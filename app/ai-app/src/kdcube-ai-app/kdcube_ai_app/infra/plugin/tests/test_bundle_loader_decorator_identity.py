@@ -158,8 +158,8 @@ setattr(
     AUTHORITY_PROVIDER_ATTR,
     AuthorityProviderDeclarationSpec(
         method_name="old_authority",
-        authority_id="yay.identity",
-        authenticator_id="yay.identity.oauth",
+        authority_id="custom.identity",
+        authenticator_id="custom.identity.oauth",
         credential_kinds=("authority_access",),
         audiences=("bundle:navigator-tg-bot@1-0",),
         label="Yay Identity",
@@ -201,5 +201,5 @@ def test_manifest_discovery_accepts_reloaded_decorator_dataclasses():
     assert len(manifest.authority_providers) == 1
     assert isinstance(manifest.authority_providers[0], CurrentAuthorityProviderDeclarationSpec)
     assert manifest.authority_providers[0].method_name == "authority_provider_method"
-    assert manifest.authority_providers[0].authority_id == "yay.identity"
-    assert manifest.authority_providers[0].authenticator_id == "yay.identity.oauth"
+    assert manifest.authority_providers[0].authority_id == "custom.identity"
+    assert manifest.authority_providers[0].authenticator_id == "custom.identity.oauth"

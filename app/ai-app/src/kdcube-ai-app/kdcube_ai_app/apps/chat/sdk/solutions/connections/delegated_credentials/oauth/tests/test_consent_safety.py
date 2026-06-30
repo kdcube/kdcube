@@ -16,7 +16,7 @@ from __future__ import annotations
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.consent import render_consent_html
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.flow import AuthorizeRequest
 
-ISSUER = "https://yey.boats"
+ISSUER = "https://connector.example.test"
 
 
 def _req(client_id="claude", redirect_uri="http://127.0.0.1:9000/callback"):

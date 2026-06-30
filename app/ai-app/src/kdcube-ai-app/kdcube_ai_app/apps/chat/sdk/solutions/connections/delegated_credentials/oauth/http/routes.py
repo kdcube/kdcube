@@ -53,6 +53,10 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_inventory impor
     platform_identity_from_user,
     selected_delegation_edge,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.mcp_metadata import (
+    kdcube_icon_url,
+    kdcube_website_url,
+)
 
 router = APIRouter()
 LOGGER = logging.getLogger("kdcube.connection_hub.oauth")
@@ -264,20 +268,30 @@ async def register_client(request: Request) -> Response:
                 "error_description": "redirect_uri not permitted for dynamic registration",
             },
         )
+    issuer = resolve_issuer(request)
+    logo_uri = kdcube_icon_url(request=request, public_base_url=issuer)
+    client_uri = kdcube_website_url(request=request, public_base_url=issuer)
+    metadata = {
+        "client_name": body.get("client_name"),
+        "logo_uri": logo_uri,
+        "client_uri": client_uri,
+    }
     record = await get_grant_store(request).register_client(
-        redirect_uris=redirect_uris, metadata={"client_name": body.get("client_name")}
+        redirect_uris=redirect_uris, metadata=metadata
     )
-    return JSONResponse(
-        status_code=201,
-        content={
-            "client_id": record["client_id"],
-            "redirect_uris": record["redirect_uris"],
-            "token_endpoint_auth_method": "none",
-            "grant_types": ["authorization_code", "refresh_token"],
-            "response_types": ["code"],
-            "client_name": body.get("client_name"),
-        },
-    )
+    content = {
+        "client_id": record["client_id"],
+        "redirect_uris": record["redirect_uris"],
+        "token_endpoint_auth_method": "none",
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "client_name": body.get("client_name"),
+    }
+    if logo_uri:
+        content["logo_uri"] = logo_uri
+    if client_uri:
+        content["client_uri"] = client_uri
+    return JSONResponse(status_code=201, content=content)
 
 
 @router.get("/oauth/authorize", include_in_schema=False)
@@ -450,6 +464,7 @@ async def authorize_consent(request: Request) -> Response:
     valid_tools = {name for name, _, _ in tools_for_scopes(selected_scopes, config=cfg, resource=req.resource)}
     selected = [t for t in form.getlist("tools") if t in valid_tools]
     resource_cfg = cfg.resource_config(req.resource)
+    named_services = dict(resource_cfg.named_services or {}) if resource_cfg is not None else {}
     grantor_authority = _grantor_authority(user or {}, scopes=selected_scopes, inventory=inventory)
     delegation_edges = list(grantor_authority.get("delegation_edges") or [])
     code = await store.create_auth_code(
@@ -463,6 +478,7 @@ async def authorize_consent(request: Request) -> Response:
         identity_scope=resource_cfg.identity_scope if resource_cfg is not None else "",
         grantor_authority=grantor_authority,
         delegation_edges=delegation_edges,
+        named_services=named_services,
     )
     url = build_redirect(req.redirect_uri, {"code": code, "state": req.state, "iss": issuer})
     return RedirectResponse(url, status_code=302)
@@ -523,6 +539,7 @@ async def _issue_tokens(
     identity_scope="",
     grantor_authority=None,
     delegation_edges=None,
+    named_services=None,
     refresh_token=None,
 ) -> JSONResponse:
     tenant, project = oauth_tenant_project(request)
@@ -576,6 +593,7 @@ async def _issue_tokens(
         credential=credential.to_dict(),
         grantor_authority=dict(grantor_authority or {}),
         delegation_edges=list(delegation_edges or []),
+        named_services=dict(named_services or {}),
     )
     if refresh_token is None:
         refresh_token = await store.create_refresh_token(
@@ -585,6 +603,7 @@ async def _issue_tokens(
             credential=credential.to_dict(),
             grantor_authority=dict(grantor_authority or {}),
             delegation_edges=list(delegation_edges or []),
+            named_services=dict(named_services or {}),
         )
     return JSONResponse(
         {
@@ -630,6 +649,7 @@ async def token(request: Request) -> Response:
             identity_scope=payload.get("identity_scope") or "",
             grantor_authority=payload.get("grantor_authority") or {},
             delegation_edges=payload.get("delegation_edges") or [],
+            named_services=payload.get("named_services") or {},
         )
 
     if grant_type == "refresh_token":
@@ -651,6 +671,7 @@ async def token(request: Request) -> Response:
             identity_scope=rec.get("identity_scope") or "",
             grantor_authority=rec.get("grantor_authority") or {},
             delegation_edges=rec.get("delegation_edges") or [],
+            named_services=rec.get("named_services") or {},
             refresh_token=new_rt,
         )
 

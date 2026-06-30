@@ -4,13 +4,16 @@
 """Descriptor-backed configuration for the OAuth delegated credential delegated credential adapter."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from typing import Any, Mapping, Tuple
 
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.hub.resolver import (
     DEFAULT_DELEGATED_IDENTITY_SCOPE,
     normalize_delegated_identity_scope,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.boundary_policy import (
+    NamedServiceBoundaryCatalog,
 )
 
 DEFAULT_CLAUDE_REDIRECT_URIS: tuple[str, ...] = (
@@ -63,6 +66,7 @@ class OAuthDelegatedResourceConfig:
     tools: tuple[OAuthDelegatedToolConfig, ...] = ()
     label: str = ""
     identity_scope: str = DEFAULT_DELEGATED_IDENTITY_SCOPE
+    named_services: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -264,6 +268,23 @@ def _parse_capabilities(raw: Any) -> tuple[OAuthDelegatedCapabilityConfig, ...]:
     return tuple(out) or _default_capabilities()
 
 
+def _nested_named_service_grants(raw: Any) -> tuple[str, ...]:
+    grants: list[str] = []
+    catalog = NamedServiceBoundaryCatalog(raw if isinstance(raw, Mapping) else {})
+    for namespace_policy in catalog.list_public():
+        tools = namespace_policy.get("tools")
+        tools = tools if isinstance(tools, Mapping) else {}
+        for tool_policy in tools.values():
+            if isinstance(tool_policy, Mapping):
+                grants.extend(_coerce_string_tuple(tool_policy.get("grants")))
+                operations = tool_policy.get("operations")
+                operations = operations if isinstance(operations, Mapping) else {}
+                for operation_policy in operations.values():
+                    if isinstance(operation_policy, Mapping):
+                        grants.extend(_coerce_string_tuple(operation_policy.get("grants")))
+    return _ordered_union(grants)
+
+
 def _parse_resources(raw: Any) -> tuple[OAuthDelegatedResourceConfig, ...]:
     if raw is None:
         return ()
@@ -299,13 +320,18 @@ def _parse_resources(raw: Any) -> tuple[OAuthDelegatedResourceConfig, ...]:
         else:
             tools = tuple(tool for tool in (_parse_tool(row) for row in (tools_raw or ())) if tool is not None)
         explicit_grants = _coerce_string_tuple(item.get("grants") or item.get("scopes"))
+        named_services = dict(item.get("named_services") or {}) if isinstance(item.get("named_services"), Mapping) else {}
+        namespace_grants = _nested_named_service_grants(named_services)
         out.append(
             OAuthDelegatedResourceConfig(
                 resource=resource,
-                grants=explicit_grants or _ordered_union(grant for tool in tools for grant in tool.grants),
+                grants=explicit_grants or _ordered_union(
+                    [*(grant for tool in tools for grant in tool.grants), *namespace_grants]
+                ),
                 tools=tools,
                 label=_coerce_str(item.get("label")) or "",
                 identity_scope=normalize_delegated_identity_scope(item.get("identity_scope")),
+                named_services=named_services,
             )
         )
     return tuple(out)

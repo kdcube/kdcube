@@ -133,6 +133,31 @@ the same actor id and projects the platform authority into that session. The
 federated token itself only points at the session; it does not duplicate roles,
 permissions, or provider identity in the signed token body.
 
+## Managed MCP Delegated Client Projection
+
+For managed MCP, the external client is the actor and the consenting platform
+user is the grantor/economics subject:
+
+```text
+delegate actor:
+  authority_id = delegated_client
+  user_id      = integration:claude:02e...
+
+grantor / economics subject:
+  authority_id = platform
+  user_id      = 02e...
+
+request projection:
+  runtime user id used by product reads = grantor subject when identity_scope=grantor
+  provenance/delegate metadata          = integration:claude:02e...
+  selected grants/tools                 = delegated credential grant record
+```
+
+This is how `kdcube-services@1-0/public/mcp/named_services` can call memory
+named-service search as the approving platform user while still logging that the
+call came from Claude. The projection is created by the managed MCP guard before
+the bundle MCP handler runs.
+
 ## SDK Helpers
 
 The platform SDK exposes helpers for normalizing/applying this envelope:

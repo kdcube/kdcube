@@ -155,3 +155,59 @@ async def test_refresh_token_validates_then_rotates(store):
     # Old token no longer valid after rotation (reuse detection boundary).
     assert await store.validate_refresh_token(rt) is None
     assert await store.validate_refresh_token(new_rt) is not None
+
+
+@pytest.mark.asyncio
+async def test_refresh_token_preserves_named_service_catalog(store):
+    named_services = {
+        "namespaces": {
+            "mem": {
+                "authority_id": "delegated_client",
+                "tools": {
+                    "search": {
+                        "operation": "object.search",
+                        "grants": ["memories:read"],
+                    },
+                },
+            },
+        },
+    }
+    rt = await store.create_refresh_token(
+        client_id="claude",
+        sub="google:admin@example.test",
+        scopes=["named_services:use", "memories:read"],
+        named_services=named_services,
+    )
+
+    rec = await store.validate_refresh_token(rt)
+    assert rec["named_services"] == named_services
+
+    new_rt = await store.rotate_refresh_token(rt)
+    rotated = await store.validate_refresh_token(new_rt)
+    assert rotated["named_services"] == named_services
+
+
+@pytest.mark.asyncio
+async def test_access_grant_record_preserves_named_service_catalog(store):
+    named_services = {
+        "namespaces": {
+            "mem": {
+                "authority_id": "delegated_client",
+                "tools": {
+                    "schema": {
+                        "operation": "object.schema",
+                        "grants": ["memories:read"],
+                    },
+                },
+            },
+        },
+    }
+
+    await store.bind_access_grant(
+        "access-token",
+        ["named_services_schema"],
+        60,
+        named_services=named_services,
+    )
+    record = await store.get_access_grant_record("access-token")
+    assert record["named_services"] == named_services

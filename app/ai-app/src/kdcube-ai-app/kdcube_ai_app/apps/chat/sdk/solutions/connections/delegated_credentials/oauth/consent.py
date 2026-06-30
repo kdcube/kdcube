@@ -12,13 +12,16 @@ carried into the authorization code and ultimately the issued grant.
 from __future__ import annotations
 
 import html as _html
-from typing import Iterable, List, Tuple
+from typing import Iterable, List, Mapping, Tuple
 
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.config import (
     OAuthDelegatedClientConfig,
     oauth_delegated_config,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.flow import AuthorizeRequest
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.boundary_policy import (
+    NamedServiceBoundaryCatalog,
+)
 
 
 def tools_for_scopes(
@@ -59,11 +62,97 @@ def platform_edge_grants_for_scopes(
     return out
 
 
+def named_service_rows_for_scopes(
+    scopes: Iterable[str],
+    *,
+    config: OAuthDelegatedClientConfig | None = None,
+    resource: str | None = None,
+) -> List[Tuple[str, str, str, Tuple[str, ...]]]:
+    """Human-readable named-service namespace operation rows for consent."""
+
+    cfg = config or oauth_delegated_config()
+    resource_cfg = cfg.resource_config(resource)
+    if resource_cfg is None or not isinstance(resource_cfg.named_services, Mapping):
+        return []
+    allowed = {str(scope or "").strip() for scope in (scopes or ()) if str(scope or "").strip()}
+    out: list[tuple[str, str, str, tuple[str, ...]]] = []
+    seen: set[tuple[str, str, tuple[str, ...]]] = set()
+    catalog = NamedServiceBoundaryCatalog(resource_cfg.named_services)
+    for namespace in catalog.list_public():
+        namespace_label = str(namespace.get("label") or namespace.get("namespace") or "").strip()
+        tools = namespace.get("tools")
+        if not isinstance(tools, Mapping):
+            continue
+        for tool_name, raw_tool in tools.items():
+            tool = raw_tool if isinstance(raw_tool, Mapping) else {}
+            operations = tool.get("operations")
+            if isinstance(operations, Mapping) and operations:
+                for operation, raw_operation in operations.items():
+                    operation_policy = raw_operation if isinstance(raw_operation, Mapping) else {}
+                    grants = tuple(
+                        str(item).strip()
+                        for item in (operation_policy.get("grants") or ())
+                        if str(item).strip()
+                    )
+                    if grants and not set(grants).issubset(allowed):
+                        continue
+                    key = (str(namespace.get("namespace") or namespace_label), str(operation), grants)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    label = str(operation_policy.get("label") or operation or tool_name).strip()
+                    desc = str(operation_policy.get("description") or tool.get("description") or "").strip()
+                    out.append((namespace_label, label, desc, grants))
+                continue
+            grants = tuple(str(item).strip() for item in (tool.get("grants") or ()) if str(item).strip())
+            if grants and not set(grants).issubset(allowed):
+                continue
+            operation = str(tool.get("operation") or tool_name).strip()
+            key = (str(namespace.get("namespace") or namespace_label), operation, grants)
+            if key in seen:
+                continue
+            seen.add(key)
+            label = str(tool.get("label") or tool.get("operation") or tool_name).strip()
+            desc = str(tool.get("description") or "").strip()
+            out.append((namespace_label, label, desc, grants))
+    return out
+
+
 def _brand_monogram(brand: str) -> str:
     """1-2 uppercase initials from the brand name (first letters of first two words)."""
     words = [w for w in brand.split() if w]
     initials = "".join(w[0] for w in words[:2]).upper()
     return initials or "KC"
+
+
+def _grant_family(grant: str) -> str:
+    text = str(grant or "").strip()
+    return text.split(":", 1)[0] if ":" in text else text or "other"
+
+
+def _tool_group(name: str, grants: Iterable[str]) -> str:
+    text = str(name or "").lower()
+    grant_text = " ".join(str(grant or "").lower() for grant in (grants or ()))
+    if any(word in text or word in grant_text for word in ("delete", "write", "upsert", "host_file", "action")):
+        return "Write and action tools"
+    if any(word in text for word in ("list", "about", "schema", "capabilities", "search", "get", "read", "export")):
+        return "Read and discovery tools"
+    return "Other tools"
+
+
+def _render_grouped(items: Iterable[tuple[str, str]], *, css_class: str) -> str:
+    groups: dict[str, list[str]] = {}
+    for group, row_html in items:
+        groups.setdefault(group, []).append(row_html)
+    out: list[str] = []
+    for group, rows in groups.items():
+        out.append(
+            f'    <section class="{css_class}-group">'
+            f'<div class="group-head"><b>{_html.escape(group)}</b><span>{len(rows)}</span></div>\n'
+            + "\n".join(rows)
+            + "\n    </section>"
+        )
+    return "\n".join(out)
 
 
 def render_consent_html(
@@ -82,21 +171,45 @@ def render_consent_html(
     esc = _html.escape
     tools = tools_for_scopes(req.scopes, config=config, resource=req.resource)
     platform_edge_grants = platform_edge_grants_for_scopes(req.scopes, config=config)
+    named_service_rows = named_service_rows_for_scopes(req.scopes, config=config, resource=req.resource)
     monogram = _brand_monogram(brand)
 
-    tool_rows = "\n".join(
-        f'    <label class="tool"><input type="checkbox" name="tools" value="{esc(name)}" checked> '
-        f'<b>{esc(name)}</b><span class="desc">{esc(desc)}</span>'
-        f'<span class="grants">Requires: {esc(", ".join(grants) or "none")}</span></label>'
+    tool_rows = _render_grouped((
+        (
+            _tool_group(name, grants),
+            f'    <label class="tool"><input type="checkbox" name="tools" value="{esc(name)}" checked> '
+            f'<b>{esc(name)}</b><span class="desc">{esc(desc)}</span>'
+            f'<span class="grants">Requires: {esc(", ".join(grants) or "none")}</span></label>'
+        )
         for name, desc, grants in tools
-    ) or '    <p class="desc">No selectable tools for the requested scope.</p>'
+    ), css_class="tool") or '    <p class="desc">No selectable tools for the requested scope.</p>'
 
-    edge_rows = "\n".join(
-        f'    <label class="edge"><input type="checkbox" name="platform_grants" value="{esc(grant)}" checked> '
-        f'<b>{esc(label)}</b><span class="desc">{esc(desc)}</span>'
-        f'<span class="grants">{esc(grant)}</span></label>'
+    edge_rows = _render_grouped((
+        (
+            _grant_family(grant),
+            f'    <label class="edge"><input type="checkbox" name="platform_grants" value="{esc(grant)}" checked> '
+            f'<b>{esc(label)}</b><span class="desc">{esc(desc)}</span>'
+            f'<span class="grants">{esc(grant)}</span></label>'
+        )
         for grant, label, desc in platform_edge_grants
-    ) or '    <p class="desc">No platform-authority grants are requested.</p>'
+    ), css_class="edge") or '    <p class="desc">No platform-authority grants are requested.</p>'
+
+    namespace_rows = _render_grouped((
+        (
+            namespace,
+            f'    <div class="namespace-row"><b>{esc(label)}</b>'
+            f'<span class="desc">{esc(desc)}</span>'
+            f'<span class="grants">{esc(", ".join(grants) or "none")}</span></div>'
+        )
+        for namespace, label, desc, grants in named_service_rows
+    ), css_class="namespace")
+    namespace_section = ""
+    if namespace_rows:
+        namespace_section = f"""
+    <p class="pick">Named-service namespace boundaries:</p>
+    <p class="desc">These are the concrete namespace operations covered by the selected grants.</p>
+{namespace_rows}
+"""
 
     hidden_fields = [
         ("client_id", req.client_id),
@@ -143,6 +256,7 @@ def render_consent_html(
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" type="image/svg+xml" href="/img/favicon.svg">
   <title>Authorize MCP connection · {esc(brand)}</title>
   <style>
     :root {{
@@ -189,16 +303,35 @@ def render_consent_html(
     .badge.warn {{ background: #fdecea; color: #b71c1c; }}
     .warn-text {{ background: #fff8e1; border: 1px solid #ffe6a3; border-radius: 10px; padding: .7rem .9rem; font-size: .85rem; color: #6b5400; }}
     .pick {{ font-weight: 600; margin: 1.2rem 0 .5rem; font-size: .92rem; }}
+    .tool-group, .edge-group, .namespace-group {{
+      border: 1px solid var(--line); border-radius: 12px; margin: .65rem 0; overflow: hidden; background: #fff;
+    }}
+    .group-head {{
+      display: flex; justify-content: space-between; align-items: center; gap: .75rem;
+      padding: .55rem .75rem; background: #f8fafc; border-bottom: 1px solid var(--line);
+      color: #2f4962; font-size: .85rem;
+    }}
+    .group-head span {{
+      min-width: 1.35rem; height: 1.35rem; border-radius: 999px; padding: .1rem .42rem;
+      display: inline-grid; place-items: center; background: #e9eef5; color: #4d5f73; font-size: .76rem;
+    }}
     .tool {{ display: flex; gap: .6rem; align-items: flex-start; padding: .7rem .8rem; margin: .45rem 0;
       border: 1px solid var(--line); border-radius: 10px; cursor: pointer; transition: border-color .15s, background .15s; }}
+    .tool-group .tool, .edge-group .edge, .namespace-group .namespace-row {{
+      margin: 0; border-left: 0; border-right: 0; border-top: 0; border-radius: 0;
+    }}
+    .tool-group .tool:last-child, .edge-group .edge:last-child, .namespace-group .namespace-row:last-child {{ border-bottom: 0; }}
     .tool:hover {{ border-color: #c7d6e6; background: #fafcff; }}
     .edge {{ display: flex; gap: .6rem; align-items: flex-start; padding: .7rem .8rem; margin: .45rem 0;
       border: 1px solid #cfe3f5; border-radius: 10px; cursor: pointer; background: #fbfdff; }}
+    .namespace-row {{ display: block; padding: .7rem .8rem; margin: .45rem 0;
+      border: 1px solid #d9ead3; border-radius: 10px; background: #fbfff9; }}
     .tool input, .edge input {{ margin-top: .2rem; width: 1.05rem; height: 1.05rem; accent-color: var(--accent); }}
     .tool b {{ font-size: .95rem; }}
     .edge b {{ font-size: .95rem; }}
-    .tool .desc, .edge .desc, .desc {{ display: block; color: var(--muted); font-size: .83rem; }}
-    .tool .grants, .edge .grants {{ display: block; color: #365f86; font-size: .76rem; margin-top: .16rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }}
+    .namespace-row b {{ font-size: .95rem; }}
+    .tool .desc, .edge .desc, .namespace-row .desc, .desc {{ display: block; color: var(--muted); font-size: .83rem; }}
+    .tool .grants, .edge .grants, .namespace-row .grants {{ display: block; color: #365f86; font-size: .76rem; margin-top: .16rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }}
     .actions {{ display: flex; gap: .75rem; margin-top: 1.4rem; }}
     button {{ flex: 1; padding: .7rem; border-radius: 10px; border: 0; font-size: 1rem; font-weight: 600; cursor: pointer; transition: filter .15s, opacity .15s; }}
     button:hover {{ filter: brightness(.96); }}
@@ -239,6 +372,7 @@ def render_consent_html(
     <p class="pick">Platform account delegation edge:</p>
     <p class="desc">These grants let the external client represent your KDCube account only when this resource later needs platform authority.</p>
 {edge_rows}
+{namespace_section}
     <p class="pick">Select which capabilities to authorize for this connection:</p>
 {tool_rows}
     <div class="actions">

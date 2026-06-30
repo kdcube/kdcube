@@ -154,7 +154,7 @@ class UserMemoriesEntrypoint(BaseEntrypointWithEconomicsAndMemory):
         delegated = getattr(getattr(request, "state", None), "delegated_credential", None) if request is not None else None
         if not isinstance(delegated, dict):
             return None
-        envelope = CredentialEnvelope.coerce(delegated.get("authority"))
+        envelope = CredentialEnvelope.coerce(delegated.get("credential"))
         return envelope if (envelope.credential_kind or envelope.subject) else None
 
     def _memory_mcp_grantor_authority(self, request=None) -> Dict[str, Any]:
@@ -271,6 +271,7 @@ class UserMemoriesEntrypoint(BaseEntrypointWithEconomicsAndMemory):
             scope_factory=lambda: self._memory_mcp_scope(request=request),
             read_user_ids_factory=lambda scope: self._memory_mcp_read_user_ids(scope, request=request),
             search_embedding_factory=lambda scope, query: self._memory_mcp_query_embedding(scope, query, request=request),
+            request=request,
         )
 
     def _build_graph(self) -> StateGraph:

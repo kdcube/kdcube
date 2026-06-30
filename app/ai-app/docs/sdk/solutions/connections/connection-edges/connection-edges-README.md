@@ -186,3 +186,36 @@ The live update event is:
 ```text
 connection_hub.edge.changed
 ```
+
+## Delegated Client Edge Example
+
+For an external client such as Claude, the edge is not a human identity link in
+the same sense as Telegram, but it is still the same Connection Hub graph shape:
+
+```text
+from:
+  authority_id = delegated_client
+  identity     = integration:claude:<grantor-or-grant-id>
+
+to:
+  authority_id = platform
+  identity     = 02e53484-...
+
+resource:
+  kdcube-services@1-0/public/mcp/named_services
+
+selected grants:
+  named_services:use
+  memories:read
+  tasks:read
+```
+
+The managed MCP guard first validates the delegated-client credential. The
+generic `named_services` bridge then resolves the nested namespace boundary for
+the requested namespace. For example, `named_services_search(namespace="mem")`
+requires the credential edge to include both the selected generic tool and the
+namespace grant `memories:read`.
+
+The MCP server's icon, instructions, and `ToolAnnotations` are not part of the
+edge. They are client-rendering hints. The edge remains the server-side
+authority record used at enforcement time.

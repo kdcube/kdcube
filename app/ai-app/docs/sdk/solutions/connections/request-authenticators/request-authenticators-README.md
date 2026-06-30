@@ -154,11 +154,28 @@ Connection Hub
     telegram.webhook
     slack.signature
     oidc.claim
+    delegated_client.bearer
     api-key
     webhook-hmac
 ```
 
 Apps and gateway code should not duplicate this verifier logic.
+
+`delegated_client.bearer` is the current authenticator used by managed MCP
+surfaces. It verifies a KDCube-issued delegated credential and its server-side
+grant record. It does not verify Telegram, Slack, webhook, or OIDC provider
+proofs. Those stay in provider-specific modules.
+
+```text
+Authorization: Bearer <kst1 delegated credential>
+  -> delegated_client.bearer authenticator
+  -> grant record lookup
+  -> resource/tool/grant/identity-scope enforcement
+```
+
+For `kdcube-services@1-0/public/mcp/named_services`, this authenticator proves
+the external client credential. The named-service bridge then applies the nested
+namespace catalog for calls such as `named_services_search(namespace="mem")`.
 
 ## Output
 

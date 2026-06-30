@@ -121,3 +121,113 @@ def test_delegated_client_parses_resource_capabilities_and_tools():
             resource="https://runtime.example.test/x/public/mcp/memories",
         )
     ] == ["memory_search", "memory_reconcile"]
+
+
+def test_delegated_client_resource_collects_nested_named_service_grants():
+    app = FastAPI()
+    app.state.oauth_delegated_config = {
+        "enabled": True,
+        "capabilities": [
+            {"grant": "named_services:use", "label": "Use named services"},
+            {"grant": "memories:read", "label": "Read memories"},
+            {"grant": "memories:write", "label": "Write memories"},
+            {"grant": "tasks:read", "label": "Read tasks"},
+            {"grant": "tasks:write", "label": "Write tasks"},
+            {"grant": "canvas:read", "label": "Read canvas"},
+            {"grant": "canvas:write", "label": "Write canvas"},
+        ],
+        "resources": [
+            {
+                "resource": "https://runtime.example.test/*/public/mcp/named_services",
+                "tools": {
+                    "named_services_schema": {"grants": ["named_services:use"]},
+                    "named_services_search": {"grants": ["named_services:use"]},
+                    "named_services_upsert": {"grants": ["named_services:use"]},
+                    "named_services_host_file": {"grants": ["named_services:use"]},
+                    "named_services_action": {"grants": ["named_services:use"]},
+                    "named_services_delete": {"grants": ["named_services:use"]},
+                },
+                "named_services": {
+                    "namespaces": {
+                        "mem": {
+                            "authority_id": "delegated_client",
+                            "tools": {
+                                "schema": {
+                                    "operation": "object.schema",
+                                    "grants": ["memories:read"],
+                                },
+                                "search": {
+                                    "operation": "object.search",
+                                    "grants": ["memories:read"],
+                                },
+                                "upsert": {
+                                    "operation": "object.upsert",
+                                    "label": "Write memory",
+                                    "description": "Create or update a memory note.",
+                                    "grants": ["memories:write"],
+                                },
+                                "action": {
+                                    "operation": "object.action",
+                                    "grants": ["memories:read"],
+                                },
+                                "delete": {
+                                    "operation": "object.delete",
+                                    "grants": ["memories:write"],
+                                },
+                            },
+                        },
+                        "task": {
+                            "authority_id": "delegated_client",
+                            "tools": {
+                                "search": {
+                                    "operation": "object.search",
+                                    "grants": ["tasks:read"],
+                                },
+                                "upsert": {
+                                    "operation": "object.upsert",
+                                    "grants": ["tasks:write"],
+                                },
+                                "host_file": {
+                                    "operation": "object.host_file",
+                                    "grants": ["tasks:write"],
+                                },
+                                "delete": {
+                                    "operation": "object.delete",
+                                    "grants": ["tasks:write"],
+                                },
+                            },
+                        },
+                        "cnv": {
+                            "authority_id": "delegated_client",
+                            "tools": {
+                                "search": {
+                                    "operation": "object.search",
+                                    "grants": ["canvas:read"],
+                                },
+                                "upsert": {
+                                    "operation": "object.upsert",
+                                    "grants": ["canvas:write"],
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        ],
+    }
+
+    cfg = oauth_delegated_config(app)
+    resource_cfg = cfg.resource_config("https://runtime.example.test/x/public/mcp/named_services")
+
+    assert resource_cfg is not None
+    assert resource_cfg.named_services["namespaces"]["mem"]["authority_id"] == "delegated_client"
+    assert resource_cfg.named_services["namespaces"]["mem"]["tools"]["upsert"]["label"] == "Write memory"
+    assert cfg.supported_scopes("https://runtime.example.test/x/public/mcp/named_services") == (
+        "named_services:use",
+        "memories:read",
+        "memories:write",
+        "tasks:read",
+        "tasks:write",
+        "canvas:read",
+        "canvas:write",
+    )

@@ -25,6 +25,8 @@ function isSignInRequired(error: string): boolean {
     normalized.includes('require_authenticated_user') ||
     normalized.includes('login_required') ||
     normalized.includes('not authenticated') ||
+    normalized.includes('user is required') ||
+    normalized.includes('user required') ||
     normalized.includes('unauthorized')
   );
 }

@@ -132,7 +132,8 @@ identity scope are envelope attributes:
 ```
 
 The credential envelope identifies the delegated client and target resource.
-The delegation edge and grantor authority facts live in the grant store, not in
+The delegation edge, grantor authority facts, and resource-specific catalogs
+such as nested named-service namespace/tool boundaries live in the grant store, not in
 the token body.
 
 Product surfaces must not hand-code `grantor_subject` interpretation. They ask
@@ -217,7 +218,29 @@ connections:
   token and enforced at `tools/call`.
 - A delegation edge is grant-bound. Each tool declares required grants; the
   credential must contain them.
+- A generic bridge can have nested boundaries. For `kdcube-services@1-0`
+  `named_services`, the selected MCP tool grants allow the generic bridge
+  itself (`named_services:use`), while the nested namespace catalog decides
+  whether a call to `namespace="mem"` also has `memories:read` or
+  `memories:write`.
 - Cross-authority projection is explicit and future-scoped. A delegated token
   should not silently borrow platform roles at a different authority boundary.
 - Economics projection is explicit. Product code should charge the projected
   platform grantor while preserving delegate provenance in accounting metadata.
+
+## Connector UX Metadata Is Not The Edge
+
+MCP connector metadata helps clients render the service:
+
+```text
+server icon / website_url
+tool title
+ToolAnnotations(readOnlyHint, destructiveHint, ...)
+server instructions
+```
+
+Those fields do not grant authority. The durable edge remains the server-side
+grant record: resource, selected tools, selected grants, identity scope, grantor
+authority facts, and any nested namespace catalogs. Clients may use metadata to
+group tools visually, but the managed guard must enforce the stored edge on
+every `tools/call`.

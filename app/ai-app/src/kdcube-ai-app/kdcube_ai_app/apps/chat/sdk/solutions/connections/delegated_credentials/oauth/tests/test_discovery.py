@@ -21,7 +21,14 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oau
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.tests.helpers import mount_test_oauth_adapter
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.tests.helpers import enable_delegated_client
 
-ISSUER = "https://yey.boats"
+ISSUER = "https://connector.example.test"
+TEST_ICON = f"{ISSUER}/img/favicon.svg"
+TEST_WEBSITE = ISSUER
+TEST_ICON_DESCRIPTOR = {
+    "src": TEST_ICON,
+    "mimeType": "image/svg+xml",
+    "sizes": ["64x64"],
+}
 
 
 # ----------------------------- pure builders -----------------------------
@@ -47,7 +54,7 @@ def test_authorization_server_metadata_omits_jwks_uri():
 
 
 def test_protected_resource_metadata_points_at_as():
-    resource = "https://yey.boats/api/integrations/bundles/demo/prod/app@1/public/mcp/export"
+    resource = "https://connector.example.test/api/integrations/bundles/demo/prod/app@1/public/mcp/export"
     md = protected_resource_metadata(ISSUER, resource=resource)
 
     assert md["resource"] == resource
@@ -68,24 +75,89 @@ def client():
 def test_well_known_authorization_server_served(client):
     resp = client.get("/.well-known/oauth-authorization-server")
     assert resp.status_code == 200
-    assert resp.json() == authorization_server_metadata(ISSUER)
+    assert resp.json() == authorization_server_metadata(
+        ISSUER,
+        service_name="KDCube",
+        logo_uri=TEST_ICON,
+        client_uri=TEST_WEBSITE,
+        icons=[TEST_ICON_DESCRIPTOR],
+    )
 
 
 def test_well_known_openid_configuration_alias_served(client):
     resp = client.get("/.well-known/openid-configuration")
     assert resp.status_code == 200
     data = resp.json()
-    assert data == authorization_server_metadata(ISSUER)
+    assert data == authorization_server_metadata(
+        ISSUER,
+        service_name="KDCube",
+        logo_uri=TEST_ICON,
+        client_uri=TEST_WEBSITE,
+        icons=[TEST_ICON_DESCRIPTOR],
+    )
     assert data["registration_endpoint"] == f"{ISSUER}/oauth/register"
 
 
 def test_well_known_protected_resource_served(client):
-    resource = "https://yey.boats/api/integrations/bundles/demo/prod/app@1/public/mcp/export"
+    resource = "https://connector.example.test/api/integrations/bundles/demo/prod/app@1/public/mcp/export"
     resp = client.get("/.well-known/oauth-protected-resource", params={"resource": resource})
     assert resp.status_code == 200
     data = resp.json()
     assert data["resource"] == resource
     assert data["authorization_servers"] == [ISSUER]
     assert data["scopes_supported"] == ["conversations:read"]
+    assert data["resource_name"] == "KDCube"
+    assert data["logo_uri"] == TEST_ICON
+    assert data["icons"] == [TEST_ICON_DESCRIPTOR]
     assert data["kdcube_capabilities"][0]["grant"] == "conversations:read"
     assert data["kdcube_tools"][0]["grants"] == ["conversations:read"]
+
+
+def test_well_known_protected_resource_serves_named_service_catalog():
+    app = FastAPI()
+    app.state.oauth_delegated_config = {
+        "enabled": True,
+        "issuer": ISSUER,
+        "capabilities": [
+            {"grant": "named_services:use", "label": "Use named services"},
+            {"grant": "memories:read", "label": "Read memories"},
+        ],
+        "resources": [
+            {
+                "resource": "https://connector.example.test/api/integrations/bundles/demo/prod/kdcube-services@1-0/public/mcp/named_services",
+                "tools": {
+                    "named_services_schema": {
+                        "label": "Named service schema",
+                        "grants": ["named_services:use"],
+                    },
+                },
+                "named_services": {
+                    "namespaces": {
+                        "mem": {
+                            "authority_id": "delegated_client",
+                            "tools": {
+                                "schema": {
+                                    "operation": "object.schema",
+                                    "grants": ["memories:read"],
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        ],
+    }
+    mount_test_oauth_adapter(app)
+
+    resource = "https://connector.example.test/api/integrations/bundles/demo/prod/kdcube-services@1-0/public/mcp/named_services"
+    resp = TestClient(app).get("/.well-known/oauth-protected-resource", params={"resource": resource})
+    assert resp.status_code == 200
+    data = resp.json()
+
+    assert data["scopes_supported"] == ["named_services:use", "memories:read"]
+    assert data["kdcube_tools"][0]["name"] == "named_services_schema"
+    assert data["kdcube_named_services"]["namespaces"]["mem"]["authority_id"] == "delegated_client"
+    assert (
+        data["kdcube_named_services"]["namespaces"]["mem"]["tools"]["schema"]["grants"]
+        == ["memories:read"]
+    )

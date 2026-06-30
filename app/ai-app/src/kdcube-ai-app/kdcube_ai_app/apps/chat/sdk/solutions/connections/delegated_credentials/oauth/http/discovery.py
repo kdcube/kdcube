@@ -21,6 +21,11 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oau
     protected_resource_metadata,
     protected_resource_metadata_url,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.mcp_metadata import (
+    kdcube_icon_descriptor,
+    kdcube_icon_url,
+    kdcube_website_url,
+)
 
 router = APIRouter()
 
@@ -46,10 +51,16 @@ def resolve_issuer(request: Request) -> str:
 @router.get(WELL_KNOWN_OIDC_PATH, include_in_schema=False)
 async def well_known_authorization_server(request: Request) -> JSONResponse:
     cfg = oauth_delegated_config(request)
+    issuer = resolve_issuer(request)
+    icon = kdcube_icon_descriptor(request=request, public_base_url=issuer)
     return JSONResponse(
         authorization_server_metadata(
-            resolve_issuer(request),
+            issuer,
             scopes_supported=cfg.supported_scopes(),
+            service_name=cfg.brand or "KDCube",
+            logo_uri=kdcube_icon_url(request=request, public_base_url=issuer),
+            client_uri=kdcube_website_url(request=request, public_base_url=issuer),
+            icons=[icon] if icon else None,
         )
     )
 
@@ -59,6 +70,9 @@ async def well_known_protected_resource(request: Request) -> JSONResponse:
     resource = request.query_params.get("resource")
     cfg = oauth_delegated_config(request)
     scopes = cfg.supported_scopes(resource)
+    resource_cfg = cfg.resource_config(resource)
+    issuer = resolve_issuer(request)
+    icon = kdcube_icon_descriptor(request=request, public_base_url=issuer)
     capabilities = []
     caps = cfg.capability_map()
     tool_catalog = cfg.resource_tool_catalog(resource)
@@ -101,8 +115,9 @@ async def well_known_protected_resource(request: Request) -> JSONResponse:
         )
     return JSONResponse(
         protected_resource_metadata(
-            resolve_issuer(request),
+            issuer,
             resource=resource,
+            resource_name=(resource_cfg.label if resource_cfg is not None and resource_cfg.label else cfg.brand or "KDCube"),
             scopes_supported=scopes,
             capabilities=capabilities,
             tools=[
@@ -114,6 +129,10 @@ async def well_known_protected_resource(request: Request) -> JSONResponse:
                 }
                 for tool in tool_catalog
             ],
+            named_services=resource_cfg.named_services if resource_cfg is not None else {},
+            logo_uri=kdcube_icon_url(request=request, public_base_url=issuer),
+            website_url=kdcube_website_url(request=request, public_base_url=issuer),
+            icons=[icon] if icon else None,
         )
     )
 

@@ -24,7 +24,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oau
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.tests.test_clients_and_store import FakeRedis
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.tests.helpers import enable_delegated_client
 
-ISSUER = "https://yey.boats"
+ISSUER = "https://connector.example.test"
 CHALLENGE = make_s256_challenge("verifier-" + "x" * 50)
 ADMIN = {"Authorization": "Bearer admin-tok"}
 

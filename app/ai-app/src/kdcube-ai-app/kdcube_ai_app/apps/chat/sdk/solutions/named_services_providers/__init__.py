@@ -46,6 +46,13 @@ from .block_policy_adapter import (
     named_service_event_source_id,
     register_configured_named_service_event_sources,
 )
+from .boundary_policy import (
+    NamedServiceBoundaryCatalog,
+    NamespaceBoundaryPolicy,
+    as_list,
+    as_mapping,
+    clean_namespace,
+)
 from .discovery import (
     ConfiguredNamedServiceDiscovery,
     DEFAULT_DISCOVERY_TTL_SECONDS,
@@ -124,6 +131,7 @@ __all__ = [
     "OBJECT_SCHEMA",
     "AuthContext",
     "NamedServiceApiTransport",
+    "NamedServiceBoundaryCatalog",
     "ConfiguredNamedServiceDiscovery",
     "NamedServiceEndpoint",
     "NamedServiceArtifactNamespaceRehoster",
@@ -140,7 +148,11 @@ __all__ = [
     "NamedServiceResponse",
     "NamedServiceSearchScope",
     "NamedServiceStreamResult",
+    "NamespaceBoundaryPolicy",
     "build_default_operations",
+    "as_list",
+    "as_mapping",
+    "clean_namespace",
     "normalize_search_scopes",
     "call_named_service_endpoint",
     "call_named_service_endpoint_stream",

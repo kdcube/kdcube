@@ -11,10 +11,14 @@ from kdcube_ai_app.infra.service_hub.inventory import BundleState, Config
 
 try:
     from .services.conversations import ConversationExportRequest, ConversationExportService
+    from .services.named_services import NamedServicesMcpBridge
     from .surfaces.mcp import conversations as conversations_mcp_module
+    from .surfaces.mcp import named_services as named_services_mcp_module
 except Exception:  # pragma: no cover - bundle loader may import as loose module
     from services.conversations import ConversationExportRequest, ConversationExportService  # type: ignore
+    from services.named_services import NamedServicesMcpBridge  # type: ignore
     from surfaces.mcp import conversations as conversations_mcp_module  # type: ignore
+    from surfaces.mcp import named_services as named_services_mcp_module  # type: ignore
 
 
 BUNDLE_ID = "kdcube-services@1-0"
@@ -69,6 +73,48 @@ class KDCubeServicesEntrypoint(BaseEntrypoint):
                                 "selected_tool_grants": True,
                             },
                         },
+                        "named_services": {
+                            "auth": {
+                                "mode": "managed",
+                                "authority_id": "delegated_client",
+                                "tools": {
+                                    "named_services_list": {
+                                        "grants": ["named_services:use"],
+                                    },
+                                    "named_services_about": {
+                                        "grants": ["named_services:use"],
+                                    },
+                                    "named_services_capabilities": {
+                                        "grants": ["named_services:use"],
+                                    },
+                                    "named_services_schema": {
+                                        "grants": ["named_services:use"],
+                                    },
+                                    "named_services_search": {
+                                        "grants": ["named_services:use"],
+                                    },
+                                    "named_services_get": {
+                                        "grants": ["named_services:use"],
+                                    },
+                                    "named_services_upsert": {
+                                        "grants": ["named_services:use"],
+                                    },
+                                    "named_services_host_file": {
+                                        "grants": ["named_services:use"],
+                                    },
+                                    "named_services_action": {
+                                        "grants": ["named_services:use"],
+                                    },
+                                    "named_services_delete": {
+                                        "grants": ["named_services:use"],
+                                    },
+                                    "named_services_call": {
+                                        "grants": ["named_services:use"],
+                                    },
+                                },
+                                "selected_tool_grants": True,
+                            },
+                        },
                     },
                 },
             },
@@ -86,6 +132,24 @@ class KDCubeServicesEntrypoint(BaseEntrypoint):
             pool_factory=lambda: self.pg_pool,
             request_model=ConversationExportRequest,
             service_cls=ConversationExportService,
+            request=request,
+        )
+
+    @mcp(
+        alias="named_services",
+        route="public",
+        transport="streamable-http",
+        auth_config="surfaces.as_provider.mcp.named_services.auth",
+    )
+    def named_services_mcp(self, request=None, **kwargs):
+        actor = getattr(self.comm_context, "actor", None)
+        return named_services_mcp_module.build_named_services_mcp_app(
+            name="KDCube named services",
+            config_factory=lambda: {},
+            tenant_factory=lambda: str(getattr(actor, "tenant_id", None) or ""),
+            project_factory=lambda: str(getattr(actor, "project_id", None) or ""),
+            request=request,
+            bridge_factory=NamedServicesMcpBridge,
         )
 
     def _build_graph(self) -> StateGraph:

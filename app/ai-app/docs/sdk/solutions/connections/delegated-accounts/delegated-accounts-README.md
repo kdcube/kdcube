@@ -59,10 +59,19 @@ Identity link:
 
 Delegated account:
   platform_user_id -> Gmail OAuth token
+
+Delegated external client:
+  Claude/KDCube-issued delegated_client token -> KDCube MCP resource
 ```
 
 An app may use a delegated token only after normal platform/request authority is
 established for the current execution.
+
+Delegated accounts are outbound capabilities: KDCube uses a provider account on
+behalf of the user. Managed delegated-client credentials are inbound
+capabilities: an external client calls a KDCube resource with a KDCube-issued
+credential. Both are Connection Hub delegations, but they store and enforce
+different token directions.
 
 ## Three-Level Model
 

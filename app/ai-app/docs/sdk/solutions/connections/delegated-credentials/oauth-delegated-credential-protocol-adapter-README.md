@@ -310,6 +310,16 @@ bundles:
                     - "kdcube:role:super-admin"
                   delegable_permissions:
                     - "memories:read"
+                - grant: "memories:write"
+                  label: "Write memories"
+                  description: "Create or update memory notes visible to the KDCube user who approves the connection."
+                  delegable_roles:
+                    - "kdcube:role:chat-user"
+                    - "kdcube:role:paid"
+                    - "kdcube:role:privileged"
+                    - "kdcube:role:super-admin"
+                  delegable_permissions:
+                    - "memories:write"
               resources:
                 - resource: "*/api/integrations/bundles/*/*/user-memories@2026-06-26/public/mcp/memories*"
                   label: "User memories MCP"
@@ -321,7 +331,54 @@ bundles:
                     memory_get:
                       label: "Read memory"
                       grants: ["memories:read"]
+                - resource: "*/api/integrations/bundles/*/*/kdcube-services@1-0/public/mcp/named_services*"
+                  label: "KDCube named services MCP"
+                  tools:
+                    named_services_search:
+                      label: "Named service search"
+                      grants: ["named_services:use"]
+                    named_services_upsert:
+                      label: "Named service upsert"
+                      grants: ["named_services:use"]
+                    named_services_action:
+                      label: "Named service action"
+                      grants: ["named_services:use"]
+                    named_services_delete:
+                      label: "Named service delete"
+                      grants: ["named_services:use"]
+                  named_services:
+                    namespaces:
+                      mem:
+                        label: "User memories"
+                        authority_id: delegated_client
+                        tools:
+                          search:
+                            operation: object.search
+                            grants: ["memories:read"]
+                          get:
+                            operation: object.get
+                            grants: ["memories:read"]
+                          upsert:
+                            operation: object.upsert
+                            label: "Write memory"
+                            grants: ["memories:write"]
+                          action:
+                            operation: object.action
+                            label: "Memory action"
+                            grants: ["memories:read"]
+                          delete:
+                            operation: object.delete
+                            label: "Delete memory"
+                            grants: ["memories:write"]
 ```
+
+For generic named-service MCP resources, keep grants two-layered:
+`kdcube_tools` advertises the generic MCP bridge tools and
+`kdcube_named_services` advertises namespace/tool boundaries. The OAuth adapter
+derives supported scopes from both layers, but it persists the nested
+`named_services` catalog separately into the auth code, refresh token, and
+access-grant record. The hosting bundle then enforces the catalog that was
+actually granted instead of reading namespace policy from its own descriptor.
 
 The bundle surface that consumes this credential is configured in
 `bundles.yaml`, not in `assembly.yaml`. For a proc-served bundle MCP endpoint:
@@ -459,7 +516,7 @@ KDCube-issued integration token
   -> selected tools / allowed actions
 ```
 
-The feature registers an `delegated_client` authority provider in the Connection Hub
+The feature registers a `delegated_client` authority provider in the Connection Hub
 authority registry. That makes the implementation visible to code using the
 authority SDK and keeps the protocol mechanics under the same service that owns
 delegated credentials.
@@ -490,6 +547,41 @@ formats. Those are other authenticator modules. Likewise, connection edges shoul
 not issue OAuth codes or refresh tokens; those records belong to the
 OAuth delegated credential grant registry.
 
+## Current Managed MCP Connector Shape
+
+The live example implementation is `kdcube-services@1-0`. It exposes managed
+MCP resources such as:
+
+```text
+/api/integrations/bundles/{tenant}/{project}/kdcube-services@1-0/public/mcp/conversations
+/api/integrations/bundles/{tenant}/{project}/kdcube-services@1-0/public/mcp/named_services
+```
+
+The `named_services` MCP surface is intentionally generic: namespaces such as
+`mem`, `task`, and `cnv` are tool arguments, while namespace-specific grants are
+kept in the Connection Hub protected-resource catalog. The MCP server advertises
+server-level instructions so clients know the intended order:
+
+```text
+named_services_list
+  -> named_services_capabilities / named_services_schema
+  -> named_services_search / named_services_get / named_services_upsert / ...
+```
+
+The FastMCP apps are built with `stateless_http=True`, because current bundle
+MCP requests are dispatched request-by-request through proc workers. Protocol
+session state is not stored in a bundle-local FastMCP object.
+
+For connector UX, MCP apps should advertise:
+
+- server `icons` and `website_url` from
+  `kdcube_ai_app.apps.chat.sdk.solutions.connections.mcp_metadata`;
+- `ToolAnnotations` such as `readOnlyHint` and `destructiveHint`.
+
+Connection Hub consent uses descriptor labels/grants. Claude's post-connection
+tool grouping uses MCP `ToolAnnotations`. They are related UX surfaces, but they
+are not the same enforcement boundary.
+
 ## Regression Checklist
 
 Use focused tests and one live connector test.
@@ -500,13 +592,19 @@ Use focused tests and one live connector test.
 2. DCR accepts only descriptor-allowed redirect URIs.
 3. Authorization requires an authenticated platform session.
 4. Consent POST validates CSRF and re-validates client, redirect URI, and PKCE.
-5. Token issue stores selected tools on both access grant and refresh record.
-6. Refresh rotation preserves selected tools.
+5. Token issue stores selected tools and nested named-service catalogs on both
+   access grant and refresh record.
+6. Refresh rotation preserves selected tools and nested named-service catalogs.
 7. Integration token without a selected-tool grant fails closed at the managed
    bundle MCP guard.
 8. Users can consent only to grants permitted by the Connection Hub descriptor
    (`delegable_roles` / `delegable_permissions`).
 9. Bundle MCP `tools/list` and `tools/call` return MCP-shaped responses, not
    unhandled HTTP 500s for authorization failures.
-10. The feature is disabled when
+10. `named_services` advertises server instructions that tell clients to call
+    `named_services_list` first and then inspect capabilities/schema.
+11. MCP server icon metadata resolves to the KDCube favicon, and
+    `ToolAnnotations` split read-only tools from write/action/delete tools in
+    clients that honor MCP annotations.
+12. The feature is disabled when
     `connection-hub@1-0.config.connections.delegated_credentials.oauth.enabled: false`.

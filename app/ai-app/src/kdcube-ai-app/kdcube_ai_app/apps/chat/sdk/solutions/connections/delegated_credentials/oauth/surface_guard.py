@@ -27,6 +27,11 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oau
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.metadata import (
     protected_resource_metadata_url,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.hub import (
+    delegated_primary_user_id,
+    normalize_delegated_identity_scope,
+    resolve_delegated_authority_projection,
+)
 
 
 MANAGED_MCP_AUTH_MODE = "managed"
@@ -318,6 +323,96 @@ def _grant_record_credential(grant_record: Mapping[str, Any] | None) -> Credenti
     return CredentialEnvelope()
 
 
+def delegated_mcp_runtime_projection(request: Request) -> dict[str, Any]:
+    """Return request-local runtime identity facts for an accepted delegated token.
+
+    The managed MCP guard authenticates a delegated-client bearer after the proc
+    bridge has already built an anonymous MCP request session. This projection
+    is the single handoff that lets the proc bridge upgrade the request-local
+    session/comm-context before invoking the bundle MCP app and any nested
+    bundle/named-service calls.
+    """
+
+    delegated = getattr(getattr(request, "state", None), "delegated_credential", None)
+    if not isinstance(delegated, Mapping):
+        return {}
+    credential = delegated.get("credential")
+    if not isinstance(credential, Mapping):
+        return {}
+    envelope = CredentialEnvelope.coerce(credential)
+    if not envelope.credential_kind and not envelope.subject:
+        return {}
+
+    grant_record = delegated.get("grant_record")
+    grant_record = grant_record if isinstance(grant_record, Mapping) else {}
+    grantor_authority = grant_record.get("grantor_authority")
+    grantor_authority = grantor_authority if isinstance(grantor_authority, Mapping) else {}
+    projection = resolve_delegated_authority_projection(
+        credential=envelope,
+        grantor_authority=grantor_authority,
+    )
+    if not projection.get("ok"):
+        return {}
+
+    attrs = envelope.attrs or {}
+    user = delegated.get("user")
+    user = user if isinstance(user, Mapping) else {}
+    grants = sorted(_credential_scopes(envelope))
+    tools = _as_list(grant_record.get("tools")) or _as_list(attrs.get("tools"))
+    grantor_user_id = str(projection.get("grantor_user_id") or delegated_primary_user_id(envelope)).strip()
+    delegate_identity = str(projection.get("delegate_identity") or envelope.subject or "").strip()
+    economics = projection.get("economics")
+    economics = dict(economics) if isinstance(economics, Mapping) else {}
+
+    identity_authority: dict[str, Any] = dict(economics)
+    identity_authority.update(
+        {
+            "schema": "connection_hub.delegated_mcp_runtime_authority.v1",
+            "authority_id": envelope.issuer_authority_id or "delegated_client",
+            "issuer_authority_id": envelope.issuer_authority_id,
+            "issuer_authenticator_id": envelope.issuer_authenticator_id,
+            "credential_kind": envelope.credential_kind,
+            "credential_id": envelope.credential_id,
+            "delegate_identity": delegate_identity,
+            "actor_identity": delegate_identity,
+            "actor_user_id": delegate_identity,
+            "grantor_user_id": grantor_user_id,
+            "platform_user_id": grantor_user_id,
+            "economics_user_id": str(economics.get("user_id") or grantor_user_id).strip(),
+            "economics_projection": "platform_user",
+            "grants": grants,
+            "scopes": grants,
+            "tools": list(tools),
+            "resource": str(attrs.get("resource") or "").strip(),
+            "identity_scope": normalize_delegated_identity_scope(attrs.get("identity_scope")),
+            "delegation": dict(projection.get("delegation") or {}),
+            "provenance": dict(projection.get("provenance") or economics.get("provenance") or {}),
+        }
+    )
+    identity_authority = {
+        key: value for key, value in identity_authority.items()
+        if value not in ("", None, [], {})
+    }
+
+    roles = _as_list(user.get("roles"))
+    permissions = _as_list(user.get("permissions")) or tuple(grants)
+    return {
+        "schema": "connection_hub.delegated_mcp_runtime_projection.v1",
+        "user_id": grantor_user_id,
+        "user_type": "external",
+        "username": delegate_identity or str(user.get("sub") or "").strip() or None,
+        "roles": list(roles),
+        "permissions": list(permissions),
+        "identity_authority": identity_authority,
+        "delegate_identity": delegate_identity,
+        "grantor_user_id": grantor_user_id,
+        "identity_scope": identity_authority.get("identity_scope") or "",
+        "resource": identity_authority.get("resource") or "",
+        "grants": grants,
+        "tools": list(tools),
+    }
+
+
 async def authorize_delegated_mcp_request(
     *,
     request: Request,
@@ -416,6 +511,18 @@ async def authorize_delegated_mcp_request(
 
     tool_calls = extract_mcp_tool_calls(body)
     if not tool_calls:
+        runtime = delegated_mcp_runtime_projection(request)
+        LOGGER.info(
+            "[connection-hub.oauth.mcp_guard] accepted resource=%s subject=%s grantor=%s delegate=%s authority=%s scopes=%s tools=%s identity_scope=%s tool_calls=0",
+            request_resource,
+            user.get("sub") or "",
+            runtime.get("grantor_user_id") or "",
+            runtime.get("delegate_identity") or "",
+            envelope.issuer_authority_id,
+            sorted(_credential_scopes(envelope)),
+            list(_as_list(grant_record.get("tools"))) if isinstance(grant_record, Mapping) else [],
+            runtime.get("identity_scope") or "",
+        )
         return None
 
     granted_tools = None
@@ -444,6 +551,19 @@ async def authorize_delegated_mcp_request(
                     f"tool not consented for this connection: {tool_name}",
                 )
 
+    runtime = delegated_mcp_runtime_projection(request)
+    LOGGER.info(
+        "[connection-hub.oauth.mcp_guard] accepted resource=%s subject=%s grantor=%s delegate=%s authority=%s scopes=%s tools=%s identity_scope=%s tool_calls=%s",
+        request_resource,
+        user.get("sub") or "",
+        runtime.get("grantor_user_id") or "",
+        runtime.get("delegate_identity") or "",
+        envelope.issuer_authority_id,
+        sorted(available_grants),
+        sorted(granted_tools or []),
+        runtime.get("identity_scope") or "",
+        [tool for _, tool in tool_calls],
+    )
     return None
 
 
@@ -452,6 +572,7 @@ __all__ = [
     "ManagedMcpAuthPolicy",
     "ManagedMcpToolPolicy",
     "authorize_delegated_mcp_request",
+    "delegated_mcp_runtime_projection",
     "extract_mcp_tool_calls",
     "managed_mcp_auth_policy",
     "mcp_auth_mode",

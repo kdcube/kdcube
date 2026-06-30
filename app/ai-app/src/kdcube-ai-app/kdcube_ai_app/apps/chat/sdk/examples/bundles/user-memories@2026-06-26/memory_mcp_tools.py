@@ -17,6 +17,7 @@ it.
 
 from __future__ import annotations
 
+import logging
 from typing import Annotated, Any, Awaitable, Callable, Literal, Optional, Sequence
 
 from pydantic import Field
@@ -27,6 +28,11 @@ from kdcube_ai_app.apps.chat.sdk.context.memory import (
     MemorySearchRequest,
     MemorySearchResult,
     UserMemoryStore,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.mcp_metadata import (
+    kdcube_mcp_icons,
+    kdcube_website_url,
+    read_only_annotations,
 )
 
 
@@ -39,6 +45,7 @@ MemoryReadStatus = Literal["active", "weakened", "unsupported", "retired", "merg
 MAX_SEARCH_LIMIT = 50
 DEFAULT_SEARCH_LIMIT = 10
 READ_STATUS_FILTERS = ("active", "weakened", "unsupported", "retired", "merged", "any")
+LOGGER = logging.getLogger("kdcube.user_memories.mcp")
 
 
 def _iso(value: Any) -> str:
@@ -103,6 +110,7 @@ def build_user_memories_mcp_app(
     scope_factory: ScopeFactory,
     read_user_ids_factory: ReadUserIdsFactory,
     search_embedding_factory: SearchEmbeddingFactory | None = None,
+    request: Any = None,
 ):
     """Build the read-only FastMCP app for user memory access.
 
@@ -118,12 +126,19 @@ def build_user_memories_mcp_app(
     """
     try:
         from mcp.server.fastmcp import FastMCP
+        from mcp.types import Icon, ToolAnnotations
     except Exception as exc:  # pragma: no cover - runtime dependency
         raise ImportError("mcp server SDK is not installed") from exc
 
     # The proc MCP bridge dispatches requests independently; stateless HTTP
     # keeps initialize/tools/list/tool calls valid across fresh app instances.
-    mcp = FastMCP(name, stateless_http=True)
+    icons = kdcube_mcp_icons(Icon, request=request)
+    mcp = FastMCP(
+        name,
+        stateless_http=True,
+        icons=icons,
+        website_url=kdcube_website_url(request=request),
+    )
 
     async def _read_user_ids(scope: MemoryScope) -> Optional[list[str]]:
         """Resolve the identity-family read set, with safe single-user fallback."""
@@ -143,12 +158,15 @@ def build_user_memories_mcp_app(
 
     @mcp.tool(
         name="memory_search",
+        title="Search memories",
         description=(
             "Search the approving user's KDCube memory notes. This is a read-only "
             "delegated tool for external clients such as Claude. Results are scoped "
             "to the grantor user and, when Connection Hub identity-family reads are "
             "available, to the grantor's linked identities."
         ),
+        annotations=read_only_annotations(ToolAnnotations, title="Search memories"),
+        structured_output=False,
     )
     async def _memory_search(
         query: Annotated[
@@ -187,6 +205,15 @@ def build_user_memories_mcp_app(
         user_ids = await _read_user_ids(scope)
         normalized_query = str(query or "").strip()
         query_embedding = await _query_embedding(scope, normalized_query)
+        LOGGER.info(
+            "[memory.mcp.search] start user_id=%s memory_user_ids=%s query=%r limit=%s status=%s embedding=%s",
+            scope.user_id,
+            list(user_ids or [scope.user_id]),
+            normalized_query,
+            _safe_limit(limit),
+            _normalized_status(status),
+            bool(query_embedding),
+        )
         request = MemorySearchRequest(
             scope=scope,
             query=normalized_query,
@@ -199,25 +226,45 @@ def build_user_memories_mcp_app(
             user_ids=user_ids,
             query_embedding=query_embedding,
         )
-        rows = await store_factory().search(request)
+        try:
+            rows = await store_factory().search(request)
+        except Exception:
+            LOGGER.exception(
+                "[memory.mcp.search] failed user_id=%s memory_user_ids=%s query=%r",
+                scope.user_id,
+                list(user_ids or [scope.user_id]),
+                normalized_query,
+            )
+            raise
         memories: list[dict[str, Any]] = []
         for row in rows:
             if isinstance(row, MemorySearchResult):
                 memories.append(_record_payload(row.memory, score=row.score))
-        return {
+        result = {
             "ok": True,
             "user_id": scope.user_id,
             "memory_user_ids": list(user_ids or [scope.user_id]),
             "count": len(memories),
             "items": memories,
         }
+        LOGGER.info(
+            "[memory.mcp.search] complete user_id=%s memory_user_ids=%s query=%r count=%s",
+            scope.user_id,
+            result["memory_user_ids"],
+            normalized_query,
+            len(memories),
+        )
+        return result
 
     @mcp.tool(
         name="memory_get",
+        title="Read memory",
         description=(
             "Read one KDCube memory note by id. The note is returned only when it "
             "belongs to the approving user's effective memory read scope."
         ),
+        annotations=read_only_annotations(ToolAnnotations, title="Read memory"),
+        structured_output=False,
     )
     async def _memory_get(
         memory_id: Annotated[
@@ -233,18 +280,42 @@ def build_user_memories_mcp_app(
     ) -> dict[str, Any]:
         scope = scope_factory().normalized()
         user_ids = await _read_user_ids(scope)
-        record = await store_factory().get_memory(
-            scope=scope,
-            memory_id=str(memory_id or "").strip(),
-            visible_to_user=True,
-            scope_filter="all_user_memories",
-            user_ids=user_ids,
+        requested_id = str(memory_id or "").strip()
+        LOGGER.info(
+            "[memory.mcp.get] start user_id=%s memory_user_ids=%s memory_id=%s",
+            scope.user_id,
+            list(user_ids or [scope.user_id]),
+            requested_id,
         )
-        return {
+        try:
+            record = await store_factory().get_memory(
+                scope=scope,
+                memory_id=requested_id,
+                visible_to_user=True,
+                scope_filter="all_user_memories",
+                user_ids=user_ids,
+            )
+        except Exception:
+            LOGGER.exception(
+                "[memory.mcp.get] failed user_id=%s memory_user_ids=%s memory_id=%s",
+                scope.user_id,
+                list(user_ids or [scope.user_id]),
+                requested_id,
+            )
+            raise
+        result = {
             "ok": bool(record),
             "user_id": scope.user_id,
             "memory_user_ids": list(user_ids or [scope.user_id]),
             "item": _record_payload(record) if record else None,
         }
+        LOGGER.info(
+            "[memory.mcp.get] complete user_id=%s memory_user_ids=%s memory_id=%s found=%s",
+            scope.user_id,
+            result["memory_user_ids"],
+            requested_id,
+            bool(record),
+        )
+        return result
 
     return mcp

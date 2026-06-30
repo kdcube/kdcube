@@ -231,12 +231,12 @@ Customer role provider
   local user store / directory / role table
         |
         | resolves grants under customer authority
-        |   yey:role:admin
-        |   yey:role:user
+        |   custom:role:admin
+        |   custom:role:user
         v
 Authority Provider
         |
-        | identity=yey:user:123, authority_id=yey.custom
+        | identity=custom:user:123, authority_id=custom.identity
         v
 /oauth/authorize or another protected surface
         |
@@ -245,7 +245,7 @@ v
 Delegated connection grant
 ```
 
-If the target surface requires `yey.custom`, no platform mapping is needed. If
+If the target surface requires `custom.identity`, no platform mapping is needed. If
 the target surface requires `kdcube.platform`, the authority linker must map the
 customer identity to a platform identity and then the platform grant resolver
 loads platform roles.
@@ -349,6 +349,52 @@ Read the durability design note before relying on long-lived external
 connectors:
 
 - [Grant Storage Durability](design/grant-storage-durability-README.md)
+
+## Current KDCube Services MCP Example
+
+The built-in example for inbound delegated external clients is
+`kdcube-services@1-0`.
+
+```text
+kdcube-services@1-0/public/mcp/conversations
+  -> one managed MCP tool: conversations_export
+
+kdcube-services@1-0/public/mcp/named_services
+  -> generic MCP tools over configured named-service namespaces
+  -> current namespaces include mem, task, and cnv when configured
+```
+
+The `named_services` surface is intentionally two-layered:
+
+```text
+outer MCP tool grant:
+  named_services:use
+
+inner namespace grant:
+  memories:read / memories:write
+  tasks:read / tasks:write
+  canvas:read / canvas:write
+```
+
+The outer grant lets the generic bridge run. The inner namespace catalog tells
+the bridge which authority/grant to enforce when a tool call targets a concrete
+namespace. This lets one MCP connector expose several product realms without
+making every namespace a separate MCP server.
+
+The MCP server advertises instructions for clients:
+
+```text
+1. call named_services_list
+2. inspect capabilities/schema for an unfamiliar namespace
+3. call search/get/upsert/action/delete only when the namespace permits it
+```
+
+The connector icon and read/write grouping are MCP metadata:
+
+- server icon / website URL comes from the shared KDCube MCP metadata helper;
+- read-only vs write/action/delete grouping comes from MCP `ToolAnnotations`;
+- Connection Hub consent grouping remains descriptor-driven and independent
+  from the client UI's post-connection grouping.
 
 ## Reading Order
 

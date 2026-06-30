@@ -1415,7 +1415,7 @@ const ResourceEditorCard: React.FC<ResourceEditorCardProps> = ({
                                     <input
                                         value={formAuthorityId}
                                         onChange={e => setFormAuthorityId(e.target.value)}
-                                        placeholder="kdcube.platform, delegated_client, yay.identity"
+                                        placeholder="kdcube.platform, delegated_client, custom.identity"
                                         className="w-full px-3 py-2 border border-gray-200/80 rounded-xl bg-white text-sm font-mono"
                                     />
                                     <FieldHint>

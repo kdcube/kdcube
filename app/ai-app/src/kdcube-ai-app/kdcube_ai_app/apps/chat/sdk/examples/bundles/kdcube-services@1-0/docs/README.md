@@ -69,7 +69,7 @@ cannot be expressed as authority/grants in the descriptor.
 
 ## Current Implementation
 
-The first service family is `conversations`.
+The first service families are `conversations` and `named_services`.
 
 ```text
 public/mcp/conversations
@@ -82,6 +82,36 @@ public/mcp/conversations
 The default descriptor makes `conversations:read` delegable only by
 `kdcube:role:super-admin`. That is policy, not bundle identity. Future user
 services can be added to this bundle with less privileged delegability.
+
+```text
+public/mcp/named_services
+  -> named_services_* tools
+  -> NamedServicesMcpBridge
+  -> Connection Hub grant-record namespace policy
+  -> NamedServiceEndpoint
+  -> owner bundle named_services() registry
+```
+
+Connection Hub resource metadata exposes named-service namespaces as consentable
+boundaries. The outer MCP tools require `named_services:use`. The inner
+namespace policy can require namespace-specific grants such as `memories:read`,
+`memories:write`, `tasks:write`, or `canvas:write`; that policy is persisted
+into the delegated credential grant record. This is intentionally two-layered:
+
+```text
+MCP resource consent
+  -> can this external client use named-services tools at all?
+
+namespace operation policy
+  -> can this external client use mem/object.search or mem/object.get?
+```
+
+If an inner grant is missing, the MCP tool returns a structured
+`delegated_consent_required` payload. That is the right provider-boundary
+signal, but it is not equivalent to an HTTP OAuth challenge. Existing MCP
+clients may not automatically restart consent from a tool result. For reliable
+Claude flows, advertise the grants the resource will likely need during initial
+Connection Hub consent.
 
 ## Why Not Root `/mcp`
 

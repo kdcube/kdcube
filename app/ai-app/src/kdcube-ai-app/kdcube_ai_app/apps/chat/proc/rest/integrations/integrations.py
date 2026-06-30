@@ -109,6 +109,7 @@ from kdcube_ai_app.infra.plugin.bundle_loader import (
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.surface_guard import (
     authorize_delegated_mcp_request,
+    delegated_mcp_runtime_projection,
     mcp_auth_mode,
 )
 from kdcube_ai_app.infra.secrets import (
@@ -905,6 +906,117 @@ def _filtered_proxy_headers(headers: httpx.Headers) -> Dict[str, str]:
     return {k: v for k, v in headers.items() if k.lower() not in blocked}
 
 
+def _mcp_bridge_session_id(*, request: Request, method: str) -> str:
+    existing = str(request.headers.get("Mcp-Session-Id") or request.headers.get("mcp-session-id") or "").strip()
+    if existing:
+        return existing
+    if method == "initialize":
+        return f"kdcube-stateless-{uuid.uuid4().hex}"
+    return ""
+
+
+def _mcp_jsonrpc_method(body: bytes) -> str:
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except Exception:
+        return ""
+    if isinstance(payload, Mapping):
+        return str(payload.get("method") or "")
+    return ""
+
+
+def _mcp_response_payload(response: httpx.Response) -> Mapping[str, Any] | None:
+    body = response.content or b""
+    if not body or len(body) > 128_000:
+        return None
+
+    try:
+        payload = response.json()
+        return payload if isinstance(payload, Mapping) else None
+    except Exception:
+        pass
+
+    content_type = response.headers.get("content-type", "")
+    if "text/event-stream" not in content_type:
+        return None
+
+    try:
+        text = body.decode("utf-8", errors="replace")
+    except Exception:
+        return None
+
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        data = line[5:].strip()
+        if not data:
+            continue
+        try:
+            payload = json.loads(data)
+        except Exception:
+            continue
+        if isinstance(payload, Mapping):
+            return payload
+    return None
+
+
+def _log_bundle_mcp_response(
+        *,
+        method: str,
+        response: httpx.Response,
+) -> None:
+    content_type = response.headers.get("content-type", "")
+    body = response.content or b""
+    if method not in {"initialize", "tools/list", "tools/call"}:
+        logger.info(
+            "Bundle MCP response method=%s status=%s content_type=%s body_bytes=%s",
+            method or "<unknown>",
+            response.status_code,
+            content_type,
+            len(body),
+        )
+        return
+
+    tool_names: list[str] = []
+    result_keys: list[str] = []
+    is_error = False
+    payload = _mcp_response_payload(response)
+    if isinstance(payload, Mapping):
+        is_error = bool(payload.get("error"))
+        result = payload.get("result")
+        if isinstance(result, Mapping):
+            result_keys = [str(key) for key in result.keys()]
+            tools = result.get("tools")
+            if isinstance(tools, list):
+                for tool in tools:
+                    if isinstance(tool, Mapping):
+                        name = str(tool.get("name") or "").strip()
+                        if name:
+                            tool_names.append(name)
+    elif body:
+        logger.info(
+            "Bundle MCP response method=%s status=%s content_type=%s body_bytes=%s json_parse=failed",
+            method,
+            response.status_code,
+            content_type,
+            len(body),
+        )
+        return
+
+    logger.info(
+        "Bundle MCP response method=%s status=%s content_type=%s body_bytes=%s error=%s result_keys=%s tool_count=%s tool_names=%s",
+        method,
+        response.status_code,
+        content_type,
+        len(body),
+        is_error,
+        result_keys,
+        len(tool_names),
+        tool_names,
+    )
+
+
 async def _dispatch_bundle_mcp_request(
         *,
         request: Request,
@@ -914,6 +1026,7 @@ async def _dispatch_bundle_mcp_request(
         body: bytes | None = None,
 ) -> Response:
     body = await request.body() if body is None else body
+    method = _mcp_jsonrpc_method(body)
     dispatch_path = _build_mcp_dispatch_path(transport=transport, mcp_path=mcp_path)
     headers = {
         key: value
@@ -935,10 +1048,26 @@ async def _dispatch_bundle_mcp_request(
                 content=body,
             )
 
+    _log_bundle_mcp_response(method=method, response=response)
+    response_headers = _filtered_proxy_headers(response.headers)
+    # Do not synthesize Mcp-Session-Id for stateless bundle MCP surfaces.
+    # Claude accepts the OAuth/token path and reaches tools/list; advertising a
+    # fake stateful session from this stateless proc bridge can make the client
+    # treat the server as stateful even though the bundle app is recreated per
+    # request. If a real stateful MCP app returns its own session header, the
+    # filtered upstream headers above will still preserve it.
+    # bridge_session_id = _mcp_bridge_session_id(request=request, method=method)
+    # if bridge_session_id:
+    #     response_headers.setdefault("Mcp-Session-Id", bridge_session_id)
+    #     logger.info(
+    #         "Bundle MCP bridge session header method=%s incoming=%s",
+    #         method or "<unknown>",
+    #         bool(request.headers.get("Mcp-Session-Id") or request.headers.get("mcp-session-id")),
+    #     )
     return Response(
         content=response.content,
         status_code=response.status_code,
-        headers=_filtered_proxy_headers(response.headers),
+        headers=response_headers,
     )
 
 
@@ -3847,6 +3976,62 @@ def _build_public_api_request_session(request: Request) -> UserSession:
     return _build_mcp_request_session(request)
 
 
+def _apply_delegated_mcp_runtime_projection(
+    *,
+    request: Request,
+    session: UserSession,
+    comm_context: ExternalEventPayload,
+    bundle_id: str,
+    endpoint_alias: str,
+) -> None:
+    projection = delegated_mcp_runtime_projection(request)
+    if not projection:
+        return
+
+    user_id = str(projection.get("user_id") or "").strip()
+    identity_authority = projection.get("identity_authority")
+    if not user_id or not isinstance(identity_authority, Mapping):
+        return
+
+    roles = [str(item) for item in (projection.get("roles") or []) if str(item).strip()]
+    permissions = [str(item) for item in (projection.get("permissions") or []) if str(item).strip()]
+    username = str(projection.get("username") or projection.get("delegate_identity") or "").strip() or None
+    user_type = str(projection.get("user_type") or UserType.EXTERNAL.value).strip() or UserType.EXTERNAL.value
+
+    session.user_id = user_id
+    session.username = username
+    session.user_type = UserType.EXTERNAL
+    session.roles = roles
+    session.permissions = permissions
+    session.identity_authority = dict(identity_authority)
+
+    user = getattr(comm_context, "user", None)
+    if user is None:
+        comm_context.user = ExternalEventUser(user_type=user_type, user_id=user_id)
+        user = comm_context.user
+    user.user_id = user_id
+    user.username = username
+    user.user_type = user_type
+    user.roles = roles
+    user.permissions = permissions
+    user.identity_authority = dict(identity_authority)
+
+    logger.info(
+        "Managed MCP runtime projection applied tenant=%s project=%s bundle=%s endpoint=%s user_id=%s user_type=%s delegate=%s grantor=%s authority=%s grants=%s identity_scope=%s",
+        getattr(getattr(comm_context, "actor", None), "tenant_id", None) or "",
+        getattr(getattr(comm_context, "actor", None), "project_id", None) or "",
+        bundle_id,
+        endpoint_alias,
+        user_id,
+        user_type,
+        projection.get("delegate_identity") or "",
+        projection.get("grantor_user_id") or "",
+        identity_authority.get("authority_id") or identity_authority.get("issuer_authority_id") or "",
+        projection.get("grants") or [],
+        projection.get("identity_scope") or "",
+    )
+
+
 async def _call_bundle_mcp_limited(
         *,
         tenant: str,
@@ -3938,6 +4123,13 @@ async def _call_bundle_mcp_inner(
         )
         if denial is not None:
             return denial
+        _apply_delegated_mcp_runtime_projection(
+            request=request,
+            session=resolved_session,
+            comm_context=comm_context,
+            bundle_id=spec_resolved.id,
+            endpoint_alias=endpoint_alias,
+        )
 
     try:
         fn = getattr(workflow, endpoint_spec.method_name)
@@ -3949,7 +4141,48 @@ async def _call_bundle_mcp_inner(
         if _callable_accepts_kwarg(fn, "mcp_path"):
             extra["mcp_path"] = mcp_path
         runtime_comm = _resolve_bound_runtime_comm(workflow=workflow, comm_context=comm_context)
-        with bind_current_request_context(comm_context, comm=runtime_comm):
+
+        async def _call_peer_bundle_operation(call: BundleOperationCall) -> Mapping[str, Any]:
+            return await _call_bundle_op_inner(
+                tenant=call.tenant or tenant_id,
+                project=call.project or project_id,
+                bundle_id=call.bundle_id,
+                payload=BundleSuggestionsRequest(data=dict(call.data or {})),
+                uploaded_files=[],
+                request=request,
+                operation=call.operation,
+                route=call.route or "operations",
+                session=resolved_session,
+                method_override=call.http_method or "POST",
+            )
+
+        peer_redis = _get_app_redis(request)
+
+        async def _call_peer_bundle_operation_stream(call: BundleOperationStreamCall) -> BundleOperationStreamResult:
+            return await invoke_local_bundle_operation_stream(
+                call,
+                comm_context=comm_context,
+                redis=peer_redis,
+                pg_pool=_get_app_pg_pool(request),
+            )
+
+        async def _call_peer_bundle_named_service(call: BundleNamedServiceCall) -> BundleNamedServiceResult:
+            return await invoke_local_bundle_named_service(
+                call,
+                comm_context=comm_context,
+                redis=peer_redis,
+                pg_pool=_get_app_pg_pool(request),
+            )
+
+        with (
+            bind_current_request_context(comm_context, comm=runtime_comm),
+            bind_named_service_discovery(
+                RedisNamedServiceDiscovery(peer_redis, tenant=tenant_id, project=project_id)
+            ),
+            bind_bundle_named_service_caller(_call_peer_bundle_named_service),
+            bind_bundle_operation_caller(_call_peer_bundle_operation),
+            bind_bundle_operation_stream_caller(_call_peer_bundle_operation_stream),
+        ):
             result = await _invoke_bundle_callable(fn, **extra)
             mcp_app = _coerce_bundle_mcp_asgi_app(result, transport=endpoint_spec.transport)
             return await _dispatch_bundle_mcp_request(

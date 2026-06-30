@@ -93,8 +93,8 @@ def test_request_hints_from_headers_are_selector_hints_not_truth():
     envelope = RequestEnvelope.from_dict(
         {
             "headers": {
-                "X-KDCube-Auth-Authority-ID": "yey.custom",
-                "X-KDCube-Auth-Authenticator-ID": "yey.google_oidc",
+                "X-KDCube-Auth-Authority-ID": "custom.identity",
+                "X-KDCube-Auth-Authenticator-ID": "custom.google_oidc",
                 "X-KDCube-Auth-Provider": "oidc",
             }
         }
@@ -102,8 +102,8 @@ def test_request_hints_from_headers_are_selector_hints_not_truth():
 
     hints = AuthRequestHints.from_envelope(envelope)
 
-    assert hints.authority_id == "yey.custom"
-    assert hints.authenticator_id == "yey.google_oidc"
+    assert hints.authority_id == "custom.identity"
+    assert hints.authenticator_id == "custom.google_oidc"
     assert hints.provider == "oidc"
     assert hints.has_explicit_selector is True
 
@@ -131,15 +131,15 @@ def test_select_authenticator_candidates_prefers_exact_authenticator_hint():
     rows = [
         AuthenticatorRegistration.from_dict(
             {
-                "authenticator_id": "yey.google_oidc",
-                "authority_id": "yey.custom",
+                "authenticator_id": "custom.google_oidc",
+                "authority_id": "custom.identity",
                 "provider": "oidc",
             }
         ),
         AuthenticatorRegistration.from_dict(
             {
-                "authenticator_id": "yey.api_key",
-                "authority_id": "yey.custom",
+                "authenticator_id": "custom.api_key",
+                "authority_id": "custom.identity",
                 "provider": "api-key",
             }
         ),
@@ -147,10 +147,10 @@ def test_select_authenticator_candidates_prefers_exact_authenticator_hint():
 
     selected = select_authenticator_candidates(
         rows,
-        {"authenticator_id": "yey.google_oidc", "authority_id": "yey.custom"},
+        {"authenticator_id": "custom.google_oidc", "authority_id": "custom.identity"},
     )
 
-    assert [row.authenticator_id for row in selected] == ["yey.google_oidc"]
+    assert [row.authenticator_id for row in selected] == ["custom.google_oidc"]
 
 
 def test_select_authenticator_candidates_uses_authority_hint_as_narrowing_only():
@@ -164,16 +164,16 @@ def test_select_authenticator_candidates_uses_authority_hint_as_narrowing_only()
         ),
         AuthenticatorRegistration.from_dict(
             {
-                "authenticator_id": "yey.google_oidc",
-                "authority_id": "yey.custom",
+                "authenticator_id": "custom.google_oidc",
+                "authority_id": "custom.identity",
                 "provider": "oidc",
             }
         ),
     ]
 
-    selected = select_authenticator_candidates(rows, {"authority_id": "yey.custom"})
+    selected = select_authenticator_candidates(rows, {"authority_id": "custom.identity"})
 
-    assert [row.authenticator_id for row in selected] == ["yey.google_oidc"]
+    assert [row.authenticator_id for row in selected] == ["custom.google_oidc"]
 
 
 def test_select_authenticator_candidates_combines_authority_and_legacy_hint():
@@ -215,8 +215,8 @@ def test_select_authenticator_candidates_respects_surface_accept_lists():
         ),
         AuthenticatorRegistration.from_dict(
             {
-                "authenticator_id": "yey.google_oidc",
-                "authority_id": "yey.custom",
+                "authenticator_id": "custom.google_oidc",
+                "authority_id": "custom.identity",
                 "provider": "oidc",
             }
         ),
@@ -232,7 +232,7 @@ def test_select_authenticator_candidates_respects_surface_accept_lists():
 
 
 def test_authority_identity_canonical_ref():
-    identity = AuthorityIdentity(authority_id="yey.custom", subject="user:123")
+    identity = AuthorityIdentity(authority_id="custom.identity", subject="user:123")
 
-    assert identity.canonical_ref == "yey.custom:user:123"
-    assert identity.to_dict()["ref"] == "yey.custom:user:123"
+    assert identity.canonical_ref == "custom.identity:user:123"
+    assert identity.to_dict()["ref"] == "custom.identity:user:123"

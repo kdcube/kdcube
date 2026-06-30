@@ -13,7 +13,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oau
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.http.routes import router as oauth_routes_router
 
 
-def enable_delegated_client(app: FastAPI, *, issuer: str = "https://yey.boats") -> None:
+def enable_delegated_client(app: FastAPI, *, issuer: str = "https://connector.example.test") -> None:
     app.state.oauth_delegated_config = {
         "enabled": True,
         "issuer": issuer,

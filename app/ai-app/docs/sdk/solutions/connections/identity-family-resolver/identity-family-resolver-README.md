@@ -220,6 +220,29 @@ If `family_user_ids` contains only `telegram_434804821`, inspect the Connection
 Hub edge record. The usual cause is an old or low-authority edge with
 `"grants": []`.
 
+The same resolver is used by delegated-client MCP reads. In the current
+`kdcube-services@1-0/public/mcp/named_services` flow:
+
+```text
+Claude calls named_services_search(namespace="mem")
+      |
+      v
+managed MCP guard validates delegated_client credential
+      |
+      v
+runtime projection sets the grantor as the effective product user
+      |
+      v
+memory named-service provider resolves identity family
+      |
+      v
+memory search runs over allowed memory_user_ids
+```
+
+This has been tested for memory search through the generic named-services MCP
+surface. The external client does not supply `memory_user_ids`; it only supplies
+the delegated credential and the namespace/tool arguments.
+
 ## Boundary With Authority Projection
 
 Identity Family Resolver returns aggregation scope. Authority Projection returns

@@ -4,7 +4,7 @@ title: "Protect Bundle MCP With Managed Credentials"
 summary: "Recipe for exposing a bundle MCP surface protected by Connection Hub delegated credentials, with tool-centric grants and descriptor-owned policy."
 status: active
 tags: ["recipes", "connections", "connection-hub", "delegated-credentials", "mcp", "managed-auth", "bundle-surfaces"]
-updated_at: 2026-06-29
+updated_at: 2026-06-30
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-credentials/oauth-delegated-credential-protocol-adapter-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-credentials/delegated-credential-protocol-adapters-README.md
@@ -230,6 +230,262 @@ delegated_identity_scope_resolve
 
 For example, the memories MCP resource can read the grantor identity family
 when `identity_scope = grantor_identity_family`.
+
+## Named-Service MCP Bridge
+
+`kdcube-services@1-0` also exposes a generic MCP surface for configured named
+services:
+
+```text
+/api/integrations/bundles/{tenant}/{project}/kdcube-services@1-0/public/mcp/named_services
+```
+
+The MCP service name is `named_services`, and the named-service namespace is a
+tool argument:
+
+```text
+named_services_schema(namespace="mem")
+named_services_search(namespace="mem", query="...")
+named_services_get(namespace="mem", object_ref="mem:<id>")
+named_services_upsert(namespace="mem", object_json="{...}")
+named_services_host_file(namespace="task", file_ref="fi:...")
+named_services_action(namespace="mem", object_ref="mem:<id>", action="preview")
+named_services_delete(namespace="task", object_ref="task:<id>")
+```
+
+The generic named-services MCP server also advertises server-level instructions
+to MCP clients. Those instructions tell clients to start with
+`named_services_list`, use returned namespaces exactly, inspect
+`named_services_capabilities` and `named_services_schema` for unfamiliar
+namespaces, and avoid write/action/delete tools unless the user explicitly asks
+for them. This matters because generic tools such as `named_services_search`
+need a namespace argument; without instructions, a client may guess instead of
+discovering the configured namespace catalog.
+
+Claude's own post-connection "Tool permissions" UI is driven by the MCP tools
+returned by the MCP server. The read-only/write/delete grouping comes from MCP
+`ToolAnnotations`, not from Connection Hub consent. KDCube MCP surfaces should
+set `readOnlyHint`, `destructiveHint`, server `icons`, and `website_url` when
+building the FastMCP app; the SDK helper
+`kdcube_ai_app.apps.chat.sdk.solutions.connections.mcp_metadata` provides the
+standard KDCube favicon and annotation helpers.
+
+With this generic bridge Claude will show tools such as
+`named_services_search` and `named_services_upsert`. Connection Hub consent is
+where namespace labels and grants such as "User memories / Write memory" are
+shown. To make Claude show namespace-specific tool rows, expose generated tools
+such as `mem_search` or `task_upsert`; the generic bridge does not do that yet.
+
+Configure two layers in two owners. The hosting bundle only configures the
+generic MCP entry boundary:
+
+```yaml
+surfaces:
+  as_provider:
+    mcp:
+      named_services:
+        auth:
+          mode: managed
+          authority_id: delegated_client
+          tools:
+            named_services_schema:
+              grants: [named_services:use]
+            named_services_capabilities:
+              grants: [named_services:use]
+            named_services_host_file:
+              grants: [named_services:use]
+            named_services_action:
+              grants: [named_services:use]
+            named_services_delete:
+              grants: [named_services:use]
+            named_services_upsert:
+              grants: [named_services:use]
+```
+
+Connection Hub owns the namespace boundary catalog for consent and delegation:
+
+```yaml
+connections:
+  delegated_credentials:
+    oauth:
+      resources:
+        - resource: "*/api/integrations/bundles/*/*/kdcube-services@1-0/public/mcp/named_services*"
+          named_services:
+            namespaces:
+              mem:
+                authority_id: delegated_client
+                tools:
+                  schema:
+                    operation: object.schema
+                    grants: [memories:read]
+                  search:
+                    label: Search memories
+                    operation: object.search
+                    grants: [memories:read]
+                  upsert:
+                    label: Write memory
+                    description: Create or update a memory note.
+                    operation: object.upsert
+                    grants: [memories:write]
+                  action:
+                    label: Memory action
+                    operation: object.action
+                    grants: [memories:read]
+                  delete:
+                    label: Delete memory
+                    operation: object.delete
+                    grants: [memories:write]
+              task:
+                label: Tasks
+                authority_id: delegated_client
+                tools:
+                  search:
+                    label: Search tasks
+                    operation: object.search
+                    grants: [tasks:read]
+                  upsert:
+                    label: Write task
+                    operation: object.upsert
+                    grants: [tasks:write]
+                  host_file:
+                    label: Host task file
+                    operation: object.host_file
+                    grants: [tasks:write]
+                  delete:
+                    label: Delete task
+                    operation: object.delete
+                    grants: [tasks:write]
+              cnv:
+                label: Canvas
+                authority_id: delegated_client
+                tools:
+                  search:
+                    label: Search canvas
+                    operation: object.search
+                    grants: [canvas:read]
+                  upsert:
+                    label: Write canvas
+                    operation: object.upsert
+                    grants: [canvas:write]
+```
+
+The outer managed MCP guard checks the generic MCP tool and
+`named_services:use`. The named-services bridge checks the namespace/operation
+authority and grant from the delegated credential grant record before calling
+the provider. If the delegated credential lacks the inner grant, the tool
+returns:
+
+```json
+{
+  "ok": false,
+  "error": "delegated_consent_required",
+  "namespace": "mem",
+  "operation": "object.schema",
+  "missing_grants": ["memories:read"]
+}
+```
+
+This is the correct lower-boundary signal, but a normal MCP tool result is not
+the same as an HTTP OAuth challenge. If the target client does not support
+incremental consent from tool results, include likely namespace grants in the
+initial Connection Hub resource consent.
+
+For one-step consent, advertise the namespace/tool boundary catalog on the
+Connection Hub resource without flattening namespace grants onto the whole
+resource:
+
+```yaml
+connections:
+  delegated_credentials:
+    oauth:
+      resources:
+        - resource: "*/api/integrations/bundles/*/*/kdcube-services@1-0/public/mcp/named_services*"
+          tools:
+            named_services_schema:
+              grants: [named_services:use]
+            named_services_search:
+              grants: [named_services:use]
+            named_services_upsert:
+              grants: [named_services:use]
+            named_services_host_file:
+              grants: [named_services:use]
+            named_services_action:
+              grants: [named_services:use]
+            named_services_delete:
+              grants: [named_services:use]
+          named_services:
+            namespaces:
+              mem:
+                authority_id: delegated_client
+                tools:
+                  schema:
+                    operation: object.schema
+                    grants: [memories:read]
+                  search:
+                    operation: object.search
+                    grants: [memories:read]
+                  upsert:
+                    operation: object.upsert
+                    grants: [memories:write]
+                  action:
+                    operation: object.action
+                    grants: [memories:read]
+                  delete:
+                    operation: object.delete
+                    grants: [memories:write]
+              task:
+                label: Tasks
+                authority_id: delegated_client
+                tools:
+                  search:
+                    operation: object.search
+                    grants: [tasks:read]
+                  upsert:
+                    operation: object.upsert
+                    grants: [tasks:write]
+                  host_file:
+                    operation: object.host_file
+                    grants: [tasks:write]
+                  delete:
+                    operation: object.delete
+                    grants: [tasks:write]
+              cnv:
+                label: Canvas
+                authority_id: delegated_client
+                tools:
+                  search:
+                    operation: object.search
+                    grants: [canvas:read]
+                  upsert:
+                    operation: object.upsert
+                    grants: [canvas:write]
+```
+
+The outer tool grants say what the MCP bridge needs to enter the generic tool.
+The nested namespace/tool catalog says which provider boundary consumes
+`memories:read`, `memories:write`, `tasks:read`, `tasks:write`, `canvas:read`,
+or `canvas:write`. This is what lets `mem`, `task`, and `cnv` require different
+grants for the same generic bridge tool.
+
+The protected-resource discovery response keeps these catalogs separate too:
+
+```json
+{
+  "kdcube_tools": [
+    {"name": "named_services_search", "grants": ["named_services:use"]}
+  ],
+  "kdcube_named_services": {
+    "namespaces": {
+      "mem": {
+        "authority_id": "delegated_client",
+        "tools": {
+          "search": {"operation": "object.search", "grants": ["memories:read"]}
+        }
+      }
+    }
+  }
+}
+```
 
 ## Bundle-Owned MCP Can Still Exist
 

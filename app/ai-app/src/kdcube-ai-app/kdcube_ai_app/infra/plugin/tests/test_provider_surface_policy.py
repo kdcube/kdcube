@@ -149,7 +149,7 @@ def test_provider_surface_policy_controls_bundle_widget_and_mcp() -> None:
                     "knowledge": {
                         "auth": {
                             "mode": "managed",
-                            "authority_id": "yay.identity",
+                            "authority_id": "custom.identity",
                             "grants": ["knowledge:read"],
                         },
                     },
@@ -171,6 +171,6 @@ def test_provider_surface_policy_controls_bundle_widget_and_mcp() -> None:
     assert apply_widget_overrides(widget, props).roles == ("kdcube:role:super-admin",)
     assert apply_mcp_overrides(mcp, props).auth == {
         "mode": "managed",
-        "authority_id": "yay.identity",
+        "authority_id": "custom.identity",
         "grants": ["knowledge:read"],
     }

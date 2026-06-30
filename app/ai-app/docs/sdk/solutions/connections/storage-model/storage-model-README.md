@@ -67,6 +67,36 @@ connection_hub_request_authenticators
 
 Secret values must not be stored here. Only `secret_ref` is stored.
 
+## Delegated Credential Grant State Today
+
+The current delegated-client OAuth adapter stores short-lived OAuth and access
+grant records through `GrantStore`:
+
+```text
+code / csrf / access grant:
+  Redis, short TTL, fail closed when missing
+
+refresh token / dynamic client registration:
+  currently Redis in the demo implementation
+  target production storage is durable
+```
+
+The server-side grant records carry enforcement state:
+
+```text
+resource
+selected tools
+selected grants
+identity_scope
+grantor authority facts
+delegation edges
+nested named-service namespace catalog
+```
+
+MCP connector presentation metadata is not persisted as authority state. Server
+icons, `website_url`, server instructions, and `ToolAnnotations` are advertised
+by the MCP server on `initialize` / `tools/list`.
+
 ## Connection Edges Today
 
 The current example implementation stores connection edges in bundle-local JSON:

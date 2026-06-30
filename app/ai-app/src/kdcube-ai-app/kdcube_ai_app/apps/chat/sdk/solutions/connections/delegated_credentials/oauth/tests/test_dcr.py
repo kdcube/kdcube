@@ -19,7 +19,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oau
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.tests.test_clients_and_store import FakeRedis
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.tests.helpers import enable_delegated_client
 
-ISSUER = "https://yey.boats"
+ISSUER = "https://connector.example.test"
 CB = "https://claude.ai/api/mcp/auth_callback"
 
 
@@ -46,7 +46,7 @@ def test_metadata_advertises_registration_endpoint():
 
 def test_register_returns_public_client(client):
     r = client.post("/oauth/register", json={
-        "client_name": "yey.boats KDCube admin",
+        "client_name": "KDCube test connector",
         "redirect_uris": [CB],
         "token_endpoint_auth_method": "none",
     })
@@ -56,6 +56,8 @@ def test_register_returns_public_client(client):
     assert "client_secret" not in body          # public client
     assert body["token_endpoint_auth_method"] == "none"
     assert body["redirect_uris"] == [CB]
+    assert body["logo_uri"] == f"{ISSUER}/img/favicon.svg"
+    assert body["client_uri"] == ISSUER
 
 
 def test_register_requires_redirect_uris(client):

@@ -64,6 +64,7 @@ class GrantStore:
         credential: Optional[Dict[str, Any]] = None,
         grantor_authority: Optional[Dict[str, Any]] = None,
         delegation_edges: Optional[List[Dict[str, Any]]] = None,
+        named_services: Optional[Dict[str, Any]] = None,
     ) -> str:
         code = secrets.token_urlsafe(32)
         payload = {
@@ -78,6 +79,7 @@ class GrantStore:
             "credential": credential or {},
             "grantor_authority": grantor_authority or {},
             "delegation_edges": list(delegation_edges or []),
+            "named_services": named_services or {},
         }
         await self._r.setex(self._key("code", code), self._auth_code_ttl, json.dumps(payload))
         return code
@@ -104,6 +106,7 @@ class GrantStore:
         credential: Optional[Dict[str, Any]] = None,
         grantor_authority: Optional[Dict[str, Any]] = None,
         delegation_edges: Optional[List[Dict[str, Any]]] = None,
+        named_services: Optional[Dict[str, Any]] = None,
     ) -> str:
         rt = secrets.token_urlsafe(40)
         payload = {
@@ -116,6 +119,7 @@ class GrantStore:
             "credential": credential or {},
             "grantor_authority": grantor_authority or {},
             "delegation_edges": list(delegation_edges or []),
+            "named_services": named_services or {},
         }
         await self._r.setex(self._key("refresh", rt), self._refresh_ttl, json.dumps(payload))
         return rt
@@ -193,6 +197,7 @@ class GrantStore:
             credential=rec.get("credential") or {},
             grantor_authority=rec.get("grantor_authority") or {},
             delegation_edges=rec.get("delegation_edges") or [],
+            named_services=rec.get("named_services") or {},
         )
 
     # ------------------------- access-token tool grant -------------------------
@@ -210,6 +215,7 @@ class GrantStore:
         credential: Optional[Dict[str, Any]] = None,
         grantor_authority: Optional[Dict[str, Any]] = None,
         delegation_edges: Optional[List[Dict[str, Any]]] = None,
+        named_services: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Record the consented tool allowlist and credential envelope for a token."""
         await self._r.setex(
@@ -219,6 +225,7 @@ class GrantStore:
                 "credential": credential or {},
                 "grantor_authority": grantor_authority or {},
                 "delegation_edges": list(delegation_edges or []),
+                "named_services": named_services or {},
             }),
         )
 

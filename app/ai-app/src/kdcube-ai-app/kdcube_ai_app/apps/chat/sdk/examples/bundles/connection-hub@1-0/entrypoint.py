@@ -62,6 +62,11 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oau
     register_client as oauth_register_client,
     token as oauth_token,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.mcp_metadata import (
+    kdcube_icon_descriptor,
+    kdcube_icon_url,
+    kdcube_website_url,
+)
 
 BUNDLE_ID = "connection-hub@1-0"
 ENTRYPOINT_NAME = "connection-hub"
@@ -1353,6 +1358,7 @@ class ConnectionHubEntrypoint(BaseEntrypointWithMemory):
             "authorization-server",
         }:
             parsed_cfg = oauth_delegated_config(request)
+            icon = kdcube_icon_descriptor(request=request, public_base_url=issuer)
             return JSONResponse(
                 authorization_server_metadata(
                     issuer,
@@ -1360,6 +1366,10 @@ class ConnectionHubEntrypoint(BaseEntrypointWithMemory):
                     token_endpoint=f"{public_base}/token",
                     registration_endpoint=f"{public_base}/register",
                     scopes_supported=parsed_cfg.supported_scopes(),
+                    service_name=parsed_cfg.brand or "KDCube",
+                    logo_uri=kdcube_icon_url(request=request, public_base_url=issuer),
+                    client_uri=kdcube_website_url(request=request, public_base_url=issuer),
+                    icons=[icon] if icon else None,
                 )
             )
         if path in {".well-known/oauth-protected-resource", "protected-resource"}:
@@ -1369,10 +1379,17 @@ class ConnectionHubEntrypoint(BaseEntrypointWithMemory):
             if not resource:
                 resource = str(kwargs.get("resource") or "").strip()
             parsed_cfg = oauth_delegated_config(request)
+            resource_cfg = parsed_cfg.resource_config(resource or None)
+            icon = kdcube_icon_descriptor(request=request, public_base_url=issuer)
             return JSONResponse(
                 protected_resource_metadata(
                     issuer,
                     resource=resource or None,
+                    resource_name=(
+                        resource_cfg.label
+                        if resource_cfg is not None and resource_cfg.label
+                        else parsed_cfg.brand or "KDCube"
+                    ),
                     scopes_supported=parsed_cfg.supported_scopes(resource),
                     capabilities=_delegated_client_capability_payload(request, resource=resource or None),
                     tools=[
@@ -1384,6 +1401,10 @@ class ConnectionHubEntrypoint(BaseEntrypointWithMemory):
                         }
                         for tool in parsed_cfg.resource_tool_catalog(resource)
                     ],
+                    named_services=resource_cfg.named_services if resource_cfg is not None else {},
+                    logo_uri=kdcube_icon_url(request=request, public_base_url=issuer),
+                    website_url=kdcube_website_url(request=request, public_base_url=issuer),
+                    icons=[icon] if icon else None,
                 )
             )
         if path == "authorize":

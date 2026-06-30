@@ -3,7 +3,7 @@ id: kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examp
 title: "2026-06-29 - Delegated Credential Surface Split"
 summary: "Connection Hub work split the OAuth delegated credential shortcut into delegated credential authority concerns and actual bundle/proc surface ownership."
 status: active
-tags: ["connection-hub", "delegated-credentials", "custom-authority", "mcp", "yay"]
+tags: ["connection-hub", "delegated-credentials", "custom-authority", "mcp", "custom-authority"]
 ---
 
 # 2026-06-29 - Delegated Credential Surface Split
@@ -49,7 +49,7 @@ The implementation must continue moving in this direction:
   wiring on top of SDK logic.
 - Ingress may host public OAuth protocol endpoints, but tool execution should
   not live in ingress as the default architecture.
-- Custom authorities such as Yey identity should be registered through the
+- Custom authorities such as custom identity should be registered through the
   Connection Hub authority model, not through repo-local gateway monkeypatches.
 
 ## Reference Plan
@@ -57,8 +57,8 @@ The implementation must continue moving in this direction:
 The detailed migration plan is tracked in the platform journal:
 
 ```text
-repo:kdcube-ai-app:app/ai-app/src/kdcube-ai-app/kdcube_ai_app/journal/26/06/connection-hub/custom-authority-and-yay/plan.md
+repo:kdcube-ai-app:app/ai-app/src/kdcube-ai-app/kdcube_ai_app/journal/26/06/connection-hub/custom-authority/plan.md
 ```
 
-Use that plan before changing the Yey integration or removing the temporary
+Use that plan before changing the custom integration or removing the temporary
 root `/mcp` shortcut.

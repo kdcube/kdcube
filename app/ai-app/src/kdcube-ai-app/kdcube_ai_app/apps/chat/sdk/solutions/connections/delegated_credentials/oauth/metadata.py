@@ -27,13 +27,17 @@ def authorization_server_metadata(
     token_endpoint: str | None = None,
     registration_endpoint: str | None = None,
     scopes_supported: Iterable[str] | None = None,
+    service_name: str | None = None,
+    logo_uri: str | None = None,
+    client_uri: str | None = None,
+    icons: Iterable[Mapping[str, Any]] | None = None,
 ) -> Dict[str, Any]:
     """RFC 8414 authorization-server metadata.
 
-    ``issuer`` is the public origin (e.g. ``https://yey.boats``), no trailing slash.
+    ``issuer`` is the public origin (e.g. ``https://connector.example.test``), no trailing slash.
     """
     issuer = issuer.rstrip("/")
-    return {
+    out: Dict[str, Any] = {
         "issuer": issuer,
         "authorization_endpoint": authorization_endpoint or f"{issuer}/oauth/authorize",
         "token_endpoint": token_endpoint or f"{issuer}/oauth/token",
@@ -49,15 +53,32 @@ def authorization_server_metadata(
         "scopes_supported": list(scopes_supported or [CONVERSATIONS_READ_SCOPE]),
         # jwks_uri intentionally omitted: tokens are opaque (kst1).
     }
+    if service_name:
+        # Non-standard but harmless for OAuth clients. Some connector UIs use
+        # this metadata to present the sign-in service.
+        out["service_name"] = service_name
+    if logo_uri:
+        out["logo_uri"] = logo_uri
+    if client_uri:
+        out["client_uri"] = client_uri
+    icon_rows = [dict(item) for item in (icons or []) if item]
+    if icon_rows:
+        out["icons"] = icon_rows
+    return out
 
 
 def protected_resource_metadata(
     issuer: str,
     *,
     resource: str | None = None,
+    resource_name: str | None = None,
     scopes_supported: Iterable[str] | None = None,
     capabilities: Iterable[Mapping[str, Any]] | None = None,
     tools: Iterable[Mapping[str, Any]] | None = None,
+    named_services: Mapping[str, Any] | None = None,
+    logo_uri: str | None = None,
+    website_url: str | None = None,
+    icons: Iterable[Mapping[str, Any]] | None = None,
 ) -> Dict[str, Any]:
     """RFC 9728 protected-resource metadata for a concrete bundle MCP resource."""
     issuer = issuer.rstrip("/")
@@ -67,6 +88,15 @@ def protected_resource_metadata(
         "authorization_servers": [issuer],
         "scopes_supported": list(scopes_supported or [CONVERSATIONS_READ_SCOPE]),
     }
+    if resource_name:
+        out["resource_name"] = resource_name
+    if logo_uri:
+        out["logo_uri"] = logo_uri
+    if website_url:
+        out["client_uri"] = website_url
+    icon_rows = [dict(item) for item in (icons or []) if item]
+    if icon_rows:
+        out["icons"] = icon_rows
     caps = [dict(item) for item in (capabilities or [])]
     if caps:
         # KDCube extension: lets clients/connector UIs discover the concrete
@@ -77,6 +107,11 @@ def protected_resource_metadata(
         # KDCube extension: canonical tool-centric policy for this protected
         # resource. Each tool declares the delegated grants required to call it.
         out["kdcube_tools"] = tool_rows
+    if isinstance(named_services, Mapping) and named_services:
+        # KDCube extension: namespace/tool boundaries for generic named-service
+        # MCP resources. This keeps namespace grants separate from generic MCP
+        # entry grants while still making the consent catalog discoverable.
+        out["kdcube_named_services"] = dict(named_services)
     return out
 
 

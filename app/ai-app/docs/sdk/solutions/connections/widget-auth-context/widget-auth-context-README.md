@@ -105,3 +105,23 @@ This lets the same widget work in:
 - KDCube scene;
 - Telegram Mini App;
 - future app-owned iframe surfaces.
+
+## Boundary With Delegated MCP Credentials
+
+Widget auth context is host-to-iframe request proof promotion. It is used when a
+runtime host already has auth material, such as Telegram `initData`, and needs a
+child widget to carry that material to its backend.
+
+Delegated MCP credentials are different:
+
+```text
+external client such as Claude
+  -> probes a KDCube MCP resource
+  -> follows Connection Hub OAuth
+  -> receives a delegated_client credential
+  -> calls MCP with Authorization: Bearer <credential>
+```
+
+Both paths use Connection Hub, but they enter through different transports.
+Widget auth context should not invent OAuth credentials, and the OAuth adapter
+should not rely on iframe `CONFIG_RESPONSE` messages.

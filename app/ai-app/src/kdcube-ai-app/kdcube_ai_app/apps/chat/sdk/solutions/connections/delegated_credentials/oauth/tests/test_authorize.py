@@ -23,12 +23,13 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oau
     parse_authorize_request,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.consent import render_consent_html
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.config import oauth_delegated_config
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.store import GrantStore
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.pkce import make_s256_challenge
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.tests.test_clients_and_store import FakeRedis
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.tests.helpers import enable_delegated_client
 
-ISSUER = "https://yey.boats"
+ISSUER = "https://connector.example.test"
 CHALLENGE = make_s256_challenge("verifier-" + "x" * 50)
 
 
@@ -158,6 +159,62 @@ def test_consent_html_shows_platform_account_and_logout():
     assert "02e53484-0081-70ce-11c1-e96706b1a182" in html
     assert "Sign out of KDCube" in html
     assert "/public/oauth/logout" in html
+
+
+def test_consent_html_shows_named_service_namespace_operation_labels():
+    app = FastAPI()
+    resource = "https://runtime.example.test/public/mcp/named_services"
+    app.state.oauth_delegated_config = {
+        "enabled": True,
+        "capabilities": [
+            {"grant": "named_services:use", "label": "Use named services"},
+            {"grant": "memories:read", "label": "Read memories"},
+            {"grant": "memories:write", "label": "Write memories"},
+        ],
+        "resources": [
+            {
+                "resource": resource,
+                "tools": {
+                    "named_services_search": {"grants": ["named_services:use"]},
+                    "named_services_upsert": {"grants": ["named_services:use"]},
+                },
+                "named_services": {
+                    "namespaces": {
+                        "mem": {
+                            "label": "User memories",
+                            "authority_id": "delegated_client",
+                            "tools": {
+                                "search": {
+                                    "operation": "object.search",
+                                    "label": "Search memories",
+                                    "description": "Search memory notes.",
+                                    "grants": ["memories:read"],
+                                },
+                                "upsert": {
+                                    "operation": "object.upsert",
+                                    "label": "Write memory",
+                                    "description": "Create or update a memory note.",
+                                    "grants": ["memories:write"],
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        ],
+    }
+    req = parse_authorize_request(
+        _params(scope="named_services:use memories:read memories:write", resource=resource),
+        supported_scopes=oauth_delegated_config(app).supported_scopes(resource),
+    )
+
+    html = render_consent_html(req, issuer=ISSUER, config=oauth_delegated_config(app))
+
+    assert "Named-service namespace boundaries" in html
+    assert "User memories" in html
+    assert "Search memories" in html
+    assert "Write memory" in html
+    assert "Create or update a memory note." in html
 
 
 # ----------------------------------- routes -----------------------------------

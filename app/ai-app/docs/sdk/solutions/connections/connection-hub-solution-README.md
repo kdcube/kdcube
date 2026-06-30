@@ -4,7 +4,7 @@ title: "Connection Hub Solution"
 summary: "Canonical map of Connection Hub roles: connection edges, identity-family resolution, request authenticators, authority projection, delegated connections, link flows, and widget auth-context transport."
 status: active
 tags: ["sdk", "solutions", "connections", "connection-hub", "identity", "auth", "authority", "delegated-connections"]
-updated_at: 2026-06-28
+updated_at: 2026-06-30
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-edges/connection-edges-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/identity-family-resolver/identity-family-resolver-README.md
@@ -115,6 +115,10 @@ Gmail:
 
 OAuth delegated credential:
   KDCube-issued token -> delegated_client authenticator -> grant registry -> integration principal + tools
+
+Managed KDCube Services MCP:
+  delegated_client credential -> kdcube-services@1-0 -> conversations / named_services tools
+  named_services_list -> namespace capabilities/schema -> namespace operation
 ```
 
 Connection edges prove which identity may represent which other identity, and
@@ -264,6 +268,17 @@ Current implementation:
   connections and email integration stores.
 - OAuth delegated credential is the current inbound delegated-connection
   protocol adapter.
+- `kdcube-services@1-0` is the current built-in managed MCP example. It exposes
+  `conversations` and `named_services` MCP surfaces protected by
+  `delegated_client`.
+- `named_services` is the current generic MCP bridge over configured
+  named-service namespaces such as `mem`, `task`, and `cnv`. Its MCP server
+  advertises instructions to call `named_services_list` first, then inspect
+  capabilities/schema, then call search/get/write/action tools.
+- MCP connector presentation is metadata, not authorization: KDCube server icons
+  and `ToolAnnotations` are provided for clients such as Claude, while
+  Connection Hub still enforces resource/tool/grant/identity-scope from stored
+  delegated credential records.
 - Gateway auth selection is documented in service auth.
 
 Production direction:

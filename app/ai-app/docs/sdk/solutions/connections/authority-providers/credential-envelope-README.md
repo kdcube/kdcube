@@ -110,9 +110,9 @@ Ingress verifies the signed token and active Redis record, then joins the
 stored session. It does not run Telegram, Slack, or bundle-local custom
 authority code.
 
-### OAuth delegated credential Delegated Client Access
+### Delegated Client Access
 
-The OAuth delegated credential access token is a `kst1` bundle-session token for an integration
+The delegated client access token is a `kst1` bundle-session token for an integration
 representative. Its session claim and grant record include:
 
 ```json
@@ -126,7 +126,8 @@ representative. Its session claim and grant record include:
   "attrs": {
     "client_id": "claude",
     "scopes": ["conversations:read"],
-    "tools": ["conversations_export"]
+    "tools": ["conversations_export"],
+    "resource": "https://runtime.example/api/integrations/bundles/demo/demo/kdcube-services@1-0/public/mcp/conversations"
   }
 }
 ```
@@ -134,6 +135,22 @@ representative. Its session claim and grant record include:
 The MCP resource server still enforces the grant record. The envelope only
 standardizes how this credential is discovered and explained to the authority
 runtime.
+
+For generic resources such as `kdcube-services@1-0/public/mcp/named_services`,
+the access/refresh grant record also carries server-side data that should not be
+trusted from the client:
+
+```text
+selected MCP tools
+selected grants
+identity_scope
+grantor authority facts
+nested named-service namespace catalog
+```
+
+MCP connector metadata such as server icon, website URL, server instructions,
+and `ToolAnnotations` is not encoded in the credential envelope. It is
+advertised by the MCP server and can be cached by the external client.
 
 ### Bundle Custom Authority
 
@@ -144,14 +161,14 @@ from kdcube_ai_app.infra.plugin.bundle_loader import authority_provider
 
 class NavigatorBundle:
     @authority_provider(
-        authority_id="yay.identity",
-        authenticator_id="yay.identity.oauth",
+        authority_id="custom.identity",
+        authenticator_id="custom.identity.oauth",
         credential_kinds=["authority_access"],
         audiences=["bundle:navigator-tg-bot@1-0"],
         label="Yay Identity",
     )
-    async def yay_identity_provider(self):
-        return self.yay_authority_provider
+    async def custom_identity_provider(self):
+        return self.custom_authority_provider
 ```
 
 On proc load, the manifest declaration is registered into Redis authority

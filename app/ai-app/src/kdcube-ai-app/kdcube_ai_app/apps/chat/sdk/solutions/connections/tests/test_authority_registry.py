@@ -73,8 +73,8 @@ async def test_local_authority_registry_fails_closed_when_unreachable():
 def test_authority_provider_spec_from_bundle_declaration():
     spec = authority_provider_spec_from_declaration(
         {
-            "authority_id": "yay.identity",
-            "authenticator_id": "yay.identity.oauth",
+            "authority_id": "custom.identity",
+            "authenticator_id": "custom.identity.oauth",
             "credential_kinds": ["authority_access"],
             "audiences": ["bundle:navigator-tg-bot@1-0"],
             "label": "Yay Identity",
@@ -83,8 +83,8 @@ def test_authority_provider_spec_from_bundle_declaration():
         bundle_id="navigator-tg-bot@1-0",
     )
 
-    assert spec.authority_id == "yay.identity"
-    assert spec.authenticators == ("yay.identity.oauth",)
+    assert spec.authority_id == "custom.identity"
+    assert spec.authenticators == ("custom.identity.oauth",)
     assert spec.credential_kinds == ("authority_access",)
     assert spec.bundle_id == "navigator-tg-bot@1-0"
     assert spec.metadata["source"] == "bundle_manifest"

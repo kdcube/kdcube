@@ -66,7 +66,7 @@ Redis / cache
 Durable store
   client    dynamic client registration metadata
   refresh   rotating refresh tokens + selected tools
-  grant     durable consent record, if we later model connection management
+  grant     durable consent record, selected tools, identity scope, nested catalogs
 ```
 
 Durable store can be Postgres or a platform persistent KV abstraction. The
@@ -86,8 +86,23 @@ inspection, revocation, and continuity across Redis restarts.
 1. Keep the current `GrantStore` interface as the service boundary.
 2. Split implementation into volatile and durable backends.
 3. Move `client` and `refresh` to the durable backend.
-4. Preserve selected-tool allowlist on refresh rotation.
+4. Preserve selected-tool allowlist, identity scope, delegation edges, grantor
+   authority facts, and nested named-service catalogs on refresh rotation.
 5. Add an operator view/API later for active MCP connections and revocation.
 
 The security rule remains unchanged: if any required record is missing or
 invalid, the OAuth delegated credential path fails closed.
+
+## Not Stored Here
+
+Connector presentation metadata is not grant state:
+
+- MCP server icons;
+- `website_url`;
+- `ToolAnnotations`;
+- server-level instructions such as "call `named_services_list` first".
+
+Those fields are re-advertised by the MCP server on `initialize` / `tools/list`.
+They help clients render and choose tools, but they do not authorize calls. The
+durable state is still the consent record: resource, selected tools, grants,
+identity scope, grantor facts, and nested namespace catalog.

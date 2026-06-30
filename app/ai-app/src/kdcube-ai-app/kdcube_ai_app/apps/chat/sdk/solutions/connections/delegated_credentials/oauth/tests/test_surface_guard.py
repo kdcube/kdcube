@@ -23,17 +23,27 @@ class _GrantStore:
         return self.record
 
 
-def _authority(scopes=None, *, resource=GUARD_RESOURCE):
+def _authority(
+    scopes=None,
+    *,
+    resource=GUARD_RESOURCE,
+    grantor_subject="02e53484-0081-70ce-11c1-e96706b1a182",
+    identity_scope="grantor",
+    subject="",
+):
+    subject = subject or f"integration:claude:{grantor_subject}"
     return {
         "schema": "kdcube.credential.v1",
         "credential_kind": "delegated_client_access",
         "issuer_authority_id": "delegated_client",
         "issuer_authenticator_id": "delegated_client.bearer",
-        "subject": "integration:claude:admin",
+        "subject": subject,
         "audience": "kdcube:delegated_client",
         "attrs": {
             "scopes": list(scopes or ["conversations:read"]),
             "resource": resource,
+            "grantor_subject": grantor_subject,
+            "identity_scope": identity_scope,
         },
     }
 
@@ -86,7 +96,7 @@ def test_extract_mcp_tool_calls_handles_batch():
     assert calls == [(2, "conversations_export")]
 
 
-def _client(monkeypatch, *, grant_record, auth=None, user=None):
+def _client(monkeypatch, *, grant_record, auth=None, user=None, return_projection=False):
     async def fake_authenticate(token: str):
         if token != "reader":
             return None
@@ -123,6 +133,9 @@ def _client(monkeypatch, *, grant_record, auth=None, user=None):
             body=body,
             auth=auth,
         )
+        if return_projection:
+            projection = surface_guard.delegated_mcp_runtime_projection(request)
+            return denial or JSONResponse({"ok": True, "projection": projection})
         return denial or JSONResponse({"ok": True})
 
     return TestClient(app)
@@ -161,7 +174,7 @@ def test_managed_guard_allows_configured_non_feedback_tool(monkeypatch):
             "selected_tool_grants": True,
         },
         user={
-            "sub": "integration:claude:user",
+            "sub": "integration:claude:02e53484-0081-70ce-11c1-e96706b1a182",
             "roles": ["kdcube:role:delegated-client"],
             "permissions": ["memories:read"],
         },
@@ -179,6 +192,60 @@ def test_managed_guard_allows_configured_non_feedback_tool(monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
+
+
+def test_managed_guard_exposes_runtime_projection_for_proc_bridge(monkeypatch):
+    client = _client(
+        monkeypatch,
+        return_projection=True,
+        auth={
+            "mode": "managed",
+            "authority_id": "delegated_client",
+            "tools": {
+                "memory_search": {
+                    "grants": ["memories:read"],
+                },
+            },
+            "selected_tool_grants": True,
+        },
+        user={
+            "sub": "integration:claude:02e53484-0081-70ce-11c1-e96706b1a182",
+            "roles": ["kdcube:role:delegated-client"],
+            "permissions": ["memories:read"],
+        },
+        grant_record={
+            "tools": ["memory_search"],
+            "credential": _authority(
+                scopes=["memories:read"],
+                grantor_subject="02e53484-0081-70ce-11c1-e96706b1a182",
+                identity_scope="grantor_identity_family",
+            ),
+            "grantor_authority": {
+                "grantor_roles": ["kdcube:role:super-admin"],
+                "grantor_permissions": ["memories:read"],
+                "economics_budget_bypass": True,
+            },
+        },
+    )
+
+    response = client.post(
+        "/guard",
+        json=_rpc_tool_call(name="memory_search"),
+        headers={"Authorization": "Bearer reader"},
+    )
+
+    assert response.status_code == 200
+    projection = response.json()["projection"]
+    authority = projection["identity_authority"]
+    assert projection["user_id"] == "02e53484-0081-70ce-11c1-e96706b1a182"
+    assert projection["user_type"] == "external"
+    assert projection["delegate_identity"] == "integration:claude:02e53484-0081-70ce-11c1-e96706b1a182"
+    assert projection["grantor_user_id"] == "02e53484-0081-70ce-11c1-e96706b1a182"
+    assert projection["identity_scope"] == "grantor_identity_family"
+    assert "memories:read" in projection["grants"]
+    assert authority["economics_user_id"] == "02e53484-0081-70ce-11c1-e96706b1a182"
+    assert authority["budget_bypass"] is True
+    assert authority["actor_identity"] == "integration:claude:02e53484-0081-70ce-11c1-e96706b1a182"
 
 
 def test_managed_guard_enforces_grants_per_called_tool(monkeypatch):

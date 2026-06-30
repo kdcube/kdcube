@@ -51,8 +51,8 @@ authorize / reject
 
 | Term | Meaning |
 | --- | --- |
-| `authority_id` | The identity/grant realm. Examples: `kdcube.platform`, `yey.custom`, `telegram.kdcube_ref`, `delegated_client`. |
-| `authenticator_id` | One verifier for one proof shape. Examples: `kdcube.cognito`, `yey.google_oidc`, `telegram.kdcube_ref.init_data`, `delegated_client.bearer`. |
+| `authority_id` | The identity/grant realm. Examples: `kdcube.platform`, `custom.identity`, `telegram.kdcube_ref`, `delegated_client`. |
+| `authenticator_id` | One verifier for one proof shape. Examples: `kdcube.cognito`, `custom.google_oidc`, `telegram.kdcube_ref.init_data`, `delegated_client.bearer`. |
 | Authority Provider | Owns an `authority_id`, identity namespace, grant resolver, linkers, and registered authenticators. |
 | Authenticator | Verifies auth material and returns a verified identity under its authority. |
 | Connection Hub Authenticator Selector | Chooses authenticator candidates inside Connection Hub. It does not authorize and it does not trust hints as facts. |
@@ -65,8 +65,8 @@ authorize / reject
 Controlled surfaces may include hints to avoid slow or broad selection:
 
 ```http
-X-KDCube-Auth-Authority-ID: yey.custom
-X-KDCube-Auth-Authenticator-ID: yey.google_oidc
+X-KDCube-Auth-Authority-ID: custom.identity
+X-KDCube-Auth-Authenticator-ID: custom.google_oidc
 ```
 
 These are non-secret selector hints. They narrow candidate authenticators, but
@@ -83,10 +83,10 @@ These hints only narrow the candidate list. Truth is produced only by a
 successful authenticator verification result.
 
 ```text
-hint says authority_id=yey.custom
+hint says authority_id=custom.identity
         |
         v
-Connection Hub selector tries candidate authenticators under yey.custom
+Connection Hub selector tries candidate authenticators under custom.identity
         |
         v
 authenticator verifies token/signature
@@ -110,10 +110,10 @@ surface_guard:
   accepted_auth:
     authority_ids:
       - kdcube.platform
-      - yey.custom
+      - custom.identity
     authenticator_ids:
       - kdcube.cognito
-      - yey.google_oidc
+      - custom.google_oidc
       - delegated_client.bearer
 ```
 
@@ -140,31 +140,31 @@ Runtime:
   authorize if required grant is present
 ```
 
-For a custom Yey surface:
+For a custom authority surface:
 
 ```text
 Surface Guard:
-  required_authority = yey.custom
-  required_grants    = [yey:role:admin]
+  required_authority = custom.identity
+  required_grants    = [custom:role:admin]
 
 Runtime:
-  selector -> yey.google_oidc
-  authenticator -> identity=yey:user:123, authority_id=yey.custom
+  selector -> custom.google_oidc
+  authenticator -> identity=custom:user:123, authority_id=custom.identity
   no platform link required
-  grant resolver for yey.custom
-  authorize if yey:role:admin is present
+  grant resolver for custom.identity
+  authorize if custom:role:admin is present
 ```
 
-For a platform surface reached by a Yey identity:
+For a platform surface reached by a custom identity:
 
 ```text
 Surface Guard:
   required_authority = kdcube.platform
 
 Runtime:
-  selector -> yey.google_oidc
-  authenticator -> identity=yey:user:123, authority_id=yey.custom
-  linker yey.custom -> kdcube.platform
+  selector -> custom.google_oidc
+  authenticator -> identity=custom:user:123, authority_id=custom.identity
+  linker custom.identity -> kdcube.platform
   grant resolver for kdcube.platform
   authorize if platform grant is present
 ```
@@ -189,13 +189,13 @@ from kdcube_ai_app.infra.plugin.bundle_loader import authority_provider
 
 class MyBundle:
     @authority_provider(
-        authority_id="yay.identity",
-        authenticator_id="yay.identity.oauth",
+        authority_id="custom.identity",
+        authenticator_id="custom.identity.oauth",
         credential_kinds=["authority_access"],
         audiences=["bundle:navigator-tg-bot@1-0"],
     )
-    async def yay_identity_provider(self):
-        return self.yay_authority_provider
+    async def custom_identity_provider(self):
+        return self.custom_authority_provider
 ```
 
 On proc load, the declaration is published to Redis authority discovery as
@@ -208,11 +208,11 @@ An authenticator result should include:
 ```json
 {
   "authenticated": true,
-  "authority_id": "yey.custom",
-  "authenticator_id": "yey.google_oidc",
+  "authority_id": "custom.identity",
+  "authenticator_id": "custom.google_oidc",
   "identity": {
     "subject": "user:123",
-    "ref": "yey.custom:user:123",
+    "ref": "custom.identity:user:123",
     "label": "Sofia"
   },
   "auth_material_type": "google_oidc"
@@ -222,14 +222,14 @@ An authenticator result should include:
 The grant resolver is authority-owned:
 
 ```text
-grant_resolver("yey.custom", "user:123")
+grant_resolver("custom.identity", "user:123")
   -> roles / permissions / scopes / tools
 ```
 
 The linker never invents grants. It only maps identity across authorities:
 
 ```text
-linker("yey.custom:user:123", to="kdcube.platform")
+linker("custom.identity:user:123", to="kdcube.platform")
   -> "kdcube.platform:02e53484-..."
   -> or null
 ```
@@ -287,15 +287,31 @@ Current state:
 - Connection Hub Telegram rows are request authenticators;
 - Connection Hub caches authenticator metadata in Redis and still resolves proof,
   links, and grants on each request;
-- OAuth delegated credential is a service auth implementation with its own grant store;
+- OAuth delegated credential is the current protocol adapter that registers the
+  `delegated_client` authority and `delegated_client.bearer` authenticator for
+  managed MCP surfaces;
+- `kdcube-services@1-0` uses that authority for the managed `conversations` and
+  `named_services` MCP surfaces;
 - most surfaces implicitly require `kdcube.platform`.
 
 Target:
 
 - all authenticators declare an `authority_id`;
 - surface guards declare required authority and grants;
-- OAuth delegated credential is registered as the `delegated_client` authority provider with
-  `delegated_client.bearer` authenticator and delegated-client grant resolver;
-- custom deployments such as Yey register `yey.custom` as an authority provider;
+- delegated credential protocol adapters register authority providers and
+  authenticators with the same descriptor/registry shape as request
+  authenticators;
+- custom deployments such as custom register `custom.identity` as an authority provider;
 - platform APIs require `kdcube.platform` only when they truly require platform
   authority.
+
+For MCP clients, authority-provider metadata is not enough for a good UX. The
+MCP server should also advertise connector metadata:
+
+```text
+FastMCP(..., stateless_http=True, icons=[...], website_url=..., instructions=...)
+tool annotations: readOnlyHint / destructiveHint / idempotentHint
+```
+
+Those hints help clients such as Claude render icons and group tools, while the
+authority provider and grant resolver remain the enforcement path.
