@@ -1,4 +1,4 @@
-import {RNFile, TurnStep} from "../../../../features/chatController/chatBase.ts";
+import {RNFile, TurnStep, resolveResourceRn} from "../../../../features/chatController/chatBase.ts";
 import {InlineImageItemsPanel} from "./InlineImageItemsPanel.tsx";
 import {useAppSelector} from "../../../../app/store.ts";
 import {selectCurrentTurn} from "../../../../features/chat/chatStateSlice.ts";
@@ -93,7 +93,7 @@ const DownloadItemsPanel = ({items}: DownloadItemsPanelProps) => {
                     <div key={index}>
                         <button
                             className="my-1 mr-2 text-gray-700 flex items-center text-sm cursor-pointer hover:text-black hover:underline"
-                            onClick={() => downloadResourceByRN(item.rn, item.filename, item.mime)}>
+                            onClick={() => downloadResourceByRN(resolveResourceRn(item), item.filename, item.mime)}>
                             <span className="inline-block mr-1">{getFileIcon(item.filename, 24, item.mime)}</span>
                             <span className="inline-block">{item.filename}</span>
                         </button>
