@@ -41,7 +41,7 @@ def _ts_sort_key(ts: Any) -> tuple[int, float]:
         return (1, 0.0)
 
 
-def _attachment_event(ts: Any, att: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _attachment_event(ts: Any, att: Dict[str, Any], conversation_id: str) -> Optional[Dict[str, Any]]:
     if not isinstance(att, dict):
         return None
     path = _text(att.get("artifact_path") or att.get("path") or att.get("logical_path"))
@@ -54,11 +54,11 @@ def _attachment_event(ts: Any, att: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if att.get("mime"):
         event["mime"] = _text(att.get("mime"))
     if path:
-        event["ref"] = conv_file_ref(path)
+        event["ref"] = conv_file_ref(path, conversation_id)
     return event
 
 
-def _classify(art: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _classify(art: Dict[str, Any], conversation_id: str) -> List[Dict[str, Any]]:
     atype = _text(art.get("type"))
     ts = art.get("ts")
     data = art.get("data") if isinstance(art.get("data"), dict) else {}
@@ -68,7 +68,7 @@ def _classify(art: Dict[str, Any]) -> List[Dict[str, Any]]:
     if atype == "chat:user":
         out: List[Dict[str, Any]] = [{"type": "user.message", "ts": ts, "text": _text(data.get("text"))}]
         for att in (data.get("attachments") or []):
-            ev = _attachment_event(ts, att)
+            ev = _attachment_event(ts, att, conversation_id)
             if ev:
                 out.append(ev)
         return out
@@ -83,7 +83,7 @@ def _classify(art: Dict[str, Any]) -> List[Dict[str, Any]]:
             "ts": ts,
             "filename": _text(payload.get("filename")),
             "mime": _text(payload.get("mime")),
-            "ref": conv_file_ref(path),
+            "ref": conv_file_ref(path, conversation_id),
         }]
 
     if atype == "artifact:conv.thinking.stream":
@@ -132,6 +132,7 @@ def build_conversation_timeline(fetched: Dict[str, Any]) -> Dict[str, Any]:
 
     Returns turns in order, each with its events time-ordered within the turn.
     """
+    conversation_id = _text((fetched or {}).get("conversation_id"))
     turns_in = (fetched or {}).get("turns") or []
     turns_out: List[Dict[str, Any]] = []
     for turn in turns_in:
@@ -140,7 +141,7 @@ def build_conversation_timeline(fetched: Dict[str, Any]) -> Dict[str, Any]:
         events: List[Dict[str, Any]] = []
         for art in (turn.get("artifacts") or []):
             if isinstance(art, dict):
-                events.extend(_classify(art))
+                events.extend(_classify(art, conversation_id))
         events.sort(key=lambda e: _ts_sort_key(e.get("ts")))
         turns_out.append({"turn_id": _text(turn.get("turn_id")), "events": events})
 

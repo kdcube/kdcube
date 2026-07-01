@@ -542,13 +542,24 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
         conv_id = logical_artifact_conversation_id(fi_ref) or _text(ctx.conversation_id)
         LOGGER.info(
             "[conversation.named_service.file] ref=%s fi=%s conversation_id=%s user_id=%s",
-            ref, fi_ref, conv_id, ctx.user_id,
+            ref, fi_ref, conv_id or "<none>", ctx.user_id,
         )
+        if not conv_id:
+            return NamedServiceResponse.error_response(
+                code="conversation_file_unscoped",
+                message=(
+                    "File ref is not conversation-scoped. Use the "
+                    "conv:fi:conv_<conversation_id>.turn_<id>.<...> form returned by search or "
+                    "object.get conv:conversation (which now emits conversation-scoped refs)."
+                ),
+                status=400, details={"ref": ref}, provider=self.provider_identity(),
+                namespace=request.namespace or NAMESPACE, object_ref=ref,
+            )
         result = await materialize(fi_ref=fi_ref, conversation_id=conv_id)
         if not result.get("ok"):
             reason = _text(result.get("reason")) or "error"
+            detail = result.get("detail") if isinstance(result.get("detail"), dict) else {}
             if reason == "too_large":
-                detail = result.get("detail") or {}
                 obj = conversation_file_to_object(
                     ref=ref, filename=_text(detail.get("filename")), mime=_text(detail.get("mime")),
                     size=int(detail.get("size") or 0), encoding="none",
@@ -559,10 +570,15 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
                     object_ref=ref, object=obj,
                 )
             status = 404 if reason in ("not_found", "unresolvable_ref") else 500
+            LOGGER.warning(
+                "[conversation.named_service.file] failed ref=%s reason=%s detail=%s",
+                ref, reason, detail,
+            )
             return NamedServiceResponse.error_response(
                 code=f"conversation_file_{reason}",
                 message=f"Could not materialize the file: {reason}.",
-                status=status, provider=self.provider_identity(), namespace=request.namespace or NAMESPACE,
+                status=status, details=detail or None,
+                provider=self.provider_identity(), namespace=request.namespace or NAMESPACE,
                 object_ref=ref,
             )
 

@@ -53,8 +53,9 @@ def test_interleaves_by_ts_and_surfaces_files_sources_thinking():
     ]
 
     by_type = {e["type"]: e for e in events}
-    assert by_type["user.attachment"]["ref"] == "conv:fi:turn_t1.user.attachments/input.csv"
-    assert by_type["assistant.file"]["ref"] == "conv:fi:turn_t1.outputs/chart.png"
+    # Refs are scoped to the conversation (fi:conv_<id>.…) so external clients resolve them.
+    assert by_type["user.attachment"]["ref"] == "conv:fi:conv_c1.turn_t1.user.attachments/input.csv"
+    assert by_type["assistant.file"]["ref"] == "conv:fi:conv_c1.turn_t1.outputs/chart.png"
     # thinking drops the empty item
     assert by_type["assistant.thinking"]["items"] == [{"agent": "solver", "text": "I will plot it"}]
     # sources keep only sid/title/url (heavy text dropped)

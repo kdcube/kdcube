@@ -130,7 +130,7 @@ async def test_object_get_returns_interleaved_timeline():
     events = turns[0]["events"]
     assert [e["type"] for e in events] == ["user.message", "assistant.file", "assistant.message"]
     file_event = events[1]
-    assert file_event["ref"] == "conv:fi:turn_t1.outputs/chart.png"
+    assert file_event["ref"] == "conv:fi:conv_c1.turn_t1.outputs/chart.png"
     assert file_event["filename"] == "chart.png"
     assert obj["body"]["turn_count"] == 1
 

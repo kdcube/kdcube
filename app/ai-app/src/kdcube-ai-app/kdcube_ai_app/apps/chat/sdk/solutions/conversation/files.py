@@ -59,7 +59,14 @@ async def materialize_fi_artifact(
     if not ref:
         return {"ok": False, "reason": "unresolvable_ref"}
     physical = _infer_physical_from_fi(ref)
+    conv = str(conversation_id or "").strip()
+    browser_conv = str(getattr(getattr(browser, "runtime_ctx", None), "conversation_id", "") or "").strip()
+    LOGGER.info(
+        "[conversation.files] materialize ref=%s physical=%s conversation_id=%s browser_conversation_id=%s",
+        ref, physical, conv or "<none>", browser_conv or "<none>",
+    )
     if not physical:
+        LOGGER.warning("[conversation.files] unresolvable_ref ref=%s", ref)
         return {"ok": False, "reason": "unresolvable_ref", "detail": {"ref": ref}}
 
     with tempfile.TemporaryDirectory(prefix="conv_fi_") as td:
@@ -69,20 +76,30 @@ async def materialize_fi_artifact(
                 ctx_browser=browser,
                 paths=[physical],
                 outdir=outdir,
-                conversation_id=str(conversation_id or "").strip() or None,
+                conversation_id=conv or None,
             )
         except Exception as exc:  # pragma: no cover - defensive
-            LOGGER.exception("[conversation.files] rehost failed ref=%s", ref)
+            LOGGER.exception("[conversation.files] rehost raised ref=%s", ref)
             return {"ok": False, "reason": "error", "detail": {"error": str(exc)}}
 
+        rehosted = list(result.get("rehosted") or []) if isinstance(result, dict) else []
         missing = list(result.get("missing") or []) if isinstance(result, dict) else []
         errors = list(result.get("errors") or []) if isinstance(result, dict) else []
 
         # Collect concrete files written under the temp dir. rehost reports physical
         # paths; a directory-shaped ref expands to several files, so scan to be safe.
         files = [p for p in outdir.rglob("*") if p.is_file()]
+        LOGGER.info(
+            "[conversation.files] rehost ref=%s physical=%s rehosted=%s files_found=%s missing=%s errors=%s",
+            ref, physical, len(rehosted), len(files), missing, errors,
+        )
         if not files:
-            return {"ok": False, "reason": "not_found", "detail": {"missing": missing, "errors": errors}}
+            LOGGER.warning(
+                "[conversation.files] not_found ref=%s physical=%s conversation_id=%s missing=%s errors=%s",
+                ref, physical, conv or "<none>", missing, errors,
+            )
+            return {"ok": False, "reason": "not_found",
+                    "detail": {"physical_path": physical, "conversation_id": conv, "missing": missing, "errors": errors}}
 
         # Single-file materialization: pick the file whose name matches the ref's
         # leaf when possible, else the first (smallest surprise for exact-file refs).

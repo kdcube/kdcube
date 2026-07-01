@@ -24,6 +24,9 @@ def test_conv_file_ref_grammar_roundtrips():
     assert conv_file_ref("fi:turn_1.outputs/summary.md") == "conv:fi:turn_1.outputs/summary.md"
     assert conv_file_ref("conv:fi:turn_1.files/x") == "conv:fi:turn_1.files/x"
     assert conv_file_ref("ar:turn_1.react.turn.index") == "ar:turn_1.react.turn.index"
+    # With a conversation id, the ref is scoped so an external client can resolve it.
+    assert conv_file_ref("fi:turn_1.outputs/summary.md", "c9") == "conv:fi:conv_c9.turn_1.outputs/summary.md"
+    assert conv_file_ref("fi:conv_c9.turn_1.outputs/summary.md", "c9") == "conv:fi:conv_c9.turn_1.outputs/summary.md"
     assert is_conv_file_ref("conv:fi:turn_1.outputs/summary.md")
     assert not is_conv_file_ref("conv:conversation:c1")
     # conv:fi: -> fi:, tolerating a bare fi: ref; anything else -> "".
@@ -40,7 +43,8 @@ def test_turn_hit_snippet_path_presented_as_conv_fi():
         "snippets": [{"role": "attachment", "path": "fi:turn_t1.user.attachments/summary.md", "text": "hello"}],
     }
     obj = turn_hit_to_object(hit)
-    assert obj["body"]["snippets"][0]["path"] == "conv:fi:turn_t1.user.attachments/summary.md"
+    # Scoped to the hit's conversation so an external client can pass it back.
+    assert obj["body"]["snippets"][0]["path"] == "conv:fi:conv_c1.turn_t1.user.attachments/summary.md"
     assert obj["body"]["snippets"][0]["text"] == "hello"
 
 

@@ -51,13 +51,30 @@ def conversation_id_from_ref(value: Any) -> str:
     return ""
 
 
-def conv_file_ref(fi_path: Any) -> str:
-    """Round-trippable conv-namespaced handle for a `fi:` artifact path.
+def _scope_fi_to_conversation(fi_path: str, conversation_id: str) -> str:
+    """Ensure a `fi:` path self-describes its conversation (`fi:conv_<id>.turn_...`).
 
-    `fi:<body>` -> `conv:fi:<body>`. An already-`conv:fi:` ref or a non-`fi:`
-    value (e.g. an `ar:`/`tc:` recovery handle) is returned unchanged.
+    External clients have no ambient conversation, so every emitted file ref must
+    carry the conversation scope for the read side to resolve the turn.
     """
     raw = _text(fi_path)
+    conv = _text(conversation_id)
+    if not conv or not raw.startswith("fi:"):
+        return raw
+    body = raw[len("fi:"):]
+    if body.startswith("conv_"):  # already scoped
+        return raw
+    return f"fi:conv_{conv}.{body}"
+
+
+def conv_file_ref(fi_path: Any, conversation_id: str = "") -> str:
+    """Round-trippable conv-namespaced handle for a `fi:` artifact path.
+
+    `fi:[conv_<id>.]<body>` -> `conv:fi:[conv_<id>.]<body>`, scoped to its
+    conversation when known so an external client can resolve it. An already-
+    `conv:fi:` ref or a non-`fi:` value (e.g. an `ar:`/`tc:` handle) passes through.
+    """
+    raw = _scope_fi_to_conversation(_text(fi_path), conversation_id)
     if raw.startswith(CONV_FILE_REF_PREFIX):
         return raw
     if raw.startswith("fi:"):
@@ -83,16 +100,17 @@ def _compact(obj: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in obj.items() if value not in (None, "", [])}
 
 
-def _present_snippet(sn: dict[str, Any]) -> dict[str, Any]:
+def _present_snippet(sn: dict[str, Any], conversation_id: str = "") -> dict[str, Any]:
     """Lean snippet for a turn hit. The `path` handle is presented as a
-    round-trippable `conv:fi:<...>` ref when it is a file artifact, so the client
-    can pass it straight to object.get; non-file handles pass through unchanged."""
+    round-trippable, conversation-scoped `conv:fi:<...>` ref when it is a file
+    artifact, so the client can pass it straight to object.get; non-file handles
+    pass through unchanged."""
     out: dict[str, Any] = {}
     for key in ("role", "path", "text", "ts"):
         value = sn.get(key)
         if value in (None, ""):
             continue
-        out[key] = conv_file_ref(value) if key == "path" else value
+        out[key] = conv_file_ref(value, conversation_id) if key == "path" else value
     return out
 
 
@@ -117,7 +135,7 @@ def turn_hit_to_object(hit: dict[str, Any], *, namespace: str = NAMESPACE) -> di
         "conversation_id": conversation_id,
         "turn_id": turn_id,
         "turn_index_path": hit.get("turn_index_path"),
-        "snippets": [_present_snippet(sn) for sn in snippets],
+        "snippets": [_present_snippet(sn, conversation_id) for sn in snippets],
         "ordinal": hit.get("ordinal"),
         "total_turns": hit.get("total_turns"),
     })
