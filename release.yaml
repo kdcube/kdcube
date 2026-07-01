@@ -1,113 +1,56 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.7.01.155"
+  ref: "2026.7.1.455"
   description: |
-    This release follows 2026.6.25.255 with the Connection Hub work promoted
-    into the platform SDK and with managed MCP surfaces ready for delegated
-    external clients.
+    This release follows 2026.7.01.155 with a focused operational hotfix for
+    git-managed bundle refresh.
 
-    The main functional change is that Connection Hub is now the platform
-    place for identity links, request authenticators, delegated credentials,
-    connection edges, identity-family resolution, and auth-context transport.
-    The former OAuth/MCP experiment has been reshaped into a Connection Hub
-    delegated-credential protocol adapter: OAuth is the protocol, delegated
-    credentials are the product concept, and MCP is only one guarded bundle
-    surface type. Bundle MCP endpoints can now be protected by managed
-    authority/grant metadata and receive a projected runtime identity after
-    a delegated client token is accepted.
+    The previous release introduced built-in Connection Hub, managed MCP
+    surfaces, and new applications-bundle refs. During staging rollout we found
+    that a processor could keep serving an old managed-bundle path when the
+    descriptor ref changed but the old path still existed on shared storage.
+    That left runtime bundle admin and request-time resolution pointed at stale
+    applications content even after the descriptor authority had the new ref.
 
-    This release also adds the built-in `kdcube-services@1-0` bundle. It
-    exposes KDCube-owned service surfaces for external clients, including a
-    `conversations_export` MCP tool guarded by `conversations:read` and a
-    generic named-services MCP bridge for configured namespaces such as
-    memories, tasks, and canvas. This gives Claude-style clients a clean
-    proc/bundle MCP URL instead of the retired root `/mcp` shortcut.
+    This release tightens the managed-bundle resolution path. Git-backed
+    bundles now skip materialization only when the managed cache marker proves
+    that the cached path matches the requested repo, ref, and subdir. A stale
+    existing path is no longer enough to bypass git resolution.
 
-    Telegram integration was standardized around Connection Hub as well.
-    Telegram Mini Apps and iframed widgets now use the existing host/iframe
-    config handshake to promote auth context, the Connection Hub widget can
-    create a channel-first connection edge to a platform user, and the Mini
-    App updates through Data Bus events after link/unlink. Telegram-only
-    actors remain low-authority/external until linked and delegated.
+    Startup descriptor reset synchronization was also hardened. Workers that do
+    not acquire the descriptor-reset lock now wait for the writer and reload
+    from descriptor authority, instead of silently continuing with stale local
+    registry state. If the wait expires, the worker refreshes directly and
+    publishes a replacement registry.
 
     Highlights
 
-    - Moves Connection Hub implementation into the SDK-owned
-      `sdk/solutions/connections` shape with a thin built-in bundle UI/API.
-    - Adds descriptor-backed request authenticators, authority hints, and
-      Connection Hub request-auth surface logging.
-    - Adds delegated OAuth credentials under
-      `connections.delegated_credentials.oauth`, including DCR, consent,
-      token issuance, refresh, and managed MCP guard support.
-    - Adds `kdcube-services@1-0` with managed MCP surfaces for conversations
-      and generic named-service access.
-    - Adds tool-centric managed MCP authorization: tools declare required
-      grants; consent and stored grant records narrow to selected tools and
-      grants.
-    - Adds connection edges and channel-first Telegram linking with explicit
-      platform confirmation and Data Bus notification back to the Mini App.
-    - Adds identity-family resolution so user-facing memory reads can include
-      memories created from linked identities while writes remain actor-scoped.
-    - Routes economics-sensitive execution through authority projection so
-      delegated/channel identities can charge the projected platform subject
-      while preserving actor provenance.
-    - Removes the legacy economics lane/user-type decision path from the
-      main chatbot economics flow.
-    - Adds recipes, solution docs, and publication drafts for Connection Hub,
-      delegated credentials, managed MCP, Telegram integrations, and
-      named-services access from external clients.
+    - Validates git-managed bundle cache markers before reusing cached bundle
+      paths.
+    - Re-materializes git bundles when descriptor repo/ref/subdir no longer
+      matches the local cache marker.
+    - Releases the startup descriptor-reset lock with a per-worker token.
+    - Makes non-writer startup workers wait for descriptor reset completion and
+      reload from authority before serving bundle registry state.
+    - Adds regression tests for stale-path re-materialization, current-cache
+      reuse, descriptor-reset lock release, and busy-lock reload behavior.
 
     Operational impact
 
-    - Deployments that want external-client MCP access should configure
-      `connection-hub@1-0.config.connections.delegated_credentials.oauth`
-      and declare managed MCP surfaces under
-      `surfaces.as_provider.mcp.<alias>.auth`.
-    - The supported MCP resource is the real bundle URL, for example
-      `/api/integrations/bundles/{tenant}/{project}/kdcube-services@1-0/public/mcp/conversations`.
-      Root `/mcp` is not a platform product surface.
-    - Telegram webhook URLs should carry an integration/connection hint when
-      possible, but Connection Hub still keeps verifier fallback.
-    - Telegram Mini Apps should promote auth context through the standard
-      widget CONFIG_REQUEST/CONFIG_RESPONSE handshake rather than custom
-      `kdcube.auth.*` messages.
-    - Memory widgets can aggregate reads across identity family when enabled;
-      services should use the Connection Hub resolver instead of guessing
-      linked user ids.
-    - External-client delegated access is now represented as a delegated
-      credential edge, not as a platform session monkeypatch.
+    - Environments using git-managed application bundles should now converge
+      to the descriptor ref on processor startup and bundle reload.
+    - Existing correct managed-bundle caches still skip git resolution through
+      the marker check.
+    - Stale caches are corrected visibly through logs and materialization,
+      rather than silently serving old bundle code.
 
     Changelog
 
-    - Added Connection Hub SDK modules for authentication surfaces,
-      request-auth selectors, connection edges, identity family resolution,
-      delegated OAuth credentials, authority inventory, credential envelopes,
-      authority projection, and federated Data Bus tokens.
-    - Added the built-in `connection-hub@1-0` bundle and moved its core logic
-      behind SDK modules.
-    - Added the built-in `user-memories@2026-06-26` app and updated memory
-      widget reads/deletes to work with linked identity families.
-    - Added the built-in `kdcube-services@1-0` bundle with conversations and
-      named-services MCP surfaces.
-    - Added managed MCP guard support for bundle/proc MCP endpoints.
-    - Added Connection Hub delegated OAuth discovery, DCR, authorize/consent,
-      token, refresh, and resource metadata flows.
-    - Added KDCube MCP metadata/icon helpers and stateless FastMCP serving for
-      managed tools.
-    - Added named-service MCP bridge tracing, per-namespace boundary policies,
-      and nested namespace grant metadata for consent.
-    - Added conversation search SDK/named-service groundwork and conversation
-      export service support.
-    - Standardized Telegram Mini App auth context promotion, link/unlink UX,
-      and Data Bus refresh behavior.
-    - Updated Versatile Telegram Mini App topology so unauthenticated Telegram
-      users see only the Connect flow until linked.
-    - Updated gateway/platform auth selection to descriptor-backed platform
-      authenticators.
-    - Updated economics/accounting projection so delegated/channel calls can
-      attribute cost to the projected platform subject.
-    - Added regression tests around delegated OAuth configuration, CSRF,
-      discovery, DCR, token storage, managed MCP guards, identity family, and
-      named-service boundaries.
+    - Updated git-managed bundle resolution in the bundle registry to validate
+      cache marker state before accepting an existing path.
+    - Updated startup bundle descriptor reset locking so only the lock holder
+      writes under its token and followers reload fresh registry state.
+    - Added targeted tests around stale bundle cache detection and startup
+      descriptor reset coordination.
 config:
-  version: "2026.7.01.155"
+  version: "2026.7.1.455"
