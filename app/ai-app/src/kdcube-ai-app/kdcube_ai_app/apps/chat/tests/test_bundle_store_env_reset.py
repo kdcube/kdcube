@@ -1345,6 +1345,68 @@ async def test_force_env_reset_runs_even_when_secrets_provider_is_aws_sm(monkeyp
 
     assert result is expected
     assert called["reset"] == 1
+    lock_key = bundle_store.namespaces.CONFIG.BUNDLES.ENV_SYNC_LOCK_FMT.format(
+        tenant="demo",
+        project="demo-project",
+    )
+    assert await redis.get(lock_key) is None
+
+
+@pytest.mark.asyncio
+async def test_force_env_reset_waits_for_busy_lock_and_reloads_authority(monkeypatch):
+    redis = _FakeRedis()
+    tenant = "demo"
+    project = "demo-project"
+    lock_key = bundle_store.namespaces.CONFIG.BUNDLES.ENV_SYNC_LOCK_FMT.format(
+        tenant=tenant,
+        project=project,
+    )
+    await redis.set(lock_key, "other-worker", ex=5)
+
+    monkeypatch.setattr(
+        bundle_store,
+        "get_settings",
+        lambda: SimpleNamespace(
+            BUNDLES_FORCE_ENV_ON_STARTUP=True,
+            BUNDLES_FORCE_ENV_LOCK_TTL_SECONDS=1,
+            BUNDLES_DESCRIPTOR_PROVIDER="file",
+            TENANT=tenant,
+            PROJECT=project,
+        ),
+    )
+    file_store = bundle_store._FileBundleDescriptorStore(bundles_yaml_uri=(Path(__file__).resolve()).as_uri())
+    monkeypatch.setattr(bundle_store, "_get_authoritative_bundle_store", lambda tenant, project: file_store)
+
+    expected = bundle_store.BundlesRegistry(default_bundle_id="fresh.bundle", bundles={})
+    called = {"reload": 0, "reset": 0}
+
+    async def _fake_reload(*args, **kwargs):
+        called["reload"] += 1
+        return expected
+
+    async def _fake_reset(*args, **kwargs):
+        called["reset"] += 1
+        return bundle_store.BundlesRegistry(default_bundle_id="stale.bundle", bundles={})
+
+    async def _release_lock_soon():
+        await asyncio.sleep(0.05)
+        await redis.delete(lock_key)
+
+    monkeypatch.setattr(bundle_store, "reload_registry_from_authority", _fake_reload)
+    monkeypatch.setattr(bundle_store, "reset_registry_from_env", _fake_reset)
+
+    result, _ = await asyncio.gather(
+        bundle_store.force_env_reset_if_requested(
+            redis,
+            tenant=tenant,
+            project=project,
+            actor="startup-env",
+        ),
+        _release_lock_soon(),
+    )
+
+    assert result is expected
+    assert called == {"reload": 1, "reset": 0}
 
 
 @pytest.mark.asyncio
