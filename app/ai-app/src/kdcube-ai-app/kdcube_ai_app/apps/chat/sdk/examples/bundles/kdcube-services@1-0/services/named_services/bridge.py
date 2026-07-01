@@ -354,15 +354,8 @@ class NamedServicesMcpBridge:
                 "allowed_operations": list(EXPOSED_OPERATIONS),
             }
 
-        policy = self._catalog.policy_for(ns)
-        if policy is None:
-            return {
-                "ok": False,
-                "error": "namespace_not_configured",
-                "message": f"namespace '{ns}' is not configured on this MCP surface",
-                "configured_namespaces": self._catalog.namespace_names(),
-            }
-
+        # Log EVERY inbound call attempt (including unknown/unconsented namespaces),
+        # before any authorization decision, so denials are always traceable.
         trace = _credential_trace_context(self._request)
         runtime_trace = _runtime_trace_context()
         LOGGER.info(
@@ -384,16 +377,42 @@ class NamedServicesMcpBridge:
             runtime_trace.get("runtime_roles") or [],
         )
 
+        policy = self._catalog.policy_for(ns)
+        if policy is None:
+            configured = self._catalog.namespace_names()
+            LOGGER.warning(
+                "[kdcube-services.named_services_mcp] denied tool=%s operation=%s namespace=%s error=namespace_not_configured configured_namespaces=%s delegate=%s grantor=%s",
+                tool_name,
+                op,
+                ns,
+                configured,
+                trace.get("delegate_identity") or "",
+                trace.get("grantor_user_id") or "",
+            )
+            return {
+                "ok": False,
+                "error": "namespace_not_configured",
+                "message": f"namespace '{ns}' is not configured on this MCP surface",
+                "configured_namespaces": configured,
+                "next_step": (
+                    "This namespace is not part of the current delegated consent. If it "
+                    "exists, reconnect this MCP resource and approve it during consent, "
+                    "then retry."
+                ),
+            }
+
         denial = self._authorize(policy, op, tool_name=tool_name)
         if denial is not None:
-            LOGGER.info(
-                "[kdcube-services.named_services_mcp] denied tool=%s operation=%s namespace=%s error=%s missing_grants=%s available_grants=%s",
+            LOGGER.warning(
+                "[kdcube-services.named_services_mcp] denied tool=%s operation=%s namespace=%s error=%s missing_grants=%s available_grants=%s delegate=%s grantor=%s",
                 tool_name,
                 op,
                 ns,
                 denial.get("error") or "",
                 denial.get("missing_grants") or [],
                 denial.get("available_grants") or [],
+                trace.get("delegate_identity") or "",
+                trace.get("grantor_user_id") or "",
             )
             return denial
 
