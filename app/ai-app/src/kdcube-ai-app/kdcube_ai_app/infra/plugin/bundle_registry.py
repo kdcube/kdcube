@@ -161,13 +161,14 @@ async def _apply_git_resolution(reg: Dict[str, Dict[str, Any]], source: str = "u
     if repo_count:
         logger.info("Resolving git bundles (source=%s, bundles=%s)", source, repo_count)
     try:
-            from kdcube_ai_app.infra.plugin.git_bundle import (
-                ensure_git_bundle,
-                resolve_managed_bundles_root,
-                cleanup_old_git_bundles_async,
-                bundle_dir_for_git,
-            )
-            from kdcube_ai_app.infra.plugin.bundle_refs import get_local_active_paths
+        from kdcube_ai_app.infra.plugin.git_bundle import (
+            ensure_git_bundle,
+            resolve_managed_bundles_root,
+            cleanup_old_git_bundles_async,
+            bundle_dir_for_git,
+            git_bundle_cache_status,
+        )
+        from kdcube_ai_app.infra.plugin.bundle_refs import get_local_active_paths
     except Exception:
         return reg
 
@@ -192,23 +193,54 @@ async def _apply_git_resolution(reg: Dict[str, Dict[str, Any]], source: str = "u
             entry.get("subdir"),
             source,
         )
-        # Skip git resolution if path already exists and we are not forcing pull.
+        # Skip git resolution only when the managed bundle cache marker proves
+        # this path was materialized for the requested repo/ref/subdir. A plain
+        # filesystem existence check is not enough: after descriptor ref bumps a
+        # stale path can still exist and would otherwise keep executing old
+        # bundle source against the newly deployed platform.
         if not force_pull:
-            path_val = (entry.get("path") or "").strip()
-            if path_val:
-                try:
-                    from pathlib import Path as _Path
-                    if _Path(path_val).exists():
-                        logger.info(
-                            "Git bundle skip (path exists): id=%s path=%s source=%s",
-                            bid,
-                            path_val,
-                            source,
-                        )
-                        skipped += 1
-                        continue
-                except Exception:
-                    pass
+            try:
+                cache_status = await git_bundle_cache_status(
+                    bundle_id=bid,
+                    git_url=repo,
+                    git_ref=entry.get("ref"),
+                    git_subdir=entry.get("subdir"),
+                    bundles_root=resolve_managed_bundles_root(),
+                )
+                if cache_status.current:
+                    entry = dict(entry)
+                    entry["path"] = str(cache_status.paths.bundle_root)
+                    if cache_status.marker and cache_status.marker.get("commit"):
+                        entry["git_commit"] = str(cache_status.marker.get("commit") or "")
+                    out[bid] = entry
+                    logger.info(
+                        "Git bundle skip current: id=%s ref=%s subdir=%s path=%s source=%s",
+                        bid,
+                        entry.get("ref") or "head",
+                        entry.get("subdir") or "",
+                        entry.get("path"),
+                        source,
+                    )
+                    skipped += 1
+                    continue
+                logger.warning(
+                    "Git bundle cache not current: id=%s reason=%s ref=%s subdir=%s path=%s source=%s",
+                    bid,
+                    cache_status.reason,
+                    entry.get("ref") or "head",
+                    entry.get("subdir") or "",
+                    str(cache_status.paths.bundle_root),
+                    source,
+                )
+            except Exception:
+                logger.exception(
+                    "Git bundle cache validation failed: id=%s repo=%s ref=%s subdir=%s source=%s",
+                    bid,
+                    repo,
+                    entry.get("ref"),
+                    entry.get("subdir"),
+                    source,
+                )
         try:
             paths = await ensure_git_bundle(
                 bundle_id=bid,

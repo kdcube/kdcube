@@ -2045,17 +2045,70 @@ async def force_env_reset_if_requested(
         return None
 
     lock_key = namespaces.CONFIG.BUNDLES.ENV_SYNC_LOCK_FMT.format(tenant=t, project=p)
+    lock_token = uuid.uuid4().hex
     try:
-        acquired = await redis.set(lock_key, "1", nx=True, ex=settings.BUNDLES_FORCE_ENV_LOCK_TTL_SECONDS)
+        acquired = await redis.set(
+            lock_key,
+            lock_token,
+            nx=True,
+            ex=settings.BUNDLES_FORCE_ENV_LOCK_TTL_SECONDS,
+        )
     except Exception:
         acquired = False
 
     if not acquired:
-        return None
+        wait_seconds = min(max(float(settings.BUNDLES_FORCE_ENV_LOCK_TTL_SECONDS or 1), 1.0), 30.0)
+        deadline = time.monotonic() + wait_seconds
+        _log.info(
+            "Startup bundle descriptor reset lock is busy; waiting for descriptor cache refresh "
+            "(tenant=%s project=%s wait_seconds=%.1f)",
+            t,
+            p,
+            wait_seconds,
+        )
+        while time.monotonic() < deadline:
+            await asyncio.sleep(0.25)
+            try:
+                current = await redis.get(lock_key)
+            except Exception:
+                current = None
+            if current is not None:
+                continue
+            try:
+                reg = await reload_registry_from_authority(redis, t, p)
+                await publish_update(
+                    redis,
+                    reg,
+                    tenant=t,
+                    project=p,
+                    op="replace",
+                    actor=actor or "startup-env-waiter",
+                )
+                return reg
+            except Exception:
+                _log.warning(
+                    "Failed to reload bundle registry after startup reset lock released; "
+                    "this worker will refresh the descriptor directly.",
+                    exc_info=True,
+                )
+                break
 
-    reg = await reset_registry_from_env(redis, t, p)
-    await publish_update(redis, reg, tenant=t, project=p, op="replace", actor=actor or "startup-env")
-    return reg
+        _log.warning(
+            "Startup bundle descriptor reset lock wait expired; refreshing descriptor directly "
+            "(tenant=%s project=%s)",
+            t,
+            p,
+        )
+        reg = await reset_registry_from_env(redis, t, p)
+        await publish_update(redis, reg, tenant=t, project=p, op="replace", actor=actor or "startup-env-timeout")
+        return reg
+
+    try:
+        reg = await reset_registry_from_env(redis, t, p)
+        await publish_update(redis, reg, tenant=t, project=p, op="replace", actor=actor or "startup-env")
+        return reg
+    finally:
+        await _release_bundle_props_lock(redis, lock_key=lock_key, token=lock_token)
 
 
 def _to_entry(bid: str, v: Dict[str, Any]) -> BundleEntry:
