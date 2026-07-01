@@ -67,14 +67,17 @@ def _schema_for(tenant: str, project: str) -> str:
 
 
 async def _get_pg_pool_from_state():
-    pool = getattr(router.state, "pg_pool", None)
+    # router.state only exists when this router is mounted in the control-plane
+    # app; in other runtimes (e.g. named-service dispatch in chat-proc) it is
+    # absent, so guard the access and fall back.
+    pool = getattr(getattr(router, "state", None), "pg_pool", None)
     if pool:
         return pool
     return await get_pg_pool()
 
 
 async def _get_shared_components():
-    base_ctx = getattr(router.state, "conversation_browser", None)
+    base_ctx = getattr(getattr(router, "state", None), "conversation_browser", None)
     if base_ctx:
         return base_ctx.model_service, base_ctx.store
 
