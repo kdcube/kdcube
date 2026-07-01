@@ -150,3 +150,29 @@ async def test_read_not_configured_guard():
     assert not resp.ok
     assert resp.error.code == "conversation_read_not_configured"
     assert resp.status == 501
+
+
+def _read_only_provider(read_service):
+    # No search factories: a read/export-only registration (no search backend).
+    return make_conversation_search_named_service_provider(
+        read_service_factory=lambda c: read_service,
+        bundle_id="b",
+    )
+
+
+@pytest.mark.asyncio
+async def test_search_not_configured_guard():
+    provider = _read_only_provider(FakeReadService())
+    resp = await provider.object_search(NamedServiceContext(user_id="u"), _req("object.search", query="x"))
+    assert not resp.ok
+    assert resp.error.code == "conversation_search_not_configured"
+    assert resp.status == 501
+
+
+@pytest.mark.asyncio
+async def test_capabilities_search_false_without_backend():
+    provider = _read_only_provider(FakeReadService())
+    resp = await provider.provider_capabilities(NamedServiceContext(), _req("provider.capabilities"))
+    caps = resp.ret["attrs"]["capabilities"]
+    assert caps["search"] is False
+    assert caps["list"] is True and caps["get"] is True and caps["export"] is True

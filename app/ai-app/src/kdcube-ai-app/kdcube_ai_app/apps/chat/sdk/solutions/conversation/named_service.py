@@ -56,7 +56,6 @@ from kdcube_ai_app.apps.chat.sdk.solutions.conversation.api import (
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.conversation.export import DEFAULT_EXPORT_LIMIT
 from kdcube_ai_app.apps.chat.sdk.solutions.conversation.instructions import (
-    CONVERSATION_NAMED_SERVICE_NAMESPACE,
     CONVERSATION_NAMESPACE_INTRO,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.conversation.read import (
@@ -69,18 +68,21 @@ from kdcube_ai_app.apps.chat.sdk.solutions.conversation.read import (
     ConversationReadService,
     ConversationScopeError,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.conversation.presentation import (
+    CONVERSATION_OBJECT_KIND,
+    NAMESPACE,
+    TURN_OBJECT_KIND as OBJECT_KIND,
+    conversation_id_from_ref,
+    conversation_ref,
+    conversation_schema_payload,
+    conversation_summary_to_object,
+    conversation_to_object,
+    turn_hit_to_object,
+)
 
 
 PROVIDER_ID = "sdk.conversation"
-NAMESPACE = CONVERSATION_NAMED_SERVICE_NAMESPACE  # "conv"
-OBJECT_KIND = "conversation.turn"
-TURN_MIME = "application/vnd.kdcube.conversation.turn+json;version=1"
-NAMED_SERVICE_OBJECT_SCHEMA = "kdcube.named_service.object.v1"
 LOGGER = logging.getLogger("kdcube.sdk.conversation.named_service")
-
-# Conversation-object (whole-conversation) surface, alongside the turn search.
-CONVERSATION_OBJECT_KIND = "conversation"
-CONVERSATION_MIME = "application/vnd.kdcube.conversation+json;version=1"
 OBJECT_EXPORT = "object.export"
 
 _CONVERSATION_TRANSPORTS = (TRANSPORT_LOCAL, TRANSPORT_API)
@@ -116,20 +118,6 @@ _CONVERSATION_DESCRIPTION = (
     "the user's conversations (selected-user access is admin-scoped)."
 )
 
-
-def conversation_ref(conversation_id: str) -> str:
-    return f"conv:conversation:{conversation_id}" if conversation_id else ""
-
-
-def _conversation_id_from_ref(value: Any) -> str:
-    text = str(value or "").strip()
-    if text.startswith("conv:conversation:"):
-        return text[len("conv:conversation:"):].split("/", 1)[0].split("?", 1)[0]
-    if text.startswith("conv:") and text.count(":") == 1:  # bare conv:<id>
-        return text[len("conv:"):].split("/", 1)[0].split("?", 1)[0]
-    if ":" not in text:  # plain id
-        return text
-    return ""
 
 # A backend exposing search/search_turn_catalog/get_turn_log, bound to the
 # caller's tenant/project schema. Built per request from the named-service ctx.
@@ -251,57 +239,6 @@ def _normalize_targets(value: Any) -> list[str]:
     return targets or list(DEFAULT_TARGETS)
 
 
-def _conversation_turn_to_named_service_object(hit: dict[str, Any], *, namespace: str) -> dict[str, Any]:
-    """Shape one rich API hit into a named-service search object.
-
-    The hit carries turn identity + snippets. The object's primary text is a
-    compact preview drawn from the first snippet; full snippet content is kept in
-    the body so callers can read it without an extra fetch.
-    """
-    turn_id = _text(hit.get("turn_id"))
-    conversation_id = _text(hit.get("conversation_id"))
-    snippets = [sn for sn in (hit.get("snippets") or []) if isinstance(sn, dict)]
-    first_text = ""
-    for sn in snippets:
-        text = _text(sn.get("text"))
-        if text:
-            first_text = text
-            break
-    ref = f"conv:turn:{turn_id}" if turn_id else ""
-    obj = {
-        "schema": NAMED_SERVICE_OBJECT_SCHEMA,
-        "ref": ref,
-        "namespace": namespace,
-        "object_kind": OBJECT_KIND,
-        "label": (first_text[:120] or turn_id),
-        "title": (first_text[:120] or turn_id),
-        "summary": first_text[:500],
-        "mime": TURN_MIME,
-        "identity": {
-            "object_ref": ref,
-            "object_id": turn_id,
-            "object_kind": OBJECT_KIND,
-            "namespace": namespace,
-        },
-        "body": {
-            "conversation_id": conversation_id,
-            "turn_id": turn_id,
-            "turn_index_path": hit.get("turn_index_path"),
-            "snippets": [
-                {key: sn.get(key) for key in ("role", "path", "text", "ts") if sn.get(key) not in (None, "")}
-                for sn in snippets
-            ],
-            "ordinal": hit.get("ordinal"),
-            "total_turns": hit.get("total_turns"),
-        },
-    }
-    score = hit.get("score")
-    if score is not None:
-        obj["score"] = float(score)
-        obj["rank_score"] = float(score)
-    return {key: value for key, value in obj.items() if value not in (None, "", [])}
-
-
 @named_service_provider(
     provider_id=PROVIDER_ID,
     namespace=NAMESPACE,
@@ -328,8 +265,8 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
     def __init__(
         self,
         *,
-        context_factory: ConversationContextFactory,
-        search_backend_factory: ConversationBackendFactory,
+        context_factory: ConversationContextFactory | None = None,
+        search_backend_factory: ConversationBackendFactory | None = None,
         read_service_factory: ConversationReadServiceFactory | None = None,
         bundle_id: str | None = None,
     ) -> None:
@@ -337,6 +274,10 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
         self._context_factory = context_factory
         self._search_backend_factory = search_backend_factory
         self._read_service_factory = read_service_factory
+
+    @property
+    def _search_enabled(self) -> bool:
+        return self._context_factory is not None and self._search_backend_factory is not None
 
     # -- read/export scope + guards -----------------------------------------
 
@@ -396,7 +337,7 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
             provider=self.provider_identity(),
             namespace=request.namespace or NAMESPACE,
             capabilities={
-                "search": True,
+                "search": self._search_enabled,
                 "list": read_enabled,
                 "get": read_enabled,
                 "export": read_enabled,
@@ -413,23 +354,10 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
         return NamedServiceResponse.ok_response(
             provider=self.provider_identity(),
             namespace=request.namespace or NAMESPACE,
-            extra={
-                "object_kinds": {
-                    CONVERSATION_OBJECT_KIND: {
-                        "mime": CONVERSATION_MIME,
-                        "canonical_ref": "conv:conversation:<conversation_id>",
-                        "summary_fields": ["conversation_id", "user_id", "title", "started_at", "last_at", "turn_count"],
-                        "full_fields": ["conversation_id", "tenant", "project", "user_id", "source", "started_at", "title", "turns"],
-                        "turn_fields": ["turn_id", "ts", "user", "assistant", "attachments", "citations"],
-                    },
-                    OBJECT_KIND: {"mime": TURN_MIME, "note": "conversation turn search hit (object.search)"},
-                },
-                "scope": {
-                    "mode": {"enum": [READ_SCOPE_SELF, READ_SCOPE_USER], "default": READ_SCOPE_SELF},
-                    "user_id": "selected platform user id (required for mode=user; admin, :any_user grants)",
-                },
-                "grant_hints": _CONVERSATION_GRANT_HINTS,
-            },
+            extra=conversation_schema_payload(
+                grant_hints=_CONVERSATION_GRANT_HINTS,
+                scopes=[READ_SCOPE_SELF, READ_SCOPE_USER],
+            ),
         )
 
     async def object_search(self, ctx: NamedServiceContext, request: NamedServiceRequest) -> NamedServiceResponse:
@@ -439,6 +367,14 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
                 code="conversation_search_scope_not_found",
                 message=f"Unsupported conversation search scope: {namespace}. Search with namespace='conv'.",
                 status=404,
+                provider=self.provider_identity(),
+                namespace=request.namespace or NAMESPACE,
+            )
+        if not self._search_enabled:
+            return NamedServiceResponse.error_response(
+                code="conversation_search_not_configured",
+                message="This conversation provider was registered without a search backend; list/get/export are available.",
+                status=501,
                 provider=self.provider_identity(),
                 namespace=request.namespace or NAMESPACE,
             )
@@ -484,7 +420,7 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
                 namespace=request.namespace or NAMESPACE,
             )
         items = [
-            _conversation_turn_to_named_service_object(hit, namespace=NAMESPACE)
+            turn_hit_to_object(hit, namespace=NAMESPACE)
             for hit in result.hits
             if isinstance(hit, dict) and _text(hit.get("turn_id"))
         ]
@@ -520,7 +456,7 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
             last_n=_int_or_none(filters.get("last_n") or request.limit),
         )
         summaries = await service.list_user_conversations(list_request)
-        items = [_conversation_summary_to_object(summary) for summary in summaries]
+        items = [conversation_summary_to_object(summary) for summary in summaries]
         return NamedServiceResponse.ok_response(
             provider=self.provider_identity(),
             namespace=request.namespace or NAMESPACE,
@@ -531,7 +467,7 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
     async def object_get(self, ctx: NamedServiceContext, request: NamedServiceRequest) -> NamedServiceResponse:
         if self._read_service_factory is None:
             return self._read_not_configured(request)
-        conversation_id = _conversation_id_from_ref(request.object_ref) or _text(request.object_id)
+        conversation_id = conversation_id_from_ref(request.object_ref) or _text(request.object_id)
         if not conversation_id:
             return NamedServiceResponse.error_response(
                 code="conversation_id_required",
@@ -561,7 +497,7 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
             provider=self.provider_identity(),
             namespace=request.namespace or NAMESPACE,
             object_ref=conversation_ref(conversation_id),
-            object=_conversation_to_object(record),
+            object=conversation_to_object(record),
         )
 
     async def object_export(self, ctx: NamedServiceContext, request: NamedServiceRequest) -> NamedServiceResponse:
@@ -588,54 +524,6 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
         )
 
 
-def _conversation_summary_to_object(summary: dict[str, Any]) -> dict[str, Any]:
-    conversation_id = _text(summary.get("conversation_id"))
-    ref = conversation_ref(conversation_id)
-    obj = {
-        "schema": NAMED_SERVICE_OBJECT_SCHEMA,
-        "ref": ref,
-        "namespace": NAMESPACE,
-        "object_kind": CONVERSATION_OBJECT_KIND,
-        "label": _text(summary.get("title")) or conversation_id,
-        "title": _text(summary.get("title")) or conversation_id,
-        "mime": CONVERSATION_MIME,
-        "identity": {
-            "object_ref": ref,
-            "object_id": conversation_id,
-            "object_kind": CONVERSATION_OBJECT_KIND,
-            "namespace": NAMESPACE,
-        },
-        "body": {
-            key: summary.get(key)
-            for key in ("conversation_id", "user_id", "tenant", "project", "started_at", "last_at", "turn_count")
-            if summary.get(key) not in (None, "")
-        },
-    }
-    return {key: value for key, value in obj.items() if value not in (None, "", [])}
-
-
-def _conversation_to_object(record: dict[str, Any]) -> dict[str, Any]:
-    conversation_id = _text(record.get("conversation_id"))
-    ref = conversation_ref(conversation_id)
-    obj = {
-        "schema": NAMED_SERVICE_OBJECT_SCHEMA,
-        "ref": ref,
-        "namespace": NAMESPACE,
-        "object_kind": CONVERSATION_OBJECT_KIND,
-        "label": _text(record.get("title")) or conversation_id,
-        "title": _text(record.get("title")) or conversation_id,
-        "mime": CONVERSATION_MIME,
-        "identity": {
-            "object_ref": ref,
-            "object_id": conversation_id,
-            "object_kind": CONVERSATION_OBJECT_KIND,
-            "namespace": NAMESPACE,
-        },
-        "body": record,
-    }
-    return {key: value for key, value in obj.items() if value not in (None, "", [])}
-
-
 def _int_or_none(value: Any) -> int | None:
     if value in (None, ""):
         return None
@@ -647,8 +535,8 @@ def _int_or_none(value: Any) -> int | None:
 
 def make_conversation_search_named_service_provider(
     *,
-    context_factory: ConversationContextFactory,
-    search_backend_factory: ConversationBackendFactory,
+    context_factory: ConversationContextFactory | None = None,
+    search_backend_factory: ConversationBackendFactory | None = None,
     read_service_factory: ConversationReadServiceFactory | None = None,
     bundle_id: str | None = None,
 ) -> ConversationSearchNamedServiceProvider:
