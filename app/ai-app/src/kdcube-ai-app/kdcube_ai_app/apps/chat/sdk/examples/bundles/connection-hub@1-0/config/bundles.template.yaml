@@ -64,6 +64,14 @@ bundles:
             oauth:
               enabled: false
               brand: "KDCube"
+              # Optional: render delegated credential consent in a bundle-hosted
+              # UI declared on an authority provider. Connection Hub still owns
+              # approve/deny validation and token issuance.
+              # consent_ui:
+              #   authority_ref:
+              #     authority_id: "kdcube.platform"
+              #     provider_id: "<platform_provider_id>"
+              #     entrypoint: "consent"
               issuer: ""
               public_clients:
                 - client_id: "claude"
@@ -78,21 +86,27 @@ bundles:
                   - "http://127.0.0.1/callback"
               capabilities:
                 - grant: "conversations:read"
-                  label: "Read conversations"
-                  description: "Read conversation transcripts that the grantor is allowed to delegate."
-                  tools:
-                    - name: "conversations_export"
-                      label: "Export conversation transcripts"
-                      description: "Read-only conversation transcript export."
+                  label: "Read your conversations"
+                  description: "Read the approving user's own KDCube conversations through delegated named-service tools."
                   delegable_roles:
+                    - "kdcube:role:registered"
+                    - "kdcube:role:paid"
+                    - "kdcube:role:privileged"
                     - "kdcube:role:super-admin"
                   delegable_permissions:
                     - "kdcube:*:conversations:*;read"
+                - grant: "conversations:read:any_user"
+                  label: "Read any user's conversations"
+                  description: "Admin: read a selected user's conversations through the conv named service."
+                  delegable_roles:
+                    - "kdcube:role:super-admin"
+                  delegable_permissions:
+                    - "kdcube:*:conversations:*;read:any_user"
                 - grant: "memories:read"
                   label: "Read memories"
                   description: "Read memory notes visible to the KDCube user who approves the connection."
                   delegable_roles:
-                    - "kdcube:role:chat-user"
+                    - "kdcube:role:registered"
                     - "kdcube:role:paid"
                     - "kdcube:role:privileged"
                     - "kdcube:role:super-admin"
@@ -102,21 +116,13 @@ bundles:
                   label: "Read KDCube knowledge"
                   description: "Read KDCube knowledge notes through delegated MCP tools."
                   delegable_roles:
-                    - "kdcube:role:chat-user"
+                    - "kdcube:role:registered"
                     - "kdcube:role:paid"
                     - "kdcube:role:privileged"
                     - "kdcube:role:super-admin"
                   delegable_permissions:
                     - "knowledge:read"
               resources:
-                - resource: "*/api/integrations/bundles/*/*/kdcube-services@1-0/public/mcp/conversations*"
-                  label: "KDCube conversations MCP"
-                  tools:
-                    conversations_export:
-                      label: "Export conversations"
-                      description: "Read conversation transcripts for feedback triage."
-                      grants:
-                        - "conversations:read"
                 - resource: "*/api/integrations/bundles/*/*/user-memories@2026-06-26/public/mcp/memories*"
                   label: "User memories MCP"
                   identity_scope: "grantor_identity_family"

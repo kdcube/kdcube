@@ -65,37 +65,31 @@ def turn_hit_to_object(hit: dict[str, Any], *, namespace: str = NAMESPACE) -> di
             first_text = text
             break
     ref = f"conv:turn:{turn_id}" if turn_id else ""
+    body = _compact({
+        "conversation_id": conversation_id,
+        "turn_id": turn_id,
+        "turn_index_path": hit.get("turn_index_path"),
+        "snippets": [
+            {key: sn.get(key) for key in ("role", "path", "text", "ts") if sn.get(key) not in (None, "")}
+            for sn in snippets
+        ],
+        "ordinal": hit.get("ordinal"),
+        "total_turns": hit.get("total_turns"),
+    })
+    # A turn is a SEARCH HIT, never an individually-fetched object (turn refs are
+    # not gettable) and never rehosted, so it carries only the actionable fields:
+    # `ref` (the recovery handle), a snippet-derived title, the body (snippets +
+    # recovery paths), and the score. The object envelope (`schema`/`mime`/
+    # `namespace`/`object_kind`/`identity`) is only meaningful for single-object
+    # responses and is intentionally omitted here.
     obj = {
-        "schema": NAMED_SERVICE_OBJECT_SCHEMA,
         "ref": ref,
-        "namespace": namespace,
-        "object_kind": TURN_OBJECT_KIND,
-        "label": (first_text[:120] or turn_id),
         "title": (first_text[:120] or turn_id),
-        "summary": first_text[:500],
-        "mime": TURN_MIME,
-        "identity": {
-            "object_ref": ref,
-            "object_id": turn_id,
-            "object_kind": TURN_OBJECT_KIND,
-            "namespace": namespace,
-        },
-        "body": {
-            "conversation_id": conversation_id,
-            "turn_id": turn_id,
-            "turn_index_path": hit.get("turn_index_path"),
-            "snippets": [
-                {key: sn.get(key) for key in ("role", "path", "text", "ts") if sn.get(key) not in (None, "")}
-                for sn in snippets
-            ],
-            "ordinal": hit.get("ordinal"),
-            "total_turns": hit.get("total_turns"),
-        },
+        "body": body,
     }
     score = hit.get("score")
     if score is not None:
         obj["score"] = float(score)
-        obj["rank_score"] = float(score)
     return _compact(obj)
 
 
@@ -147,7 +141,9 @@ def conversation_to_object(record: dict[str, Any]) -> dict[str, Any]:
     return _compact(obj)
 
 
-def conversation_schema_payload(*, grant_hints: dict[str, Any], scopes: list[str]) -> dict[str, Any]:
+def conversation_schema_payload(
+    *, grant_hints: dict[str, Any], scopes: list[str], search_filters: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     return {
         "object_kinds": {
             CONVERSATION_OBJECT_KIND: {
@@ -162,6 +158,34 @@ def conversation_schema_payload(*, grant_hints: dict[str, Any], scopes: list[str
         "scope": {
             "mode": {"enum": list(scopes), "default": scopes[0] if scopes else "self"},
             "user_id": "selected platform user id (required for mode=user; admin, :any_user grants)",
+        },
+        "search": {
+            "operation": "object.search",
+            "purpose": (
+                "Conversations are one of the user's memory realms - what was actually said in chat, "
+                "alongside durable memories (mem) and context boards (cnv). Search what the USER said "
+                "(prompts and follow-ups), what the ASSISTANT said (replies and working summaries), and "
+                "the user's UPLOADED attachments (their indexed summaries). Reach for it whenever a look "
+                "back would help: an explicit recall request, or when the user refers to something from "
+                "before, says it was clearer earlier, can't re-locate something, or resumes a dropped thread."
+            ),
+            # Single source of truth: the provider's authoritative search filter schema
+            # (same object surfaced via provider.about's search_scopes).
+            "filters": dict(search_filters or {}),
+            "behavior": {
+                "topic": "set query -> hybrid semantic+lexical+recency search",
+                "topic_in_window": "query + from/to",
+                "date_window": "from/to, no query -> turns in that window",
+                "overview": "no query, no bounds, targets=['summary'] -> working summaries",
+            },
+            "returns": (
+                "turn hits: ref (conv:turn:<id>), title, body{conversation_id, turn_id, "
+                "turn_index_path, snippets[{role,path,text,ts}]}, score."
+            ),
+            "recovery": (
+                "read the returned snippet paths, or turn_index_path (ar:turn_<id>.react.turn.index), "
+                "to recover full turn content."
+            ),
         },
         "grant_hints": grant_hints,
     }

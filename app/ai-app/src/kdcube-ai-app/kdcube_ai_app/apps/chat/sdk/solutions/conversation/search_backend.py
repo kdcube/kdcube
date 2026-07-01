@@ -5,28 +5,23 @@
 
 The provider searches through `run_conversation_search`, which needs a
 `ConversationSearchBackend` (search / search_turn_catalog / get_turn_log) and an
-explicit `ConversationSearchContext`. The ReAct memsearch tool satisfies the same
-contract with its `ctx_browser`; this module builds an equivalent backend for a
-named-service request (no ReAct runtime), bound per request to the caller's
-tenant/project.
+explicit `ConversationSearchContext`. This module builds such a backend from
+pooled resources passed in from above (pg_pool + model service + store) — never
+from router/app state — bound per request to the caller's tenant/project.
 
-Identity is explicit — the backend carries no user identity; it is passed per
-call via `ConversationSearchContext` (mapped from the named-service context).
-
-TEMPORARY adapter: the lazy backend reuses the control-plane `_build_ctx`
-materialization and ReAct's `ContextBrowser` (the proven search plumbing). Those
-imports are the only cross-layer coupling and are expected to move behind an
-SDK-owned search store later without changing this module's contract.
+Identity is explicit: the backend carries no user identity; it is passed per call
+via `ConversationSearchContext` (mapped from the named-service context).
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from kdcube_ai_app.apps.chat.sdk.solutions.conversation.api import (
     ConversationSearchBackend,
     ConversationSearchContext,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.conversation.read import build_conversation_ctx_client
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import NamedServiceContext
 
 
@@ -42,56 +37,80 @@ def conversation_search_context_from_ns(ns_ctx: NamedServiceContext) -> Conversa
     )
 
 
-class _LazyControlPlaneSearchBackend:
-    """A ConversationSearchBackend that builds its ContextBrowser on first use.
+class _PooledSearchBackend:
+    """A ConversationSearchBackend over a ContextBrowser built from pooled
+    resources (pg_pool + model service + store, all passed in from above).
 
-    The named-service `search_backend_factory` is synchronous, but building the
-    ctx_client is async, so construction is deferred to the first search call.
+    The ContextBrowser search path uses only the ctx_client + model service and
+    the explicit per-call context; it carries no app/router state. Built lazily on
+    first use.
     """
 
-    def __init__(self, *, pool_factory: Callable[[], Any], tenant: str, project: str):
-        self._pool_factory = pool_factory
+    def __init__(
+        self, *, pg_pool: Any, tenant: str, project: str, model_service: Any, store: Any,
+        user_id: str = "", conversation_id: str = "",
+    ):
+        self._pg_pool = pg_pool
         self._tenant = tenant
         self._project = project
+        self._model_service = model_service
+        self._store = store
+        # Identity for the browser's runtime_ctx. get_turn_log() materializes turn
+        # payloads using user_id read off runtime_ctx (not the call), so snippet text
+        # only resolves when the browser is user-scoped. conversation_id is a fallback
+        # anchor; per-hit conversation ids are passed explicitly by the search API.
+        self._user_id = user_id
+        self._conversation_id = conversation_id
         self._browser: Any = None
 
-    async def _ensure_browser(self) -> Any:
+    def _ensure_browser(self) -> Any:
         if self._browser is None:
-            # Temporary adapter over the proven materialization + search plumbing.
-            from kdcube_ai_app.apps.chat.ingress.control_plane.conversations_browser import _build_ctx
             from kdcube_ai_app.apps.chat.sdk.solutions.react.browser import ContextBrowser
+            from kdcube_ai_app.apps.chat.sdk.solutions.react.proto import RuntimeCtx
 
-            ctx_client = await _build_ctx(self._pool_factory(), self._tenant, self._project)
+            ctx_client = build_conversation_ctx_client(
+                pg_pool=self._pg_pool, tenant=self._tenant, project=self._project,
+                model_service=self._model_service, store=self._store,
+            )
+            runtime_ctx = RuntimeCtx(
+                tenant=self._tenant or None,
+                project=self._project or None,
+                user_id=self._user_id or None,
+                conversation_id=self._conversation_id or None,
+            )
             self._browser = ContextBrowser(
-                ctx_client=ctx_client,
-                model_service=getattr(ctx_client, "model_service", None),
+                ctx_client=ctx_client, model_service=self._model_service, runtime_ctx=runtime_ctx,
             )
         return self._browser
 
     async def search(self, **kwargs: Any) -> Any:
-        return await (await self._ensure_browser()).search(**kwargs)
+        return await self._ensure_browser().search(**kwargs)
 
     async def search_turn_catalog(self, **kwargs: Any) -> List[Dict[str, Any]]:
-        return await (await self._ensure_browser()).search_turn_catalog(**kwargs)
+        return await self._ensure_browser().search_turn_catalog(**kwargs)
 
     async def get_turn_log(self, *, turn_id: str, conversation_id: Optional[str] = None) -> Dict[str, Any]:
-        return await (await self._ensure_browser()).get_turn_log(
-            turn_id=turn_id, conversation_id=conversation_id,
-        )
+        return await self._ensure_browser().get_turn_log(turn_id=turn_id, conversation_id=conversation_id)
 
 
-def make_control_plane_search_backend(
+def make_conversation_search_backend(
     *,
-    pool_factory: Callable[[], Any],
+    pg_pool: Any,
     tenant: str,
     project: str,
+    model_service: Any,
+    store: Any,
+    user_id: str = "",
+    conversation_id: str = "",
 ) -> ConversationSearchBackend:
-    return _LazyControlPlaneSearchBackend(
-        pool_factory=pool_factory, tenant=tenant or "", project=project or "",
+    return _PooledSearchBackend(
+        pg_pool=pg_pool, tenant=tenant or "", project=project or "",
+        model_service=model_service, store=store,
+        user_id=user_id or "", conversation_id=conversation_id or "",
     )
 
 
 __all__ = [
     "conversation_search_context_from_ns",
-    "make_control_plane_search_backend",
+    "make_conversation_search_backend",
 ]

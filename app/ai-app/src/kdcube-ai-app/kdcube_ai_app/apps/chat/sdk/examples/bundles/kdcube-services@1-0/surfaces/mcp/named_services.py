@@ -178,7 +178,10 @@ def build_named_services_mcp_app(
         name="named_services_search",
         title="Search named service",
         description=(
-            "Search objects in a configured named-service namespace. "
+            "Search objects in a configured named-service namespace. Each namespace declares "
+            "its OWN search filters and semantics — before searching, call named_services_call "
+            "with operation='object.schema' (or 'provider.about') for the namespace to read its "
+            "filter contract (ret.extra.schema.search.filters) and how to search it efficiently. "
             "filters_json must be a JSON object string; use '{}' when no filters are needed."
         ),
         annotations=read_only_annotations(ToolAnnotations, title="Search named service"),
@@ -199,7 +202,11 @@ def build_named_services_mcp_app(
         ] = 10,
         filters_json: Annotated[
             str,
-            Field(description="JSON object string with provider-specific filters, for example '{}'."),
+            Field(description=(
+                "JSON object string with provider-specific filters. The available filters are "
+                "namespace-specific: read them from object.schema (ret.extra.schema.search.filters) "
+                "or provider.about for the namespace. Use '{}' when no filters are needed."
+            )),
         ] = "{}",
         provider: Annotated[
             str,
@@ -423,7 +430,9 @@ def build_named_services_mcp_app(
             "Generic named-service call for configured namespaces. "
             "Allowed operation values: provider.about, provider.capabilities, "
             "object.list, object.search, object.get, object.host_file, object.schema, "
-            "object.upsert, object.delete, object.action. JSON fields must be valid JSON strings."
+            "object.upsert, object.delete, object.action. JSON fields must be valid JSON strings. "
+            "Batch get: object.get with filters_json={\"refs\": [\"<ref1>\", \"<ref2>\", ...]} fetches "
+            "several objects in one call and returns them as items (uniform across all namespaces)."
         ),
         annotations=destructive_annotations(ToolAnnotations, title="Generic named-service call"),
         structured_output=False,
@@ -447,12 +456,12 @@ def build_named_services_mcp_app(
             str,
             Field(description="Optional provider id when a namespace has more than one provider."),
         ] = "",
-        object_ref: Annotated[str, Field(description="Optional object ref, for example mem:<id>.")] = "",
+        object_ref: Annotated[str, Field(description="Optional object ref for a single object.get, for example mem:<id>.")] = "",
         object_id: Annotated[str, Field(description="Optional provider-local object id.")] = "",
         query: Annotated[str, Field(description="Optional search query for object.search.")] = "",
         action: Annotated[str, Field(description="Optional provider action for object.action.")] = "",
         limit: Annotated[int, Field(ge=0, le=50, description="Optional result limit.")] = 0,
-        filters_json: Annotated[str, Field(description="JSON object string for filters.")] = "{}",
+        filters_json: Annotated[str, Field(description="JSON object string for filters. For object.get, {\"refs\": [ref, ...]} batch-fetches many objects in one call.")] = "{}",
         include_json: Annotated[str, Field(description="JSON list string for include fields.")] = "[]",
         object_json: Annotated[str, Field(description="JSON object string for object payload.")] = "{}",
         payload_json: Annotated[str, Field(description="JSON object string for provider payload.")] = "{}",

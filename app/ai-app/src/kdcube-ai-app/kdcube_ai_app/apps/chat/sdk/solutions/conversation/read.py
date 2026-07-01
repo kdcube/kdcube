@@ -265,26 +265,43 @@ class ConversationReadService:
         }
 
 
-class _ControlPlaneMaterializationPort:
-    """TEMPORARY adapter over existing control-plane materialization primitives.
+def build_conversation_ctx_client(*, pg_pool: Any, tenant: str, project: str, model_service: Any, store: Any) -> Any:
+    """Build a ContextRAGClient from explicitly-provided pooled resources.
 
-    This is the ONLY place in the conversation SDK that reaches into
-    `apps/chat/ingress/control_plane`. It exists so Phase 2 stays small; the
-    intent is to replace it with an SDK-owned store implementation later WITHOUT
-    changing the `ConversationReadService`/port contract the provider depends on.
+    For callers outside the control-plane app (named-service dispatch in
+    chat-proc) that already hold the worker's pg_pool + model service + store.
+    No app/router state, no fallback — resources are always passed in from above.
+    """
+    from kdcube_ai_app.apps.chat.sdk.context.retrieval.ctx_rag import ContextRAGClient
+    from kdcube_ai_app.apps.chat.sdk.context.vector.conv_index import ConvIndex
+    from kdcube_ai_app.ops.deployment.sql.db_deployment import project_schema
+
+    conv_idx = ConvIndex(pool=pg_pool)
+    conv_idx.schema = project_schema(tenant, project)
+    return ContextRAGClient(conv_idx=conv_idx, store=store, model_service=model_service)
+
+
+class _PooledMaterializationPort:
+    """Materialization over a ContextRAGClient bound to the caller's tenant/project.
+
+    Built from pooled resources supplied by the bundle (pg_pool, model service,
+    store) — no control-plane app state.
     """
 
-    def __init__(self, *, pg_pool: Any, tenant: str, project: str):
+    def __init__(self, *, pg_pool: Any, tenant: str, project: str, model_service: Any, store: Any):
         self._pg_pool = pg_pool
         self._tenant = tenant
         self._project = project
+        self._model_service = model_service
+        self._store = store
         self._ctx: Any = None
 
-    async def _ensure_ctx(self) -> Any:
+    def _ensure_ctx(self) -> Any:
         if self._ctx is None:
-            # Temporary import of the control-plane materialization builder.
-            from kdcube_ai_app.apps.chat.ingress.control_plane.conversations_browser import _build_ctx
-            self._ctx = await _build_ctx(self._pg_pool, self._tenant, self._project)
+            self._ctx = build_conversation_ctx_client(
+                pg_pool=self._pg_pool, tenant=self._tenant, project=self._project,
+                model_service=self._model_service, store=self._store,
+            )
         return self._ctx
 
     async def list_conversations(
@@ -296,12 +313,14 @@ class _ControlPlaneMaterializationPort:
         last_n: Optional[int] = None,
         include_titles: bool = True,
     ) -> List[Dict[str, Any]]:
-        ctx = await self._ensure_ctx()
+        ctx = self._ensure_ctx()
         result = await ctx.list_conversations(
             user_id=user_id, last_n=last_n, started_after=started_after,
             days=days, include_titles=include_titles, ctx={},  # ctx={} bypasses ambient bundle_id filtering
         )
-        return list(result or [])
+        # ContextRAGClient.list_conversations returns {"user_id", "items": [...]},
+        # NOT a bare list — unwrap items (list(dict) would yield the keys).
+        return list((result or {}).get("items") or [])
 
     async def fetch_conversation_artifacts(
         self,
@@ -312,7 +331,7 @@ class _ControlPlaneMaterializationPort:
         materialize: bool = True,
         days: int = 3650,
     ) -> Dict[str, Any]:
-        ctx = await self._ensure_ctx()
+        ctx = self._ensure_ctx()
         result = await ctx.fetch_conversation_artifacts(
             user_id=user_id, conversation_id=conversation_id, turn_ids=turn_ids,
             materialize=materialize, days=days, ctx={},
@@ -320,9 +339,13 @@ class _ControlPlaneMaterializationPort:
         return dict(result or {})
 
 
-def make_control_plane_read_service(*, pg_pool: Any, tenant: str, project: str) -> ConversationReadService:
-    """Build a read service backed by the temporary control-plane adapter."""
-    port = _ControlPlaneMaterializationPort(pg_pool=pg_pool, tenant=tenant, project=project)
+def make_conversation_read_service(
+    *, pg_pool: Any, tenant: str, project: str, model_service: Any, store: Any,
+) -> ConversationReadService:
+    """Build a read service over a ContextRAGClient built from pooled resources."""
+    port = _PooledMaterializationPort(
+        pg_pool=pg_pool, tenant=tenant, project=project, model_service=model_service, store=store,
+    )
     return ConversationReadService(port, tenant=tenant, project=project)
 
 
@@ -337,5 +360,6 @@ __all__ = [
     "ConversationReadScope",
     "ConversationReadService",
     "ConversationScopeError",
-    "make_control_plane_read_service",
+    "build_conversation_ctx_client",
+    "make_conversation_read_service",
 ]

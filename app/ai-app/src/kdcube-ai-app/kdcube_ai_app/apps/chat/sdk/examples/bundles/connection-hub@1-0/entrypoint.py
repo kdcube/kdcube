@@ -440,6 +440,7 @@ def _bind_delegated_client_request_config(entrypoint: Any, request: Any) -> Dict
     if request is not None:
         request.state.oauth_delegated_config = cfg
         request.state.oauth_delegated_issuer = str(cfg.get("issuer") or "").rstrip("/")
+        request.state.connection_hub_authority_registry = _authority_registry_config(entrypoint)
     return cfg
 
 
@@ -1132,24 +1133,29 @@ class ConnectionHubEntrypoint(BaseEntrypointWithMemory):
                         "capabilities": [
                             {
                                 "grant": "conversations:read",
-                                "label": "Read conversations",
-                                "description": "Read conversation transcripts that the grantor is allowed to delegate.",
-                                "tools": [
-                                    {
-                                        "name": "conversations_export",
-                                        "label": "Export conversation transcripts",
-                                        "description": "Read-only conversation transcript export.",
-                                    },
+                                "label": "Read your conversations",
+                                "description": "Read the approving user's own KDCube conversations through delegated named-service tools.",
+                                "delegable_roles": [
+                                    "kdcube:role:registered",
+                                    "kdcube:role:paid",
+                                    "kdcube:role:privileged",
+                                    "kdcube:role:super-admin",
                                 ],
-                                "delegable_roles": ["kdcube:role:super-admin"],
                                 "delegable_permissions": ["kdcube:*:conversations:*;read"],
+                            },
+                            {
+                                "grant": "conversations:read:any_user",
+                                "label": "Read any user's conversations",
+                                "description": "Admin: read a selected user's conversations through the conv named service.",
+                                "delegable_roles": ["kdcube:role:super-admin"],
+                                "delegable_permissions": ["kdcube:*:conversations:*;read:any_user"],
                             },
                             {
                                 "grant": "memories:read",
                                 "label": "Read memories",
                                 "description": "Read memory notes visible to the KDCube user who approves the connection.",
                                 "delegable_roles": [
-                                    "kdcube:role:chat-user",
+                                    "kdcube:role:registered",
                                     "kdcube:role:paid",
                                     "kdcube:role:privileged",
                                     "kdcube:role:super-admin",
@@ -1161,7 +1167,7 @@ class ConnectionHubEntrypoint(BaseEntrypointWithMemory):
                                 "label": "Read KDCube knowledge",
                                 "description": "Read KDCube knowledge notes through delegated MCP tools.",
                                 "delegable_roles": [
-                                    "kdcube:role:chat-user",
+                                    "kdcube:role:registered",
                                     "kdcube:role:paid",
                                     "kdcube:role:privileged",
                                     "kdcube:role:super-admin",
@@ -1170,17 +1176,6 @@ class ConnectionHubEntrypoint(BaseEntrypointWithMemory):
                             },
                         ],
                         "resources": [
-                            {
-                                "resource": "*/api/integrations/bundles/*/*/kdcube-services@1-0/public/mcp/conversations*",
-                                "label": "KDCube conversations MCP",
-                                "tools": {
-                                    "conversations_export": {
-                                        "label": "Export conversations",
-                                        "description": "Read conversation transcripts for feedback triage.",
-                                        "grants": ["conversations:read"],
-                                    },
-                                },
-                            },
                             {
                                 "resource": "*/api/integrations/bundles/*/*/user-memories@2026-06-26/public/mcp/memories*",
                                 "label": "User memories MCP",

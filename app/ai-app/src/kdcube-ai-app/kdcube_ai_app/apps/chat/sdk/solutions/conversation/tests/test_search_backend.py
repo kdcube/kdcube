@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 from kdcube_ai_app.apps.chat.sdk.solutions.conversation.search_backend import (
     conversation_search_context_from_ns,
-    make_control_plane_search_backend,
+    make_conversation_search_backend,
 )
 
 
@@ -23,15 +23,13 @@ def test_ns_context_mapping():
 
 
 def test_backend_is_lazy_and_satisfies_protocol():
-    calls = {"pool": 0}
-
-    def pool_factory():
-        calls["pool"] += 1
-        return object()
-
-    backend = make_control_plane_search_backend(pool_factory=pool_factory, tenant="t", project="p")
+    # All resources are passed in from above; the backend must not build a
+    # ContextBrowser until the first search call.
+    backend = make_conversation_search_backend(
+        pg_pool=object(), tenant="t", project="p", model_service=object(), store=object(),
+    )
     # Satisfies the ConversationSearchBackend protocol.
     for method in ("search", "search_turn_catalog", "get_turn_log"):
         assert hasattr(backend, method)
-    # Construction is lazy: nothing built, pool not touched until the first search.
-    assert calls["pool"] == 0
+    # Construction is lazy: nothing built until the first search.
+    assert backend._browser is None

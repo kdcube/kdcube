@@ -104,7 +104,9 @@ async def test_object_search_uses_explicit_context_factory():
     assert backend.search_kwargs["conv"] == "conv_99"
     items = response.ret.get("items") or []
     assert len(items) == 1
-    assert items[0]["object_kind"] == "conversation.turn"
+    # Turn search hits are lean: the kind is encoded in the ref, no object envelope.
+    assert items[0]["ref"] == "conv:turn:turn_prev"
+    assert "object_kind" not in items[0]
     assert items[0]["body"]["turn_id"] == "turn_prev"
 
 

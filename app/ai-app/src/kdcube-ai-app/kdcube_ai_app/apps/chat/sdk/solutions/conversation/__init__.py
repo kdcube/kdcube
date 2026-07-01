@@ -33,7 +33,8 @@ from kdcube_ai_app.apps.chat.sdk.solutions.conversation.read import (
     ConversationReadScope,
     ConversationReadService,
     ConversationScopeError,
-    make_control_plane_read_service,
+    build_conversation_ctx_client,
+    make_conversation_read_service,
 )
 
 __all__ = [
@@ -49,5 +50,6 @@ __all__ = [
     "ConversationReadScope",
     "ConversationReadService",
     "ConversationScopeError",
-    "make_control_plane_read_service",
+    "build_conversation_ctx_client",
+    "make_conversation_read_service",
 ]

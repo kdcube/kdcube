@@ -10,16 +10,12 @@ from kdcube_ai_app.infra.plugin.bundle_loader import api, bundle_entrypoint, bun
 from kdcube_ai_app.infra.service_hub.inventory import BundleState, Config
 
 try:
-    from .services.conversations import ConversationExportRequest, ConversationExportService
     from .services.conversations.named_service import build_conversation_named_service_provider
     from .services.named_services import NamedServicesMcpBridge
-    from .surfaces.mcp import conversations as conversations_mcp_module
     from .surfaces.mcp import named_services as named_services_mcp_module
 except Exception:  # pragma: no cover - bundle loader may import as loose module
-    from services.conversations import ConversationExportRequest, ConversationExportService  # type: ignore
     from services.conversations.named_service import build_conversation_named_service_provider  # type: ignore
     from services.named_services import NamedServicesMcpBridge  # type: ignore
-    from surfaces.mcp import conversations as conversations_mcp_module  # type: ignore
     from surfaces.mcp import named_services as named_services_mcp_module  # type: ignore
 
 
@@ -67,18 +63,6 @@ class KDCubeServicesEntrypoint(BaseEntrypoint):
                 "as_provider": {
                     "bundle": {"visibility": {"allowed_roles": []}},
                     "mcp": {
-                        "conversations": {
-                            "auth": {
-                                "mode": "managed",
-                                "authority_id": "delegated_client",
-                                "tools": {
-                                    "conversations_export": {
-                                        "grants": ["conversations:read"],
-                                    },
-                                },
-                                "selected_tool_grants": True,
-                            },
-                        },
                         "named_services": {
                             "auth": {
                                 "mode": "managed",
@@ -157,21 +141,6 @@ class KDCubeServicesEntrypoint(BaseEntrypoint):
         ]
 
     @mcp(
-        alias="conversations",
-        route="public",
-        transport="streamable-http",
-        auth_config="surfaces.as_provider.mcp.conversations.auth",
-    )
-    def conversations_mcp(self, request=None, **kwargs):
-        return conversations_mcp_module.build_conversations_mcp_app(
-            name="KDCube conversations",
-            pool_factory=lambda: self.pg_pool,
-            request_model=ConversationExportRequest,
-            service_cls=ConversationExportService,
-            request=request,
-        )
-
-    @mcp(
         alias="named_services",
         route="public",
         transport="streamable-http",
@@ -195,6 +164,8 @@ class KDCubeServicesEntrypoint(BaseEntrypoint):
         providers.append(
             build_conversation_named_service_provider(
                 pool_factory=lambda: self.pg_pool,
+                model_service_factory=lambda: self.models_service,
+                storage_path=str(getattr(self.settings, "STORAGE_PATH", "") or ""),
                 bundle_id=self._named_services_bundle_id(),
             )
         )

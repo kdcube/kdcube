@@ -148,3 +148,21 @@ async def test_selected_user_scope_routes_to_selected_user():
     await service.export_conversations(ConversationExportScope(scope=scope))
     assert port.list_calls == ["other-user"]
     assert port.fetch_calls == [("other-user", "c1")]
+
+
+@pytest.mark.asyncio
+async def test_pooled_port_unwraps_list_conversations_items():
+    # Regression: ContextRAGClient.list_conversations returns a dict
+    # {"user_id", "items": [...]}, NOT a bare list. The port must unwrap `items`;
+    # `list(dict)` would yield the keys ("user_id","items") and silently drop
+    # every conversation (the "object.list returns empty" bug).
+    from kdcube_ai_app.apps.chat.sdk.solutions.conversation.read import _PooledMaterializationPort
+
+    class _FakeCtx:
+        async def list_conversations(self, **kwargs):
+            return {"user_id": "u", "items": [{"conversation_id": "c1"}, {"conversation_id": "c2"}]}
+
+    port = _PooledMaterializationPort(pg_pool=None, tenant="t", project="p", model_service=None, store=None)
+    port._ctx = _FakeCtx()  # bypass real ctx-client construction
+    convs = await port.list_conversations(user_id="u")
+    assert [c["conversation_id"] for c in convs] == ["c1", "c2"]

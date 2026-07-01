@@ -32,7 +32,6 @@ from typing import Any, Awaitable, Callable
 
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
     NamedServiceContext,
-    NamedServiceOperationSpec,
     NamedServiceProvider,
     NamedServiceProviderSpec,
     NamedServiceRequest,
@@ -54,14 +53,12 @@ from kdcube_ai_app.apps.chat.sdk.solutions.conversation.api import (
     ConversationSearchParams,
     run_conversation_search,
 )
-from kdcube_ai_app.apps.chat.sdk.solutions.conversation.export import DEFAULT_EXPORT_LIMIT
 from kdcube_ai_app.apps.chat.sdk.solutions.conversation.instructions import (
     CONVERSATION_NAMESPACE_INTRO,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.conversation.read import (
     SCOPE_SELF as READ_SCOPE_SELF,
     SCOPE_USER as READ_SCOPE_USER,
-    ConversationExportScope,
     ConversationGetRequest,
     ConversationListRequest,
     ConversationReadScope,
@@ -83,17 +80,14 @@ from kdcube_ai_app.apps.chat.sdk.solutions.conversation.presentation import (
 
 PROVIDER_ID = "sdk.conversation"
 LOGGER = logging.getLogger("kdcube.sdk.conversation.named_service")
-OBJECT_EXPORT = "object.export"
 
 _CONVERSATION_TRANSPORTS = (TRANSPORT_LOCAL, TRANSPORT_API)
 
 
 def _conversation_operations() -> dict:
-    # Default read ops (list/search/get/schema/action/...) plus the custom
-    # object.export, which is not in the standard operation vocabulary.
-    ops = build_default_operations(_CONVERSATION_TRANSPORTS, include_mutations=False)
-    ops[OBJECT_EXPORT] = NamedServiceOperationSpec(OBJECT_EXPORT, _CONVERSATION_TRANSPORTS)
-    return ops
+    # Read realm: default read ops (list/search/get/schema/action/...). Reading a
+    # conversation is object.get; there is no separate export operation.
+    return build_default_operations(_CONVERSATION_TRANSPORTS, include_mutations=False)
 
 
 _CONVERSATION_OBJECT_KINDS = (OBJECT_KIND, CONVERSATION_OBJECT_KIND)
@@ -105,8 +99,7 @@ _CONVERSATION_GRANT_HINTS = {
     "object.list": ["conversations:read"],
     "object.search": ["conversations:read"],
     "object.get": ["conversations:read"],
-    "object.export": ["conversations:export"],
-    "selected_user": ["conversations:read:any_user", "conversations:export:any_user"],
+    "selected_user": ["conversations:read:any_user"],
 }
 _CONVERSATION_METADATA = {
     "viewer_surface": "sdk.conversation.viewer",
@@ -146,19 +139,17 @@ CONVERSATION_SEARCH_FILTERS: dict[str, Any] = {
     },
     "scope": {
         "type": "string",
-        "enum": [SCOPE_CONVERSATION, SCOPE_USER],
+        "enum": [SCOPE_USER, SCOPE_CONVERSATION],
         "description": (
-            "conversation = search only the current conversation (default). "
-            "user = also search the same user's other conversations — required for "
-            "cross-conversation recall."
+            "user = search across the user's conversations (default) — the right choice for "
+            "external recall. conversation = restrict to a single conversation; only meaningful "
+            "when the caller supplies a conversation_id it owns."
         ),
-        "default": SCOPE_CONVERSATION,
+        "default": SCOPE_USER,
     },
-    "from": {"type": "string", "description": "ISO timestamp. Start of the temporal window."},
+    "from": {"type": "string", "description": "ISO timestamp. Start of the temporal window (date-window recall)."},
     "to": {"type": "string", "description": "ISO timestamp. End of the temporal window, exclusive."},
-    "ordinal": {"type": "integer", "description": "1-based turn ordinal in the selected scope/window (catalog lookup, no query)."},
-    "order": {"type": "string", "enum": ["asc", "desc"], "description": "Order for catalog results. Default asc.", "default": "asc"},
-    "days": {"type": "integer", "description": "Lookback window in days. Default 365 for topic search, 3650 for catalog/temporal."},
+    "days": {"type": "integer", "description": "Lookback window in days. Default 365 for topic search, 3650 for temporal."},
     "include_recovery_sessions": {
         "type": "boolean",
         "description": (
@@ -190,8 +181,9 @@ SERVICE_ABOUT: dict[str, Any] = {
     "description": (
         "Read-only search over the user's conversation memory realm: what was actually said "
         "(user prompts/follow-ups, assistant replies/working summaries) and the user's uploaded "
-        "attachment summaries — not bot-produced files. Default scope is the current conversation; "
-        "the user scope widens to the same user's other conversations."
+        "attachment summaries — not bot-produced files. Default scope searches across the user's "
+        "conversations; narrow to a single conversation by passing scope=conversation with a "
+        "conversation_id."
     ),
     "search_scopes": [scope.to_dict() for scope in CONVERSATION_SEARCH_SCOPES],
 }
@@ -340,7 +332,6 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
                 "search": self._search_enabled,
                 "list": read_enabled,
                 "get": read_enabled,
-                "export": read_enabled,
                 "upsert": False,
                 "delete": False,
                 "actions": ["preview", "describe", "capabilities"],
@@ -357,6 +348,7 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
             extra=conversation_schema_payload(
                 grant_hints=_CONVERSATION_GRANT_HINTS,
                 scopes=[READ_SCOPE_SELF, READ_SCOPE_USER],
+                search_filters=CONVERSATION_SEARCH_FILTERS,
             ),
         )
 
@@ -379,9 +371,9 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
                 namespace=request.namespace or NAMESPACE,
             )
         filters = dict(request.filters or {})
-        scope = _text(filters.get("scope") or SCOPE_CONVERSATION).lower()
+        scope = _text(filters.get("scope") or SCOPE_USER).lower()
         if scope not in ALLOWED_SCOPES:
-            scope = SCOPE_CONVERSATION
+            scope = SCOPE_USER
         params = ConversationSearchParams(
             query=_text(request.query),
             targets=_normalize_targets(filters.get("targets")),
@@ -498,29 +490,6 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
             namespace=request.namespace or NAMESPACE,
             object_ref=conversation_ref(conversation_id),
             object=conversation_to_object(record),
-        )
-
-    async def object_export(self, ctx: NamedServiceContext, request: NamedServiceRequest) -> NamedServiceResponse:
-        # User-scoped export (self by default; selected-user is admin). NOT the
-        # all-user tenant/project bulk export — that stays a separate operation.
-        if self._read_service_factory is None:
-            return self._read_not_configured(request)
-        try:
-            scope = self._read_scope(ctx, request)
-        except ConversationScopeError as exc:
-            return self._scope_error(request, exc)
-        filters = dict(request.filters or {})
-        service = self._read_service_factory(ctx)
-        export_request = ConversationExportScope(
-            scope=scope,
-            since=_text(filters.get("since") or filters.get("from")),
-            limit=_int_or_none(filters.get("limit") or request.limit) or DEFAULT_EXPORT_LIMIT,
-        )
-        result = await service.export_conversations(export_request)
-        return NamedServiceResponse.ok_response(
-            provider=self.provider_identity(),
-            namespace=request.namespace or NAMESPACE,
-            extra={**result, "scope": scope.normalized_mode},
         )
 
 

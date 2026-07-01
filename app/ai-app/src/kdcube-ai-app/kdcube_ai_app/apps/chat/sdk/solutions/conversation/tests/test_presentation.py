@@ -45,8 +45,24 @@ def test_full_conversation_object_carries_record_body():
 def test_turn_hit_object():
     hit = {"turn_id": "t1", "conversation_id": "c1", "snippets": [{"role": "assistant", "text": "hello"}], "score": 0.5}
     obj = turn_hit_to_object(hit)
-    assert obj["object_kind"] == TURN_OBJECT_KIND
     assert obj["ref"] == "conv:turn:t1"
-    assert obj["summary"] == "hello"
+    # Title is derived from the first snippet's text (not the turn_id).
+    assert obj["title"] == "hello"
     assert obj["score"] == 0.5
     assert obj["body"]["conversation_id"] == "c1"
+    # Snippet content (with text) is preserved in the body.
+    assert obj["body"]["snippets"] == [{"role": "assistant", "text": "hello"}]
+    # Turn search hits carry only actionable fields — the single-object envelope
+    # (schema/mime/namespace/object_kind/identity) and verbose duplicates are gone.
+    for dropped in ("schema", "mime", "identity", "namespace", "object_kind", "label", "summary", "rank_score"):
+        assert dropped not in obj
+    # Compacted body drops null catalog fields.
+    assert "ordinal" not in obj["body"]
+    assert "total_turns" not in obj["body"]
+
+
+def test_turn_hit_object_title_falls_back_to_turn_id_when_no_snippet_text():
+    # If snippets carry no text, title falls back to the turn id (never blank).
+    hit = {"turn_id": "t1", "conversation_id": "c1", "snippets": [], "score": 0.1}
+    obj = turn_hit_to_object(hit)
+    assert obj["title"] == "t1"
