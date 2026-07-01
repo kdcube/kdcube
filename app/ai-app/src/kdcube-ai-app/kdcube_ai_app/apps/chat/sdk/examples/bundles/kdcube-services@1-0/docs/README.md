@@ -143,8 +143,9 @@ Operations and scope:
 
 - `object.list` — conversation summaries; `object.get` — one full conversation
   (`conv:conversation:<id>`); `object.export` — the `conversations_export`
-  record family, user-scoped. `object.search` is advertised but returns
-  `conversation_search_not_configured` until a search backend is wired.
+  record family, user-scoped; `object.search` — search the conversation memory
+  realm (turn-level recovery), backed by the SDK search backend over the shared
+  search plumbing, bound per request to the caller's tenant/project.
 - Default scope is the caller's own conversations. A selected-user scope
   (`filters.scope = {mode: "user", user_id}`) is the admin path.
 
