@@ -1160,20 +1160,27 @@ class ExecTools:
             "RUNTIME BEHAVIOR\n"
             "- The executor runs your snippet verbatim from a separate user_code.py module.\n"
             "- The executor supports top-level await and does not indent or rewrite your program body.\n"
-            "- After execution, the harness collects ONLY the files named in `contract`. It iterates the\n"
-            "  contract (NOT the workdir): each contracted `filepath` that exists and is non-empty is hosted,\n"
-            "  and the exec workdir is then discarded.\n"
-            "- CONSEQUENCE (the #1 cause of 'my file is gone next turn'): `contract` is the EXHAUSTIVE list of\n"
-            "  what survives. Any file your code writes that is NOT in the contract is thrown away — it cannot\n"
-            "  be pulled, read, shared, or reused this turn or in any later turn (your next turn starts EMPTY and\n"
-            "  can only PULL files that were contracted). There is no 'keep everything' scan. So contract EVERY\n"
-            "  file that could be useful on its own later, not just the final deliverable.\n"
-            "- MOST COMMON MISTAKE: generating an Excel/PDF/DOCX that embeds charts/images your code rendered and\n"
-            "  contracting ONLY the workbook. Embedding copies the image BYTES into the document, but each\n"
-            "  standalone image is a SEPARATE output and is discarded unless you contract it too — one entry per\n"
-            "  image (visibility='internal' for reusable building blocks, 'external' if the user should get them).\n"
-            "  Same for any dataset/parsed table/intermediate export. The contract `filepath` MUST be byte-identical\n"
-            "  to the path your code writes to, or the file is reported as missing and its bytes are lost.\n"
+            "- WHERE YOU WRITE DECIDES HOW A FILE PERSISTS. There are TWO independent paths:\n"
+            "    (1) `turn_<current>/files/...` -> GIT: a versioned PROJECT. The whole files/ tree is committed as\n"
+            "        this turn's SNAPSHOT and carried across turns; next turn starts EMPTY but you re-materialize it\n"
+            "        by pulling/checking out its `fi:turn_<id>.files/...` ref. You do NOT contract project files —\n"
+            "        git saves the tree wholesale (a turn editing many project files is captured by the snapshot).\n"
+            "    (2) the `contract` -> HOSTING: each listed file is copied to the resource host (S3/local FS) with\n"
+            "        its OWN durable, downloadable/pullable handle, INDEPENDENT of git. A produced file reaches\n"
+            "        hosting ONLY if it is in the contract. `turn_<current>/outputs/...` has NO git — files there\n"
+            "        survive only if contracted.\n"
+            "- After execution the harness hosts ONLY the files named in `contract` (resolves each `filepath`,\n"
+            "  requires it to exist and be non-empty); it never scans the workdir for extras.\n"
+            "- FLIP YOUR DEFAULT: contract EVERY standalone file your code writes (image, chart, dataset, spreadsheet,\n"
+            "  PDF, export) — NOT only the 'main' deliverable. There is NO 'it's just an intermediate/helper' exemption:\n"
+            "  if a file exists on disk as its own file, the user or a later turn can ask for it ('send the data file\n"
+            "  you used', 'give me that chart as a PNG') and it is LOST unless contracted. When unsure, contract it. The\n"
+            "  only files you may leave uncontracted are routine PROJECT SOURCE under files/ (git keeps those).\n"
+            "- MOST COMMON MISTAKE: you render chart PNGs, embed them into an Excel/PDF, and contract ONLY the workbook —\n"
+            "  embedding copies the bytes INTO the document, but each standalone PNG is a SEPARATE file that vanishes\n"
+            "  unless contracted. Contract the workbook AND every chart image (one entry each; visibility='internal' for\n"
+            "  reusable building blocks). The contract `filepath` MUST be byte-identical to the path your code writes to,\n"
+            "  or the file is reported missing and its bytes lost.\n"
             "\n"
             "[INPUTS]\n"
             "- When called from React decision, the code is provided in <channel:code> (not in params).\n"
@@ -1618,6 +1625,72 @@ async def run_exec_tool(
             "filepath": rel,
         })
 
+    # 4b) Backstop: keep files the code produced under outputs/ that were NOT listed
+    # in the contract, so a produced file (e.g. a chart image the model forgot to
+    # contract) is not silently lost. Auto-kept as INTERNAL (pullable by the agent,
+    # never delivered to the user); a notice in report_text teaches the agent to
+    # contract such files explicitly next time. outputs/ only — files/ is git-backed.
+    auto_hosted: List[Dict[str, Any]] = []
+    try:
+        contracted_paths = set()
+        for a in (contract or []):
+            try:
+                contracted_paths.add(resolve_artifact_path(outdir, a["filepath"]).resolve())
+            except Exception:
+                pass
+        used_names = set(out_dyn.keys())
+        _AUTO_HOST_MAX_FILES = 50
+        for root_dir in sorted(artifact_outdir.glob("turn_*")):
+            outputs_dir = root_dir / "outputs"
+            if not outputs_dir.is_dir():
+                continue
+            for p in sorted(outputs_dir.rglob("*")):
+                if len(auto_hosted) >= _AUTO_HOST_MAX_FILES:
+                    break
+                try:
+                    if not p.is_file() or p.stat().st_size <= 0:
+                        continue
+                    rp = p.resolve()
+                    rel_auto = p.relative_to(artifact_outdir).as_posix()
+                except Exception:
+                    continue
+                if rp in contracted_paths:
+                    continue
+                if "/outputs/tmp/" in ("/" + rel_auto + "/"):  # documented scratch area
+                    continue
+                leaf = p.name
+                base = pathlib.Path(leaf).stem or leaf
+                name = base
+                _n = 1
+                while name in used_names:
+                    _n += 1
+                    name = f"{base}_{_n}"
+                used_names.add(name)
+                out_dyn[name] = {
+                    "type": "file",
+                    "path": rel_auto,
+                    "filename": leaf,
+                    "mime": guess_mime_type(leaf),
+                    "text_preview": "",
+                    "description": "Auto-kept: produced under outputs/ but not listed in the exec contract.",
+                    "visibility": "internal",
+                    "size_bytes": p.stat().st_size,
+                    "text_symbols": None,
+                    "line_count": None,
+                    "text_preview_symbols": 0,
+                    "text_preview_max_symbols": 0,
+                    "text_is_preview": False,
+                    "text_preview_line_start": None,
+                    "text_preview_line_end": None,
+                    "text_preview_line_numbers": False,
+                    "text_truncated": False,
+                    "write_warning": None,
+                    "auto_hosted": True,
+                }
+                auto_hosted.append({"name": name, "filepath": rel_auto})
+    except Exception:
+        auto_hosted = []
+
     infra_tail = ""
     user_log_tail = ""
     user_code_start_line = None
@@ -1769,6 +1842,13 @@ async def run_exec_tool(
     if user_log_display:
         lines.append("Program log (tail):")
         lines.append(user_log_display.strip())
+    if auto_hosted:
+        lines.append("Auto-kept (NOT in your contract): " + ", ".join(a["filepath"] for a in auto_hosted))
+        lines.append(
+            "These files were produced under outputs/ but you did NOT list them in `contract`, so they were kept "
+            "as INTERNAL (pullable by you in a later turn, NOT delivered to the user). Next time list every file "
+            "you want to keep in `contract` — set visibility=\"external\" for anything the user should receive."
+        )
     report_text = "\n".join(lines).strip()
 
     items_list = []

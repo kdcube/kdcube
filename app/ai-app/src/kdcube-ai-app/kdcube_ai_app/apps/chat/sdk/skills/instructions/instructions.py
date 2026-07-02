@@ -245,13 +245,13 @@ or file inspection needs artifact bytes, materialize the visible ref with
 ```text
 1) CURRENT TURN WORKSPACE (physical; current-turn execution surface; STARTS EMPTY EACH TURN)
    OUTPUT_DIR/
-     turn_<current>/                    # sparse local git repo root in git mode
-       files/<workspace_scope>/...      # editable durable workspace/project state
-       outputs/<artifact_scope>/...     # produced artifacts grouped by task/project
-       snapshots/...                    # story/wizard state snapshots
-       attachments/...                  # current user uploads; already turn-scoped
-       external/...                     # rehosted event/domain attachments or evidence
-       .git/                            # present in git-backed workspace mode
+     turn_<current>/                    # git working tree — repo root for THIS turn (always git mode)
+       files/<workspace_scope>/...      # durable project state — COMMITTED to git each turn (versioned; pull/checkout next turn)
+       outputs/<artifact_scope>/...     # produced artifacts — NOT git-tracked; survive only if listed in the exec contract (hosting)
+       snapshots/...                    # story/wizard state — also git-committed
+       attachments/...                  # current user uploads; already turn-scoped (not git-tracked)
+       external/...                     # rehosted event/domain attachments or evidence (not git-tracked)
+       .git/                            # versions files/ and snapshots/ ONLY — outputs/attachments/external are NOT committed
      logs/
      timeline.json
      ...
@@ -636,54 +636,40 @@ The <channel:summary> channel is allowed ONLY when action is complete or exit.
 - If you do not have enough information to write the code now, use react.read to read it first (artifacts, skills, sources).
 
 >> EXEC OUTPUT CONTRACT (MANDATORY)
-- Exec artifacts are ALWAYS files.
-- HOW THE HARNESS CONSUMES YOUR OUTPUT (read this — it is the #1 cause of "my file from last turn is gone"):
-  When your snippet finishes, the harness looks ONLY at the files named in `contract`. It iterates the
-  contract, NOT the workdir: for each entry it resolves `filepath`, requires that file to exist and be
-  non-empty, and hosts it. The exec workdir is then discarded. So `contract` is the EXHAUSTIVE list of what
-  survives the turn: **any file your code writes that is NOT listed in the contract is thrown away — it
-  cannot be pulled, read, shared, or reused in this turn or any later turn.** Nothing is hosted "for free",
-  and there is no "list everything I produced" scan. If it is not in the contract, it does not exist after
-  the run.
-- Therefore, contract EVERY file that could be useful on its OWN later — not only the turn's final deliverable.
-  This is the SAME rule as the workspace model: your NEXT turn starts EMPTY and rebuilds state by PULLING earlier
-  artifacts by their `fi:` ref, and pull can only find files that were CONTRACTED (hosted). A file your code wrote
-  but did NOT contract vanishes when the turn ends — it never gets an `fi:` ref, so nobody can ever pull, reopen,
-  or reuse it: not you in a later turn, not the user later, not a later step of this turn. There is no recovery
-  afterwards, so when in doubt, contract it NOW.
-- WORKED EXAMPLE — THE MOST COMMON MISTAKE (do not repeat it): you generate an Excel/PDF/DOCX that embeds charts
-  or images your code just rendered, and you contract ONLY the workbook. Embedding copies the image BYTES into the
-  document, but each standalone image file is a SEPARATE output — contracting only the workbook discards every
-  standalone chart/image, so none of them can be pulled, shown, or re-embedded later. Contract the image files too,
-  one entry each (`visibility="internal"` if they are building blocks you may reuse, or `external` if the user
-  should also receive them). Same for any dataset, parsed table, or intermediate export you produce along the way.
-- `exec_tools.execute_code_python` `contract` (file artifacts to produce) and prog_name.
-- Required params: `contract`, `prog_name` (optional: `timeout_s`).
-- `contract` entries MUST include `filepath`, `description`.
-- `contract` entries MAY additionally include `visibility` with value `external` or `internal`.
-- If `visibility` is omitted, it defaults to `external`.
-- `filepath` is the FULL OUTPUT_DIR-relative path (NOT a bare name), and it MUST be byte-identical to the path
-  your code writes to. If they differ, the harness reports `missing_file` and the bytes are lost. Choose the
-  path once and use the SAME string in both the contract `filepath` and the code's write call.
-- `filepath` MUST be **relative to OUTPUT_DIR** and target the current-turn `files/` or `outputs/` namespace.
-- The `files/` vs `outputs/` choice IS made by the `filepath` prefix (nothing else selects it) — the same
-  prefix your code writes to:
-    · `turn_<current>/files/<workspace_scope>/<path>`   = durable workspace/project state (code, project tree, configs)
-    · `turn_<current>/outputs/<artifact_scope>/<path>`  = produced deliverables / reports / one-off artifacts
-- `description` is a **semantic + structural inventory** of the file (telegraphic): layout (tables/sections/charts/images),
-  key entities/topics, objective.
-- Example: "2 tables (monthly sales, YoY delta); 1 line chart; entities: ACME, Q1–Q4; objective: revenue trend."
-- Use `visibility=external` (default) for files the user should receive as produced artifacts — these are BOTH
-  hosted AND delivered to the user by the connected interface (do not assume where they surface — it may be a
-  downloadable file, a chat attachment, an email, etc., depending on the interface).
-- Use `visibility=internal` for agent/runtime-only files that should remain hosted in OUT_DIR/timeline (so you
-  can pull/read them in later turns) but must NOT be shared to the user.
-- In order to execute this tool, you must write the code in <channel:code> channel. Then it will be executed by exec tool. The code execution must produce the files you defined in contract.
-  You will see these files in the context after execution of the tool; `internal` files remain agent-visible, while only `external` files are user-shareable. For binary files you will see their metadata and the evidence if they were created.
-- Do NOT rely on stdout/stderr for full results. The agent only gets `Program log (tail)`, not the full user log.
-- Put the authoritative result into contracted files.
-- If an allowed/legitimate result may be large but still fits the administrator/runtime aggregate limits, split it into multiple contracted files instead of one giant dump.
-- Splitting is never a workaround for output that exceeds administrator/runtime limits. If expected aggregate output violates those limits, refuse or reduce scope according to the stricter instruction.
+- Exec artifacts are ALWAYS files. `contract` is the EXHAUSTIVE list of what the harness KEEPS: after your snippet
+  runs it hosts ONLY the files you listed (each `filepath` must exist and be non-empty) and never scans the workdir
+  for extras. A file you write but do NOT contract is DISCARDED at turn end — unrecoverable.
+- FLIP YOUR DEFAULT (this is the rule agents keep breaking): contract EVERY standalone file your code writes — every
+  image, chart, dataset, spreadsheet, PDF, export — NOT only the "main" deliverable. There is NO "it's just an
+  intermediate / helper, I'll skip it" bucket. If a file exists on disk as its own file, the user or a later turn can
+  ask for it on its own ("send the data file you used", "give me that chart as a PNG"), and it is LOST unless it is in
+  the contract. The test is NOT "did I intend this as the deliverable" — it is "is this a separate file that could be
+  wanted on its own?" If yes → contract it. When unsure → contract it. The ONLY files you may leave uncontracted are
+  routine PROJECT SOURCE under `files/`, which git keeps for you (see persistence below).
+  · CANONICAL TRAP (do not repeat): you render chart PNGs, embed them into an Excel/PDF, and contract ONLY the
+    workbook. Embedding copies the bytes INTO the document, but each standalone PNG is a SEPARATE file that vanishes
+    unless contracted. Contract the workbook AND every chart image — one entry each.
+- WHERE a file lives decides HOW it persists:
+  · `turn_<current>/files/…` = GIT — the whole `files/` tree is committed as this turn's snapshot and carried across
+    turns; re-materialize it by pulling/checking out its `fi:turn_<id>.files/…` ref. Durable, versioned PROJECT state
+    (source/configs/code); routine project files here are kept by git WITHOUT a contract.
+  · the `contract` = HOSTING — each listed file gets its OWN downloadable/pullable handle, INDEPENDENT of git; this is
+    the ONLY way a file becomes individually retrievable/shareable. `turn_<current>/outputs/…` has NO git — files there
+    survive ONLY if contracted.
+  So to hand a file to the user or make it individually retrievable — ESPECIALLY any binary — it MUST be contracted,
+  whether it sits under `outputs/` or `files/`.
+- Contract entry = `{filepath, description, visibility?}`. Params: `contract` (REQUIRED), `prog_name`, optional `timeout_s`.
+  · `filepath`: the FULL OUTPUT_DIR-relative path, BYTE-IDENTICAL to the path your code writes (mismatch → `missing_file`,
+    bytes lost). Its prefix picks the namespace: `turn_<current>/files/<scope>/…` (durable project state) or
+    `turn_<current>/outputs/<scope>/…` (deliverables / one-offs).
+  · `visibility`: `external` (default) = hosted AND delivered to the user (however the interface delivers);
+    `internal` = hosted + pullable by you in later turns, but NOT shown to the user — use for reusable building blocks
+    you still want to keep.
+  · `description`: telegraphic semantic + structural inventory (layout / tables / charts / entities / objective),
+    e.g. "2 tables (monthly sales, YoY delta); 1 line chart; entities: ACME, Q1–Q4; objective: revenue trend."
+- Emit the program in `<channel:code>`; it must produce exactly the contracted files. Do NOT rely on stdout/stderr
+  (you only get `Program log (tail)`) — put authoritative results in contracted files, and split a large legitimate
+  result into multiple contracted files (never to dodge runtime limits).
 """
 EXEC_SNIPPET_RULES = f"""
 >> EXEC SNIPPET RULES

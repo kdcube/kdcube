@@ -683,11 +683,6 @@ async def test_run_exec_tool_forwards_bundle_storage_dir_to_runtime(tmp_path, mo
             return {"ok": True, "returncode": 0}
 
     monkeypatch.setattr(exec_tools_module, "_InProcessRuntime", _FakeRuntime)
-    monkeypatch.setattr(
-        exec_tools_module,
-        "build_portable_spec",
-        lambda **_kwargs: SimpleNamespace(to_json=lambda: "{}"),
-    )
 
     tool_manager = SimpleNamespace(
         svc=object(),
@@ -695,6 +690,7 @@ async def test_run_exec_tool_forwards_bundle_storage_dir_to_runtime(tmp_path, mo
         export_runtime_globals=lambda: {},
         tool_modules_tuple_list=lambda: [],
         bundle_root=None,
+        build_portable_spec=lambda **_k: SimpleNamespace(to_json=lambda: "{}"),
     )
 
     result = await run_exec_tool(
@@ -732,11 +728,6 @@ async def test_run_exec_tool_reports_runtime_quota_error_but_keeps_succeeded_art
             }
 
     monkeypatch.setattr(exec_tools_module, "_InProcessRuntime", _FakeRuntime)
-    monkeypatch.setattr(
-        exec_tools_module,
-        "build_portable_spec",
-        lambda **_kwargs: SimpleNamespace(to_json=lambda: "{}"),
-    )
 
     tool_manager = SimpleNamespace(
         svc=object(),
@@ -744,6 +735,7 @@ async def test_run_exec_tool_reports_runtime_quota_error_but_keeps_succeeded_art
         export_runtime_globals=lambda: {},
         tool_modules_tuple_list=lambda: [],
         bundle_root=None,
+        build_portable_spec=lambda **_k: SimpleNamespace(to_json=lambda: "{}"),
     )
 
     result = await run_exec_tool(
@@ -790,11 +782,6 @@ async def test_run_exec_tool_touches_task_activity_while_runtime_runs(tmp_path, 
         "touch_current_task_activity",
         lambda kind: activity_kinds.append(kind) or True,
     )
-    monkeypatch.setattr(
-        exec_tools_module,
-        "build_portable_spec",
-        lambda **_kwargs: SimpleNamespace(to_json=lambda: "{}"),
-    )
 
     tool_manager = SimpleNamespace(
         svc=object(),
@@ -802,6 +789,7 @@ async def test_run_exec_tool_touches_task_activity_while_runtime_runs(tmp_path, 
         export_runtime_globals=lambda: {},
         tool_modules_tuple_list=lambda: [],
         bundle_root=None,
+        build_portable_spec=lambda **_k: SimpleNamespace(to_json=lambda: "{}"),
     )
 
     result = await run_exec_tool(
@@ -849,11 +837,6 @@ async def test_run_exec_tool_preserves_user_code_verbatim_and_uses_loader_wrappe
             return {"ok": True, "returncode": 0}
 
     monkeypatch.setattr(exec_tools_module, "_InProcessRuntime", _FakeRuntime)
-    monkeypatch.setattr(
-        exec_tools_module,
-        "build_portable_spec",
-        lambda **_kwargs: SimpleNamespace(to_json=lambda: "{}"),
-    )
 
     tool_manager = SimpleNamespace(
         svc=object(),
@@ -861,6 +844,7 @@ async def test_run_exec_tool_preserves_user_code_verbatim_and_uses_loader_wrappe
         export_runtime_globals=lambda: {},
         tool_modules_tuple_list=lambda: [],
         bundle_root=None,
+        build_portable_spec=lambda **_k: SimpleNamespace(to_json=lambda: "{}"),
     )
 
     result = await run_exec_tool(
@@ -895,11 +879,6 @@ async def test_run_exec_tool_uses_configured_text_preview_symbols(tmp_path, monk
             return {"ok": True, "returncode": 0}
 
     monkeypatch.setattr(exec_tools_module, "_InProcessRuntime", _FakeRuntime)
-    monkeypatch.setattr(
-        exec_tools_module,
-        "build_portable_spec",
-        lambda **_kwargs: SimpleNamespace(to_json=lambda: "{}"),
-    )
 
     tool_manager = SimpleNamespace(
         svc=object(),
@@ -907,6 +886,7 @@ async def test_run_exec_tool_uses_configured_text_preview_symbols(tmp_path, monk
         export_runtime_globals=lambda: {},
         tool_modules_tuple_list=lambda: [],
         bundle_root=None,
+        build_portable_spec=lambda **_k: SimpleNamespace(to_json=lambda: "{}"),
     )
 
     result = await run_exec_tool(
@@ -932,3 +912,59 @@ async def test_run_exec_tool_uses_configured_text_preview_symbols(tmp_path, monk
     assert output["text_truncated"] is True
     assert output["text_preview_max_symbols"] == 12
     assert output["text_is_preview"] is True
+
+
+@pytest.mark.asyncio
+async def test_run_exec_tool_auto_hosts_uncontracted_outputs_as_internal(tmp_path, monkeypatch):
+    # Backstop: a file produced under outputs/ but NOT listed in the contract must not
+    # be silently lost — it is auto-kept as INTERNAL (never delivered to the user) and a
+    # notice in report_text tells the agent to contract such files explicitly next time.
+    class _FakeRuntime:
+        def __init__(self, logger):
+            self.logger = logger
+
+        async def execute_py_code(self, **kwargs):
+            root = exec_tools_module.artifact_outdir_for(kwargs["output_dir"]) / "turn_1" / "outputs"
+            root.mkdir(parents=True, exist_ok=True)
+            (root / "report.txt").write_text("hello", encoding="utf-8")          # contracted
+            (root / "chart.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"x" * 64)    # NOT contracted
+            return {"ok": True, "returncode": 0}
+
+    monkeypatch.setattr(exec_tools_module, "_InProcessRuntime", _FakeRuntime)
+    tool_manager = SimpleNamespace(
+        svc=object(),
+        comm=SimpleNamespace(_export_comm_spec_for_runtime=lambda: {}),
+        export_runtime_globals=lambda: {},
+        tool_modules_tuple_list=lambda: [],
+        bundle_root=None,
+        build_portable_spec=lambda **_k: SimpleNamespace(to_json=lambda: "{}"),
+    )
+
+    result = await run_exec_tool(
+        tool_manager=tool_manager,
+        output_contract={},
+        code="print('ok')",
+        contract=[{
+            "name": "report",
+            "filepath": "turn_1/outputs/report.txt",
+            "mime": "text/plain",
+            "description": "Report text",
+            "visibility": "external",
+        }],
+        timeout_s=30,
+        workdir=tmp_path / "work",
+        outdir=tmp_path / "out",
+    )
+
+    outputs = {item["resource_id"]: item["output"] for item in result["artifacts"]}
+    # The un-contracted chart.png was auto-kept as INTERNAL (not delivered to the user).
+    auto = outputs.get("artifact:chart")
+    assert auto is not None
+    assert auto["visibility"] == "internal"
+    assert auto.get("auto_hosted") is True
+    assert auto["path"] == "turn_1/outputs/chart.png"
+    # The contracted report keeps its external visibility.
+    assert outputs["artifact:report"]["visibility"] == "external"
+    # The agent-visible report names the auto-kept file so the agent learns to contract it.
+    assert "Auto-kept" in result["report_text"]
+    assert "turn_1/outputs/chart.png" in result["report_text"]

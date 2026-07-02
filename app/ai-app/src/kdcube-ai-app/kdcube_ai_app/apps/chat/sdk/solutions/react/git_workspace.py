@@ -744,7 +744,7 @@ def _stage_current_turn_text_workspace(*, turn_root: pathlib.Path) -> None:
     except GitWorkspaceCommandError as exc:
         if not _is_empty_workspace_pathspec_error(exc):
             raise
-    text_paths: List[str] = []
+    new_paths: List[str] = []
     for namespace in _GIT_WORKSPACE_NAMESPACES:
         workspace_root = turn_root / namespace
         if not workspace_root.exists():
@@ -754,20 +754,24 @@ def _stage_current_turn_text_workspace(*, turn_root: pathlib.Path) -> None:
                 continue
             if _workspace_path_is_skipped(path, turn_root=turn_root):
                 continue
-            if not _file_is_text_like(path):
-                continue
+            # Binaries are intentionally included in the project snapshot: files/ is the
+            # git-backed project, so its whole tree (text AND binary) is versioned per turn.
+            # (Retrieval/sharing of an individual file still goes through hosting via the
+            # exec contract — the rn resolver points at hosting, not git.)
+            # if not _file_is_text_like(path):
+            #     continue
             rel_path = str(path.relative_to(turn_root))
             if _git_path_is_ignored(repo_root=turn_root, rel_path=rel_path):
                 continue
-            text_paths.append(rel_path)
-    if not text_paths:
+            new_paths.append(rel_path)
+    if not new_paths:
         return
-    for idx in range(0, len(text_paths), 128):
-        chunk = text_paths[idx: idx + 128]
+    for idx in range(0, len(new_paths), 128):
+        chunk = new_paths[idx: idx + 128]
         _run_git_checked(
             turn_root,
             ["add", "--sparse", "--", *chunk],
-            op="stage text workspace paths",
+            op="stage new workspace paths",
         )
 
 
