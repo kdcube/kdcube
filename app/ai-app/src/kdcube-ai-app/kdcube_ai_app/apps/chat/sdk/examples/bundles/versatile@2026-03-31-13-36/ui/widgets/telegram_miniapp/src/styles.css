@@ -245,8 +245,23 @@ input:focus, select:focus, textarea:focus {
 .link-button:hover:not(:disabled) {
   background: var(--surface-2);
 }
-.link-button.danger { color: var(--pink-dark); }
-.link-button.danger:hover:not(:disabled) { background: var(--pink-pale); }
+/* Filled destructive action (e.g. Delete). Kept as a strong override so the
+ * later `.link-button` block (the link-card flow, ~line 623) can't leak its
+ * blue fill / pink text under this button. White text stays readable on the
+ * pink-dark fill in every state, including disabled. */
+.link-button.danger {
+  border: 1px solid var(--pink-dark);
+  background: var(--pink-dark);
+  color: #fff;
+}
+.link-button.danger:hover:not(:disabled) {
+  border-color: var(--red-dark);
+  background: var(--red-dark);
+  color: #fff;
+}
+.link-button.danger:disabled {
+  color: #fff;
+}
 
 /* ─── New row composite (input + button) ─── */
 .new-row {
