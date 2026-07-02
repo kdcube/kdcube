@@ -29,6 +29,7 @@ def _solver_stub() -> ReactSolverV2:
     solver._steer_interrupt_requested = False
     solver._latest_steer_seq_seen = 0
     solver._last_handled_steer_seq = 0
+    solver._latest_followup_seq_seen = 0
     solver._latest_steer_text = ""
     solver._active_phase_task = None
     solver._active_phase_name = ""
@@ -853,6 +854,9 @@ async def test_on_external_event_followup_awards_iteration_credit_for_current_tu
     assert handled is True
     assert solver._reactive_iteration_credit_total == 1
     assert "evt_15" in solver._credited_external_event_ids
+    # The followup's sequence is tracked so a later decision round can tell it superseded
+    # an earlier steer's finalize (which must then be cleared so this followup runs fresh).
+    assert solver._latest_followup_seq_seen == 15
 
 
 @pytest.mark.asyncio

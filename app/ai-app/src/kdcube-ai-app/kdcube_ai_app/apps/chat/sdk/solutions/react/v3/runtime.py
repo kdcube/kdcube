@@ -157,6 +157,7 @@ class ReactSolverV2:
         self._steer_interrupt_requested = False
         self._latest_steer_seq_seen = 0
         self._last_handled_steer_seq = 0
+        self._latest_followup_seq_seen = 0
         self._latest_steer_text = ""
         self._active_phase_task: Optional[asyncio.Task] = None
         self._active_phase_name: str = ""
@@ -237,6 +238,10 @@ class ReactSolverV2:
                     await self._interrupt_active_phase_for_steer()
         except Exception:
             pass
+        if type_norm == "followup":
+            fseq = int(seq or 0) if seq is not None else 0
+            if fseq > int(self._latest_followup_seq_seen or 0):
+                self._latest_followup_seq_seen = fseq
         try:
             event_id = getattr(event, "message_id", None) or ""
             credit_awarded = self._award_reactive_iteration_credit(type=type_norm, event=event)
@@ -2712,6 +2717,7 @@ class ReactSolverV2:
         self._steer_interrupt_requested = False
         self._latest_steer_seq_seen = 0
         self._last_handled_steer_seq = 0
+        self._latest_followup_seq_seen = 0
         self._latest_steer_text = ""
         self._reactive_iteration_credit_total = 0
         self._reactive_iteration_credit_cap = int(getattr(state, "reactive_iteration_credit_cap", 0) or 0)
@@ -2870,6 +2876,22 @@ class ReactSolverV2:
 
     async def _decision_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
         self._sync_reactive_iteration_budget(state)
+        # A followup that arrived AFTER a steer's finalize supersedes it: the user gave new
+        # work, so LEAVE finalize mode and let the followup's generation run with a full
+        # budget, instead of being force-completed under the earlier steer's wrap-up.
+        if bool(state.get("steer_finalize_mode")) and int(self._latest_followup_seq_seen or 0) > int(state.get("steer_finalize_seq") or 0):
+            state["steer_finalize_mode"] = False
+            state.pop("steer_finalize_rounds_remaining", None)
+            if str(state.get("exit_reason") or "") == "steer":
+                state["exit_reason"] = ""
+            try:
+                self.log.log(
+                    f"[react] steer finalize cleared by newer followup seq={int(self._latest_followup_seq_seen or 0)} "
+                    f"turn_id={self.scratchpad.turn_id}",
+                    level="INFO",
+                )
+            except Exception:
+                pass
         if await self._apply_steer_interrupt_if_requested(state, checkpoint="decision.start"):
             return state
         if state.get("exit_reason"):

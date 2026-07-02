@@ -61,6 +61,11 @@ This page explains the followup/steer behavior after those fields exist.
   one a subsequent `followup` just started. (The checkpoint path `_apply_steer_interrupt_if_requested`
   uses the same `_latest_steer_seq_seen` vs `_last_handled_steer_seq` fence.)
 - React then re-enters with the steer already on the current turn timeline and gets a short bounded finalize window
+- steer finalize is bounded (`steer_finalize_mode` reduces the decision token budget and force-completes after a
+  few rounds), so a NEWER followup must clear it: if a followup arrives with a sequence greater than the finalize's
+  steer sequence, the decision node leaves `steer_finalize_mode` and the followup's generation runs with a full
+  budget. Without this, finalize (set once and never otherwise cleared) would truncate every later generation in
+  the same turn — e.g. one a followup started.
 - if no live owner consumes the event, processor promotes it from that same retained source into a normal scheduled turn
 
 Current boundary:
