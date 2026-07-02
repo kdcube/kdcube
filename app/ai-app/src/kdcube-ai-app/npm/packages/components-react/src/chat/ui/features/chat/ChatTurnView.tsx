@@ -5,7 +5,7 @@
  *  primitives this borrows from (FollowupMessageBlock, OverviewEvent +
  *  mergeOverviewEvents).
  */
-import { memo, useMemo, useState, type CSSProperties } from 'react'
+import { memo, useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { useChatViewModel } from '../../context.tsx'
 import {
   formatBytes,
@@ -528,6 +528,11 @@ function ChatTimelineBlockImpl({ artifact }: { artifact: TimelineArtifact }) {
  *  The public identity is `objectRef`/`logicalPath` (usually `fi:`).
  *  Download and drag both use that canonical object ref; transport handles
  *  stay behind the resolver boundary. */
+function isPreviewableImageFile(artifact: FileArtifact, iconKind: ReturnType<typeof fileKind>['icon']): boolean {
+  const mime = artifact.mime ? artifact.mime.toLowerCase() : ''
+  return mime.startsWith('image/') || iconKind === 'image'
+}
+
 function ChatFileBlockImpl({
   artifact,
   onError,
@@ -553,6 +558,33 @@ function ChatFileBlockImpl({
   const actionLabel = isDirectDownload ? 'Download' : 'Open'
   const extLabel = isDirectDownload ? kind.label : (namespace ? namespace.toUpperCase() : kind.label)
   const subtitle = artifact.description || artifact.mime || pinRef || ''
+  const imagePreviewable = Boolean(isDirectDownload && pinRef && isPreviewableImageFile(artifact, kind.icon))
+  const loadFileBlob = vm.loadFileBlob
+  const [imageUrl, setImageUrl] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!imagePreviewable || !pinRef) {
+      setImageUrl(null)
+      return undefined
+    }
+    setImageUrl(null)
+    let cancelled = false
+    let objectUrl: string | null = null
+    loadFileBlob(pinRef, artifact.filename, artifact.mime ?? undefined)
+      .then((blob) => {
+        if (cancelled) return
+        objectUrl = URL.createObjectURL(blob)
+        setImageUrl(objectUrl)
+      })
+      .catch(() => {
+        if (!cancelled) setImageUrl(null)
+      })
+    return () => {
+      cancelled = true
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [artifact.filename, artifact.mime, imagePreviewable, loadFileBlob, pinRef])
+
   const handle = () => {
     if (!canActivate || downloading) return
     if (isDirectDownload) {
@@ -587,52 +619,62 @@ function ChatFileBlockImpl({
     } as Parameters<typeof vm.openContextChip>[0])
   }
   return (
-    <button
-      type="button"
-      draggable={Boolean(pinRef)}
-      onClick={() => handle()}
-      onDragStart={(event) => {
-        if (!pinRef) return
-        setChatFileDragData(event.dataTransfer, {
-          ref: pinRef,
-          filename: artifact.filename,
-          mime: artifact.mime,
-          preview: artifact.description,
-          sourceKind: 'assistant.file',
-        }, event)
-      }}
-      disabled={!pinRef || downloading}
-      className="k-chat-file"
-      style={namespaceVars}
-      title={
-        pinRef
-          ? `${actionLabel} ${artifact.filename}; drag to attach or pin`
-          : artifact.filename
-      }
-    >
-      <span className="k-chat-file-icon" aria-hidden="true">
-        <FileExtIcon kind={kind.icon} />
-      </span>
-      <span className="k-chat-file-main">
-        <span className="k-chat-file-name">{artifact.filename}</span>
-        {subtitle ? <span className="k-chat-file-sub">{subtitle}</span> : null}
-      </span>
-      <span className="k-chat-file-ext">{extLabel}</span>
-      <span className="k-chat-file-action">
-        {downloading ? (
-          isDirectDownload ? 'Downloading…' : 'Opening…'
-        ) : canActivate ? (
-          <>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
-            </svg>
-            <span>{actionLabel}</span>
-          </>
-        ) : (
-          'Unavailable'
-        )}
-      </span>
-    </button>
+    <>
+      {imageUrl ? (
+        <figure className="k-chat-image-preview">
+          <a href={imageUrl} target="_blank" rel="noreferrer" title={`Open ${artifact.filename}`}>
+            <img src={imageUrl} alt={artifact.description || artifact.filename} loading="lazy" />
+          </a>
+          <figcaption>{artifact.filename}</figcaption>
+        </figure>
+      ) : null}
+      <button
+        type="button"
+        draggable={Boolean(pinRef)}
+        onClick={() => handle()}
+        onDragStart={(event) => {
+          if (!pinRef) return
+          setChatFileDragData(event.dataTransfer, {
+            ref: pinRef,
+            filename: artifact.filename,
+            mime: artifact.mime,
+            preview: artifact.description,
+            sourceKind: 'assistant.file',
+          }, event)
+        }}
+        disabled={!pinRef || downloading}
+        className="k-chat-file"
+        style={namespaceVars}
+        title={
+          pinRef
+            ? `${actionLabel} ${artifact.filename}; drag to attach or pin`
+            : artifact.filename
+        }
+      >
+        <span className="k-chat-file-icon" aria-hidden="true">
+          <FileExtIcon kind={kind.icon} />
+        </span>
+        <span className="k-chat-file-main">
+          <span className="k-chat-file-name">{artifact.filename}</span>
+          {subtitle ? <span className="k-chat-file-sub">{subtitle}</span> : null}
+        </span>
+        <span className="k-chat-file-ext">{extLabel}</span>
+        <span className="k-chat-file-action">
+          {downloading ? (
+            isDirectDownload ? 'Downloading…' : 'Opening…'
+          ) : canActivate ? (
+            <>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
+              </svg>
+              <span>{actionLabel}</span>
+            </>
+          ) : (
+            'Unavailable'
+          )}
+        </span>
+      </button>
+    </>
   )
 }
 

@@ -73,6 +73,7 @@ export interface ChatEngine extends Pick<HostEventEmitter, 'on'> {
   openContextChip(context: OpenContextInput): void
 
   downloadFile(ref: string, filename?: string, mime?: string): void
+  loadFileBlob(ref: string, filename?: string, mime?: string): Promise<Blob>
   submitFeedback(turnId: string, reaction: FeedbackReaction, text?: string): void
 
   handleReconnect(): void

@@ -56,6 +56,7 @@ export function ChatViewModelProvider({ children, kdcubePreview = false }: ChatV
     openContextChip: engine.openContextChip,
 
     downloadFile: engine.downloadFile,
+    loadFileBlob: engine.loadFileBlob,
     submitFeedback: engine.submitFeedback,
     handleReconnect: engine.handleReconnect,
     pinConversationToCanvas: engine.pinConversationToCanvas,

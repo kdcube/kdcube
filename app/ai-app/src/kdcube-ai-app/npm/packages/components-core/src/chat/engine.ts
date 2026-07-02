@@ -30,6 +30,7 @@ import { messageForError } from './util.ts'
 import {
   deleteConversationById,
   downloadObjectRef,
+  fetchObjectRefBlob,
   fetchConversationById,
   fetchProfile,
   fetchTurnFeedbacks,
@@ -755,6 +756,9 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
       void downloadObjectRef(runtime, ref, filename ?? ref, mime).catch((error: unknown) => {
         dispatch(chatActions.pushBanner({ tone: 'error', text: `Download failed: ${messageForError(error)}` }))
       })
+    },
+    loadFileBlob(ref, filename, mime) {
+      return fetchObjectRefBlob(runtime, ref, filename ?? ref, mime)
     },
     submitFeedback(turnId, reaction: FeedbackReaction, text) {
       const snapshot = getChat()

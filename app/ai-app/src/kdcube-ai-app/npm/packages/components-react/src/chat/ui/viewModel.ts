@@ -44,6 +44,7 @@ export interface ChatViewModel {
   openContextChip: ChatEngine['openContextChip']
 
   downloadFile: ChatEngine['downloadFile']
+  loadFileBlob: ChatEngine['loadFileBlob']
   submitFeedback: ChatEngine['submitFeedback']
   handleReconnect: ChatEngine['handleReconnect']
   pinConversationToCanvas: ChatEngine['pinConversationToCanvas']
