@@ -128,18 +128,18 @@ def test_search_subject_uses_projected_platform_economics_user():
     subj = M._memory_search_econ_subject(
         _StubSearchEP(
             user_type="registered",
-            user_id="telegram_434804821",
+            user_id="telegram_100200300",
             identity_authority={
-                "actor_user_id": "telegram_434804821",
-                "economics_user_id": "02e53484-0081-70ce-11c1-e96706b1a182",
-                "platform_user_id": "02e53484-0081-70ce-11c1-e96706b1a182",
+                "actor_user_id": "telegram_100200300",
+                "economics_user_id": "a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+                "platform_user_id": "a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
                 "platform_roles": ["kdcube:role:super-admin"],
                 "platform_permissions": ["memories:read"],
             },
         )
     )
-    assert subj.user_id == "02e53484-0081-70ce-11c1-e96706b1a182"
-    assert subj.provenance["actor_user_id"] == "telegram_434804821"
+    assert subj.user_id == "a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
+    assert subj.provenance["actor_user_id"] == "telegram_100200300"
     assert subj.roles == ("kdcube:role:super-admin",)
     assert subj.permissions == ("memories:read",)
     assert subj.budget_bypass is True
@@ -181,18 +181,18 @@ async def test_metered_embedder_ok_embeds():
 async def test_metered_embedder_receives_projected_platform_subject():
     ep = _StubSearchEP(
         user_type="registered",
-        user_id="telegram_434804821",
+        user_id="telegram_100200300",
         reservation=0.02,
         identity_authority={
-            "actor_user_id": "telegram_434804821",
-            "economics_user_id": "02e53484-0081-70ce-11c1-e96706b1a182",
-            "platform_user_id": "02e53484-0081-70ce-11c1-e96706b1a182",
+            "actor_user_id": "telegram_100200300",
+            "economics_user_id": "a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+            "platform_user_id": "a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
             "platform_roles": ["kdcube:role:super-admin"],
         },
     )
     out = await ep._memory_search_embed_or_downgrade("query text")
     assert out == [0.1, 0.2, 0.3]
-    assert ep.metered_subjects == ["02e53484-0081-70ce-11c1-e96706b1a182"]
+    assert ep.metered_subjects == ["a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d"]
 
 
 async def test_economics_limit_downgrades_to_bm25():

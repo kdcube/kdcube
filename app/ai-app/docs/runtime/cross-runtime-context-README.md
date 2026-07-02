@@ -132,7 +132,7 @@ host/coordinator identity.
 
 Some executions start from a surface identity that is not the platform account
 which owns roles or funding. For example, a Telegram-triggered scheduled
-automation can execute as `telegram_434804821` for app storage and audit, while
+automation can execute as `telegram_100200300` for app storage and audit, while
 the Telegram identity has a Connection Hub edge to a platform user that owns
 the effective roles and economics authority.
 
@@ -148,27 +148,27 @@ The portable shape is:
 
 ```text
 REQUEST_CONTEXT.user
-  user_id       = telegram_434804821        # actor/storage identity
+  user_id       = telegram_100200300        # actor/storage identity
   roles         = ["kdcube:role:super-admin"]
   permissions   = [...]
 
 BUNDLE_CALL_CONTEXT.identity_authority
-  actor_user_id      = telegram_434804821
-  storage_user_id    = telegram_434804821
-  platform_user_id   = 02e53484-...
-  economics_user_id  = 02e53484-...
+  actor_user_id      = telegram_100200300
+  storage_user_id    = telegram_100200300
+  platform_user_id   = a1b2c3d4-...
+  economics_user_id  = a1b2c3d4-...
   platform_roles     = ["kdcube:role:super-admin"]
   platform_permissions = [...]
   economics_budget_bypass = true
   identity_provider  = telegram
-  identity_provider_subject = 434804821
+  identity_provider_subject = 100200300
 
 BUNDLE_CALL_CONTEXT.connection_edges
   - edge_id           = edge_...
     from_authority_id = telegram.kdcube_ref
-    from_identity     = telegram.kdcube_ref:434804821
+    from_identity     = telegram.kdcube_ref:100200300
     to_authority_id   = platform
-    to_identity       = platform:02e53484-...
+    to_identity       = platform:a1b2c3d4-...
     grants            = ["identity:family"]
     used_for          = ["authority_projection", "economics"]
 

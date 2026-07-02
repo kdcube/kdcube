@@ -11,8 +11,8 @@ from kdcube_ai_app.apps.chat.sdk.context.memory.models import MemoryScope
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.base_workflow import BaseWorkflow
 
 
-_ACTOR = "02e53484-0081-70ce-11c1-e96706b1a182"
-_LINKED = "telegram_434804821"
+_ACTOR = "a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
+_LINKED = "telegram_100200300"
 
 
 def _family_v1(memory_user_ids, *, ok=True):

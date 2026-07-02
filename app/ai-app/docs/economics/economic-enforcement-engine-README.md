@@ -77,8 +77,8 @@ subject = economics_subject_from_authority_context(
     tenant=tenant,
     project=project,
     identity_authority=bundle_call_context.get("identity_authority"),
-    actor_user_id="telegram_434804821",
-    fallback_user_id="telegram_434804821",
+    actor_user_id="telegram_100200300",
+    fallback_user_id="telegram_100200300",
     timezone="Europe/Kyiv",
 )
 ```

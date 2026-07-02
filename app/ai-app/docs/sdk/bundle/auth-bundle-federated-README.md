@@ -118,7 +118,7 @@ For an unlinked Telegram user:
 
 ```text
 UserSession
-  user_id     = telegram_434804821
+  user_id     = telegram_100200300
   user_type   = registered
   roles       = []
   permissions = []
@@ -132,16 +132,16 @@ platform authority onto the Telegram actor session:
 
 ```text
 UserSession
-  user_id     = telegram_434804821
+  user_id     = telegram_100200300
   user_type   = privileged
   roles       = platform roles
   permissions = platform permissions
   identity_authority
-    actor_user_id       = telegram_434804821
-    platform_user_id    = 02e53484-...
-    economics_user_id   = 02e53484-...
+    actor_user_id       = telegram_100200300
+    platform_user_id    = a1b2c3d4-...
+    economics_user_id   = a1b2c3d4-...
     identity_provider   = telegram
-    identity_provider_subject = 434804821
+    identity_provider_subject = 100200300
 ```
 
 The session does not become the browser platform session. It remains the actor
@@ -181,8 +181,8 @@ session.
   "audience": "kdcube:data_bus",
   "session_id": "<session_id>",
   "verified_authority": {
-    "actor_user_id": "telegram_434804821",
-    "platform_user_id": "02e53484-..."
+    "actor_user_id": "telegram_100200300",
+    "platform_user_id": "a1b2c3d4-..."
   }
 }
 ```

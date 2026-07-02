@@ -23,7 +23,7 @@ def test_telegram_request_payload_selects_telegram_ui_topology():
         request=SimpleNamespace(
             payload={
                 "source": "telegram",
-                "telegram": {"chat_id": "434804821", "turn_id": "turn-test"},
+                "telegram": {"chat_id": "100200300", "turn_id": "turn-test"},
             },
             external_events=[],
         ),

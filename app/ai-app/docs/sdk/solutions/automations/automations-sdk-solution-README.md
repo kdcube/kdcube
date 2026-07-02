@@ -121,12 +121,12 @@ Automation executions can be started by a surface-local identity. A Telegram
 Mini App user is the clearest example:
 
 ```text
-actor/storage identity: telegram_434804821
-linked platform user:  02e53484-0081-70ce-11c1-e96706b1a182
+actor/storage identity: telegram_100200300
+linked platform user:  a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d
 ```
 
 Those identities are not the same and should not be collapsed. The automation
-may keep `telegram_434804821` as the app storage/audit owner while using the
+may keep `telegram_100200300` as the app storage/audit owner while using the
 linked platform user as the role/economics authority.
 
 The conversion happens once when detached work is enqueued or picked up. After
@@ -138,28 +138,28 @@ Canonical envelope:
 ```text
 source.identity_authority
 bundle_call_context.identity_authority
-  actor_user_id       = telegram_434804821
-  storage_user_id     = telegram_434804821
-  platform_user_id    = 02e53484-0081-70ce-11c1-e96706b1a182
-  economics_user_id   = 02e53484-0081-70ce-11c1-e96706b1a182
+  actor_user_id       = telegram_100200300
+  storage_user_id     = telegram_100200300
+  platform_user_id    = a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d
+  economics_user_id   = a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d
   platform_roles      = ["kdcube:role:super-admin"]
   platform_permissions = [...]
   economics_budget_bypass = true
   identity_provider   = telegram
-  identity_provider_subject = 434804821
+  identity_provider_subject = 100200300
 ```
 
 Runtime binding then projects this into:
 
 ```text
 REQUEST_CONTEXT.user
-  user_id     = telegram_434804821      # actor/storage identity
+  user_id     = telegram_100200300      # actor/storage identity
   roles       = ["kdcube:role:super-admin"]
   permissions = [...]
 
 ReAct state
-  user           = telegram_434804821
-  economics_user = 02e53484-0081-70ce-11c1-e96706b1a182
+  user           = telegram_100200300
+  economics_user = a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d
 ```
 
 The app keeps using the actor/storage identity for app data. Economics checks

@@ -39,18 +39,18 @@ def test_economics_run_authority_projects_actor_to_platform_subject():
 
     projection = entrypoint._project_economics_run_authority(
         {
-            "user": "telegram_434804821",
+            "user": "telegram_100200300",
             "user_type": "registered",
             "identity_authority": {
-                "actor_user_id": "telegram_434804821",
-                "platform_user_id": "02e53484-0081-70ce-11c1-e96706b1a182",
+                "actor_user_id": "telegram_100200300",
+                "platform_user_id": "a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
                 "roles": ["kdcube:role:super-admin"],
             },
         }
     )
 
-    assert projection.actor_user_id == "telegram_434804821"
-    assert projection.economics_user_id == "02e53484-0081-70ce-11c1-e96706b1a182"
+    assert projection.actor_user_id == "telegram_100200300"
+    assert projection.economics_user_id == "a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
     assert projection.budget_bypass is True
 
 
@@ -59,13 +59,13 @@ def test_economics_run_authority_does_not_trust_legacy_privileged_user_type():
 
     projection = entrypoint._project_economics_run_authority(
         {
-            "user": "telegram_434804821",
+            "user": "telegram_100200300",
             "user_type": "privileged",
         }
     )
 
-    assert projection.actor_user_id == "telegram_434804821"
-    assert projection.economics_user_id == "telegram_434804821"
+    assert projection.actor_user_id == "telegram_100200300"
+    assert projection.economics_user_id == "telegram_100200300"
     assert projection.budget_bypass is None
 
 
@@ -74,11 +74,11 @@ def test_economics_run_authority_treats_unlinked_external_actor_as_not_platform_
     entrypoint.comm_context = SimpleNamespace(
         user=SimpleNamespace(
             identity_authority={
-                "actor_user_id": "telegram_434804821",
-                "storage_user_id": "telegram_434804821",
-                "economics_user_id": "telegram_434804821",
+                "actor_user_id": "telegram_100200300",
+                "storage_user_id": "telegram_100200300",
+                "economics_user_id": "telegram_100200300",
                 "identity_provider": "telegram",
-                "identity_provider_subject": "434804821",
+                "identity_provider_subject": "100200300",
                 "platform_authority_resolved": False,
                 "platform_authority_error": "platform_user_not_linked",
             },
@@ -91,13 +91,13 @@ def test_economics_run_authority_treats_unlinked_external_actor_as_not_platform_
 
     projection = entrypoint._project_economics_run_authority(
         {
-            "user": "telegram_434804821",
+            "user": "telegram_100200300",
             "user_type": "external",
         }
     )
 
-    assert projection.actor_user_id == "telegram_434804821"
-    assert projection.economics_user_id == "telegram_434804821"
+    assert projection.actor_user_id == "telegram_100200300"
+    assert projection.economics_user_id == "telegram_100200300"
     assert projection.roles == ()
     assert projection.budget_bypass is None
     assert projection.is_anonymous is True

@@ -133,8 +133,8 @@ class _ReadStore(UserMemoryStore):
         return None
 
 
-_ACTOR = "02e53484-actor"
-_LINKED = "telegram_434804821"
+_ACTOR = "a1b2c3d4-actor"
+_LINKED = "telegram_100200300"
 _SCOPE = MemoryScope(tenant="t", project="p", user_id=_ACTOR, bundle_id="b@1")
 
 
@@ -194,7 +194,7 @@ def test_identity_family_result_payload_unwraps_json_body() -> None:
         _memory_identity_family_result_payload,
     )
 
-    payload = '{"ok": true, "memory_user_ids": ["02e53484-actor", "telegram_434804821"]}'
+    payload = '{"ok": true, "memory_user_ids": ["a1b2c3d4-actor", "telegram_100200300"]}'
     assert _memory_identity_family_result_payload({"body": payload})["memory_user_ids"] == [_ACTOR, _LINKED]
 
 

@@ -217,7 +217,7 @@ Use this after changing Connection Hub identity projection, Telegram linking,
 delegated credentials, Data Bus, or economics enforcement.
 
 1. Link an external/channel identity to a platform user, for example
-   `telegram_434804821 -> 02e53484-...`.
+   `telegram_100200300 -> a1b2c3d4-...`.
 2. Trigger paid work from the external identity:
    - Telegram Mini App memory search or chat;
    - scheduled automation owned by the Telegram actor;

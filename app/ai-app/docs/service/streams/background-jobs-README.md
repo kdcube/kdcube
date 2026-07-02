@@ -61,7 +61,7 @@ use generic metadata needed to create the runtime context.
 
 The job actor and the economics subject may be different.
 
-Example: a Telegram actor may enqueue or own work as `telegram_434804821`, while
+Example: a Telegram actor may enqueue or own work as `telegram_100200300`, while
 Connection Hub projection says platform user `02e5...` is the economics subject.
 The job envelope must therefore carry `identity_authority` when the producer has
 one. Proc restores it into:
