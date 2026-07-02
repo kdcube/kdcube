@@ -86,7 +86,7 @@ delegate:
   integration:claude:<grantor>
 
 grantor:
-  platform user 02e53484-...
+  platform user a1b2c3d4-...
 
 allowed:
   resource = user-memories MCP
@@ -101,8 +101,8 @@ can yield:
 
 ```text
 memory_user_ids:
-  02e53484-...
-  telegram_434804821
+  a1b2c3d4-...
+  telegram_100200300
 ```
 
 Only descriptor and consent allow this. The external client does not choose

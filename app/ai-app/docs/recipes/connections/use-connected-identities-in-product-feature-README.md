@@ -19,11 +19,11 @@ Current example:
 
 ```text
 User memories created from:
-  platform user 02e53484-...
-  telegram user telegram_434804821
+  platform user a1b2c3d4-...
+  telegram user telegram_100200300
 
 Connection Hub edge:
-  telegram.kdcube_ref:434804821 -> platform:02e53484-...
+  telegram.kdcube_ref:100200300 -> platform:a1b2c3d4-...
   grants include identity:family
 
 Memory widget:
@@ -35,8 +35,8 @@ Memory widget:
 Runtime identity and product storage identity are not always the platform user:
 
 ```text
-Telegram Mini App writes memory as telegram_434804821
-Browser chat writes memory as 02e53484-...
+Telegram Mini App writes memory as telegram_100200300
+Browser chat writes memory as a1b2c3d4-...
 Delegated client may read as integration:claude:...
 ```
 
@@ -104,20 +104,20 @@ Use the normalized result:
 {
   "ok": true,
   "schema": "connection_hub.identity_family.v1",
-  "platform_user_id": "02e53484-...",
+  "platform_user_id": "a1b2c3d4-...",
   "memory_user_ids": [
-    "02e53484-...",
-    "telegram_434804821"
+    "a1b2c3d4-...",
+    "telegram_100200300"
   ],
   "identities": [
     {
       "authority_id": "platform",
-      "user_id": "02e53484-..."
+      "user_id": "a1b2c3d4-..."
     },
     {
       "provider": "telegram",
       "integration_id": "telegram.kdcube_ref",
-      "user_id": "telegram_434804821"
+      "user_id": "telegram_100200300"
     }
   ]
 }
@@ -141,7 +141,7 @@ If no connection edge exists, or the edge does not delegate identity-family
 reads, the resolver returns only the current actor:
 
 ```text
-memory_user_ids = ["telegram_434804821"]
+memory_user_ids = ["telegram_100200300"]
 ```
 
 That is expected. The product should still work in actor-local mode.
@@ -152,10 +152,10 @@ Writes should usually stay actor/provenance scoped:
 
 ```text
 Telegram-originated write:
-  user_id = telegram_434804821
+  user_id = telegram_100200300
 
 Browser-originated write:
-  user_id = 02e53484-...
+  user_id = a1b2c3d4-...
 
 Delegated-client write:
   user_id = integration/client actor, or deny writes unless explicitly delegated
@@ -186,8 +186,8 @@ Product features should log both the actor and the resolved family:
 
 ```text
 [memory.identity_family]
-  actor_user_id=telegram_434804821
-  family_user_ids=['02e53484-...', 'telegram_434804821']
+  actor_user_id=telegram_100200300
+  family_user_ids=['a1b2c3d4-...', 'telegram_100200300']
   family_size=2
 ```
 
@@ -195,10 +195,10 @@ Connection Hub should log the resolver decision:
 
 ```text
 [connection-hub.identity_family_resolve]
-  requested_user=telegram_434804821
-  projected_platform_user=02e53484-...
+  requested_user=telegram_100200300
+  projected_platform_user=a1b2c3d4-...
   projected_grants=['identity:family', ...]
-  memory_user_ids=['02e53484-...', 'telegram_434804821']
+  memory_user_ids=['a1b2c3d4-...', 'telegram_100200300']
 ```
 
 If Connection Hub returns two ids but the product logs one id, the product is

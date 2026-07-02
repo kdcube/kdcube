@@ -42,7 +42,7 @@ from either side.
 
 ```text
 External channel
-  "I can prove telegram:434804821"
+  "I can prove telegram:100200300"
         |
         v
 Connection Hub
@@ -55,7 +55,7 @@ Browser claim page
         v
 Connection Hub
   writes:
-    telegram:434804821 -> platform user 02e53484-...
+    telegram:100200300 -> platform user a1b2c3d4-...
         |
         v
 External channel UI
@@ -133,7 +133,7 @@ Data Bus
         |
         | verifies provider proof
         | creates/reuses actor session:
-        |   actor_user_id = telegram_434804821
+        |   actor_user_id = telegram_100200300
         |   no projected platform authority before link
         | returns:
         |   federated_token
@@ -154,7 +154,7 @@ Data Bus
         | stores pending challenge:
         |   challenge_id
         |   provider = telegram
-        |   provider_subject = 434804821
+        |   provider_subject = 100200300
         |   integration_id = telegram.kdcube_ref
         |   live_event_session_id
         |   expires_at
@@ -188,7 +188,7 @@ Data Bus
         | reads platform user from browser session
         | reads provider subject from challenge
         | writes connection edge:
-        |   telegram:434804821 -> 02e53484-...
+        |   telegram:100200300 -> a1b2c3d4-...
         | emits:
         |   connection_hub.edge.changed
         | to live_event_session_id
@@ -296,9 +296,9 @@ For a regular user, the external UI should say:
 After the link exists, show concrete linked data:
 
 ```text
-Telegram user id: 434804821
+Telegram user id: 100200300
 Telegram nickname: elena_viter
-KDCube user id: 02e53484-...
+KDCube user id: a1b2c3d4-...
 ```
 
 Provide an `Unlink` action in the external UI.
@@ -328,7 +328,7 @@ external UI
 Before link:
 
 ```text
-actor_user_id = telegram_434804821
+actor_user_id = telegram_100200300
 projected_platform_user = null
 projected_grants = []
 ```
@@ -336,8 +336,8 @@ projected_grants = []
 After link:
 
 ```text
-actor_user_id = telegram_434804821
-projected_platform_user = 02e53484-...
+actor_user_id = telegram_100200300
+projected_platform_user = a1b2c3d4-...
 projected_grants = selected grants from the connection edge
 ```
 
@@ -352,29 +352,29 @@ During a successful unlinked-to-linked run, expect this sequence.
 1. request_authenticate accepted
    provider=telegram
    integration_id=telegram.kdcube_ref
-   actor_user_id=telegram_434804821
+   actor_user_id=telegram_100200300
    platform_user_present=False
    linked=False
    projected_grants=[]
 
 2. data_bus claim issued
-   actor_user_id=telegram_434804821
+   actor_user_id=telegram_100200300
    session_id=<live-session>
    linked=False
 
 3. Socket.IO federated connect verified
    session_id=<live-session>
-   actor_user_id=telegram_434804821
+   actor_user_id=telegram_100200300
 
 4. link_start created provider claim
    challenge_id=<challenge>
-   telegram_user_id=434804821
+   telegram_user_id=100200300
    live_event_session=<live-session>
 
 5. challenge_claim linked
    challenge_id=<challenge>
    provider=telegram
-   provider_subject=434804821
+   provider_subject=100200300
    platform_user_id=02e...
    live_event_session=<live-session>
 
@@ -383,14 +383,14 @@ During a successful unlinked-to-linked run, expect this sequence.
    session_id=<live-session>
 
 7. new data_bus claim issued
-   actor_user_id=telegram_434804821
+   actor_user_id=telegram_100200300
    linked=True
    projected_platform_user=02e...
    projected_grants=[identity:family, economics:platform-user, ...]
 
 8. Socket.IO federated connect verified
    session_id=<live-session>
-   actor_user_id=telegram_434804821
+   actor_user_id=telegram_100200300
    projected_platform_user=02e...
 ```
 
