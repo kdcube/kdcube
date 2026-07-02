@@ -915,10 +915,15 @@ class BaseEntrypoint:
             previous_dest = storage_root / f".ui.previous.{os.getpid()}.{_uuid.uuid4().hex}"
             swapped_old = False
             try:
-                shutil.rmtree(tmp_dest, ignore_errors=True)
-                shutil.rmtree(tmp_src, ignore_errors=True)
+                # Filesystem materialization is offloaded to worker threads so the
+                # copy/rmtree work never blocks the event loop. A blocked loop here
+                # starves the once-lock heartbeat (lock_age climbs) and freezes every
+                # other widget/request in the proc until the build finishes.
+                await asyncio.to_thread(shutil.rmtree, tmp_dest, ignore_errors=True)
+                await asyncio.to_thread(shutil.rmtree, tmp_src, ignore_errors=True)
                 tmp_dest.mkdir(parents=True, exist_ok=True)
-                shutil.copytree(
+                await asyncio.to_thread(
+                    shutil.copytree,
                     src_path,
                     tmp_src,
                     ignore=self._ui_copy_ignore_patterns(),
@@ -930,9 +935,10 @@ class BaseEntrypoint:
                         shared_target.relative_to(tmp_src_resolved)
                     except ValueError as exc:
                         raise ValueError(f"shared UI target escapes build workspace: {spec['target_path']}") from exc
-                    shutil.rmtree(shared_target, ignore_errors=True)
+                    await asyncio.to_thread(shutil.rmtree, shared_target, ignore_errors=True)
                     shared_target.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copytree(
+                    await asyncio.to_thread(
+                        shutil.copytree,
                         spec["src_path"],
                         shared_target,
                         ignore=self._ui_copy_ignore_patterns(),
@@ -1038,7 +1044,7 @@ class BaseEntrypoint:
                 if not (tmp_dest / "index.html").exists():
                     raise RuntimeError(f"UI build failed: index.html missing in temp output {tmp_dest}")
 
-                shutil.rmtree(previous_dest, ignore_errors=True)
+                await asyncio.to_thread(shutil.rmtree, previous_dest, ignore_errors=True)
                 if build_dest.exists():
                     build_dest.rename(previous_dest)
                     swapped_old = True
@@ -1049,14 +1055,14 @@ class BaseEntrypoint:
                         previous_dest.rename(build_dest)
                     raise
 
-                shutil.rmtree(previous_dest, ignore_errors=True)
+                await asyncio.to_thread(shutil.rmtree, previous_dest, ignore_errors=True)
                 self.logger.log(
                     f"[bundle.ui] {kind} build done: dest={build_dest} index_html={(build_dest / 'index.html').exists()}",
                     "INFO",
                 )
             finally:
-                shutil.rmtree(tmp_dest, ignore_errors=True)
-                shutil.rmtree(tmp_src, ignore_errors=True)
+                await asyncio.to_thread(shutil.rmtree, tmp_dest, ignore_errors=True)
+                await asyncio.to_thread(shutil.rmtree, tmp_src, ignore_errors=True)
 
         try:
             await run_once_for_shared_bundle_storage(
