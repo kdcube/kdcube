@@ -84,6 +84,10 @@ plans:
 price_tables:            # optional; whole-table replacement of the baseline (either/or)
   llm:                   # must include the reference model, else the baseline is used
     - { provider: anthropic, model: claude-sonnet-4-5-20250929, input_tokens_1M: 3.0, output_tokens_1M: 15.0 }
+
+llm_reference_service:   # optional; the USD↔token unit of account
+  provider: anthropic
+  service_name: claude-sonnet-4-5-20250929
 ```
 
 ### `version`
@@ -131,8 +135,25 @@ cost calculation and USD↔token conversion. Like `reservation`, it is a pure
 - **Reference model guard.** The block must carry the reference model
   (`anthropic`/`claude-sonnet-4-5-…`, the currency of the token economy) in its
   `llm` section. If it does not, the block is treated as **invalid** and the
-  baseline is used in full — the economy (reservation/credits/Stripe/balance)
-  can never break on a misconfigured descriptor.
+  baseline is used in full. Symmetrically, an `llm_reference_service` that does
+  not resolve in the effective table is treated as invalid and the in-code default
+  reference is used — the economy (reservation/credits/Stripe/balance) can never
+  break on a misconfigured descriptor.
+
+### `llm_reference_service`
+
+The token-economy reference model — the single model whose `output_tokens_1M`
+defines the USD↔token unit (reservation, credits, Stripe, balance, per-turn
+billable equivalent). Like `price_tables`, a pure **runtime-read** section —
+never seeded, never in the DB.
+
+- **Optional.** Absent section/file → the in-code default
+  (`anthropic`/`claude-sonnet-4-5-…`) is used.
+- **Live.** Read straight from the file (mtime-cached); a change re-points the
+  whole economy without a restart.
+- **Priced or default.** The `provider`/`service_name` must resolve in the
+  effective `price_tables`; if they do not, the reference is invalid and the
+  in-code default is used (see the reference model guard above).
 
 ### `project_budget`
 
@@ -223,14 +244,16 @@ Behaviour:
 
 ## Runtime reads
 
-The **reservation** and **price_tables** sections are read by the runtime from
-the file; quota, budget, and subscription state are read from the economics
-tables each turn.
+The **reservation**, **price_tables**, and **llm_reference_service** sections are
+read by the runtime from the file; quota, budget, and subscription state are read
+from the economics tables each turn.
 
-`config_scopes.economics_reservation_default(floor)` reads `reservation.<floor>`
-and `config_scopes.economics_price_tables()` reads `price_tables`. Both readers
-are cached by file **mtime**, so edits (including write-backs) are picked up
-without a restart, and they propagate to every proc replica over the shared mount.
+`config_scopes.economics_reservation_default(floor)` reads `reservation.<floor>`,
+`config_scopes.economics_price_tables()` reads `price_tables`, and
+`config_scopes.economics_llm_reference_service()` (via `usage.llm_reference_service()`)
+reads `llm_reference_service`. All readers are cached by file **mtime**, so edits
+(including write-backs) are picked up without a restart, and they propagate to
+every proc replica over the shared mount.
 `price_table()` (`infra/accounting/usage.py`) uses the descriptor section in
 full when present and valid, else the in-code baseline (no merge).
 

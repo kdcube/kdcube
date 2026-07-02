@@ -1213,17 +1213,15 @@ class VersatileEntrypoint(BaseEntrypointWithEconomics):
     @property
     def configuration(self) -> Dict[str, Any]:
         sonnet_45 = "claude-sonnet-4-5-20250929"
-        from kdcube_ai_app.infra.accounting.usage import llm_reference_service
-        ref_provider, ref_model = llm_reference_service()
         haiku_4 = "claude-haiku-4-5-20251001"
 
         config = dict(super().configuration)
         role_models = dict(config.get("role_models") or {})
         for key, value in {
             "gate.simple": {"provider": "anthropic", "model": haiku_4},
-            "answer.generator.simple": {"provider": ref_provider, "model": ref_model},
-            "solver.coordinator.v2": {"provider": ref_provider, "model": ref_model},
-            "solver.react.v2.decision.v2.strong": {"provider": ref_provider, "model": ref_model},
+            "answer.generator.simple": {"provider": "anthropic", "model": sonnet_45},
+            "solver.coordinator.v2": {"provider": "anthropic", "model": sonnet_45},
+            "solver.react.v2.decision.v2.strong": {"provider": "anthropic", "model": sonnet_45},
             "solver.react.v2.decision.v2.regular": {"provider": "anthropic", "model": haiku_4},
         }.items():
             role_models.setdefault(key, value)

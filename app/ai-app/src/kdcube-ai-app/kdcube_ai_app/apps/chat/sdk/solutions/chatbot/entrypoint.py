@@ -2101,10 +2101,7 @@ class BaseEntrypoint:
         return [default_html]
 
     def configuration_defaults(self) -> Dict[str, Any]:
-        # Roles that used the reference model read it from the single source
-        # (economics descriptor llm_reference_service, else in-code default).
-        from kdcube_ai_app.infra.accounting.usage import llm_reference_service
-        ref_provider, ref_model = llm_reference_service()
+        sonnet_45 = "claude-sonnet-4-5-20250929"
         sonnet_46 = "claude-sonnet-4-6"
         haiku_3 = "claude-3-5-haiku-20241022"
         haiku_4 = "claude-haiku-4-5-20251001"
@@ -2119,11 +2116,11 @@ class BaseEntrypoint:
 
                 "solver.tool_router": {"provider": "anthropic", "model": haiku_4},
                 "solver.solvability": {"provider": "anthropic", "model": haiku_4},
-                "solver.codegen": {"provider": ref_provider, "model": ref_model},
-                "solver.coordinator": {"provider": ref_provider, "model": ref_model},
-                "solver.unified-planner": {"provider": ref_provider, "model": ref_model},
-                "solver.react.decision": {"provider": ref_provider, "model": ref_model},
-                "solver.react.decision.strong": {"provider": ref_provider, "model": ref_model},
+                "solver.codegen": {"provider": "anthropic", "model": sonnet_45},
+                "solver.coordinator": {"provider": "anthropic", "model": sonnet_45},
+                "solver.unified-planner": {"provider": "anthropic", "model": sonnet_45},
+                "solver.react.decision": {"provider": "anthropic", "model": sonnet_45},
+                "solver.react.decision.strong": {"provider": "anthropic", "model": sonnet_45},
                 "solver.react.decision.regular": {"provider": "anthropic", "model": haiku_4},
                 "solver.react.v2.decision.v2.strong": {"provider": "anthropic", "model": sonnet_46}, # Solver — hard reasoning
                 "solver.react.v2.decision.v2.regular": {"provider": "anthropic", "model": haiku_4},  # Solver — routine steps
@@ -2131,8 +2128,8 @@ class BaseEntrypoint:
                 "context.compaction.summary": {"provider": "anthropic", "model": sonnet_46},
                 "context.compaction.turn_prefix": {"provider": "anthropic", "model": sonnet_46},
 
-                "tool.generator": {"provider": ref_provider, "model": ref_model},
-                "tool.generator.strong": {"provider": ref_provider, "model": ref_model},
+                "tool.generator": {"provider": "anthropic", "model": sonnet_45},
+                "tool.generator.strong": {"provider": "anthropic", "model": sonnet_45},
                 "tool.generator.regular": {"provider": "anthropic", "model": haiku_4},
 
                 "tool.source.reconciler": {"provider": "anthropic", "model": haiku_4},
@@ -2183,8 +2180,8 @@ class BaseEntrypoint:
             f"conversation_id={thread_id};turn_id={turn_id};usage_from={usage_from};"
             f"date_to={date_to};bundle_id={bundle_id};"
         )
-        ref_provider = "anthropic"
-        ref_model = "claude-sonnet-4-5-20250929"
+        from kdcube_ai_app.infra.accounting.usage import llm_reference_service
+        ref_provider, ref_model = llm_reference_service()
 
         result = await calc.calculate_turn_costs(
             tenant_id=tenant,

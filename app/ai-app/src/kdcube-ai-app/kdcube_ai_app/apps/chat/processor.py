@@ -2486,7 +2486,7 @@ class EnhancedChatRequestProcessor:
             finally:
                 if pubsub:
                     try:
-                        await pubsub.unsubscribe(update_channel, cleanup_channel, props_update_channel, secrets_update_channel)
+                        await pubsub.unsubscribe(update_channel, cleanup_channel, props_update_channel, secrets_update_channel, economics_sync_channel)
                         await pubsub.close()
                     except Exception:
                         pass

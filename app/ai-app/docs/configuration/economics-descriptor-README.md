@@ -189,7 +189,7 @@ the USD↔token unit (see [Reference model](#reference-model)). `provider` and
 |---|---|
 | optional | absent section/file → the in-code default (`anthropic` / `claude-sonnet-4-5-20250929`) is used |
 | live | read straight from the file (mtime-cached); a change is picked up without a restart |
-| must be priced | the reference must resolve in the effective `price_tables`; its `output_tokens_1M` is the conversion rate |
+| priced or default | if the reference resolves in the effective `price_tables`, its `output_tokens_1M` is the conversion rate; if it does not resolve, the reference is treated as invalid and the in-code default is used |
 
 Runtime consumers:
 - [config_scopes.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/config_scopes.py) — `economics_llm_reference_service()`
@@ -245,11 +245,19 @@ falling back to the in-code default `anthropic` / `claude-sonnet-4-5-20250929`.
 Both the economics runtime and bundles read the reference from this single source,
 so a descriptor change re-points the whole economy without code edits.
 
+The reference is a **pricing unit only** — it does not select the models that
+execute a turn. Bundle `role_models` are independent; changing the reference
+re-values the USD↔token unit (reservation, credits, balance, accounting), not
+which model runs.
+
 Consequences:
 
-- the reference model **must** resolve in the effective `price_tables`; a
-  `price_tables` block that omits it is treated as invalid and the baseline is
-  used instead;
+- the reference model must resolve in the effective `price_tables`. This is a
+  two-way guard: a `price_tables` block that omits the reference is treated as
+  invalid and the baseline is used instead; and an `llm_reference_service` that
+  does not resolve in the effective table is treated as invalid and the in-code
+  default reference is used — a malformed / partially-updated descriptor degrades
+  gracefully instead of raising;
 - the rate is the reference entry's `output_tokens_1M`. The reference is matched
   by the `model` field, so a duplicate/mislabeled `model` key can shadow the
   intended entry and silently mis-price the whole economy — keep `model` keys

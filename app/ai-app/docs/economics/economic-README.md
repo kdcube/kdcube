@@ -281,10 +281,15 @@ Key tables:
 ## Accounting and Costing
 
 Accounting events are emitted by service wrappers (LLM calls, web search, etc.).
-Events are aggregated per turn and converted to USD using the reference model.
+Events are aggregated per turn and priced in USD from **each model's own**
+price-table entry — the actual dollar cost is reference-independent. The reference
+model then converts that USD into the token unit (equivalent / billable tokens)
+for quota consumption, credits, and balance.
 
 Reference model conversion is used for:
 
 - Wallet credit conversion (USD → tokens)
 - Token balance display (tokens → USD)
 - Estimation of request cost for reservations
+- Per-turn billable-token equivalent (USD → reference tokens), read live so it
+  stays in the same unit as the reservation and quota
