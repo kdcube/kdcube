@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 PROJECT_BROADCAST_ROOM = "__project__"
 _MISSING = object()
+SessionChannelKey = Tuple[str, str, str]
 
 # map protocol type → client socket event
 _EVENT_MAP = {
@@ -193,11 +194,19 @@ class ChatRelayCommunicator:
         self._channel = channel
 
         self._callbacks: Set[Callable[[dict], Awaitable[None]]] = set()
-        self._session_refcounts: Dict[str, int] = {}
-        self._session_meta: Dict[str, Tuple[str, str]] = {}
+        self._session_refcounts: Dict[SessionChannelKey, int] = {}
         self._project_refcounts: Dict[Tuple[str, str], int] = {}
         self._listener_started = False
         self._sub_lock = asyncio.Lock()
+
+    def _session_key(self, session_id: str, tenant: str | None, project: str | None) -> SessionChannelKey:
+        return tenant or "-", project or "-", session_id
+
+    def session_refcounts_debug(self) -> Dict[str, int]:
+        return {
+            f"{tenant}:{project}:{session_id}": count
+            for (tenant, project, session_id), count in self._session_refcounts.items()
+        }
 
     def _base_channel(self, tenant: str | None = None, project: str | None = None) -> str:
         # keep old behavior if tenant/project not provided
@@ -369,38 +378,38 @@ class ChatRelayCommunicator:
             if callback:
                 self.add_listener(callback)
             ch = self._session_channel(session_id, tenant=tenant, project=project)
-            self._session_meta[session_id] = (tenant, project)
+            key = self._session_key(session_id, tenant, project)
             logger.info(
                 "[ChatRelayCommunicator] acquire session=%s count_before=%s channel=%s "
                 "tenant=%s project=%s relay_id=%s comm_id=%s listener_started=%s",
-                session_id, self._session_refcounts.get(session_id, 0), ch,
+                session_id, self._session_refcounts.get(key, 0), ch,
                 tenant, project, id(self), id(self._comm), self._listener_started
             )
-            count = self._session_refcounts.get(session_id, 0)
+            count = self._session_refcounts.get(key, 0)
             if count == 0:
                 await self._comm.subscribe_add(ch)
 
-            self._session_refcounts[session_id] = count + 1
+            self._session_refcounts[key] = count + 1
             await self._ensure_listener()
 
     async def release_session_channel(self, session_id: str, tenant: str, project: str):
         if not session_id:
             return
         async with self._sub_lock:
-            count = self._session_refcounts.get(session_id, 0)
+            key = self._session_key(session_id, tenant, project)
+            count = self._session_refcounts.get(key, 0)
             ch = self._session_channel(session_id, tenant=tenant, project=project)
             logger.info(
                 "[ChatRelayCommunicator] release session=%s count_before=%s channel=%s "
                 "tenant=%s project=%s relay_id=%s comm_id=%s",
-                session_id, self._session_refcounts.get(session_id, 0), ch,
+                session_id, self._session_refcounts.get(key, 0), ch,
                 tenant, project, id(self), id(self._comm)
             )
             if count <= 1:
-                self._session_refcounts.pop(session_id, None)
-                self._session_meta.pop(session_id, None)
+                self._session_refcounts.pop(key, None)
                 await self._comm.unsubscribe_some(self._session_channel(session_id, tenant=tenant, project=project))
             else:
-                self._session_refcounts[session_id] = count - 1
+                self._session_refcounts[key] = count - 1
 
     async def acquire_project_channel(self, tenant: str, project: str, *, callback=None):
         key = (tenant or "-", project or "-")
@@ -425,31 +434,35 @@ class ChatRelayCommunicator:
 
     async def reconcile_sessions(
             self,
-            session_counts: Dict[str, Tuple[str, str, int]],
+            session_counts: Dict[Any, Tuple[str, str, int]],
             *,
             reason: str = "manual",
     ):
         """
         Rebuild relay subscriptions and refcounts from the authoritative SSE hub state.
-        session_counts: {session_id: (tenant, project, count)}
+        session_counts: {(tenant, project, session_id): (tenant, project, count)}
+        The old {session_id: (tenant, project, count)} shape is still accepted.
         """
         async with self._sub_lock:
-            desired = set(session_counts.keys())
+            desired: Set[SessionChannelKey] = set()
 
             # Ensure all desired sessions are subscribed and refcounted
-            for session_id, (tenant, project, count) in session_counts.items():
-                self._session_meta[session_id] = (tenant, project)
-                self._session_refcounts[session_id] = max(int(count), 1)
+            for raw_key, (tenant, project, count) in session_counts.items():
+                if isinstance(raw_key, tuple) and len(raw_key) == 3:
+                    key = self._session_key(str(raw_key[2]), str(raw_key[0]), str(raw_key[1]))
+                    session_id = str(raw_key[2])
+                else:
+                    session_id = str(raw_key)
+                    key = self._session_key(session_id, tenant, project)
+                desired.add(key)
+                self._session_refcounts[key] = max(int(count), 1)
                 await self._comm.subscribe_add(self._session_channel(session_id, tenant=tenant, project=project))
 
             # Unsubscribe stale sessions
-            stale = [sid for sid in list(self._session_refcounts.keys()) if sid not in desired]
-            for sid in stale:
-                tenant, project = self._session_meta.get(sid, (None, None))
-                if tenant is not None or project is not None:
-                    await self._comm.unsubscribe_some(self._session_channel(sid, tenant=tenant, project=project))
-                self._session_refcounts.pop(sid, None)
-                self._session_meta.pop(sid, None)
+            stale = [key for key in list(self._session_refcounts.keys()) if key not in desired]
+            for tenant, project, session_id in stale:
+                await self._comm.unsubscribe_some(self._session_channel(session_id, tenant=tenant, project=project))
+                self._session_refcounts.pop((tenant, project, session_id), None)
 
         if session_counts:
             await self._ensure_listener()

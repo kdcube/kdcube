@@ -119,10 +119,9 @@ class SSEHub:
         self.instance_id = instance_id or get_settings().INSTANCE_ID
         self.process_id = process_id or os.getpid()
         self._stats_ttl_sec = stats_ttl_sec
-        self._by_session: Dict[str, List[Client]] = {}
+        self._by_session: Dict[Tuple[str, str, str], List[Client]] = {}
         self._counts_by_tp: Dict[Tuple[str, str], int] = {}
         self._sessions_by_tp: Dict[Tuple[str, str], int] = {}
-        self._session_tp: Dict[str, Tuple[str, str]] = {}
         self._lock = asyncio.Lock()
         self._relay_started = False
 
@@ -135,6 +134,28 @@ class SSEHub:
         tenant = client.tenant or "unknown"
         project = client.project or "unknown"
         return tenant, project
+
+    def _session_key(self, session_id: str, tenant: str | None, project: str | None) -> Tuple[str, str, str]:
+        return tenant or "unknown", project or "unknown", session_id
+
+    def _client_key(self, client: Client) -> Tuple[str, str, str]:
+        return self._session_key(client.session_id, client.tenant, client.project)
+
+    def _session_clients_locked(
+        self,
+        session_id: str,
+        *,
+        tenant: str | None = None,
+        project: str | None = None,
+    ) -> List[Client]:
+        if tenant and project:
+            return list(self._by_session.get(self._session_key(session_id, tenant, project), []))
+        return [
+            client
+            for (_tenant, _project, stored_session_id), clients in self._by_session.items()
+            if stored_session_id == session_id
+            for client in clients
+        ]
 
     def _redis_stats_key(self, tenant: str, project: str) -> str:
         base = f"{REDIS.CHAT.SSE_CONNECTIONS_PREFIX}:{self.instance_id}:{self.process_id}"
@@ -217,7 +238,6 @@ class SSEHub:
                         pass
             self._counts_by_tp.clear()
             self._sessions_by_tp.clear()
-            self._session_tp.clear()
 
         await self.chat_comm.unsubscribe()
         self._relay_started = False
@@ -227,6 +247,7 @@ class SSEHub:
 
     async def register(self, client: Client):
         tp_key = self._tp_key(client)
+        session_key = self._client_key(client)
         async with self._lock:
             max_conn = self._resolve_max_connections()
             if max_conn > 0:
@@ -235,19 +256,12 @@ class SSEHub:
                     raise SSECapacityError(
                         f"SSE instance capacity exceeded: {total_now}/{max_conn}"
                     )
-            lst = self._by_session.setdefault(client.session_id, [])
+            lst = self._by_session.setdefault(session_key, [])
+            is_new_session_for_project = not lst
             lst.append(client)
             self._counts_by_tp[tp_key] = self._counts_by_tp.get(tp_key, 0) + 1
-            if client.session_id not in self._session_tp:
-                self._session_tp[client.session_id] = tp_key
+            if is_new_session_for_project:
                 self._sessions_by_tp[tp_key] = self._sessions_by_tp.get(tp_key, 0) + 1
-            elif self._session_tp.get(client.session_id) != tp_key:
-                logger.warning(
-                    "[SSEHub] session mapped to different tenant/project: session=%s current=%s new=%s",
-                    client.session_id,
-                    self._session_tp.get(client.session_id),
-                    tp_key,
-                )
 
         # Acquire per-session channel via central refcounting
         await self.chat_comm.acquire_session_channel(
@@ -271,7 +285,7 @@ class SSEHub:
         logger.info(
             "[SSEHub] register session=%s stream_id=%s tenant=%s project=%s total_now=%s hub_id=%s relay_id=%s",
             client.session_id, client.stream_id, client.tenant, client.project,
-            len(self._by_session.get(client.session_id, [])),
+            len(self._by_session.get(session_key, [])),
             id(self), id(self.chat_comm)
         )
 
@@ -287,16 +301,15 @@ class SSEHub:
 
     async def unregister(self, client: Client):
         tp_key = self._tp_key(client)
+        session_key = self._client_key(client)
         async with self._lock:
-            lst = self._by_session.get(client.session_id, [])
-            self._by_session[client.session_id] = [c for c in lst if c is not client]
-            if not self._by_session[client.session_id]:
-                self._by_session.pop(client.session_id, None)
-                prev_tp = self._session_tp.pop(client.session_id, None)
-                if prev_tp:
-                    self._sessions_by_tp[prev_tp] = max(0, self._sessions_by_tp.get(prev_tp, 0) - 1)
-                    if self._sessions_by_tp.get(prev_tp, 0) == 0:
-                        self._sessions_by_tp.pop(prev_tp, None)
+            lst = self._by_session.get(session_key, [])
+            self._by_session[session_key] = [c for c in lst if c is not client]
+            if not self._by_session[session_key]:
+                self._by_session.pop(session_key, None)
+                self._sessions_by_tp[tp_key] = max(0, self._sessions_by_tp.get(tp_key, 0) - 1)
+                if self._sessions_by_tp.get(tp_key, 0) == 0:
+                    self._sessions_by_tp.pop(tp_key, None)
 
             if tp_key in self._counts_by_tp:
                 self._counts_by_tp[tp_key] = max(0, self._counts_by_tp.get(tp_key, 0) - 1)
@@ -323,7 +336,7 @@ class SSEHub:
         logger.info(
             "[SSEHub] unregister session=%s stream_id=%s tenant=%s project=%s total_now=%s hub_id=%s relay_id=%s",
             client.session_id, client.stream_id, client.tenant, client.project,
-            len(self._by_session.get(client.session_id, [])),
+            len(self._by_session.get(session_key, [])),
             id(self), id(self.chat_comm)
         )
 
@@ -333,14 +346,14 @@ class SSEHub:
         Useful after Redis reconnect or suspected drift.
         """
         async with self._lock:
-            snapshot: Dict[str, tuple[str | None, str | None, int]] = {}
+            snapshot: Dict[Tuple[str, str, str], tuple[str | None, str | None, int]] = {}
             project_snapshot: Dict[Tuple[str, str], int] = {}
-            for session_id, clients in self._by_session.items():
+            for session_key, clients in self._by_session.items():
                 if not clients:
                     continue
                 tenant = clients[0].tenant
                 project = clients[0].project
-                snapshot[session_id] = (tenant, project, len(clients))
+                snapshot[session_key] = (tenant, project, len(clients))
                 for client in clients:
                     if client.project_events:
                         key = self._tp_key(client)
@@ -402,19 +415,28 @@ class SSEHub:
 
             logger.debug(
                 "[SSEHub._on_relay] RECEIVED event=%s session=%s target_sid=%s "
-                "known_sessions=%s hub_id=%s",
+                "known_session_keys=%s hub_id=%s",
                 event, room, target_sid,
                 list(self._by_session.keys()),
                 id(self),
             )
 
             # First check if we even have listeners for this session
+            service = (data or {}).get("service") or {}
+            tenant = service.get("tenant")
+            project = service.get("project")
             async with self._lock:
-                recipients = list(self._by_session.get(room, []))
+                recipients = self._session_clients_locked(room, tenant=tenant, project=project)
 
             if not recipients:
                 # Nothing to do on this worker
-                logger.warning("[SSEHub._on_relay] no recipients found for message for session session=%s stream_id=%s", room, target_sid)
+                logger.warning(
+                    "[SSEHub._on_relay] no recipients found for message for session=%s stream_id=%s tenant=%s project=%s",
+                    room,
+                    target_sid,
+                    tenant,
+                    project,
+                )
                 return
 
             # Only now build the SSE frame
@@ -437,8 +459,10 @@ class SSEHub:
                     ) else logger.warning
                     log_method(
                         "[SSEHub._on_relay] target stream_id=%s not found among %d session client(s) for session=%s; "
-                        "message dropped (connected stream_ids: %s)",
+                        "message dropped (tenant=%s project=%s connected stream_ids: %s)",
                         target_sid, len(recipients), room,
+                        tenant,
+                        project,
                         [c.stream_id for c in recipients],
                     )
             else:
@@ -524,7 +548,11 @@ def create_sse_router(
 
     def _resolve_sse_client(session_id: str, stream_id: str | None) -> Client | None:
         hub = router.state.sse_hub
-        clients = list(hub._by_session.get(session_id) or [])
+        resolver = getattr(hub, "_session_clients_locked", None)
+        if callable(resolver):
+            clients = resolver(session_id)
+        else:
+            clients = list(getattr(hub, "_by_session", {}).get(session_id) or [])
         if stream_id:
             for client in clients:
                 if client.stream_id == stream_id:
@@ -640,7 +668,7 @@ def create_sse_router(
             getattr(relay_comm, "_listener_started", "?"),
             comm_obj.listener_alive() if comm_obj and hasattr(comm_obj, "listener_alive") else "?",
             getattr(comm_obj, "_subscribed_channels", []) if comm_obj else [],
-            dict(getattr(relay_comm, "_session_refcounts", {})),
+            relay_comm.session_refcounts_debug() if hasattr(relay_comm, "session_refcounts_debug") else dict(getattr(relay_comm, "_session_refcounts", {})),
         )
 
         async def gen():
@@ -756,8 +784,7 @@ def create_sse_router(
             context=ctx,
             endpoint="/sse/chat",
         )
-        hub = router.state.sse_hub
-        client = next(iter(hub._by_session.get(session.session_id) or []), None) or {}
+        client = _resolve_sse_client(session.session_id, stream_id)
         logger.info(f"[/conv_status.get] Received request for session={session.session_id} stream_id={stream_id}")
 
         settings = get_settings()
@@ -1023,8 +1050,7 @@ def create_sse_router(
         conv_id = (data or {}).get("conversation_id") or session.session_id
         bundle_id = data.get("bundle_id")
         stream_id = data.get("stream_id")
-        hub = router.state.sse_hub
-        client = next(iter(hub._by_session.get(session.session_id) or []), None) or {}
+        client = _resolve_sse_client(session.session_id, stream_id)
         logger.info(f"[/conv_status.get] Received request for session={session.session_id} stream_id={stream_id}")
 
         settings = get_settings()

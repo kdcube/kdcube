@@ -75,6 +75,7 @@ from kdcube_ai_app.apps.middleware.gateway import (
     STATE_USER_TYPE,
     bind_stream_id_to_request_state,
 )
+from kdcube_ai_app.apps.middleware.platform_auth import platform_authenticator_provider
 from kdcube_ai_app.apps.middleware.token_extract import extract_auth_tokens_from_query_params
 from starlette.datastructures import MutableHeaders
 from kdcube_ai_app.infra.gateway.backpressure import create_atomic_chat_queue_manager
@@ -492,6 +493,7 @@ async def gateway_middleware(request: Request, call_next):
         )
     if request.method == "OPTIONS" or request.url.path.startswith((
         "/api/cp-frontend-config",
+        "/api/platform/logout",
         "/profile",
         "/monitoring",
         "/admin",
@@ -626,6 +628,31 @@ async def get_profile(session: UserSession = Depends(get_user_session_dependency
             "session_id": session.session_id,
             "created_at": session.created_at
         }
+
+
+@app.post("/api/platform/logout")
+async def platform_logout(request: Request):
+    settings = get_settings()
+    auth_cfg = settings.AUTH
+    provider = platform_authenticator_provider(settings)
+    token = request.cookies.get(auth_cfg.AUTH_TOKEN_COOKIE_NAME)
+    invalidated = False
+    if token and provider in {"session", "bundle", "bundle-session"}:
+        try:
+            from kdcube_ai_app.auth.bundle.sessions import logout_bundle_session
+            invalidated = bool(await logout_bundle_session(token=token))
+        except Exception:
+            logger.warning("Failed to invalidate bundle platform session during logout", exc_info=True)
+
+    response = JSONResponse({"ok": True, "invalidated": invalidated})
+    for name in {
+        auth_cfg.AUTH_TOKEN_COOKIE_NAME,
+        auth_cfg.ID_TOKEN_COOKIE_NAME,
+        auth_cfg.MASQUERADED_TOKEN_COOKIE_NAME,
+    }:
+        if name:
+            response.delete_cookie(name, path="/")
+    return response
 
 # ================================
 # MONITORING ENDPOINTS

@@ -56,6 +56,25 @@ class _ProjectRelay(_RecordingRelay):
         self.project_events.append({"event": event, "data": data, "tenant": tenant, "project": project})
 
 
+class _RelayServiceCommunicator:
+    def __init__(self) -> None:
+        self.subscribed: list[str] = []
+        self.unsubscribed: list[str] = []
+        self.redis_url = "redis://unused"
+
+    async def subscribe_add(self, channel: str) -> None:
+        self.subscribed.append(channel)
+
+    async def unsubscribe_some(self, channel: str) -> None:
+        self.unsubscribed.append(channel)
+
+    async def start_listener(self, _callback) -> None:
+        return None
+
+    def listener_alive(self) -> bool:
+        return True
+
+
 def _make_comm(relay: _RecordingRelay, event_filter=None):
     """Build a ChatCommunicator wired to a recording relay."""
     from kdcube_ai_app.apps.chat.emitters import ChatCommunicator
@@ -146,8 +165,8 @@ class TestEventStructure:
         session_only_client = Client(tenant="t", project="p", session_id="s1", stream_id="b", queue=asyncio.Queue(), project_events=False)
         other_project_client = Client(tenant="t", project="other", session_id="s2", stream_id="c", queue=asyncio.Queue(), project_events=True)
         hub._by_session = {
-            "s1": [project_client, session_only_client],
-            "s2": [other_project_client],
+            ("t", "p", "s1"): [project_client, session_only_client],
+            ("t", "other", "s2"): [other_project_client],
         }
 
         await hub._on_relay(
@@ -168,6 +187,51 @@ class TestEventStructure:
         assert '"type": "demo.snapshot"' in frame
         assert session_only_client.queue.qsize() == 0
         assert other_project_client.queue.qsize() == 0
+
+    @pytest.mark.anyio
+    async def test_session_sse_relay_fans_out_only_within_message_project(self):
+        from kdcube_ai_app.apps.chat.ingress.sse.chat import Client, SSEHub
+
+        hub = SSEHub(chat_comm=object())
+        current_project_client = Client(tenant="t", project="p", session_id="s1", stream_id="current", queue=asyncio.Queue())
+        other_project_client = Client(tenant="t", project="other", session_id="s1", stream_id="other", queue=asyncio.Queue())
+        hub._by_session = {
+            ("t", "p", "s1"): [current_project_client],
+            ("t", "other", "s1"): [other_project_client],
+        }
+
+        await hub._on_relay(
+            {
+                "event": "chat_delta",
+                "session_id": "s1",
+                "target_sid": "current",
+                "data": {
+                    "type": "chat.delta",
+                    "service": {"tenant": "t", "project": "p"},
+                    "delta": {"text": "hello"},
+                },
+            }
+        )
+
+        assert current_project_client.queue.qsize() == 1
+        assert other_project_client.queue.qsize() == 0
+
+    @pytest.mark.anyio
+    async def test_relay_subscriptions_are_scoped_by_tenant_project_and_session(self):
+        from kdcube_ai_app.apps.chat.emitters import ChatRelayCommunicator
+
+        service_comm = _RelayServiceCommunicator()
+        relay = ChatRelayCommunicator(comm=service_comm)
+
+        await relay.acquire_session_channel("s1", tenant="t", project="p")
+        await relay.acquire_session_channel("s1", tenant="t", project="other")
+
+        assert "t:p:chat.events.s1" in service_comm.subscribed
+        assert "t:other:chat.events.s1" in service_comm.subscribed
+        assert relay.session_refcounts_debug() == {
+            "t:p:s1": 1,
+            "t:other:s1": 1,
+        }
 
     @pytest.mark.anyio
     async def test_delta_event_has_running_status(self):
