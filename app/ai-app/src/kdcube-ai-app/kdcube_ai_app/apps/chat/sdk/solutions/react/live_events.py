@@ -50,6 +50,27 @@ def _bool_from_any(value: Any, default: bool = False) -> bool:
     return default
 
 
+def recover_semantic_event_type(type_norm: Any, event: Any) -> str:
+    """Recover the SEMANTIC external-event type (steer/followup) from a transport
+    envelope. The transported lane ``kind`` is uniformly ``"external_event"`` for
+    in-flight events; the semantic type lives nested in ``payload.event.type``
+    (e.g. ``"event.user.steer"``). This lets the live interrupt/credit logic treat
+    a "stop"/steer as a steer WITHOUT changing the transport envelope ``kind``.
+    Already-specific types (steer/followup/message/...) are returned unchanged.
+    """
+    norm = str(type_norm or "").strip().lower()
+    if norm not in {"external_event", "external", ""}:
+        return norm
+    payload = getattr(event, "payload", None)
+    accepted = payload.get("event") if isinstance(payload, dict) else None
+    nested = str((accepted or {}).get("type") or "").strip().lower() if isinstance(accepted, dict) else ""
+    if "steer" in nested:
+        return "steer"
+    if "followup" in nested:
+        return "followup"
+    return norm
+
+
 def compute_reactive_iteration_credit_cap(*, runtime_ctx: Any, base_max_iterations: int) -> int:
     enabled = bool(getattr(runtime_ctx, "reactive_event_iteration_credit_enabled", True))
     if not enabled:

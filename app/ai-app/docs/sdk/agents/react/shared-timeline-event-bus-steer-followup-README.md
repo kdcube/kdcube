@@ -46,6 +46,20 @@ This page explains the followup/steer behavior after those fields exist.
 - if the user already saw a completion before a new `followup` arrived, that visible completion remains part of the same turn history; later completions are additive, not replacement-only
 - `steer` is folded into the current turn and acts as a control interrupt
 - a consumed steer first interrupts the active generation or cancellable tool phase when possible
+- the live interrupt classifies `steer`/`followup` from the **semantic** event type
+  (`payload.event.type`, e.g. `event.user.steer`), NOT the transport lane `kind` — which is
+  uniformly `external_event` for in-flight events (see [Lane Kinds And Event Types](../../events/external-events-journey-and-handling-README.md#lane-kinds-and-event-types)).
+  `runtime.on_external_event` recovers the semantic type via
+  `live_events.recover_semantic_event_type` before branching, so a steer that arrives on the wire
+  enveloped as `external_event` still fires `_interrupt_active_phase_for_steer()` (→ `task.cancel()`,
+  which the isolated exec runtime turns into a container/subprocess kill) and is denied reactive
+  iteration credit. A "stop" is a `steer` with empty text + `explicit=True`; there is no separate
+  stop event type.
+- steer interrupts are de-duplicated by sequence: `on_external_event` fires the live interrupt only
+  for a steer whose sequence is newer than `_last_handled_steer_seq` (the highest steer already folded
+  into a finalize). A re-read / re-delivered steer therefore cannot cancel a LATER generation — e.g.
+  one a subsequent `followup` just started. (The checkpoint path `_apply_steer_interrupt_if_requested`
+  uses the same `_latest_steer_seq_seen` vs `_last_handled_steer_seq` fence.)
 - React then re-enters with the steer already on the current turn timeline and gets a short bounded finalize window
 - if no live owner consumes the event, processor promotes it from that same retained source into a normal scheduled turn
 

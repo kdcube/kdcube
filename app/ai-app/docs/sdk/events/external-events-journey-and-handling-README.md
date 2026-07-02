@@ -543,6 +543,13 @@ the semantic event shape. Current built-in/default projections are:
 | `steer` | `event.user.steer` | `user.steer` |
 | `external_event` | Generic lane label for accepted semantic types such as `event.external`, `event.snapshot`, `event.canvas`, or `event.user.prompt` when submitted through the plural event batch | Policy-produced blocks, built-in user projections, or no blocks with `react.block_production.no_timeline` |
 
+> Live consumers MUST branch on the semantic event `type`, not the lane `kind`. In-flight
+> events submitted through the plural batch arrive with lane `kind = external_event`, so the
+> real type (`event.user.steer` / `event.user.followup`) lives only in `payload.event.type`.
+> `react.on_external_event` recovers it with `live_events.recover_semantic_event_type` before
+> deciding steer-interrupt / iteration-credit; keying off the lane `kind` would silently drop a
+> live "stop". See [Steer and Followup](../agents/react/shared-timeline-event-bus-steer-followup-README.md).
+
 When the ReAct event-source pipeline is enabled, folded blocks are stamped with
 event identity:
 

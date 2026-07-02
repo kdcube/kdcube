@@ -34,6 +34,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.v3.agents.decision import (
     react_decision_stream_v2,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.live_events import (
+    recover_semantic_event_type,
     compute_reactive_iteration_credit_cap,
     resolve_reactive_iteration_credit,
     sync_reactive_iteration_budget,
@@ -197,7 +198,11 @@ class ReactSolverV2:
         return current_turn_id in set(turn_ids)
 
     async def on_external_event(self, *, type: str, event: Any, blocks: List[Dict[str, Any]]) -> bool:
-        type_norm = str(type or "").strip().lower()
+        # The transport lane `kind` is uniformly "external_event" for in-flight events;
+        # the semantic type (steer/followup) lives nested in payload.event.type. Recover
+        # it so a live "stop"/steer actually fires the interrupt and is denied iteration
+        # credit. The transport envelope `kind` is intentionally left untouched.
+        type_norm = recover_semantic_event_type(type, event)
         if type_norm in {"steer", "followup"} and not self._event_targets_current_turn(event):
             try:
                 self.log.log(
@@ -218,11 +223,18 @@ class ReactSolverV2:
             seq = None
         try:
             if type_norm == "steer":
-                if seq is not None and int(seq or 0) > self._latest_steer_seq_seen:
-                    self._latest_steer_seq_seen = int(seq or 0)
-                self._latest_steer_text = str(getattr(event, "text", "") or "").strip()
-                self._steer_interrupt_requested = True
-                await self._interrupt_active_phase_for_steer()
+                seq_val = int(seq or 0) if seq is not None else 0
+                # Only a NOT-yet-handled steer may interrupt. Without this, a re-read /
+                # re-delivered steer (its seq already folded into a prior finalize) would
+                # cancel a LATER generation — e.g. one a subsequent followup just started.
+                if seq_val and seq_val <= int(self._last_handled_steer_seq or 0):
+                    pass
+                else:
+                    if seq_val > self._latest_steer_seq_seen:
+                        self._latest_steer_seq_seen = seq_val
+                    self._latest_steer_text = str(getattr(event, "text", "") or "").strip()
+                    self._steer_interrupt_requested = True
+                    await self._interrupt_active_phase_for_steer()
         except Exception:
             pass
         try:
