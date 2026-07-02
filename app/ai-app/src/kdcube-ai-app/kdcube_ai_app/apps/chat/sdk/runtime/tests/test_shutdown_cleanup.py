@@ -465,17 +465,24 @@ def test_split_supervisor_large_runtime_globals_move_to_stdin(tmp_path):
 
     supervisor_env = {
         "RUNTIME_GLOBALS_JSON": json.dumps({"large": "x" * 256}),
+        # a base64 descriptor payload is also oversized and must be offloaded too
+        "KDCUBE_RUNTIME_BUNDLES_YAML_B64": "b" * 300,
         "HOME": "/tmp/kdcube-supervisor/home",
     }
-    payload = docker_runtime._prepare_supervisor_runtime_globals_stdin(
+    payload = docker_runtime._prepare_supervisor_stdin_env(
         supervisor_env,
         inline_max_bytes=64,
     )
 
     assert payload is not None
+    # every oversized var moved out of the env; small control vars stay inline
     assert "RUNTIME_GLOBALS_JSON" not in supervisor_env
-    assert supervisor_env["KDCUBE_EXEC_PAYLOAD_STDIN"] == "runtime_globals_json"
+    assert "KDCUBE_RUNTIME_BUNDLES_YAML_B64" not in supervisor_env
+    assert supervisor_env["HOME"] == "/tmp/kdcube-supervisor/home"
+    assert supervisor_env["KDCUBE_EXEC_PAYLOAD_STDIN"] == "env_json"
     assert int(supervisor_env["KDCUBE_EXEC_PAYLOAD_STDIN_BYTES"]) == len(payload)
+    stdin_map = json.loads(payload.decode("utf-8"))
+    assert set(stdin_map) == {"RUNTIME_GLOBALS_JSON", "KDCUBE_RUNTIME_BUNDLES_YAML_B64"}
 
     argv = docker_runtime._build_split_supervisor_argv(
         image="py-code-exec:latest",
@@ -491,7 +498,8 @@ def test_split_supervisor_large_runtime_globals_move_to_stdin(tmp_path):
 
     assert "-i" in argv
     assert all(not item.startswith("RUNTIME_GLOBALS_JSON=") for item in argv)
-    assert any(item == "KDCUBE_EXEC_PAYLOAD_STDIN=runtime_globals_json" for item in argv)
+    assert all(not item.startswith("KDCUBE_RUNTIME_BUNDLES_YAML_B64=") for item in argv)
+    assert any(item == "KDCUBE_EXEC_PAYLOAD_STDIN=env_json" for item in argv)
 
 
 def test_split_runtime_logs_are_merged_for_requestor_feedback(tmp_path):

@@ -1413,14 +1413,18 @@ async def run_exec_tool(
                 "where": "exec.tool.harness",
                 "code": "sandbox_execution_failed",
                 "message": (
-                    "The code execution sandbox failed to run — this is a platform/harness error, NOT a defect in "
-                    f"your code. Underlying error: {type(e).__name__}: {e}. This is usually a transient "
-                    "infrastructure issue; retrying the same code typically succeeds."
+                    "The code execution sandbox failed to run — a platform/harness error, NOT a defect in your "
+                    f"code; your code did not execute. Underlying error: {type(e).__name__}: {e}. A single retry is "
+                    "reasonable in case it was a transient blip, but if the SAME failure repeats do NOT resend the "
+                    "same request: send a minimal probe (e.g. print('ok')) to check whether the sandbox is alive, "
+                    "and if that also fails, report the infrastructure failure to the user or finish without code "
+                    "execution instead of retrying further."
                 ),
                 "error": "sandbox_execution_failed",
                 "description": str(e),
                 "managed": True,
                 "retryable": True,
+                "retry_guidance": "retry_once_then_probe_then_stop",
             },
         }
 

@@ -139,20 +139,30 @@ def test_hydrate_runtime_payload_from_secret_skips_when_inline_payload_present(m
     assert any("skipping secret hydration" in msg for _, msg in logger.messages)
 
 
-def test_hydrate_runtime_payload_from_stdin_restores_runtime_globals(monkeypatch):
-    payload = json.dumps({"PORTABLE_SPEC_JSON": "{\"ok\":true}"})
+def test_hydrate_runtime_payload_from_stdin_restores_env_map(monkeypatch):
+    globals_json = json.dumps({"PORTABLE_SPEC_JSON": "{\"ok\":true}"})
+    stdin_payload = json.dumps({
+        "RUNTIME_GLOBALS_JSON": globals_json,
+        "KDCUBE_RUNTIME_BUNDLES_YAML_B64": "YnVuZGxlczoge30K",
+    })
     monkeypatch.delenv("RUNTIME_GLOBALS_JSON", raising=False)
-    monkeypatch.setenv("KDCUBE_EXEC_PAYLOAD_STDIN", "runtime_globals_json")
-    monkeypatch.setenv("KDCUBE_EXEC_PAYLOAD_STDIN_BYTES", str(len(payload.encode("utf-8"))))
-    monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
+    monkeypatch.delenv("KDCUBE_RUNTIME_BUNDLES_YAML_B64", raising=False)
+    monkeypatch.setenv("KDCUBE_EXEC_PAYLOAD_STDIN", "env_json")
+    monkeypatch.setenv("KDCUBE_EXEC_PAYLOAD_STDIN_BYTES", str(len(stdin_payload.encode("utf-8"))))
+    monkeypatch.setattr(sys, "stdin", io.StringIO(stdin_payload))
     logger = _CaptureLogger()
+    try:
+        _hydrate_runtime_payload_from_stdin(logger)
 
-    _hydrate_runtime_payload_from_stdin(logger)
-
-    assert json.loads(os.environ["RUNTIME_GLOBALS_JSON"])["PORTABLE_SPEC_JSON"] == "{\"ok\":true}"
-    assert "KDCUBE_EXEC_PAYLOAD_STDIN" not in os.environ
-    assert "KDCUBE_EXEC_PAYLOAD_STDIN_BYTES" not in os.environ
-    assert any("Restored runtime globals from stdin" in msg for _, msg in logger.messages)
+        assert json.loads(os.environ["RUNTIME_GLOBALS_JSON"])["PORTABLE_SPEC_JSON"] == "{\"ok\":true}"
+        # every relocated var is restored, not just runtime globals
+        assert os.environ["KDCUBE_RUNTIME_BUNDLES_YAML_B64"] == "YnVuZGxlczoge30K"
+        assert "KDCUBE_EXEC_PAYLOAD_STDIN" not in os.environ
+        assert "KDCUBE_EXEC_PAYLOAD_STDIN_BYTES" not in os.environ
+        assert any("Restored" in msg and "env var" in msg for _, msg in logger.messages)
+    finally:
+        os.environ.pop("RUNTIME_GLOBALS_JSON", None)
+        os.environ.pop("KDCUBE_RUNTIME_BUNDLES_YAML_B64", None)
 
 
 def test_materialize_runtime_descriptor_payloads_restores_root_only_descriptor_files(monkeypatch):

@@ -49,7 +49,7 @@ _SUPERVISOR_PRIVATE_BUNDLES_ROOT = _SUPERVISOR_PRIVATE_ROOT / "bundles"
 _SUPERVISOR_PRIVATE_BUNDLE_STORAGE_ROOT = _SUPERVISOR_PRIVATE_ROOT / "bundle-storage"
 _SUPERVISOR_PRIVATE_KDCUBE_STORAGE_ROOT = _SUPERVISOR_PRIVATE_ROOT / "kdcube-storage"
 _SUPERVISOR_RUNTIME_GLOBALS_STDIN_ENV = "KDCUBE_EXEC_PAYLOAD_STDIN"
-_SUPERVISOR_RUNTIME_GLOBALS_STDIN_VALUE = "runtime_globals_json"
+_SUPERVISOR_RUNTIME_GLOBALS_STDIN_VALUE = "env_json"
 _SUPERVISOR_RUNTIME_GLOBALS_STDIN_BYTES_ENV = "KDCUBE_EXEC_PAYLOAD_STDIN_BYTES"
 _SUPERVISOR_RUNTIME_GLOBALS_INLINE_MAX_BYTES_DEFAULT = 96 * 1024
 
@@ -209,23 +209,44 @@ def _supervisor_runtime_globals_inline_max_bytes() -> int:
         return _SUPERVISOR_RUNTIME_GLOBALS_INLINE_MAX_BYTES_DEFAULT
 
 
-def _prepare_supervisor_runtime_globals_stdin(
+def _prepare_supervisor_stdin_env(
         supervisor_env: Dict[str, str],
         *,
         inline_max_bytes: int | None = None,
 ) -> bytes | None:
-    raw = supervisor_env.get("RUNTIME_GLOBALS_JSON")
-    if not raw:
-        return None
-    payload = str(raw).encode("utf-8")
+    """Move ANY oversized supervisor env var off the `-e` command line into a
+    stdin-delivered JSON map.
+
+    A single `docker run -e KEY=VALUE` string is bounded by the OS per-argument
+    limit (`MAX_ARG_STRLEN`, ~128 KiB on Linux), so one large value — the full
+    `RUNTIME_GLOBALS_JSON`, or a base64 descriptor payload like
+    `KDCUBE_RUNTIME_BUNDLES_YAML_B64` — trips `OSError: [Errno 7] Argument list
+    too long` and nothing runs. Every value above the inline limit is relocated
+    to stdin (the entrypoint hydrates `os.environ` from it before use); small
+    control vars stay inline. Only the trusted supervisor is affected — the
+    network-isolated executor path is untouched.
+    """
     limit = (
         _supervisor_runtime_globals_inline_max_bytes()
         if inline_max_bytes is None
         else max(0, int(inline_max_bytes))
     )
-    if len(payload) <= limit:
+    reserved = {
+        _SUPERVISOR_RUNTIME_GLOBALS_STDIN_ENV,
+        _SUPERVISOR_RUNTIME_GLOBALS_STDIN_BYTES_ENV,
+    }
+    oversized = {
+        key: value
+        for key, value in supervisor_env.items()
+        if key not in reserved
+        and value is not None
+        and len(str(value).encode("utf-8")) > limit
+    }
+    if not oversized:
         return None
-    supervisor_env.pop("RUNTIME_GLOBALS_JSON", None)
+    for key in oversized:
+        supervisor_env.pop(key, None)
+    payload = json.dumps(oversized, ensure_ascii=False).encode("utf-8")
     supervisor_env[_SUPERVISOR_RUNTIME_GLOBALS_STDIN_ENV] = _SUPERVISOR_RUNTIME_GLOBALS_STDIN_VALUE
     supervisor_env[_SUPERVISOR_RUNTIME_GLOBALS_STDIN_BYTES_ENV] = str(len(payload))
     return payload
@@ -846,11 +867,11 @@ async def _run_py_in_split_docker_prepared(
     supervisor_env[ARTIFACT_OUTPUT_ENV] = _ARTIFACT_OUT_CONTAINER
     supervisor_env[RUNTIME_OUTPUT_ENV] = _RUNTIME_OUT_CONTAINER
     supervisor_env["PLAYWRIGHT_BROWSERS_PATH"] = "/opt/ms-playwright"
-    supervisor_stdin_payload = _prepare_supervisor_runtime_globals_stdin(supervisor_env)
+    supervisor_stdin_payload = _prepare_supervisor_stdin_env(supervisor_env)
     if supervisor_stdin_payload is not None:
         log.log(
-            "[docker.exec.split] Supervisor runtime globals exceed inline env limit; "
-            f"passing via stdin bytes={len(supervisor_stdin_payload)}",
+            "[docker.exec.split] Supervisor env vars exceed inline arg limit; "
+            f"passing oversized vars via stdin bytes={len(supervisor_stdin_payload)}",
             level="INFO",
         )
 

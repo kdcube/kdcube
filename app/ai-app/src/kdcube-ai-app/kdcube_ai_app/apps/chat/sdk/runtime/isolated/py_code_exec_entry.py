@@ -88,7 +88,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.isolated.executor_payload import build_
 
 _RUNTIME_ENV_PREPARED_MARKER = "KDCUBE_RUNTIME_ENV_PREPARED"
 _RUNTIME_GLOBALS_STDIN_ENV = "KDCUBE_EXEC_PAYLOAD_STDIN"
-_RUNTIME_GLOBALS_STDIN_VALUE = "runtime_globals_json"
+_RUNTIME_GLOBALS_STDIN_VALUE = "env_json"
 _RUNTIME_GLOBALS_STDIN_BYTES_ENV = "KDCUBE_EXEC_PAYLOAD_STDIN_BYTES"
 
 
@@ -220,28 +220,41 @@ def _hydrate_runtime_payload_from_stdin(logger: AgentLogger) -> None:
     if mode != _RUNTIME_GLOBALS_STDIN_VALUE:
         logger.log(f"[exec.payload] Unsupported stdin payload mode: {mode}", "ERROR")
         return
-    if os.environ.get("RUNTIME_GLOBALS_JSON"):
-        logger.log("[exec.payload] Inline runtime globals already present; skipping stdin hydration", "INFO")
-        os.environ.pop(_RUNTIME_GLOBALS_STDIN_ENV, None)
-        os.environ.pop(_RUNTIME_GLOBALS_STDIN_BYTES_ENV, None)
-        return
 
     expected_bytes = (os.environ.get(_RUNTIME_GLOBALS_STDIN_BYTES_ENV) or "").strip()
-    payload = sys.stdin.read()
-    if not payload:
-        logger.log("[exec.payload] Stdin runtime globals payload was empty", "ERROR")
-        return
-    os.environ["RUNTIME_GLOBALS_JSON"] = payload
     os.environ.pop(_RUNTIME_GLOBALS_STDIN_ENV, None)
     os.environ.pop(_RUNTIME_GLOBALS_STDIN_BYTES_ENV, None)
-    actual_bytes = len(payload.encode("utf-8"))
-    if expected_bytes:
-        logger.log(
-            f"[exec.payload] Restored runtime globals from stdin bytes={actual_bytes}/{expected_bytes}",
-            "INFO",
-        )
-    else:
-        logger.log(f"[exec.payload] Restored runtime globals from stdin bytes={actual_bytes}", "INFO")
+
+    raw = sys.stdin.read()
+    if not raw:
+        logger.log("[exec.payload] Stdin env payload was empty", "ERROR")
+        return
+    try:
+        env_map = json.loads(raw)
+    except Exception as exc:
+        logger.log(f"[exec.payload] Failed to parse stdin env payload: {exc}", "ERROR")
+        return
+    if not isinstance(env_map, dict):
+        logger.log("[exec.payload] Stdin env payload was not a JSON object", "ERROR")
+        return
+
+    # Restore each relocated var, but never clobber a value already provided
+    # inline (inline wins, so tests / overrides stay authoritative).
+    restored = 0
+    for key, value in env_map.items():
+        if value is None:
+            continue
+        name = str(key)
+        if os.environ.get(name):
+            continue
+        os.environ[name] = str(value)
+        restored += 1
+    actual_bytes = len(raw.encode("utf-8"))
+    logger.log(
+        f"[exec.payload] Restored {restored} env var(s) from stdin "
+        f"bytes={actual_bytes}{('/' + expected_bytes) if expected_bytes else ''}",
+        "INFO",
+    )
 
 
 def _materialize_runtime_descriptor_payloads(logger: AgentLogger) -> pathlib.Path | None:

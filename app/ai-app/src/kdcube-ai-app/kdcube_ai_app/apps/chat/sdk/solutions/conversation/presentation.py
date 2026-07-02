@@ -285,8 +285,11 @@ def conversation_schema_payload(
                 "text is the same artifact — address it as conv:fi:<that-path>)."
             ),
             "returns": (
-                "the file: {ref, filename, mime, size, encoding, content} — text inline for text "
-                "files; base64 for small binaries; metadata only when too large."
+                "the file: {ref, filename, mime, size, encoding, ...}. encoding=text -> content is "
+                "the decoded text (inline); encoding=url -> fetch the bytes from `url` over HTTP (a "
+                "short-lived link; the default for binaries so they stay out of context); "
+                "encoding=base64 -> content is base64 (small binaries); encoding=none -> metadata "
+                "only (too large / no link configured)."
             ),
         },
         "search": {
