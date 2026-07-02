@@ -387,13 +387,13 @@ def _normalize_artifacts_spec(artifacts: Any) -> Tuple[Optional[List[Dict[str, A
     for item in artifacts:
         if not isinstance(item, dict):
             continue
-        raw_filename = item.get("filename")
-        filename = raw_filename.strip() if isinstance(raw_filename, str) else ""
+        raw_filepath = item.get("filepath")
+        filename = raw_filepath.strip() if isinstance(raw_filepath, str) else ""
         description = (item.get("description") or "").strip()
         if not filename or not description:
             return None, {
                 "code": "invalid_artifact_spec",
-                "message": "Each artifact requires filename and description",
+                "message": "Each artifact requires filepath (the full OUTPUT_DIR-relative path) and description",
             }
         visibility = normalize_artifact_visibility(item.get("visibility"), default="")
         if item.get("visibility") is not None and not visibility:
@@ -410,14 +410,14 @@ def _normalize_artifacts_spec(artifacts: Any) -> Tuple[Optional[List[Dict[str, A
         if "/attachments/" in safe_filename:
             return None, {
                 "code": "invalid_filename",
-                "message": "Contract filename must be under the current turn files/ or outputs/ namespace (attachments not allowed)",
+                "message": "Contract filepath must be under the current turn files/ or outputs/ namespace (attachments not allowed)",
             }
         qualified = _split_turn_artifact_path(safe_filename)
         if not qualified or qualified[1] not in {"files", "outputs"}:
             return None, {
                 "code": "invalid_filename",
                 "message": (
-                    "filename must be OUTPUT_DIR-relative and start with "
+                    "filepath must be OUTPUT_DIR-relative and start with "
                     "'turn_<current>/files/' or 'turn_<current>/outputs/': "
                     f"{filename}"
                 ),
@@ -502,13 +502,13 @@ def normalize_exec_contract_for_turn(
     for item in artifacts:
         if not isinstance(item, dict):
             continue
-        raw_filename = item.get("filename")
-        filename = raw_filename.strip() if isinstance(raw_filename, str) else ""
+        raw_filepath = item.get("filepath")
+        filename = raw_filepath.strip() if isinstance(raw_filepath, str) else ""
         description = (item.get("description") or "").strip()
         if not filename or not description:
             return None, [], {
                 "code": "invalid_artifact_spec",
-                "message": "Each artifact requires filename and description",
+                "message": "Each artifact requires filepath (the full OUTPUT_DIR-relative path) and description",
             }
         visibility = normalize_artifact_visibility(item.get("visibility"), default="")
         if item.get("visibility") is not None and not visibility:
@@ -531,7 +531,7 @@ def normalize_exec_contract_for_turn(
         ):
             return None, [], {
                 "code": "invalid_filename",
-                "message": "Contract filename must be under the current turn files/ or outputs/ namespace (attachments not allowed)",
+                "message": "Contract filepath must be under the current turn files/ or outputs/ namespace (attachments not allowed)",
             }
         rewritten = None
         if qualified:
@@ -542,7 +542,7 @@ def normalize_exec_contract_for_turn(
             ):
                 return None, [], {
                     "code": "invalid_filename",
-                    "message": "Contract filename must use current turn_id and files/ or outputs/ path",
+                    "message": "Contract filepath must use current turn_id and files/ or outputs/ path",
                 }
             filename = safe_filename
         elif safe_filename.startswith("files/"):
@@ -559,7 +559,9 @@ def normalize_exec_contract_for_turn(
 
         updated.append(
             {
-                "filename": filename,
+                # _normalize_artifacts_spec reads the input under `filepath`; this
+                # is the internal handoff, not a second accepted input alias.
+                "filepath": filename,
                 "description": description,
                 "visibility": visibility or "external",
             }
@@ -1158,17 +1160,29 @@ class ExecTools:
             "RUNTIME BEHAVIOR\n"
             "- The executor runs your snippet verbatim from a separate user_code.py module.\n"
             "- The executor supports top-level await and does not indent or rewrite your program body.\n"
-            "- After execution, the executor checks for the requested output files.\n"
-            "- Each requested file that exists and is non-empty is considered.\n"
-            "- Expected as a result of this snippet files are described in contract.\n"
+            "- After execution, the harness collects ONLY the files named in `contract`. It iterates the\n"
+            "  contract (NOT the workdir): each contracted `filepath` that exists and is non-empty is hosted,\n"
+            "  and the exec workdir is then discarded.\n"
+            "- CONSEQUENCE (the #1 cause of 'my file is gone next turn'): `contract` is the EXHAUSTIVE list of\n"
+            "  what survives. Any file your code writes that is NOT in the contract is thrown away — it cannot\n"
+            "  be pulled, read, shared, or reused this turn or in any later turn. There is no 'keep everything'\n"
+            "  scan. So contract EVERY file you want to keep: deliverables AND intermediates you will reuse\n"
+            "  (e.g. chart PNGs you embed into an xlsx and want to pull later) — mark such intermediates\n"
+            "  visibility='internal'. The contract `filepath` MUST be byte-identical to the path your code\n"
+            "  writes to, or the file is reported as missing and its bytes are lost.\n"
             "\n"
             "[INPUTS]\n"
             "- When called from React decision, the code is provided in <channel:code> (not in params).\n"
             "1) `contract` (list or JSON string, REQUIRED): list of output files specs with fields:\n"
-            "   - filename (OUTPUT_DIR-relative; canonical form is turn_<current>/files/<scope>/... or turn_<current>/outputs/<scope>/...)\n"
+            "   - filepath (the FULL OUTPUT_DIR-relative path, NOT a bare name; MUST equal the path your code\n"
+            "     writes to). The files/ vs outputs/ choice IS this prefix:\n"
+            "     turn_<current>/files/<scope>/... = durable workspace/project state;\n"
+            "     turn_<current>/outputs/<scope>/... = produced deliverables / reports / one-off artifacts.\n"
             "   - description (what this file contains / why it was produced)\n"
-            "   - visibility (optional: `external` or `internal`; default `external`)\n"
-            "   These are outputs of this program that it promises to produce.\n"
+            "   - visibility (optional: `external` or `internal`; default `external`).\n"
+            "       · external = hosted AND delivered to the user.\n"
+            "       · internal = hosted and pullable/readable by you in later turns, but NOT shown to the user.\n"
+            "   These are outputs of this program that it promises to produce; anything not listed is discarded.\n"
             "2) `prog_name` (string, optional): short name of the program for UI labeling.\n"
             "\n"
             "FETCH_CTX (ADVANCED)\n"
@@ -1231,7 +1245,7 @@ class ExecTools:
     )
     async def execute_code_python(
         self,
-        contract: Annotated[Any, "List or JSON string of artifact specs (filename, description, optional visibility=external|internal) that you plan your future code to produce."],
+        contract: Annotated[Any, "List or JSON string of artifact specs (filepath, description, optional visibility=external|internal) that you plan your future code to produce. filepath is the full OUTPUT_DIR-relative path your code writes to."],
         prog_name: Annotated[Optional[str], "Short name of the program for UI labeling."] = None,
         timeout_s: Annotated[Optional[int], "Execution timeout seconds (default: 600)."] = None,
     ) -> Annotated[dict, "Envelope: ok/artifacts/items/error/report_text."]:

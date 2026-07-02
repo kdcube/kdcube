@@ -582,7 +582,7 @@ def test_exec_tool_call_validation_policy_rejects_missing_code_before_execution(
         "final_params": {
             "contract": [
                 {
-                    "filename": "turn_1/files/out.txt",
+                    "filepath": "turn_1/files/out.txt",
                     "description": "test output",
                 }
             ]

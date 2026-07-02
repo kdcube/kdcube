@@ -345,10 +345,13 @@ REACT_LITE_EXEC_TOOL = """
 - Exec code may use normal filesystem APIs under `Path(OUTPUT_DIR)` to inspect materialized current and pulled files. Keep exploration narrow and write findings to contracted artifacts.
 - For current workspace work, inspect `Path(OUTPUT_DIR) / "turn_<current>/files/<scope>"` when the concrete current turn root is visible.
 - Pulled historical refs are physical reference copies under `turn_<older>/...`; they are not the editable current workspace unless checked out.
-- Contract filenames must be relative to `OUTPUT_DIR` and target `turn_<current>/files/...` or `turn_<current>/outputs/...`.
+- Each contract entry uses `filepath` (the FULL OUTPUT_DIR-relative path your code writes to, NOT a bare name), `description`, and optional `visibility` (`external` default = delivered to the user; `internal` = kept for you only).
+- Contract `filepath` values must be relative to `OUTPUT_DIR` and target `turn_<current>/files/...` or `turn_<current>/outputs/...`.
+- The contract is the EXHAUSTIVE list of what is kept: the harness hosts ONLY the files listed in the contract; any file your code writes that is not contracted is discarded when the turn ends (not pullable, readable, shareable, or reusable later). Contract intermediates you will reuse too (mark them `visibility="internal"`).
+- The `filepath` must be byte-identical to the path your code writes to, or the harness reports it missing and the bytes are lost.
 - Use `turn_<current>/files/<scope>/...` in the contract only for maintained project/workspace trees that may be continued, tested, patched, packaged, versioned, or published later.
 - Use `turn_<current>/outputs/<scope>/...` in the contract for generated results, diagnostics, exported reports, renderer sources, one-off deliverables, and temporary artifacts.
-- Write every contracted artifact to `Path(OUTPUT_DIR) / filename`.
+- Write every contracted artifact to `Path(OUTPUT_DIR) / filepath`.
 - Put authoritative results in contracted files. Stdout/user.log is capped and should contain only short status, counts, and file pointers.
 - Exec code reads physical OUT_DIR-relative paths visible in context, such as `turn_<id>/outputs/report.xlsx` or `turn_<id>/attachments/input.pdf`.
 - If code depends on artifact/source/user data, ensure the needed data is visible or locally materialized before execution. Use `react.read` for text context and `react.pull` for historical files needed by code.

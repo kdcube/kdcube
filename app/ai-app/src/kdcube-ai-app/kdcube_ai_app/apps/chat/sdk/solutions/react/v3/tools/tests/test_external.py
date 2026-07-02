@@ -94,7 +94,7 @@ async def test_external_exec_path_rewrite_notice(monkeypatch, tmp_path):
     runtime = RuntimeCtx(turn_id="turn_exec", outdir=str(tmp_path), workdir=str(tmp_path))
     ctx = FakeBrowser(runtime)
     state = {"last_decision": {"tool_call": {"tool_id": "exec_tools.execute_code_python", "params": {
-        "contract": [{"filename": "turn_exec/files/out.txt", "description": "test output"}],
+        "contract": [{"filepath": "turn_exec/files/out.txt", "description": "test output"}],
         "prog_name": "snippet.py",
     }}},
              "outdir": str(tmp_path),
@@ -741,7 +741,7 @@ async def test_external_exec_internal_file_is_not_hosted_but_keeps_file_path(mon
                 "tool_id": "exec_tools.execute_code_python",
                 "params": {
                     "contract": [{
-                        "filename": "turn_exec/files/secret.txt",
+                        "filepath": "turn_exec/files/secret.txt",
                         "description": "Agent-only output.",
                         "visibility": "internal",
                     }],
@@ -1251,7 +1251,7 @@ async def test_external_exec_requires_pull_for_unmaterialized_historical_file(mo
                 "tool_id": "exec_tools.execute_code_python",
                 "params": {
                     "contract": [{
-                        "filename": "turn_exec/files/out.txt",
+                        "filepath": "turn_exec/files/out.txt",
                         "description": "test output",
                     }],
                     "prog_name": "snippet.py",
@@ -1307,7 +1307,7 @@ async def test_external_exec_accepts_materialized_cross_conversation_artifact_pa
                 "tool_id": "exec_tools.execute_code_python",
                 "params": {
                     "contract": [{
-                        "filename": "turn_exec/files/out.txt",
+                        "filepath": "turn_exec/files/out.txt",
                         "description": "test output",
                     }],
                     "prog_name": "snippet.py",
@@ -1356,7 +1356,7 @@ async def test_external_exec_falls_back_to_decision_packet_code_channel(monkeypa
                 "tool_id": "exec_tools.execute_code_python",
                 "params": {
                     "contract": [{
-                        "filename": "turn_exec/files/out.txt",
+                        "filepath": "turn_exec/files/out.txt",
                         "description": "test output",
                     }],
                     "prog_name": "snippet.py",
@@ -1411,7 +1411,7 @@ async def test_external_exec_event_source_policy_feeds_artifact_loop(monkeypatch
                 "tool_id": "exec_tools.execute_code_python",
                 "params": {
                     "contract": [{
-                        "filename": "turn_exec/files/summary.txt",
+                        "filepath": "turn_exec/files/summary.txt",
                         "description": "test output",
                     }],
                     "prog_name": "snippet.py",
@@ -1494,7 +1494,7 @@ async def test_external_exec_rejects_contaminated_code_channel(monkeypatch, tmp_
                 "tool_id": "exec_tools.execute_code_python",
                 "params": {
                     "contract": [{
-                        "filename": "turn_exec/files/out.txt",
+                        "filepath": "turn_exec/files/out.txt",
                         "description": "test output",
                     }],
                     "prog_name": "snippet.py",
@@ -1535,7 +1535,7 @@ async def test_external_exec_missing_code_adds_tool_result_error(tmp_path):
                 "tool_id": "exec_tools.execute_code_python",
                 "params": {
                     "contract": [{
-                        "filename": "turn_exec/files/out.txt",
+                        "filepath": "turn_exec/files/out.txt",
                         "description": "test output",
                     }],
                     "prog_name": "snippet.py",

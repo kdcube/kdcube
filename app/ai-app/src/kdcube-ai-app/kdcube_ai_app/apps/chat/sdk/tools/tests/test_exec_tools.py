@@ -326,7 +326,7 @@ def test_build_exec_context_from_comm_spec_preserves_identity_fields():
 def test_normalize_artifacts_spec_marks_markdown_as_text():
     artifacts, err = _normalize_artifacts_spec([
         {
-            "filename": "turn_1/files/preferences_exec_report.md",
+            "filepath": "turn_1/files/preferences_exec_report.md",
             "description": "Markdown report generated from bundle-local preference history.",
         }
     ])
@@ -339,11 +339,11 @@ def test_normalize_artifacts_spec_marks_markdown_as_text():
 def test_build_exec_output_contract_preserves_visibility_and_defaults_external():
     contract, normalized, err = build_exec_output_contract([
         {
-            "filename": "turn_1/files/public.md",
+            "filepath": "turn_1/files/public.md",
             "description": "User-visible report.",
         },
         {
-            "filename": "turn_1/files/internal.json",
+            "filepath": "turn_1/files/internal.json",
             "description": "Agent-only scratch output.",
             "visibility": "internal",
         },
@@ -374,7 +374,7 @@ def test_build_exec_output_contract_preserves_visibility_and_defaults_external()
 def test_build_exec_output_contract_accepts_outputs_namespace():
     contract, normalized, err = build_exec_output_contract([
         {
-            "filename": "turn_1/outputs/test_results.txt",
+            "filepath": "turn_1/outputs/test_results.txt",
             "description": "Non-workspace test results.",
         },
     ])
@@ -396,7 +396,7 @@ def test_build_exec_output_contract_accepts_outputs_namespace():
 def test_build_exec_output_contract_accepts_telegram_turn_id():
     contract, normalized, err = build_exec_output_contract([
         {
-            "filename": "telegram_turn_13083631/outputs/tech_news_emails.xlsx",
+            "filepath": "telegram_turn_13083631/outputs/tech_news_emails.xlsx",
             "description": "Excel report generated in a Telegram turn.",
         },
     ])
@@ -412,7 +412,7 @@ def test_normalize_exec_contract_rewrites_outputs_for_telegram_turn_id():
     normalized, rewrites, err = normalize_exec_contract_for_turn(
         [
             {
-                "filename": "outputs/tech_news_emails.xlsx",
+                "filepath": "outputs/tech_news_emails.xlsx",
                 "description": "Excel report generated in a Telegram turn.",
             }
         ],
@@ -434,7 +434,7 @@ def test_normalize_exec_contract_rewrites_unqualified_filename_to_outputs():
     normalized, rewrites, err = normalize_exec_contract_for_turn(
         [
             {
-                "filename": "reports/summary.md",
+                "filepath": "reports/summary.md",
                 "description": "Generated report.",
             }
         ],
@@ -456,7 +456,7 @@ def test_normalize_exec_contract_preserves_current_telegram_turn_id():
     normalized, rewrites, err = normalize_exec_contract_for_turn(
         [
             {
-                "filename": "telegram_turn_13083631/outputs/tech_news_emails.xlsx",
+                "filepath": "telegram_turn_13083631/outputs/tech_news_emails.xlsx",
                 "description": "Excel report generated in a Telegram turn.",
             }
         ],
@@ -473,7 +473,7 @@ def test_normalize_exec_contract_rejects_different_telegram_turn_id():
     normalized, rewrites, err = normalize_exec_contract_for_turn(
         [
             {
-                "filename": "telegram_turn_other/outputs/tech_news_emails.xlsx",
+                "filepath": "telegram_turn_other/outputs/tech_news_emails.xlsx",
                 "description": "Excel report generated in a different Telegram turn.",
             }
         ],
@@ -484,7 +484,7 @@ def test_normalize_exec_contract_rejects_different_telegram_turn_id():
     assert rewrites == []
     assert err == {
         "code": "invalid_filename",
-        "message": "Contract filename must use current turn_id and files/ or outputs/ path",
+        "message": "Contract filepath must use current turn_id and files/ or outputs/ path",
     }
 
 
@@ -538,7 +538,7 @@ def test_rewrite_exec_code_paths_is_artifact_segment_aware():
 def test_build_exec_output_contract_rejects_invalid_visibility():
     contract, normalized, err = build_exec_output_contract([
         {
-            "filename": "turn_1/files/public.md",
+            "filepath": "turn_1/files/public.md",
             "description": "User-visible report.",
             "visibility": "public",
         },

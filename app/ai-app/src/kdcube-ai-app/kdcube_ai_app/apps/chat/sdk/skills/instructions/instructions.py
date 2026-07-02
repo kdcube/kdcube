@@ -637,18 +637,40 @@ The <channel:summary> channel is allowed ONLY when action is complete or exit.
 
 >> EXEC OUTPUT CONTRACT (MANDATORY)
 - Exec artifacts are ALWAYS files.
+- HOW THE HARNESS CONSUMES YOUR OUTPUT (read this — it is the #1 cause of "my file from last turn is gone"):
+  When your snippet finishes, the harness looks ONLY at the files named in `contract`. It iterates the
+  contract, NOT the workdir: for each entry it resolves `filepath`, requires that file to exist and be
+  non-empty, and hosts it. The exec workdir is then discarded. So `contract` is the EXHAUSTIVE list of what
+  survives the turn: **any file your code writes that is NOT listed in the contract is thrown away — it
+  cannot be pulled, read, shared, or reused in this turn or any later turn.** Nothing is hosted "for free",
+  and there is no "list everything I produced" scan. If it is not in the contract, it does not exist after
+  the run.
+- Therefore, contract EVERY file you want to keep — deliverables AND intermediates. If your code makes an
+  intermediate file that a later step or a future turn will need (e.g. chart PNGs you embed into an xlsx and
+  may want to reuse, a parsed dataset, a rendered figure), you MUST add it to the contract too. Use
+  `visibility="internal"` for such intermediates so they persist and stay pullable/readable by you next turn
+  without being shown to the user.
 - `exec_tools.execute_code_python` `contract` (file artifacts to produce) and prog_name.
 - Required params: `contract`, `prog_name` (optional: `timeout_s`).
-- `contract` entries MUST include `filename`, `description`.
+- `contract` entries MUST include `filepath`, `description`.
 - `contract` entries MAY additionally include `visibility` with value `external` or `internal`.
 - If `visibility` is omitted, it defaults to `external`.
-- `filename` MUST be **relative to OUTPUT_DIR** and target the current-turn `files/` or `outputs/` namespace.
-- Follow the canonical physical path rule: `"turn_<current>/files/<workspace_scope>/<path>"` or `"turn_<current>/outputs/<artifact_scope>/<path>"`.
+- `filepath` is the FULL OUTPUT_DIR-relative path (NOT a bare name), and it MUST be byte-identical to the path
+  your code writes to. If they differ, the harness reports `missing_file` and the bytes are lost. Choose the
+  path once and use the SAME string in both the contract `filepath` and the code's write call.
+- `filepath` MUST be **relative to OUTPUT_DIR** and target the current-turn `files/` or `outputs/` namespace.
+- The `files/` vs `outputs/` choice IS made by the `filename` prefix (nothing else selects it) — the same
+  prefix your code writes to:
+    · `turn_<current>/files/<workspace_scope>/<path>`   = durable workspace/project state (code, project tree, configs)
+    · `turn_<current>/outputs/<artifact_scope>/<path>`  = produced deliverables / reports / one-off artifacts
 - `description` is a **semantic + structural inventory** of the file (telegraphic): layout (tables/sections/charts/images),
   key entities/topics, objective.
 - Example: "2 tables (monthly sales, YoY delta); 1 line chart; entities: ACME, Q1–Q4; objective: revenue trend."
-- Use `visibility=external` for files the user should receive as produced artifacts.
-- Use `visibility=internal` for agent/runtime-only files that should remain in OUT_DIR/timeline but should NOT be shared to the user.
+- Use `visibility=external` (default) for files the user should receive as produced artifacts — these are BOTH
+  hosted AND delivered to the user by the connected interface (do not assume where they surface — it may be a
+  downloadable file, a chat attachment, an email, etc., depending on the interface).
+- Use `visibility=internal` for agent/runtime-only files that should remain hosted in OUT_DIR/timeline (so you
+  can pull/read them in later turns) but must NOT be shared to the user.
 - In order to execute this tool, you must write the code in <channel:code> channel. Then it will be executed by exec tool. The code execution must produce the files you defined in contract.
   You will see these files in the context after execution of the tool; `internal` files remain agent-visible, while only `external` files are user-shareable. For binary files you will see their metadata and the evidence if they were created.
 - Do NOT rely on stdout/stderr for full results. The agent only gets `Program log (tail)`, not the full user log.

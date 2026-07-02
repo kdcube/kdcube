@@ -99,14 +99,14 @@ def build_scenario(*, turn_id: str, scenario: ScenarioSpec) -> Dict[str, object]
 
     Returns dict with keys:
       - "code":         Python source code string to execute
-      - "contract":     list of expected output files [{filename, description}]
+      - "contract":     list of expected output files [{filepath, description}]
       - "timeout_s":    execution timeout in seconds
       - "use_contract": whether to use contract-based execution (False for side-effects mode)
     """
     # Default contract: one expected output file
     contract = [
         {
-            "filename": f"{turn_id}/files/hello-iso-runtime.txt",
+            "filepath": f"{turn_id}/files/hello-iso-runtime.txt",
             "description": "Sample output produced by iso-runtime execution.",
         }
     ]
@@ -145,7 +145,7 @@ def build_scenario(*, turn_id: str, scenario: ScenarioSpec) -> Dict[str, object]
     elif scenario.id == "4":  # Partial success: only 1 of 2 contracted files produced
         contract = contract + [
             {
-                "filename": f"{turn_id}/files/missing-output.txt",
+                "filepath": f"{turn_id}/files/missing-output.txt",
                 "description": "This file is intentionally missing.",
             }
         ]
