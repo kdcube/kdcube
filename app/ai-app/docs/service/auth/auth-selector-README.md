@@ -216,11 +216,11 @@ authentication surface: connection-hub
   output: identity under module authority; linker/grant resolver produce session
 ```
 
-The gateway derives the platform authenticator from
-`auth.authenticators.platform` when present, otherwise from existing
-`auth.idp`/`auth.providers` descriptors. If no descriptor declares platform
-auth, the development default is `simple`. Runtime code should not introduce
-new service-local `AUTH_PROVIDER` switches.
+The gateway derives the platform authenticator from the selected platform
+authority provider in `auth.connection_hub`. The provider details live in
+`connection-hub@1-0.config.authority_registry`. Runtime code should not
+introduce new service-local `AUTH_PROVIDER` switches or read Cognito provider
+details directly from `assembly.yaml`.
 
 ## Multiple Bots And Providers
 

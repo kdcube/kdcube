@@ -103,10 +103,12 @@ That authority projection is documented in
 
 2) Multi-Cognito (mixed trusted runtimes)
 - Implementation: [Multi Cognito auth](../../../src/kdcube-ai-app/kdcube_ai_app/auth/implementations/multi_cognito.py)
-- `auth.idp: multi-cognito`.
-- Accepts JWTs from every configured `auth.providers` Cognito user-pool/client
-  pair. Provider selection is based on token claims: `iss` plus `client_id`
-  for access tokens or `aud` for ID tokens.
+- Selected by the Connection Hub platform authority provider when the selected
+  provider has more than one trusted Cognito user-pool/client pair.
+- Accepts JWTs from every trusted provider declared under
+  `connection-hub@1-0.config.authority_registry`. Provider selection is based
+  on token claims: `iss` plus `client_id` for access tokens or `aud` for ID
+  tokens.
 - The access token and ID token must resolve to the same provider and subject.
 - The browser still logs into one configured OIDC provider. Multi-Cognito is a
   server-side trust-list mode for mixed scenes where one authenticated shell can
@@ -149,37 +151,63 @@ That authority projection is documented in
   MCP tool allowlist to the issued grant.
 - Details: [OAuth delegated credential Protocol Adapter](../../sdk/solutions/connections/delegated-credentials/oauth-delegated-credential-protocol-adapter-README.md).
 
-### Multi-Cognito descriptor shape
+### Cognito Platform Authority Descriptor Shape
 
-The primary `auth.cognito` block remains the provider surfaced to the browser
-through `/api/cp-frontend-config`. `auth.providers` is the server-side trust
-list used by ingress/proc token verification.
+`assembly.yaml` selects the platform authority provider. Cognito details live
+in the Connection Hub authority registry, not in `assembly.yaml`.
 
 ```yaml
+# assembly.yaml
 auth:
   type: cognito
-  idp: multi-cognito
-  cognito:
-    region: eu-west-1
-    user_pool_id: eu-west-1_PRIMARY
-    app_client_id: primary-client
-    service_client_id: primary-client
-  providers:
-  - alias: primary
-    kind: cognito
-    region: eu-west-1
-    user_pool_id: eu-west-1_PRIMARY
-    app_client_id: primary-client
-  - alias: peer
-    kind: cognito
-    region: eu-west-1
-    user_pool_id: eu-west-1_PEER
-    app_client_id: peer-client
+  connection_hub:
+    bundle_id: connection-hub@1-0
+    authority_id: kdcube.platform
+    provider_id: cognito
 ```
 
-Equivalent JSON can be supplied with `AUTH_COGNITO_PROVIDERS_JSON` or
-`COGNITO_TRUSTED_PROVIDERS_JSON`. A provider hint may be transported by future
-clients for routing/logging, but token claims remain authoritative.
+```yaml
+# bundles.yaml
+items:
+  - id: connection-hub@1-0
+    config:
+      authority_registry:
+        authorities:
+          kdcube.platform:
+            label: KDCube platform authority
+            platform: true
+            providers:
+              cognito:
+                type: multi_cognito
+                enabled: true
+                authenticator:
+                  type: cognito_id_token
+                  id_token_header_name: X-ID-Token
+                  region: eu-west-1
+                  user_pool_id: eu-west-1_PRIMARY
+                  app_client_id: primary-client
+                  service_client_id: primary-client
+                  cookie:
+                    auth_token_cookie_name: __Secure-LATC
+                    id_token_cookie_name: __Secure-LITC
+                    masqueraded_token_cookie_name: __Secure-LMTC
+                  trusted_providers:
+                    - alias: primary
+                      kind: cognito
+                      region: eu-west-1
+                      user_pool_id: eu-west-1_PRIMARY
+                      app_client_id: primary-client
+                    - alias: peer
+                      kind: cognito
+                      region: eu-west-1
+                      user_pool_id: eu-west-1_PEER
+                      app_client_id: peer-client
+```
+
+The control-plane frontend config, ingress, proc, and deployment descriptors
+all resolve Cognito runtime fields from the selected Connection Hub provider.
+Environment variables may still override runtime values for deployment
+mechanics, but the descriptor owner is Connection Hub.
 
 ## Bundle Builder Reading Path
 
@@ -256,15 +284,24 @@ Common environment variables:
 - `IDP_DB_PATH` (SimpleIDP user token map)
 - `services.session_token.secret` (descriptor secret used by bundle session auth)
 
-In descriptor-driven deployments these values come from `assembly.yaml`:
+In descriptor-driven deployments these values come from the selected platform
+authority provider in Connection Hub:
 
 ```yaml
-auth:
-  idp: "simple" # simple | cognito | session
-  id_token_header_name: "X-ID-Token"
-  auth_token_cookie_name: "__Secure-LATC"
-  id_token_cookie_name: "__Secure-LITC"
-  jwks_cache_ttl_seconds: 86400
+items:
+  - id: connection-hub@1-0
+    config:
+      authority_registry:
+        authorities:
+          kdcube.platform:
+            providers:
+              cognito:
+                authenticator:
+                  id_token_header_name: X-ID-Token
+                  cookie:
+                    auth_token_cookie_name: __Secure-LATC
+                    id_token_cookie_name: __Secure-LITC
+                  jwks_cache_ttl_seconds: 86400
 ```
 
 ## Roles (current)

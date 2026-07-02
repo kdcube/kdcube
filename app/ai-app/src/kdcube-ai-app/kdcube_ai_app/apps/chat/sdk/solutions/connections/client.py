@@ -19,8 +19,8 @@ from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
     NamedServiceResponse,
     TRANSPORT_LOCAL,
 )
-
-from .contract import (
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_registry_client import AuthorityRegistryClient
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.contract import (
     NAMESPACE,
     CONNECTION_CATALOG,
     CONNECTION_DISCONNECT,
@@ -128,4 +128,74 @@ class ConnectionsClient:
         return response
 
 
-__all__ = ["ConnectionsClient", "ConnectionsError", "Connection"]
+class ConnectionHubClient:
+    """Facade for SDK-owned Connection Hub runtime capabilities.
+
+    This is the boundary general platform code should use when it needs a
+    Connection Hub answer. The implementation may use descriptor-backed bundle
+    props, Redis, or an explicit in-memory registry, but callers should not
+    inspect Connection Hub descriptors directly and should not call the
+    Connection Hub bundle just to resolve SDK-owned registry metadata.
+    """
+
+    def __init__(
+        self,
+        entrypoint: Any = None,
+        *,
+        connection_hub_bundle_id: str | None = None,
+        tenant: str | None = None,
+        project: str | None = None,
+        redis: Any = None,
+        registry: dict[str, Any] | None = None,
+        bundle_props: dict[str, Any] | None = None,
+    ) -> None:
+        self.authority_registry = AuthorityRegistryClient(
+            entrypoint,
+            connection_hub_bundle_id=connection_hub_bundle_id,
+            tenant=tenant,
+            project=project,
+            redis=redis,
+            registry=registry,
+            bundle_props=bundle_props,
+        )
+
+    async def resolve_authority_provider(
+        self,
+        *,
+        authority_id: str = "",
+        provider_id: str = "",
+        provider_type: str = "",
+        host_bundle_id: str = "",
+        host_route: str = "",
+        host_operation: str = "",
+    ) -> dict[str, Any]:
+        return await self.authority_registry.resolve_provider(
+            authority_id=authority_id,
+            provider_id=provider_id,
+            provider_type=provider_type,
+            host_bundle_id=host_bundle_id,
+            host_route=host_route,
+            host_operation=host_operation,
+        )
+
+    async def resolve_authority_provider_entrypoint(
+        self,
+        *,
+        authority_id: str = "",
+        provider_id: str = "",
+        provider_type: str = "",
+        entrypoint: str = "login",
+        request: Any = None,
+        public_origin: str = "",
+    ) -> dict[str, Any]:
+        return await self.authority_registry.resolve_provider_entrypoint(
+            authority_id=authority_id,
+            provider_id=provider_id,
+            provider_type=provider_type,
+            entrypoint=entrypoint,
+            request=request,
+            public_origin=public_origin,
+        )
+
+
+__all__ = ["ConnectionsClient", "ConnectionsError", "Connection", "ConnectionHubClient"]

@@ -37,6 +37,7 @@ from kdcube_cli.cli import (
 from kdcube_cli import export_live_bundles as export_mod
 from kdcube_cli.installer import (
     PathsContext,
+    _connection_hub_provider_config,
     apply_runtime_secrets_to_file_descriptors,
     build_ui_url,
     ensure_generated_runtime_secrets,
@@ -495,6 +496,8 @@ def test_write_frontend_config_derives_bundle_auth_type(tmp_path: Path):
     config = json.loads(target.read_text())
     assert config["auth"]["authType"] == "bundle"
     assert config["auth"]["loginUrl"] == "/api/integrations/bundles/tenant-one/project-one/versatile@2026-03-31-13-36/public/platform_login"
+    assert config["auth"]["profileUrl"] == "/profile"
+    assert config["auth"]["logoutUrl"] == "/api/platform/logout"
     assert config["auth"]["authTokenCookieName"] == "__Secure-APP"
     assert config["auth"]["idTokenCookieName"] == "__Secure-ID"
     assert "token" not in config["auth"]
@@ -531,6 +534,8 @@ def test_write_frontend_config_derives_bundle_auth_connection_hub_reference(tmp_
         "providerId": "versatile_google_session",
         "entrypoint": "login",
     }
+    assert config["auth"]["profileUrl"] == "/profile"
+    assert config["auth"]["logoutUrl"] == "/api/platform/logout"
     assert "loginUrl" not in config["auth"]
     assert "token" not in config["auth"]
 
@@ -1079,7 +1084,111 @@ def test_descriptor_fast_path_requires_cognito_fields():
         release=None,
     )
 
-    assert "assembly auth.cognito.app_client_id is required" in reasons
+    assert (
+        "Connection Hub platform Cognito provider or "
+        "legacy assembly auth.cognito.app_client_id is required"
+    ) in reasons
+
+
+def test_descriptor_fast_path_accepts_connection_hub_cognito_provider():
+    assembly = {
+        "context": {"tenant": "acme", "project": "platform"},
+        "platform": {"ref": "2026.4.04.318"},
+        "secrets": {"provider": "secrets-file"},
+        "paths": {"host_bundles_path": "/Users/demo/bundles"},
+        "auth": {
+            "type": "cognito",
+            "connection_hub": {
+                "bundle_id": "connection-hub@1-0",
+                "authority_id": "kdcube.platform",
+                "provider_id": "cognito",
+            },
+        },
+        "proxy": {"ssl": False},
+    }
+    bundles_descriptor = {
+        "bundles": {
+            "items": [
+                {
+                    "id": "connection-hub@1-0",
+                    "config": {
+                        "authority_registry": {
+                            "authorities": {
+                                "kdcube.platform": {
+                                    "platform": True,
+                                    "providers": {
+                                        "cognito": {
+                                            "type": "cognito",
+                                            "authenticator": {
+                                                "region": "eu-west-1",
+                                                "user_pool_id": "pool",
+                                                "app_client_id": "client",
+                                            },
+                                        }
+                                    },
+                                }
+                            }
+                        }
+                    },
+                }
+            ]
+        }
+    }
+
+    reasons = _descriptor_fast_path_reasons(
+        assembly,
+        bundles_descriptor=bundles_descriptor,
+        have_secrets=True,
+        have_gateway=True,
+        latest=False,
+        release=None,
+    )
+
+    assert reasons == []
+
+
+def test_installer_resolves_connection_hub_cognito_provider_config():
+    assembly = {
+        "auth": {
+            "connection_hub": {
+                "bundle_id": "connection-hub@1-0",
+                "authority_id": "kdcube.platform",
+                "provider_id": "cognito",
+            },
+        },
+    }
+    bundles_descriptor = {
+        "bundles": {
+            "items": [
+                {
+                    "id": "connection-hub@1-0",
+                    "config": {
+                        "authority_registry": {
+                            "authorities": {
+                                "kdcube.platform": {
+                                    "providers": {
+                                        "cognito": {
+                                            "type": "cognito",
+                                            "authenticator": {
+                                                "region": "eu-west-1",
+                                                "user_pool_id": "pool",
+                                                "app_client_id": "client",
+                                            },
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                }
+            ]
+        }
+    }
+
+    provider = _connection_hub_provider_config(assembly, bundles_descriptor)
+
+    assert provider["type"] == "cognito"
+    assert provider["authenticator"]["user_pool_id"] == "pool"
 
 
 def test_descriptor_fast_path_accepts_explicit_release_without_platform_ref():
@@ -2749,16 +2858,20 @@ def test_ensure_generated_runtime_secrets_backfills_federated_token_secret(tmp_p
     generated = ensure_generated_runtime_secrets(config_dir)
     secrets_data = yaml.safe_load((config_dir / "secrets.yaml").read_text())
     secret = secrets_data["services"]["federated_token"]["secret"]
+    session_secret = secrets_data["services"]["session_token"]["secret"]
 
-    assert sorted(generated) == ["services.federated_token.secret"]
+    assert sorted(generated) == ["services.federated_token.secret", "services.session_token.secret"]
     assert isinstance(secret, str)
     assert secret
+    assert isinstance(session_secret, str)
+    assert session_secret
 
     generated_again = ensure_generated_runtime_secrets(config_dir)
     secrets_data_again = yaml.safe_load((config_dir / "secrets.yaml").read_text())
 
     assert generated_again == {}
     assert secrets_data_again["services"]["federated_token"]["secret"] == secret
+    assert secrets_data_again["services"]["session_token"]["secret"] == session_secret
 
 
 def test_resolve_aws_sm_prefix_defaults_from_tenant_project():
@@ -2979,6 +3092,7 @@ def _write_initialized_runtime_config(workdir: Path, *, marker: str = "old") -> 
     )
     (config_dir / "secrets.yaml").write_text(f"services:\n  marker: {marker}\n")
     (config_dir / "gateway.yaml").write_text(f"routes:\n  marker: {marker}\n")
+    (config_dir / "economics.yaml").write_text(f"economics:\n  marker: {marker}\n")
     (config_dir / "bundles.yaml").write_text(
         yaml.safe_dump(
             {
@@ -3010,9 +3124,9 @@ def test_export_platform_descriptors_copies_platform_files(tmp_path: Path):
         quiet=True,
     )
 
-    assert {item["name"] for item in files} == {"assembly.yaml", "secrets.yaml", "gateway.yaml"}
+    assert {item["name"] for item in files} == {"assembly.yaml", "secrets.yaml", "gateway.yaml", "economics.yaml"}
     assert (out_dir / "assembly.yaml").exists()
-    for name in ("secrets.yaml", "gateway.yaml"):
+    for name in ("secrets.yaml", "gateway.yaml", "economics.yaml"):
         assert (out_dir / name).read_text() == (config_dir / name).read_text()
 
 
@@ -3109,7 +3223,14 @@ def test_apply_config_descriptors_overwrites_platform_files_and_regenerates(monk
 
     assert result["runtime_config_regenerated"] is True
     assert regenerated and regenerated[0]["workdir"] == target_config.parent
-    for name in ("assembly.yaml", "secrets.yaml", "gateway.yaml", "bundles.yaml", "bundles.secrets.yaml"):
+    for name in (
+        "assembly.yaml",
+        "secrets.yaml",
+        "gateway.yaml",
+        "economics.yaml",
+        "bundles.yaml",
+        "bundles.secrets.yaml",
+    ):
         assert (target_config / name).read_text() == (source_config / name).read_text()
 
 

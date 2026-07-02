@@ -5,7 +5,10 @@ from __future__ import annotations
 
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_registry_config import (
     authority_provider_instances,
+    cognito_platform_auth_config,
+    platform_authority_auth_config,
     resolve_authority_provider_instance,
+    resolve_platform_authority_provider,
 )
 
 
@@ -21,8 +24,28 @@ def _registry():
                 },
                 "providers": {
                     "cognito": {
-                        "type": "cognito",
-                        "authenticator": {"type": "cognito_id_token"},
+                        "type": "multi_cognito",
+                        "authenticator": {
+                            "type": "cognito_id_token",
+                            "id_token_header_name": "X-ID-Token",
+                            "region": "eu-west-1",
+                            "user_pool_id": "pool-a",
+                            "app_client_id": "client-a",
+                            "service_client_id": "service-a",
+                            "trusted_providers": [
+                                {
+                                    "alias": "secondary",
+                                    "kind": "cognito",
+                                    "region": "eu-west-1",
+                                    "user_pool_id": "pool-b",
+                                    "app_client_id": "client-b",
+                                }
+                            ],
+                            "cookie": {
+                                "auth_token_cookie_name": "__Secure-AUTH",
+                                "id_token_cookie_name": "__Secure-ID",
+                            },
+                        },
                     },
                     "versatile_google_session": {
                         "type": "bundle_session_login",
@@ -52,6 +75,11 @@ def _registry():
                         "issuer": {
                             "type": "kdcube_session_token",
                             "ttl_seconds": 43200,
+                            "cookie": {
+                                "auth_token_cookie_name": "__Secure-SESSION-AUTH",
+                                "id_token_cookie_name": "__Secure-SESSION-ID",
+                                "masqueraded_token_cookie_name": "__Secure-SESSION-MASK",
+                            },
                         },
                         "grants": {"roles": ["kdcube:role:registered"]},
                     },
@@ -89,7 +117,7 @@ def test_authority_provider_instances_flatten_configured_instances():
         (row["authority_id"], row["provider_id"], row["provider_type"], row["platform"])
         for row in rows
     ] == [
-        ("kdcube.platform", "cognito", "cognito", True),
+        ("kdcube.platform", "cognito", "multi-cognito", True),
         ("kdcube.platform", "versatile_google_session", "bundle_session_login", True),
         ("telegram.kdcube_ref", "telegram_bot_init_data", "telegram_init_data", False),
         ("google.accounts", "google_oidc", "google_id_token", False),
@@ -112,6 +140,41 @@ def test_resolve_authority_provider_instance_by_host_operation():
     assert result["entrypoints"]["consent"]["operation"] == "delegated_consent"
     assert result["provider"]["issuer"]["ttl_seconds"] == 43200
     assert result["authority"]["role_bindings"]["emails"]["owner@example.com"]["roles"] == ["kdcube:role:super-admin"]
+
+
+def test_cognito_platform_auth_config_normalizes_registry_provider():
+    resolved = resolve_platform_authority_provider(
+        _registry(),
+        authority_id="kdcube.platform",
+        provider_id="cognito",
+    )
+
+    config = cognito_platform_auth_config(resolved)
+
+    assert config["auth_provider"] == "multi-cognito"
+    assert config["region"] == "eu-west-1"
+    assert config["user_pool_id"] == "pool-a"
+    assert config["app_client_id"] == "client-a"
+    assert config["service_client_id"] == "service-a"
+    assert config["auth_token_cookie_name"] == "__Secure-AUTH"
+    assert config["id_token_cookie_name"] == "__Secure-ID"
+    assert [row["alias"] for row in config["trusted_providers"]] == ["primary", "secondary"]
+
+
+def test_platform_authority_auth_config_normalizes_bundle_session_provider():
+    resolved = resolve_platform_authority_provider(
+        _registry(),
+        authority_id="kdcube.platform",
+        provider_id="versatile_google_session",
+    )
+
+    config = platform_authority_auth_config(resolved)
+
+    assert config["auth_provider"] == "session"
+    assert config["id_token_header_name"] == "X-ID-Token"
+    assert config["auth_token_cookie_name"] == "__Secure-SESSION-AUTH"
+    assert config["id_token_cookie_name"] == "__Secure-SESSION-ID"
+    assert config["masqueraded_token_cookie_name"] == "__Secure-SESSION-MASK"
 
 
 def test_resolve_authority_provider_instance_by_consent_entrypoint():

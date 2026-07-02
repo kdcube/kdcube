@@ -46,6 +46,20 @@ def _str(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _entrypoint_matches_current_operation(
+    endpoint: Mapping[str, Any],
+    *,
+    bundle_id: str,
+    route: str,
+    operation: str,
+) -> bool:
+    return (
+        _str(endpoint.get("bundle_id") or endpoint.get("app_id")) == bundle_id
+        and (_str(endpoint.get("route")) or "public") == route
+        and _str(endpoint.get("operation") or endpoint.get("alias")) == operation
+    )
+
+
 def _required_positive_int(config: Mapping[str, Any], key: str) -> int:
     try:
         value = int(config.get(key) or 0)
@@ -77,10 +91,20 @@ async def resolve_bundle_session_login_provider(
         )
     if not bool(result.get("platform")):
         raise HTTPException(status_code=500, detail="Registered authority provider is not platform-capable")
-    provider = _dict(result.get("provider"))
-    host = _dict(provider.get("host"))
-    if _str(host.get("bundle_id") or host.get("app_id")) != bundle_id:
-        raise HTTPException(status_code=500, detail="Registered authority provider host does not match this bundle")
+    entrypoints = _dict(result.get("entrypoints"))
+    if not any(
+        _entrypoint_matches_current_operation(
+            _dict(endpoint),
+            bundle_id=bundle_id,
+            route="public",
+            operation=operation,
+        )
+        for endpoint in entrypoints.values()
+    ):
+        raise HTTPException(
+            status_code=500,
+            detail="Registered authority provider entrypoint does not match this bundle operation",
+        )
     return result
 
 

@@ -4,7 +4,7 @@ import logging
 import json
 from datetime import datetime, timezone
 from typing import Any, Dict, Mapping, Optional
-from urllib.parse import quote, urlencode, urlsplit, urlunsplit
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 from fastapi.responses import JSONResponse
 
@@ -20,8 +20,8 @@ from kdcube_ai_app.apps.chat.sdk.config import get_secret
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.authenticators.models import RequestEnvelope
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_registry_config import (
     authority_registry_config,
-    resolve_authority_provider_instance,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_registry_client import AuthorityRegistryClient
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint_with_memory import BaseEntrypointWithMemory
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
     NamedServiceRegistry,
@@ -611,32 +611,6 @@ def _request_origin(request: Any) -> str:
         return f"{url.scheme}://{url.netloc}"
     except Exception:
         return ""
-
-
-def _bundle_operation_public_url(
-    entrypoint: Any,
-    *,
-    request: Any,
-    endpoint: Mapping[str, Any],
-) -> str:
-    bundle_id = str(
-        endpoint.get("bundle_id")
-        or endpoint.get("bundle")
-        or endpoint.get("app_id")
-        or ""
-    ).strip()
-    route = str(endpoint.get("route") or "public").strip()
-    operation = str(endpoint.get("operation") or endpoint.get("alias") or "").strip()
-    if not bundle_id or not route or not operation:
-        return ""
-    tenant, project = _runtime_tenant_project(entrypoint)
-    path = (
-        "/api/integrations/bundles/"
-        f"{quote(tenant, safe='')}/{quote(project, safe='')}/"
-        f"{quote(bundle_id, safe='')}/{quote(route, safe='')}/{quote(operation, safe='')}"
-    )
-    origin = _request_origin(request)
-    return f"{origin}{path}" if origin else path
 
 
 def _append_query(url: str, params: Mapping[str, str]) -> str:
@@ -1547,8 +1521,13 @@ class ConnectionHubEntrypoint(BaseEntrypointWithMemory):
             host_operation=host_operation,
             **kwargs,
         )
-        result = resolve_authority_provider_instance(
-            _authority_registry_config(self),
+        tenant, project = _runtime_tenant_project(self)
+        result = await AuthorityRegistryClient(
+            self,
+            tenant=tenant,
+            project=project,
+            registry=_authority_registry_config(self),
+        ).resolve_provider(
             authority_id=str(payload.get("authority_id") or "").strip(),
             provider_id=str(payload.get("provider_id") or "").strip(),
             provider_type=str(payload.get("provider_type") or "").strip(),
@@ -1587,44 +1566,20 @@ class ConnectionHubEntrypoint(BaseEntrypointWithMemory):
             **kwargs,
         )
         entrypoint_name = str(payload.get("entrypoint") or "login").strip() or "login"
-        result = resolve_authority_provider_instance(
-            _authority_registry_config(self),
+        tenant, project = _runtime_tenant_project(self)
+        result = await AuthorityRegistryClient(
+            self,
+            tenant=tenant,
+            project=project,
+            registry=_authority_registry_config(self),
+        ).resolve_provider_entrypoint(
             authority_id=str(payload.get("authority_id") or "").strip(),
             provider_id=str(payload.get("provider_id") or "").strip(),
             provider_type=str(payload.get("provider_type") or "").strip(),
+            entrypoint=entrypoint_name,
+            request=request,
         )
-        if not result.get("ok"):
-            return result
-        entrypoints = result.get("entrypoints") if isinstance(result.get("entrypoints"), Mapping) else {}
-        endpoint = dict(entrypoints.get(entrypoint_name) or {}) if isinstance(entrypoints, Mapping) else {}
-        if not endpoint:
-            return {
-                "ok": False,
-                "error": "authority_provider_entrypoint_not_found",
-                "authority_id": result.get("authority_id"),
-                "provider_id": result.get("provider_id"),
-                "entrypoint": entrypoint_name,
-            }
-        url = _bundle_operation_public_url(self, request=request, endpoint=endpoint)
-        if not url:
-            return {
-                "ok": False,
-                "error": "authority_provider_entrypoint_url_unavailable",
-                "authority_id": result.get("authority_id"),
-                "provider_id": result.get("provider_id"),
-                "entrypoint": entrypoint_name,
-                "endpoint": endpoint,
-            }
-        return {
-            "ok": True,
-            "authority_id": result.get("authority_id"),
-            "provider_id": result.get("provider_id"),
-            "provider_type": result.get("provider_type"),
-            "platform": bool(result.get("platform")),
-            "entrypoint": entrypoint_name,
-            "endpoint": endpoint,
-            "url": url,
-        }
+        return result
 
     # ── connection edges (external identity -> delegated platform principal) ─
 

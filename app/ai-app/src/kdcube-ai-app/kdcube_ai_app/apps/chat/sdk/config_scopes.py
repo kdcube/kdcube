@@ -122,6 +122,24 @@ def _load_assembly_plain(dotted_path: str) -> Any:
     )
 
 
+def _load_bundles_plain(dotted_path: str) -> Any:
+    data = _load_plain_yaml(
+        _descriptor_path(
+            env_name="BUNDLES_YAML_DESCRIPTOR_PATH",
+            filename="bundles.yaml",
+            default="/config/bundles.yaml",
+        )
+    )
+    direct = _resolve_dotted_value(data, dotted_path)
+    if direct is not None or not dotted_path:
+        return direct
+    for prefix in ("bundles.items", "bundles"):
+        resolved = _resolve_dotted_value(data, f"{prefix}.{dotted_path}")
+        if resolved is not None:
+            return resolved
+    return None
+
+
 def _load_economics_plain(dotted_path: str) -> Any:
     return _resolve_dotted_value(
         _load_plain_yaml(

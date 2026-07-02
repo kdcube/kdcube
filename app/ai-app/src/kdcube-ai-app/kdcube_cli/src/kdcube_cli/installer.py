@@ -514,6 +514,118 @@ def _delete_nested(dct: Dict[str, object], keys: List[str]) -> None:
             break
 
 
+def _ensure_bundle_item(payload: Dict[str, object], bundle_id: str) -> Dict[str, object]:
+    bundles = payload.get("bundles")
+    if not isinstance(bundles, dict):
+        bundles = {"items": []}
+        payload["bundles"] = bundles
+    items = bundles.get("items")
+    if isinstance(items, list):
+        for item in items:
+            if isinstance(item, dict) and str(item.get("id") or "").strip() == bundle_id:
+                return item
+        item: Dict[str, object] = {"id": bundle_id, "config": {}}
+        items.append(item)
+        return item
+    item = bundles.get(bundle_id)
+    if isinstance(item, dict):
+        item.setdefault("id", bundle_id)
+        item.setdefault("config", {})
+        return item
+    item = {"id": bundle_id, "config": {}}
+    bundles[bundle_id] = item
+    return item
+
+
+def _ensure_connection_hub_cognito_provider(
+    bundles_data: Dict[str, object],
+    *,
+    region: str,
+    user_pool_id: str,
+    app_client_id: str,
+    service_client_id: str,
+    providers: object,
+    id_token_header_name: str,
+    auth_token_cookie_name: str,
+    id_token_cookie_name: str,
+    masqueraded_token_cookie_name: str,
+    jwks_cache_ttl_seconds: object,
+) -> None:
+    connection_hub = _ensure_bundle_item(bundles_data, "connection-hub@1-0")
+    config = connection_hub.get("config")
+    if not isinstance(config, dict):
+        config = {}
+        connection_hub["config"] = config
+    provider_type = "multi_cognito" if isinstance(providers, list) and len(providers) > 1 else "cognito"
+    authenticator: Dict[str, object] = {
+        "type": "cognito_id_token",
+        "id_token_header_name": id_token_header_name,
+        "region": region,
+        "user_pool_id": user_pool_id,
+        "app_client_id": app_client_id,
+        "service_client_id": service_client_id,
+        "jwks_cache_ttl_seconds": jwks_cache_ttl_seconds,
+        "cookie": {
+            "auth_token_cookie_name": auth_token_cookie_name,
+            "id_token_cookie_name": id_token_cookie_name,
+            "masqueraded_token_cookie_name": masqueraded_token_cookie_name,
+        },
+    }
+    if providers:
+        authenticator["trusted_providers"] = providers
+    _set_nested(
+        config,
+        ["authority_registry", "authorities", "kdcube.platform", "label"],
+        "KDCube platform authority",
+    )
+    _set_nested(
+        config,
+        ["authority_registry", "authorities", "kdcube.platform", "platform"],
+        True,
+    )
+    _set_nested(
+        config,
+        ["authority_registry", "authorities", "kdcube.platform", "providers", "cognito"],
+        {
+            "type": provider_type,
+            "enabled": True,
+            "label": "KDCube Cognito platform session",
+            "authenticator": authenticator,
+        },
+    )
+
+
+def _connection_hub_provider_config(
+    assembly_data: Dict[str, object],
+    bundles_data: Dict[str, object],
+) -> Dict[str, object]:
+    ref = _get_nested(assembly_data, "auth", "connection_hub")
+    if not isinstance(ref, dict):
+        ref = _get_nested(assembly_data, "auth", "connectionHub")
+    if not isinstance(ref, dict):
+        ref = {}
+    bundle_id = str(ref.get("bundle_id") or ref.get("bundleId") or "connection-hub@1-0").strip()
+    authority_id = str(ref.get("authority_id") or ref.get("authorityId") or "kdcube.platform").strip()
+    provider_id = str(ref.get("provider_id") or ref.get("providerId") or "cognito").strip()
+
+    for spec in _iter_bundle_specs(bundles_data):
+        if str(spec.get("id") or "").strip() != bundle_id:
+            continue
+        config = spec.get("config")
+        if not isinstance(config, dict):
+            return {}
+        provider = _get_nested(
+            config,
+            "authority_registry",
+            "authorities",
+            authority_id,
+            "providers",
+            provider_id,
+        )
+        return dict(provider) if isinstance(provider, dict) else {}
+    return {}
+
+
 def _upsert_bundle_secret(
     bundles_secrets_data: Dict[str, object],
     *,
@@ -961,6 +1073,8 @@ def write_frontend_config(
     routes_prefix: Optional[str] = None,
     company_name: Optional[str] = None,
     turnstile_development_token: Optional[str] = None,
+    auth_token_cookie_name: Optional[str] = None,
+    id_token_cookie_name: Optional[str] = None,
     assembly: Optional[Dict[str, object]] = None,
 ) -> None:
     _write_frontend_config_file(
@@ -975,6 +1089,8 @@ def write_frontend_config(
         routes_prefix=routes_prefix,
         company_name=company_name,
         turnstile_development_token=turnstile_development_token,
+        auth_token_cookie_name=auth_token_cookie_name,
+        id_token_cookie_name=id_token_cookie_name,
         assembly=assembly,
     )
 
@@ -2486,6 +2602,12 @@ def gather_configuration(
         raw_cognito = auth_descriptor.get("cognito") if auth_descriptor else None
         if isinstance(raw_cognito, dict):
             cognito_descriptor = dict(raw_cognito)
+        registry_provider = _connection_hub_provider_config(assembly_data, bundles_data)
+        registry_authenticator = (
+            registry_provider.get("authenticator")
+            if isinstance(registry_provider.get("authenticator"), dict)
+            else {}
+        )
 
         def _normalize_cognito_block(block: Dict[str, Any]) -> None:
             legacy_map = {
@@ -2508,14 +2630,36 @@ def gather_configuration(
 
         if cognito_descriptor:
             _normalize_cognito_block(cognito_descriptor)
-        descriptor_region = _pick(cognito_descriptor, "region")
-        descriptor_pool = _pick(cognito_descriptor, "user_pool_id")
-        descriptor_app = _pick(cognito_descriptor, "app_client_id")
-        descriptor_service = _pick(cognito_descriptor, "service_client_id")
-        id_token_header_name = _pick(auth_descriptor, "id_token_header_name") or "X-ID-Token"
-        auth_token_cookie_name = _pick(auth_descriptor, "auth_token_cookie_name") or "__Secure-LATC"
-        id_token_cookie_name = _pick(auth_descriptor, "id_token_cookie_name") or "__Secure-LITC"
-        jwks_cache_ttl = str(auth_descriptor.get("jwks_cache_ttl_seconds") or "86400")
+        descriptor_region = _pick(cognito_descriptor, "region") or _pick(registry_authenticator, "region")
+        descriptor_pool = _pick(cognito_descriptor, "user_pool_id") or _pick(registry_authenticator, "user_pool_id")
+        descriptor_app = _pick(cognito_descriptor, "app_client_id") or _pick(registry_authenticator, "app_client_id")
+        descriptor_service = _pick(cognito_descriptor, "service_client_id") or _pick(registry_authenticator, "service_client_id")
+        registry_cookie = registry_authenticator.get("cookie") if isinstance(registry_authenticator.get("cookie"), dict) else {}
+        id_token_header_name = (
+            _pick(auth_descriptor, "id_token_header_name")
+            or _pick(registry_authenticator, "id_token_header_name")
+            or "X-ID-Token"
+        )
+        auth_token_cookie_name = (
+            _pick(auth_descriptor, "auth_token_cookie_name")
+            or _pick(registry_cookie, "auth_token_cookie_name")
+            or "__Secure-LATC"
+        )
+        id_token_cookie_name = (
+            _pick(auth_descriptor, "id_token_cookie_name")
+            or _pick(registry_cookie, "id_token_cookie_name")
+            or "__Secure-LITC"
+        )
+        masqueraded_token_cookie_name = (
+            _pick(auth_descriptor, "masqueraded_token_cookie_name")
+            or _pick(registry_cookie, "masqueraded_token_cookie_name")
+            or "__Secure-LMTC"
+        )
+        jwks_cache_ttl = str(
+            auth_descriptor.get("jwks_cache_ttl_seconds")
+            or registry_authenticator.get("jwks_cache_ttl_seconds")
+            or "86400"
+        )
         for auth_env in (env_main, env_ingress, env_proc):
             update_env_value(auth_env, "ID_TOKEN_HEADER_NAME", id_token_header_name)
             update_env_value(auth_env, "AUTH_TOKEN_COOKIE_NAME", auth_token_cookie_name)
@@ -2569,6 +2713,47 @@ def gather_configuration(
                 _set_nested(assembly_data, ["auth", "cognito", "app_client_id"], current_val or "")
             elif key == "COGNITO_SERVICE_CLIENT_ID":
                 _set_nested(assembly_data, ["auth", "cognito", "service_client_id"], current_val or "")
+
+        registry_trusted_providers = auth_descriptor.get("providers")
+        if not registry_trusted_providers and isinstance(cognito_descriptor.get("providers"), (list, dict)):
+            registry_trusted_providers = cognito_descriptor.get("providers")
+        if not registry_trusted_providers and isinstance(registry_authenticator.get("trusted_providers"), (list, dict)):
+            registry_trusted_providers = registry_authenticator.get("trusted_providers")
+        cognito_user_pool_id = env_ingress.entries.get("COGNITO_USER_POOL_ID", (None, None))[1] or ""
+        cognito_app_client_id = env_ingress.entries.get("COGNITO_APP_CLIENT_ID", (None, None))[1] or ""
+        cognito_service_client_id = env_ingress.entries.get("COGNITO_SERVICE_CLIENT_ID", (None, None))[1] or cognito_app_client_id
+        _ensure_connection_hub_cognito_provider(
+            bundles_data,
+            region=cognito_region or "eu-west-1",
+            user_pool_id=cognito_user_pool_id,
+            app_client_id=cognito_app_client_id,
+            service_client_id=cognito_service_client_id,
+            providers=registry_trusted_providers,
+            id_token_header_name=id_token_header_name,
+            auth_token_cookie_name=auth_token_cookie_name,
+            id_token_cookie_name=id_token_cookie_name,
+            masqueraded_token_cookie_name=masqueraded_token_cookie_name,
+            jwks_cache_ttl_seconds=int(jwks_cache_ttl) if jwks_cache_ttl.isdigit() else jwks_cache_ttl,
+        )
+        _set_nested(
+            assembly_data,
+            ["auth", "connection_hub"],
+            {
+                "bundle_id": "connection-hub@1-0",
+                "authority_id": "kdcube.platform",
+                "provider_id": "cognito",
+            },
+        )
+        for legacy_path in (
+            ["auth", "cognito"],
+            ["auth", "providers"],
+            ["auth", "id_token_header_name"],
+            ["auth", "auth_token_cookie_name"],
+            ["auth", "id_token_cookie_name"],
+            ["auth", "masqueraded_token_cookie_name"],
+            ["auth", "jwks_cache_ttl_seconds"],
+        ):
+            _delete_nested(assembly_data, legacy_path)
 
         proxy_client_secret = _secret_pick(("auth", "cognito", "client_secret"))
         if auth_mode == "delegated" and not proxy_client_secret:
@@ -3864,6 +4049,8 @@ def gather_configuration(
     cognito_region_val = env_ingress.entries.get("COGNITO_REGION", (None, None))[1]
     cognito_user_pool_id_val = env_ingress.entries.get("COGNITO_USER_POOL_ID", (None, None))[1]
     cognito_app_client_id_val = env_ingress.entries.get("COGNITO_APP_CLIENT_ID", (None, None))[1]
+    auth_token_cookie_name_val = env_ingress.entries.get("AUTH_TOKEN_COOKIE_NAME", (None, None))[1]
+    id_token_cookie_name_val = env_ingress.entries.get("ID_TOKEN_COOKIE_NAME", (None, None))[1]
     proxy_route_prefix_raw = _get_nested(assembly_data, "proxy", "route_prefix")
     proxy_route_prefix = normalize_routes_prefix(proxy_route_prefix_raw) if proxy_route_prefix_raw else ""
     if proxy_route_prefix:
@@ -3881,6 +4068,8 @@ def gather_configuration(
         routes_prefix=proxy_route_prefix or None,
         company_name=company_name,
         turnstile_development_token=turnstile_development_token,
+        auth_token_cookie_name=auth_token_cookie_name_val,
+        id_token_cookie_name=id_token_cookie_name_val,
         assembly=assembly_data,
     )
     routes_prefix = proxy_route_prefix or normalize_routes_prefix(_load_json_file(compose_ui_config).get("routesPrefix"))
@@ -3933,6 +4122,8 @@ def gather_configuration(
             routes_prefix=proxy_route_prefix or None,
             company_name=company_name,
             turnstile_development_token=turnstile_development_token,
+            auth_token_cookie_name=auth_token_cookie_name_val,
+            id_token_cookie_name=id_token_cookie_name_val,
             assembly=assembly_data,
         )
     except Exception:
@@ -3955,6 +4146,8 @@ def gather_configuration(
         routes_prefix=proxy_route_prefix or None,
         company_name=company_name,
         turnstile_development_token=turnstile_development_token,
+        auth_token_cookie_name=auth_token_cookie_name_val,
+        id_token_cookie_name=id_token_cookie_name_val,
         assembly=assembly_data,
     )
 

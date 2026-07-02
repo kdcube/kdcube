@@ -97,7 +97,7 @@ Human consent
 Connection Hub OAuth adapter
   |
   | 4. Validate existing platform session cookie
-  |    cookie name comes from assembly.yaml auth.auth_token_cookie_name
+  |    cookie name comes from the selected platform authority provider
   |    user and roles come from platform auth/session resolver
   v
 User consent page
@@ -446,8 +446,8 @@ Rules:
 - Redirect URI fields are descriptor lists, not comma-separated strings.
 - Tenant and project come from `assembly.yaml -> context.tenant` and
   `context.project`.
-- Platform session cookie name comes from
-  `assembly.yaml -> auth.auth_token_cookie_name`.
+- Platform session cookie name comes from the selected platform authority
+  provider in `connection-hub@1-0.config.authority_registry`.
 - This flow currently uses public clients plus PKCE and does not require a new
   secret in `secrets.yaml`.
 

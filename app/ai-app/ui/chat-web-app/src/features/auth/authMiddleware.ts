@@ -177,6 +177,9 @@ export const authMiddleware = (): Middleware => {
                 return;
             }
             const url = new URL(loginUrl, window.location.origin);
+            if (url.protocol === "http:" && window.location.protocol === "https:") {
+                url.protocol = "https:";
+            }
             url.searchParams.set("next", String(navigateTo || currentLocation()));
             window.location.assign(url.toString());
         }
@@ -196,6 +199,11 @@ export const authMiddleware = (): Middleware => {
                 if (!profile?.session_id) {
                     throw new Error("Profile response did not include a session id");
                 }
+                const userType = String(profile.user_type || "").toLowerCase();
+                const userId = String(profile.user_id || "").trim();
+                if (!userId || userType === "anonymous") {
+                    throw new Error("Bundle session is not authenticated");
+                }
                 store.dispatch(setCredentials({
                     loggedIn: true,
                     user: {
@@ -209,6 +217,7 @@ export const authMiddleware = (): Middleware => {
             } catch (error) {
                 console.debug("Bundle session is not established", error);
                 store.dispatch(setLoggedOut());
+                void redirectToBundleLogin(currentLocation());
             } finally {
                 store.dispatch(finishLoading(null));
             }

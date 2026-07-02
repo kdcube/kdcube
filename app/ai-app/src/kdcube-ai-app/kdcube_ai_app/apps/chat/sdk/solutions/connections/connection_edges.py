@@ -81,6 +81,17 @@ def request_origin(request: Any) -> str:
         host = _str(headers.get("x-forwarded-host") or headers.get("host"))
         proto = _str(headers.get("x-forwarded-proto")).split(",", 1)[0].strip()
         if host:
+            host_name = host.split(":", 1)[0].strip().lower()
+            if (
+                (not proto or proto == "http")
+                and host_name
+                and host_name != "localhost"
+                and not host_name.startswith("127.")
+                and host_name != "::1"
+                and not host_name.endswith(".local")
+                and "." in host_name
+            ):
+                proto = "https"
             return f"{proto or 'https'}://{host}"
     except Exception:
         pass

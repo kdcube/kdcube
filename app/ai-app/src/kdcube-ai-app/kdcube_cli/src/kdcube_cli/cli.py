@@ -2601,6 +2601,38 @@ def _local_path_bundles_need_host_root(payload: dict | None) -> bool:
     return False
 
 
+def _connection_hub_cognito_provider_config(assembly: dict, bundles_descriptor: dict | None) -> dict:
+    ref = _get_nested(assembly, "auth", "connection_hub")
+    if not isinstance(ref, dict):
+        ref = _get_nested(assembly, "auth", "connectionHub")
+    if not isinstance(ref, dict):
+        ref = {}
+    bundle_id = str(ref.get("bundle_id") or ref.get("bundleId") or "connection-hub@1-0").strip()
+    authority_id = str(ref.get("authority_id") or ref.get("authorityId") or "kdcube.platform").strip()
+    provider_id = str(ref.get("provider_id") or ref.get("providerId") or "cognito").strip()
+    for spec in _iter_bundle_specs(bundles_descriptor):
+        if str(spec.get("id") or "").strip() != bundle_id:
+            continue
+        config = spec.get("config")
+        if not isinstance(config, dict):
+            return {}
+        authority = _get_nested(config, "authority_registry", "authorities", authority_id)
+        if not isinstance(authority, dict):
+            return {}
+        provider = _get_nested(authority, "providers", provider_id)
+        return provider if isinstance(provider, dict) else {}
+    return {}
+
+
+def _connection_hub_cognito_provider_has_fields(assembly: dict, bundles_descriptor: dict | None) -> bool:
+    provider = _connection_hub_cognito_provider_config(assembly, bundles_descriptor)
+    authenticator = provider.get("authenticator") if isinstance(provider.get("authenticator"), dict) else {}
+    return all(
+        _has_value(authenticator.get(key) or provider.get(key))
+        for key in ("region", "user_pool_id", "app_client_id")
+    )
+
+
 def _descriptor_fast_path_reasons(
     assembly: dict,
     *,
@@ -2635,13 +2667,18 @@ def _descriptor_fast_path_reasons(
     if auth_type not in {"simple", "cognito", "delegated"}:
         reasons.append("assembly auth.type must be simple, cognito, or delegated")
     if auth_type in {"cognito", "delegated"}:
-        for field in (
-            ("auth", "cognito", "region"),
-            ("auth", "cognito", "user_pool_id"),
-            ("auth", "cognito", "app_client_id"),
-        ):
-            if not _has_value(_get_nested(assembly, *field)):
-                reasons.append(f"assembly {'.'.join(field)} is required")
+        has_connection_hub_provider = _connection_hub_cognito_provider_has_fields(assembly, bundles_descriptor)
+        if not has_connection_hub_provider:
+            for field in (
+                ("auth", "cognito", "region"),
+                ("auth", "cognito", "user_pool_id"),
+                ("auth", "cognito", "app_client_id"),
+            ):
+                if not _has_value(_get_nested(assembly, *field)):
+                    reasons.append(
+                        "Connection Hub platform Cognito provider or "
+                        f"legacy assembly {'.'.join(field)} is required"
+                    )
 
     if installer_mod.parse_bool(_get_nested(assembly, "proxy", "ssl")) and not _has_value(assembly.get("domain")):
         reasons.append("assembly domain is required when proxy.ssl=true")

@@ -177,6 +177,190 @@ def test_get_plain_reads_bundles_namespace(monkeypatch, tmp_path):
     assert settings.plain("b:bundles.demo.bundle@1.0.0.widgets.0.alias") == "chat"
 
 
+def test_settings_reads_cognito_from_connection_hub_bundle_items(monkeypatch, tmp_path):
+    for key in (
+        "AUTH_PROVIDER",
+        "AUTH_COGNITO_PROVIDERS_JSON",
+        "COGNITO_REGION",
+        "COGNITO_USER_POOL_ID",
+        "COGNITO_APP_CLIENT_ID",
+        "COGNITO_SERVICE_CLIENT_ID",
+        "ID_TOKEN_HEADER_NAME",
+        "AUTH_TOKEN_COOKIE_NAME",
+        "ID_TOKEN_COOKIE_NAME",
+        "MASQUERADED_TOKEN_COOKIE_NAME",
+        "JWKS_CACHE_TTL_SECONDS",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    assembly_path = tmp_path / "assembly.yaml"
+    bundles_path = tmp_path / "bundles.yaml"
+    assembly_path.write_text(
+        yaml.safe_dump(
+            {
+                "auth": {
+                    "type": "cognito",
+                    "connection_hub": {
+                        "bundle_id": "connection-hub@1-0",
+                        "authority_id": "kdcube.platform",
+                        "provider_id": "cognito",
+                    },
+                },
+            },
+            sort_keys=False,
+        )
+    )
+    bundles_path.write_text(
+        yaml.safe_dump(
+            {
+                "bundles": {
+                    "items": [
+                        {
+                            "id": "connection-hub@1-0",
+                            "config": {
+                                "authority_registry": {
+                                    "authorities": {
+                                        "kdcube.platform": {
+                                            "platform": True,
+                                            "providers": {
+                                                "cognito": {
+                                                    "type": "multi_cognito",
+                                                    "authenticator": {
+                                                        "type": "cognito_id_token",
+                                                        "id_token_header_name": "X-Test-ID",
+                                                        "region": "eu-west-1",
+                                                        "user_pool_id": "pool-primary",
+                                                        "app_client_id": "client-primary",
+                                                        "service_client_id": "service-client",
+                                                        "jwks_cache_ttl_seconds": 123,
+                                                        "cookie": {
+                                                            "auth_token_cookie_name": "__Secure-AUTH",
+                                                            "id_token_cookie_name": "__Secure-ID",
+                                                            "masqueraded_token_cookie_name": "__Secure-MASK",
+                                                        },
+                                                        "trusted_providers": [
+                                                            {
+                                                                "alias": "primary",
+                                                                "region": "eu-west-1",
+                                                                "user_pool_id": "pool-primary",
+                                                                "app_client_id": "client-primary",
+                                                            },
+                                                            {
+                                                                "alias": "peer",
+                                                                "region": "eu-west-1",
+                                                                "user_pool_id": "pool-peer",
+                                                                "app_client_id": "client-peer",
+                                                            },
+                                                        ],
+                                                    },
+                                                }
+                                            },
+                                        }
+                                    }
+                                }
+                            },
+                        }
+                    ]
+                }
+            },
+            sort_keys=False,
+        )
+    )
+
+    monkeypatch.setattr(sdk_config, "get_secrets_manager", lambda _settings: _NoopSecretsManager())
+    monkeypatch.setenv("ASSEMBLY_YAML_DESCRIPTOR_PATH", str(assembly_path))
+    monkeypatch.setenv("BUNDLES_YAML_DESCRIPTOR_PATH", str(bundles_path))
+
+    settings = sdk_config.Settings()
+
+    assert settings.AUTH_PROVIDER == "multi-cognito"
+    assert settings.AUTH.COGNITO_REGION == "eu-west-1"
+    assert settings.AUTH.COGNITO_USER_POOL_ID == "pool-primary"
+    assert settings.AUTH.COGNITO_APP_CLIENT_ID == "client-primary"
+    assert settings.AUTH.COGNITO_SERVICE_CLIENT_ID == "service-client"
+    assert settings.AUTH.ID_TOKEN_HEADER_NAME == "X-Test-ID"
+    assert settings.AUTH.AUTH_TOKEN_COOKIE_NAME == "__Secure-AUTH"
+    assert settings.AUTH.ID_TOKEN_COOKIE_NAME == "__Secure-ID"
+    assert settings.AUTH.MASQUERADED_TOKEN_COOKIE_NAME == "__Secure-MASK"
+    assert settings.AUTH.JWKS_CACHE_TTL_SECONDS == 123
+    assert [row.alias for row in settings.AUTH.COGNITO_TRUSTED_PROVIDERS] == ["primary", "peer"]
+
+
+def test_settings_reads_bundle_session_transport_from_connection_hub(monkeypatch, tmp_path):
+    for key in (
+        "AUTH_PROVIDER",
+        "AUTH_TOKEN_COOKIE_NAME",
+        "ID_TOKEN_COOKIE_NAME",
+        "MASQUERADED_TOKEN_COOKIE_NAME",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    assembly_path = tmp_path / "assembly.yaml"
+    bundles_path = tmp_path / "bundles.yaml"
+    assembly_path.write_text(
+        yaml.safe_dump(
+            {
+                "auth": {
+                    "type": "bundle",
+                    "connection_hub": {
+                        "bundle_id": "connection-hub@1-0",
+                        "authority_id": "kdcube.platform",
+                        "provider_id": "versatile_google_session",
+                    },
+                },
+            },
+            sort_keys=False,
+        )
+    )
+    bundles_path.write_text(
+        yaml.safe_dump(
+            {
+                "bundles": {
+                    "items": [
+                        {
+                            "id": "connection-hub@1-0",
+                            "config": {
+                                "authority_registry": {
+                                    "authorities": {
+                                        "kdcube.platform": {
+                                            "platform": True,
+                                            "providers": {
+                                                "versatile_google_session": {
+                                                    "type": "bundle_session_login",
+                                                    "issuer": {
+                                                        "type": "kdcube_session_token",
+                                                        "cookie": {
+                                                            "auth_token_cookie_name": "__Secure-AUTH",
+                                                            "id_token_cookie_name": "__Secure-ID",
+                                                            "masqueraded_token_cookie_name": "__Secure-MASK",
+                                                        },
+                                                    },
+                                                }
+                                            },
+                                        }
+                                    }
+                                }
+                            },
+                        }
+                    ]
+                }
+            },
+            sort_keys=False,
+        )
+    )
+
+    monkeypatch.setattr(sdk_config, "get_secrets_manager", lambda _settings: _NoopSecretsManager())
+    monkeypatch.setenv("ASSEMBLY_YAML_DESCRIPTOR_PATH", str(assembly_path))
+    monkeypatch.setenv("BUNDLES_YAML_DESCRIPTOR_PATH", str(bundles_path))
+
+    settings = sdk_config.Settings()
+
+    assert settings.AUTH_PROVIDER == "session"
+    assert settings.AUTH.AUTH_TOKEN_COOKIE_NAME == "__Secure-AUTH"
+    assert settings.AUTH.ID_TOKEN_COOKIE_NAME == "__Secure-ID"
+    assert settings.AUTH.MASQUERADED_TOKEN_COOKIE_NAME == "__Secure-MASK"
+
+
 def test_get_plain_returns_default_when_path_missing(monkeypatch, tmp_path):
     assembly_path = tmp_path / "assembly.yaml"
     assembly_path.write_text(yaml.safe_dump({"storage": {"workspace": {"type": "custom"}}}, sort_keys=False))

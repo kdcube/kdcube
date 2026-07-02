@@ -15,13 +15,20 @@ import yaml
 
 from kdcube_ai_app.apps.chat.sdk.config_scopes import (
     PLATFORM_CONFIG, RUNTIME_CONFIG,
-    _load_assembly_plain, _load_global_secret_plain, _parse_plain_key, _load_plain_yaml, _resolve_dotted_value,
+    _load_assembly_plain, _load_bundles_plain, _load_global_secret_plain, _parse_plain_key, _load_plain_yaml, _resolve_dotted_value,
     _descriptor_cache_token,
     LOGConfig, ServiceConfig, AVConfig, HostedServicesConfig, MonitoringConfig,
     MetricsConfig, MetricsRuntimeConfig, MetricsProxyConfig, MetricsExportConfig,
     MetricsCloudWatchConfig, MetricsPrometheusConfig,
     PyExecConfig, ExecConfig, ReactDebugConfig, AccountingConfig, GitBundlesConfig, ApplicationsConfig,
     PlatformConfig, IDPLocalConfig, IDPConfig, AuthConfig, CognitoTrustedProviderConfig, ServicesConfig,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_registry_config import (
+    DEFAULT_PLATFORM_AUTHORITY_ID,
+    DEFAULT_PLATFORM_PROVIDER_ID,
+    authority_registry_config,
+    platform_authority_auth_config,
+    resolve_platform_authority_provider,
 )
 from kdcube_ai_app.infra.props import get_props_manager
 from kdcube_ai_app.infra.secrets import get_secrets_manager
@@ -765,12 +772,57 @@ class Settings(PLATFORM_CONFIG):
             return "session"
         return None
 
+    def _connection_hub_auth_ref(self) -> dict[str, Any]:
+        raw = _load_assembly_plain("auth.connection_hub")
+        if not isinstance(raw, dict):
+            raw = _load_assembly_plain("auth.connectionHub")
+        return dict(raw) if isinstance(raw, dict) else {}
+
+    def _connection_hub_platform_provider_config(self) -> dict[str, Any]:
+        ref = self._connection_hub_auth_ref()
+        bundle_id = str(ref.get("bundle_id") or ref.get("bundleId") or "connection-hub@1-0").strip()
+        authority_id = str(
+            ref.get("authority_id")
+            or ref.get("authorityId")
+            or DEFAULT_PLATFORM_AUTHORITY_ID
+        ).strip()
+        provider_id = str(
+            ref.get("provider_id")
+            or ref.get("providerId")
+            or DEFAULT_PLATFORM_PROVIDER_ID
+        ).strip()
+        provider_type = str(ref.get("provider_type") or ref.get("providerType") or "").strip()
+        registry = authority_registry_config(
+            {"authority_registry": _load_bundles_plain(f"{bundle_id}.authority_registry")}
+        )
+        if not registry:
+            return {}
+        resolved = resolve_platform_authority_provider(
+            registry,
+            authority_id=authority_id,
+            provider_id=provider_id,
+            provider_type=provider_type,
+        )
+        return platform_authority_auth_config(resolved)
+
+    def connection_hub_platform_auth_config(self) -> dict[str, Any]:
+        """Return normalized platform auth config from the Connection Hub registry."""
+
+        return self._connection_hub_platform_provider_config()
+
+    def _connection_hub_auth_int(self, value: Any) -> int | None:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
     def _resolve_cognito_trusted_providers(
         self,
         *,
         primary_region: str | None,
         primary_pool_id: str | None,
         primary_client_id: str | None,
+        registry_providers: list[dict[str, Any]] | None = None,
     ) -> list[CognitoTrustedProviderConfig]:
         import json
 
@@ -783,6 +835,8 @@ class Settings(PLATFORM_CONFIG):
                     break
                 except Exception:
                     raw_providers = None
+        if raw_providers is None and registry_providers:
+            raw_providers = registry_providers
         if raw_providers is None:
             raw_providers = _load_assembly_plain("auth.providers")
         if raw_providers is None:
@@ -998,9 +1052,14 @@ class Settings(PLATFORM_CONFIG):
             if val:
                 self.PROJECT = val
 
+        platform_auth_cfg = self._connection_hub_platform_provider_config()
+
         # 6. auth provider
         if not self._env_present("AUTH_PROVIDER") and not self.AUTH_PROVIDER:
-            self.AUTH_PROVIDER = self._resolve_auth_provider_from_assembly()
+            self.AUTH_PROVIDER = (
+                str(platform_auth_cfg.get("auth_provider") or "").strip()
+                or self._resolve_auth_provider_from_assembly()
+            )
 
         # 7. AWS settings
         if not self._env_present("AWS_REGION"):
@@ -1418,14 +1477,32 @@ class Settings(PLATFORM_CONFIG):
         _log_secret_status("services.git.http_user", self.GIT_HTTP_USER, git_http_user_source)
         _log_secret_status("services.openrouter.api_key", self.OPENROUTER_API_KEY, "env" if env_openrouter else "settings")
 
-        # 13. Build AUTH config (env > assembly.yaml > default).
-        _cognito_region = self._resolve_str("COGNITO_REGION", "auth.cognito.region")
-        _cognito_user_pool_id = self._resolve_str("COGNITO_USER_POOL_ID", "auth.cognito.user_pool_id")
-        _cognito_app_client_id = self._resolve_str("COGNITO_APP_CLIENT_ID", "auth.cognito.app_client_id")
+        # 13. Build AUTH config (env > Connection Hub authority registry > assembly.yaml > default).
+        _cognito_region = (
+            self._env_str("COGNITO_REGION")
+            or str(platform_auth_cfg.get("region") or "").strip()
+            or self._assembly_str("auth.cognito.region")
+        )
+        _cognito_user_pool_id = (
+            self._env_str("COGNITO_USER_POOL_ID")
+            or str(platform_auth_cfg.get("user_pool_id") or "").strip()
+            or self._assembly_str("auth.cognito.user_pool_id")
+        )
+        _cognito_app_client_id = (
+            self._env_str("COGNITO_APP_CLIENT_ID")
+            or str(platform_auth_cfg.get("app_client_id") or "").strip()
+            or self._assembly_str("auth.cognito.app_client_id")
+        )
+        _cognito_service_client_id = (
+            self._env_str("COGNITO_SERVICE_CLIENT_ID")
+            or str(platform_auth_cfg.get("service_client_id") or "").strip()
+            or self._assembly_str("auth.cognito.service_client_id")
+        )
         _cognito_trusted_providers = self._resolve_cognito_trusted_providers(
             primary_region=_cognito_region,
             primary_pool_id=_cognito_user_pool_id,
             primary_client_id=_cognito_app_client_id,
+            registry_providers=platform_auth_cfg.get("trusted_providers") if isinstance(platform_auth_cfg.get("trusted_providers"), list) else None,
         )
         if (self.AUTH_PROVIDER or "").strip().lower() in {"", "cognito"} and len(_cognito_trusted_providers) > 1:
             self.AUTH_PROVIDER = "multi-cognito"
@@ -1433,13 +1510,38 @@ class Settings(PLATFORM_CONFIG):
             COGNITO_REGION=_cognito_region,
             COGNITO_USER_POOL_ID=_cognito_user_pool_id,
             COGNITO_APP_CLIENT_ID=_cognito_app_client_id,
-            COGNITO_SERVICE_CLIENT_ID=self._resolve_str("COGNITO_SERVICE_CLIENT_ID", "auth.cognito.service_client_id"),
+            COGNITO_SERVICE_CLIENT_ID=_cognito_service_client_id,
             COGNITO_TRUSTED_PROVIDERS=_cognito_trusted_providers,
-            ID_TOKEN_HEADER_NAME=self._resolve_str("ID_TOKEN_HEADER_NAME", "auth.id_token_header_name", "X-ID-Token"),
-            AUTH_TOKEN_COOKIE_NAME=self._resolve_str("AUTH_TOKEN_COOKIE_NAME", "auth.auth_token_cookie_name", "__Secure-LATC"),
-            ID_TOKEN_COOKIE_NAME=self._resolve_str("ID_TOKEN_COOKIE_NAME", "auth.id_token_cookie_name", "__Secure-LITC"),
-            MASQUERADED_TOKEN_COOKIE_NAME=self._resolve_str("MASQUERADED_TOKEN_COOKIE_NAME", "auth.masqueraded_token_cookie_name", "__Secure-LMTC"),
-            JWKS_CACHE_TTL_SECONDS=self._resolve_int("JWKS_CACHE_TTL_SECONDS", "auth.jwks_cache_ttl_seconds", 86400),
+            ID_TOKEN_HEADER_NAME=(
+                self._env_str("ID_TOKEN_HEADER_NAME")
+                or str(platform_auth_cfg.get("id_token_header_name") or "").strip()
+                or self._assembly_str("auth.id_token_header_name")
+                or "X-ID-Token"
+            ),
+            AUTH_TOKEN_COOKIE_NAME=(
+                self._env_str("AUTH_TOKEN_COOKIE_NAME")
+                or str(platform_auth_cfg.get("auth_token_cookie_name") or "").strip()
+                or self._assembly_str("auth.auth_token_cookie_name")
+                or "__Secure-LATC"
+            ),
+            ID_TOKEN_COOKIE_NAME=(
+                self._env_str("ID_TOKEN_COOKIE_NAME")
+                or str(platform_auth_cfg.get("id_token_cookie_name") or "").strip()
+                or self._assembly_str("auth.id_token_cookie_name")
+                or "__Secure-LITC"
+            ),
+            MASQUERADED_TOKEN_COOKIE_NAME=(
+                self._env_str("MASQUERADED_TOKEN_COOKIE_NAME")
+                or str(platform_auth_cfg.get("masqueraded_token_cookie_name") or "").strip()
+                or self._assembly_str("auth.masqueraded_token_cookie_name")
+                or "__Secure-LMTC"
+            ),
+            JWKS_CACHE_TTL_SECONDS=(
+                self._env_int("JWKS_CACHE_TTL_SECONDS")
+                or self._connection_hub_auth_int(platform_auth_cfg.get("jwks_cache_ttl_seconds"))
+                or self._assembly_int("auth.jwks_cache_ttl_seconds")
+                or 86400
+            ),
             OIDC_SERVICE_USER_EMAIL=self._resolve_sensitive_str(
                 "OIDC_SERVICE_USER_EMAIL",
                 plain_path="auth.oidc.admin_email",

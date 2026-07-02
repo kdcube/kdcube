@@ -22,7 +22,7 @@ non-KDCube identity:
 Telegram Mini App
 Slack modal
 WhatsApp webview
-customer portal iframe
+product portal iframe
 bundle-owned public hook or widget
 ```
 
@@ -93,7 +93,7 @@ Data Bus
 
 ```text
 1. User opens external runtime
-   Telegram / Slack / WhatsApp / customer app
+   Telegram / Slack / WhatsApp / product app
         |
         | provider auth material
         |   Telegram initData

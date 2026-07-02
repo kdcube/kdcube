@@ -96,6 +96,51 @@ this bundle exposes. It is separate from `enabled`: `enabled` decides whether a
 surface exists; `surfaces.as_provider` decides who can see/call it and which
 authority/grants are required.
 
+`connection-hub@1-0.config.authority_registry` is also platform-owned. It is
+the canonical registry for authority realms and provider instances, including
+the Cognito platform authority provider. `assembly.yaml` selects a provider via
+`auth.connection_hub`; the provider's concrete details live here.
+
+Example platform Cognito provider:
+
+```yaml
+bundles:
+  items:
+    - id: connection-hub@1-0
+      config:
+        authority_registry:
+          authorities:
+            kdcube.platform:
+              label: KDCube platform authority
+              platform: true
+              providers:
+                cognito:
+                  type: multi_cognito
+                  enabled: true
+                  authenticator:
+                    type: cognito_id_token
+                    id_token_header_name: X-ID-Token
+                    region: eu-west-1
+                    user_pool_id: eu-west-1_PRIMARY
+                    app_client_id: primary-client
+                    service_client_id: primary-client
+                    cookie:
+                      auth_token_cookie_name: __Secure-LATC
+                      id_token_cookie_name: __Secure-LITC
+                      masqueraded_token_cookie_name: __Secure-LMTC
+                    trusted_providers:
+                      - alias: primary
+                        kind: cognito
+                        region: eu-west-1
+                        user_pool_id: eu-west-1_PRIMARY
+                        app_client_id: primary-client
+                      - alias: peer
+                        kind: cognito
+                        region: eu-west-1
+                        user_pool_id: eu-west-1_PEER
+                        app_client_id: peer-client
+```
+
 Provider surface policy keys:
 
 | Surface | Policy path |

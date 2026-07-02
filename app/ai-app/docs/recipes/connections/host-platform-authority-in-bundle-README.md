@@ -20,7 +20,7 @@ flow while KDCube still treats the result as a normal platform session.
 Examples:
 
 ```text
-A customer app wants its own login page but standard KDCube sessions.
+A product app wants its own login page but standard KDCube sessions.
 Versatile demonstrates Google login and Telegram-to-session flows.
 ```
 
@@ -496,7 +496,7 @@ In the Versatile example, it renders Google Identity Services, posts the
 credential to `auth_google_session`, and relies on the SDK runtime to set the
 configured KDCube platform auth cookies.
 
-The page may be replaced by a customer-specific login UI as long as the public
+The page may be replaced by a product-specific login UI as long as the public
 operation calls the same SDK runtime and the provider is registered in
 Connection Hub.
 

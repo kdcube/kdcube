@@ -130,7 +130,7 @@ connection-hub@1-0:
             google_oidc:
               type: google_id_token
               authenticator:
-                client_id: 960111679915-825b0cenujpavcmognp450l7ius4suje.apps.googleusercontent.com
+                client_id: <google-client-id>.apps.googleusercontent.com
 ```
 
 The provider instance may reference a bundle-hosted operation, but roles,

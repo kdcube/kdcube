@@ -186,6 +186,7 @@ def build_frontend_config(
     turnstile_development_token: Optional[str] = None,
     auth_token_cookie_name: Optional[str] = None,
     id_token_cookie_name: Optional[str] = None,
+    platform_auth_config: Optional[Mapping[str, Any]] = None,
 ) -> dict[str, Any]:
     """
     Build the public frontend runtime config.
@@ -224,16 +225,33 @@ def build_frontend_config(
         auth_type = _normalize_frontend_auth_type(auth.get("authType")) or _assembly_auth_type(assembly)
     auth["authType"] = auth_type
 
-    id_token_header = as_text(get_nested(assembly or {}, "auth", "id_token_header_name")) or "X-ID-Token"
+    provider_auth = dict(platform_auth_config or {})
+    id_token_header = (
+        as_text(provider_auth.get("id_token_header_name"))
+        or as_text(get_nested(assembly or {}, "auth", "id_token_header_name"))
+        or "X-ID-Token"
+    )
     if auth_type == "simple":
         if auth.get("token") in (None, "", "test-admin-token-123"):
             auth["token"] = token
     elif auth_type in {"cognito", "oauth"}:
         auth.pop("token", None)
         oidc_cfg = copy.deepcopy(auth.get("oidcConfig") if isinstance(auth.get("oidcConfig"), dict) else {})
-        region = as_text(cognito_region) or as_text(get_nested(assembly or {}, "auth", "cognito", "region"))
-        user_pool_id = as_text(cognito_user_pool_id) or as_text(get_nested(assembly or {}, "auth", "cognito", "user_pool_id"))
-        client_id = as_text(cognito_app_client_id) or as_text(get_nested(assembly or {}, "auth", "cognito", "app_client_id"))
+        region = (
+            as_text(cognito_region)
+            or as_text(provider_auth.get("region"))
+            or as_text(get_nested(assembly or {}, "auth", "cognito", "region"))
+        )
+        user_pool_id = (
+            as_text(cognito_user_pool_id)
+            or as_text(provider_auth.get("user_pool_id"))
+            or as_text(get_nested(assembly or {}, "auth", "cognito", "user_pool_id"))
+        )
+        client_id = (
+            as_text(cognito_app_client_id)
+            or as_text(provider_auth.get("app_client_id"))
+            or as_text(get_nested(assembly or {}, "auth", "cognito", "app_client_id"))
+        )
         authority = _build_oidc_authority(region, user_pool_id)
         if authority:
             oidc_cfg["authority"] = authority
@@ -296,14 +314,18 @@ def build_frontend_config(
     # platform defaults.
     auth["authTokenCookieName"] = (
         as_text(auth_token_cookie_name)
+        or as_text(provider_auth.get("auth_token_cookie_name"))
         or as_text(get_nested(assembly or {}, "auth", "auth_token_cookie_name"))
         or "__Secure-LATC"
     )
     auth["idTokenCookieName"] = (
         as_text(id_token_cookie_name)
+        or as_text(provider_auth.get("id_token_cookie_name"))
         or as_text(get_nested(assembly or {}, "auth", "id_token_cookie_name"))
         or "__Secure-LITC"
     )
+    auth["profileUrl"] = as_text(auth.get("profileUrl")) or "/profile"
+    auth["logoutUrl"] = as_text(auth.get("logoutUrl")) or "/api/platform/logout"
 
     merged["auth"] = auth
 
@@ -328,6 +350,7 @@ def build_frontend_config_from_assembly(
     routes_prefix: Optional[str] = None,
     company_name: Optional[str] = None,
     turnstile_development_token: Optional[str] = None,
+    platform_auth_config: Optional[Mapping[str, Any]] = None,
 ) -> dict[str, Any]:
     tenant = as_text(get_nested(assembly, "context", "tenant")) or "demo-tenant"
     project = as_text(get_nested(assembly, "context", "project")) or "demo-project"
@@ -347,6 +370,7 @@ def build_frontend_config_from_assembly(
         routes_prefix=route_prefix or None,
         company_name=company_name,
         turnstile_development_token=turnstile_development_token,
+        platform_auth_config=platform_auth_config,
     )
 
 

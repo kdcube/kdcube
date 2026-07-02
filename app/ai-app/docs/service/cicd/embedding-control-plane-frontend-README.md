@@ -510,14 +510,15 @@ iframe: https://ai.app.example.com/platform/chat
 cookie Domain=.app.example.com; Path=/; Secure
 ```
 
-The iframe must receive both configured non-masquerade cookies:
+The iframe must receive both configured non-masquerade cookies. Their names
+come from the selected platform authority provider in Connection Hub:
 
-| Descriptor field | Default cookie name | Meaning |
+| Provider field | Default cookie name | Meaning |
 |---|---|---|
-| `auth.auth_token_cookie_name` | `__Secure-LATC` | access/auth token |
-| `auth.id_token_cookie_name` | `__Secure-LITC` | identity token |
+| `authenticator.cookie.auth_token_cookie_name` | `__Secure-LATC` | access/auth token |
+| `authenticator.cookie.id_token_cookie_name` | `__Secure-LITC` | identity token |
 
-The delegated web-proxy uses these descriptor-rendered names. If both cookies
+The delegated web-proxy uses these rendered names. If both cookies
 are present, it treats the request as a non-masquerade cookie request and does
 not call `/auth/unmask`. If either cookie is missing, it keeps using the
 existing proxylogin unmask flow. A proxylogin-side validation subrequest for the

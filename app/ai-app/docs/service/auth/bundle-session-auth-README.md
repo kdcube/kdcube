@@ -58,9 +58,9 @@ Platform UserSession
 
 | Surface | Owner | Purpose |
 |---|---|---|
-| Bundle public endpoint | Bundle | Receives external login/logout requests and validates upstream identity. |
+| Bundle public endpoint | Bundle | Hosts login/issuer UI or operations and validates upstream identity. Normal browser logout uses the platform logout endpoint. |
 | `kdcube_ai_app.auth.bundle` | Platform | Async API used by the bundle to register/login/logout/delete/invalidate sessions. |
-| Browser cookies | Deployment descriptor | Carry the `kst1.*` auth token under configured cookie names. |
+| Browser cookies | Connection Hub provider config | Carry the `kst1.*` auth token under configured cookie names. |
 | Gateway auth manager | Platform | Validates token, Redis session, user record, and roles on each request. |
 | Redis | Platform | Stores active session records, user records, token versions, and session indexes. |
 | `secrets.yaml` / secret provider | Deployment | Stores `services.session_token.secret` shared by all validating services. |
@@ -73,8 +73,11 @@ Use `auth.idp: session` for this provider:
 auth:
   type: "bundle"
   idp: "session"
-  auth_token_cookie_name: "__Secure-LATC"
-  id_token_cookie_name: "__Secure-LITC"
+  connection_hub:
+    bundle_id: connection-hub@1-0
+    authority_id: kdcube.platform
+    provider_id: versatile_google_session
+    entrypoint: login
 ```
 
 When `frontend.config.auth.authType` is omitted, `auth.type: bundle` or
@@ -82,6 +85,19 @@ When `frontend.config.auth.authType` is omitted, `auth.type: bundle` or
 control-plane client that login is owned by a bundle/front shell and that
 platform requests should use the descriptor-configured cookies already present
 in the browser.
+
+The browser-facing auth contract is still provider-neutral. A host or scene
+should use the URLs returned by `/api/cp-frontend-config`:
+
+| Field | Meaning |
+|---|---|
+| `auth.loginUrl` | Optional browser login entrypoint resolved from Connection Hub provider metadata. |
+| `auth.profileUrl` | Server auth-state endpoint. Default: `/profile`. This is the source of truth for "is the browser logged in?". |
+| `auth.logoutUrl` | Server logout endpoint. Default: `/api/platform/logout`. |
+
+The client should not inspect bundle-session cookies directly. Those cookies
+are HTTP-only in normal deployments. The client asks `profileUrl`; the platform
+gateway resolves the configured authority and returns the current session.
 
 The signing secret is stored in `secrets.yaml`:
 
@@ -98,12 +114,14 @@ provider. Every ingress/proc worker must read the same value. Secret rotation
 is an operational restart boundary: rotate the secret, invalidate active bundle
 sessions if needed, and restart workers so all processes verify with one value.
 
-Cookie names are descriptor-driven:
+Cookie names are provider-driven. They live on the selected Connection Hub
+platform provider, normally under `provider.issuer.cookie` for bundle-session
+providers:
 
 | Descriptor field | Browser credential |
 |---|---|
-| `auth.auth_token_cookie_name` | Auth/access cookie consumed by the gateway. |
-| `auth.id_token_cookie_name` | Optional identity cookie. For bundle session auth it can carry the same `kst1.*` token when a frontend expects both cookies. |
+| `issuer.cookie.auth_token_cookie_name` | Auth/access cookie consumed by the gateway. |
+| `issuer.cookie.id_token_cookie_name` | Optional identity cookie. For bundle session auth it can carry the same `kst1.*` token when a frontend expects both cookies. |
 
 In bundle code, read these names from settings:
 
@@ -328,21 +346,43 @@ route handler / bundle API / SSE / Socket.IO
 ### Logout
 
 ```
-Browser calls bundle public logout endpoint
+Browser calls auth.logoutUrl from frontend config
   |
   v
-Bundle reads auth cookie
+POST /api/platform/logout
   |
   v
-await authority.logout(token=token)
+Platform reads configured auth cookie
+  |
+  +-- if provider is bundle-session:
+  |     await logout_bundle_session(token=token)
   |
   +-- delete Redis session record
   |
   v
-Bundle response clears auth cookies
+Response clears platform cookies
 ```
 
-Example:
+The standard browser logout endpoint is:
+
+```text
+POST /api/platform/logout
+```
+
+It clears `AUTH_TOKEN_COOKIE_NAME`, `ID_TOKEN_COOKIE_NAME`, and
+`MASQUERADED_TOKEN_COOKIE_NAME`. For `auth.idp: session` it also invalidates the
+active bundle-session record in Redis. This endpoint is intentionally platform
+generic: the browser does not need to know whether the configured authority is
+Cognito, bundle-session, or another platform provider.
+
+Bundles do not need to implement logout for the normal browser shell. A bundle
+may still expose a branded "signed out" page or an upstream-provider sign-out
+flow, but that is UI/provider cleanup. The KDCube platform session must still
+end through the generic platform logout endpoint or the same SDK authority
+logout primitive.
+
+If a bundle needs a custom logout operation for a non-browser surface, use the
+same underlying authority primitive:
 
 ```python
 @api(method="POST", alias="auth_logout", route="public")
@@ -552,7 +592,7 @@ If `/profile` is anonymous, check these items in order:
 |---|---|
 | Descriptor | `auth.idp: session` in `assembly.yaml`. |
 | Secret | `services.session_token.secret` exists and is identical for ingress/proc. |
-| Cookie name | Browser sends `auth.auth_token_cookie_name` to the platform origin. |
+| Cookie name | Browser sends the selected provider auth cookie to the platform origin. |
 | Token prefix | Cookie value starts with `kst1.`. |
 | Redis session | The backing session key exists until logout/expiry. |
 | User record | The user record exists and is not disabled. |

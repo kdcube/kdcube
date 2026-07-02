@@ -93,7 +93,7 @@ authority_registry:
           type: google_id_token
           enabled: true
           authenticator:
-            client_id: 960111679915-825b0cenujpavcmognp450l7ius4suje.apps.googleusercontent.com
+            client_id: <google-client-id>.apps.googleusercontent.com
 ```
 
 `platform` is a property of an authority:
@@ -191,7 +191,7 @@ google.accounts:
     google_oidc:
       type: google_id_token
       authenticator:
-        client_id: 960111679915-825b0cenujpavcmognp450l7ius4suje.apps.googleusercontent.com
+        client_id: <google-client-id>.apps.googleusercontent.com
 ```
 
 The platform provider lives under `kdcube.platform`:
@@ -305,9 +305,11 @@ Implemented on 2026-07-01:
 
 - `kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_registry_config`
   flattens and resolves `authority_registry.authorities.*.providers.*`.
-- `AuthorityRegistryClient` lets hosted providers ask Connection Hub for their
-  registered provider instance.
-- Connection Hub exposes `authority_provider_resolve` as an operations API.
+- `AuthorityRegistryClient` resolves provider instances from the SDK-owned
+  authority registry. It can use explicit registry data or the shared
+  bundle-props store; it does not call the Connection Hub bundle.
+- Connection Hub exposes `authority_provider_resolve` as a thin operations API
+  facade for callers that only have HTTP/bundle-operation access.
 - Versatile's hosted Telegram session login resolves its platform-session
   authority provider from Connection Hub instead of local bundle policy.
 - Versatile's hosted Google login resolves its Google upstream authenticator and
@@ -336,7 +338,13 @@ auth:
     entrypoint: login
 ```
 
-Connection Hub now exposes:
+The SDK resolver owns this lookup. The platform frontend config endpoint should
+resolve the entrypoint through `ConnectionHubClient`, which loads the
+Connection Hub registry from the shared bundle-props store and materializes
+`auth.loginUrl` in the frontend config response.
+
+Connection Hub also exposes a public facade for browser/external callers that
+cannot use the in-process SDK client:
 
 ```text
 POST /api/integrations/bundles/{tenant}/{project}/connection-hub@1-0/public/authority_provider_entrypoint_resolve
@@ -363,13 +371,15 @@ Output includes the concrete current-runtime URL:
 }
 ```
 
-The SDK client also exposes `AuthorityRegistryClient.resolve_provider_entrypoint`
-for in-process callers. The web app uses the public resolver when
-`auth.authType == "bundle"` and `auth.connectionHub` is present.
+The SDK client exposes
+`ConnectionHubClient.resolve_authority_provider_entrypoint` and
+`AuthorityRegistryClient.resolve_provider_entrypoint` for in-process callers.
+The bundle API uses the same SDK client internally.
 
 For product-specific migrations, this is the descriptor contract: register the
 platform authority provider in Connection Hub, set the web frontend to
-`auth.connection_hub`, and let Connection Hub resolve the hosted login URL.
+`auth.connection_hub`, and let the Connection Hub SDK client resolve the hosted
+login URL.
 
 ## 2026-07-02: Reference Bundle-Hosted Consent Renderer
 
@@ -386,3 +396,58 @@ The split is:
 
 This proves the custom consent extension point without requiring a product
 bundle to patch platform OAuth routes.
+
+## 2026-07-02: Cognito Is A Platform Authority Provider
+
+Cognito and multi-Cognito are now represented in the same Connection Hub
+authority registry as bundle-hosted platform-session providers.
+
+Canonical selector in `assembly.yaml`:
+
+```yaml
+auth:
+  type: cognito
+  connection_hub:
+    bundle_id: connection-hub@1-0
+    authority_id: kdcube.platform
+    provider_id: cognito
+```
+
+Canonical provider in `connection-hub@1-0.config.authority_registry`:
+
+```yaml
+authority_registry:
+  authorities:
+    kdcube.platform:
+      label: KDCube platform authority
+      platform: true
+      providers:
+        cognito:
+          type: multi_cognito
+          enabled: true
+          label: KDCube Cognito platform session
+          authenticator:
+            type: cognito_id_token
+            id_token_header_name: X-ID-Token
+            region: eu-west-1
+            user_pool_id: eu-west-1_PRIMARY
+            app_client_id: primary-client
+            service_client_id: primary-client
+            jwks_cache_ttl_seconds: 86400
+            cookie:
+              auth_token_cookie_name: __Secure-LATC
+              id_token_cookie_name: __Secure-LITC
+              masqueraded_token_cookie_name: __Secure-LMTC
+            trusted_providers:
+              - alias: primary
+                kind: cognito
+                region: eu-west-1
+                user_pool_id: eu-west-1_PRIMARY
+                app_client_id: primary-client
+```
+
+Runtime readers must use the Connection Hub SDK registry helpers instead of
+reading Cognito fields directly from `assembly.yaml`. Deployment renderers may
+still emit env vars such as `COGNITO_REGION` and `AUTH_PROVIDER`, but those are
+runtime projections of the selected provider, not the canonical descriptor
+home.

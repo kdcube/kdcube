@@ -8,10 +8,14 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_registry_config import (
+    platform_authority_auth_config,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.client import ConnectionHubClient
 from kdcube_ai_app.apps.middleware.platform_auth import platform_authenticator_provider
 from kdcube_ai_app.infra.config.frontend_config import build_frontend_config as build_frontend_config_payload
 
@@ -79,12 +83,103 @@ def _assembly_from_settings(settings: Any) -> dict[str, Any]:
     return assembly
 
 
-def build_frontend_config() -> dict[str, Any]:
+def _router_redis() -> Any:
+    state = getattr(router, "state", None)
+    middleware = getattr(state, "middleware", None)
+    return (
+        getattr(state, "redis", None)
+        or getattr(state, "redis_async", None)
+        or getattr(middleware, "redis", None)
+        or getattr(middleware, "redis_async", None)
+    )
+
+
+async def _resolve_bundle_auth_login_url(
+    config: dict[str, Any],
+    *,
+    tenant: str,
+    project: str,
+    request: Request | None = None,
+) -> None:
+    auth = config.get("auth")
+    if not isinstance(auth, dict):
+        return
+    if _text(auth.get("authType")).lower() != "bundle":
+        return
+    if _text(auth.get("loginUrl")):
+        return
+    connection_hub = auth.get("connectionHub")
+    if not isinstance(connection_hub, dict):
+        return
+
+    redis = _router_redis()
+    if redis is None:
+        logger.warning("Cannot resolve bundle login URL: runtime Redis is unavailable")
+        return
+
+    result = await ConnectionHubClient(
+        connection_hub_bundle_id=_text(connection_hub.get("bundleId")),
+        tenant=tenant,
+        project=project,
+        redis=redis,
+    ).resolve_authority_provider_entrypoint(
+        authority_id=_text(connection_hub.get("authorityId")),
+        provider_id=_text(connection_hub.get("providerId")),
+        provider_type=_text(connection_hub.get("providerType")),
+        entrypoint=_text(connection_hub.get("entrypoint")) or "login",
+        request=request,
+    )
+    if not result.get("ok"):
+        logger.warning(
+            "Connection Hub did not resolve bundle login URL: authority=%s provider=%s error=%s",
+            connection_hub.get("authorityId"),
+            connection_hub.get("providerId"),
+            result.get("error"),
+        )
+        return
+    auth["loginUrl"] = _text(result.get("url"))
+
+
+async def _resolve_platform_auth_config(
+    settings: Any,
+    assembly: dict[str, Any],
+) -> dict[str, Any]:
+    auth = assembly.get("auth")
+    ref = auth.get("connection_hub") if isinstance(auth, dict) else None
+    if not isinstance(ref, dict):
+        ref = auth.get("connectionHub") if isinstance(auth, dict) else None
+    if not isinstance(ref, dict):
+        ref = settings.plain("auth.connection_hub")
+    if not isinstance(ref, dict):
+        ref = settings.plain("auth.connectionHub")
+    if not isinstance(ref, dict):
+        return settings.connection_hub_platform_auth_config()
+
+    redis = _router_redis()
+    if redis is None:
+        return settings.connection_hub_platform_auth_config()
+
+    result = await ConnectionHubClient(
+        connection_hub_bundle_id=_text(ref.get("bundle_id") or ref.get("bundleId")),
+        tenant=settings.TENANT,
+        project=settings.PROJECT,
+        redis=redis,
+    ).resolve_authority_provider(
+        authority_id=_text(ref.get("authority_id") or ref.get("authorityId")),
+        provider_id=_text(ref.get("provider_id") or ref.get("providerId")),
+        provider_type=_text(ref.get("provider_type") or ref.get("providerType")),
+    )
+    config = platform_authority_auth_config(result)
+    return config or settings.connection_hub_platform_auth_config()
+
+
+async def build_frontend_config(request: Request | None = None) -> dict[str, Any]:
     settings = get_settings()
     assembly = _load_assembly_descriptor() or _assembly_from_settings(settings)
     auth_cfg = getattr(settings, "AUTH", None)
+    platform_auth_config = await _resolve_platform_auth_config(settings, assembly)
 
-    return build_frontend_config_payload(
+    config = build_frontend_config_payload(
         tenant=settings.TENANT,
         project=settings.PROJECT,
         assembly=assembly,
@@ -96,12 +191,20 @@ def build_frontend_config() -> dict[str, Any]:
         turnstile_development_token=_text(settings.plain("auth.turnstile_development_token")) or None,
         auth_token_cookie_name=_text(getattr(auth_cfg, "AUTH_TOKEN_COOKIE_NAME", "")) or None,
         id_token_cookie_name=_text(getattr(auth_cfg, "ID_TOKEN_COOKIE_NAME", "")) or None,
+        platform_auth_config=platform_auth_config,
     )
+    await _resolve_bundle_auth_login_url(
+        config,
+        tenant=settings.TENANT,
+        project=settings.PROJECT,
+        request=request,
+    )
+    return config
 
 
 @router.get("/api/cp-frontend-config")
-async def cp_frontend_config() -> JSONResponse:
+async def cp_frontend_config(request: Request) -> JSONResponse:
     return JSONResponse(
-        content=build_frontend_config(),
+        content=await build_frontend_config(request=request),
         headers={"Cache-Control": "no-store, no-cache"},
     )

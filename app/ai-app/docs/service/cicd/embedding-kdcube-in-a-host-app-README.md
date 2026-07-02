@@ -134,12 +134,13 @@ blocked), or auth is carried by a **token handoff** instead of cookies.
 ## Auth flow per topology
 
 **A / B — cookie-based (preferred when same-site).** A top-level login page
-runs the OIDC flow and sets the two non-masquerade cookies:
+runs the OIDC flow and sets the two non-masquerade cookies. Their names come
+from the selected platform authority provider in Connection Hub:
 
-| Descriptor field | Default name | Meaning |
+| Provider field | Default name | Meaning |
 |---|---|---|
-| `auth.auth_token_cookie_name` | `__Secure-LATC` | access/auth token |
-| `auth.id_token_cookie_name` | `__Secure-LITC` | identity token |
+| `authenticator.cookie.auth_token_cookie_name` | `__Secure-LATC` | access/auth token |
+| `authenticator.cookie.id_token_cookie_name` | `__Secure-LITC` | identity token |
 
 - **Same origin:** cookies are first-party; the iframe sends them automatically.
 - **Same-site subdomain:** set the cookies with `Domain=<parent>` (e.g.

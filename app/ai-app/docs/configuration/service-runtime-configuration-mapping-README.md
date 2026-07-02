@@ -62,16 +62,16 @@ per-descriptor pages. This section keeps only the cross-descriptor overview.
 
 | Env var | Descriptor path | Descriptor file | Modes |
 |---|---|---|---|
-| `AUTH_PROVIDER` | `auth.idp` | `assembly.yaml` | effective runtime value; descriptor remains the source of truth |
-| `COGNITO_REGION` | `auth.cognito.region` | `assembly.yaml` | CLI local compose, AWS deployment |
-| `COGNITO_USER_POOL_ID` | `auth.cognito.user_pool_id` | `assembly.yaml` | CLI local compose, AWS deployment |
-| `COGNITO_APP_CLIENT_ID` | `auth.cognito.app_client_id` | `assembly.yaml` | CLI local compose, AWS deployment |
-| `COGNITO_SERVICE_CLIENT_ID` | `auth.cognito.service_client_id` | `assembly.yaml` | CLI local compose, AWS deployment |
-| `AUTH_COGNITO_PROVIDERS_JSON` / `COGNITO_TRUSTED_PROVIDERS_JSON` | `auth.providers` or `auth.cognito.providers` | `assembly.yaml` | optional multi-Cognito trust list |
-| `ID_TOKEN_HEADER_NAME` | `auth.id_token_header_name` | `assembly.yaml` | CLI local compose, AWS deployment |
-| `AUTH_TOKEN_COOKIE_NAME` | `auth.auth_token_cookie_name` | `assembly.yaml` | CLI local compose, AWS deployment |
-| `ID_TOKEN_COOKIE_NAME` | `auth.id_token_cookie_name` | `assembly.yaml` | CLI local compose, AWS deployment |
-| `JWKS_CACHE_TTL_SECONDS` | `auth.jwks_cache_ttl_seconds` | `assembly.yaml` | CLI local compose, AWS deployment |
+| `AUTH_PROVIDER` | selected provider type from `auth.connection_hub` -> `connection-hub@1-0.config.authority_registry` | `assembly.yaml` + `bundles.yaml` | effective runtime value |
+| `COGNITO_REGION` | selected platform provider `authenticator.region` | `bundles.yaml` | CLI local compose, AWS deployment |
+| `COGNITO_USER_POOL_ID` | selected platform provider `authenticator.user_pool_id` | `bundles.yaml` | CLI local compose, AWS deployment |
+| `COGNITO_APP_CLIENT_ID` | selected platform provider `authenticator.app_client_id` | `bundles.yaml` | CLI local compose, AWS deployment |
+| `COGNITO_SERVICE_CLIENT_ID` | selected platform provider `authenticator.service_client_id` | `bundles.yaml` | CLI local compose, AWS deployment |
+| `AUTH_COGNITO_PROVIDERS_JSON` / `COGNITO_TRUSTED_PROVIDERS_JSON` | selected platform provider `authenticator.trusted_providers` | `bundles.yaml` | optional multi-Cognito trust list |
+| `ID_TOKEN_HEADER_NAME` | selected platform provider `authenticator.id_token_header_name` | `bundles.yaml` | CLI local compose, AWS deployment |
+| `AUTH_TOKEN_COOKIE_NAME` | selected platform provider `authenticator.cookie.auth_token_cookie_name` | `bundles.yaml` | CLI local compose, AWS deployment |
+| `ID_TOKEN_COOKIE_NAME` | selected platform provider `authenticator.cookie.id_token_cookie_name` | `bundles.yaml` | CLI local compose, AWS deployment |
+| `JWKS_CACHE_TTL_SECONDS` | selected platform provider `authenticator.jwks_cache_ttl_seconds` | `bundles.yaml` | CLI local compose, AWS deployment |
 | `COGNITO_ENFORCEMFA` | `auth.proxy_login.enforce_mfa` | `assembly.yaml` | CLI local compose, AWS deployment |
 | `CHAT_APP_PORT` | `ports.ingress` | `assembly.yaml` | CLI local compose |
 | `CHAT_PROCESSOR_PORT` | `ports.proc` | `assembly.yaml` | CLI local compose |
@@ -90,9 +90,9 @@ Notes:
 - in delegated auth deployments, `AUTH_TOKEN_COOKIE_NAME` and
   `ID_TOKEN_COOKIE_NAME` are also passed to the web-proxy so it can distinguish
   already-present real cookies from the proxylogin masquerade/unmask flow
-- `auth.idp: multi-cognito` selects server-side verification against
-  `auth.providers`; `auth.cognito` remains the browser/login provider surfaced
-  by `/api/cp-frontend-config`
+- `auth.connection_hub` selects the platform authority provider. For Cognito,
+  the selected provider under `connection-hub@1-0.config.authority_registry`
+  supplies both browser-facing OIDC config and server-side token verification.
 - `auth.idp: session` is the bundle session auth provider. It requires the
   platform secret `services.session_token.secret`.
 

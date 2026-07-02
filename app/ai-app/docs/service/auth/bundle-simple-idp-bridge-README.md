@@ -79,12 +79,13 @@ that authenticates through SimpleIDP and every bundle runtime that registers
 SimpleIDP users.
 
 For SimpleIDP, the auth token and ID token cookies can carry the same opaque
-platform token. The cookie names are descriptor-driven:
+platform token. The cookie names come from the selected platform authority
+provider:
 
-| Descriptor field | Runtime purpose |
+| Provider field | Runtime purpose |
 |---|---|
-| `auth.auth_token_cookie_name` | Access/auth token cookie consumed by the gateway. |
-| `auth.id_token_cookie_name` | Identity token cookie consumed by the gateway. |
+| `authenticator.cookie.auth_token_cookie_name` | Access/auth token cookie consumed by the gateway. |
+| `authenticator.cookie.id_token_cookie_name` | Identity token cookie consumed by the gateway. |
 | `services.idp.idp_db_path` | JSON registry path used by SimpleIDP. |
 
 ## Bundle Endpoint

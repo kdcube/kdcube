@@ -28,18 +28,9 @@ def normalize_platform_auth_provider(value: str) -> str:
 def platform_authenticator_descriptor(settings: Any | None = None) -> dict[str, Any]:
     """Normalize the descriptor for the platform role-providing authority.
 
-    Canonical form:
-
-        auth:
-          authenticators:
-            platform:
-              id: kdcube.multi-cognito
-              provider: multi-cognito
-              authority_id: kdcube.platform
-
-    Existing descriptors with ``auth.idp`` and ``auth.providers`` are treated as
-    an implicit platform authenticator so deployments do not need a flag-day
-    migration.
+    The canonical descriptor selects the provider through
+    ``auth.connection_hub``. This function derives the concrete runtime
+    authenticator from settings populated from that selected provider.
     """
 
     settings = settings or get_settings()
@@ -74,7 +65,9 @@ def platform_authenticator_descriptor(settings: Any | None = None) -> dict[str, 
                 "source": "auth.authenticators.platform",
             }
 
-    descriptor_provider = str(settings.plain("auth.idp", default="") or "").strip().lower()
+    descriptor_provider = str(getattr(settings, "AUTH_PROVIDER", "") or "").strip().lower()
+    if not descriptor_provider:
+        descriptor_provider = str(settings.plain("auth.idp", default="") or "").strip().lower()
     if not descriptor_provider:
         descriptor_provider = str(settings.plain("auth.type", default="") or "").strip().lower()
     if not descriptor_provider:

@@ -172,43 +172,61 @@ Typical use:
 
 ## Auth Descriptor Modes
 
-`auth.type` describes the deployment/routing shape. `auth.idp` selects the
-backend auth provider used by ingress/proc.
+`auth.type` describes the deployment/routing shape. `auth.connection_hub`
+selects the platform authority/provider. Provider details live under
+`connection-hub@1-0.config.authority_registry`.
 
-| `auth.type` | `auth.idp` | Provider behavior |
+| `auth.type` | `auth.connection_hub.provider_id` | Provider behavior |
 |---|---|---|
-| `simple` | `simple` | SimpleIDP token registry. |
-| `cognito` | `cognito` | Cognito JWT validation. |
-| `cognito` | `multi-cognito` | Cognito JWT validation against every configured `auth.providers` trust-list entry. |
-| `delegated` | `cognito` | Proxy-login/delegated deployment shape with Cognito backend validation. |
-| `bundle` | `session` | Bundle/front shell validates external identity and issues platform-recognized bundle session cookies. |
+| `simple` | n/a | SimpleIDP token registry. |
+| `cognito` | `cognito` | Cognito or multi-Cognito JWT validation using the selected Connection Hub provider. |
+| `delegated` | `cognito` | Proxy-login/delegated deployment shape with Cognito backend validation from the selected provider. |
+| `bundle` | bundle-session provider id | Bundle/front shell validates external identity and issues platform-recognized bundle session cookies. |
 
 Bundle session auth requires the platform/global secret
 `services.session_token.secret` in `secrets.yaml` or the configured secret
 provider. See [Bundle Session Auth](../auth/bundle-session-auth-README.md).
 
-For mixed runtime scenes, `auth.idp: multi-cognito` keeps `auth.cognito` as the
-browser/login provider and adds a server-side trust list:
+For mixed runtime scenes, keep the selector in `assembly.yaml` and place the
+Cognito trust list in `bundles.yaml`:
 
 ```yaml
+# assembly.yaml
 auth:
   type: cognito
-  idp: multi-cognito
-  cognito:
-    region: eu-west-1
-    user_pool_id: eu-west-1_PRIMARY
-    app_client_id: primary-client
-  providers:
-  - alias: primary
-    kind: cognito
-    region: eu-west-1
-    user_pool_id: eu-west-1_PRIMARY
-    app_client_id: primary-client
-  - alias: peer
-    kind: cognito
-    region: eu-west-1
-    user_pool_id: eu-west-1_PEER
-    app_client_id: peer-client
+  connection_hub:
+    bundle_id: connection-hub@1-0
+    authority_id: kdcube.platform
+    provider_id: cognito
+```
+
+```yaml
+# bundles.yaml
+items:
+  - id: connection-hub@1-0
+    config:
+      authority_registry:
+        authorities:
+          kdcube.platform:
+            platform: true
+            providers:
+              cognito:
+                type: multi_cognito
+                authenticator:
+                  region: eu-west-1
+                  user_pool_id: eu-west-1_PRIMARY
+                  app_client_id: primary-client
+                  trusted_providers:
+                    - alias: primary
+                      kind: cognito
+                      region: eu-west-1
+                      user_pool_id: eu-west-1_PRIMARY
+                      app_client_id: primary-client
+                    - alias: peer
+                      kind: cognito
+                      region: eu-west-1
+                      user_pool_id: eu-west-1_PEER
+                      app_client_id: peer-client
 ```
 
 The verifier selects a provider from the token `iss` and `client_id`/`aud`

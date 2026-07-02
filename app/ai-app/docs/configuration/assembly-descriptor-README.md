@@ -59,15 +59,15 @@ These env vars are the direct runtime surface for assembly-backed settings.
 | Env var | `assembly.yaml` path | Primary API | Modes |
 |---|---|---|---|
 | `SECRETS_PROVIDER` | `secrets.provider` | `get_settings()` | all modes |
-| `AUTH_PROVIDER` | `auth.idp` | `get_settings()` | effective runtime value; descriptor remains the source of truth |
-| `COGNITO_REGION` | `auth.cognito.region` | `get_settings()` | CLI local compose, AWS deployment |
-| `COGNITO_USER_POOL_ID` | `auth.cognito.user_pool_id` | `get_settings()` | CLI local compose, AWS deployment |
-| `COGNITO_APP_CLIENT_ID` | `auth.cognito.app_client_id` | `get_settings()` | CLI local compose, AWS deployment |
-| `COGNITO_SERVICE_CLIENT_ID` | `auth.cognito.service_client_id` | `get_settings()` | CLI local compose, AWS deployment |
-| `ID_TOKEN_HEADER_NAME` | `auth.id_token_header_name` | `get_settings()` | CLI local compose, AWS deployment |
-| `AUTH_TOKEN_COOKIE_NAME` | `auth.auth_token_cookie_name` | `get_settings()` / web-proxy env | CLI local compose, AWS deployment |
-| `ID_TOKEN_COOKIE_NAME` | `auth.id_token_cookie_name` | `get_settings()` / web-proxy env | CLI local compose, AWS deployment |
-| `JWKS_CACHE_TTL_SECONDS` | `auth.jwks_cache_ttl_seconds` | `get_settings()` | CLI local compose, AWS deployment |
+| `AUTH_PROVIDER` | `auth.connection_hub` selects Connection Hub provider | `get_settings()` | effective runtime value |
+| `COGNITO_REGION` | selected Connection Hub platform provider `authenticator.region` | `get_settings()` | CLI local compose, AWS deployment |
+| `COGNITO_USER_POOL_ID` | selected Connection Hub platform provider `authenticator.user_pool_id` | `get_settings()` | CLI local compose, AWS deployment |
+| `COGNITO_APP_CLIENT_ID` | selected Connection Hub platform provider `authenticator.app_client_id` | `get_settings()` | CLI local compose, AWS deployment |
+| `COGNITO_SERVICE_CLIENT_ID` | selected Connection Hub platform provider `authenticator.service_client_id` | `get_settings()` | CLI local compose, AWS deployment |
+| `ID_TOKEN_HEADER_NAME` | selected Connection Hub platform provider `authenticator.id_token_header_name` | `get_settings()` | CLI local compose, AWS deployment |
+| `AUTH_TOKEN_COOKIE_NAME` | selected Connection Hub platform provider `authenticator.cookie.auth_token_cookie_name` | `get_settings()` / web-proxy env | CLI local compose, AWS deployment |
+| `ID_TOKEN_COOKIE_NAME` | selected Connection Hub platform provider `authenticator.cookie.id_token_cookie_name` | `get_settings()` / web-proxy env | CLI local compose, AWS deployment |
+| `JWKS_CACHE_TTL_SECONDS` | selected Connection Hub platform provider `authenticator.jwks_cache_ttl_seconds` | `get_settings()` | CLI local compose, AWS deployment |
 | `CHAT_APP_PORT` | `ports.ingress` | `get_settings()` | CLI local compose |
 | `CHAT_PROCESSOR_PORT` | `ports.proc` | `get_settings()` | CLI local compose |
 | `METRICS_PORT` | `ports.metrics` | `get_settings()` | CLI local compose |
@@ -118,27 +118,20 @@ They are consumed either:
 - by runtime env rendering
 - or by direct `read_plain(...)` reads from `assembly.yaml`
 
-### `auth.*` token transport
+### Platform Auth Selection
 
-`auth.*` defines both the identity provider and the token transport names used
-by runtime services and the delegated web-proxy.
+`assembly.yaml` selects the platform authority provider. Provider details and
+token transport names are registered in Connection Hub.
 
 Example:
 
 ```yaml
 auth:
-  type: "delegated"             # simple | cognito | delegated | bundle
-  idp: "cognito"                # simple | cognito | session
-  id_token_header_name: "X-ID-Token"
-  auth_token_cookie_name: "__Secure-LATC"
-  id_token_cookie_name: "__Secure-LITC"
-  jwks_cache_ttl_seconds: 86400
-
-  cognito:
-    region: "eu-west-1"
-    user_pool_id: "eu-west-1_XXXXXXXXX"
-    app_client_id: ""
-    service_client_id: ""
+  type: "cognito"               # simple | cognito | delegated | bundle
+  connection_hub:
+    bundle_id: connection-hub@1-0
+    authority_id: kdcube.platform
+    provider_id: cognito
 
   proxy_login:
     redis_key_prefix: "proxylogin:<TENANT>:<PROJECT>:"
@@ -147,12 +140,12 @@ auth:
     http_urlbase: "https://YOUR_DOMAIN/auth"
 ```
 
-`auth_token_cookie_name` and `id_token_cookie_name` are not frontend-only
-settings. They are rendered into ingress/proc runtime env and into the
-delegated web-proxy. The proxy uses them to detect the non-masquerade path
-where a top-level login flow has already set the real auth and identity
-cookies. If either cookie is missing, the delegated proxy keeps using the
-existing `/auth/unmask` flow.
+The auth and identity cookie names are not frontend-only settings. They are
+registered on the selected Connection Hub platform provider and rendered into
+ingress/proc runtime env and into the delegated web-proxy. The proxy uses them
+to detect the non-masquerade path where a top-level login flow has already set
+the real auth and identity cookies. If either cookie is missing, the delegated
+proxy keeps using the existing `/auth/unmask` flow.
 
 `auth.proxy_login.token_masquerade` controls how proxylogin issues browser
 cookies. It does not change the backend token validator; ingress/proc still
@@ -167,29 +160,30 @@ issue platform-recognized `kst1.*` cookies. It requires
 `services.session_token.secret` in `secrets.yaml`. See
 [Bundle Session Auth](../service/auth/bundle-session-auth-README.md).
 
-`auth.authenticators` configures request-auth surfaces. The resolver returns a
-complete `UserSession`; downstream gateway policy does not need to know whether
-platform auth or the Connection Hub surface accepted the request.
+`auth.authenticators` configures request-auth surfaces. The platform
+authenticator itself is derived from the selected Connection Hub platform
+authority provider; assembly does not carry Cognito pool/client/cookie
+configuration.
 
 ```yaml
 auth:
-  authenticators:
-    platform:
-      id: "kdcube.multi-cognito"
-      authority_id: "kdcube.platform"
-      provider: "multi-cognito"
+  type: cognito
+  connection_hub:
+    bundle_id: "connection-hub@1-0"
+    authority_id: "kdcube.platform"
+    provider_id: "cognito"
 
+  authenticators:
     connection_hub:
       enabled: true
       app_id: "connection-hub@1-0"
       operation: "request_authenticate"
 ```
 
-`auth.authenticators.platform` is the canonical descriptor registration for the
-role-providing platform authenticator. Existing descriptors that only declare
-`auth.idp` and `auth.providers` are treated as an implicit platform
-authenticator so current deployments do not need a flag-day migration. New
-descriptors should name the platform authenticator explicitly.
+`auth.connection_hub` selects which Connection Hub authority/provider instance
+supplies the concrete platform auth configuration. `auth.authenticators` is for
+additional request-auth surfaces, such as the Connection Hub external-channel
+surface.
 
 When Connection Hub is enabled, ingress/proc first accept a valid platform
 token/cookie session when one is present. If no platform session is established,
@@ -202,30 +196,36 @@ See
 [Auth Selector](../service/auth/auth-selector-README.md) and
 [Request Authenticators](../sdk/solutions/connections/request-authenticators/request-authenticators-README.md).
 
-`auth.idp: multi-cognito` selects the multi-provider Cognito verifier. The
-browser-facing OIDC config still comes from `auth.cognito`; ingress/proc also
-trust every Cognito provider listed in `auth.providers` or
-`auth.cognito.providers`.
+For Cognito and Multi-Cognito, `auth.connection_hub` points at a provider under
+`connection-hub@1-0.config.authority_registry`. That provider supplies the
+browser-facing OIDC config and the server-side trust list.
 
 ```yaml
-auth:
-  type: cognito
-  idp: multi-cognito
-  cognito:
-    region: eu-west-1
-    user_pool_id: eu-west-1_PRIMARY
-    app_client_id: primary-client
-  providers:
-  - alias: primary
-    kind: cognito
-    region: eu-west-1
-    user_pool_id: eu-west-1_PRIMARY
-    app_client_id: primary-client
-  - alias: peer
-    kind: cognito
-    region: eu-west-1
-    user_pool_id: eu-west-1_PEER
-    app_client_id: peer-client
+items:
+  - id: connection-hub@1-0
+    config:
+      authority_registry:
+        authorities:
+          kdcube.platform:
+            platform: true
+            providers:
+              cognito:
+                type: multi_cognito
+                authenticator:
+                  region: eu-west-1
+                  user_pool_id: eu-west-1_PRIMARY
+                  app_client_id: primary-client
+                  trusted_providers:
+                    - alias: primary
+                      kind: cognito
+                      region: eu-west-1
+                      user_pool_id: eu-west-1_PRIMARY
+                      app_client_id: primary-client
+                    - alias: peer
+                      kind: cognito
+                      region: eu-west-1
+                      user_pool_id: eu-west-1_PEER
+                      app_client_id: peer-client
 ```
 
 The server selects a verifier from token claims (`iss` plus `client_id` or
@@ -249,9 +249,9 @@ bundles:
               brand: "KDCube"
 ```
 
-Assembly still owns the underlying platform auth/session settings used by the
-adapter, such as `context.tenant`, `context.project`, and
-`auth.auth_token_cookie_name`. The adapter itself is a Connection Hub concern.
+Assembly still owns deployment context such as `context.tenant` and
+`context.project`. Platform auth/session settings used by the adapter are
+owned by the selected Connection Hub authority provider.
 
 See [OAuth Delegated Credential Protocol Adapter](../sdk/solutions/connections/delegated-credentials/oauth-delegated-credential-protocol-adapter-README.md).
 
