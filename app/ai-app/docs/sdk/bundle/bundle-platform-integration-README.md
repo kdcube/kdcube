@@ -1146,9 +1146,14 @@ async def news_items(self) -> list[PublicContentItem]:
 ```
 
 Exposure is explicit: the alias must also be enabled in the app config
-`public_content.<alias>` block. The full surface — model, lifecycle, serving
-routes, storage/concurrency model, gateway/rate-limit consequences — is in
-[Public Content Provider](public-content-provider-README.md).
+`public_content.<alias>` block, and content-provider apps should be
+**singletons** (every crawler request resolves the app instance for the
+declaration/config gate). The app-surface contract is
+[Public Content Provider](public-content-provider-README.md); the machinery
+(registry tiers, serving, CDN deployment) is
+[Public Content Solution (cdn-pub)](../solutions/cdn-pub/public-content-solution-README.md);
+a hands-on walkthrough is the
+[Publish Discoverable Content recipe](../../recipes/resource_sharing/publish-discoverable-content-README.md).
 
 ## 2) Metadata model
 

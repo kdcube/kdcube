@@ -38,6 +38,11 @@ covered by [ui-components-lifecycle](../../sdk/bundle/ui-components-lifecycle-RE
 and [bundle-widget-integration](../../sdk/bundle/bundle-widget-integration-README.md);
 this recipe only points at it.
 
+Sharing gives content a URL. If you also want it **discoverable** — crawlable
+pages with JSON-LD and metadata, a `sitemap.xml`, 410 after removal — that is
+the public-content surface: see
+[Publish Discoverable Content](publish-discoverable-content-README.md).
+
 ## Plain shape
 
 ```

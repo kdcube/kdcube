@@ -147,6 +147,7 @@ ownership.
 | Bundle-served MCP endpoint | `@mcp(...)` | [Bundle Platform Integration](../bundle-platform-integration-README.md), [MCP Tools](../../tools/mcp-README.md) |
 | Claude Code subagent with scoped MCP/tools | `ClaudeCodeAgent`, `ClaudeCodeWorkspaceConfig` | [Bundle Agent Integration](../bundle-agent-integration-README.md) |
 | Browser widget or Mini App | `@ui_widget(...)`, source-folder widget build, operations/public APIs | [Bundle Widget Integration](../bundle-widget-integration-README.md) |
+| Crawlable public web content — SEO/AI-crawler-discoverable pages, JSON-LD, per-alias `sitemap.xml`, 410 on retract — published from app data | `@public_content(...)` declaration + `kdcube_ai_app.apps.chat.sdk.pub` registry (`publish`/`update`/`retract`); make the app a singleton | [Public Content Provider](../public-content-provider-README.md), [Public Content Solution](../../solutions/cdn-pub/public-content-solution-README.md), [Publish Discoverable Content recipe](../../../recipes/resource_sharing/publish-discoverable-content-README.md) |
 | App scene that connects chat, canvas, namespace objects, widgets, and live client events into one workspace | scene host + `@kdcube/components-core/scene` style runtime contract: surface registry, config handshake, namespace presentation relay, context drag broker, provider-backed open routing, and optional event-bus/Data Bus relay | [Scene Composition](../../solutions/scene/scene-composition-README.md), [Scene Surface Registry](../../solutions/scene/scene-surface-registry-README.md), [Cross-Surface Context Drag](../../solutions/scene/cross-surface-context-drag-README.md), [Scene Event Orchestration](../../solutions/scene/scene-event-orchestration-README.md) |
 | Host product/client integration with a KDCube app | Choose iframe app UI, embedded control plane, direct host browser client, host-server client, or backend-only app; then wire operations, chat stream, Data Bus, named services, files, and auth accordingly | [How To Integrate With KDCube Apps](../../../how-to-integrate-with-kdcube-apps-README.md) |
 | Expose a namespace (`task:`, …) of objects/actions for other bundles to call, **or** consume another bundle's namespace as canvas pins / chat chips / agent tools | Owner side: `named_service` API operation + `NamedServiceRegistry`. Consumer side: `named_services.namespaces.<ns>.provider` config + generic resolver — no shared code, configured discovery | [Namespace Services](../../namespace-services/README.md) (index → Providers / Clients / Integration), [Bundle Subsystem Integration](../bundle-subsystem-integration-README.md) |
@@ -408,9 +409,9 @@ host at `ui/scene`, aliases and resolver registry in `entrypoint.py`, and the
 bundle-local design note `docs/design/scene-sdk-components.md`.
 
 Before building one, read the composition walk-through and the routing contract:
-[Scene Composition](../../../solutions/scene/scene-composition-README.md) for the
+[Scene Composition](../../solutions/scene/scene-composition-README.md) for the
 mount config, CONFIG handshake, and Data Bus wiring;
-[Scene Surface Registry](../../../solutions/scene/scene-surface-registry-README.md)
+[Scene Surface Registry](../../solutions/scene/scene-surface-registry-README.md)
 for how a resolver `open` event reaches the target widget.
 
 ## Test The Assembly Boundary

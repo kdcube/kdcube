@@ -662,6 +662,28 @@ Docs:
 
 ---
 
+## 9) Public discoverable content (`@public_content`)
+
+An app can declare a public content alias — articles, docs, catalog entries —
+and the platform serves the full discoverability layer for it: crawlable item
+pages (real title/meta/body, no JS), JSON-LD + canonical/OG/Twitter metadata,
+a per-alias `sitemap.xml`, and `410 Gone` after retraction, all under the
+reserved `…/public/__content__/{alias}/…` route. The app publishes/retracts
+items through the SDK registry; the widget URL stays a widget shell — the
+crawlable page is a separate platform-rendered artifact.
+
+Content-provider apps should be **singletons** (`singleton: true`): every
+crawler request resolves the app instance for the declaration/config gate.
+
+- App-surface contract (declaration, config block, lifecycle API):
+  [Public Content Provider](public-content-provider-README.md)
+- The solution itself (registry tiers, serving, CDN split-origin deployment):
+  [Public Content Solution (cdn-pub)](../solutions/cdn-pub/public-content-solution-README.md)
+- Hands-on walkthrough:
+  [Publish Discoverable Content](../../recipes/resource_sharing/publish-discoverable-content-README.md)
+
+---
+
 ## References (code)
 
 - Integrations ops API: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/rest/integrations/integrations.py`
