@@ -803,7 +803,7 @@ class StripeEconomicsWebhookHandler:
 
                 try:
                     # APPLY via UserCreditsManager inside SAME transaction
-                    await self.user_credits_mgr.add_lifetime_tokens(
+                    await self.user_credits_mgr.add_lifetime_credits(
                         tenant=tenant,
                         project=project,
                         user_id=user_id,
@@ -1112,7 +1112,7 @@ class StripeEconomicsWebhookHandler:
                         tokens = int(internal["tokens"] or 0)
                         usd_amount = float(int(internal["amount_cents"] or 0)) / 100.0
                         if tokens > 0 and usd_amount > 0:
-                            await self.user_credits_mgr.restore_lifetime_tokens(
+                            await self.user_credits_mgr.restore_lifetime_credits(
                                 tenant=str(internal["tenant"]),
                                 project=str(internal["project"]),
                                 user_id=str(internal["user_id"]),
@@ -1506,7 +1506,7 @@ class StripeEconomicsAdminService:
                 if status == "failed":
                     raise ValueError("Previous refund attempt failed; use a new request or investigate")
 
-                await self.user_credits_mgr.refund_lifetime_tokens(
+                await self.user_credits_mgr.refund_lifetime_credits(
                     tenant=tenant,
                     project=project,
                     user_id=user_id,
@@ -1536,7 +1536,7 @@ class StripeEconomicsAdminService:
             # restore credits + mark failed
             async with self.pg_pool.acquire() as conn:
                 async with conn.transaction():
-                    await self.user_credits_mgr.restore_lifetime_tokens(
+                    await self.user_credits_mgr.restore_lifetime_credits(
                         tenant=tenant,
                         project=project,
                         user_id=user_id,
@@ -1813,7 +1813,7 @@ class StripeEconomicsAdminService:
                     usd_amount = float(row["amount_cents"] or 0) / 100.0
                     async with self.pg_pool.acquire() as conn:
                         async with conn.transaction():
-                            await self.user_credits_mgr.restore_lifetime_tokens(
+                            await self.user_credits_mgr.restore_lifetime_credits(
                                 tenant=row["tenant"],
                                 project=row["project"],
                                 user_id=row["user_id"],

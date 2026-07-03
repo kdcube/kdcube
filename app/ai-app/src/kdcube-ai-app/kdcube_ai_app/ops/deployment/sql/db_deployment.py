@@ -79,6 +79,7 @@ def project_schema(tenant: str, project: str) -> str:
 PROJECT_MIGRATION_FILES = [
     "economics-plans-corrections.sql",   # `plans` rename + new fields
     "conv-messages-agent-id.sql",        # conv_messages.agent_id column
+    "wallet-usd-native.sql",             # USD-native wallet cents columns + back-fill
 ]
 
 

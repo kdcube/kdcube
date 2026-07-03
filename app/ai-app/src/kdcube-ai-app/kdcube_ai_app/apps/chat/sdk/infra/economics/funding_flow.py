@@ -250,9 +250,12 @@ async def reserve_funding(
 
     # --- wallet hold for the over-quota/over-funds remainder -------------
     if wallet_part > 0 and has_wallet:
-        ok = await ctx.cp_manager.user_credits_mgr.reserve_lifetime_tokens(
+        # Hold the USD value of the wallet_part at the live rate (USD-native); the
+        # token count is display-only. The margin is already baked into est_turn.
+        wallet_hold_cents = int(round(float(wallet_part) * usd_per_token * 100))
+        ok = await ctx.cp_manager.user_credits_mgr.reserve_lifetime_credits(
             tenant=ctx.tenant, project=ctx.project, user_id=ctx.user_id,
-            reservation_id=ctx.scope_id, tokens=int(wallet_part),
+            reservation_id=ctx.scope_id, usd_cents=wallet_hold_cents, tokens=int(wallet_part),
             ttl_sec=int(ttl_sec), bundle_id=ctx.bundle_id,
             notes=f"split wallet reserve: scope={ctx.scope_id}, wallet_part={wallet_part}",
         )
@@ -397,24 +400,32 @@ async def settle_plan_funding(
     plan_quota_commit_tokens = int(alloc.quota_tokens)
     user_target_tokens = int(alloc.wallet_tokens)
 
-    # --- charge wallet (reserved part first, then reservation-free consume) ---
-    user_uncovered_tokens = 0
-    if user_target_tokens > 0:
-        remaining = int(user_target_tokens)
+    # --- charge wallet in USD (reserved hold first, then reservation-free consume) ---
+    # The allocator decides the split in tokens; the wallet is charged its USD share
+    # of the real cost (reference-independent). commit/consume operate on cents; the
+    # token counts passed are display-only.
+    user_target_usd = _cost_for_tokens(tokens=user_target_tokens, ranked_tokens=ranked_tokens, total_cost=total_cost)
+    user_target_cents = int(round(float(user_target_usd) * 100))
+    user_uncovered_cents = 0
+    if user_target_cents > 0:
+        remaining_cents = int(user_target_cents)
+        reserved_display_tokens = min(int(user_target_tokens), int(res.wallet_reserved_tokens or 0))
         if res.wallet_reservation_active and res.wallet_reservation_id and res.wallet_reserved_tokens > 0:
-            reserved_target = min(remaining, int(res.wallet_reserved_tokens))
             try:
-                reserved_uncovered = await ctx.cp_manager.user_credits_mgr.commit_reserved_lifetime_tokens(
+                reserved_uncovered_cents = await ctx.cp_manager.user_credits_mgr.commit_reserved_lifetime_credits(
                     tenant=ctx.tenant, project=ctx.project, user_id=ctx.user_id,
-                    reservation_id=str(res.wallet_reservation_id), tokens=int(reserved_target),
+                    reservation_id=str(res.wallet_reservation_id),
+                    usd_cents=int(remaining_cents), tokens=int(reserved_display_tokens),
                 )
             finally:
                 res.wallet_reservation_active = False
-            reserved_consumed = max(int(reserved_target) - int(reserved_uncovered or 0), 0)
-            remaining = max(remaining - reserved_consumed, 0)
-        if remaining > 0:
-            user_uncovered_tokens = await ctx.cp_manager.user_credits_mgr.consume_lifetime_tokens(
-                tenant=ctx.tenant, project=ctx.project, user_id=ctx.user_id, tokens=int(remaining),
+            # commit caps its charge at the hold; the remainder falls to reservation-free consume.
+            remaining_cents = int(reserved_uncovered_cents or 0)
+        if remaining_cents > 0:
+            consume_display_tokens = max(int(user_target_tokens) - int(reserved_display_tokens), 0)
+            user_uncovered_cents = await ctx.cp_manager.user_credits_mgr.consume_lifetime_credits(
+                tenant=ctx.tenant, project=ctx.project, user_id=ctx.user_id,
+                usd_cents=int(remaining_cents), tokens=int(consume_display_tokens),
             )
     elif res.wallet_reservation_active and res.wallet_reservation_id:
         try:
@@ -425,8 +436,14 @@ async def settle_plan_funding(
         finally:
             res.wallet_reservation_active = False
 
-    user_uncovered_tokens = int(user_uncovered_tokens or 0)
-    user_uncovered_usd = _cost_for_tokens(tokens=user_uncovered_tokens, ranked_tokens=ranked_tokens, total_cost=total_cost)
+    user_uncovered_cents = int(user_uncovered_cents or 0)
+    user_uncovered_usd = float(user_uncovered_cents) / 100.0
+    # Token-equivalent of the uncovered USD via the turn's ranked/total rate (inverse
+    # of _cost_for_tokens) — used only for the token-native RL quota cascade below.
+    user_uncovered_tokens = (
+        int(round(user_uncovered_usd * ranked_tokens / total_cost))
+        if total_cost > 0 else 0
+    )
 
     # wallet shortfall can re-consume any remaining plan quota room
     if user_uncovered_tokens > 0:

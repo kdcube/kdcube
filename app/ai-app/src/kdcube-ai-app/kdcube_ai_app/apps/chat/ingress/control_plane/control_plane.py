@@ -580,15 +580,18 @@ async def get_user_plan_override_balance(
             consumed = int(plan_override_balance.lifetime_tokens_consumed or 0)
             gross_remaining = max(purchased - consumed, 0)
 
-            available = await mgr.user_credits_mgr.get_lifetime_balance(
+            # USD-native: available_usd is authoritative (cents); the token figure is
+            # a cosmetic projection at the live rate.
+            available_cents = await mgr.user_credits_mgr.get_available_cents(
                 tenant=settings.TENANT, project=settings.PROJECT, user_id=user_id
             )
-            available = int(available or 0)
-
-            reserved = max(gross_remaining - available, 0)
+            available_cents = int(available_cents or 0)
+            available_usd = round(available_cents / 100.0, 2)
 
             usd_per_token = usd_per_reference_token()
-            available_usd = round(available * usd_per_token, 2)
+            available = int((available_cents / 100.0) / usd_per_token) if usd_per_token > 0 else 0
+
+            reserved = max(gross_remaining - available, 0)
 
             lifetime_payload = {
                 "tokens_purchased": purchased,
@@ -708,12 +711,13 @@ async def add_lifetime_credits(
             notes=payload.notes,
         )
 
-        # available balance (excludes reservations)
-        balance_tokens = await mgr.user_credits_mgr.get_lifetime_balance(
+        # available balance (excludes reservations) — USD-native (cents authoritative)
+        balance_cents = await mgr.user_credits_mgr.get_available_cents(
             tenant=settings.TENANT, project=settings.PROJECT, user_id=payload.user_id
         )
-        balance_tokens = int(balance_tokens or 0)
-        balance_usd = round(balance_tokens * usd_per_token, 2)
+        balance_cents = int(balance_cents or 0)
+        balance_usd = round(balance_cents / 100.0, 2)
+        balance_tokens = int((balance_cents / 100.0) / usd_per_token) if usd_per_token > 0 else 0
 
         logger.info(f"[add_lifetime_credits] {payload.user_id}: +${payload.usd_amount} by {session.username}")
 
@@ -745,14 +749,14 @@ async def get_lifetime_balance(
         mgr = _get_control_plane_manager(router)
         settings = get_settings()
 
-        # Get lifetime balance from UserCreditsManager
-        balance_tokens = await mgr.user_credits_mgr.get_lifetime_balance(
+        # USD-native balance (cents authoritative); token figure is a live-rate projection.
+        balance_cents = await mgr.user_credits_mgr.get_available_cents(
             tenant=settings.TENANT,
             project=settings.PROJECT,
             user_id=user_id,
         )
 
-        if balance_tokens is None:
+        if balance_cents is None:
             return {
                 "user_id": user_id,
                 "has_purchased_credits": False,
@@ -761,8 +765,10 @@ async def get_lifetime_balance(
                 "message": "User has no purchased credits"
             }
 
-        # Convert to USD
-        balance_usd = _usd_from_tokens(int(balance_tokens or 0))
+        balance_cents = int(balance_cents or 0)
+        balance_usd = balance_cents / 100.0
+        _rate = usd_per_reference_token()
+        balance_tokens = int((balance_cents / 100.0) / _rate) if _rate > 0 else 0
 
         return {
             "user_id": user_id,

@@ -489,6 +489,11 @@ CREATE TABLE IF NOT EXISTS <SCHEMA>.user_lifetime_credits (
     lifetime_tokens_purchased BIGINT NOT NULL DEFAULT 0,
     lifetime_tokens_consumed  BIGINT NOT NULL DEFAULT 0,
 
+    -- USD-native balance (cents). Authoritative; the token columns above are
+    -- display-only. available = purchased_cents - spent_cents - SUM(usd_reserved_cents).
+    purchased_cents BIGINT NOT NULL DEFAULT 0,
+    spent_cents     BIGINT NOT NULL DEFAULT 0,
+
     -- Aggregate lifetime purchase (for reporting)
     lifetime_usd_purchased NUMERIC(10, 2) NOT NULL DEFAULT 0,
 
@@ -504,7 +509,10 @@ CREATE TABLE IF NOT EXISTS <SCHEMA>.user_lifetime_credits (
     PRIMARY KEY (tenant, project, user_id),
 
     CONSTRAINT chk_cp_ulc_consumed_nonneg
-        CHECK (lifetime_tokens_consumed >= 0)
+        CHECK (lifetime_tokens_consumed >= 0),
+
+    CONSTRAINT chk_cp_ulc_cents_nonneg
+        CHECK (purchased_cents >= 0 AND spent_cents >= 0)
 
 --     CONSTRAINT chk_cp_ulc_nonneg
 --       CHECK (lifetime_tokens_purchased >= 0 AND lifetime_tokens_consumed >= 0),
@@ -545,6 +553,11 @@ CREATE TABLE IF NOT EXISTS <SCHEMA>.user_token_reservations (
 
     tokens_reserved BIGINT NOT NULL CHECK (tokens_reserved >= 0),
     tokens_used BIGINT DEFAULT NULL CHECK (tokens_used IS NULL OR tokens_used >= 0),
+
+    -- USD-native hold (cents). Authoritative; the token columns above are
+    -- display-only. usd_reserved_cents = amount held, actual_spent_cents = committed.
+    usd_reserved_cents BIGINT NOT NULL DEFAULT 0 CHECK (usd_reserved_cents >= 0),
+    actual_spent_cents BIGINT DEFAULT NULL CHECK (actual_spent_cents IS NULL OR actual_spent_cents >= 0),
 
     status VARCHAR(32) NOT NULL DEFAULT 'reserved'
       CHECK (status IN ('reserved', 'committed', 'released')),

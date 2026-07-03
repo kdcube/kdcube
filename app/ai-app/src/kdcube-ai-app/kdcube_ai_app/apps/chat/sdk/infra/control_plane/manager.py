@@ -262,7 +262,7 @@ class ControlPlaneManager:
     ) -> UserPlanBalance:
         """
         Add purchased credits in USD (converted to lifetime tokens).
-        Uses plan override balance manager's add_lifetime_tokens method.
+        Uses plan override balance manager's add_lifetime_credits method.
         """
 
 
@@ -280,7 +280,7 @@ class ControlPlaneManager:
         )
 
         # Delegate to plan override balance manager
-        await self.user_credits_mgr.add_lifetime_tokens(
+        await self.user_credits_mgr.add_lifetime_credits(
             tenant=tenant,
             project=project,
             user_id=user_id,
@@ -293,7 +293,7 @@ class ControlPlaneManager:
         # Return the canonical flattened snapshot (single SQL)
         bal = await self.get_user_plan_balance(tenant=tenant, project=project, user_id=user_id, include_expired=True)
         if not bal:
-            # extremely unlikely after add_lifetime_tokens succeeds
+            # extremely unlikely after add_lifetime_credits succeeds
             raise RuntimeError("Failed to load plan override balance after adding credits")
         return bal
 

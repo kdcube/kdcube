@@ -24,6 +24,14 @@ from kdcube_ai_app.ops.deployment.sql.db_deployment import project_schema as _pr
 logger = logging.getLogger(__name__)
 
 
+def _usd_to_cents(usd: float) -> int:
+    return int(round(float(usd) * 100))
+
+
+def _cents_to_usd(cents: int) -> float:
+    return float(cents) / 100.0
+
+
 # -----------------------------------------------------------------------------
 # Compatibility snapshot (flattened) used widely by RL / run() today.
 # Backed by TWO tables:
@@ -541,7 +549,7 @@ class UserCreditsManager:
 
     # ---------------- credits mutations ----------------
 
-    async def add_lifetime_tokens(
+    async def add_lifetime_credits(
             self,
             *,
             tenant: str,
@@ -561,19 +569,24 @@ class UserCreditsManager:
                 "lifetime_usd_purchased": 0,
             }
 
+        # purchased_cents is the authoritative USD-native balance side; the token
+        # columns are display-only.
+        purchased_cents = _usd_to_cents(usd_amount)
         sql = f"""
           INSERT INTO {self._schema(tenant, project)}.{self.TABLE} (
             tenant, project, user_id,
             lifetime_tokens_purchased,
             lifetime_tokens_consumed,
+            purchased_cents,
             lifetime_usd_purchased,
             last_purchase_id,
             last_purchase_amount_usd,
             last_purchase_notes
-          ) VALUES ($1,$2,$3,$4,0,$5,$6,$5,$7)
+          ) VALUES ($1,$2,$3,$4,0,$8,$5,$6,$5,$7)
           ON CONFLICT (tenant, project, user_id)
           DO UPDATE SET
             lifetime_tokens_purchased = {self._schema(tenant, project)}.{self.TABLE}.lifetime_tokens_purchased + EXCLUDED.lifetime_tokens_purchased,
+            purchased_cents           = {self._schema(tenant, project)}.{self.TABLE}.purchased_cents + EXCLUDED.purchased_cents,
             lifetime_usd_purchased    = {self._schema(tenant, project)}.{self.TABLE}.lifetime_usd_purchased + EXCLUDED.lifetime_usd_purchased,
             last_purchase_id          = EXCLUDED.last_purchase_id,
             last_purchase_amount_usd  = EXCLUDED.last_purchase_amount_usd,
@@ -584,17 +597,17 @@ class UserCreditsManager:
         """
 
         if conn:
-            row = await conn.fetchrow(sql, tenant, project, user_id, int(tokens), float(usd_amount), purchase_id, notes)
+            row = await conn.fetchrow(sql, tenant, project, user_id, int(tokens), float(usd_amount), purchase_id, notes, int(purchased_cents))
         else:
             if not self._pg_pool:
                 raise RuntimeError("PostgreSQL pool not initialized")
             async with self._pg_pool.acquire() as c:
-                row = await c.fetchrow(sql, tenant, project, user_id, int(tokens), float(usd_amount), purchase_id, notes)
+                row = await c.fetchrow(sql, tenant, project, user_id, int(tokens), float(usd_amount), purchase_id, notes, int(purchased_cents))
 
         await self._invalidate(tenant, project, user_id)
         return dict(row)
 
-    async def refund_lifetime_tokens(
+    async def refund_lifetime_credits(
             self,
             *,
             tenant: str,
@@ -616,11 +629,11 @@ class UserCreditsManager:
                 "lifetime_usd_purchased": 0,
             }
 
+        refund_cents = _usd_to_cents(usd_amount)
+
         async def _apply(c: asyncpg.Connection) -> asyncpg.Record:
             bal = await c.fetchrow(f"""
-                SELECT lifetime_tokens_purchased AS purchased,
-                       lifetime_tokens_consumed AS consumed,
-                       lifetime_usd_purchased AS usd_purchased
+                SELECT purchased_cents, spent_cents
                 FROM {self._schema(tenant, project)}.{self.TABLE}
                 WHERE tenant=$1 AND project=$2 AND user_id=$3
                   AND active=TRUE
@@ -629,21 +642,23 @@ class UserCreditsManager:
             if not bal:
                 raise ValueError("lifetime credits not found")
 
-            purchased = int(bal["purchased"] or 0)
-            consumed = int(bal["consumed"] or 0)
-            reserved = await self._reserved_sum(conn=c, tenant=tenant, project=project, user_id=user_id)
-            available = purchased - consumed - reserved
-            if available < int(tokens):
-                raise ValueError(f"insufficient refundable tokens: available={available}, requested={int(tokens)}")
+            purchased_cents = int(bal["purchased_cents"] or 0)
+            spent_cents = int(bal["spent_cents"] or 0)
+            reserved_cents = await self._reserved_cents_sum(conn=c, tenant=tenant, project=project, user_id=user_id)
+            available_cents = purchased_cents - spent_cents - reserved_cents
+            if available_cents < int(refund_cents):
+                raise ValueError(f"insufficient refundable credits: available_cents={available_cents}, requested_cents={int(refund_cents)}")
 
+            # purchased_cents is authoritative; token columns are display-only.
             row = await c.fetchrow(f"""
                 UPDATE {self._schema(tenant, project)}.{self.TABLE}
-                SET lifetime_tokens_purchased = lifetime_tokens_purchased - $4,
+                SET purchased_cents = GREATEST(purchased_cents - $6, 0),
+                    lifetime_tokens_purchased = lifetime_tokens_purchased - $4,
                     lifetime_usd_purchased = GREATEST(lifetime_usd_purchased - $5, 0),
                     updated_at = NOW()
                 WHERE tenant=$1 AND project=$2 AND user_id=$3
                 RETURNING *
-            """, tenant, project, user_id, int(tokens), float(usd_amount))
+            """, tenant, project, user_id, int(tokens), float(usd_amount), int(refund_cents))
             return row
 
         if conn:
@@ -658,7 +673,7 @@ class UserCreditsManager:
         await self._invalidate(tenant, project, user_id)
         return dict(row)
 
-    async def restore_lifetime_tokens(
+    async def restore_lifetime_credits(
             self,
             *,
             tenant: str,
@@ -680,17 +695,20 @@ class UserCreditsManager:
                 "lifetime_usd_purchased": 0,
             }
 
+        restore_cents = _usd_to_cents(usd_amount)
         sql = f"""
             INSERT INTO {self._schema(tenant, project)}.{self.TABLE} (
                 tenant, project, user_id,
                 lifetime_tokens_purchased,
                 lifetime_tokens_consumed,
+                purchased_cents,
                 lifetime_usd_purchased,
                 active
-            ) VALUES ($1,$2,$3,$4,0,$5,TRUE)
+            ) VALUES ($1,$2,$3,$4,0,$6,$5,TRUE)
             ON CONFLICT (tenant, project, user_id)
             DO UPDATE SET
                 lifetime_tokens_purchased = {self._schema(tenant, project)}.{self.TABLE}.lifetime_tokens_purchased + EXCLUDED.lifetime_tokens_purchased,
+                purchased_cents           = {self._schema(tenant, project)}.{self.TABLE}.purchased_cents + EXCLUDED.purchased_cents,
                 lifetime_usd_purchased    = {self._schema(tenant, project)}.{self.TABLE}.lifetime_usd_purchased + EXCLUDED.lifetime_usd_purchased,
                 active                    = TRUE,
                 updated_at                = NOW()
@@ -698,47 +716,15 @@ class UserCreditsManager:
         """
 
         if conn:
-            row = await conn.fetchrow(sql, tenant, project, user_id, int(tokens), float(usd_amount))
+            row = await conn.fetchrow(sql, tenant, project, user_id, int(tokens), float(usd_amount), int(restore_cents))
         else:
             if not self._pg_pool:
                 raise RuntimeError("PostgreSQL pool not initialized")
             async with self._pg_pool.acquire() as c:
-                row = await c.fetchrow(sql, tenant, project, user_id, int(tokens), float(usd_amount))
+                row = await c.fetchrow(sql, tenant, project, user_id, int(tokens), float(usd_amount), int(restore_cents))
 
         await self._invalidate(tenant, project, user_id)
         return dict(row)
-
-    async def deduct_lifetime_tokens(self, *, tenant: str, project: str, user_id: str, tokens: int) -> int:
-        """
-        Simple deduction (not reservation-aware).
-        Returns overflow tokens not covered by credits.
-        """
-        if tokens <= 0:
-            return 0
-        if not self._pg_pool:
-            return tokens
-
-        async with self._pg_pool.acquire() as conn:
-            row = await conn.fetchrow(f"""
-                UPDATE {self._schema(tenant, project)}.{self.TABLE}
-                SET lifetime_tokens_consumed = LEAST(lifetime_tokens_consumed + $4, lifetime_tokens_purchased),
-                    updated_at = NOW()
-                WHERE tenant=$1 AND project=$2 AND user_id=$3
-                  AND active=TRUE
-                RETURNING lifetime_tokens_purchased AS purchased, lifetime_tokens_consumed AS consumed
-            """, tenant, project, user_id, int(tokens))
-
-        if not row:
-            return tokens
-
-        purchased = int(row["purchased"] or 0)
-        consumed = int(row["consumed"] or 0)
-        old_consumed = max(consumed - int(tokens), 0)
-        actually = min(int(tokens), max(purchased - old_consumed, 0))
-        overflow = int(tokens) - actually
-
-        await self._invalidate(tenant, project, user_id)
-        return max(overflow, 0)
 
     # ---------------- reservation-aware balance ----------------
 
@@ -767,10 +753,35 @@ class UserCreditsManager:
         """, *args)
         return int(v or 0)
 
-    async def get_lifetime_balance(self, *, tenant: str, project: str, user_id: str) -> Optional[int]:
+    async def _reserved_cents_sum(
+            self,
+            *,
+            conn: asyncpg.Connection,
+            tenant: str,
+            project: str,
+            user_id: str,
+            exclude_reservation_id: Optional[str] = None,
+    ) -> int:
+        exclude_sql = ""
+        args = [tenant, project, user_id]
+        if exclude_reservation_id:
+            args.append(exclude_reservation_id)
+            exclude_sql = f"AND reservation_id <> ${len(args)}"
+
+        v = await conn.fetchval(f"""
+            SELECT COALESCE(SUM(usd_reserved_cents), 0)
+            FROM {self._schema(tenant, project)}.{self.RESERVATIONS_TABLE}
+            WHERE tenant=$1 AND project=$2 AND user_id=$3
+              AND status='reserved'
+              AND expires_at > NOW()
+              {exclude_sql}
+        """, *args)
+        return int(v or 0)
+
+    async def get_available_cents(self, *, tenant: str, project: str, user_id: str) -> Optional[int]:
         """
-        Remaining AVAILABLE lifetime tokens:
-          purchased - consumed - active_reservations
+        Remaining AVAILABLE USD balance in cents (authoritative):
+          purchased_cents - spent_cents - active reservations (usd_reserved_cents)
         """
         if not self._pg_pool:
             return None
@@ -778,12 +789,12 @@ class UserCreditsManager:
         async with self._pg_pool.acquire() as conn:
             row = await conn.fetchrow(f"""
                 SELECT
-                    COALESCE(ulc.lifetime_tokens_purchased, 0) AS purchased,
-                    COALESCE(ulc.lifetime_tokens_consumed, 0) AS consumed,
+                    COALESCE(ulc.purchased_cents, 0) AS purchased,
+                    COALESCE(ulc.spent_cents, 0) AS spent,
                     COALESCE(rsv.reserved, 0) AS reserved
                 FROM {self._schema(tenant, project)}.{self.TABLE} ulc
                 LEFT JOIN (
-                    SELECT tenant, project, user_id, COALESCE(SUM(tokens_reserved), 0) AS reserved
+                    SELECT tenant, project, user_id, COALESCE(SUM(usd_reserved_cents), 0) AS reserved
                     FROM {self._schema(tenant, project)}.{self.RESERVATIONS_TABLE}
                     WHERE tenant=$1 AND project=$2 AND user_id=$3
                       AND status='reserved'
@@ -798,22 +809,42 @@ class UserCreditsManager:
         if not row:
             return None
 
-        remaining = int(row["purchased"]) - int(row["consumed"]) - int(row["reserved"])
-        return remaining
+        return int(row["purchased"]) - int(row["spent"]) - int(row["reserved"])
 
-    async def reserve_lifetime_tokens(
+    async def get_lifetime_balance(self, *, tenant: str, project: str, user_id: str) -> Optional[int]:
+        """
+        Available balance expressed in reference tokens at the LIVE rate — for the
+        split-admission feeder only (transient, never stored). Derived from the
+        USD-native balance via get_available_cents(). Money callers should use
+        get_available_cents() directly.
+        """
+        cents = await self.get_available_cents(tenant=tenant, project=project, user_id=user_id)
+        if cents is None:
+            return None
+        from kdcube_ai_app.infra.accounting.usage import usd_per_reference_token
+        rate = usd_per_reference_token()
+        if rate <= 0:
+            return 0
+        return int(_cents_to_usd(cents) / rate)
+
+    async def reserve_lifetime_credits(
             self,
             *,
             tenant: str,
             project: str,
             user_id: str,
             reservation_id: str,
-            tokens: int,
+            usd_cents: int,
+            tokens: int = 0,
             ttl_sec: int = 900,
             bundle_id: Optional[str] = None,
             notes: Optional[str] = None,
     ) -> bool:
-        if tokens <= 0:
+        """
+        Hold `usd_cents` (authoritative) against the wallet for an in-flight turn.
+        `tokens` is display-only. Checks available_cents = purchased - spent - other holds.
+        """
+        if usd_cents <= 0:
             return True
         if not self._pg_pool:
             raise RuntimeError("PostgreSQL pool not initialized")
@@ -822,16 +853,8 @@ class UserCreditsManager:
 
         async with self._pg_pool.acquire() as conn:
             async with conn.transaction():
-                res = await conn.fetchrow(f"""
-                    SELECT tokens_reserved, status
-                    FROM {self._schema(tenant, project)}.{self.RESERVATIONS_TABLE}
-                    WHERE tenant=$1 AND project=$2 AND user_id=$3 AND reservation_id=$4
-                    FOR UPDATE
-                """, tenant, project, user_id, reservation_id)
-
                 bal = await conn.fetchrow(f"""
-                    SELECT lifetime_tokens_purchased AS purchased,
-                           lifetime_tokens_consumed AS consumed
+                    SELECT purchased_cents, spent_cents
                     FROM {self._schema(tenant, project)}.{self.TABLE}
                     WHERE tenant=$1 AND project=$2 AND user_id=$3
                       AND active=TRUE
@@ -841,32 +864,31 @@ class UserCreditsManager:
                 if not bal:
                     return False
 
-                purchased = int(bal["purchased"] or 0)
-                consumed = int(bal["consumed"] or 0)
-                # if purchased <= 0:
-                #     return False
+                purchased_cents = int(bal["purchased_cents"] or 0)
+                spent_cents = int(bal["spent_cents"] or 0)
 
-                reserved = await self._reserved_sum(conn=conn, tenant=tenant, project=project, user_id=user_id)
-                available = purchased - consumed - reserved
-                if available < int(tokens):
+                reserved_cents = await self._reserved_cents_sum(conn=conn, tenant=tenant, project=project, user_id=user_id)
+                available_cents = purchased_cents - spent_cents - reserved_cents
+                if available_cents < int(usd_cents):
                     return False
 
                 await conn.execute(f"""
                     INSERT INTO {self._schema(tenant, project)}.{self.RESERVATIONS_TABLE} (
                         tenant, project, user_id,
                         reservation_id, bundle_id,
-                        tokens_reserved, status, expires_at, notes
+                        tokens_reserved, usd_reserved_cents, status, expires_at, notes
                     )
-                    VALUES ($1,$2,$3,$4,$5,$6,'reserved',$7,$8)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,'reserved',$8,$9)
                     ON CONFLICT (tenant, project, user_id, reservation_id)
                     DO UPDATE SET
                         tokens_reserved = GREATEST(EXCLUDED.tokens_reserved, {self._schema(tenant, project)}.{self.RESERVATIONS_TABLE}.tokens_reserved),
+                        usd_reserved_cents = GREATEST(EXCLUDED.usd_reserved_cents, {self._schema(tenant, project)}.{self.RESERVATIONS_TABLE}.usd_reserved_cents),
                         status='reserved',
                         expires_at=EXCLUDED.expires_at,
                         bundle_id=EXCLUDED.bundle_id,
                         notes=EXCLUDED.notes,
                         updated_at=NOW()
-                """, tenant, project, user_id, reservation_id, bundle_id, int(tokens), exp, notes)
+                """, tenant, project, user_id, reservation_id, bundle_id, int(tokens), int(usd_cents), exp, notes)
 
         return True
 
@@ -893,29 +915,30 @@ class UserCreditsManager:
                   AND status='reserved'
             """, tenant, project, user_id, reservation_id, reason)
 
-    async def commit_reserved_lifetime_tokens(
+    async def commit_reserved_lifetime_credits(
             self,
             *,
             tenant: str,
             project: str,
             user_id: str,
             reservation_id: str,
-            tokens: int,
+            usd_cents: int,
+            tokens: int = 0,
     ) -> int:
         """
-        Commit actual token spend against a reservation.
-        Returns overflow tokens not covered by credits.
+        Commit actual USD spend (cents) against a reservation. Charges spent_cents;
+        `tokens` is display-only (tokens_used). Returns uncovered cents not covered
+        by the wallet.
         """
-        if tokens <= 0:
+        if usd_cents <= 0:
             return 0
         if not self._pg_pool:
-            return tokens
+            return usd_cents
 
         async with self._pg_pool.acquire() as conn:
             async with conn.transaction():
                 bal = await conn.fetchrow(f"""
-                    SELECT lifetime_tokens_purchased AS purchased,
-                           lifetime_tokens_consumed AS consumed
+                    SELECT purchased_cents, spent_cents
                     FROM {self._schema(tenant, project)}.{self.TABLE}
                     WHERE tenant=$1 AND project=$2 AND user_id=$3
                       AND active=TRUE
@@ -931,67 +954,68 @@ class UserCreditsManager:
                         WHERE tenant=$1 AND project=$2 AND user_id=$3 AND reservation_id=$4
                           AND status='reserved'
                     """, tenant, project, user_id, reservation_id)
-                    return tokens
+                    return usd_cents
 
                 res = await conn.fetchrow(f"""
-                        SELECT status, tokens_reserved
+                        SELECT status, usd_reserved_cents
                         FROM {self._schema(tenant, project)}.{self.RESERVATIONS_TABLE}
                         WHERE tenant=$1 AND project=$2 AND user_id=$3 AND reservation_id=$4
                     """, tenant, project, user_id, reservation_id)
 
                 if not res or res.get("status") != "reserved":
                     # Missing or already finalized reservation; do not consume
-                    return tokens
+                    return usd_cents
 
-                reserved = int(res.get("tokens_reserved") or 0)
+                reserved_cents = int(res.get("usd_reserved_cents") or 0)
 
-                purchased = int(bal["purchased"] or 0)
-                consumed = int(bal["consumed"] or 0)
+                purchased_cents = int(bal["purchased_cents"] or 0)
+                spent_cents = int(bal["spent_cents"] or 0)
 
-                other_reserved = await self._reserved_sum(
+                other_reserved_cents = await self._reserved_cents_sum(
                     conn=conn, tenant=tenant, project=project, user_id=user_id,
                     exclude_reservation_id=reservation_id,
                 )
-                available = max(purchased - consumed - other_reserved, 0)
-                consume = min(int(tokens), int(available), int(reserved))
+                available_cents = max(purchased_cents - spent_cents - other_reserved_cents, 0)
+                charge_cents = min(int(usd_cents), int(available_cents), int(reserved_cents))
 
-                if consume > 0:
+                if charge_cents > 0:
                     await conn.execute(f"""
                         UPDATE {self._schema(tenant, project)}.{self.TABLE}
-                        SET lifetime_tokens_consumed = LEAST(lifetime_tokens_consumed + $4, lifetime_tokens_purchased),
+                        SET spent_cents = spent_cents + $4,
+                            lifetime_tokens_consumed = LEAST(lifetime_tokens_consumed + $5, lifetime_tokens_purchased),
                             updated_at=NOW()
                         WHERE tenant=$1 AND project=$2 AND user_id=$3
-                    """, tenant, project, user_id, int(consume))
+                    """, tenant, project, user_id, int(charge_cents), int(tokens))
 
                 await conn.execute(f"""
                     UPDATE {self._schema(tenant, project)}.{self.RESERVATIONS_TABLE}
                     SET status='committed',
-                        tokens_used=$5,
+                        actual_spent_cents=$5,
+                        tokens_used=$6,
                         committed_at=NOW(),
                         expires_at=NOW(),
                         updated_at=NOW()
                     WHERE tenant=$1 AND project=$2 AND user_id=$3 AND reservation_id=$4
-                """, tenant, project, user_id, reservation_id, int(consume))
+                """, tenant, project, user_id, reservation_id, int(charge_cents), int(tokens))
 
         await self._invalidate(tenant, project, user_id)
-        return max(int(tokens) - int(consume), 0)
+        return max(int(usd_cents) - int(charge_cents), 0)
 
-    async def consume_lifetime_tokens(self, *, tenant: str, project: str, user_id: str, tokens: int) -> int:
+    async def consume_lifetime_credits(self, *, tenant: str, project: str, user_id: str, usd_cents: int, tokens: int = 0) -> int:
         """
-        Reservation-aware consumption WITHOUT a reservation_id.
-        Will NOT steal tokens reserved by other in-flight requests.
-        Returns overflow tokens.
+        Reservation-free USD consumption (cents) WITHOUT a reservation_id.
+        Will NOT steal credits reserved by other in-flight requests.
+        `tokens` is display-only. Returns uncovered cents.
         """
-        if tokens <= 0:
+        if usd_cents <= 0:
             return 0
         if not self._pg_pool:
-            return tokens
+            return usd_cents
 
         async with self._pg_pool.acquire() as conn:
             async with conn.transaction():
                 bal = await conn.fetchrow(f"""
-                    SELECT lifetime_tokens_purchased AS purchased,
-                           lifetime_tokens_consumed AS consumed
+                    SELECT purchased_cents, spent_cents
                     FROM {self._schema(tenant, project)}.{self.TABLE}
                     WHERE tenant=$1 AND project=$2 AND user_id=$3
                       AND active=TRUE
@@ -999,25 +1023,26 @@ class UserCreditsManager:
                 """, tenant, project, user_id)
 
                 if not bal:
-                    return tokens
+                    return usd_cents
 
-                purchased = int(bal["purchased"] or 0)
-                consumed = int(bal["consumed"] or 0)
+                purchased_cents = int(bal["purchased_cents"] or 0)
+                spent_cents = int(bal["spent_cents"] or 0)
 
-                reserved = await self._reserved_sum(conn=conn, tenant=tenant, project=project, user_id=user_id)
-                available = max(purchased - consumed - reserved, 0)
+                reserved_cents = await self._reserved_cents_sum(conn=conn, tenant=tenant, project=project, user_id=user_id)
+                available_cents = max(purchased_cents - spent_cents - reserved_cents, 0)
 
-                consume = min(int(tokens), int(available))
-                if consume > 0:
+                charge_cents = min(int(usd_cents), int(available_cents))
+                if charge_cents > 0:
                     await conn.execute(f"""
                         UPDATE {self._schema(tenant, project)}.{self.TABLE}
-                        SET lifetime_tokens_consumed = LEAST(lifetime_tokens_consumed + $4, lifetime_tokens_purchased),
+                        SET spent_cents = spent_cents + $4,
+                            lifetime_tokens_consumed = LEAST(lifetime_tokens_consumed + $5, lifetime_tokens_purchased),
                             updated_at=NOW()
                         WHERE tenant=$1 AND project=$2 AND user_id=$3
-                    """, tenant, project, user_id, int(consume))
+                    """, tenant, project, user_id, int(charge_cents), int(tokens))
 
         await self._invalidate(tenant, project, user_id)
-        return max(int(tokens) - int(consume), 0)
+        return max(int(usd_cents) - int(charge_cents), 0)
 
     async def get_active_reserved_sum(
             self,

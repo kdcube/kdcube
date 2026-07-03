@@ -95,15 +95,15 @@ class _Credits:
     async def get_lifetime_balance(self, **kw):
         return self.balance
 
-    async def reserve_lifetime_tokens(self, **kw):
+    async def reserve_lifetime_credits(self, **kw):
         self.reserved.append(kw)
         return self.reserve_ok
 
-    async def commit_reserved_lifetime_tokens(self, **kw):
+    async def commit_reserved_lifetime_credits(self, **kw):
         self.committed.append(kw)
         return 0
 
-    async def consume_lifetime_tokens(self, **kw):
+    async def consume_lifetime_credits(self, **kw):
         self.consumed.append(kw)
         return 0
 
