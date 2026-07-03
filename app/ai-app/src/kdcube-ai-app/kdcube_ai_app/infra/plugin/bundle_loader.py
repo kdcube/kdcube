@@ -65,6 +65,7 @@ UI_MAIN_ATTR = "__bundle_ui_main__"
 CRON_JOB_ATTR = "__bundle_cron_job__"
 DATA_BUS_HANDLER_ATTR = "__bundle_data_bus_handler__"
 AUTHORITY_PROVIDER_ATTR = "__bundle_authority_provider__"
+PUBLIC_CONTENT_ATTR = "__bundle_public_content__"
 BUNDLE_VENV_ATTR = "__bundle_venv__"
 _BUNDLE_VENV_EXEC_ENV = "KDCUBE_BUNDLE_VENV_EXEC"
 _BUNDLE_VENV_STAMP_FILE = ".kdcube_venv_stamp.json"
@@ -95,6 +96,23 @@ class APIEndpointSpec:
     user_types_config: str | None = None
     roles: tuple[str, ...] = ()
     roles_config: str | None = None
+
+
+@dataclass(frozen=True)
+class PublicContentSpec:
+    """Declares one public content alias on an app entrypoint.
+
+    The decorated provider method returns the app's current
+    ``PublicContentItem`` list for the alias (full-sync source used when the
+    durable registry needs seeding). Runtime lifecycle (publish/update/
+    retract) goes through the SDK ``PublicContentRegistry``. Exposure is
+    explicit and item-state driven — this surface has no per-user audience
+    selectors.
+    """
+
+    method_name: str
+    alias: str
+    schema_type: str = "Article"
 
 
 @dataclass(frozen=True)
@@ -176,6 +194,7 @@ class BundleInterfaceManifest:
     scheduled_jobs: tuple[CronJobSpec, ...] = ()
     data_bus_handlers: tuple[DataBusHandlerSpec, ...] = ()
     authority_providers: tuple[AuthorityProviderDeclarationSpec, ...] = ()
+    public_content: tuple[PublicContentSpec, ...] = ()
 
 
 _VALID_ENABLED_KINDS: frozenset = frozenset({"bundle", "api", "mcp", "widget", "cron"})
@@ -793,6 +812,42 @@ def api(
                 user_types_config=resolved_user_types_config,
                 roles=resolved_roles,
                 roles_config=resolved_roles_config,
+            ),
+        )
+        return fn
+
+    return _wrap
+
+
+def public_content(
+        *,
+        alias: str | None = None,
+        schema_type: str = "Article",
+):
+    """Declare a public content provider on an app entrypoint.
+
+    The decorated async method returns the app's current
+    ``list[PublicContentItem]`` for the alias — the full-sync source used to
+    seed or resync the durable public-content registry. Runtime lifecycle
+    (publish/update/retract) goes through the SDK ``PublicContentRegistry``;
+    the platform renders and serves the discoverability artifacts (crawlable
+    pages, JSON-LD, sitemap).
+
+    Exposure is explicit: the alias must also be enabled in the app config
+    public-content block. This surface is public-or-nothing — there are no
+    per-user audience selectors here.
+    """
+
+    def _wrap(fn):
+        method_name = getattr(fn, "__name__", "public_content")
+        resolved_alias = _clean_alias(alias, method_name)
+        setattr(
+            fn,
+            PUBLIC_CONTENT_ATTR,
+            PublicContentSpec(
+                method_name=method_name,
+                alias=resolved_alias,
+                schema_type=str(schema_type or "Article").strip() or "Article",
             ),
         )
         return fn
@@ -2477,11 +2532,13 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
     scheduled_jobs: list[CronJobSpec] = []
     data_bus_handlers: list[DataBusHandlerSpec] = []
     authority_providers: list[AuthorityProviderDeclarationSpec] = []
+    public_content_specs: list[PublicContentSpec] = []
     seen_api: set[tuple[str, str]] = set()
     seen_mcp: set[tuple[str, str]] = set()
     seen_widgets: set[str] = set()
     seen_data_bus_subjects: set[str] = set()
     seen_authority_providers: set[tuple[str, str]] = set()
+    seen_public_content: set[str] = set()
 
     for member_name, fn in _iter_bundle_callable_members(target):
         api_spec = getattr(fn, API_METHOD_ATTR, None)
@@ -2649,6 +2706,22 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
             seen_authority_providers.add(authority_key)
             authority_providers.append(resolved)
 
+        public_content_spec = getattr(fn, PUBLIC_CONTENT_ATTR, None)
+        if _is_equivalent_decorator_spec(
+            public_content_spec,
+            PublicContentSpec,
+            ("method_name", "alias", "schema_type"),
+        ):
+            resolved_pc_alias = str(getattr(public_content_spec, "alias", "") or "").strip()
+            if resolved_pc_alias in seen_public_content:
+                raise ValueError(f"Duplicate public content alias detected: {resolved_pc_alias}")
+            seen_public_content.add(resolved_pc_alias)
+            public_content_specs.append(PublicContentSpec(
+                method_name=member_name,
+                alias=resolved_pc_alias,
+                schema_type=str(getattr(public_content_spec, "schema_type", "Article") or "Article"),
+            ))
+
     meta = _get_bundle_entrypoint_meta(cls)
     allowed_roles: tuple[str, ...] = _tuple_str(meta.get("allowed_roles"))
     allowed_roles_config: str | None = meta.get("allowed_roles_config") or None
@@ -2659,6 +2732,7 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
     scheduled_jobs.sort(key=lambda item: (item.alias, item.method_name))
     data_bus_handlers.sort(key=lambda item: (item.subject, item.method_name))
     authority_providers.sort(key=lambda item: (item.authority_id, item.authenticator_id, item.method_name))
+    public_content_specs.sort(key=lambda item: (item.alias, item.method_name))
     return BundleInterfaceManifest(
         bundle_id=resolved_bundle_id,
         allowed_roles=allowed_roles,
@@ -2673,6 +2747,7 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
         scheduled_jobs=tuple(scheduled_jobs),
         data_bus_handlers=tuple(data_bus_handlers),
         authority_providers=tuple(authority_providers),
+        public_content=tuple(public_content_specs),
     )
 
 

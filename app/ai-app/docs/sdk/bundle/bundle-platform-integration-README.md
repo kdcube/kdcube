@@ -114,13 +114,14 @@ Bundles currently support these decorators:
 | `@data_bus_handler(...)` | entrypoint method | Declares a durable Data Bus subject handler managed by proc. |
 | `@cron(...)` | entrypoint method | Declares a scheduled background job managed by proc. |
 | `@on_job` | entrypoint method | Declares the bundle handler for ready background jobs claimed by proc. |
+| `@public_content(...)` | entrypoint method | Declares a public discoverable-content alias (crawlable item pages, JSON-LD, per-alias sitemap). |
 | `@venv(...)` | helper function or method | Declares that a callable executes in a cached per-bundle subprocess venv. |
 
 Important distinction:
 
 - `@bundle_entrypoint(...)`, `@bundle_entrypoint_factory(...)`, `@bundle_id(...)`,
   `@api(...)`, `@mcp(...)`, `@ui_widget(...)`, `@ui_main`, `@on_reactive_event`,
-  `@data_bus_handler(...)`, `@cron(...)`, and `@on_job`
+  `@data_bus_handler(...)`, `@cron(...)`, `@on_job`, and `@public_content(...)`
   participate in bundle manifest and runtime interface discovery
 - `@venv(...)` is an execution decorator, not an HTTP/UI manifest decorator
 - most bundles should use `@bundle_entrypoint(...)`; `@bundle_entrypoint_factory(...)`
@@ -1127,6 +1128,28 @@ broadcasts the changed bundle id to other workers. See:
 
 - [../../service/cicd/cli-README.md#bundle-reload-flow](../../service/cicd/cli-README.md#bundle-reload-flow)
 
+### 1.13 `@public_content(...)`
+
+Declares a public discoverable-content alias on the entrypoint. The decorated
+async method returns the app's current `list[PublicContentItem]` for the alias
+(the full-sync source); runtime lifecycle goes through the SDK
+`PublicContentRegistry`, and the platform renders and serves the crawlable
+pages, JSON-LD, and per-alias `sitemap.xml` on the reserved
+`public/__content__/…` route.
+
+```python
+from kdcube_ai_app.infra.plugin.bundle_loader import public_content
+
+@public_content(alias="news", schema_type="Article")
+async def news_items(self) -> list[PublicContentItem]:
+    ...
+```
+
+Exposure is explicit: the alias must also be enabled in the app config
+`public_content.<alias>` block. The full surface — model, lifecycle, serving
+routes, storage/concurrency model, gateway/rate-limit consequences — is in
+[Public Content Provider](public-content-provider-README.md).
+
 ## 2) Metadata model
 
 The loader stores interface metadata as typed dataclasses.
@@ -1238,8 +1261,11 @@ class BundleInterfaceManifest:
     ui_main: UIMainSpec | None = None
     on_message: OnMessageSpec | None = None
     on_job: OnJobSpec | None = None
+    process_offline_events: ProcessOfflineEventsSpec | None = None
     scheduled_jobs: tuple[CronJobSpec, ...] = ()
     data_bus_handlers: tuple[DataBusHandlerSpec, ...] = ()
+    authority_providers: tuple[AuthorityProviderDeclarationSpec, ...] = ()
+    public_content: tuple[PublicContentSpec, ...] = ()
 ```
 
 `allowed_roles` is populated from the `allowed_roles` argument of
@@ -1256,6 +1282,10 @@ entrypoint class, sorted by `alias`.
 
 `data_bus_handlers` is populated from all `@data_bus_handler(...)` methods on
 the entrypoint class, sorted by `subject`.
+
+`public_content` is populated from all `@public_content(...)` methods on the
+entrypoint class, sorted by `alias`; duplicate aliases are rejected at
+discovery time. See [Public Content Provider](public-content-provider-README.md).
 
 Discovery helpers currently exposed by the loader:
 

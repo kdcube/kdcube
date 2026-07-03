@@ -372,7 +372,37 @@ class BaseEntrypoint:
             )
         await self._ensure_ui_build()
         await self._publish_named_services_discovery()
+        await self._ensure_public_content_indexes()
         return None
+
+    # -- public content (platform capability) --------------------------------
+
+    async def _ensure_public_content_indexes(self) -> None:
+        """Bring public-content hot indexes current for declared+enabled
+        aliases. Delegates to the SDK service; guarded once-per-fleet, so the
+        N-workers × M-instances load race costs one rebuild."""
+        storage_root = self.bundle_storage_root()
+        if not storage_root:
+            return
+        tenant = getattr(getattr(self.comm_context, "actor", None), "tenant_id", None)
+        project = getattr(getattr(self.comm_context, "actor", None), "project_id", None)
+        bundle_id = str(getattr(getattr(self.config, "ai_bundle_spec", None), "id", "") or "")
+        if not (tenant and project and bundle_id):
+            return
+        from kdcube_ai_app.apps.chat.sdk.pub.service import ensure_public_content_ready
+
+        try:
+            await ensure_public_content_ready(
+                workflow=self,
+                tenant=tenant,
+                project=project,
+                bundle_id=bundle_id,
+                props=self.bundle_props,
+                hot_root=storage_root,
+                logger=self.logger,
+            )
+        except Exception:
+            self.logger.log("[bundle.public_content] ensure indexes failed (non-fatal)", "WARNING")
 
     # -- named services (platform capability) --------------------------------
     # Any bundle can publish named-service providers by overriding

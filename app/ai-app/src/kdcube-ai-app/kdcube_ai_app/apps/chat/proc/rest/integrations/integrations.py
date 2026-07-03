@@ -4517,6 +4517,67 @@ async def _load_bundle_workflow(
     return workflow, spec_resolved, tenant_id, project_id, comm_context
 
 
+PUBLIC_CONTENT_ROUTE_SEGMENT = "__content__"
+
+
+async def _serve_public_content_route(
+        *,
+        workflow: Any,
+        spec_resolved: Any,
+        tenant_id: str,
+        project_id: str,
+        request: Request,
+        path_tail: Optional[str],
+):
+    """Serve `public/__content__/…` for one app: descriptor list, per-alias
+    sitemap.xml, or a crawlable item page (410 when retracted)."""
+    from kdcube_ai_app.apps.chat.sdk.pub.service import serve_public_content
+
+    props = _authoritative_bundle_props(
+        tenant=tenant_id,
+        project=project_id,
+        bundle_id=spec_resolved.id,
+    )
+    if not is_bundle_enabled(props):
+        raise HTTPException(status_code=404, detail=f"Bundle {spec_resolved.id} is disabled")
+
+    hot_root = None
+    storage_root_fn = getattr(workflow, "bundle_storage_root", None)
+    if callable(storage_root_fn):
+        try:
+            hot_root = storage_root_fn()
+        except Exception:
+            hot_root = None
+    if hot_root is None:
+        from kdcube_ai_app.infra.plugin.bundle_storage import bundle_storage_dir
+
+        hot_root = bundle_storage_dir(
+            bundle_id=spec_resolved.id,
+            tenant=tenant_id,
+            project=project_id,
+            ensure=True,
+        )
+
+    # Absolute URL of the __content__ route root — the canonical fallback when
+    # the alias does not configure canonical_base.
+    url_text = str(request.url)
+    marker = f"/public/{PUBLIC_CONTENT_ROUTE_SEGMENT}"
+    serving_base_url = url_text.split(marker)[0] + marker if marker in url_text else ""
+
+    result = await serve_public_content(
+        workflow=workflow,
+        tenant=tenant_id,
+        project=project_id,
+        bundle_id=spec_resolved.id,
+        props=props,
+        hot_root=hot_root,
+        path_tail=str(path_tail or ""),
+        serving_base_url=serving_base_url,
+        logger=getattr(workflow, "logger", None),
+    )
+    return _coerce_bundle_http_response(result)
+
+
 async def _call_bundle_op_inner(
         *,
         tenant: str,
@@ -4542,6 +4603,19 @@ async def _call_bundle_op_inner(
             session=session,
         )
     )
+
+    # Reserved platform surface: crawlable public content (item pages, per-alias
+    # sitemap.xml, sitemap descriptor list). Served by the platform from the
+    # app's public-content registry — not an app-defined operation.
+    if route == "public" and operation == PUBLIC_CONTENT_ROUTE_SEGMENT:
+        return await _serve_public_content_route(
+            workflow=workflow,
+            spec_resolved=spec_resolved,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            request=request,
+            path_tail=path_tail,
+        )
 
     request_method = str(method_override or getattr(request, "method", "POST") or "POST").upper()
     endpoint_spec, allowed_methods = resolve_bundle_api_endpoint(
