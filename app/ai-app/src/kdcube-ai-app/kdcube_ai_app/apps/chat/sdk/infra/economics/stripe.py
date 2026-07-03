@@ -807,7 +807,6 @@ class StripeEconomicsWebhookHandler:
                         tenant=tenant,
                         project=project,
                         user_id=user_id,
-                        tokens=int(tokens_added),
                         usd_amount=float(usd_amount),
                         purchase_id=payment_intent_id,
                         notes=notes,
@@ -1116,7 +1115,6 @@ class StripeEconomicsWebhookHandler:
                                 tenant=str(internal["tenant"]),
                                 project=str(internal["project"]),
                                 user_id=str(internal["user_id"]),
-                                tokens=tokens,
                                 usd_amount=usd_amount,
                                 conn=conn,
                             )
@@ -1510,7 +1508,6 @@ class StripeEconomicsAdminService:
                     tenant=tenant,
                     project=project,
                     user_id=user_id,
-                    tokens=tokens_refund,
                     usd_amount=refund_usd,
                     conn=conn,
                 )
@@ -1540,7 +1537,6 @@ class StripeEconomicsAdminService:
                         tenant=tenant,
                         project=project,
                         user_id=user_id,
-                        tokens=tokens_refund,
                         usd_amount=refund_usd,
                         conn=conn,
                     )
@@ -1817,7 +1813,6 @@ class StripeEconomicsAdminService:
                                 tenant=row["tenant"],
                                 project=row["project"],
                                 user_id=row["user_id"],
-                                tokens=tokens,
                                 usd_amount=usd_amount,
                                 conn=conn,
                             )

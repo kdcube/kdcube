@@ -250,12 +250,12 @@ async def reserve_funding(
 
     # --- wallet hold for the over-quota/over-funds remainder -------------
     if wallet_part > 0 and has_wallet:
-        # Hold the USD value of the wallet_part at the live rate (USD-native); the
-        # token count is display-only. The margin is already baked into est_turn.
+        # Hold the USD value of the wallet_part at the live rate. The margin is
+        # already baked into est_turn.
         wallet_hold_cents = int(round(float(wallet_part) * usd_per_token * 100))
         ok = await ctx.cp_manager.user_credits_mgr.reserve_lifetime_credits(
             tenant=ctx.tenant, project=ctx.project, user_id=ctx.user_id,
-            reservation_id=ctx.scope_id, usd_cents=wallet_hold_cents, tokens=int(wallet_part),
+            reservation_id=ctx.scope_id, usd_cents=wallet_hold_cents,
             ttl_sec=int(ttl_sec), bundle_id=ctx.bundle_id,
             notes=f"split wallet reserve: scope={ctx.scope_id}, wallet_part={wallet_part}",
         )
@@ -402,30 +402,27 @@ async def settle_plan_funding(
 
     # --- charge wallet in USD (reserved hold first, then reservation-free consume) ---
     # The allocator decides the split in tokens; the wallet is charged its USD share
-    # of the real cost (reference-independent). commit/consume operate on cents; the
-    # token counts passed are display-only.
+    # of the real cost (reference-independent). commit/consume operate on cents.
     user_target_usd = _cost_for_tokens(tokens=user_target_tokens, ranked_tokens=ranked_tokens, total_cost=total_cost)
     user_target_cents = int(round(float(user_target_usd) * 100))
     user_uncovered_cents = 0
     if user_target_cents > 0:
         remaining_cents = int(user_target_cents)
-        reserved_display_tokens = min(int(user_target_tokens), int(res.wallet_reserved_tokens or 0))
         if res.wallet_reservation_active and res.wallet_reservation_id and res.wallet_reserved_tokens > 0:
             try:
                 reserved_uncovered_cents = await ctx.cp_manager.user_credits_mgr.commit_reserved_lifetime_credits(
                     tenant=ctx.tenant, project=ctx.project, user_id=ctx.user_id,
                     reservation_id=str(res.wallet_reservation_id),
-                    usd_cents=int(remaining_cents), tokens=int(reserved_display_tokens),
+                    usd_cents=int(remaining_cents),
                 )
             finally:
                 res.wallet_reservation_active = False
             # commit caps its charge at the hold; the remainder falls to reservation-free consume.
             remaining_cents = int(reserved_uncovered_cents or 0)
         if remaining_cents > 0:
-            consume_display_tokens = max(int(user_target_tokens) - int(reserved_display_tokens), 0)
             user_uncovered_cents = await ctx.cp_manager.user_credits_mgr.consume_lifetime_credits(
                 tenant=ctx.tenant, project=ctx.project, user_id=ctx.user_id,
-                usd_cents=int(remaining_cents), tokens=int(consume_display_tokens),
+                usd_cents=int(remaining_cents),
             )
     elif res.wallet_reservation_active and res.wallet_reservation_id:
         try:

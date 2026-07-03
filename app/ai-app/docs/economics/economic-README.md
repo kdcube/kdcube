@@ -79,7 +79,7 @@ Plan is resolved in the entrypoint at request time. The active plan determines b
 Funding sources are money or tokens used to pay for requests:
 
 - Subscription period budget (per‑month balance, USD)
-- Wallet or lifetime credits (USD balance, stored in cents; token figures are display-only)
+- Wallet or lifetime credits (USD balance, stored in cents)
 - Project budget (tenant/project balance, USD)
 
 Role determines which funding sources are allowed, while plan determines rate limits.
@@ -214,7 +214,7 @@ Shortfall notes are tagged `shortfall:wallet_subscription`, `shortfall:wallet_pl
 - Rate limiter token reservation (Redis) for the plan part
 - Subscription reservations in `user_plan_period_reservations`
 - Project budget reservations in `tenant_project_budget_reservations`
-- Wallet reservations in `user_token_reservations`
+- Wallet reservations in `user_credit_reservations`
 
 Reservations are committed or released after execution and accounting. Expired reservations are reaped automatically.
 
@@ -266,7 +266,7 @@ Key tables:
 - `plan_quota_policies` — base policy per plan_id
 - `user_plan_overrides` — temporary plan overrides
 - `user_lifetime_credits` — wallet credits (USD-native)
-- `user_token_reservations` — wallet reservations
+- `user_credit_reservations` — wallet reservations (USD-in-cents holds)
 - `tenant_project_budget` — project money balance
 - `tenant_project_budget_reservations` — project budget holds
 - `tenant_project_budget_ledger` — project budget ledger

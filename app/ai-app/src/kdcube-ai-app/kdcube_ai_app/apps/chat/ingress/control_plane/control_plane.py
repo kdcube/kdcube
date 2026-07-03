@@ -576,34 +576,22 @@ async def get_user_plan_override_balance(
 
         lifetime_payload = None
         if plan_override_balance.has_lifetime_budget():
-            purchased = int(plan_override_balance.lifetime_tokens_purchased or 0)
-            consumed = int(plan_override_balance.lifetime_tokens_consumed or 0)
-            gross_remaining = max(purchased - consumed, 0)
-
-            # USD-native: available_usd is authoritative (cents); the token figure is
-            # a cosmetic projection at the live rate.
-            available_cents = await mgr.user_credits_mgr.get_available_cents(
+            # Wallet is USD-native (cents). available = purchased - spent - reserved.
+            purchased_cents = int(plan_override_balance.purchased_cents or 0)
+            spent_cents = int(plan_override_balance.spent_cents or 0)
+            reserved_cents = await mgr.user_credits_mgr.get_active_reserved_cents(
                 tenant=settings.TENANT, project=settings.PROJECT, user_id=user_id
             )
-            available_cents = int(available_cents or 0)
-            available_usd = round(available_cents / 100.0, 2)
-
-            usd_per_token = usd_per_reference_token()
-            available = int((available_cents / 100.0) / usd_per_token) if usd_per_token > 0 else 0
-
-            reserved = max(gross_remaining - available, 0)
+            available_cents = purchased_cents - spent_cents - reserved_cents
 
             lifetime_payload = {
-                "tokens_purchased": purchased,
-                "tokens_consumed": consumed,
-                "tokens_gross_remaining": gross_remaining,   # purchased-consumed
-                "tokens_reserved": reserved,                 # in-flight gates
-                "tokens_available": available,               # spendable now
-                "available_usd": available_usd,
+                "purchased_usd": round(purchased_cents / 100.0, 2),
+                "spent_usd": round(spent_cents / 100.0, 2),
+                "reserved_usd": round(reserved_cents / 100.0, 2),
+                "available_usd": round(available_cents / 100.0, 2),
                 # last purchase snapshot (credits purchase)
                 "purchase_amount_usd": float(plan_override_balance.last_purchase_amount_usd)
                 if plan_override_balance.last_purchase_amount_usd else None,
-                "reference_model": _reference_model_label(),
             }
 
         return {
@@ -689,35 +677,20 @@ async def add_lifetime_credits(
         mgr = _get_control_plane_manager(router)
         settings = get_settings()
 
-        ref_provider = payload.ref_provider
-        ref_model = payload.ref_model
-        if not ref_provider or not ref_model:
-            ref_provider, ref_model = llm_reference_service()
-
-        tokens_added, usd_per_token = quote_tokens_for_usd(
-            usd_amount=payload.usd_amount,
-            ref_provider=ref_provider,
-            ref_model=ref_model,
-        )
-
         await mgr.add_user_credits_usd(
             tenant=settings.TENANT,
             project=settings.PROJECT,
             user_id=payload.user_id,
             usd_amount=payload.usd_amount,
-            ref_provider=ref_provider,
-            ref_model=ref_model,
             purchase_id=payload.purchase_id,
             notes=payload.notes,
         )
 
         # available balance (excludes reservations) — USD-native (cents authoritative)
-        balance_cents = await mgr.user_credits_mgr.get_available_cents(
+        balance_cents = int(await mgr.user_credits_mgr.get_available_cents(
             tenant=settings.TENANT, project=settings.PROJECT, user_id=payload.user_id
-        )
-        balance_cents = int(balance_cents or 0)
+        ) or 0)
         balance_usd = round(balance_cents / 100.0, 2)
-        balance_tokens = int((balance_cents / 100.0) / usd_per_token) if usd_per_token > 0 else 0
 
         logger.info(f"[add_lifetime_credits] {payload.user_id}: +${payload.usd_amount} by {session.username}")
 
@@ -725,10 +698,7 @@ async def add_lifetime_credits(
             "success": True,
             "user_id": payload.user_id,
             "usd_amount": payload.usd_amount,
-            "tokens_added": tokens_added,
-            "new_balance_tokens": balance_tokens,
             "new_balance_usd": balance_usd,
-            "reference_model": f"{ref_provider}/{ref_model}",
         }
 
     except Exception as e:
@@ -743,13 +713,12 @@ async def get_lifetime_balance(
         session: UserSession = Depends(auth_without_pressure())
 ):
     """
-    Get user's lifetime purchased balance (tokens + USD equivalent).
+    Get user's lifetime purchased balance (USD).
     """
     try:
         mgr = _get_control_plane_manager(router)
         settings = get_settings()
 
-        # USD-native balance (cents authoritative); token figure is a live-rate projection.
         balance_cents = await mgr.user_credits_mgr.get_available_cents(
             tenant=settings.TENANT,
             project=settings.PROJECT,
@@ -760,23 +729,16 @@ async def get_lifetime_balance(
             return {
                 "user_id": user_id,
                 "has_purchased_credits": False,
-                "balance_tokens": 0,
                 "balance_usd": 0,
                 "message": "User has no purchased credits"
             }
 
-        balance_cents = int(balance_cents or 0)
-        balance_usd = balance_cents / 100.0
-        _rate = usd_per_reference_token()
-        balance_tokens = int((balance_cents / 100.0) / _rate) if _rate > 0 else 0
+        balance_usd = round(int(balance_cents) / 100.0, 2)
 
         return {
             "user_id": user_id,
             "has_purchased_credits": True,
-            "balance_tokens": balance_tokens,
-            "balance_usd": round(balance_usd, 2),
-            "minimum_required_tokens": 50_000,
-            "can_use_budget": balance_tokens >= 50_000,
+            "balance_usd": balance_usd,
         }
 
     except Exception as e:
@@ -2067,9 +2029,9 @@ async def get_request_lineage(
 
         wallet_resv = await conn.fetch(f"""
             SELECT reservation_id, user_id, bundle_id, notes,
-                   tokens_reserved, tokens_used, status,
+                   usd_reserved_cents, actual_spent_cents, status,
                    created_at, expires_at, committed_at, released_at
-            FROM {schema}.user_token_reservations
+            FROM {schema}.user_credit_reservations
             WHERE tenant=$1 AND project=$2 AND reservation_id=$3
             ORDER BY created_at ASC
         """, settings.TENANT, settings.PROJECT, request_id)
@@ -2099,7 +2061,13 @@ async def get_request_lineage(
             ],
         },
         "wallet": {
-            "reservations": [_row_to_dict(r) for r in wallet_resv],
+            "reservations": [
+                {
+                    **_row_to_dict(r),
+                    "reserved_usd": _usd_from_cents(int(r["usd_reserved_cents"] or 0)),
+                    "spent_usd": _usd_from_cents(int(r["actual_spent_cents"] or 0)),
+                } for r in wallet_resv
+            ],
         },
         "notes": [
             "request_id is the turn_id used across ledger and reservation tables.",

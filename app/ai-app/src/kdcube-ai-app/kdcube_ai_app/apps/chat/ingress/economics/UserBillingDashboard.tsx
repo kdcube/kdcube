@@ -92,14 +92,11 @@ interface QuotaBreakdown {
     };
     lifetime_credits: {
         has_lifetime_credits: boolean;
-        tokens_purchased: number;
-        tokens_consumed: number;
-        tokens_gross_remaining?: number;
-        tokens_reserved?: number;
-        tokens_available: number;
+        purchased_usd: number;
+        spent_usd: number;
+        reserved_usd: number;
         available_usd: number;
         lifetime_usd_purchased?: number | null;
-        reference_model?: string;
     } | null;
     subscription_balance?: {
         has_subscription?: boolean;
@@ -634,8 +631,7 @@ const UserBillingDashboard: React.FC = () => {
     const currentPlanId = breakdown?.plan_id || subscription?.plan_id || 'free';
     const personalCredits = breakdown?.lifetime_credits;
     const availablePersonalCreditsUsd = personalCredits?.available_usd || 0;
-    const availablePersonalCreditTokens = personalCredits?.tokens_available || 0;
-    const hasPersonalOverflowCover = availablePersonalCreditTokens > 0;
+    const hasPersonalOverflowCover = availablePersonalCreditsUsd > 0;
 
     return (
         <div className="h-screen overflow-hidden bg-gray-50/50 p-3 md:p-4 font-sans text-gray-900">
@@ -783,7 +779,7 @@ const UserBillingDashboard: React.FC = () => {
                                     <div className={`rounded-xl border px-4 py-3 text-sm ${hasPersonalOverflowCover ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-amber-200 bg-amber-50 text-amber-900'}`}>
                                         <div className="font-semibold">If one request is larger than your remaining plan tokens</div>
                                         <p className="mt-1">
-                                            The part above your remaining plan quota is covered by personal credits. You currently have {formatUsd(availablePersonalCreditsUsd)} ({formatCount(availablePersonalCreditTokens)} tokens) available.
+                                            The part above your remaining plan quota is covered by personal credits. You currently have {formatUsd(availablePersonalCreditsUsd)} available.
                                         </p>
                                         {!hasPersonalOverflowCover && (
                                             <p className="mt-1">
@@ -832,26 +828,23 @@ const UserBillingDashboard: React.FC = () => {
                                 <div className="text-xl font-bold">
                                     ${(breakdown.lifetime_credits?.available_usd || 0).toFixed(2)}
                                 </div>
-                                <div className="mb-4 text-sm text-gray-500">
-                                    {breakdown.lifetime_credits?.tokens_available.toLocaleString() || 0} tokens available
-                                </div>
+                                <div className="mb-4 text-sm text-gray-500">available</div>
                                 <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-4">
                                     <WalletMetric
                                         label="Purchased"
-                                        value={`${formatCount(personalCredits?.tokens_purchased || 0)} tokens`}
+                                        value={formatUsd(personalCredits?.purchased_usd || 0)}
                                     />
                                     <WalletMetric
-                                        label="Consumed"
-                                        value={`${formatCount(personalCredits?.tokens_consumed || 0)} tokens`}
+                                        label="Spent"
+                                        value={formatUsd(personalCredits?.spent_usd || 0)}
                                     />
                                     <WalletMetric
                                         label="Reserved"
-                                        value={`${formatCount(personalCredits?.tokens_reserved || 0)} tokens`}
+                                        value={formatUsd(personalCredits?.reserved_usd || 0)}
                                     />
                                     <WalletMetric
                                         label="Available"
                                         value={formatUsd(personalCredits?.available_usd || 0)}
-                                        hint={`${formatCount(personalCredits?.tokens_available || 0)} tokens`}
                                     />
                                 </div>
                                 

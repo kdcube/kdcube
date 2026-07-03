@@ -62,14 +62,11 @@ interface PlanOverride {
 }
 
 interface LifetimeBudget {
-    tokens_purchased: number;
-    tokens_consumed: number;
-    tokens_gross_remaining: number;
-    tokens_reserved: number;
-    tokens_available: number;
+    purchased_usd: number;
+    spent_usd: number;
+    reserved_usd: number;
     available_usd: number;
     purchase_amount_usd: number | null;
-    reference_model?: string;
 }
 
 interface PlanBalance {
@@ -84,14 +81,7 @@ interface PlanBalance {
 interface LifetimeBalance {
     user_id: string;
     has_purchased_credits: boolean;
-    balance_tokens: number;
     balance_usd: number;
-
-    // Backend returns these (NOT minimum_required_usd)
-    minimum_required_tokens: number;
-    can_use_budget: boolean;
-
-    reference_model?: string;
     message?: string;
 }
 
@@ -128,11 +118,11 @@ interface BudgetAbsorptionRow {
     events: number;
 }
 
-interface TokenReservationView {
+interface CreditReservationView {
     reservation_id: string;
     bundle_id: string | null;
-    tokens_reserved: number;
-    tokens_used: number;
+    reserved_usd: number;
+    spent_usd: number | null;
     status: string;
     expires_at: string | null;
     created_at: string | null;
@@ -142,11 +132,9 @@ interface TokenReservationView {
 
 interface LifetimeCreditsBreakdown {
     has_lifetime_credits: boolean;
-    tokens_purchased: number;
-    tokens_consumed: number;
-    tokens_gross_remaining: number;
-    tokens_reserved: number;
-    tokens_available: number;
+    purchased_usd: number;
+    spent_usd: number;
+    reserved_usd: number;
     available_usd: number;
     lifetime_usd_purchased: number | null;
     last_purchase: {
@@ -154,7 +142,6 @@ interface LifetimeCreditsBreakdown {
         amount_usd: number | null;
         notes: string | null;
     };
-    reference_model: string;
 }
 
 interface QuotaBreakdown {
@@ -249,7 +236,7 @@ interface QuotaBreakdown {
 
     lifetime_credits: LifetimeCreditsBreakdown | null;
     subscription_balance?: SubscriptionBalance | null;
-    active_reservations: TokenReservationView[];
+    active_reservations: CreditReservationView[];
     reference_model?: string;
 }
 
@@ -2130,8 +2117,8 @@ const EconomicsAdmin: React.FC = () => {
         const uid = lifetimeUserId.trim();
 
         try {
-            const result = await api.addLifetimeCredits(uid, parseFloat(lifetimeUsdAmount), lifetimeNotes);
-            setSuccess(`Added $${lifetimeUsdAmount} (${Number(result.tokens_added).toLocaleString()} tokens) to ${uid}`);
+            await api.addLifetimeCredits(uid, parseFloat(lifetimeUsdAmount), lifetimeNotes);
+            setSuccess(`Added $${lifetimeUsdAmount} to ${uid}`);
 
             setLifetimeUsdAmount('');
             setLifetimeNotes('');
@@ -2604,16 +2591,6 @@ const EconomicsAdmin: React.FC = () => {
         { id: 'plans', label: 'Plans' },
     ];
 
-    const usdPerToken =
-        lifetimeBalance && lifetimeBalance.balance_tokens > 0
-            ? lifetimeBalance.balance_usd / lifetimeBalance.balance_tokens
-            : null;
-
-    const minUsd =
-        usdPerToken && lifetimeBalance
-            ? usdPerToken * Number(lifetimeBalance.minimum_required_tokens || 0)
-            : null;
-
     return (
         <div className="h-screen overflow-hidden bg-white">
             <div className="mx-auto flex h-full max-w-6xl flex-col gap-3 overflow-hidden px-4 py-4">
@@ -3077,32 +3054,28 @@ const EconomicsAdmin: React.FC = () => {
 
                                                             <div className="mt-4 space-y-2 text-sm">
                                                                 <div className="flex justify-between gap-3">
-                                                                    <span className="text-gray-600">Gross remaining</span>
+                                                                    <span className="text-gray-600">Purchased</span>
                                                                     <span className="font-semibold text-gray-900">
-                                    {planBalance.lifetime_budget.tokens_gross_remaining.toLocaleString()}
+                                    ${Number(planBalance.lifetime_budget.purchased_usd || 0).toFixed(2)}
+                                  </span>
+                                                                </div>
+                                                                <div className="flex justify-between gap-3">
+                                                                    <span className="text-gray-600">Spent</span>
+                                                                    <span className="font-semibold text-gray-900">
+                                    ${Number(planBalance.lifetime_budget.spent_usd || 0).toFixed(2)}
                                   </span>
                                                                 </div>
                                                                 <div className="flex justify-between gap-3">
                                                                     <span className="text-gray-600">Reserved (in-flight)</span>
                                                                     <span className="font-semibold text-gray-900">
-                                    {planBalance.lifetime_budget.tokens_reserved.toLocaleString()}
+                                    ${Number(planBalance.lifetime_budget.reserved_usd || 0).toFixed(2)}
                                   </span>
                                                                 </div>
                                                                 <div className="flex justify-between gap-3">
                                                                     <span className="text-gray-600">Available now</span>
                                                                     <span className="font-semibold text-gray-900">
-                                    {planBalance.lifetime_budget.tokens_available.toLocaleString()}
-                                  </span>
-                                                                </div>
-                                                                <div className="flex justify-between gap-3">
-                                                                    <span className="text-gray-600">Available USD (quoted)</span>
-                                                                    <span className="font-semibold text-gray-900">
                                     ${Number(planBalance.lifetime_budget.available_usd || 0).toFixed(2)}
                                   </span>
-                                                                </div>
-
-                                                                <div className="pt-3 border-t border-gray-200/70 text-xs text-gray-600">
-                                                                    Reference: {planBalance.lifetime_budget.reference_model || (economicsRef ? `${economicsRef.reference_provider}/${economicsRef.reference_model}` : '')}
                                                                 </div>
                                                             </div>
                                                         </div>
@@ -3164,7 +3137,7 @@ const EconomicsAdmin: React.FC = () => {
                                                 value={`$${Number(quotaBreakdown.current_usage.tokens_reserved_usd || 0).toFixed(2)}`}
                                                 hint={`${formatCount(quotaBreakdown.current_usage.tokens_reserved || 0)} tokens held`}
                                             />
-                                            <StatCard label="Wallet available" value={quotaBreakdown.lifetime_credits ? `$${Number(quotaBreakdown.lifetime_credits.available_usd || 0).toFixed(2)}` : '$0.00'} hint={quotaBreakdown.lifetime_credits ? `${formatCount(quotaBreakdown.lifetime_credits.tokens_available)} tokens` : 'no wallet record'} />
+                                            <StatCard label="Wallet available" value={quotaBreakdown.lifetime_credits ? `$${Number(quotaBreakdown.lifetime_credits.available_usd || 0).toFixed(2)}` : '$0.00'} hint={quotaBreakdown.lifetime_credits ? 'available' : 'no wallet record'} />
                                         </div>
 
                                         <div className="rounded-xl border border-gray-200/70 bg-gray-50 p-4">
@@ -3302,25 +3275,21 @@ const EconomicsAdmin: React.FC = () => {
                                             {!quotaBreakdown.lifetime_credits ? (
                                                 <div className="mt-3 text-sm text-emerald-900">No wallet record for this user.</div>
                                             ) : (
-                                                <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-5">
+                                                <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-4">
                                                     <div className="rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm">
                                                         <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Purchased</div>
-                                                        <div className="mt-1 font-semibold text-emerald-950">{formatCount(quotaBreakdown.lifetime_credits.tokens_purchased)}</div>
+                                                        <div className="mt-1 font-semibold text-emerald-950">${Number(quotaBreakdown.lifetime_credits.purchased_usd || 0).toFixed(2)}</div>
                                                     </div>
                                                     <div className="rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm">
-                                                        <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Consumed</div>
-                                                        <div className="mt-1 font-semibold text-emerald-950">{formatCount(quotaBreakdown.lifetime_credits.tokens_consumed)}</div>
+                                                        <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Spent</div>
+                                                        <div className="mt-1 font-semibold text-emerald-950">${Number(quotaBreakdown.lifetime_credits.spent_usd || 0).toFixed(2)}</div>
                                                     </div>
                                                     <div className="rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm">
                                                         <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Reserved</div>
-                                                        <div className="mt-1 font-semibold text-emerald-950">{formatCount(quotaBreakdown.lifetime_credits.tokens_reserved)}</div>
+                                                        <div className="mt-1 font-semibold text-emerald-950">${Number(quotaBreakdown.lifetime_credits.reserved_usd || 0).toFixed(2)}</div>
                                                     </div>
                                                     <div className="rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm">
                                                         <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Available</div>
-                                                        <div className="mt-1 font-semibold text-emerald-950">{formatCount(quotaBreakdown.lifetime_credits.tokens_available)}</div>
-                                                    </div>
-                                                    <div className="rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm">
-                                                        <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Available USD</div>
                                                         <div className="mt-1 font-semibold text-emerald-950">${Number(quotaBreakdown.lifetime_credits.available_usd || 0).toFixed(2)}</div>
                                                     </div>
                                                 </div>
@@ -3451,7 +3420,7 @@ const EconomicsAdmin: React.FC = () => {
                                                         <tr className="text-gray-600">
                                                             <th className="px-4 py-3 text-left font-semibold">Reservation</th>
                                                             <th className="px-4 py-3 text-left font-semibold">Bundle</th>
-                                                            <th className="px-4 py-3 text-right font-semibold">Tokens</th>
+                                                            <th className="px-4 py-3 text-right font-semibold">Reserved (USD)</th>
                                                             <th className="px-4 py-3 text-left font-semibold">Expires</th>
                                                             <th className="px-4 py-3 text-left font-semibold">Notes</th>
                                                         </tr>
@@ -3461,7 +3430,7 @@ const EconomicsAdmin: React.FC = () => {
                                                             <tr key={r.reservation_id} className="hover:bg-white/70 transition-colors">
                                                                 <td className="px-4 py-3 font-semibold text-gray-900">{r.reservation_id}</td>
                                                                 <td className="px-4 py-3 text-gray-700">{r.bundle_id ?? '—'}</td>
-                                                                <td className="px-4 py-3 text-right text-gray-700">{Number(r.tokens_reserved || 0).toLocaleString()}</td>
+                                                                <td className="px-4 py-3 text-right text-gray-700">${Number(r.reserved_usd || 0).toFixed(2)}</td>
                                                                 <td className="px-4 py-3 text-gray-700">{r.expires_at ? new Date(r.expires_at).toLocaleString() : '—'}</td>
                                                                 <td className="px-4 py-3 text-gray-600">{r.notes ?? '—'}</td>
                                                             </tr>
@@ -3977,19 +3946,9 @@ const EconomicsAdmin: React.FC = () => {
                                     <CardBody className="space-y-5">
                                         {lifetimeBalance.has_purchased_credits ? (
                                             <>
-                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                                    <StatCard label="Tokens remaining" value={lifetimeBalance.balance_tokens.toLocaleString()} />
-                                                    <StatCard label="USD equivalent (quoted)" value={`$${Number(lifetimeBalance.balance_usd || 0).toFixed(2)}`} />
+                                                <div className="grid grid-cols-1 gap-4">
+                                                    <StatCard label="Balance" value={`$${Number(lifetimeBalance.balance_usd || 0).toFixed(2)}`} />
                                                 </div>
-
-                                                {!lifetimeBalance.can_use_budget && (
-                                                    <Callout tone="warning" title="Below admission threshold">
-                                                        Needs at least{' '}
-                                                        {Number(lifetimeBalance.minimum_required_tokens || 0).toLocaleString()} tokens
-                                                        {minUsd != null ? ` (≈ $${minUsd.toFixed(2)})` : ''}
-                                                        {' '}to cover wallet-funded shortfall.
-                                                    </Callout>
-                                                )}
                                             </>
                                         ) : (
                                             <EmptyState message="No purchased credits found. This user operates on plan quotas only." icon="💳" />
@@ -4397,8 +4356,8 @@ Shortfall ledger notes:
                                                                         <thead className="text-gray-500 uppercase">
                                                                             <tr>
                                                                                 <th className="py-1 pr-3">Reservation</th>
-                                                                                <th className="py-1 pr-3">Tokens reserved</th>
-                                                                                <th className="py-1 pr-3">Tokens used</th>
+                                                                                <th className="py-1 pr-3">Reserved (USD)</th>
+                                                                                <th className="py-1 pr-3">Spent (USD)</th>
                                                                                 <th className="py-1 pr-3">Status</th>
                                                                                 <th className="py-1 pr-3">Created</th>
                                                                             </tr>
@@ -4407,8 +4366,8 @@ Shortfall ledger notes:
                                                                             {lineageResult.wallet.reservations.map((r: any, i: number) => (
                                                                                 <tr key={`wr-${i}`} className="border-t border-gray-200/70">
                                                                                     <td className="py-1 pr-3">{r.reservation_id}</td>
-                                                                                    <td className="py-1 pr-3">{Number(r.tokens_reserved || 0).toLocaleString()}</td>
-                                                                                    <td className="py-1 pr-3">{Number(r.tokens_used || 0).toLocaleString()}</td>
+                                                                                    <td className="py-1 pr-3">${Number(r.reserved_usd || 0).toFixed(2)}</td>
+                                                                                    <td className="py-1 pr-3">{r.spent_usd == null ? '—' : `$${Number(r.spent_usd).toFixed(2)}`}</td>
                                                                                     <td className="py-1 pr-3">{r.status}</td>
                                                                                     <td className="py-1 pr-3">{formatDate(r.created_at)}</td>
                                                                                 </tr>

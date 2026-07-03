@@ -105,7 +105,7 @@ DROP TABLE IF EXISTS <SCHEMA>.tenant_project_budget_reservations CASCADE;
 DROP TABLE IF EXISTS <SCHEMA>.tenant_project_budget CASCADE;
 DROP TABLE IF EXISTS <SCHEMA>.application_budget_policies CASCADE;
 DROP TABLE IF EXISTS <SCHEMA>.plan_quota_policies CASCADE;
-DROP TABLE IF EXISTS <SCHEMA>.user_token_reservations CASCADE;
+DROP TABLE IF EXISTS <SCHEMA>.user_credit_reservations CASCADE;
 DROP TABLE IF EXISTS <SCHEMA>.user_lifetime_credits CASCADE;
 DROP TABLE IF EXISTS <SCHEMA>.user_plan_overrides CASCADE;
 DROP TYPE  IF EXISTS <SCHEMA>.budget_reservation_status;

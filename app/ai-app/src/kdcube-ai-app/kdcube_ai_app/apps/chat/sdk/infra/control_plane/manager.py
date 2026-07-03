@@ -255,39 +255,17 @@ class ControlPlaneManager:
             project: str,
             user_id: str,
             usd_amount: float,
-            ref_provider: str = "anthropic",
-            ref_model: str = "claude-sonnet-4-5-20250929",
             purchase_id: Optional[str] = None,
             notes: Optional[str] = None,
     ) -> UserPlanBalance:
-        """
-        Add purchased credits in USD (converted to lifetime tokens).
-        Uses plan override balance manager's add_lifetime_credits method.
-        """
-
-
-        # from kdcube_ai_app.infra.accounting.usage import _find_llm_price
-        #
-        # # Convert USD to tokens
-        # pr = _find_llm_price(ref_provider, ref_model)
-        # p_ref_out = float(pr["output_tokens_1M"]) / 1_000_000
-        # tokens = int(usd_amount / p_ref_out)
-
-        tokens, usd_per_token = quote_tokens_for_usd(
-            usd_amount=usd_amount,
-            ref_provider=ref_provider,
-            ref_model=ref_model,
-        )
-
-        # Delegate to plan override balance manager
+        """Add `usd_amount` of purchased credits via add_lifetime_credits."""
         await self.user_credits_mgr.add_lifetime_credits(
             tenant=tenant,
             project=project,
             user_id=user_id,
-            tokens=tokens,
             usd_amount=usd_amount,
             purchase_id=purchase_id,
-            notes=notes or f"USD purchase: ${usd_amount:.2f} → {tokens:,} tokens",
+            notes=notes or f"USD purchase: ${usd_amount:.2f}",
         )
 
         # Return the canonical flattened snapshot (single SQL)

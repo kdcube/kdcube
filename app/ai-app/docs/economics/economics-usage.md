@@ -48,10 +48,10 @@ Important: changing namespaces changes the Redis key-space (effectively resets u
 ### A) User plan overrides + credits (PostgreSQL)
 **Tables:**
 - `kdcube_control_plane.user_plan_overrides` — temporary plan overrides (expires).
-- `kdcube_control_plane.user_lifetime_credits` — wallet credits (USD-native: `purchased_cents`/`spent_cents` authoritative; `lifetime_tokens_*` display-only).
+- `kdcube_control_plane.user_lifetime_credits` — wallet credits (USD-native: `purchased_cents`, `spent_cents`).
 
 ### B) User credit reservations (PostgreSQL)
-**Table:** `kdcube_control_plane.user_token_reservations`
+**Table:** `kdcube_control_plane.user_credit_reservations`
 
 This is how we prevent concurrent requests from spending the same user credits twice.
 Reservations are short-lived (TTL) and are either:
@@ -202,7 +202,7 @@ python /app/kdcube_ai_app/apps/chat/sdk/infra/economics/profile_user_economics.p
 Notes:
 - Run it inside the processor container or any environment that has the same economics config, Redis, and PostgreSQL access as the running service.
 - `--rl-bundle-id` should usually remain `__project__` because quota counters are global per tenant/project.
-- The script is diagnostic: money balances are USD-native (cents) and authoritative; token counters are display-only, and USD↔token figures are reference-price projections at the live rate.
+- The script is diagnostic: money balances are USD-native (cents); any token figures it prints are reference-price projections at the live rate.
 
 ---
 
@@ -215,15 +215,15 @@ Charging order:
 2) **Project budget** — money-based, deducted from tenant/project balance
 
 ### 2.1 User lifetime credits (USD budget, cents)
-Module: `UserCreditsManager` (USD-native; `usd_cents` args, `tokens` display-only)
+Module: `UserCreditsManager` (USD-native; `usd_cents` args)
 - Reserve before work (optional but strongly recommended):
-    - `reserve_lifetime_credits(usd_cents=..., tokens=...)`
+    - `reserve_lifetime_credits(usd_cents=...)`
 - Commit after we know the actual USD cost:
-    - `commit_reserved_lifetime_credits(usd_cents=..., tokens=...)`
+    - `commit_reserved_lifetime_credits(usd_cents=...)`
 - Any amount not covered becomes the returned **uncovered cents**.
 
 If you skip reservations, use:
-- `consume_lifetime_credits(usd_cents=..., tokens=...)`  
+- `consume_lifetime_credits(usd_cents=...)`  
   which will NOT steal from other active reservations.
 
 ### 2.2 Project budget (money)
@@ -264,11 +264,11 @@ Use cases:
 
 ### 3.3 User lifetime credits (depleting USD bucket, cents)
 Stored in `user_lifetime_credits` (USD-native):
-- purchased_cents / spent_cents — authoritative
-- lifetime_tokens_purchased / lifetime_tokens_consumed — display-only
+- purchased_cents / spent_cents
+- lifetime_usd_purchased — aggregate lifetime purchase (reporting)
 - available = purchased_cents − spent_cents − active `usd_reserved_cents`
 
-Concurrency-safe via `user_token_reservations` (holds `usd_reserved_cents`).
+Concurrency-safe via `user_credit_reservations` (holds `usd_reserved_cents`).
 
 Use cases:
 - one-time purchases (Stripe payments)
