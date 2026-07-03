@@ -1,91 +1,52 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.7.3.243"
+  ref: "2026.7.3.2030"
   description: |
-    This release follows 2026.7.1.455 with the platform-authority and
-    external-agent integration work that was validated during the Connection Hub
-    rollout.
+    This release follows 2026.7.3.243 and adds the first platform slice of
+    public, crawlable application content.
 
-    The main change is that platform authentication configuration is now driven
-    by Connection Hub authority registry data instead of being scattered across
-    assembly-only auth fields. The runtime can describe Cognito or
-    multi-Cognito platform authority providers through the same registry model
-    used by bundle-hosted platform authorities, delegated credentials, request
-    authenticators, cookies, headers, and login/logout entrypoints.
+    The core addition is the SDK public-content backbone. Applications can now
+    expose selected published content through a registry-backed public surface
+    with stable item routes, canonical metadata, sitemap support, structured
+    page rendering, and retract semantics. The platform owns the public serving
+    path while the application owns the publish/update/retract lifecycle.
 
-    The release also extends the delegated-credential and managed MCP surface.
-    Connection Hub now preserves custom delegated-consent payload fields through
-    authorize/consent, supports cleaner custom consent UI handoff, and keeps
-    delegated client consent aligned with the selected resource, tools, and
-    grants. KDCube Services and named services continue moving toward a shared
-    external-agent capability model.
+    The release also tightens the documentation around the new content surface.
+    The public-content docs are now split between platform solution docs,
+    application-surface docs, and recipes so application builders can understand
+    where to declare content, where it is indexed, and how it is made
+    discoverable without running application code on the crawler-facing path.
 
-    Conversation and named-service surfaces were expanded and hardened. The
-    conversation named-service provider now exposes search/read operations over
-    the shared backend, lightweight conversation timelines, scoped file refs,
-    short-lived file downloads, uniform batch object.get behavior, and clearer
-    MCP bridge traces for tool attempts, denials, and reconsent.
-
-    Runtime auth and stream regressions found during local testing were fixed.
-    SSE relay delivery is scoped by tenant/project so one runtime cannot drop or
-    misroute another runtime's stream messages. Control-plane and hosted-site
-    auth callback handling was tightened so real OIDC callbacks are processed
-    before stale local user state is reused.
+    Finally, the generated public article renderer no longer duplicates a
+    headline over authored bodies that already carry their own article heading.
+    This keeps public pages cleaner while preserving metadata and structured
+    content for search engines, AI crawlers, and direct readers.
 
     Highlights
 
-    - Moves platform auth configuration under Connection Hub authority registry
-      semantics for Cognito, multi-Cognito, and bundle-hosted platform authority
-      providers.
-    - Documents platform authority setup, bundle-hosted platform authorities,
-      credential envelopes, login/logout entrypoints, cookies, and headers.
-    - Fixes custom delegated OAuth consent payload preservation and adds tests
-      around authorize/consent handling.
-    - Adds authority-provider entrypoint resolution so clients can ask the
-      registry for login URLs instead of reading descriptor internals directly.
-    - Expands conversation named-service support with search, timelines,
-      scoped file references, short-lived file download URLs, and batch reads.
-    - Adds managed MCP/named-services bridge logging for call attempts,
-      authorization denials, and reconsent hints.
-    - Scopes SSE relay delivery by tenant/project to avoid cross-runtime stream
-      delivery mismatches.
-    - Improves control-plane and website auth callback behavior for OIDC
-      logins.
-    - Adds descriptor-driven economics reference-model fixes.
-    - Keeps widget build and supervisor execution paths off the event loop for
-      better runtime responsiveness.
-    - Hardens exec output contracts and oversized supervisor environment
-      handling so produced files and structured tool failures survive across
-      runtime boundaries.
+    - Adds the SDK public-content registry and serving backbone.
+    - Supports public item pages, sitemap entries, canonical metadata, and
+      retract/gone behavior for application-published content.
+    - Separates public-content documentation into solution, application-surface,
+      and recipe layers.
+    - Documents the platform/application split for public content: applications
+      publish the content record; the platform serves the public artifact.
+    - Avoids duplicate rendered headlines when the authored public body already
+      includes its own heading.
 
     Operational impact
 
-    - Environments that use Cognito or multi-Cognito should carry the platform
-      authority provider configuration in Connection Hub descriptors while
-      retaining compatible cookie/header runtime values.
-    - Environments that host an application as the platform authority can now
-      model that provider through the same registry and expose application-owned
-      login and consent screens.
-    - MCP clients should reconnect/reconsent when tool or namespace grant
-      metadata changes so their delegated credentials match the current
-      resource contract.
-    - Stream relay logs should now be easier to reason about because delivery
-      is scoped to the active tenant/project runtime.
+    - Applications that opt into public content should define explicit aliases,
+      metadata, canonical bases, and publish/retract behavior.
+    - Deployment owners should verify any public-content route is intentionally
+      exposed and backed by the expected application registry records.
+    - Crawlers and direct readers can consume public content without loading the
+      application's iframe/widget runtime.
 
     Changelog
 
-    - Added Connection Hub authority provider entrypoint lookup and platform
-      authority setup documentation.
-    - Updated runtime auth docs for credential envelopes and bundle-hosted
-      platform authority flows.
-    - Updated delegated OAuth authorize/consent route handling and regression
-      tests.
-    - Updated bundle-store logging around reserved built-in bundle resolution.
-    - Updated control-plane auth callback handling and auth cookie utilities.
-    - Added conversation named-service provider/read/export facade changes and
-      KDCube Services MCP bridge improvements.
-    - Added economics reference-model fixes and descriptor-driven plan behavior.
-    - Added SSE relay tenant/project scoping.
-    - Added runtime execution contract and supervisor env offload fixes.
+    - Added the public-content SDK backbone.
+    - Added and reorganized public-content documentation and recipes.
+    - Updated public article body rendering to avoid duplicate title injection.
 config:
-  version: "2026.7.3.243"
+  version: "2026.7.3.2030"
