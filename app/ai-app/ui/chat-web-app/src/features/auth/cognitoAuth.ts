@@ -128,10 +128,25 @@ class CognitoAuth {
                     }
                     store.dispatch(startLoading())
                     try {
-                        const user = await userManager!.getUser() ?? await userManager.signinCallback()
+                        const hasCallbackParams = typeof window !== "undefined"
+                            && new URLSearchParams(window.location.search).has("code");
+                        let user: User | null = null;
+                        if (hasCallbackParams) {
+                            try {
+                                user = await userManager.signinCallback();
+                            } catch (callbackError) {
+                                user = await userManager.getUser();
+                                if (!user) {
+                                    throw callbackError;
+                                }
+                            }
+                        } else {
+                            user = await userManager.getUser();
+                        }
                         if (user) {
+                            setUser(user)
                             const userState = user.state ? JSON.parse(user.state as string) : null
-                            const navigateTo = userState && userState.navigateTo ? userState.navigateTo : "/"
+                            const navigateTo = userState && userState.navigateTo ? userState.navigateTo : selectChatPath(state)
                             store.dispatch(finishLoading(navigateTo))
                         } else {
                             console.error("wtf") //todo: handle this

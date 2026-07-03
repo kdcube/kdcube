@@ -18,14 +18,14 @@ export function setCookie(name:string, value:string, opts:CookieOptions = {}) {
             opts.expires instanceof Date
                 ? opts.expires
                 : new Date(Date.now() + opts.expires * 864e5); // days → ms
-        cookie += `; expires=${date.toUTCString()}`;
+        cookie += `; Expires=${date.toUTCString()}`;
     }
 
-    cookie += `; path=${opts.path ?? '/'}`;
+    cookie += `; Path=${opts.path ?? '/'}`;
 
-    if (opts.domain)   cookie += `; domain=${opts.domain}`;
-    if (opts.secure)   cookie += `; secure`;
-    cookie += `; samesite=${opts.sameSite ?? 'Lax'}`;
+    if (opts.domain)   cookie += `; Domain=${opts.domain}`;
+    if (opts.secure)   cookie += `; Secure`;
+    cookie += `; SameSite=${opts.sameSite ?? 'Lax'}`;
 
     document.cookie = cookie;
 }

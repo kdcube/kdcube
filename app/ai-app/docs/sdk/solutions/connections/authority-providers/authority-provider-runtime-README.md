@@ -4,12 +4,14 @@ title: "Authority Provider Runtime"
 summary: "Canonical Connection Hub runtime contract for authenticator selection, authority-scoped identities, linkers, grant resolvers, and surface guards."
 status: design
 tags: ["sdk", "solutions", "connections", "connection-hub", "authority-provider", "authenticator-selector", "surface-guard", "grants"]
-updated_at: 2026-07-01
+updated_at: 2026-07-03
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/authority-providers/credential-envelope-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/request-authenticators/request-authenticators-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/authority-projection/authority-projection-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/platform-authority/setup-platform-authority-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/platform-authority/host-platform-authority-in-bundle-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-selector-README.md
 ---
 # Authority Provider Runtime
@@ -209,28 +211,203 @@ provider engines to live in bundles, SDK modules, or platform auth managers.
 The hosting bundle is resolved by its provider `entrypoints` and does not carry
 a local platform-session policy branch.
 
+## Platform Authority Provider Methods
+
+KDCube currently supports two main ways to provide the platform authority:
+
+1. **Platform-managed token authority**: Cognito, multi-Cognito, or local
+   SimpleIDP. The platform verifier validates the browser's platform tokens
+   directly.
+2. **Bundle-hosted platform session authority**: a bundle hosts the login UI and
+   upstream proof flow, then asks the Connection Hub SDK runtime to issue a
+   standard KDCube bundle-session token.
+
+Both methods produce a `kdcube.platform` subject. They differ in how the browser
+gets the session and which cookie slots are meaningful.
+
+### Cognito / Multi-Cognito Platform Authority
+
+```text
+Browser
+  -> /api/cp-frontend-config
+  -> authType=cognito + oidcConfig
+  -> Cognito Hosted UI / OIDC code flow
+  -> /platform/callback?code=...&state=...
+  -> browser OIDC client receives access token + id token
+  -> browser writes platform cookies
+  -> /profile verifies the platform session server-side
+```
+
+Server configuration:
+
+- `assembly.yaml` selects the platform provider:
+
+  ```yaml
+  auth:
+    type: cognito
+    connection_hub:
+      bundle_id: connection-hub@1-0
+      authority_id: kdcube.platform
+      provider_id: cognito
+  ```
+
+- Connection Hub owns provider details under
+  `authority_registry.authorities.kdcube.platform.providers.cognito`.
+- The runtime maps that provider into `MultiCognitoAuthManager`.
+- The verifier expects an access token and, when available, an ID token.
+
+Browser configuration:
+
+- `/api/cp-frontend-config` returns `auth.authType: cognito`,
+  `auth.oidcConfig.authority`, `auth.oidcConfig.client_id`,
+  `auth.authTokenCookieName`, and `auth.idTokenCookieName`.
+- Browser clients run the OIDC callback flow and write:
+
+  | Cookie | Meaning in Cognito mode |
+  | --- | --- |
+  | `AUTH_TOKEN_COOKIE_NAME` / `__Secure-LATC` | Cognito/OIDC access token. |
+  | `ID_TOKEN_COOKIE_NAME` / `__Secure-LITC` | Cognito/OIDC ID token. |
+  | `MASQUERADED_TOKEN_COOKIE_NAME` / `__Secure-LMTC` | Optional masquerade token. |
+
+The callback URL looking like `/platform/callback?code=...&state=...` is normal
+for Cognito authorization-code flow because Cognito redirects back to the
+configured KDCube `redirect_uri`.
+
+### SimpleIDP Platform Authority
+
+Simple auth is the local/development platform-token path. It does not involve a
+browser OIDC callback.
+
+```text
+Configured SimpleIDP user/token
+  -> browser or host receives a platform token
+  -> token is carried in Authorization or AUTH_TOKEN_COOKIE_NAME
+  -> SimpleIDP verifier resolves kdcube.platform subject
+  -> /profile verifies the platform session server-side
+```
+
+Use this only when the deployment intentionally wants a simple platform identity
+registry, usually local development, demos, or embedded test surfaces. Production
+browser deployments should prefer Cognito/multi-Cognito or a registered
+bundle-session platform provider.
+
+### Bundle-Hosted Platform Session Authority
+
+```text
+Browser
+  -> /api/cp-frontend-config
+  -> authType=bundle + loginUrl/profileUrl/logoutUrl
+  -> bundle-hosted login page
+  -> upstream proof, for example Google ID token
+  -> bundle public operation calls Connection Hub SDK runtime
+  -> runtime verifies upstream proof and resolves grants
+  -> runtime issues KDCube bundle-session token
+  -> server sets platform auth cookie
+  -> /profile verifies the platform session server-side
+```
+
+Server configuration:
+
+- `assembly.yaml` selects the Connection Hub provider:
+
+  ```yaml
+  auth:
+    type: bundle
+    connection_hub:
+      bundle_id: connection-hub@1-0
+      authority_id: kdcube.platform
+      provider_id: product_google_session
+      entrypoint: login
+  ```
+
+- Connection Hub owns provider details under
+  `authority_registry.authorities.kdcube.platform.providers.<provider_id>`.
+- The provider type is `bundle_session_login`.
+- The bundle owns only the registered UI/operations, for example
+  `entrypoints.login`, `entrypoints.session_issue`, and optionally
+  `entrypoints.consent`.
+
+Browser configuration:
+
+- `/api/cp-frontend-config` returns `auth.authType: bundle`, `auth.loginUrl`,
+  `auth.profileUrl`, and `auth.logoutUrl`.
+- There is no browser OIDC token-writing flow unless the hosted bundle page
+  internally uses an upstream OIDC library.
+- The issued KDCube session token is carried in:
+
+  | Cookie | Meaning in bundle-session mode |
+  | --- | --- |
+  | `AUTH_TOKEN_COOKIE_NAME` / `__Secure-LATC` | KDCube bundle-session token. |
+  | `ID_TOKEN_COOKIE_NAME` / `__Secure-LITC` | Not required for bundle-session auth; Cognito-specific clients may not see it. |
+  | `MASQUERADED_TOKEN_COOKIE_NAME` / `__Secure-LMTC` | Optional masquerade token. |
+
+The bundle-session verifier uses the platform auth token. It does not need a
+Cognito-style ID token.
+
 ## Browser Auth Contract
 
 Browser clients should consume the platform auth contract returned by
-`/api/cp-frontend-config`; they should not branch on whether the selected
-provider is Cognito, bundle-session, or another platform authority.
+`/api/cp-frontend-config`; they should not construct provider URLs from bundle
+ids, tenant/project ids, or descriptor internals.
 
 | Frontend field | Source | Purpose |
 | --- | --- | --- |
+| `auth.authType` | Selected platform provider. | Selects the browser auth driver, for example `cognito`, `bundle`, or `simple`. |
+| `auth.oidcConfig` | Cognito/multi-Cognito provider. | Browser OIDC driver config. Present only for OIDC-backed browser auth. |
 | `auth.loginUrl` | Connection Hub provider `entrypoints.login`, when the provider hosts browser login. | Where the browser navigates to create a platform session. |
-| `auth.profileUrl` | Platform default `/profile` unless overridden. | Server-side current-session probe. This is the canonical "logged in?" check. |
+| `auth.profileUrl` | Platform default `/profile` unless overridden. | Server-side current-session probe after the browser has established auth cookies. |
 | `auth.logoutUrl` | Platform default `/api/platform/logout` unless overridden. | Generic platform logout. It clears platform cookies and invalidates bundle-session storage when applicable. |
 
-OIDC metadata, when present, is a browser login driver. It is not the source of
-truth for whether the platform sees the request as authenticated. The browser
-asks `auth.profileUrl`; the platform gateway resolves the active authority and
-session.
+OIDC metadata, when present, is a browser login driver. The browser completes
+the OIDC callback and writes the platform cookies from the OIDC tokens. After
+that, `auth.profileUrl` is the server-side confirmation that the platform
+gateway accepts the current request as an authenticated platform session.
 
-`/api/platform/logout` is intentionally provider-neutral. For bundle-session
-providers it reads the configured platform auth cookie, calls the
-bundle-session authority logout primitive, and clears the platform cookies. A
-provider may still define a branded sign-out page or upstream-provider cleanup
-flow, but the KDCube platform session is ended by the platform logout contract.
+`/api/platform/logout` is intentionally provider-neutral where it is routed by
+the deployment proxy. For bundle-session providers it reads the configured
+platform auth cookie, calls the bundle-session authority logout primitive, and
+clears the platform cookies. A provider may still define a branded sign-out page
+or upstream-provider cleanup flow, but the KDCube platform session is ended by
+the platform logout contract.
+
+## Switching Platform Authority Providers
+
+Switching between Cognito and bundle-session on the same browser origin is a
+deployment/test operation, not a normal user flow. Browser cookies are scoped by
+origin, path, and cookie name. They are not scoped by tenant, project, or active
+KDCube descriptor.
+
+Before switching a local environment from one platform provider to another:
+
+1. Stop or refresh the old environment.
+2. If possible, call the old environment's `auth.logoutUrl` while it is still
+   running.
+3. Clear site data for the shared origin if the previous provider set HttpOnly
+   cookies and the logout route is not available.
+4. Start the new environment.
+5. Check `/api/cp-frontend-config`.
+6. Check that the server-side auth settings match the same cookie names and
+   provider type.
+7. Complete login.
+8. Check `/profile`.
+
+Expected checks:
+
+| Selected provider | `/api/cp-frontend-config` | Browser cookies after login | `/profile` |
+| --- | --- | --- | --- |
+| Cognito / multi-Cognito | `authType: cognito`, `oidcConfig` present | `LATC` access token and `LITC` ID token | Non-anonymous platform user. |
+| Bundle-session | `authType: bundle`, `loginUrl` present | `LATC` bundle-session token; `LITC` is not required | Non-anonymous platform user. |
+| SimpleIDP | `authType: simple` or local simple config | `LATC` simple platform token or Authorization header | Non-anonymous platform user. |
+
+If `/profile` remains anonymous after a successful browser login:
+
+- verify the active `/api/cp-frontend-config` came from the intended runtime;
+- verify the proxy routes `/profile` and, if used, `/api/platform/logout` to
+  ingress;
+- verify old HttpOnly cookies from another provider are not still present on the
+  same origin;
+- verify Cognito login wrote both access and ID token cookies;
+- verify bundle-session login wrote the platform auth/session cookie.
 
 Google in this model is an upstream authority/provider, not the platform
 authority. The platform subject is created under `kdcube.platform` by the

@@ -4,12 +4,13 @@ title: "Authority Credential Envelope"
 summary: "Canonical kdcube.credential.v1 shape used to route tokens and proofs to reachable authority providers."
 status: active
 tags: ["sdk", "solutions", "connections", "authority-provider", "credential", "delegated-connections", "data-bus", "oauth"]
-updated_at: 2026-06-28
+updated_at: 2026-07-03
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/authority-providers/authority-provider-runtime-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-connections/delegated-connections-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/auth-bundle-federated-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-credentials/oauth-delegated-credential-protocol-adapter-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/platform-authority/setup-platform-authority-README.md
 ---
 # Authority Credential Envelope
 
@@ -86,6 +87,36 @@ Reachability is intentional:
   bundle is loaded, normally proc.
 - Redis discovery records can expose authority metadata across runtimes without
   importing bundle verifier code.
+
+## Platform Browser Sessions And Envelopes
+
+Not every credential used by a platform authority is a
+`kdcube.credential.v1` envelope.
+
+`kdcube.credential.v1` is the KDCube-issued self-description used when KDCube
+needs to route a credential through Connection Hub authority/provider metadata.
+External provider tokens remain in their provider-native shape and are verified
+by the selected platform provider.
+
+| Platform provider method | Browser credential | Envelope relationship |
+| --- | --- | --- |
+| Cognito / multi-Cognito | Cognito/OIDC access token in `AUTH_TOKEN_COOKIE_NAME`; Cognito/OIDC ID token in `ID_TOKEN_COOKIE_NAME`. | External JWTs. They are not rewritten into a KDCube envelope in the browser. The selected Connection Hub provider tells the runtime which Cognito verifier/trust list to use. |
+| SimpleIDP | Simple platform token in `AUTH_TOKEN_COOKIE_NAME` or Authorization header. | Local/simple platform credential. It does not require an envelope unless a future issuer explicitly adds one. |
+| Bundle-hosted platform session | KDCube `kst1` bundle-session token in `AUTH_TOKEN_COOKIE_NAME`. | KDCube-issued session credential. The bundle-session authority/runtime may include envelope metadata for routing and diagnostics, but browser clients treat it as the platform auth/session token. |
+| Delegated external client | KDCube `kst1` delegated-client token in Authorization bearer. | KDCube-issued delegated credential with explicit `delegated_client_access` envelope/grant metadata. |
+
+The browser-facing contract comes from `/api/cp-frontend-config`. Clients should
+use its `authType`, `oidcConfig`, `loginUrl`, `profileUrl`, `logoutUrl`, and
+cookie names rather than attempting to infer credential kind from token shape.
+
+Switching platform providers on the same origin can leave stale cookies from the
+previous provider. Always verify the expected cookie set and `/profile` after a
+switch:
+
+- Cognito/multi-Cognito: access token cookie and ID token cookie;
+- SimpleIDP: simple platform token cookie or Authorization header;
+- bundle-session: platform auth/session cookie only; ID token cookie is not
+  required.
 
 ## Current Credential Kinds
 

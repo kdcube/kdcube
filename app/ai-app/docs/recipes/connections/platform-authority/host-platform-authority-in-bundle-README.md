@@ -1,11 +1,12 @@
 ---
-id: repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/host-platform-authority-in-bundle-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/platform-authority/host-platform-authority-in-bundle-README.md
 title: "Host A Platform Authority Flow In A Bundle"
 summary: "Recipe for deployments that do not want Cognito as the only platform login path: Connection Hub owns authority registration and policy, while a bundle hosts the login UI/operation and issues standard KDCube bundle-session credentials."
 status: draft
 tags: ["recipes", "connections", "connection-hub", "authority-registry", "bundle-session", "platform-auth", "custom-authority"]
-updated_at: 2026-07-02
+updated_at: 2026-07-03
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/platform-authority/setup-platform-authority-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/authority-providers/authority-provider-runtime-README.md
   - repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/docs/integrations/platform-session-issuer.md
@@ -66,7 +67,7 @@ SDK runtime verifies upstream proof
 SDK runtime issues standard kst1 bundle-session token
       |
       v
-Browser receives platform auth cookies
+Browser receives platform auth/session cookie
       |
       v
 Future ingress/proc requests use normal platform auth verifier
@@ -143,11 +144,12 @@ Cognito, or another platform authority. It should use the auth URLs returned by
 }
 ```
 
-`profileUrl` is the canonical "am I logged in?" check. `logoutUrl` is the
-canonical browser logout endpoint. For bundle-session providers,
+`profileUrl` is the canonical server-side "am I logged in?" check. `logoutUrl`
+is the canonical browser logout endpoint. For bundle-session providers,
 `/api/platform/logout` invalidates the active bundle-session record and clears
-the platform cookies. The hosting bundle does not need a logout operation for
-the normal browser shell.
+the platform auth/session cookie. The hosting bundle does not need a logout
+operation for the normal browser shell, but the deployment proxy must route the
+configured `logoutUrl` to ingress if the shell exposes it.
 
 ## Platform Secret
 
@@ -494,7 +496,7 @@ The login page is bundle-owned UI and is registered at
 `authority_registry.authorities.<platform-authority>.providers.<provider>.entrypoints.login`.
 In the Versatile example, it renders Google Identity Services, posts the
 credential to `auth_google_session`, and relies on the SDK runtime to set the
-configured KDCube platform auth cookies.
+configured KDCube platform auth/session cookie.
 
 The page may be replaced by a product-specific login UI as long as the public
 operation calls the same SDK runtime and the provider is registered in
@@ -511,15 +513,18 @@ Connection Hub.
 
 4. Complete the hosted login flow.
 
-5. Confirm the response sets platform auth cookies.
+5. Confirm the response sets the configured platform auth/session cookie
+   (`AUTH_TOKEN_COOKIE_NAME`, commonly `__Secure-LATC`). A Cognito-style ID
+   token cookie is not required for bundle-session auth.
 
 6. Reload the platform frontend.
 
 7. Confirm a normal platform user can open registered-user surfaces.
 
-8. Call `POST /api/platform/logout`, or press the shell logout button if the
-   host uses the generated `auth.logoutUrl`. Confirm `/profile` returns
-   anonymous and registered-user surfaces are hidden.
+8. Call the generated `auth.logoutUrl`, or press the shell logout button if it
+   uses that URL. Confirm `/profile` returns anonymous and registered-user
+   surfaces are hidden. If a local proxy does not route logout yet, clear site
+   data for the test origin before switching to another platform provider.
 
 9. Confirm an admin bootstrap rule grants admin only when the verified upstream
    claim matches.
@@ -542,6 +547,7 @@ The hosted operation must fail closed if:
 
 ## Related Recipes
 
-- [Link From External Channel](link-from-external-channel-README.md)
-- [Telegram Integration](integrations/telegram-README.md)
-- [Delegate A KDCube Service To An External Client](delegate-kdcube-service-to-external-client-README.md)
+- [Set Up A Platform Authority Provider](setup-platform-authority-README.md)
+- [Link From External Channel](../link-from-external-channel-README.md)
+- [Telegram Integration](../integrations/telegram-README.md)
+- [Delegate A KDCube Service To An External Client](../delegate-kdcube-service-to-external-client-README.md)

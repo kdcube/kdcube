@@ -2152,10 +2152,16 @@ def _to_entry(bid: str, v: Dict[str, Any]) -> BundleEntry:
         # Ignore any repo/ref/path/module fields and keep the built-in entry.
         if _entries_equivalent(candidate, reserved):
             return reserved
-        if repo or ref or subdir or v.get("path") or v.get("module") or v.get("name") or v.get("description"):
+        ignored_loader_fields = [
+            key
+            for key in ("repo", "ref", "subdir", "path", "module", "git_commit")
+            if _norm_str(v.get(key))
+        ]
+        if ignored_loader_fields:
             _log.warning(
-                "Bundle id '%s' is reserved; ignoring repo/ref/path/module and using built-in bundle entry.",
+                "Bundle id '%s' is reserved; ignoring loader fields %s and using built-in bundle entry.",
                 bid,
+                ignored_loader_fields,
             )
         return reserved
     return candidate

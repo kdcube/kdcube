@@ -567,7 +567,7 @@ async def authorize(request: Request) -> Response:
         # return their JSON payload.
         if getattr(denied, "status_code", None) == 401:
             return_to = _return_to(request)
-            return RedirectResponse(f"/signin?next={quote(return_to, safe='')}", status_code=302)
+            return RedirectResponse(f"/signin/?next={quote(return_to, safe='')}", status_code=302)
         return denied
 
     inventory = await _platform_grant_inventory(user or {}, req.scopes, cfg=cfg, resource=req.resource)
@@ -785,7 +785,7 @@ async def oauth_logout(request: Request) -> Response:
     if not next_url.startswith("/") or next_url.startswith("//"):
         next_url = "/"
 
-    response = RedirectResponse(f"/signin?next={quote(next_url, safe='')}", status_code=302)
+    response = RedirectResponse(f"/signin/?next={quote(next_url, safe='')}", status_code=302)
     auth_cfg = get_settings().AUTH
     cookie_names = {
         oauth_delegated_config(request).auth_cookie_name,

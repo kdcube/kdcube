@@ -1,5 +1,5 @@
 import {Loader2} from "lucide-react";
-import {useEffect} from "react";
+import {useEffect, useRef} from "react";
 import {useAppDispatch, useAppSelector} from "../../app/store.ts";
 import {logInCallback} from "./authMiddleware.ts";
 import {selectAuthIsLoading, selectNavigateTo} from "./authSlice.ts";
@@ -8,12 +8,14 @@ import {useNavigate} from "react-router-dom";
 const AuthCallback = ()=>{
     const dispatch = useAppDispatch();
     const navigate = useNavigate();
+    const submittedRef = useRef(false);
 
     const isLoading = useAppSelector(selectAuthIsLoading);
     const navigateTo = useAppSelector(selectNavigateTo);
 
     useEffect(() => {
-        if (!isLoading) {
+        if (!isLoading && !submittedRef.current) {
+            submittedRef.current = true;
             dispatch(logInCallback());
         }
     }, [dispatch, isLoading]);

@@ -388,12 +388,8 @@ def _session_response(
             "role_binding_source": role_binding_source,
         }
     )
-    for cookie_name in {
-        _str(auth_cfg.AUTH_TOKEN_COOKIE_NAME),
-        _str(auth_cfg.ID_TOKEN_COOKIE_NAME),
-    }:
-        if not cookie_name:
-            continue
+    cookie_name = _str(auth_cfg.AUTH_TOKEN_COOKIE_NAME)
+    if cookie_name:
         response.set_cookie(
             cookie_name,
             grant.token,

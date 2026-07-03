@@ -28,6 +28,8 @@ export interface SimpleAuthConfig extends AuthConfig {
 export interface CognitoAuthConfig extends AuthConfig {
     authType: "cognito";
     idTokenHeaderName: string;
+    profileUrl?: string;
+    logoutUrl?: string;
     oidcConfig: {
         authority:string;
         client_id:string;

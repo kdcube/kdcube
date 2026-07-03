@@ -248,7 +248,7 @@ def test_authorize_unauthenticated_redirects_to_signin(client):
     r = client.get("/oauth/authorize", params=_params(), follow_redirects=False)
     assert r.status_code == 302
     loc = r.headers["location"]
-    assert loc.startswith("/signin?next=")
+    assert loc.startswith("/signin/?next=")
     nxt = dict(up.parse_qsl(up.urlsplit(loc).query))["next"]
     # the full authorize request (path + multi-param query) is preserved url-encoded
     assert nxt.startswith("/oauth/authorize")

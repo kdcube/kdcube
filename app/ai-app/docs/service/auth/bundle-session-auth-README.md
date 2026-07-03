@@ -4,6 +4,7 @@ title: "Bundle Session Auth"
 summary: "Platform-recognized login sessions issued by a bundle-owned sign-in flow."
 tags: ["service", "auth", "bundle", "session", "sso"]
 keywords: ["bundle auth", "session token", "front shell", "login", "logout", "register", "invalidate"]
+updated_at: 2026-07-03
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/bundle-simple-idp-bridge-README.md
@@ -121,7 +122,7 @@ providers:
 | Descriptor field | Browser credential |
 |---|---|
 | `issuer.cookie.auth_token_cookie_name` | Auth/access cookie consumed by the gateway. |
-| `issuer.cookie.id_token_cookie_name` | Optional identity cookie. For bundle session auth it can carry the same `kst1.*` token when a frontend expects both cookies. |
+| `issuer.cookie.id_token_cookie_name` | Optional compatibility field for clients that display the configured cookie names. Bundle-session auth does not require this cookie. |
 
 In bundle code, read these names from settings:
 
@@ -130,7 +131,6 @@ from kdcube_ai_app.apps.chat.sdk.config import get_settings
 
 
 auth_cookie = get_settings().AUTH.AUTH_TOKEN_COOKIE_NAME
-id_cookie = get_settings().AUTH.ID_TOKEN_COOKIE_NAME
 ```
 
 ## Storage Surfaces
@@ -210,14 +210,6 @@ async def auth_external(self, request=None, **payload):
         httponly=True,
         samesite="lax",
     )
-    response.set_cookie(
-        auth_cfg.ID_TOKEN_COOKIE_NAME,
-        grant.token,
-        path="/",
-        secure=True,
-        httponly=True,
-        samesite="lax",
-    )
     return response
 ```
 
@@ -273,8 +265,8 @@ response.set_cookie(
 ```
 
 Use the descriptor-configured cookie name in production code instead of a hard
-coded value. When a separate ID cookie is required by a frontend integration, it
-can carry the same token for this provider.
+coded value. Do not mirror the bundle-session token into the Cognito ID-token
+cookie unless a deployment explicitly adds a compatibility bridge.
 
 ### Login Or Register
 
@@ -313,7 +305,6 @@ wants a single call for first login and subsequent login.
 
 5. Bundle response sets:
      auth auth-token cookie = kst1.*
-     optional id-token cookie = kst1.*
 
 6. Browser calls:
      GET /profile
