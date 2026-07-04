@@ -97,15 +97,15 @@ class _Credits:
     async def get_lifetime_balance(self, **kw):
         return self.balance
 
-    async def reserve_lifetime_tokens(self, **kw):
+    async def reserve_lifetime_credits(self, **kw):
         self.reserved.append(kw)
         return self.reserve_ok
 
-    async def commit_reserved_lifetime_tokens(self, **kw):
+    async def commit_reserved_lifetime_credits(self, **kw):
         self.committed.append(kw)
         return self.commit_uncovered
 
-    async def consume_lifetime_tokens(self, **kw):
+    async def consume_lifetime_credits(self, **kw):
         self.consumed.append(kw)
         return self.consume_uncovered
 
@@ -342,7 +342,7 @@ async def test_settle_exposes_wallet_uncovered_intermediates():
     # wallet can't fully cover its target -> the result exposes wallet_consumed /
     # user_uncovered (tokens + usd) for the caller's underfunded event. commit_uncovered
     # leaves a reservation-free remainder that consume_lifetime_tokens reports uncovered.
-    credits = _Credits(balance=10**9, commit_uncovered=2000, consume_uncovered=2000)
+    credits = _Credits(balance=10**9, commit_uncovered=2, consume_uncovered=2)
     budget = _Budget(overdraft=0.0, available_usd=0.05)
     ctx = _ctx(budget=budget, credits=credits)
     res = await _resv(
@@ -367,7 +367,7 @@ async def test_settle_subscription_runtime_shortfall_absorbed_by_subscription_he
     # subscription primary with funds beyond the pre-run plan share (headroom). A
     # runtime wallet shortfall (consume returns fewer tokens than the fresh balance
     # promised) is absorbed by the subscription budget's headroom, NOT the project.
-    credits = _Credits(balance=10**9, commit_uncovered=2000, consume_uncovered=2000)
+    credits = _Credits(balance=10**9, commit_uncovered=2, consume_uncovered=2)
     sub = _SubBudget(available_usd=1.0)                  # plenty of headroom at settle
     ctx = _ctx(sub=sub, credits=credits)
     res = ff.PlanFundingReservation(
@@ -396,7 +396,7 @@ async def test_settle_subscription_runtime_shortfall_absorbed_by_subscription_he
 async def test_settle_subscription_runtime_shortfall_falls_to_project_when_no_headroom():
     # subscription funds exhausted at the plan share (no headroom) -> the runtime
     # wallet shortfall falls through to the project as shortfall:wallet_subscription.
-    credits = _Credits(balance=10**9, commit_uncovered=2000, consume_uncovered=2000)
+    credits = _Credits(balance=10**9, commit_uncovered=2, consume_uncovered=2)
     sub = _SubBudget(available_usd=0.0)                  # nothing beyond the reserved plan share
     ctx = _ctx(sub=sub, credits=credits)
     res = ff.PlanFundingReservation(
@@ -425,7 +425,7 @@ async def test_settle_subscription_no_reservation_charges_subscription_not_proje
     # the wallet was the in-flight primary. A runtime wallet shortfall absorbed by the
     # subscription headroom must debit the SUBSCRIPTION budget directly — never the
     # project (which is the last resort). Regression for the no-reservation settle path.
-    credits = _Credits(balance=10**9, commit_uncovered=2000, consume_uncovered=2000)
+    credits = _Credits(balance=10**9, commit_uncovered=2, consume_uncovered=2)
     sub = _SubBudget(available_usd=1.0)                  # plenty of headroom at settle
     rl = _RL(available_tokens=0)                         # quota fully exhausted
     ctx = _ctx(rl=rl, sub=sub, credits=credits)

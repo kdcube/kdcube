@@ -95,15 +95,15 @@ class _Credits:
     async def get_lifetime_balance(self, **kw):
         return self.balance
 
-    async def reserve_lifetime_tokens(self, **kw):
+    async def reserve_lifetime_credits(self, **kw):
         self.reserved.append(kw)
         return self.reserve_ok
 
-    async def commit_reserved_lifetime_tokens(self, **kw):
+    async def commit_reserved_lifetime_credits(self, **kw):
         self.committed.append(kw)
         return 0
 
-    async def consume_lifetime_tokens(self, **kw):
+    async def consume_lifetime_credits(self, **kw):
         self.consumed.append(kw)
         return 0
 
@@ -374,9 +374,9 @@ def _trace(ep) -> dict:
         "budget_committed_usd": [_usd(k) for k in b.committed],
         "budget_forced": [(_usd(k), k.get("note") or k.get("notes")) for k in b.forced],
         "budget_released": len(b.released),
-        "wallet_reserved_tokens": [int(k.get("tokens") or 0) for k in c.reserved],
-        "wallet_committed_tokens": [int(k.get("tokens") or 0) for k in c.committed],
-        "wallet_consumed_tokens": [int(k.get("tokens") or 0) for k in c.consumed],
+        "wallet_reserved_cents": [int(k.get("usd_cents") or 0) for k in c.reserved],
+        "wallet_committed_cents": [int(k.get("usd_cents") or 0) for k in c.committed],
+        "wallet_consumed_cents": [int(k.get("usd_cents") or 0) for k in c.consumed],
         "wallet_released": len(c.released),
         "rl_committed_tokens": [int(k.get("tokens") or 0) for k in r.commits],
         "rl_released": [kind for (kind, _) in r.releases],
@@ -400,7 +400,7 @@ async def test_characterize_registered_project_unlimited(monkeypatch):
     assert _trace(ep) == {
         "budget_reserved_usd": [2.0], "budget_committed_usd": [0.03],
         "budget_forced": [], "budget_released": 0,
-        "wallet_reserved_tokens": [], "wallet_committed_tokens": [], "wallet_consumed_tokens": [],
+        "wallet_reserved_cents": [], "wallet_committed_cents": [], "wallet_consumed_cents": [],
         "wallet_released": 0, "rl_committed_tokens": [1000], "rl_released": [], "events": [],
     }
 
@@ -418,8 +418,8 @@ async def test_characterize_registered_project_finite_plus_wallet_split(monkeypa
     assert _trace(ep) == {
         "budget_reserved_usd": [0.05], "budget_committed_usd": [0.0453],
         "budget_forced": [], "budget_released": 0,
-        "wallet_reserved_tokens": [113045], "wallet_committed_tokens": [13102],
-        "wallet_consumed_tokens": [], "wallet_released": 0,
+        "wallet_reserved_cents": [170], "wallet_committed_cents": [20],
+        "wallet_consumed_cents": [], "wallet_released": 0,
         "rl_committed_tokens": [2898], "rl_released": [], "events": [],
     }
 
@@ -435,7 +435,7 @@ async def test_characterize_project_shortfall_absorption(monkeypatch):
     assert _trace(ep) == {
         "budget_reserved_usd": [2.0], "budget_committed_usd": [1.8116],
         "budget_forced": [(0.6884, "shortfall:free_plan")], "budget_released": 0,
-        "wallet_reserved_tokens": [], "wallet_committed_tokens": [], "wallet_consumed_tokens": [],
+        "wallet_reserved_cents": [], "wallet_committed_cents": [], "wallet_consumed_cents": [],
         "wallet_released": 0, "rl_committed_tokens": [160000], "rl_released": [], "events": [],
     }
 
@@ -449,7 +449,7 @@ async def test_characterize_privileged_bypass(monkeypatch):
     assert _trace(ep) == {
         "budget_reserved_usd": [], "budget_committed_usd": [],
         "budget_forced": [(0.03, "settle: admin bypass")], "budget_released": 0,
-        "wallet_reserved_tokens": [], "wallet_committed_tokens": [], "wallet_consumed_tokens": [],
+        "wallet_reserved_cents": [], "wallet_committed_cents": [], "wallet_consumed_cents": [],
         "wallet_released": 0, "rl_committed_tokens": [1000], "rl_released": [], "events": [],
     }
 
@@ -465,8 +465,8 @@ async def test_characterize_project_exhausted_wallet_covers(monkeypatch):
     assert _trace(ep) == {
         "budget_reserved_usd": [], "budget_committed_usd": [],
         "budget_forced": [], "budget_released": 0,
-        "wallet_reserved_tokens": [115943], "wallet_committed_tokens": [2000],
-        "wallet_consumed_tokens": [], "wallet_released": 0,
+        "wallet_reserved_cents": [174], "wallet_committed_cents": [5],
+        "wallet_consumed_cents": [], "wallet_released": 0,
         # plan_part=0 (no project funds) -> no plan token quota consumed
         "rl_committed_tokens": [0], "rl_released": [], "events": [],
     }
@@ -516,7 +516,7 @@ async def test_characterize_internal_subscription_funds_from_project(monkeypatch
     assert _trace(ep) == {
         "budget_reserved_usd": [2.0], "budget_committed_usd": [0.03],
         "budget_forced": [], "budget_released": 0,
-        "wallet_reserved_tokens": [], "wallet_committed_tokens": [], "wallet_consumed_tokens": [],
+        "wallet_reserved_cents": [], "wallet_committed_cents": [], "wallet_consumed_cents": [],
         "wallet_released": 0, "rl_committed_tokens": [1000], "rl_released": [], "events": [],
     }
 
@@ -559,7 +559,7 @@ async def test_characterize_post_run_warning(monkeypatch):
     assert _trace(ep) == {
         "budget_reserved_usd": [0.0431], "budget_committed_usd": [0.03],
         "budget_forced": [], "budget_released": 0,
-        "wallet_reserved_tokens": [], "wallet_committed_tokens": [], "wallet_consumed_tokens": [],
+        "wallet_reserved_cents": [], "wallet_committed_cents": [], "wallet_consumed_cents": [],
         "wallet_released": 0, "rl_committed_tokens": [1000], "rl_released": [],
         "events": ["rate_limit.warning"],
     }

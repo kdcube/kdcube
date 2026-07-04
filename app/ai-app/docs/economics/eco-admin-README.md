@@ -235,7 +235,7 @@ Backend: `POST /app-budget/topup`
 
 UI card: **Lifetime Credits**
 
-- Adds token credits based on USD amount and reference model pricing.
+- Adds USD credits (stored in cents); the reference model only sets the displayed token figure.
 
 Backend: `POST /plan-override/add-lifetime-credits`
 

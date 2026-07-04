@@ -79,7 +79,7 @@ Plan is resolved in the entrypoint at request time. The active plan determines b
 Funding sources are money or tokens used to pay for requests:
 
 - Subscription period budget (per‑month balance, USD)
-- Wallet or lifetime credits (token bucket, USD‑quoted)
+- Wallet or lifetime credits (USD balance, stored in cents)
 - Project budget (tenant/project balance, USD)
 
 Role determines which funding sources are allowed, while plan determines rate limits.
@@ -182,8 +182,9 @@ part; the wallet covers the over‑quota/over‑funds remainder.
   token quota, P the primary funds (subscription period budget for external subscribers,
   project budget for everyone else, including internal subscriptions). The primary money
   hold is placed for `plan_part`.
-- `wallet_part = R − plan_part` — reserved against the wallet (lifetime tokens) when a wallet
-  is present and allowed for the surface.
+- `wallet_part = R − plan_part` — reserved against the wallet whenever a wallet is present
+  (balance > 0). The hold is stored in **USD** (`usd_reserved_cents`, the wallet's USD value of
+  `wallet_part` at the live rate); `wallet_part` tokens are only the split unit.
 - Admit succeeds if, and only if the wallet can cover `wallet_part` and any indivisible
   requests/concurrency gate is satisfied (a wallet lifts that gate). Otherwise the request is
   denied and **no money hold is left behind**.
@@ -213,7 +214,7 @@ Shortfall notes are tagged `shortfall:wallet_subscription`, `shortfall:wallet_pl
 - Rate limiter token reservation (Redis) for the plan part
 - Subscription reservations in `user_plan_period_reservations`
 - Project budget reservations in `tenant_project_budget_reservations`
-- Wallet reservations in `user_token_reservations`
+- Wallet reservations in `user_credit_reservations`
 
 Reservations are committed or released after execution and accounting. Expired reservations are reaped automatically.
 
@@ -264,8 +265,8 @@ Key tables:
 
 - `plan_quota_policies` — base policy per plan_id
 - `user_plan_overrides` — temporary plan overrides
-- `user_lifetime_credits` — wallet credits
-- `user_token_reservations` — wallet reservations
+- `user_lifetime_credits` — wallet credits (USD-native)
+- `user_credit_reservations` — wallet reservations (USD-in-cents holds)
 - `tenant_project_budget` — project money balance
 - `tenant_project_budget_reservations` — project budget holds
 - `tenant_project_budget_ledger` — project budget ledger
@@ -283,13 +284,15 @@ Key tables:
 Accounting events are emitted by service wrappers (LLM calls, web search, etc.).
 Events are aggregated per turn and priced in USD from **each model's own**
 price-table entry — the actual dollar cost is reference-independent. The reference
-model then converts that USD into the token unit (equivalent / billable tokens)
-for quota consumption, credits, and balance.
+model then converts that USD into the **token unit** for the token-denominated
+surface (the RL quota).
 
 Reference model conversion is used for:
 
-- Wallet credit conversion (USD → tokens)
-- Token balance display (tokens → USD)
-- Estimation of request cost for reservations
+- Estimation of request cost for reservations (reservation floor USD → tokens)
 - Per-turn billable-token equivalent (USD → reference tokens), read live so it
   stays in the same unit as the reservation and quota
+- Wallet admission split and display projections (available USD ↔ tokens). The
+  wallet **balance and holds are stored in USD** (cents) and do **not** re-value
+  when the reference changes; only the transient split unit and the cosmetic token
+  figure use the live rate. Plan and project budgets are likewise USD.

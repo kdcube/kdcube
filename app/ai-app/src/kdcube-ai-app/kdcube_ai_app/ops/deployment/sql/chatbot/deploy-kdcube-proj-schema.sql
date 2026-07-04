@@ -486,8 +486,10 @@ CREATE TABLE IF NOT EXISTS <SCHEMA>.user_lifetime_credits (
     project VARCHAR(255) NOT NULL,
     user_id VARCHAR(255) NOT NULL,
 
-    lifetime_tokens_purchased BIGINT NOT NULL DEFAULT 0,
-    lifetime_tokens_consumed  BIGINT NOT NULL DEFAULT 0,
+    -- USD-native balance (cents).
+    -- available = purchased_cents - spent_cents - SUM(usd_reserved_cents).
+    purchased_cents BIGINT NOT NULL DEFAULT 0,
+    spent_cents     BIGINT NOT NULL DEFAULT 0,
 
     -- Aggregate lifetime purchase (for reporting)
     lifetime_usd_purchased NUMERIC(10, 2) NOT NULL DEFAULT 0,
@@ -503,21 +505,12 @@ CREATE TABLE IF NOT EXISTS <SCHEMA>.user_lifetime_credits (
 
     PRIMARY KEY (tenant, project, user_id),
 
-    CONSTRAINT chk_cp_ulc_consumed_nonneg
-        CHECK (lifetime_tokens_consumed >= 0)
-
---     CONSTRAINT chk_cp_ulc_nonneg
---       CHECK (lifetime_tokens_purchased >= 0 AND lifetime_tokens_consumed >= 0),
-
---     CONSTRAINT chk_cp_ulc_consumed_le_purchased
---       CHECK (lifetime_tokens_consumed <= lifetime_tokens_purchased),
-
---     CONSTRAINT chk_cp_ulc_usd_nonneg
---       CHECK (lifetime_usd_purchased >= 0)
+    CONSTRAINT chk_cp_ulc_cents_nonneg
+        CHECK (purchased_cents >= 0 AND spent_cents >= 0)
 );
 
 COMMENT ON TABLE <SCHEMA>.user_lifetime_credits IS
-  'Personal lifetime credits: purchased tokens that deplete on use. Never expire.';
+  'Personal lifetime credits (USD, cents): purchased_cents deplete via spent_cents on use. Never expire.';
 
 CREATE INDEX IF NOT EXISTS idx_cp_ulc_lookup
   ON <SCHEMA>.user_lifetime_credits(tenant, project, user_id)
@@ -529,11 +522,11 @@ CREATE TRIGGER trg_cp_ulc_updated_at
   FOR EACH ROW EXECUTE FUNCTION <SCHEMA>.update_updated_at();
 
 -- =========================================
--- USER TOKEN RESERVATIONS (Personal Credits)
--- Prevent concurrent overspending of lifetime credits.
+-- USER CREDIT RESERVATIONS (Personal Credits)
+-- Prevent concurrent overspending of lifetime credits. USD-in-cents holds.
 -- FK -> user_lifetime_credits
 -- =========================================
-CREATE TABLE IF NOT EXISTS <SCHEMA>.user_token_reservations (
+CREATE TABLE IF NOT EXISTS <SCHEMA>.user_credit_reservations (
     tenant VARCHAR(255) NOT NULL,
     project VARCHAR(255) NOT NULL,
     user_id VARCHAR(255) NOT NULL,
@@ -543,8 +536,10 @@ CREATE TABLE IF NOT EXISTS <SCHEMA>.user_token_reservations (
     bundle_id VARCHAR(255) DEFAULT NULL,
     notes TEXT DEFAULT NULL,
 
-    tokens_reserved BIGINT NOT NULL CHECK (tokens_reserved >= 0),
-    tokens_used BIGINT DEFAULT NULL CHECK (tokens_used IS NULL OR tokens_used >= 0),
+    -- USD-native hold (cents). usd_reserved_cents = amount held,
+    -- actual_spent_cents = committed spend.
+    usd_reserved_cents BIGINT NOT NULL DEFAULT 0 CHECK (usd_reserved_cents >= 0),
+    actual_spent_cents BIGINT DEFAULT NULL CHECK (actual_spent_cents IS NULL OR actual_spent_cents >= 0),
 
     status VARCHAR(32) NOT NULL DEFAULT 'reserved'
       CHECK (status IN ('reserved', 'committed', 'released')),
@@ -558,8 +553,8 @@ CREATE TABLE IF NOT EXISTS <SCHEMA>.user_token_reservations (
 
     PRIMARY KEY (tenant, project, user_id, reservation_id),
 
-    CONSTRAINT chk_cp_utr_used_le_reserved
-      CHECK (tokens_used IS NULL OR tokens_used <= tokens_reserved),
+    CONSTRAINT chk_cp_utr_actual_le_reserved
+      CHECK (actual_spent_cents IS NULL OR actual_spent_cents <= usd_reserved_cents),
 
     CONSTRAINT fk_cp_utr_user_credits
       FOREIGN KEY (tenant, project, user_id)
@@ -567,23 +562,23 @@ CREATE TABLE IF NOT EXISTS <SCHEMA>.user_token_reservations (
       ON DELETE CASCADE
 );
 
-COMMENT ON TABLE <SCHEMA>.user_token_reservations IS
-  'In-flight reservations for lifetime credits to prevent concurrent overspend.';
+COMMENT ON TABLE <SCHEMA>.user_credit_reservations IS
+  'In-flight USD (cents) reservations for lifetime credits to prevent concurrent overspend.';
 
 CREATE INDEX IF NOT EXISTS idx_cp_utr_active
-  ON <SCHEMA>.user_token_reservations(tenant, project, user_id, expires_at)
+  ON <SCHEMA>.user_credit_reservations(tenant, project, user_id, expires_at)
   WHERE status = 'reserved';
 
 CREATE INDEX IF NOT EXISTS idx_cp_utr_reservation_id
-  ON <SCHEMA>.user_token_reservations(tenant, project, reservation_id);
+  ON <SCHEMA>.user_credit_reservations(tenant, project, reservation_id);
 
 CREATE INDEX IF NOT EXISTS idx_cp_utr_expires
-  ON <SCHEMA>.user_token_reservations(expires_at)
+  ON <SCHEMA>.user_credit_reservations(expires_at)
   WHERE status = 'reserved';
 
-DROP TRIGGER IF EXISTS trg_cp_utr_updated_at ON <SCHEMA>.user_token_reservations;
+DROP TRIGGER IF EXISTS trg_cp_utr_updated_at ON <SCHEMA>.user_credit_reservations;
 CREATE TRIGGER trg_cp_utr_updated_at
-  BEFORE UPDATE ON <SCHEMA>.user_token_reservations
+  BEFORE UPDATE ON <SCHEMA>.user_credit_reservations
   FOR EACH ROW EXECUTE FUNCTION <SCHEMA>.update_updated_at();
 
 -- =========================================

@@ -143,9 +143,11 @@ cost calculation and USD↔token conversion. Like `reservation`, it is a pure
 ### `llm_reference_service`
 
 The token-economy reference model — the single model whose `output_tokens_1M`
-defines the USD↔token unit (reservation, credits, Stripe, balance, per-turn
-billable equivalent). Like `price_tables`, a pure **runtime-read** section —
-never seeded, never in the DB.
+defines the USD↔token unit: reservation sizing, the per-turn billable equivalent,
+and the token figures projected for credits / Stripe / balance. Those balances are
+stored in **USD** (plan, project, and wallet are all USD-native) and do not
+re-value when the reference changes — only their token projection does. Like
+`price_tables`, a pure **runtime-read** section — never seeded, never in the DB.
 
 - **Optional.** Absent section/file → the in-code default
   (`anthropic`/`claude-sonnet-4-5-…`) is used.

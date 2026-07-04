@@ -236,10 +236,12 @@ baseline field or to add a chargeable catalog plan.
 
 ## Reference model
 
-The whole token economy (reservation, credits, Stripe, balance) is denominated
-in **reference tokens**: USD↔token conversion always uses one reference model's
-output price. The reference is chosen by the `llm_reference_service` section and
-read live via `llm_reference_service()` in
+The **token-denominated** surfaces — reservation sizing, the per-turn billable-token
+equivalent, and the RL quota — use one reference model's output price for USD↔token
+conversion. The money balances (plan, project, wallet) are stored in **USD** and are
+reference-independent; the reference only sets the token figures displayed for
+credits / Stripe / balance. The reference is chosen by the `llm_reference_service`
+section and read live via `llm_reference_service()` in
 [usage.py](../../src/kdcube-ai-app/kdcube_ai_app/infra/accounting/usage.py),
 falling back to the in-code default `anthropic` / `claude-sonnet-4-5-20250929`.
 Both the economics runtime and bundles read the reference from this single source,
@@ -247,8 +249,8 @@ so a descriptor change re-points the whole economy without code edits.
 
 The reference is a **pricing unit only** — it does not select the models that
 execute a turn. Bundle `role_models` are independent; changing the reference
-re-values the USD↔token unit (reservation, credits, balance, accounting), not
-which model runs.
+re-points the USD↔token unit for reservation sizing and accounting token-equivalents,
+not the stored USD balances and not which model runs.
 
 Consequences:
 
@@ -262,11 +264,11 @@ Consequences:
   by the `model` field, so a duplicate/mislabeled `model` key can shadow the
   intended entry and silently mis-price the whole economy — keep `model` keys
   unique per provider;
-- changing the reference (or its price) re-values previously-accumulated token
-  balances in USD terms, because the balance is stored in reference tokens and
-  the USD figure is reconstructed at the current reference price. Since the
-  reference is read live, this re-valuation applies immediately across every
-  display and settle.
+- money balances do **not** re-value when the reference changes: plan, project,
+  and wallet are all stored in **USD** (cents), so a reference change shifts only
+  their cosmetic token projection, never the stored dollars. The reference change
+  re-points the token-denominated surfaces (reservation sizing, billable-token
+  equivalent, RL quota) live, but the plan/project/wallet dollars are held fixed.
 
 ## Built-in baseline
 

@@ -25,7 +25,7 @@ Key table groups:
 - Quota policies: `plan_quota_policies`
 - Plan overrides: `user_plan_overrides`
 - Lifetime credits: `user_lifetime_credits`
-- Credit reservations: `user_token_reservations`
+- Credit reservations: `user_credit_reservations`
 - Project budget: `tenant_project_budget`, `tenant_project_budget_reservations`, `tenant_project_budget_ledger`
 - Subscription plans: `plans`
 - Subscriptions: `user_plans`
