@@ -17,3 +17,7 @@ export * from './ids'
 export * from './ingressBridge'
 export * from './canvasModel'
 export * from './ingress'
+export {
+  namespacePresentationCandidates,
+  namespaceStyleForKey,
+} from '../shared/namespacePresentation.ts'

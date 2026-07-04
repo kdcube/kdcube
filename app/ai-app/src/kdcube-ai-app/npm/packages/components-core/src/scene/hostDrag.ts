@@ -8,6 +8,7 @@ import {
   asSceneString,
   normalizeSceneContext,
 } from './runtime'
+import { namespacePresentationCandidates } from '../shared/namespacePresentation'
 
 export interface ScenePoint {
   x: number
@@ -66,25 +67,7 @@ export function normalizeHostContextDragStartMessage(
 }
 
 export function presentationStyleCandidates(input: unknown): string[] {
-  const item = asSceneRecord(input)
-  const data = asSceneRecord(item.data)
-  const seen = new Set<string>()
-  const out: string[] = []
-  const addRaw = (value: unknown): void => {
-    const text = asSceneString(value).toLowerCase()
-    if (!text || seen.has(text)) return
-    seen.add(text)
-    out.push(text)
-  }
-
-  addRaw(item.object_kind)
-  addRaw(item.objectKind)
-  addRaw(data.object_kind)
-  addRaw(data.objectKind)
-  addRaw(item.namespace)
-  addRaw(data.namespace)
-
-  return out
+  return namespacePresentationCandidates(input)
 }
 
 export function sceneRectBounds(rect: SceneRect): Required<SceneRect> {

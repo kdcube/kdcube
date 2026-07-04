@@ -1147,6 +1147,10 @@ class VersatileEntrypoint(BaseEntrypointWithEconomics):
                             "src_folder": "npm://components-core/src/canvas",
                             "target": "_shared/components-core/canvas",
                         },
+                        "components_core_shared": {
+                            "src_folder": "npm://components-core/src/shared",
+                            "target": "_shared/components-core/shared",
+                        },
                         "components_core_scene": {
                             "src_folder": "npm://components-core/src/scene",
                             "target": "_shared/components-core/scene",
@@ -1203,6 +1207,10 @@ class VersatileEntrypoint(BaseEntrypointWithEconomics):
                                 "src_folder": "npm://components-core/src/canvas",
                                 "target": "_shared/components-core/canvas",
                             },
+                            "components_core_shared": {
+                                "src_folder": "npm://components-core/src/shared",
+                                "target": "_shared/components-core/shared",
+                            },
                         },
                     },
                 },
@@ -1254,6 +1262,13 @@ class VersatileEntrypoint(BaseEntrypointWithEconomics):
             {
                 "src_folder": "npm://components-core/src/canvas",
                 "target": "_shared/components-core/canvas",
+            },
+        )
+        shared_sources.setdefault(
+            "components_core_shared",
+            {
+                "src_folder": "npm://components-core/src/shared",
+                "target": "_shared/components-core/shared",
             },
         )
         shared_sources.setdefault(

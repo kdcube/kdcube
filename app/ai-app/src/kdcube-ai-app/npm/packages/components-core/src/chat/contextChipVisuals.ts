@@ -1,45 +1,25 @@
+import {
+  namespacePresentationCandidates,
+  namespaceRootKey,
+  namespaceStyleForContext,
+  namespaceStyleKey,
+  namespaceStyleVars as sharedNamespaceStyleVars,
+  namespaceVarsFromStyle,
+  objectRefFromContext,
+  safePresentationKey,
+  type NamespaceStyleMap,
+  type NamespaceStyleVars,
+  type NamespaceVisualStyle,
+} from '../shared/namespacePresentation.ts'
+
 type ContextLike = Record<string, unknown>
-
-export interface NamespaceVisualStyle {
-  label?: string
-  color?: string
-  ink?: string
-  border?: string
-  focus?: string
-  background?: string
-}
-
-export type NamespaceStyleMap = Record<string, unknown>
-export type NamespaceStyleVars = Record<`--${string}`, string>
-
-function asContextLike(value: unknown): ContextLike {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as ContextLike : {}
-}
 
 function text(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
 function safeClass(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-}
-
-function objectRef(context: ContextLike): string {
-  const data = context.data && typeof context.data === 'object' ? context.data as ContextLike : {}
-  const keys = ['ref', 'object_ref', 'objectRef', 'logicalPath', 'logical_path', 'hostedUri', 'hosted_uri', 'event_ref', 'uri', 'canonical_uri']
-  for (const key of keys) {
-    const value = text(context[key])
-    if (value) return value
-  }
-  for (const key of keys) {
-    const value = text(data[key])
-    if (value) return value
-  }
-  return ''
+  return safePresentationKey(value).replace(/:/g, '-')
 }
 
 function namespaceClassesFromRef(ref: string): string[] {
@@ -52,84 +32,29 @@ function namespaceClassesFromRef(ref: string): string[] {
   return classes
 }
 
-function rootNamespace(value: string): string {
-  return safeClass(value.split(':', 1)[0] || '')
-}
-
-function namespaceKey(value: string): string {
-  const clean = value.split(/[?#]/, 1)[0].trim().toLowerCase()
-  if (!clean) return ''
-  const parts = clean.split(':').filter(Boolean)
-  if (parts[0] === 'conv' && parts[1]) return `conv:${safeClass(parts[1])}`
-  return rootNamespace(clean)
-}
-
-function namespaceFromRef(ref: string): string {
-  const clean = ref.split(/[?#]/, 1)[0].trim()
-  const index = clean.indexOf(':')
-  return index > 0 ? namespaceKey(clean) : ''
-}
-
 export function contextNamespace(context: unknown): string {
-  const item = asContextLike(context)
-  const data = asContextLike(item.data)
-  const explicit = namespaceKey(text(item.namespace))
-  if (explicit) return explicit
-  const nested = namespaceKey(text(data.namespace))
-  if (nested) return nested
-  return namespaceFromRef(objectRef(item))
-}
-
-function styleFromRaw(value: unknown): NamespaceVisualStyle | null {
-  if (typeof value === 'string' && value.trim()) return { color: value.trim() }
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  return value as NamespaceVisualStyle
+  return namespacePresentationCandidates(context)[0] || ''
 }
 
 export function namespaceStyleVars(
   namespace: string,
   namespaceStyles: NamespaceStyleMap = {},
 ): NamespaceStyleVars | undefined {
-  const key = namespaceKey(namespace)
-  const root = rootNamespace(namespace)
-  if (!root) return undefined
-  const style = styleFromRaw(namespaceStyles[key]) || styleFromRaw(namespaceStyles[root])
-  if (!style) return undefined
-  const ink = style.ink || style.color
-  const border = style.border || style.color
-  const focus = style.focus || style.color
-  const background = style.background
-  const vars: NamespaceStyleVars = {}
-  if (ink) {
-    vars['--ctx-ink'] = ink
-    vars['--ns-ink'] = ink
-  }
-  if (border) {
-    vars['--ctx-border'] = border
-    vars['--ns-border'] = border
-  }
-  if (focus) {
-    vars['--ctx-focus'] = focus
-    vars['--ns-focus'] = focus
-  }
-  if (background) {
-    vars['--ctx-bg'] = background
-    vars['--ns-bg'] = background
-  }
-  return Object.keys(vars).length ? vars : undefined
+  return sharedNamespaceStyleVars(namespace, namespaceStyles)
 }
 
 export function contextChipStyle(
   context: unknown,
   namespaceStyles: NamespaceStyleMap = {},
 ): NamespaceStyleVars | undefined {
-  return namespaceStyleVars(contextNamespace(context), namespaceStyles)
+  const resolved = namespaceStyleForContext(context, namespaceStyles)
+  return resolved ? namespaceVarsFromStyle(resolved.style) : undefined
 }
 
 export function contextChipClass(context: unknown): string {
-  const item = asContextLike(context)
-  const data = asContextLike(item.data)
-  const ref = objectRef(item)
+  const item = context && typeof context === 'object' && !Array.isArray(context) ? context as ContextLike : {}
+  const data = item.data && typeof item.data === 'object' && !Array.isArray(item.data) ? item.data as ContextLike : {}
+  const ref = objectRefFromContext(item)
   const classes = [
     text(item.kind),
     text(item.cardType),
@@ -142,3 +67,6 @@ export function contextChipClass(context: unknown): string {
   ]
   return Array.from(new Set(classes.map(safeClass).filter(Boolean))).join(' ')
 }
+
+export type { NamespaceStyleMap, NamespaceStyleVars, NamespaceVisualStyle }
+export { namespaceRootKey, namespaceStyleKey }

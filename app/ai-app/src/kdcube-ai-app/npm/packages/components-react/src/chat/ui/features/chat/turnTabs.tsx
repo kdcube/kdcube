@@ -46,7 +46,7 @@ import type {
   TurnAttachment,
   TurnStep,
 } from '@kdcube/components-core/chat'
-import { canonicalObjectRef, contextChipStyle, namespaceStyleVars } from '@kdcube/components-core/chat'
+import { canonicalObjectRef, contextChipStyle, namespaceFromObjectRef, namespaceStyleVars } from '@kdcube/components-core/chat'
 import { setChatFileDragData, type ChatFileDragInput } from '../../support/fileDrag.ts'
 import { durableHistoricalObjectRef } from '@kdcube/components-core/chat'
 import { ContextInlineChip } from './ContextInlineChip.tsx'
@@ -401,11 +401,13 @@ function DownloadsPanelImpl({
   files,
   conversationId,
   onError,
+  namespaceStyles = {},
 }: {
   attachments: TurnAttachment[]
   files: FileArtifact[]
   conversationId?: string | null
   onError: (text: string) => void
+  namespaceStyles?: NamespaceStyleMap
 }) {
   const vm = useChatViewModel()
   const [downloadingId, setDownloadingId] = useState<string | null>(null)
@@ -467,6 +469,10 @@ function DownloadsPanelImpl({
   ) => {
     const ext = fileExtension(filename)
     const kind = fileKind(ext)
+    const namespace = namespaceFromObjectRef(dragInput?.ref || '')
+    const namespaceVars = namespace
+      ? (namespaceStyleVars(namespace, namespaceStyles) as CSSProperties | undefined)
+      : undefined
     return (
       <button
         key={key}
@@ -478,6 +484,7 @@ function DownloadsPanelImpl({
           setChatFileDragData(event.dataTransfer, dragInput, event)
         }}
         className={`k-chat-file k-chat-file--${origin}`}
+        style={namespaceVars}
         title={dragInput?.ref ? `Download ${label}; drag to attach or pin` : `Download ${label}`}
       >
         <span className="k-chat-file-icon" aria-hidden="true">
@@ -687,8 +694,16 @@ function ArtifactFeedImpl({
 
         if (artifact.kind === 'file') {
           const objectRef = canonicalObjectRef(artifact.objectRef, artifact.logicalPath)
+          const namespace = namespaceFromObjectRef(objectRef)
+          const namespaceVars = namespace
+            ? (namespaceStyleVars(namespace, namespaceStyles) as CSSProperties | undefined)
+            : undefined
           return (
-            <div key={`${artifact.kind}-${objectRef || artifact.filename}`} className="k-workitem">
+            <div
+              key={`${artifact.kind}-${objectRef || artifact.filename}`}
+              className="k-workitem k-namespace-tint"
+              style={namespaceVars}
+            >
               <div className="k-workitem-head">
                 <span className="k-workitem-icon">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

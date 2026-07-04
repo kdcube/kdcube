@@ -20,7 +20,7 @@ import {
 } from 'lucide-react'
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import type { CanvasObjectActionName, CanvasObjectActionResponse, CanvasPatchInput, CanvasPatchOp, CanvasPatchResponse, CanvasReadInput, CanvasReadResponse, CanvasSearchInput, CanvasSearchItem, CanvasSearchResponse } from '@kdcube/components-core/canvas'
-import { normalizeContext, normalizeContextMessage, type CanvasContextItem } from '@kdcube/components-core/canvas'
+import { namespacePresentationCandidates, namespaceStyleForKey, normalizeContext, normalizeContextMessage, type CanvasContextItem } from '@kdcube/components-core/canvas'
 import { parseIngressMessage, type CanvasIngressMessage } from '@kdcube/components-core/canvas'
 import {
   canvasContext,
@@ -135,15 +135,24 @@ function cardPresentation(
 ): { key: string; label: string; style: CanvasNamespaceStyle; configured: boolean } {
   const objectKind = cleanPresentationKey(card.object_kind || String(resolverState?.object_kind || ''))
   const namespace = cleanPresentationKey(card.namespace || String(resolverState?.namespace || ''))
-  const exact = presentationEntry(objectKind, namespaceStyles)
-  if (exact) {
-    return { key: objectKind, label: exact.label?.trim() || objectKind, style: exact, configured: true }
+  const candidates = namespacePresentationCandidates({
+    object_kind: objectKind,
+    namespace,
+    ref: card.ref,
+    object_ref: String(resolverState?.object_ref || resolverState?.ref || card.ref || ''),
+    data: {
+      object_kind: String(resolverState?.object_kind || ''),
+      namespace: String(resolverState?.namespace || ''),
+    },
+  })
+  for (const key of candidates) {
+    const style = namespaceStyleForKey(key, namespaceStyles || {}) as CanvasNamespaceStyle | null
+    if (style) {
+      return { key, label: style.label?.trim() || key, style, configured: true }
+    }
   }
-  const root = presentationEntry(namespace, namespaceStyles)
-  if (root) {
-    return { key: namespace, label: root.label?.trim() || namespace, style: root, configured: true }
-  }
-  return { key: namespace || objectKind || 'unknown', label: namespace || objectKind || 'unknown', style: {}, configured: false }
+  const fallback = candidates[0] || namespace || objectKind || 'unknown'
+  return { key: fallback, label: fallback, style: {}, configured: false }
 }
 
 function NamespaceIcon({ style }: { style: CanvasNamespaceStyle }) {

@@ -382,7 +382,13 @@ function TurnViewImpl({
           ) : null}
           {activeTab === 'links' ? <LinksPanel links={turnLinks} /> : null}
           {activeTab === 'files' ? (
-            <DownloadsPanel attachments={allUserAttachments} files={assistantFiles} conversationId={conversationId} onError={onDownloadError} />
+            <DownloadsPanel
+              attachments={allUserAttachments}
+              files={assistantFiles}
+              conversationId={conversationId}
+              onError={onDownloadError}
+              namespaceStyles={namespaceStyles}
+            />
           ) : null}
         </div>
 

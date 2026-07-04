@@ -7,6 +7,8 @@
  * helpers belong in the headless engine; the drag-data builders stay in the view.
  */
 
+import { namespaceStyleKeyFromObjectRef } from '../shared/namespacePresentation.ts'
+
 const NAMESPACE_REF = /^[a-z][a-z0-9_.-]*:/i
 const BROWSER_SCHEMES = new Set(['blob:', 'data:', 'http:', 'https:', 'javascript:', 'mailto:'])
 const DURABLE_FI_REF = /^conv:fi:conv_[^.]+\.turn_[^.]+\./
@@ -23,10 +25,7 @@ export function canonicalObjectRef(...refs: Array<string | null | undefined>): s
 
 /** The style namespace of an object ref (`task:issue:1` -> `task`, `conv:fi:...` -> `conv:fi`), or "". */
 export function namespaceFromObjectRef(ref: string): string {
-  const match = String(ref || '').trim().match(/^([a-z][a-z0-9_.-]*):([a-z][a-z0-9_.-]*:)?/i)
-  const root = match?.[1]?.toLowerCase() || ''
-  const child = (match?.[2] || '').replace(/:$/, '').toLowerCase()
-  return root === 'conv' && child ? `${root}:${child}` : root
+  return namespaceStyleKeyFromObjectRef(ref)
 }
 
 export function isDurableFiRef(ref: string): boolean {

@@ -31,3 +31,4 @@ export {
   buildContextDrag,
   parseContextDrop,
 } from './contextPin.ts'
+export * from './namespacePresentation.ts'
