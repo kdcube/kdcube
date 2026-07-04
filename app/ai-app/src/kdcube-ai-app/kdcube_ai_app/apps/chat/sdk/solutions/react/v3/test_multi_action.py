@@ -11,6 +11,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.tool_traits import STRATEGY_COMPATIBILI
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v3.agents.decision import (
     parse_react_decision_bundle_from_raw,
     react_decision_stream_v2,
+    validate_decision_protocol_shape,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v3.runtime import ReactSolverV2
 from kdcube_ai_app.apps.chat.sdk.solutions.react.round import ReactRound
@@ -277,6 +278,32 @@ Explain the literal syntax `<channel:action>...</channel:action>` to the user.
     assert [d["tool_call"]["tool_id"] for d in parsed["decisions"]] == [
         "web_tools.web_search",
     ]
+
+
+def test_validate_decision_protocol_shape_rejects_preamble_before_first_channel():
+    raw = (
+        "I will write the full code first.\n"
+        "```python\nprint('not a channel')\n```\n"
+        "<channel:thinking>Now using the protocol.</channel:thinking>"
+    )
+
+    error, extra = validate_decision_protocol_shape(raw)
+
+    assert error == "decision_preamble_before_first_channel"
+    assert extra["first_channel"] == "thinking"
+    assert "not a channel" in extra["preamble_preview"]
+
+
+def test_validate_decision_protocol_shape_accepts_immediate_thinking_channel():
+    raw = (
+        "<channel:thinking>Planning.</channel:thinking>"
+        "<channel:action>{\"action\":\"complete\",\"final_answer\":\"done\"}</channel:action>"
+    )
+
+    error, extra = validate_decision_protocol_shape(raw)
+
+    assert error is None
+    assert extra == {}
 
 
 def test_parse_react_decision_bundle_from_multiple_fenced_blocks_in_single_channel():

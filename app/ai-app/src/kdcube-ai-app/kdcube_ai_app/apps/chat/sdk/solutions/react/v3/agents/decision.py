@@ -22,9 +22,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.decision_prompt import (
     compose_decision_system_text,
     head_tail_preview,
 )
-# NOTE: switched to the deduplicated `instructions` module for testing.
-# Revert by changing `.instructions` back to `.shared_instructions`.
-from kdcube_ai_app.apps.chat.sdk.skills.instructions.instructions import (
+from kdcube_ai_app.apps.chat.sdk.skills.instructions.shared_instructions import (
     ACTION_CAUSALITY_AND_STRATEGY,
     MULTI_ACTION_INDEPENDENCE_AND_GOOD_SHAPES,
 )
@@ -58,6 +56,7 @@ _CHANNEL_BLOCK_RE = re.compile(
     r"<channel:action>(.*?)</channel:action>",
     re.I | re.S,
 )
+_CHANNEL_TAG_RE = re.compile(r"<\s*(/)?\s*channel:([a-zA-Z0-9_-]+)\s*>", re.I)
 _FENCE_LINE_RE = re.compile(r"^\s*```(?:json)?\s*$", re.I)
 
 
@@ -210,6 +209,39 @@ def _preview_channel_text(text: Optional[str], *, limit: int = 600) -> str:
     return raw[:limit].rstrip() + "...(truncated)"
 
 
+def validate_decision_protocol_shape(full_raw: Optional[str]) -> tuple[Optional[str], Dict[str, Any]]:
+    raw = full_raw if isinstance(full_raw, str) else ""
+    if not raw.strip():
+        return None, {}
+
+    for match in _CHANNEL_TAG_RE.finditer(raw):
+        if not _is_valid_channel_block_start(raw, match.start(), start=0):
+            continue
+        preamble = raw[:match.start()]
+        if preamble.strip():
+            return "decision_preamble_before_first_channel", {
+                "preamble_chars": len(preamble),
+                "preamble_preview": _preview_channel_text(preamble, limit=900),
+                "first_channel": ("/" if match.group(1) else "") + (match.group(2) or ""),
+            }
+        if match.group(1):
+            return "decision_first_channel_not_thinking", {
+                "first_channel": "/" + (match.group(2) or ""),
+                "offset": match.start(),
+            }
+        first_channel = (match.group(2) or "").strip().lower()
+        if first_channel != "thinking":
+            return "decision_first_channel_not_thinking", {
+                "first_channel": first_channel,
+                "offset": match.start(),
+            }
+        return None, {}
+
+    return "decision_missing_protocol_channels", {
+        "raw_preview": _preview_channel_text(raw, limit=900),
+    }
+
+
 def build_decision_system_text(
     *,
     adapters: List[Dict[str, Any]],
@@ -252,29 +284,30 @@ def build_decision_system_text(
             "The block above is the strategy. This protocol's technique is channels: <channel:thinking>, <channel:action>, <channel:code>, optional <channel:summary>. Each action you emit lives in its own <channel:action> instance. When the strategy permits multi-action, repeat <channel:action>; when not, emit one <channel:action> and stop.\n"
             "Allowed (multi-action, both independent, both consume a source visible BEFORE this round):\n"
             "<channel:thinking>...short status for the round...</channel:thinking>\n"
-            "<channel:action>```json {{ \"action\":\"call_tool\", \"tool_call\":{{\"tool_id\":\"rendering_tools.write_pdf\", \"params\":{{\"path\":\"turn_<current>/outputs/report/report.pdf\", \"content\":\"ref:fi:turn_<earlier>.outputs/report/report.md\"}}}} }} ```</channel:action>\n"
-            "<channel:action>```json {{ \"action\":\"call_tool\", \"tool_call\":{{\"tool_id\":\"rendering_tools.write_pptx\", \"params\":{{\"path\":\"turn_<current>/outputs/report/report.pptx\", \"content\":\"ref:fi:turn_<earlier>.outputs/report/report.md\"}}}} }} ```</channel:action>\n"
+            "<channel:action>```json {{ \"action\":\"call_tool\", \"tool_call\":{{\"tool_id\":\"rendering_tools.write_pdf\", \"params\":{{\"path\":\"turn_<current>/files/report/report.pdf\", \"content\":\"ref:conv:fi:turn_<earlier>.files/report/report.md\"}}}} }} ```</channel:action>\n"
+            "<channel:action>```json {{ \"action\":\"call_tool\", \"tool_call\":{{\"tool_id\":\"rendering_tools.write_pptx\", \"params\":{{\"path\":\"turn_<current>/files/report/report.pptx\", \"content\":\"ref:conv:fi:turn_<earlier>.files/report/report.md\"}}}} }} ```</channel:action>\n"
             "<channel:code></channel:code>\n"
             "Forbidden (write + render in the same round — the render consumes the just-written source which is NOT yet visible):\n"
             "<channel:action>```json {{ ...react.write canvas report.md... }} ```</channel:action>\n"
-            "<channel:action>```json {{ ...rendering_tools.write_pdf content=ref:turn_<current>/outputs/report.md (BAD) ... }} ```</channel:action>\n"
-            "Fix: write this round, render next round after the `fi:` ref is visible.\n"
+            "<channel:action>```json {{ ...rendering_tools.write_pdf content=ref:turn_<current>/files/report.md (BAD) ... }} ```</channel:action>\n"
+            "Fix: write this round, render next round after the `conv:fi:` ref is visible.\n"
             "\n"
             "[VISIBILITY & RENDER]\n"
             "Visibility rule: content meant for the user to see, download, approve, or use as a renderer source must be EXTERNAL — react.write channel=canvas or exec visibility=external. channel=internal is only for private scratch that will not be presented or rendered.\n"
-            "Default write rule: reports, briefs, HTML, Markdown, slide source, DOCX/PDF/PPTX source, and anything under outputs/ that may become a deliverable must be written with react.write channel=canvas.\n"
+            "Default write rule: reports, briefs, HTML, Markdown, slide source, DOCX/PDF/PPTX source, and anything under files/ that may become a deliverable must be written with react.write channel=canvas.\n"
             "Renderer source rule: rendering_tools.write_* produces user-visible artifacts; `content='ref:...'` MUST resolve to text in the renderer's requested input format and must be visible at the START of this response. If you just wrote the source earlier in this same response, it is NOT visible yet — write now, render in a later round. Inline content is valid when the tool input type allows it.\n"
             "After react.write, stop. Review the visible write result next round, then render or patch if needed. Do not write a placeholder now to patch later — write the final content once.\n"
             "\n"
             "[CHANNELS — FORMAT MECHANICS]\n"
             "CRITICAL: the first literal channel in your response must be <channel:thinking>. Never emit legacy <thinking>...</thinking> tags.\n"
+            "CRITICAL: write ONLY inside channels whose tags start with `<channel:`. Do not emit prose, code fences, draft code, JSON, HTML, markdown, or legacy tags outside the actual <channel:...> blocks. Any text outside these channels is a protocol violation: the runtime drops it and runs no action.\n"
             "CRITICAL: you have 4 channel types. Three are required every round; summary is allowed ONLY on complete/exit final-answer rounds.\n"
             "Output protocol (strict): one round = at least one <channel:thinking>, one or more <channel:action> (multiple only when the multi-action gate above passes), and <channel:code> only when an exec action is in this round.\n"
             "<channel:thinking> ... </channel:thinking>\n"
             "<channel:action> ... </channel:action>\n"
             "<channel:code> code generated </channel:code>\n"
             "Do not include summary unless action is complete or exit. The optional <channel:summary> may appear exactly once, and only when the response contains a single complete/exit action and no tool-call actions.\n"
-            "<channel:thinking>: short user-facing markdown status (1–2 sentences, no lists). It is shown to the user; do NOT use it to claim a pending action's result is in.\n"
+            "<channel:thinking>: short user-facing markdown status (1–2 sentences, no lists). It is shown to the user; do NOT put source code, HTML, JSON, long drafts, or repeated implementation text in thinking, and do NOT use it to claim a pending action's result is in.\n"
             "Multiple <channel:thinking> blocks per response are allowed; emit additional ones only when each adds something worth saying.\n"
             "\n"
             "<channel:action> carries one action. One <channel:action>...</channel:action> instance means exactly one action.\n"
@@ -332,23 +365,24 @@ def build_decision_system_text(
             "Forbidden (action emitted + result asserted in the same response):\n"
             "<channel:thinking>report.xlsx is ready — here is the summary...</channel:thinking>  (BAD: result not seen yet)\n"
             "<channel:action>```json {{ ...exec that produces report.xlsx... }} ```</channel:action>\n"
-            "Fix: emit the action this round, stop; next round will see the `fi:...xlsx` ref and you can then say it is ready.\n"
+            "Fix: emit the action this round, stop; next round will see the `conv:fi:...xlsx` ref and you can then say it is ready.\n"
             "\n"
             "[VISIBILITY & RENDER]\n"
             "Visibility rule: content meant for the user to see, download, approve, or use as a renderer source must be EXTERNAL — react.write channel=canvas or exec visibility=external. channel=internal is only for private scratch that will not be presented or rendered.\n"
-            "Default write rule: reports, briefs, HTML, Markdown, slide source, DOCX/PDF/PPTX source, and anything under outputs/ that may become a deliverable must be written with react.write channel=canvas.\n"
+            "Default write rule: reports, briefs, HTML, Markdown, slide source, DOCX/PDF/PPTX source, and anything under files/ that may become a deliverable must be written with react.write channel=canvas.\n"
             "Renderer source rule: rendering_tools.write_* `content='ref:...'` MUST resolve to text in the renderer's requested input format and must be visible at the START of this response. A source written or modified earlier in this same response is NOT visible yet — write now, render next round. Inline content is valid when the tool input type allows it.\n"
             "After react.write, stop. Review the visible write result next round, then render or patch if needed. Do not write a placeholder now to patch later — write the final content once.\n"
             "\n"
             "[CHANNELS — FORMAT MECHANICS]\n"
             "The first literal channel in your response must be <channel:thinking>. Never emit legacy <thinking>...</thinking> tags.\n"
+            "CRITICAL: write ONLY inside channels whose tags start with `<channel:`. Do not emit prose, code fences, draft code, JSON, HTML, markdown, or legacy tags outside the actual <channel:...> blocks. Any text outside these channels is a protocol violation: the runtime drops it and runs no action.\n"
             "You have 4 channel types. Three are required every round; summary is allowed ONLY on complete/exit final-answer rounds.\n"
             "Output protocol (strict): one round = exactly one <channel:thinking>, exactly one <channel:action>, and <channel:code> (empty unless an exec action is in this round).\n"
             "<channel:thinking> ... </channel:thinking>\n"
             "<channel:action> ... </channel:action>\n"
             "<channel:code> code generated </channel:code>\n"
             "Do not include summary unless action is complete or exit. The optional <channel:summary> may appear exactly once, and only when the action is complete or exit.\n"
-            "<channel:thinking>: short user-facing markdown status (1–2 sentences, no lists). It is shown to the user; do NOT use it to claim a pending action's result is in.\n"
+            "<channel:thinking>: short user-facing markdown status (1–2 sentences, no lists). It is shown to the user; do NOT put source code, HTML, JSON, long drafts, or repeated implementation text in thinking, and do NOT use it to claim a pending action's result is in.\n"
             "\n"
             "<channel:action> carries one action. Inside the single <channel:action> instance, output exactly one ```json fenced block with an action JSON object matching the shape hint below (no extra text):\n"
             "```json\n"
@@ -512,11 +546,13 @@ async def react_decision_stream_v2(
     res_json = results.get("action")
     res_code = results.get("code")
     res_summary = results.get("summary")
+    full_raw = (meta or {}).get("raw") if isinstance(meta, dict) else None
     thinking_raw = res_thinking.raw if res_thinking else ""
     json_raw = res_json.raw if res_json else ""
     code_raw = res_code.raw if res_code else ""
     summary_raw = res_summary.raw if res_summary else ""
     err = res_json.error if res_json else None
+    protocol_shape_error, protocol_shape_extra = validate_decision_protocol_shape(full_raw)
 
     data = {}
     if res_json and res_json.obj is not None:
@@ -551,7 +587,7 @@ async def react_decision_stream_v2(
             }
         else:
             bundle_parse = parse_react_decision_bundle_from_raw(
-                full_raw=(meta or {}).get("raw") if isinstance(meta, dict) else None,
+                full_raw=full_raw,
                 json_raw=json_raw,
             )
     normalized_bundle = list(bundle_parse.get("decisions") or [])
@@ -561,7 +597,7 @@ async def react_decision_stream_v2(
         data = normalized_bundle[0]
     if normalized_bundle:
         err = None
-    ok_flag = (service_error is None) and (err is None)
+    ok_flag = (service_error is None) and (err is None) and (protocol_shape_error is None)
 
     return {
         "agent_response": data,
@@ -571,11 +607,13 @@ async def react_decision_stream_v2(
             "raw_data": json_raw,
             "service_error": service_error,
             "ok": ok_flag,
+            "protocol_shape_error": protocol_shape_error,
+            "protocol_shape_extra": protocol_shape_extra,
             "bundle_errors": list(bundle_parse.get("errors") or []),
             "bundle_error_items": list(bundle_parse.get("error_items") or []),
             "bundle_candidate_count": int(bundle_parse.get("candidate_count") or 0),
         },
-        "raw": (meta or {}).get("raw") if isinstance(meta, dict) else None,
+        "raw": full_raw,
         "internal_thinking": thinking_raw,
         "working_summary": summary_raw,
         "channels": {

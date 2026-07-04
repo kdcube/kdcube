@@ -50,6 +50,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.call import get_react_tools_cat
 from kdcube_ai_app.apps.chat.sdk.solutions.react.proto import ReactResult
 from kdcube_ai_app.apps.chat.sdk.solutions.react.runtime_state import ReactRuntimeState as ReactStateV2
 from kdcube_ai_app.apps.chat.sdk.solutions.react.solution_workspace import ApplicationHostingService
+from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import REACT_FILE_REF_PREFIX
 from kdcube_ai_app.apps.chat.sdk.solutions.widgets.exec import DecisionExecCodeStreamer
 from kdcube_ai_app.apps.chat.sdk.solutions.widgets.canvas import (
     ReactPatchContentStreamer,
@@ -1193,6 +1194,22 @@ class ReactSolverV2:
             return f"Action '{action}' is not allowed. Allowed: call_tool | complete | exit."
         if code == "final_answer_required":
             return "final_answer is required for action=complete/exit."
+        if code == "decision_preamble_before_first_channel":
+            return (
+                "Your response started with text outside the ReAct channel protocol. Text before the first `<channel:thinking>` tag is ignored by the runtime and can exhaust the output budget. "
+                "No action ran. Next: start immediately with `<channel:thinking>`, then emit `<channel:action>` and any required `<channel:code>`."
+            )
+        if code == "decision_first_channel_not_thinking":
+            first_channel = str((extra or {}).get("first_channel") or "unknown").strip()
+            return (
+                f"Your response started with `{first_channel}` instead of `<channel:thinking>`. "
+                "No action ran. Next: start immediately with `<channel:thinking>`, then emit `<channel:action>` and any required `<channel:code>`."
+            )
+        if code == "decision_missing_protocol_channels":
+            return (
+                "Your response did not contain valid ReAct channel tags. No action ran. "
+                "Next: emit the required `<channel:thinking>`, `<channel:action>`, and optional `<channel:code>` blocks."
+            )
         if code == "final_answer_with_tool_call":
             return (
                 "You used `action=call_tool` and also attached `final_answer` text. `final_answer` closes the turn — but the tool has not run yet, so the answer would be a guess. "
@@ -1314,7 +1331,7 @@ class ReactSolverV2:
             ref = str((extra or {}).get("ref") or "").strip() or "a source produced in this same round"
             return (
                 f"You bundled a renderer whose `ref:` points at `{ref}` — a file being written by another action in this same round. The render's input is not visible until the next round, so the renderer would consume an uncertain/incomplete file. "
-                "The render was dropped. Next: write the source this round; render it next round after the `fi:` ref is visible."
+                "The render was dropped. Next: write the source this round; render it next round after the `conv:fi:` ref is visible."
             )
         if code == "action_schema_error":
             summary, _diagnostic = self._schema_error_diagnostics(error)
@@ -1341,6 +1358,15 @@ class ReactSolverV2:
             return (
                 "Wrong round. The action was malformed JSON, so this round executed no action. "
                 "The protocol violation notice contains the parser error and diagnostic excerpt."
+            )
+        if code in {
+            "decision_preamble_before_first_channel",
+            "decision_first_channel_not_thinking",
+            "decision_missing_protocol_channels",
+        }:
+            return (
+                "Wrong round. The response did not start with the required ReAct channel sequence, "
+                "so no action was executed."
             )
         if code == "tool_call_invalid":
             target = tool_id or "the requested tool"
@@ -2004,8 +2030,8 @@ class ReactSolverV2:
         """Canonicalize a path or ref: value for cross-action collision/dependency detection.
 
         Accepts:
-          - physical path: 'turn_<id>/files/foo.md', 'turn_<id>/outputs/foo.md'
-          - logical ref:   'fi:turn_<id>.files/foo.md', 'fi:turn_<id>.outputs/foo.md'
+          - physical path: 'turn_<id>/files/foo.md', 'turn_<id>/git/projects/foo.md'
+          - logical ref:   'conv:fi:turn_<id>.files/foo.md', 'conv:fi:turn_<id>.git/projects/foo.md'
           - param ref:     'ref:<either form>'
         Returns lowercase canonical 'turn_<id>/<namespace>/<rel>' string, or '' if not recognizable.
         """
@@ -2014,11 +2040,12 @@ class ReactSolverV2:
             return ""
         if s.startswith("ref:"):
             s = s[4:].strip()
-        if s.startswith("fi:"):
-            body = s[3:]
+        if s.startswith(REACT_FILE_REF_PREFIX):
+            body = s[len(REACT_FILE_REF_PREFIX):]
             for marker, replacement in (
                 (".files/", "/files/"),
-                (".outputs/", "/outputs/"),
+                (".git/projects/", "/git/projects/"),
+                (".git/snapshots/", "/git/snapshots/"),
                 (".user.attachments/", "/attachments/"),
             ):
                 if marker in body:
@@ -3466,6 +3493,16 @@ class ReactSolverV2:
             bundle=decision_bundle,
             exec_streamer=exec_streamer_widget,
         )
+        try:
+            packet_log = decision_packet.get("log") if isinstance(decision_packet, dict) else {}
+            protocol_shape_error = packet_log.get("protocol_shape_error") if isinstance(packet_log, dict) else None
+            if protocol_shape_error:
+                packet_validation_error = str(protocol_shape_error)
+                packet_validation_extra = (
+                    packet_log.get("protocol_shape_extra") if isinstance(packet_log, dict) else {}
+                ) or {}
+        except Exception:
+            pass
 
         try:
             ReactRound.thinking(
@@ -4377,7 +4414,7 @@ class ReactSolverV2:
             "turn_id": self.scratchpad.turn_id or "",
             "ts": time.time(),
             "mime": "application/json",
-            "path": f"ar:{self.scratchpad.turn_id}.react.exit",
+            "path": f"conv:ar:{self.scratchpad.turn_id}.react.exit",
             "text": json.dumps({
                 "reason": reason,
             }, ensure_ascii=False, indent=2),
@@ -4414,7 +4451,7 @@ class ReactSolverV2:
                     "turn_id": turn_id,
                     "ts": time.time(),
                     "mime": "text/plain",
-                    "path": f"ar:{turn_id}.react.turn.finalize",
+                    "path": f"conv:ar:{turn_id}.react.turn.finalize",
                     "text": final_text,
                     "meta": {"model_visible": True, "sections": ["BUDGET", "OPEN PLANS"]},
                 })
@@ -4432,7 +4469,7 @@ class ReactSolverV2:
                     "turn_id": self.ctx_browser.runtime_ctx.turn_id or "",
                     "ts": time.time(),
                     "mime": "application/json",
-                    "path": f"ar:{self.ctx_browser.runtime_ctx.turn_id}.react.state",
+                    "path": f"conv:ar:{self.ctx_browser.runtime_ctx.turn_id}.react.state",
                     "text": json.dumps(react_state.to_dict(), ensure_ascii=False, indent=2),
                 })
         except Exception:

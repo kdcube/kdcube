@@ -495,6 +495,42 @@ def test_normalize_exec_contract_preserves_current_telegram_turn_id():
     assert normalized[0]["filepath"] == "telegram_turn_13083631/outputs/tech_news_emails.xlsx"
 
 
+def test_normalize_exec_contract_preserves_nested_current_files_path():
+    turn_id = "turn_2026-07-04-13-18-11-048"
+    normalized, rewrites, err = normalize_exec_contract_for_turn(
+        [
+            {
+                "filepath": f"{turn_id}/files/expense_tracker/demo_output.txt",
+                "description": "Demo run output for the generated project.",
+            }
+        ],
+        turn_id=turn_id,
+    )
+
+    assert err is None
+    assert rewrites == []
+    assert normalized is not None
+    assert normalized[0]["filepath"] == f"{turn_id}/files/expense_tracker/demo_output.txt"
+
+
+def test_normalize_exec_contract_preserves_nested_current_git_projects_path():
+    turn_id = "turn_2026-07-04-13-18-11-048"
+    normalized, rewrites, err = normalize_exec_contract_for_turn(
+        [
+            {
+                "filepath": f"{turn_id}/git/projects/expense_tracker/README.md",
+                "description": "Project README.",
+            }
+        ],
+        turn_id=turn_id,
+    )
+
+    assert err is None
+    assert rewrites == []
+    assert normalized is not None
+    assert normalized[0]["filepath"] == f"{turn_id}/git/projects/expense_tracker/README.md"
+
+
 def test_normalize_exec_contract_rejects_different_telegram_turn_id():
     normalized, rewrites, err = normalize_exec_contract_for_turn(
         [
@@ -559,6 +595,39 @@ def test_rewrite_exec_code_paths_is_artifact_segment_aware():
             "rewritten": "turn_13083704/attachments/uploaded.pdf",
         },
     ]
+
+
+def test_rewrite_exec_code_paths_does_not_rewrite_literal_under_current_turn_variable():
+    code = (
+        "from pathlib import Path\n"
+        "OUT = Path(OUTPUT_DIR)\n"
+        "TURN = \"turn_2026-07-04-14-28-41-253\"\n"
+        "PROJ = OUT / TURN / \"git/projects/budgetly\"\n"
+        "FILES = OUT / TURN / \"files/budgetly\"\n"
+        "readme = PROJ / \"README.md\"\n"
+    )
+
+    rewritten, rewrites = rewrite_exec_code_paths(code, turn_id="turn_2026-07-04-14-28-41-253")
+
+    assert 'PROJ = OUT / TURN / "git/projects/budgetly"' in rewritten
+    assert 'FILES = OUT / TURN / "files/budgetly"' in rewritten
+    assert "TURN / \"turn_2026-07-04-14-28-41-253/" not in rewritten
+    assert rewrites == []
+
+
+def test_rewrite_exec_code_paths_does_not_rewrite_literal_under_current_turn_literal():
+    code = (
+        "from pathlib import Path\n"
+        "OUT = Path(OUTPUT_DIR)\n"
+        "PROJ = OUT / \"turn_2026-07-04-14-28-41-253\" / \"git/projects/budgetly\"\n"
+        "FILES = OUT / \"turn_2026-07-04-14-28-41-253\" / \"files/budgetly\"\n"
+    )
+
+    rewritten, rewrites = rewrite_exec_code_paths(code, turn_id="turn_2026-07-04-14-28-41-253")
+
+    assert '"turn_2026-07-04-14-28-41-253" / "git/projects/budgetly"' in rewritten
+    assert '"turn_2026-07-04-14-28-41-253" / "files/budgetly"' in rewritten
+    assert rewrites == []
 
 
 def test_build_exec_output_contract_rejects_invalid_visibility():

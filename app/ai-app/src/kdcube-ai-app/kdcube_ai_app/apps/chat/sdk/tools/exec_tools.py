@@ -87,11 +87,18 @@ def _split_turn_artifact_path(path: str) -> Optional[Tuple[str, str, str]]:
     safe = _safe_relpath(path)
     if not safe:
         return None
-    parts = safe.split("/", 2)
-    if len(parts) != 3:
+    parts = safe.split("/")
+    if len(parts) >= 4 and parts[1] == "git" and parts[2] == "projects":
+        turn_id = parts[0]
+        namespace = "git/projects"
+        rel = "/".join(parts[3:])
+    elif len(parts) >= 3 and parts[1] in {"files", "attachments"}:
+        turn_id = parts[0]
+        namespace = parts[1]
+        rel = "/".join(parts[2:])
+    else:
         return None
-    turn_id, namespace, rel = parts
-    if not turn_id or namespace not in {"files", "outputs", "attachments"} or not rel:
+    if not turn_id or namespace not in {"files", "git/projects", "attachments"} or not rel:
         return None
     return turn_id, namespace, rel
 
@@ -410,15 +417,15 @@ def _normalize_artifacts_spec(artifacts: Any) -> Tuple[Optional[List[Dict[str, A
         if "/attachments/" in safe_filename:
             return None, {
                 "code": "invalid_filename",
-                "message": "Contract filepath must be under the current turn files/ or outputs/ namespace (attachments not allowed)",
+                "message": "Contract filepath must be under the current turn files/ or git/projects/ namespace (attachments not allowed)",
             }
         qualified = _split_turn_artifact_path(safe_filename)
-        if not qualified or qualified[1] not in {"files", "outputs"}:
+        if not qualified or qualified[1] not in {"files", "git/projects"}:
             return None, {
                 "code": "invalid_filename",
                 "message": (
                     "filepath must be OUTPUT_DIR-relative and start with "
-                    "'turn_<current>/files/' or 'turn_<current>/outputs/': "
+                    "'turn_<current>/files/' or 'turn_<current>/git/projects/': "
                     f"{filename}"
                 ),
             }
@@ -480,7 +487,7 @@ def normalize_exec_contract_for_turn(
 ) -> Tuple[Optional[List[Dict[str, Any]]], List[Dict[str, str]], Optional[Dict[str, Any]]]:
     """
     Normalize exec contract to current turn:
-    - contract entries must target turn_<current>/files/<name> or turn_<current>/outputs/<name>
+    - contract entries must target turn_<current>/files/<name> or turn_<current>/git/projects/<name>
     - if turn_id is missing in filename, rewrite to current turn
     - attachments are forbidden in contract
     Returns (normalized_list, rewrites, error)
@@ -531,28 +538,28 @@ def normalize_exec_contract_for_turn(
         ):
             return None, [], {
                 "code": "invalid_filename",
-                "message": "Contract filepath must be under the current turn files/ or outputs/ namespace (attachments not allowed)",
+                "message": "Contract filepath must be under the current turn files/ or git/projects/ namespace (attachments not allowed)",
             }
         rewritten = None
         if qualified:
             qualified_turn_id, namespace, _rel = qualified
             if not (
                 qualified_turn_id == turn_id
-                and namespace in {"files", "outputs"}
+                and namespace in {"files", "git/projects"}
             ):
                 return None, [], {
                     "code": "invalid_filename",
-                    "message": "Contract filepath must use current turn_id and files/ or outputs/ path",
+                    "message": "Contract filepath must use current turn_id and files/ or git/projects/ path",
                 }
             filename = safe_filename
         elif safe_filename.startswith("files/"):
             rel = safe_filename[len("files/") :]
             rewritten = f"{turn_id}/files/{rel}"
-        elif safe_filename.startswith("outputs/"):
-            rel = safe_filename[len("outputs/") :]
-            rewritten = f"{turn_id}/outputs/{rel}"
+        elif safe_filename.startswith("git/projects/"):
+            rel = safe_filename[len("git/projects/") :]
+            rewritten = f"{turn_id}/git/projects/{rel}"
         else:
-            rewritten = f"{turn_id}/outputs/{safe_filename}"
+            rewritten = f"{turn_id}/files/{safe_filename}"
         if rewritten:
             rewrites.append({"original": filename, "rewritten": rewritten})
             filename = rewritten
@@ -574,11 +581,42 @@ def normalize_exec_contract_for_turn(
 
 
 _PATH_TOKEN_RE = re.compile(r"[^\s'\"\)\];,]+")
-_UNQUALIFIED_ARTIFACT_PREFIXES = ("files/", "outputs/", "attachments/")
+_UNQUALIFIED_ARTIFACT_PREFIXES = ("git/projects/", "files/", "outputs/", "attachments/")
 
 
 def _is_unqualified_artifact_path_token(token: str) -> bool:
     return any(str(token or "").startswith(prefix) for prefix in _UNQUALIFIED_ARTIFACT_PREFIXES)
+
+
+def _assigned_current_turn_segment_names(code: str, *, turn_id: str) -> set[str]:
+    if not isinstance(code, str) or not turn_id:
+        return set()
+    pattern = re.compile(
+        r"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(['\"])"
+        + re.escape(turn_id)
+        + r"\2\s*(?:#.*)?$"
+    )
+    return {match.group(1) for match in pattern.finditer(code)}
+
+
+def _has_current_turn_join_context(
+    code: str,
+    token_start: int,
+    *,
+    turn_id: str,
+    current_turn_segment_names: set[str],
+) -> bool:
+    quote_idx = int(token_start) - 1
+    if quote_idx < 0 or code[quote_idx] not in {"'", '"'}:
+        return False
+    prefix = code[max(0, quote_idx - 160):quote_idx]
+    match = re.search(r"/\s*([A-Za-z_][A-Za-z0-9_]*|['\"][^'\"]+['\"])\s*/\s*$", prefix)
+    if not match:
+        return False
+    segment = (match.group(1) or "").strip()
+    if len(segment) >= 2 and segment[0] in {"'", '"'} and segment[-1] == segment[0]:
+        return segment[1:-1] == turn_id
+    return segment in current_turn_segment_names
 
 
 def rewrite_exec_code_paths(
@@ -587,8 +625,8 @@ def rewrite_exec_code_paths(
     turn_id: str,
 ) -> Tuple[str, List[Dict[str, str]]]:
     """
-    Best-effort recovery for legacy current-turn artifact paths in generated code.
-    Leaves already qualified turn_<id>/files|outputs|attachments paths intact.
+    Best-effort recovery for current-turn artifact paths in generated code.
+    Leaves already qualified turn_<id>/git/projects|files|attachments paths intact.
     Returns (rewritten_code, rewrites).
     """
     if not isinstance(code, str) or not code.strip() or not turn_id:
@@ -596,9 +634,17 @@ def rewrite_exec_code_paths(
     rewrites: List[Dict[str, str]] = []
     out_parts: List[str] = []
     last = 0
+    current_turn_segment_names = _assigned_current_turn_segment_names(code, turn_id=turn_id)
     for m in _PATH_TOKEN_RE.finditer(code):
         orig = m.group(0)
         if not _is_unqualified_artifact_path_token(orig):
+            continue
+        if _has_current_turn_join_context(
+            code,
+            m.start(),
+            turn_id=turn_id,
+            current_turn_segment_names=current_turn_segment_names,
+        ):
             continue
         repl = f"{turn_id}/{orig}"
         out_parts.append(code[last:m.start()] + repl)
@@ -870,7 +916,7 @@ def exec_tool_call_validation_policy(
         _add_validation_notice(
             target,
             code="protocol_violation.exec_code_rewritten",
-            message="Exec code contained relative files/ or attachments/ paths; rewritten to current turn.",
+            message="Exec code contained relative git/projects/, files/, or attachments/ paths; rewritten to current turn.",
             extra={"rewritten": code_rewrites, "tool_id": tool_id},
         )
 
@@ -889,7 +935,7 @@ def exec_tool_call_validation_policy(
                 "call_id": tool_call_id,
                 "tool_id": tool_id,
                 "mime": mime,
-                "path": f"fi:{turn_id}.code.{tool_call_id}" if turn_id else "",
+                "path": f"conv:fi:{turn_id}.code.{tool_call_id}" if turn_id else "",
                 "text": code_txt,
                 "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "meta": {
@@ -1161,13 +1207,13 @@ class ExecTools:
             "- The executor runs your snippet verbatim from a separate user_code.py module.\n"
             "- The executor supports top-level await and does not indent or rewrite your program body.\n"
             "- WHERE YOU WRITE DECIDES HOW A FILE PERSISTS. There are TWO independent paths:\n"
-            "    (1) `turn_<current>/files/...` -> GIT: a versioned PROJECT. The whole files/ tree is committed as\n"
+            "    (1) `turn_<current>/git/projects/...` -> GIT: versioned PROJECT state. The whole git/projects/ tree is committed as\n"
             "        this turn's SNAPSHOT and carried across turns; next turn starts EMPTY but you re-materialize it\n"
-            "        by pulling/checking out its `fi:turn_<id>.files/...` ref. You do NOT contract project files —\n"
+            "        by pulling/checking out its `conv:fi:turn_<id>.git/projects/...` ref. You do NOT contract project files —\n"
             "        git saves the tree wholesale (a turn editing many project files is captured by the snapshot).\n"
             "    (2) the `contract` -> HOSTING: each listed file is copied to the resource host (S3/local FS) with\n"
             "        its OWN durable, downloadable/pullable handle, INDEPENDENT of git. A produced file reaches\n"
-            "        hosting ONLY if it is in the contract. `turn_<current>/outputs/...` has NO git — files there\n"
+            "        hosting ONLY if it is in the contract. `turn_<current>/files/...` has NO git — files there\n"
             "        survive only if contracted.\n"
             "- After execution the harness hosts ONLY the files named in `contract` (resolves each `filepath`,\n"
             "  requires it to exist and be non-empty); it never scans the workdir for extras.\n"
@@ -1175,7 +1221,7 @@ class ExecTools:
             "  PDF, export) — NOT only the 'main' deliverable. There is NO 'it's just an intermediate/helper' exemption:\n"
             "  if a file exists on disk as its own file, the user or a later turn can ask for it ('send the data file\n"
             "  you used', 'give me that chart as a PNG') and it is LOST unless contracted. When unsure, contract it. The\n"
-            "  only files you may leave uncontracted are routine PROJECT SOURCE under files/ (git keeps those).\n"
+            "  only files you may leave uncontracted are routine PROJECT SOURCE under git/projects/ (git keeps those).\n"
             "- MOST COMMON MISTAKE: you render chart PNGs, embed them into an Excel/PDF, and contract ONLY the workbook —\n"
             "  embedding copies the bytes INTO the document, but each standalone PNG is a SEPARATE file that vanishes\n"
             "  unless contracted. Contract the workbook AND every chart image (one entry each; visibility='internal' for\n"
@@ -1186,9 +1232,9 @@ class ExecTools:
             "- When called from React decision, the code is provided in <channel:code> (not in params).\n"
             "1) `contract` (list or JSON string, REQUIRED): list of output files specs with fields:\n"
             "   - filepath (the FULL OUTPUT_DIR-relative path, NOT a bare name; MUST equal the path your code\n"
-            "     writes to). The files/ vs outputs/ choice IS this prefix:\n"
-            "     turn_<current>/files/<scope>/... = durable workspace/project state;\n"
-            "     turn_<current>/outputs/<scope>/... = produced deliverables / reports / one-off artifacts.\n"
+            "     writes to). The project-vs-produced choice IS this prefix:\n"
+            "     turn_<current>/git/projects/<scope>/... = durable workspace/project state;\n"
+            "     turn_<current>/files/<scope>/... = produced deliverables / reports / one-off artifacts.\n"
             "   - description (what this file contains / why it was produced)\n"
             "   - visibility (optional: `external` or `internal`; default `external`).\n"
             "       · external = hosted AND delivered to the user.\n"
@@ -1199,7 +1245,7 @@ class ExecTools:
             "FETCH_CTX (ADVANCED)\n"
             "- If your snippet needs to load the text data for the artifact you see on timeline, you may call\n"
             "  ctx_tools.fetch_ctx inside the snippet using agent_io_tools.tool_call.\n"
-            "- The paths allowed with this tool are only logical ar: so: tc:\n"
+            "- The paths allowed with this tool are only logical conv:ar:, conv:so:, conv:tc:\n"
             "- This is for computation or for producing smaller derived artifacts. It is not an uncapped way\n"
             "  to put large content into model-visible context; exec stdout and previews are capped too.\n"
             "- Only execution-enabled runtime tool handles are available inside snippets. Orchestration/job tools\n"
@@ -1210,7 +1256,7 @@ class ExecTools:
             "  import json\n"
             "  resp = await agent_io_tools.tool_call(\n"
             "      fn=ctx_tools.fetch_ctx,\n"
-            "      params={\"path\": \"ar:turn_<id>.user.prompt\"},\n"
+            "      params={\"path\": \"conv:ar:turn_<id>.user.prompt\"},\n"
             "      call_reason=\"Load user message for turn_<id>\",\n"
             "      tool_id=\"ctx_tools.fetch_ctx\"\n"
             "  )\n"
@@ -1224,13 +1270,13 @@ class ExecTools:
             "FILES & PATHS\n"
             "- `OUTPUT_DIR` is the output data/artifact root.\n"
             "- `OUT_DIR` is also available as `Path(OUTPUT_DIR)` if you prefer Path operations.\n"
-            "- Input workspace artifacts from context are available by their filenames under OUTPUT_DIR/turn_<id>/files/<scope>/.\n"
-            "- Historical or generated non-workspace artifacts may also be under OUTPUT_DIR/turn_<id>/outputs/<scope>/.\n"
+            "- Input project workspace artifacts from context are available by their filenames under OUTPUT_DIR/turn_<id>/git/projects/<scope>/.\n"
+            "- Historical or generated non-workspace artifacts may also be under OUTPUT_DIR/turn_<id>/files/<scope>/.\n"
             "- User attachments are available under OUTPUT_DIR/turn_<id>/attachments/.\n"
-            "- Write durable project/workspace state to OUTPUT_DIR/turn_<current>/files/<scope>/.\n"
-            "- Write reports, test results, and other non-workspace deliverables to OUTPUT_DIR/turn_<current>/outputs/<scope>/.\n"
+            "- Write durable project/workspace state to OUTPUT_DIR/turn_<current>/git/projects/<scope>/.\n"
+            "- Write reports, test results, and other non-workspace deliverables to OUTPUT_DIR/turn_<current>/files/<scope>/.\n"
             "- Build paths like:\n"
-            "  `Path(OUTPUT_DIR) / \"turn_<current>/files/app/my_file.ext\"` or `Path(OUTPUT_DIR) / \"turn_<current>/outputs/report/report.txt\"`.\n"
+            "  `Path(OUTPUT_DIR) / \"turn_<current>/git/projects/app/my_file.ext\"` or `Path(OUTPUT_DIR) / \"turn_<current>/files/report/report.txt\"`.\n"
             "- Use the exact current turn id shown in the runtime context.\n"
             "- Network access is disabled in the sandbox; any network calls will fail.\n"
             "- Read/write outside OUTPUT_DIR or the current workdir is not permitted.\n"
@@ -1284,13 +1330,13 @@ class ExecTools:
     #         "FETCH_CTX (ADVANCED)\n"
     #         "- If your snippet needs to load the text data for the artifact you see on timeline, you may call\n"
     #         "  ctx_tools.fetch_ctx inside the snippet using agent_io_tools.tool_call.\n"
-    #         "- The paths allowed with this tool are only logical ar: so: tc:\n"
+    #         "- The paths allowed with this tool are only logical conv:ar:, conv:so:, conv:tc:\n"
     #         "- Do NOT rely on fetch_ctx unless you are the code author for this run.\n"
     #         "\n"
     #         "Example:\n"
     #         "  resp = await agent_io_tools.tool_call(\n"
     #         "      fn=ctx_tools.fetch_ctx,\n"
-    #         "      params={\"path\": \"ar:turn_<id>.user.prompt\"},\n"
+    #         "      params={\"path\": \"conv:ar:turn_<id>.user.prompt\"},\n"
     #         "      call_reason=\"Load user message for turn_<id>\",\n"
     #         "      tool_id=\"ctx_tools.fetch_ctx\"\n"
     #         "  )\n"
@@ -1298,11 +1344,12 @@ class ExecTools:
     #         "      raise RuntimeError(resp[\"err\"])\n"
     #         "\n"
     #         "FILES & PATHS\n"
-    #         "- Input artifacts from context are available by their filenames under OUTPUT_DIR/turn_<id>/files/.\n"
+    #         "- Input project artifacts from context are available by their filenames under OUTPUT_DIR/turn_<id>/git/projects/.\n"
+    #         "- Input produced files from context are available by their filenames under OUTPUT_DIR/turn_<id>/files/.\n"
     #         "- User attachments are available under OUTPUT_DIR/turn_<id>/attachments/.\n"
-    #         "- Write your outputs to OUTPUT_DIR/turn_<current>/files/ or OUTPUT_DIR/turn_<current>/outputs/.\n"
+    #         "- Write project state to OUTPUT_DIR/turn_<current>/git/projects/ and produced files to OUTPUT_DIR/turn_<current>/files/.\n"
     #         "- `OUTPUT_DIR` is a global string path in the runtime; build paths like:\n"
-    #         "  `os.path.join(OUTPUT_DIR, \"turn_<current>/files/app/my_file.ext\")` or `Path(OUTPUT_DIR) / \"turn_<id>/attachments/user_file.ext\"`.\n"
+    #         "  `os.path.join(OUTPUT_DIR, \"turn_<current>/git/projects/app/my_file.ext\")` or `Path(OUTPUT_DIR) / \"turn_<id>/attachments/user_file.ext\"`.\n"
     #         "- Network access is disabled in the sandbox; any network calls will fail.\n"
     #         "- Read/write outside OUTPUT_DIR or the current workdir is not permitted.\n"
     #         "\n"
@@ -1625,11 +1672,11 @@ async def run_exec_tool(
             "filepath": rel,
         })
 
-    # 4b) Backstop: keep files the code produced under outputs/ that were NOT listed
+    # 4b) Backstop: keep files the code produced under files/ that were NOT listed
     # in the contract, so a produced file (e.g. a chart image the model forgot to
     # contract) is not silently lost. Auto-kept as INTERNAL (pullable by the agent,
     # never delivered to the user); a notice in report_text teaches the agent to
-    # contract such files explicitly next time. outputs/ only — files/ is git-backed.
+    # contract such files explicitly next time. files/ only — git/projects/ is git-backed.
     auto_hosted: List[Dict[str, Any]] = []
     try:
         contracted_paths = set()
@@ -1641,7 +1688,7 @@ async def run_exec_tool(
         used_names = set(out_dyn.keys())
         _AUTO_HOST_MAX_FILES = 50
         for root_dir in sorted(artifact_outdir.glob("turn_*")):
-            outputs_dir = root_dir / "outputs"
+            outputs_dir = root_dir / "files"
             if not outputs_dir.is_dir():
                 continue
             for p in sorted(outputs_dir.rglob("*")):
@@ -1656,7 +1703,7 @@ async def run_exec_tool(
                     continue
                 if rp in contracted_paths:
                     continue
-                if "/outputs/tmp/" in ("/" + rel_auto + "/"):  # documented scratch area
+                if "/files/tmp/" in ("/" + rel_auto + "/"):  # documented scratch area
                     continue
                 leaf = p.name
                 base = pathlib.Path(leaf).stem or leaf
@@ -1672,7 +1719,7 @@ async def run_exec_tool(
                     "filename": leaf,
                     "mime": guess_mime_type(leaf),
                     "text_preview": "",
-                    "description": "Auto-kept: produced under outputs/ but not listed in the exec contract.",
+                    "description": "Auto-kept: produced under files/ but not listed in the exec contract.",
                     "visibility": "internal",
                     "size_bytes": p.stat().st_size,
                     "text_symbols": None,
@@ -1845,7 +1892,7 @@ async def run_exec_tool(
     if auto_hosted:
         lines.append("Auto-kept (NOT in your contract): " + ", ".join(a["filepath"] for a in auto_hosted))
         lines.append(
-            "These files were produced under outputs/ but you did NOT list them in `contract`, so they were kept "
+            "These files were produced under files/ but you did NOT list them in `contract`, so they were kept "
             "as INTERNAL (pullable by you in a later turn, NOT delivered to the user). Next time list every file "
             "you want to keep in `contract` — set visibility=\"external\" for anything the user should receive."
         )
