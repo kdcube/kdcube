@@ -9,7 +9,7 @@ admin exactly WHICH client is asking and WHERE the authorization code will be
 sent (the redirect_uri), and must not present an arbitrary/unknown client with a
 hardcoded trusted brand. Otherwise a phishing link to /oauth/authorize with an
 attacker's client_id + redirect_uri yields a familiar-looking screen and steals
-a feedback-reader grant.
+a delegated-client grant.
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ def _req(client_id="claude", redirect_uri="http://127.0.0.1:9000/callback"):
         client_id=client_id,
         redirect_uri=redirect_uri,
         response_type="code",
-        scopes=["conversations:read"],
+        scopes=["records:read"],
         state="s1",
         code_challenge="c" * 43,
         code_challenge_method="S256",

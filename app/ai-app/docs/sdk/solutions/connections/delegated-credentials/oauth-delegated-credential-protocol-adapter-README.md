@@ -156,12 +156,13 @@ the consenting user, for example:
 integration:claude:<grantor-sub>
 ```
 
-That integration identity receives only the role and permissions required by
-the approved integration. For the legacy conversation export grant this includes:
+That integration identity receives the generic delegated-client role plus the
+approved grants from the concrete protected-resource descriptor. OAuth does not
+hardcode service-specific permissions:
 
 ```text
-kdcube:role:feedback-reader
-kdcube:*:conversations:*;read
+kdcube:role:delegated-client
+<approved resource grants, for example memories:read>
 ```
 
 Admin roles remain platform roles resolved by the existing platform session and
@@ -386,7 +387,9 @@ access-grant record. The hosting bundle then enforces the catalog that was
 actually granted instead of reading namespace policy from its own descriptor.
 
 The bundle surface that consumes this credential is configured in
-`bundles.yaml`, not in `assembly.yaml`. For a proc-served bundle MCP endpoint:
+`bundles.yaml`, not in `assembly.yaml`. For a proc-served bundle MCP endpoint,
+the surface declares only the managed boundary. The concrete tool/grant catalog
+for delegated OAuth lives in Connection Hub `resources` above:
 
 ```yaml
 bundles:
@@ -400,17 +403,14 @@ bundles:
                 auth:
                   mode: managed
                   authority_id: delegated_client
-                  tools:
-                    memory_search:
-                      grants: [memories:read]
-                    memory_get:
-                      grants: [memories:read]
                   selected_tool_grants: true
 ```
 
-`mode: managed` means the proc MCP bridge owns the credential and grant check
-before dispatching into the bundle MCP app. If `mode` is absent, the MCP auth
-block is bundle-owned metadata. The knowledge bundle's shared-token surface uses
+`mode: managed` means the proc MCP bridge owns credential validation before
+dispatching into the bundle MCP app. It resolves the resource catalog from
+Connection Hub and uses that catalog for tool/grant enforcement. If `mode` is
+absent, the MCP auth block is bundle-owned metadata. The knowledge bundle's
+shared-token surface uses
 `surfaces.as_provider.mcp.knowledge.auth.mode: bundle` and reads
 `surfaces.as_provider.mcp.knowledge.auth.header_name` before returning its MCP
 app.
@@ -555,10 +555,9 @@ OAuth delegated credential grant registry.
 ## Current Managed MCP Connector Shape
 
 The live example implementation is `kdcube-services@1-0`. It exposes managed
-MCP resources such as:
+MCP resources configured outside the OAuth adapter, for example:
 
 ```text
-/api/integrations/bundles/{tenant}/{project}/kdcube-services@1-0/public/mcp/conversations
 /api/integrations/bundles/{tenant}/{project}/kdcube-services@1-0/public/mcp/named_services
 ```
 

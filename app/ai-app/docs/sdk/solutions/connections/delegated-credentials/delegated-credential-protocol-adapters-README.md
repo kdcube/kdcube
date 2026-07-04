@@ -154,7 +154,7 @@ Platform auth / Connection Hub authority projection
 Delegated connection grant
   representative = integration:claude:<grantor>
   resource       = concrete bundle MCP resource
-  actions        = conversations_export
+  actions        = selected resource tools
   credential     = KDCube access/refresh token
       |
       v

@@ -10,8 +10,7 @@ import time
 from typing import Any, Mapping
 
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.grants import (
-    CONVERSATIONS_READ_PERMISSION,
-    FEEDBACK_READER_ROLE,
+    DELEGATED_CLIENT_ROLE,
     integration_subject,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_registry import (
@@ -41,8 +40,6 @@ def delegated_client_authority_spec(*, bundle_id: str = "platform:delegated_clie
         transports=("local", "redis_registry"),
         metadata={
             "grant_model": "delegated_connection",
-            "roles": [FEEDBACK_READER_ROLE],
-            "permissions": [CONVERSATIONS_READ_PERMISSION],
         },
     )
 
@@ -61,7 +58,7 @@ def build_delegated_client_credential(
     issued_at: int | None = None,
 ) -> CredentialEnvelope:
     iat = int(issued_at if issued_at is not None else time.time())
-    subject = integration_subject(grantor_subject)
+    subject = integration_subject(grantor_subject, client_id=client_id)
     return CredentialEnvelope(
         credential_id="cred_" + secrets.token_urlsafe(18),
         credential_kind=DELEGATED_CLIENT_CREDENTIAL_KIND,
@@ -124,8 +121,8 @@ class OAuthDelegatedClientAuthorityProvider:
             authenticator_id=DELEGATED_CLIENT_AUTHENTICATOR_ID,
             subject=envelope.subject,
             actor_user_id=envelope.subject,
-            roles=(FEEDBACK_READER_ROLE,) if "conversations:read" in scopes else ("kdcube:role:delegated-client",),
-            permissions=(CONVERSATIONS_READ_PERMISSION,) if "conversations:read" in scopes else (),
+            roles=(DELEGATED_CLIENT_ROLE,),
+            permissions=tuple(scopes),
             grants=tuple(scopes),
             credential=envelope,
             metadata={

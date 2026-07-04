@@ -280,12 +280,12 @@ Claude / external MCP client
   -> MCP tools/list / tools/call
   -> proc managed MCP guard validates token/resource/tool/grant
   -> kdcube-services FastMCP tool                 (bundle: tool schema/wrapper)
+  -> export_current_user_conversations            (SDK: sdk/solutions/conversation/mcp_export.py)
   -> ConversationExportService                    (SDK: sdk/solutions/conversation/export.py)
-  -> control-plane conversation store
+  -> ConversationReadService                      (SDK: sdk/solutions/conversation/read.py)
 ```
 
-The export implementation is SDK-owned: `ConversationExportRequest` and
-`ConversationExportService` live in `sdk/solutions/conversation/export.py`. This
-bundle only publishes them — `services/conversations/__init__.py` re-exports the
-SDK classes and `surfaces/mcp/conversations.py` wraps them as the
-`conversations_export` tool. The tool contract above is unchanged by that split.
+The export implementation is SDK-owned and user-scoped. The bundle publishes
+only the FastMCP tool schema; the implementation runs through
+`sdk/solutions/conversation/mcp_export.py` and the same read/export facade used
+by the `conv` named service. The tool contract above is unchanged by that split.

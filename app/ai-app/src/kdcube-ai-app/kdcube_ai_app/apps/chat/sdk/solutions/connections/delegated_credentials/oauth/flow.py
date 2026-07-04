@@ -16,9 +16,6 @@ from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.clients import get_client, redirect_uri_allowed
-from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.metadata import CONVERSATIONS_READ_SCOPE
-
-SUPPORTED_SCOPES = {CONVERSATIONS_READ_SCOPE}
 
 
 @dataclass
@@ -81,9 +78,9 @@ def parse_authorize_request(
             redirectable=True, state=state, redirect_uri=redirect_uri,
         )
 
-    raw_scope = (params.get("scope") or CONVERSATIONS_READ_SCOPE).strip()
-    scopes = [s for s in raw_scope.split() if s] or [CONVERSATIONS_READ_SCOPE]
-    allowed_scopes = set(supported_scopes or SUPPORTED_SCOPES)
+    raw_scope = (params.get("scope") or "").strip()
+    scopes = [s for s in raw_scope.split() if s]
+    allowed_scopes = set(supported_scopes or ())
     for s in scopes:
         if s not in allowed_scopes:
             raise AuthorizeError(

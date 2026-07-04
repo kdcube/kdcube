@@ -72,13 +72,13 @@ def test_registered_client_can_authorize(client):
         "client_id": cid,
         "redirect_uri": CB,
         "response_type": "code",
-        "scope": "conversations:read",
+        "scope": "records:read",
         "state": "s1",
         "code_challenge": make_s256_challenge("v" * 60),
         "code_challenge_method": "S256",
     }, headers={"Authorization": "Bearer admin-tok"})
     assert r.status_code == 200
-    assert "conversations_export" in r.text
+    assert "records_export" in r.text
 
 
 def test_registered_client_redirect_must_match(client):
@@ -89,7 +89,7 @@ def test_registered_client_redirect_must_match(client):
         "client_id": cid,
         "redirect_uri": "https://evil.example/cb",
         "response_type": "code",
-        "scope": "conversations:read",
+        "scope": "records:read",
         "code_challenge": make_s256_challenge("v" * 60),
         "code_challenge_method": "S256",
     }, headers={"Authorization": "Bearer admin-tok"}, follow_redirects=False)

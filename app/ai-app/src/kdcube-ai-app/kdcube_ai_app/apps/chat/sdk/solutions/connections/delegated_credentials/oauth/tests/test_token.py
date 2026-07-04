@@ -47,7 +47,7 @@ def ctx():
 async def _seed_code(store, *, redirect_uri="http://127.0.0.1:9000/callback", client_id="claude"):
     return await store.create_auth_code(
         client_id=client_id, redirect_uri=redirect_uri, code_challenge=CHALLENGE,
-        sub="google:admin@example.test", scopes=["conversations:read"], tools=["conversations_export"],
+        sub="google:admin@example.test", scopes=["records:read"], tools=["records_export"],
         identity_scope="grantor_identity_family",
     )
 
@@ -59,10 +59,10 @@ async def test_access_token_grant_binds_consented_tools(ctx):
     code = await store.create_auth_code(
         client_id="claude", redirect_uri="http://127.0.0.1:9000/callback",
         code_challenge=CHALLENGE, sub="google:admin@example.test",
-        scopes=["conversations:read"], tools=[],
+        scopes=["records:read"], tools=[],
         grantor_authority={
             "grantor_roles": ["kdcube:role:super-admin"],
-            "grantor_permissions": ["kdcube:*:conversations:*;read"],
+            "grantor_permissions": ["kdcube:*:records:*;read"],
             "economics_budget_bypass": True,
         },
     )
@@ -87,7 +87,7 @@ async def test_access_token_grant_binds_consented_tools(ctx):
     refresh_record = await store.validate_refresh_token(body["refresh_token"])
     assert refresh_record["tools"] == []
     assert refresh_record["credential"]["issuer_authority_id"] == DELEGATED_CLIENT_AUTHORITY_ID
-    assert refresh_record["grantor_authority"]["grantor_permissions"] == ["kdcube:*:conversations:*;read"]
+    assert refresh_record["grantor_authority"]["grantor_permissions"] == ["kdcube:*:records:*;read"]
 
 
 @pytest.mark.asyncio
@@ -106,7 +106,7 @@ async def test_authorization_code_exchange_succeeds(ctx):
     assert body["access_token"] == "kst1.mock.google:admin@example.test"
     assert body["token_type"] == "Bearer"
     assert body["expires_in"] == 3600
-    assert body["scope"] == "conversations:read"
+    assert body["scope"] == "records:read"
     assert body["refresh_token"]
     refresh_record = await store.validate_refresh_token(body["refresh_token"])
     assert refresh_record["credential"]["subject"] == "integration:claude:google:admin@example.test"

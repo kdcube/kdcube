@@ -16,17 +16,29 @@ explicitly. `named_service.py` exposes the same capability as a search
 named-service provider; `instructions.py` carries the realm-trait intro.
 """
 
+from kdcube_ai_app.apps.chat.sdk.solutions.conversation.export_records import (
+    collapse_turn,
+    export_conversations,
+    normalize_conversation,
+    normalize_turn,
+    source_for_user,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.conversation.export import (
-    DEFAULT_EXPORT_LIMIT,
-    MAX_EXPORT_LIMIT,
     ConversationExportRequest,
     ConversationExportService,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.conversation.mcp_export import (
+    ConversationReadServiceFactory,
+    CurrentUserIdFactory,
+    export_current_user_conversations,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.conversation.instructions import (
     CONVERSATION_NAMED_SERVICE_NAMESPACE,
     CONVERSATION_NAMESPACE_INTRO,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.conversation.read import (
+    DEFAULT_EXPORT_LIMIT,
+    MAX_EXPORT_LIMIT,
     ConversationExportScope,
     ConversationGetRequest,
     ConversationListRequest,
@@ -47,9 +59,17 @@ __all__ = [
     "ConversationExportService",
     "ConversationGetRequest",
     "ConversationListRequest",
+    "ConversationReadServiceFactory",
     "ConversationReadScope",
     "ConversationReadService",
     "ConversationScopeError",
+    "CurrentUserIdFactory",
     "build_conversation_ctx_client",
+    "collapse_turn",
+    "export_current_user_conversations",
+    "export_conversations",
     "make_conversation_read_service",
+    "normalize_conversation",
+    "normalize_turn",
+    "source_for_user",
 ]

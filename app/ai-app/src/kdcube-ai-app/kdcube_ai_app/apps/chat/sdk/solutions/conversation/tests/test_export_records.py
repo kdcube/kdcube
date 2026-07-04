@@ -1,16 +1,12 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Elena Viter
 
-"""
-Tests for the conversations_export tool logic: source attribution, the Phase-0
-normalizer, and the cross-tenant/project sweep with the `since` watermark.
-The data layer is faked; the real adapter wraps conversations_browser.
-"""
+"""Tests for conversation export record normalization."""
 from __future__ import annotations
 
 import pytest
 
-from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.export_tool import (
+from kdcube_ai_app.apps.chat.sdk.solutions.conversation.export_records import (
     export_conversations,
     normalize_conversation,
     source_for_user,
@@ -30,8 +26,14 @@ def test_normalize_conversation_shape():
         "started_at": "2026-06-22T10:30:00Z",
         "title": "Anchor alarm?",
         "turns": [
-            {"turn_id": "t1", "ts": "2026-06-22T10:30:01Z", "user": "hi", "assistant": "hello",
-             "attachments": [{"k": "v"}], "citations": ["s1"]},
+            {
+                "turn_id": "t1",
+                "ts": "2026-06-22T10:30:01Z",
+                "user": "hi",
+                "assistant": "hello",
+                "attachments": [{"k": "v"}],
+                "citations": ["s1"],
+            },
         ],
     }
     rec = normalize_conversation(raw, tenant="home", project="demo")
@@ -47,7 +49,6 @@ def test_normalize_conversation_shape():
 
 class _FakeDataSource:
     def __init__(self, data):
-        # data: {(tenant, project): [raw_conversation, ...]}
         self._data = data
 
     async def list_tenant_projects(self):
@@ -73,7 +74,6 @@ async def test_export_sweeps_all_tenant_projects_by_default():
     out = await export_conversations(ds)
     ids = {r["conversation_id"] for r in out}
     assert ids == {"c1", "c2"}
-    # tenant/project stamped per record.
     by_id = {r["conversation_id"]: r for r in out}
     assert by_id["c1"]["tenant"] == "home" and by_id["c2"]["project"] == "prod"
 

@@ -210,22 +210,7 @@ def _ordered_union(values: Any) -> tuple[str, ...]:
 
 
 def _default_capabilities() -> tuple[OAuthDelegatedCapabilityConfig, ...]:
-    return (
-        OAuthDelegatedCapabilityConfig(
-            grant="conversations:read",
-            label="Read conversations",
-            description="Read conversation transcripts that the grantor is allowed to delegate.",
-            tools=(
-                OAuthDelegatedToolConfig(
-                    name="conversations_export",
-                    label="Export conversation transcripts",
-                    description="Read-only conversation transcript export.",
-                ),
-            ),
-            delegable_roles=("kdcube:role:super-admin",),
-            delegable_permissions=("kdcube:*:conversations:*;read",),
-        ),
-    )
+    return ()
 
 
 def _parse_tool(item: Any) -> OAuthDelegatedToolConfig | None:
@@ -283,7 +268,7 @@ def _parse_capabilities(raw: Any) -> tuple[OAuthDelegatedCapabilityConfig, ...]:
                 ),
             )
         )
-    return tuple(out) or _default_capabilities()
+    return tuple(out)
 
 
 def _nested_named_service_grants(raw: Any) -> tuple[str, ...]:

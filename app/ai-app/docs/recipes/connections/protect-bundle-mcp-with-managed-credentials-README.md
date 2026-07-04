@@ -79,7 +79,8 @@ memory.
 
 ## Descriptor Surface
 
-Put the surface under `surfaces.as_provider.mcp`:
+Put the surface under `surfaces.as_provider.mcp`. The surface declares how the
+MCP endpoint is protected. It does not own the delegated tool/grant catalog:
 
 ```yaml
 surfaces:
@@ -91,24 +92,29 @@ surfaces:
           mode: managed
           authority_id: delegated_client
           identity_scope: grantor_identity_family
-          tools:
-            memory_search:
-              grants:
-                - memories:read
-            memory_get:
-              grants:
-                - memories:read
+          selected_tool_grants: true
 ```
 
-Each tool declares its required grants. If one tool needs multiple grants, put
-the full set on that tool:
+`mode: managed` means the proc MCP bridge asks Connection Hub to authenticate
+the delegated credential before it dispatches into the bundle MCP app.
+`authority_id` names the authority accepted at this boundary.
+`selected_tool_grants` means the concrete MCP tool must be present in the
+credential grant record.
+
+The delegated tool/grant catalog belongs in Connection Hub resource config. If
+one tool needs multiple grants, put the full set on that tool there:
 
 ```yaml
-tools:
-  admin_reindex:
-    grants:
-      - knowledge:read
-      - knowledge:maintain
+connections:
+  delegated_credentials:
+    oauth:
+      resources:
+        - resource: "*/api/integrations/bundles/*/*/knowledge@1-0/public/mcp/knowledge*"
+          tools:
+            admin_reindex:
+              grants:
+                - knowledge:read
+                - knowledge:maintain
 ```
 
 Do not model multi-grant tools by duplicating the tool under several grant
@@ -287,22 +293,11 @@ surfaces:
         auth:
           mode: managed
           authority_id: delegated_client
-          tools:
-            named_services_schema:
-              grants: [named_services:use]
-            named_services_capabilities:
-              grants: [named_services:use]
-            named_services_host_file:
-              grants: [named_services:use]
-            named_services_action:
-              grants: [named_services:use]
-            named_services_delete:
-              grants: [named_services:use]
-            named_services_upsert:
-              grants: [named_services:use]
+          selected_tool_grants: true
 ```
 
-Connection Hub owns the namespace boundary catalog for consent and delegation:
+Connection Hub owns the generic MCP tool catalog and the nested namespace
+boundary catalog for consent and delegation:
 
 ```yaml
 connections:
@@ -310,6 +305,23 @@ connections:
     oauth:
       resources:
         - resource: "*/api/integrations/bundles/*/*/kdcube-services@1-0/public/mcp/named_services*"
+          tools:
+            named_services_schema:
+              grants: [named_services:use]
+            named_services_capabilities:
+              grants: [named_services:use]
+            named_services_search:
+              grants: [named_services:use]
+            named_services_get:
+              grants: [named_services:use]
+            named_services_upsert:
+              grants: [named_services:use]
+            named_services_host_file:
+              grants: [named_services:use]
+            named_services_action:
+              grants: [named_services:use]
+            named_services_delete:
+              grants: [named_services:use]
           named_services:
             namespaces:
               mem:

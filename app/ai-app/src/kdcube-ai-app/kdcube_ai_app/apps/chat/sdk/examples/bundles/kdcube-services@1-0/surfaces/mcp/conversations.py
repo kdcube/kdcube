@@ -2,25 +2,26 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Callable, Type
+from typing import Annotated, Any
 
 from pydantic import Field
 
+from kdcube_ai_app.apps.chat.sdk.solutions.conversation.mcp_export import (
+    ConversationReadServiceFactory,
+    CurrentUserIdFactory,
+    export_current_user_conversations,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.mcp_metadata import (
     kdcube_mcp_icons,
     kdcube_website_url,
     read_only_annotations,
 )
 
-PoolFactory = Callable[[], Any]
-
-
 def build_conversations_mcp_app(
     *,
     name: str,
-    pool_factory: PoolFactory,
-    request_model: Type[Any],
-    service_cls: Type[Any],
+    read_service_factory: ConversationReadServiceFactory,
+    current_user_id_factory: CurrentUserIdFactory,
     request: Any = None,
 ):
     try:
@@ -41,10 +42,10 @@ def build_conversations_mcp_app(
         name="conversations_export",
         title="Export conversations",
         description=(
-            "Export KDCube conversation transcripts visible to the approving "
-            "user. In the default descriptor this tool is delegable only by a "
-            "super-admin and is intended for feedback triage and operational "
-            "review through delegated external clients."
+            "Export conversation transcripts for the approving KDCube user in "
+            "the current project. The server resolves tenant, project, and user "
+            "from the delegated MCP credential; callers should normally provide "
+            "only limit and optional since."
         ),
         annotations=read_only_annotations(ToolAnnotations, title="Export conversations"),
     )
@@ -56,25 +57,6 @@ def build_conversations_mcp_app(
                     "Optional ISO timestamp. When set, only conversations started "
                     "at or after this time are returned, for example "
                     "2026-06-01T00:00:00Z."
-                )
-            ),
-        ] = "",
-        tenant: Annotated[
-            str,
-            Field(
-                description=(
-                    "Optional tenant id. If provided, project must also be "
-                    "provided. Leave empty to export across all registered "
-                    "tenant/project pairs allowed by the service."
-                )
-            ),
-        ] = "",
-        project: Annotated[
-            str,
-            Field(
-                description=(
-                    "Optional project id. Used together with tenant to limit the "
-                    "export to one project."
                 )
             ),
         ] = "",
@@ -90,14 +72,11 @@ def build_conversations_mcp_app(
             ),
         ] = 100,
     ) -> dict[str, Any]:
-        service = service_cls(pg_pool=pool_factory())
-        return await service.export(
-            request_model(
-                since=since,
-                tenant=tenant,
-                project=project,
-                limit=limit,
-            )
+        return await export_current_user_conversations(
+            read_service_factory=read_service_factory,
+            current_user_id_factory=current_user_id_factory,
+            since=since,
+            limit=limit,
         )
 
     return mcp

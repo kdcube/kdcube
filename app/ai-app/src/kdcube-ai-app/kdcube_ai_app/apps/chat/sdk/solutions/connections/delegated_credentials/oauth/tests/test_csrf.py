@@ -42,7 +42,7 @@ def _params(**over):
         "client_id": "claude",
         "redirect_uri": "http://127.0.0.1:9876/callback",
         "response_type": "code",
-        "scope": "conversations:read",
+        "scope": "records:read",
         "state": "st-1",
         "code_challenge": CHALLENGE,
         "code_challenge_method": "S256",
@@ -54,8 +54,8 @@ def _params(**over):
 def _consent_form(csrf=None, decision="approve", **over):
     f = dict(_params(**over))
     f["decision"] = decision
-    f["platform_grants"] = ["conversations:read"]
-    f["tools"] = ["conversations_export"]
+    f["platform_grants"] = ["records:read"]
+    f["tools"] = ["records_export"]
     if csrf is not None:
         f["csrf_token"] = csrf
     return f

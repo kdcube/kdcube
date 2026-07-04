@@ -4,25 +4,13 @@
 """Delegated-client session minting for Connection Hub external credentials."""
 from __future__ import annotations
 
-from typing import Any, Iterable, List, Mapping, Optional
-
-from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_projection import (
-    authority_has_platform_privilege,
-)
-
-FEEDBACK_READER_ROLE = "kdcube:role:feedback-reader"
-
-# Read-only permission for conversation export across tenants/projects.
-CONVERSATIONS_READ_PERMISSION = "kdcube:*:conversations:*;read"
+from typing import Any, Iterable, List, Mapping
 
 # Short-lived access token; the refresh token (long-lived, rotating) keeps a
 # daily-or-seldom routine working without re-consent.
 ACCESS_TOKEN_TTL_SECONDS = 3600
 
-# Which tools each role may invoke over MCP. feedback-reader is read-only.
-ROLE_TOOLS = {
-    FEEDBACK_READER_ROLE: {"conversations_export"},
-}
+DELEGATED_CLIENT_ROLE = "kdcube:role:delegated-client"
 
 
 def oauth_tenant_project(source: Any | None = None) -> tuple[str, str]:
@@ -34,36 +22,23 @@ def oauth_tenant_project(source: Any | None = None) -> tuple[str, str]:
     return cfg.tenant, cfg.project
 
 
-def integration_subject(admin_sub: str) -> str:
-    """Dedicated identity for the Claude Code integration tied to the consenting admin."""
-    return f"integration:claude:{admin_sub}"
-
-
-def can_call_tool(roles: Iterable[str], tool: str) -> bool:
-    roles = set(roles or [])
-    # Platform admins retain access to everything.
-    if authority_has_platform_privilege(roles):
-        return True
-    return any(tool in ROLE_TOOLS.get(r, set()) for r in roles)
+def integration_subject(grantor_subject: str, *, client_id: str = "") -> str:
+    """Dedicated external-client identity tied to the consenting platform subject."""
+    client = str(client_id or "delegated_client").strip() or "delegated_client"
+    client = "_".join(client.split())
+    return f"integration:{client}:{grantor_subject}"
 
 
 def _delegated_roles_for_scopes(scopes: Iterable[str]) -> list[str]:
-    scopes_set = {str(item).strip() for item in (scopes or []) if str(item).strip()}
-    roles = ["kdcube:role:delegated-client"]
-    if "conversations:read" in scopes_set:
-        roles.append(FEEDBACK_READER_ROLE)
-    return roles
+    del scopes
+    return [DELEGATED_CLIENT_ROLE]
 
 
 def _delegated_permissions_for_scopes(scopes: Iterable[str]) -> list[str]:
-    scopes_set = {str(item).strip() for item in (scopes or []) if str(item).strip()}
-    permissions = sorted(scopes_set)
-    if "conversations:read" in scopes_set and CONVERSATIONS_READ_PERMISSION not in permissions:
-        permissions.append(CONVERSATIONS_READ_PERMISSION)
-    return permissions
+    return sorted({str(item).strip() for item in (scopes or []) if str(item).strip()})
 
 
-async def mint_feedback_reader_access_token(
+async def mint_delegated_client_access_token(
     sub: str,
     scopes: List[str],
     *,
@@ -73,7 +48,7 @@ async def mint_feedback_reader_access_token(
     credential: Mapping[str, Any] | None = None,
     ttl_seconds: int = ACCESS_TOKEN_TTL_SECONDS,
 ) -> dict:
-    """Mint a least-privilege integration session for the consenting user's connection.
+    """Mint a least-privilege external-client session for a delegated connection.
 
     ``sub`` is the consenting user's subject; the token is issued to the derived
     integration identity, never to ``sub`` itself.
@@ -84,11 +59,11 @@ async def mint_feedback_reader_access_token(
         tenant, project = oauth_tenant_project()
         authority = get_bundle_session_authority(tenant=tenant, project=project)
 
-    isub = integration_subject(sub)
+    isub = integration_subject(sub, client_id=client_id)
     grant = await authority.login_or_register(
         sub=isub,
-        username="claude-feedback-reader",
-        name="Claude Code delegated connection",
+        username=f"delegated-client:{client_id or 'unknown'}",
+        name="Delegated client connection",
         roles=_delegated_roles_for_scopes(scopes),
         permissions=_delegated_permissions_for_scopes(scopes),
         provider="integration",

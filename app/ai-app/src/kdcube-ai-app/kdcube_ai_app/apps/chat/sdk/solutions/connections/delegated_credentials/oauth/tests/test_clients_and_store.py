@@ -112,14 +112,14 @@ async def test_auth_code_consume_returns_bound_payload(store):
         redirect_uri="http://localhost:9999/callback",
         code_challenge=make_s256_challenge("v" * 50),
         sub="google:admin@example.test",
-        scopes=["conversations:read"],
-        tools=["conversations_export"],
+        scopes=["records:read"],
+        tools=["records_export"],
     )
     payload = await store.consume_auth_code(code)
     assert payload["client_id"] == "claude"
     assert payload["sub"] == "google:admin@example.test"
-    assert payload["scopes"] == ["conversations:read"]
-    assert payload["tools"] == ["conversations_export"]
+    assert payload["scopes"] == ["records:read"]
+    assert payload["tools"] == ["records_export"]
     assert payload["redirect_uri"] == "http://localhost:9999/callback"
 
 
@@ -127,7 +127,7 @@ async def test_auth_code_consume_returns_bound_payload(store):
 async def test_auth_code_is_single_use(store):
     code = await store.create_auth_code(
         client_id="claude", redirect_uri="http://localhost:9999/callback",
-        code_challenge=make_s256_challenge("v" * 50), sub="s", scopes=["conversations:read"], tools=[],
+        code_challenge=make_s256_challenge("v" * 50), sub="s", scopes=["records:read"], tools=[],
     )
     assert await store.consume_auth_code(code) is not None
     # Second consume must fail — replay protection.
@@ -144,11 +144,11 @@ async def test_unknown_auth_code_returns_none(store):
 @pytest.mark.asyncio
 async def test_refresh_token_validates_then_rotates(store):
     rt = await store.create_refresh_token(
-        client_id="claude", sub="google:admin@example.test", scopes=["conversations:read"],
+        client_id="claude", sub="google:admin@example.test", scopes=["records:read"],
     )
     rec = await store.validate_refresh_token(rt)
     assert rec["sub"] == "google:admin@example.test"
-    assert rec["scopes"] == ["conversations:read"]
+    assert rec["scopes"] == ["records:read"]
 
     new_rt = await store.rotate_refresh_token(rt)
     assert new_rt and new_rt != rt

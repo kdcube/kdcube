@@ -14,6 +14,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.conversation.download_links import (
     verify_file_download_token,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.conversation.presentation import fi_path_from_conv_ref
+from kdcube_ai_app.apps.chat.sdk.solutions.conversation import make_conversation_read_service
 from kdcube_ai_app.apps.chat.sdk.solutions.conversation.search_backend import (
     make_conversation_search_backend,
 )
@@ -25,11 +26,13 @@ try:
     from .services.conversations.named_service import build_conversation_named_service_provider
     from .services.named_services import NamedServicesMcpBridge
     from .services.named_services.request_scope import get_public_base_url
+    from .surfaces.mcp import conversations as conversations_mcp_module
     from .surfaces.mcp import named_services as named_services_mcp_module
 except Exception:  # pragma: no cover - bundle loader may import as loose module
     from services.conversations.named_service import build_conversation_named_service_provider  # type: ignore
     from services.named_services import NamedServicesMcpBridge  # type: ignore
     from services.named_services.request_scope import get_public_base_url  # type: ignore
+    from surfaces.mcp import conversations as conversations_mcp_module  # type: ignore
     from surfaces.mcp import named_services as named_services_mcp_module  # type: ignore
 
 
@@ -82,45 +85,17 @@ class KDCubeServicesEntrypoint(BaseEntrypoint):
                 "as_provider": {
                     "bundle": {"visibility": {"allowed_roles": []}},
                     "mcp": {
+                        "conversations": {
+                            "auth": {
+                                "mode": "managed",
+                                "authority_id": "delegated_client",
+                                "selected_tool_grants": True,
+                            },
+                        },
                         "named_services": {
                             "auth": {
                                 "mode": "managed",
                                 "authority_id": "delegated_client",
-                                "tools": {
-                                    "named_services_list": {
-                                        "grants": ["named_services:use"],
-                                    },
-                                    "named_services_about": {
-                                        "grants": ["named_services:use"],
-                                    },
-                                    "named_services_capabilities": {
-                                        "grants": ["named_services:use"],
-                                    },
-                                    "named_services_schema": {
-                                        "grants": ["named_services:use"],
-                                    },
-                                    "named_services_search": {
-                                        "grants": ["named_services:use"],
-                                    },
-                                    "named_services_get": {
-                                        "grants": ["named_services:use"],
-                                    },
-                                    "named_services_upsert": {
-                                        "grants": ["named_services:use"],
-                                    },
-                                    "named_services_host_file": {
-                                        "grants": ["named_services:use"],
-                                    },
-                                    "named_services_action": {
-                                        "grants": ["named_services:use"],
-                                    },
-                                    "named_services_delete": {
-                                        "grants": ["named_services:use"],
-                                    },
-                                    "named_services_call": {
-                                        "grants": ["named_services:use"],
-                                    },
-                                },
                                 "selected_tool_grants": True,
                             },
                         },
@@ -160,6 +135,21 @@ class KDCubeServicesEntrypoint(BaseEntrypoint):
         ]
 
     @mcp(
+        alias="conversations",
+        route="public",
+        transport="streamable-http",
+        auth_config="surfaces.as_provider.mcp.conversations.auth",
+    )
+    def conversations_mcp(self, request=None, **kwargs):
+        del kwargs
+        return conversations_mcp_module.build_conversations_mcp_app(
+            name="KDCube conversations",
+            read_service_factory=self._conversation_read_service,
+            current_user_id_factory=self._runtime_user_id,
+            request=request,
+        )
+
+    @mcp(
         alias="named_services",
         route="public",
         transport="streamable-http",
@@ -190,6 +180,27 @@ class KDCubeServicesEntrypoint(BaseEntrypoint):
             )
         )
         return providers
+
+    def _runtime_user_id(self) -> str:
+        user = getattr(self.comm_context, "user", None)
+        return str(getattr(user, "user_id", None) or "").strip()
+
+    def _runtime_tenant(self) -> str:
+        actor = getattr(self.comm_context, "actor", None)
+        return str(getattr(actor, "tenant_id", None) or "").strip()
+
+    def _runtime_project(self) -> str:
+        actor = getattr(self.comm_context, "actor", None)
+        return str(getattr(actor, "project_id", None) or "").strip()
+
+    def _conversation_read_service(self):
+        return make_conversation_read_service(
+            pg_pool=self.pg_pool,
+            tenant=self._runtime_tenant(),
+            project=self._runtime_project(),
+            model_service=self.models_service,
+            store=ConversationStore(str(getattr(self.settings, "STORAGE_PATH", "") or "")),
+        )
 
     # ── binary conv:fi: download URL (out-of-band, signed, session-less) ──────
 

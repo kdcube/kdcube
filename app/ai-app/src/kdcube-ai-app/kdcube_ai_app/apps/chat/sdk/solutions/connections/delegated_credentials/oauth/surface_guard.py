@@ -273,6 +273,24 @@ def _request_resource(request: Request) -> str:
     return _normalize_resource(_request_public_url_without_query(request))
 
 
+def _connection_hub_tool_policies(request: Request) -> dict[str, ManagedMcpToolPolicy]:
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.config import (
+        oauth_delegated_config,
+    )
+
+    cfg = oauth_delegated_config(request)
+    tools = cfg.resource_tool_catalog(_request_resource(request))
+    out: dict[str, ManagedMcpToolPolicy] = {}
+    for tool in tools:
+        name = str(getattr(tool, "name", "") or "").strip()
+        if not name:
+            continue
+        out[name] = ManagedMcpToolPolicy(
+            grants=_as_list(getattr(tool, "grants", ())),
+        )
+    return out
+
+
 def _credential_resource(envelope: CredentialEnvelope) -> str:
     attrs = envelope.attrs or {}
     return _normalize_resource(attrs.get("resource"))
@@ -528,7 +546,9 @@ async def authorize_delegated_mcp_request(
     granted_tools = None
     if isinstance(grant_record, Mapping):
         granted_tools = set(_as_list(grant_record.get("tools")))
-    tool_policies = dict(policy.tool_policies or {})
+    tool_policies = _connection_hub_tool_policies(request)
+    if not tool_policies:
+        tool_policies = dict(policy.tool_policies or {})
     available_grants = _credential_scopes(envelope)
 
     for rpc_id, tool_name in tool_calls:

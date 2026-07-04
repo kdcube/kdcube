@@ -1,16 +1,7 @@
-"""Conversation read services.
+"""Conversation service wiring for kdcube-services.
 
-Thin compatibility layer: the export domain logic now lives in the conversation
-SDK (`sdk.solutions.conversation.export`). This bundle only publishes it, so it
-re-exports the SDK classes for the MCP surface wiring.
+The bundle owns resource wiring only. Conversation export/read behavior lives in
+`kdcube_ai_app.apps.chat.sdk.solutions.conversation`.
 """
 
-from kdcube_ai_app.apps.chat.sdk.solutions.conversation.export import (
-    ConversationExportRequest,
-    ConversationExportService,
-)
-
-__all__ = [
-    "ConversationExportRequest",
-    "ConversationExportService",
-]
+__all__: list[str] = []

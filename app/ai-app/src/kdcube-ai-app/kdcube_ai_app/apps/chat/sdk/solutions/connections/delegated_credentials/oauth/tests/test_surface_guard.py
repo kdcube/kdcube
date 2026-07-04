@@ -40,7 +40,7 @@ def _authority(
         "subject": subject,
         "audience": "kdcube:delegated_client",
         "attrs": {
-            "scopes": list(scopes or ["conversations:read"]),
+            "scopes": list(scopes or ["records:read"]),
             "resource": resource,
             "grantor_subject": grantor_subject,
             "identity_scope": identity_scope,
@@ -52,7 +52,7 @@ def _memory_authority():
     return _authority(scopes=["memories:read"])
 
 
-def _rpc_tool_call(name="conversations_export", rpc_id=1):
+def _rpc_tool_call(name="records_export", rpc_id=1):
     return {
         "jsonrpc": "2.0",
         "id": rpc_id,
@@ -73,8 +73,8 @@ def test_managed_policy_parses_per_tool_grants():
         "mode": "managed",
         "authority_id": "delegated_client",
         "tools": {
-            "conversations_export": {
-                "grants": ["conversations:read"],
+            "records_export": {
+                "grants": ["records:read"],
             },
         },
     })
@@ -82,18 +82,18 @@ def test_managed_policy_parses_per_tool_grants():
     assert policy is not None
     assert policy.authority_id == "delegated_client"
     assert policy.tool_policies is not None
-    assert policy.tool_policies["conversations_export"].grants == ("conversations:read",)
+    assert policy.tool_policies["records_export"].grants == ("records:read",)
 
 
 def test_extract_mcp_tool_calls_handles_batch():
     calls = surface_guard.extract_mcp_tool_calls(
         b"""[
           {"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}},
-          {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"conversations_export"}}
+          {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"records_export"}}
         ]"""
     )
 
-    assert calls == [(2, "conversations_export")]
+    assert calls == [(2, "records_export")]
 
 
 def _client(monkeypatch, *, grant_record, auth=None, user=None, return_projection=False):
@@ -102,8 +102,8 @@ def _client(monkeypatch, *, grant_record, auth=None, user=None, return_projectio
             return None
         return user or {
             "sub": "integration:claude:admin",
-            "roles": ["kdcube:role:feedback-reader"],
-            "permissions": ["kdcube:*:conversations:*;read"],
+            "roles": ["kdcube:role:delegated-client"],
+            "permissions": ["kdcube:*:records:*;read"],
         }
 
     monkeypatch.setattr(
@@ -118,8 +118,8 @@ def _client(monkeypatch, *, grant_record, auth=None, user=None, return_projectio
         "mode": "managed",
         "authority_id": "delegated_client",
         "tools": {
-            "conversations_export": {
-                "grants": ["conversations:read"],
+            "records_export": {
+                "grants": ["records:read"],
             },
         },
         "selected_tool_grants": True,
@@ -141,11 +141,104 @@ def _client(monkeypatch, *, grant_record, auth=None, user=None, return_projectio
     return TestClient(app)
 
 
+def test_managed_guard_uses_connection_hub_resource_policy(monkeypatch):
+    config = {
+        "enabled": True,
+        "capabilities": [{"grant": "records:read"}],
+        "resources": [
+            {
+                "resource": GUARD_RESOURCE,
+                "tools": {
+                    "records_export": {
+                        "grants": ["records:read"],
+                    },
+                },
+            }
+        ],
+    }
+    client = _client(
+        monkeypatch,
+        auth={
+            "mode": "managed",
+            "authority_id": "delegated_client",
+            "selected_tool_grants": True,
+        },
+        user={
+            "sub": "integration:claude:user",
+            "roles": ["kdcube:role:delegated-client"],
+            "permissions": ["records:read"],
+        },
+        grant_record={
+            "tools": ["records_export"],
+            "credential": _authority(),
+        },
+    )
+    client.app.state.oauth_delegated_config = config
+
+    response = client.post(
+        "/guard",
+        json=_rpc_tool_call(),
+        headers={"Authorization": "Bearer reader"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+
+def test_managed_guard_prefers_connection_hub_resource_policy_over_surface_tools(monkeypatch):
+    config = {
+        "enabled": True,
+        "capabilities": [{"grant": "records:read"}],
+        "resources": [
+            {
+                "resource": GUARD_RESOURCE,
+                "tools": {
+                    "records_export": {
+                        "grants": ["records:read"],
+                    },
+                },
+            }
+        ],
+    }
+    client = _client(
+        monkeypatch,
+        auth={
+            "mode": "managed",
+            "authority_id": "delegated_client",
+            "tools": {
+                "records_export": {
+                    "grants": ["wrong:grant"],
+                },
+            },
+            "selected_tool_grants": True,
+        },
+        user={
+            "sub": "integration:claude:user",
+            "roles": ["kdcube:role:delegated-client"],
+            "permissions": ["records:read"],
+        },
+        grant_record={
+            "tools": ["records_export"],
+            "credential": _authority(),
+        },
+    )
+    client.app.state.oauth_delegated_config = config
+
+    response = client.post(
+        "/guard",
+        json=_rpc_tool_call(),
+        headers={"Authorization": "Bearer reader"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+
 def test_managed_guard_allows_consented_tool(monkeypatch):
     client = _client(
         monkeypatch,
         grant_record={
-            "tools": ["conversations_export"],
+            "tools": ["records_export"],
             "credential": _authority(),
         },
     )
@@ -308,7 +401,7 @@ def test_managed_guard_rejects_resource_mismatch(monkeypatch):
     client = _client(
         monkeypatch,
         grant_record={
-            "tools": ["conversations_export"],
+            "tools": ["records_export"],
             "credential": _authority(resource="http://testserver/other"),
         },
     )
@@ -329,7 +422,7 @@ def test_managed_guard_rejects_missing_resource(monkeypatch):
     client = _client(
         monkeypatch,
         grant_record={
-            "tools": ["conversations_export"],
+            "tools": ["records_export"],
             "credential": authority,
         },
     )
@@ -348,7 +441,7 @@ def test_managed_guard_compares_forwarded_public_resource(monkeypatch):
     client = _client(
         monkeypatch,
         grant_record={
-            "tools": ["conversations_export"],
+            "tools": ["records_export"],
             "credential": _authority(
                 resource=(
                     "https://broodier-maxie-uninferrably.ngrok-free.dev"
@@ -377,7 +470,7 @@ def test_managed_guard_requires_bearer(monkeypatch):
     client = _client(
         monkeypatch,
         grant_record={
-            "tools": ["conversations_export"],
+            "tools": ["records_export"],
             "credential": _authority(),
         },
     )
@@ -394,7 +487,7 @@ def test_oauth_challenge_uses_forwarded_public_origin():
             "type": "http",
             "method": "POST",
             "scheme": "http",
-            "path": "/api/integrations/bundles/demo-tenant/demo-project/kdcube-services@1-0/public/mcp/conversations",
+            "path": "/api/integrations/bundles/demo-tenant/demo-project/kdcube-services@1-0/public/mcp/example",
             "query_string": b"",
             "server": ("chat-proc", 8020),
             "headers": [

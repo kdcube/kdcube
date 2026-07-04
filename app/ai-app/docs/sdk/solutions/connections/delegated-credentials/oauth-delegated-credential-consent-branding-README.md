@@ -105,9 +105,9 @@ The custom consent operation receives a POST payload like:
     "client_id": "claude",
     "redirect_uri": "https://claude.ai/api/mcp/auth_callback",
     "response_type": "code",
-    "scope": "conversations:read",
-    "scopes": ["conversations:read"],
-    "resource": "https://runtime.example.test/.../public/mcp/conversations",
+    "scope": "records:read",
+    "scopes": ["records:read"],
+    "resource": "https://runtime.example.test/.../public/mcp/example",
     "state": "...",
     "code_challenge": "...",
     "code_challenge_method": "S256"
@@ -122,10 +122,10 @@ The custom consent operation receives a POST payload like:
   "signout_action": "/api/integrations/bundles/.../connection-hub@1-0/public/oauth/logout",
   "return_to": "/api/integrations/bundles/.../connection-hub@1-0/public/oauth/authorize?...",
   "platform_grants": [
-    {"grant": "conversations:read", "label": "Read conversations", "description": "..."}
+    {"grant": "records:read", "label": "Read records", "description": "..."}
   ],
   "tools": [
-    {"name": "conversations_export", "label": "Export conversations", "description": "...", "grants": ["conversations:read"]}
+    {"name": "records_export", "label": "Export records", "description": "...", "grants": ["records:read"]}
   ]
 }
 ```

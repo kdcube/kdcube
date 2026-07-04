@@ -11,9 +11,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, Mapping
 
-# The single scope this AS issues. Maps to kdcube:role:feedback-reader (read-only).
-CONVERSATIONS_READ_SCOPE = "conversations:read"
-
 # Discovery document paths (RFC 8414 / RFC 9728).
 WELL_KNOWN_AS_PATH = "/.well-known/oauth-authorization-server"
 WELL_KNOWN_OIDC_PATH = "/.well-known/openid-configuration"
@@ -50,7 +47,7 @@ def authorization_server_metadata(
         # Public client, no secret -> 'none'.
         "token_endpoint_auth_methods_supported": ["none"],
         "authorization_response_iss_parameter_supported": True,
-        "scopes_supported": list(scopes_supported or [CONVERSATIONS_READ_SCOPE]),
+        "scopes_supported": list(scopes_supported or []),
         # jwks_uri intentionally omitted: tokens are opaque (kst1).
     }
     if service_name:
@@ -86,7 +83,7 @@ def protected_resource_metadata(
     out = {
         "resource": resource,
         "authorization_servers": [issuer],
-        "scopes_supported": list(scopes_supported or [CONVERSATIONS_READ_SCOPE]),
+        "scopes_supported": list(scopes_supported or []),
     }
     if resource_name:
         out["resource_name"] = resource_name

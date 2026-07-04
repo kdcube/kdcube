@@ -17,6 +17,35 @@ def enable_delegated_client(app: FastAPI, *, issuer: str = "https://connector.ex
     app.state.oauth_delegated_config = {
         "enabled": True,
         "issuer": issuer,
+        "capabilities": [
+            {
+                "grant": "records:read",
+                "label": "Read records",
+                "description": "Read example records exposed by the protected resource.",
+                "tools": [
+                    {
+                        "name": "records_export",
+                        "label": "Export records",
+                        "description": "Read-only example export tool.",
+                        "grants": ["records:read"],
+                    },
+                ],
+            },
+        ],
+        "resources": [
+            {
+                "resource": "*",
+                "grants": ["records:read"],
+                "tools": [
+                    {
+                        "name": "records_export",
+                        "label": "Export records",
+                        "description": "Read-only example export tool.",
+                        "grants": ["records:read"],
+                    },
+                ],
+            },
+        ],
     }
 
 

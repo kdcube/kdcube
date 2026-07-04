@@ -46,11 +46,12 @@ python -m py_compile entrypoint.py surfaces/mcp/conversations.py services/conver
 ```
 
 Export domain logic lives in the conversation SDK
-(`sdk.solutions.conversation.export`); this bundle only re-exports and publishes
-it. To compile-check the SDK owner from the source root:
+(`sdk.solutions.conversation.export` and `sdk.solutions.conversation.mcp_export`);
+this bundle only publishes the MCP tool schema and supplies pooled resources
+from the runtime. To compile-check the SDK owner from the source root:
 
 ```bash
-python -m py_compile kdcube_ai_app/apps/chat/sdk/solutions/conversation/export.py
+python -m py_compile kdcube_ai_app/apps/chat/sdk/solutions/conversation/export.py kdcube_ai_app/apps/chat/sdk/solutions/conversation/mcp_export.py
 ```
 
 Then reload the bundle and test the real public MCP URL through Connection Hub

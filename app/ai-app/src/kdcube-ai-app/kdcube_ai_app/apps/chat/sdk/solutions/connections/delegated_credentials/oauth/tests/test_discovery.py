@@ -44,7 +44,7 @@ def test_authorization_server_metadata_required_fields():
     assert md["code_challenge_methods_supported"] == ["S256"]
     assert md["token_endpoint_auth_methods_supported"] == ["none"]
     assert md["authorization_response_iss_parameter_supported"] is True
-    assert md["scopes_supported"] == ["conversations:read"]
+    assert md["scopes_supported"] == []
 
 
 def test_authorization_server_metadata_omits_jwks_uri():
@@ -59,7 +59,7 @@ def test_protected_resource_metadata_points_at_as():
 
     assert md["resource"] == resource
     assert md["authorization_servers"] == [ISSUER]
-    assert md["scopes_supported"] == ["conversations:read"]
+    assert md["scopes_supported"] == []
 
 
 # ----------------------------- served endpoints -----------------------------
@@ -81,6 +81,7 @@ def test_well_known_authorization_server_served(client):
         logo_uri=TEST_ICON,
         client_uri=TEST_WEBSITE,
         icons=[TEST_ICON_DESCRIPTOR],
+        scopes_supported=["records:read"],
     )
 
 
@@ -94,6 +95,7 @@ def test_well_known_openid_configuration_alias_served(client):
         logo_uri=TEST_ICON,
         client_uri=TEST_WEBSITE,
         icons=[TEST_ICON_DESCRIPTOR],
+        scopes_supported=["records:read"],
     )
     assert data["registration_endpoint"] == f"{ISSUER}/oauth/register"
 
@@ -105,12 +107,12 @@ def test_well_known_protected_resource_served(client):
     data = resp.json()
     assert data["resource"] == resource
     assert data["authorization_servers"] == [ISSUER]
-    assert data["scopes_supported"] == ["conversations:read"]
+    assert data["scopes_supported"] == ["records:read"]
     assert data["resource_name"] == "KDCube"
     assert data["logo_uri"] == TEST_ICON
     assert data["icons"] == [TEST_ICON_DESCRIPTOR]
-    assert data["kdcube_capabilities"][0]["grant"] == "conversations:read"
-    assert data["kdcube_tools"][0]["grants"] == ["conversations:read"]
+    assert data["kdcube_capabilities"][0]["grant"] == "records:read"
+    assert data["kdcube_tools"][0]["grants"] == ["records:read"]
 
 
 def test_well_known_protected_resource_serves_named_service_catalog():

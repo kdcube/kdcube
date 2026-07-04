@@ -1,53 +1,30 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Elena Viter
 
-"""
-Tests for the conversations:read -> feedback-reader grant mapping.
-
-Critical safety property: the access token is minted for a SEPARATE integration
-identity (never the consenting admin's own subject), so the admin's account roles
-are never downgraded by issuing a read-only integration token.
-"""
+"""Tests for delegated-client access-token minting."""
 from __future__ import annotations
 
 import pytest
 
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.grants import (
-    FEEDBACK_READER_ROLE,
-    can_call_tool,
+    DELEGATED_CLIENT_ROLE,
     integration_subject,
-    mint_feedback_reader_access_token,
+    mint_delegated_client_access_token,
 )
 
 ADMIN_SUB = "google:admin@example.test"
 
 
-def test_feedback_reader_role_value():
-    assert FEEDBACK_READER_ROLE == "kdcube:role:feedback-reader"
+def test_delegated_client_role_value():
+    assert DELEGATED_CLIENT_ROLE == "kdcube:role:delegated-client"
 
 
 def test_integration_subject_is_distinct_and_deterministic():
-    isub = integration_subject(ADMIN_SUB)
+    isub = integration_subject(ADMIN_SUB, client_id="example-client")
     assert isub != ADMIN_SUB
     assert ADMIN_SUB in isub
-    assert integration_subject(ADMIN_SUB) == isub  # deterministic
-
-
-def test_feedback_reader_can_call_export():
-    assert can_call_tool([FEEDBACK_READER_ROLE], "conversations_export")
-
-
-def test_registered_user_cannot_call_export_without_delegated_grant():
-    assert not can_call_tool(["kdcube:role:registered"], "conversations_export")
-
-
-def test_feedback_reader_cannot_call_unlisted_write_tool():
-    assert not can_call_tool([FEEDBACK_READER_ROLE], "conversations_delete")
-
-
-def test_super_admin_can_call_export():
-    # Admins retain access (superset of the read-only grant).
-    assert can_call_tool(["kdcube:role:super-admin"], "conversations_export")
+    assert "example-client" in isub
+    assert integration_subject(ADMIN_SUB, client_id="example-client") == isub
 
 
 class _FakeAuthority:
@@ -66,18 +43,17 @@ class _FakeAuthority:
 @pytest.mark.asyncio
 async def test_minter_uses_integration_identity_not_admin():
     authority = _FakeAuthority()
-    out = await mint_feedback_reader_access_token(
-        ADMIN_SUB, ["conversations:read"], authority=authority, ttl_seconds=3600
+    out = await mint_delegated_client_access_token(
+        ADMIN_SUB, ["records:read"], authority=authority, client_id="example-client", ttl_seconds=3600
     )
     assert out["expires_in"] == 3600
-    assert out["access_token"].startswith("kst1.mock.integration:claude:")
+    assert out["access_token"].startswith("kst1.mock.integration:example-client:")
 
     call = authority.calls[0]
-    # Minted for the integration identity, with the generic delegated-client role
-    # plus the legacy feedback-reader role for conversations:read.
-    assert call["sub"] == integration_subject(ADMIN_SUB)
+    assert call["sub"] == integration_subject(ADMIN_SUB, client_id="example-client")
     assert call["sub"] != ADMIN_SUB
-    assert call["roles"] == ["kdcube:role:delegated-client", FEEDBACK_READER_ROLE]
+    assert call["roles"] == [DELEGATED_CLIENT_ROLE]
+    assert call["permissions"] == ["records:read"]
 
 
 @pytest.mark.asyncio
@@ -89,15 +65,15 @@ async def test_minter_passes_credential_metadata_to_session_authority():
         "credential_kind": "delegated_client_access",
         "issuer_authority_id": "delegated_client",
         "issuer_authenticator_id": "delegated_client.bearer",
-        "subject": integration_subject(ADMIN_SUB),
+        "subject": integration_subject(ADMIN_SUB, client_id="claude"),
         "audience": "kdcube:delegated_client",
     }
-    await mint_feedback_reader_access_token(
+    await mint_delegated_client_access_token(
         ADMIN_SUB,
-        ["conversations:read"],
+        ["records:read"],
         authority=authority,
         client_id="claude",
-        tools=["conversations_export"],
+        tools=["records_export"],
         credential=credential,
         ttl_seconds=3600,
     )
@@ -105,4 +81,4 @@ async def test_minter_passes_credential_metadata_to_session_authority():
     metadata = authority.calls[0]["metadata"]
     assert metadata["credential"] == credential
     assert metadata["delegated_client"]["client_id"] == "claude"
-    assert metadata["delegated_client"]["tools"] == ["conversations_export"]
+    assert metadata["delegated_client"]["tools"] == ["records_export"]

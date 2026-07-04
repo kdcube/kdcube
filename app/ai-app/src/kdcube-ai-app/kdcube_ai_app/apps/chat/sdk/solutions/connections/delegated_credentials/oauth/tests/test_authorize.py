@@ -32,6 +32,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oau
 
 ISSUER = "https://connector.example.test"
 CHALLENGE = make_s256_challenge("verifier-" + "x" * 50)
+SUPPORTED_SCOPES = ["records:read"]
 
 
 def _params(**over):
@@ -39,7 +40,7 @@ def _params(**over):
         "client_id": "claude",
         "redirect_uri": "http://127.0.0.1:9876/callback",
         "response_type": "code",
-        "scope": "conversations:read",
+        "scope": "records:read",
         "state": "st-123",
         "code_challenge": CHALLENGE,
         "code_challenge_method": "S256",
@@ -48,40 +49,44 @@ def _params(**over):
     return p
 
 
+def _parse(params):
+    return parse_authorize_request(params, supported_scopes=SUPPORTED_SCOPES)
+
+
 # ------------------------------ request validation ------------------------------
 
 def test_parse_valid_request():
-    req = parse_authorize_request(_params())
+    req = _parse(_params())
     assert req.client_id == "claude"
     assert req.redirect_uri == "http://127.0.0.1:9876/callback"
-    assert req.scopes == ["conversations:read"]
+    assert req.scopes == ["records:read"]
     assert req.state == "st-123"
     assert req.code_challenge == CHALLENGE
 
 
 def test_unknown_client_not_redirectable():
     with pytest.raises(AuthorizeError) as ei:
-        parse_authorize_request(_params(client_id="bogus"))
+        _parse(_params(client_id="bogus"))
     assert ei.value.error == "invalid_client"
     assert ei.value.redirectable is False
 
 
 def test_bad_redirect_not_redirectable():
     with pytest.raises(AuthorizeError) as ei:
-        parse_authorize_request(_params(redirect_uri="https://evil.example/cb"))
+        _parse(_params(redirect_uri="https://evil.example/cb"))
     assert ei.value.redirectable is False
 
 
 def test_bad_response_type_is_redirectable():
     with pytest.raises(AuthorizeError) as ei:
-        parse_authorize_request(_params(response_type="token"))
+        _parse(_params(response_type="token"))
     assert ei.value.error == "unsupported_response_type"
     assert ei.value.redirectable is True
 
 
 def test_bad_scope_is_redirectable():
     with pytest.raises(AuthorizeError) as ei:
-        parse_authorize_request(_params(scope="conversations:write"))
+        _parse(_params(scope="records:write"))
     assert ei.value.error == "invalid_scope"
     assert ei.value.redirectable is True
 
@@ -97,14 +102,14 @@ def test_parse_resource_specific_scope():
 
 def test_missing_pkce_is_redirectable():
     with pytest.raises(AuthorizeError) as ei:
-        parse_authorize_request(_params(code_challenge=""))
+        _parse(_params(code_challenge=""))
     assert ei.value.error == "invalid_request"
     assert ei.value.redirectable is True
 
 
 def test_non_s256_pkce_is_redirectable():
     with pytest.raises(AuthorizeError) as ei:
-        parse_authorize_request(_params(code_challenge_method="plain"))
+        _parse(_params(code_challenge_method="plain"))
     assert ei.value.error == "invalid_request"
     assert ei.value.redirectable is True
 
@@ -123,17 +128,19 @@ def test_build_redirect_appends_code_state_iss():
 # --------------------------------- consent UI ---------------------------------
 
 def test_consent_html_lists_requested_tools_and_carries_state():
-    req = parse_authorize_request(_params())
-    html = render_consent_html(req, issuer=ISSUER)
-    assert "conversations_export" in html       # selectable tool
-    assert "conversations:read" in html         # requested scope
+    req = _parse(_params())
+    app = FastAPI()
+    enable_delegated_client(app, issuer=ISSUER)
+    html = render_consent_html(req, issuer=ISSUER, config=oauth_delegated_config(app))
+    assert "records_export" in html       # selectable tool
+    assert "records:read" in html         # requested scope
     assert 'value="st-123"' in html             # state carried in a hidden field
     assert "/oauth/authorize/consent" in html   # form posts to the consent endpoint
     assert "KDCube" in html                      # attribution
 
 
 def test_consent_html_uses_configured_brand():
-    req = parse_authorize_request(_params())
+    req = _parse(_params())
 
     branded = render_consent_html(req, issuer=ISSUER, brand="Acme AI")
     assert "Authorize an MCP connection to Acme AI" in branded   # <h1>
@@ -145,7 +152,7 @@ def test_consent_html_uses_configured_brand():
 
 
 def test_consent_html_shows_platform_account_and_logout():
-    req = parse_authorize_request(_params())
+    req = _parse(_params())
     html = render_consent_html(
         req,
         issuer=ISSUER,
@@ -266,6 +273,32 @@ def test_authorize_can_render_bundle_hosted_consent(client, monkeypatch):
     client.app.state.oauth_delegated_config = {
         "enabled": True,
         "issuer": ISSUER,
+        "capabilities": [
+            {
+                "grant": "records:read",
+                "label": "Read records",
+                "delegable_roles": ["kdcube:role:super-admin"],
+                "tools": [
+                    {
+                        "name": "records_export",
+                        "label": "Export records",
+                        "grants": ["records:read"],
+                    },
+                ],
+            },
+        ],
+        "resources": [
+            {
+                "resource": "*",
+                "grants": ["records:read"],
+                "tools": {
+                    "records_export": {
+                        "label": "Export records",
+                        "grants": ["records:read"],
+                    },
+                },
+            },
+        ],
         "consent_ui": {
             "host": {
                 "bundle_id": "product@1-0",
@@ -285,8 +318,8 @@ def test_authorize_can_render_bundle_hosted_consent(client, monkeypatch):
         assert data["form_action"] == "/oauth/authorize/consent"
         assert data["request"]["client_id"] == "claude"
         assert data["oauth_request"]["client_id"] == "claude"
-        assert data["platform_grants"][0]["grant"] == "conversations:read"
-        assert data["tools"][0]["name"] == "conversations_export"
+        assert data["platform_grants"][0]["grant"] == "records:read"
+        assert data["tools"][0]["name"] == "records_export"
         return {"delegated_consent": {"html": "<html><body>Custom consent</body></html>"}}
 
     monkeypatch.setattr(oauth_routes, "call_bundle_operation", fake_call_bundle_operation)
@@ -342,7 +375,7 @@ def test_authorize_renders_consent_for_regular_user_when_grant_is_delegable(clie
 def test_authorize_renders_consent_for_admin(client):
     r = client.get("/oauth/authorize", params=_params(), headers={"Authorization": "Bearer admin-tok"})
     assert r.status_code == 200
-    assert "conversations_export" in r.text
+    assert "records_export" in r.text
     assert "Sign out of KDCube" in r.text
 
 
@@ -371,7 +404,7 @@ def test_authorize_uses_id_token_when_browser_session_needs_it():
         headers={"Authorization": "Bearer access-only", "X-ID-Token": "id-with-roles"},
     )
     assert with_id.status_code == 200
-    assert "conversations_export" in with_id.text
+    assert "records_export" in with_id.text
 
 
 def test_authorize_unknown_client_is_400_not_redirect(client):
@@ -395,8 +428,8 @@ def test_consent_approve_issues_code_bound_to_selection(client):
     store = client.app.state.oauth_grant_store
     form = _params()
     form["decision"] = "approve"
-    form["platform_grants"] = ["conversations:read"]
-    form["tools"] = ["conversations_export"]
+    form["platform_grants"] = ["records:read"]
+    form["tools"] = ["records_export"]
     form["csrf_token"] = _csrf_token(client)
     r = client.post(
         "/oauth/authorize/consent",
@@ -417,10 +450,10 @@ def test_consent_approve_issues_code_bound_to_selection(client):
     raw = store._r.values[store._key("code", code)]
     payload = json.loads(raw)
     assert payload["sub"] == "google:admin@example.test"
-    assert payload["tools"] == ["conversations_export"]
-    assert payload["scopes"] == ["conversations:read"]
+    assert payload["tools"] == ["records_export"]
+    assert payload["scopes"] == ["records:read"]
     assert payload["delegation_edges"][0]["authority_id"] == "platform"
-    assert payload["delegation_edges"][0]["grants"] == ["conversations:read"]
+    assert payload["delegation_edges"][0]["grants"] == ["records:read"]
 
 
 def test_consent_recovers_missing_authorize_fields_from_same_origin_referrer(client):
@@ -429,8 +462,8 @@ def test_consent_recovers_missing_authorize_fields_from_same_origin_referrer(cli
     referer = "http://testserver/oauth/authorize?" + up.urlencode(form)
     form.pop("client_id")
     form["decision"] = "approve"
-    form["platform_grants"] = ["conversations:read"]
-    form["tools"] = ["conversations_export"]
+    form["platform_grants"] = ["records:read"]
+    form["tools"] = ["records_export"]
     form["csrf_token"] = csrf
 
     r = client.post(
@@ -453,8 +486,8 @@ def test_consent_recovers_blank_authorize_fields_from_same_origin_referrer(clien
     referer = "http://testserver/oauth/authorize?" + up.urlencode(form)
     form["client_id"] = ""
     form["decision"] = "approve"
-    form["platform_grants"] = ["conversations:read"]
-    form["tools"] = ["conversations_export"]
+    form["platform_grants"] = ["records:read"]
+    form["tools"] = ["records_export"]
     form["csrf_token"] = csrf
 
     r = client.post(

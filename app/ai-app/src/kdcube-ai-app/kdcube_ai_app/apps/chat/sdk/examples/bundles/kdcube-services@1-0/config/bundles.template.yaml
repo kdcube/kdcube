@@ -18,49 +18,11 @@ bundles:
                 auth:
                   mode: "managed"
                   authority_id: "delegated_client"
-                  tools:
-                    conversations_export:
-                      grants:
-                        - "conversations:read"
                   selected_tool_grants: true
               named_services:
                 auth:
                   mode: "managed"
                   authority_id: "delegated_client"
-                  tools:
-                    named_services_list:
-                      grants:
-                        - "named_services:use"
-                    named_services_about:
-                      grants:
-                        - "named_services:use"
-                    named_services_capabilities:
-                      grants:
-                        - "named_services:use"
-                    named_services_schema:
-                      grants:
-                        - "named_services:use"
-                    named_services_search:
-                      grants:
-                        - "named_services:use"
-                    named_services_get:
-                      grants:
-                        - "named_services:use"
-                    named_services_upsert:
-                      grants:
-                        - "named_services:use"
-                    named_services_host_file:
-                      grants:
-                        - "named_services:use"
-                    named_services_action:
-                      grants:
-                        - "named_services:use"
-                    named_services_delete:
-                      grants:
-                        - "named_services:use"
-                    named_services_call:
-                      grants:
-                        - "named_services:use"
                   selected_tool_grants: true
         ui:
           widgets:

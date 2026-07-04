@@ -25,7 +25,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oau
 def _request_without_override():
     state = types.SimpleNamespace()  # no oauth_authenticate attribute
     app = types.SimpleNamespace(state=state)
-    return types.SimpleNamespace(app=app)
+    return types.SimpleNamespace(app=app, headers={}, cookies={})
 
 
 def _patch_managers(monkeypatch, gateway, bundle_manager):
@@ -44,7 +44,7 @@ class _WebUser:
 
 class _IntegrationUser:
     sub = "integration:claude:google:admin@example.test"
-    roles = ["kdcube:role:feedback-reader"]
+    roles = ["kdcube:role:delegated-client"]
 
 
 class _RolelessUser:
@@ -62,6 +62,10 @@ class _GreedyGatewayManager:
             return _RolelessUser()
         raise ValueError("unknown token")
 
+    async def authenticate_with_both(self, token: str, id_token: str = ""):
+        del id_token
+        return await self.authenticate(token)
+
 
 class _BundleManager:
     """Platform bundle authority: validates the integration access token with its
@@ -71,15 +75,20 @@ class _BundleManager:
             return _IntegrationUser()
         raise ValueError("no bundle session")
 
+    async def authenticate_with_both(self, token: str, id_token: str = ""):
+        del id_token
+        return await self.authenticate(token)
+
 
 async def test_access_token_resolves_feedback_reader_not_empty_roles(monkeypatch):
     # Regression: the bundle authority is tried first, so the access token keeps its
-    # feedback-reader role instead of the gateway's empty-roles result (-> 403).
+    # delegated-client role instead of the gateway's empty-roles result (-> 403).
     _patch_managers(monkeypatch, _GreedyGatewayManager(), _BundleManager())
     authenticate = deps.get_authenticate(_request_without_override())
     assert await authenticate("integration-access") == {
         "sub": "integration:claude:google:admin@example.test",
-        "roles": ["kdcube:role:feedback-reader"],
+        "user_id": "integration:claude:google:admin@example.test",
+        "roles": ["kdcube:role:delegated-client"],
     }
 
 
@@ -88,6 +97,7 @@ async def test_web_session_falls_through_to_gateway(monkeypatch):
     authenticate = deps.get_authenticate(_request_without_override())
     assert await authenticate("web-session") == {
         "sub": "google:admin@example.test",
+        "user_id": "google:admin@example.test",
         "roles": ["kdcube:role:super-admin"],
     }
 

@@ -28,20 +28,19 @@ keeps `object.export` on the same record family as the direct
 from __future__ import annotations
 
 import datetime as _dt
+import json as _json
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
-from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.export_adapter import (
+from kdcube_ai_app.apps.chat.sdk.solutions.conversation.export_records import (
     collapse_turn,
 )
-from kdcube_ai_app.apps.chat.sdk.solutions.conversation.export import (
-    DEFAULT_EXPORT_LIMIT,
-    MAX_EXPORT_LIMIT,
-)
-from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.export_tool import (
+from kdcube_ai_app.apps.chat.sdk.solutions.conversation.export_records import (
     normalize_conversation,
 )
 
+MAX_EXPORT_LIMIT = 500
+DEFAULT_EXPORT_LIMIT = 100
 
 SCOPE_SELF = "self"
 SCOPE_USER = "user"
@@ -170,6 +169,15 @@ def _conversation_summary(conv: Dict[str, Any], *, user_id: str, tenant: str, pr
         "turn_count": conv.get("turn_count") if conv.get("turn_count") is not None else conv.get("turns_count"),
     }
     return {key: value for key, value in summary.items() if value not in (None, "")}
+
+
+def _dict_result(result: Any) -> Dict[str, Any]:
+    if isinstance(result, str):
+        try:
+            result = _json.loads(result)
+        except Exception:
+            return {}
+    return result if isinstance(result, dict) else {}
 
 
 class ConversationReadService:
@@ -336,7 +344,7 @@ class _PooledMaterializationPort:
             user_id=user_id, conversation_id=conversation_id, turn_ids=turn_ids,
             materialize=materialize, days=days, ctx={},
         )
-        return dict(result or {})
+        return _dict_result(result)
 
 
 def make_conversation_read_service(
