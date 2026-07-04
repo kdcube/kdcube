@@ -261,6 +261,74 @@ class PublicContentRegistry:
         bumped = item.model_copy(update={"lastmod": utc_now_iso(), "state": "published"})
         return await self._mutate("update", bumped)
 
+    async def publish_many(self, items: List[PublicContentItem]) -> List[PublicContentItem]:
+        """Publish a batch in ONE critical section — the bulk-seed path.
+
+        One lock acquisition, one generation bump, one index rewrite for the
+        whole batch. Publishing N items via :meth:`publish` costs N lock
+        cycles and N durable generation read-modify-writes — on shared
+        storage (EFS + S3) that thrashes the lock and can starve concurrent
+        publishers past their wait budget. A full seed must therefore go
+        through this method.
+        """
+        for item in items:
+            if item.alias != self.alias:
+                raise ValueError(
+                    f"item alias {item.alias!r} does not match registry alias {self.alias!r}"
+                )
+        published = [item.model_copy(update={"state": "published"}) for item in items]
+        if not published:
+            return []
+
+        self.hot_alias_dir.mkdir(parents=True, exist_ok=True)
+        async with observed_file_lock_async(
+            lock_path=self._mutate_lock_path,
+            resource_id=f"public-content:{self.alias}",
+            operation="public-content.publish_many",
+            # The batch holds the lock for the whole durable write pass, so
+            # waiters get the rebuild-sized budget rather than the single-item
+            # one.
+            wait_seconds=_REBUILD_LOCK_WAIT_SECONDS,
+        ):
+            def _apply_sync() -> int:
+                for item in published:
+                    self._durable_write_item_sync(item)
+                generation = self._durable_read_generation_sync() + 1
+                self._durable_write_generation_sync(generation)
+                index = self._hot_read_index_sync() or PublicContentAliasIndex(alias=self.alias)
+                for item in published:
+                    self._hot_write_item_sync(item)
+                    index.upsert(
+                        PublicContentIndexEntry(
+                            slug=item.slug,
+                            title=item.title,
+                            lastmod=item.lastmod,
+                            published_at=item.published_at,
+                            state=item.state,
+                        )
+                    )
+                index.generation = generation
+                self._hot_write_index_sync(index)
+                self._hot_write_signature_sync(generation)
+                return generation
+
+            generation = await asyncio.to_thread(_apply_sync)
+
+        self._log(
+            f"[pub.registry] publish_many alias={self.alias} items={len(published)} generation={generation}",
+            "INFO",
+        )
+        if self.notifier is not None:
+            for item in published:
+                try:
+                    await self.notifier("publish", item)
+                except Exception:
+                    self._log(
+                        f"[pub.registry] change notifier failed for publish {item.slug} (ignored)",
+                        "WARNING",
+                    )
+        return published
+
     async def retract(self, slug: str) -> Optional[PublicContentItem]:
         """Retract one item. The record is kept so serving can answer 410."""
         slug = normalize_slug_path(slug)

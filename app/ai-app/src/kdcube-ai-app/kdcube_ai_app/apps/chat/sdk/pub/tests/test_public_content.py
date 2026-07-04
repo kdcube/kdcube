@@ -108,6 +108,45 @@ def test_retract_keeps_record_for_410(tmp_path):
     assert index.generation == 2
 
 
+def test_publish_many_single_generation_bump(tmp_path):
+    """The bulk-seed path: N items commit in ONE critical section with ONE
+    generation bump (per-item publish would thrash the shared lock and the
+    durable generation RMW — the exact production seed failure)."""
+    reg = _registry(tmp_path)
+    items = [
+        _item(),
+        _item(slug="kdcube/blogs/second", title="Second"),
+        _item(slug="industry/ai/third", title="Third"),
+    ]
+    published = asyncio.run(reg.publish_many(items))
+    assert len(published) == 3 and all(i.state == "published" for i in published)
+
+    index = asyncio.run(reg.read_index())
+    assert index.generation == 1                      # ONE bump for the whole batch
+    assert {e.slug for e in index.entries} == {
+        "kdcube/journal/lane", "kdcube/blogs/second", "industry/ai/third",
+    }
+    # Items are readable and mirrored hot.
+    assert asyncio.run(reg.get_item("industry/ai/third")).title == "Third"
+    # Re-seeding is idempotent content-wise and costs one more bump only.
+    asyncio.run(reg.publish_many(items))
+    assert asyncio.run(reg.read_index()).generation == 2
+    # Empty batch is a no-op.
+    assert asyncio.run(reg.publish_many([])) == []
+    assert asyncio.run(reg.read_index()).generation == 2
+
+
+def test_publish_many_notifies_per_item(tmp_path):
+    calls = []
+
+    async def notifier(op, item):
+        calls.append((op, item.slug))
+
+    reg = _registry(tmp_path, notifier=notifier)
+    asyncio.run(reg.publish_many([_item(), _item(slug="kdcube/blogs/second", title="B")]))
+    assert calls == [("publish", "kdcube/journal/lane"), ("publish", "kdcube/blogs/second")]
+
+
 def test_retract_unknown_slug_returns_none(tmp_path):
     reg = _registry(tmp_path)
     assert asyncio.run(reg.retract("kdcube/journal/missing")) is None

@@ -104,7 +104,10 @@ Mirrors the platform's prepared-data pattern
   by an observed file lock on the shared hot tier, holding durable write →
   generation bump → hot update → signature in one critical section. Readers
   never take the lock; hot files are replaced atomically, so torn reads are
-  impossible.
+  impossible. **Bulk seeds must use `publish_many(items)`** — one lock
+  acquisition and one generation bump for the whole batch; publishing N items
+  one-by-one thrashes the shared lock and the durable generation RMW, and on
+  EFS/S3 can starve concurrent publishers past their wait budget.
 
 A publish landing during a rebuild is safe by generation re-check — worst
 case one redundant rebuild, never a lost publish. All registry I/O runs off
