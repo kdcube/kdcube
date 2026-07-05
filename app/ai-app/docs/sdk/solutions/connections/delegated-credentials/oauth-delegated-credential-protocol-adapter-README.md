@@ -102,7 +102,7 @@ Connection Hub OAuth adapter
   v
 User consent page
   |
-  | 5. User approves platform delegation grants and selected tool set
+  | 5. User approves platform delegation grants and selected operation set
   |    CSRF token is single-use and bound to grantor subject
   v
 Authorization code
@@ -123,7 +123,7 @@ KDCube token endpoint
   |
   | verifies code, client, redirect URI, and PKCE
   | mints a short-lived kst1 integration session
-  | stores refresh token, selected tool allowlist, credential envelope,
+  | stores refresh token, selected operation allowlist, credential envelope,
   | and explicit delegation edge(s)
   v
 External client holds:
@@ -141,7 +141,7 @@ Proc bundle MCP bridge
   |
   | authenticates kst1 token
   | checks role permission
-  | checks grant-level selected-tool allowlist
+  | checks grant-level selected-operation allowlist
   v
 Allowed MCP tool result
 ```
@@ -187,9 +187,11 @@ requiring product code to decode grantor facts from the token body:
   "audience": "kdcube:delegated_client",
   "attrs": {
     "client_id": "claude",
-    "resource": "https://runtime.example/api/integrations/bundles/demo/demo/user-memories@2026-06-26/public/mcp/memories",
     "scopes": ["memories:read"],
-    "tools": ["memory_search", "memory_get"],
+    "operations": ["memory_search", "memory_get"],
+    "resource_grants": {
+      "https://runtime.example/api/integrations/bundles/demo/demo/user-memories@2026-06-26/public/mcp/memories": ["memories:read"]
+    },
     "identity_scope": "grantor_identity_family"
   }
 }
@@ -237,21 +239,21 @@ Platform delegation edge
 ```
 
 Approval may narrow the requested scopes to the selected platform-edge grants.
-The selected tools are then filtered against that final grant set. Approval must
-bind both the selected tool list and the resulting delegation edge into the
+The selected operations are then filtered against that final grant set. Approval must
+bind both the selected operation list and the resulting delegation edge into the
 issued grant:
 
 ```
 consent POST
-  -> authorization code stores final scopes + selected tools + delegation_edges
-  -> token endpoint binds selected tools + delegation_edges to access token
-  -> refresh token record stores selected tools + delegation_edges
-  -> refresh rotation preserves selected tools + delegation_edges
-  -> managed bundle MCP tools/call checks role permission AND selected-tool grant
+  -> authorization code stores final scopes + selected operations + delegation_edges
+  -> token endpoint binds selected operations + delegation_edges to access token
+  -> refresh token record stores selected operations + delegation_edges
+  -> refresh rotation preserves selected operations + delegation_edges
+  -> managed bundle MCP tools/call checks role permission AND selected-operation grant
 ```
 
 This makes the tool-selection UI meaningful. A token with the right grant but
-no matching selected-tool grant must fail closed.
+no matching selected operation must fail closed.
 
 ## Descriptor Contract
 
@@ -464,9 +466,9 @@ store, normally Redis.
 |---|---|---|
 | Dynamic client record | Stores registered public client metadata and redirect URIs. | Until registration expiry or cleanup policy. |
 | CSRF token | Single-use consent POST protection bound to grantor subject. | Short TTL. |
-| Authorization code | Stores client, redirect URI, PKCE challenge, grantor subject, resource, final scopes, selected tools, delegation edges, and grantor authority facts captured at consent. | Short TTL, single use. |
-| Access grant | Binds an access token to selected MCP tools, the `delegated_client` credential envelope, delegation edges, and server-side grantor authority facts. | Same TTL as access token. |
-| Refresh token | Stores client, grantor subject, resource, scopes, selected tools, credential envelope, delegation edges, grantor authority facts, and rotation state. | Long-lived, rotating. |
+| Authorization code | Stores client, redirect URI, PKCE challenge, grantor subject, resource, final scopes, selected operations, delegation edges, and grantor authority facts captured at consent. | Short TTL, single use. |
+| Access grant | Binds an access token to selected operations, the `delegated_client` credential envelope, delegation edges, and server-side grantor authority facts. | Same TTL as access token. |
+| Refresh token | Stores client, grantor subject, resource, scopes, selected operations, credential envelope, delegation edges, grantor authority facts, and rotation state. | Long-lived, rotating. |
 | Bundle session record | The issued access token is a `kst1` session for the integration identity. | Access-token TTL. |
 
 Redis loss is safe but product-visible: missing records fail closed, but
@@ -483,7 +485,7 @@ records disappear. The solution-level durability design note is
 | DCR redirect URI is not allowlisted | `invalid_redirect_uri`; client is not registered. |
 | Bad redirect URI on authorize/token | Request fails; codes are not delivered to unvalidated redirects. |
 | Missing or invalid PKCE verifier | Token request fails with `invalid_grant`. |
-| Token has grant but no selected-tool grant | Bundle MCP `tools/call` fails closed. |
+| Token has grant but no selected operation | Bundle MCP `tools/call` fails closed. |
 | Tool is not listed by endpoint policy or not selected during consent | Bundle MCP `tools/call` returns an MCP tool authorization error. |
 | Refresh token is invalid or rotated | Token request fails with `invalid_grant`. |
 
@@ -518,7 +520,7 @@ KDCube-issued integration token
   -> delegated_client authenticator
   -> delegated_client grant registry
   -> delegated representative principal
-  -> selected tools / allowed actions
+  -> selected operations / allowed actions
 ```
 
 The feature registers a `delegated_client` authority provider in the Connection Hub
@@ -537,13 +539,13 @@ grantor authority
 connection-hub@1-0/public/oauth/authorize
       |
       v
-descriptor-allowed scopes + selected MCP tools
+descriptor-allowed scopes + selected operations
       |
       v
 auth code + PKCE
       |
       v
-integration token + refresh token + selected-tool grant
+integration token + refresh token + selected-operation grant
 ```
 
 The OAuth delegated credential authenticator validates only OAuth delegated credential tokens and grant records.
@@ -586,6 +588,163 @@ Connection Hub consent uses descriptor labels/grants. Claude's post-connection
 tool grouping uses MCP `ToolAnnotations`. They are related UX surfaces, but they
 are not the same enforcement boundary.
 
+## Managed REST Surface Shape
+
+Managed REST uses the same delegated credential and grant store as managed MCP,
+but REST has two enforcement locations:
+
+- application REST operations are guarded by the proc application REST bridge;
+- platform REST resources are guarded by the shared request-auth layer before
+  the platform route handler runs.
+
+Do not route REST authorization through generic platform cookies, and do not
+call MCP guard code from REST handlers.
+
+An application exposes a normal REST operation. The operation may live on
+`public` or `operations`; `auth.mode: managed` is what lets a delegated bearer
+token replace a browser cookie session for that operation.
+
+```python
+@api(method="POST", alias="records_export", route="public")
+async def records_export(self, **params):
+    ...
+```
+
+The operation becomes delegated-credential protected only through descriptor
+configuration:
+
+```yaml
+surfaces:
+  as_provider:
+    api:
+      public:
+        records_export:
+          POST:
+            auth:
+              mode: managed
+              authority_id: delegated_client
+              selected_operation_grants: true
+              operations:
+                records_export:
+                  grants:
+                    - records:read
+```
+
+The corresponding Connection Hub delegated resource describes the same concrete
+resource and operation catalog:
+
+```yaml
+connections:
+  delegated_credentials:
+    oauth:
+      capabilities:
+        - grant: records:read
+          label: Read records
+          delegable_roles:
+            - kdcube:role:registered
+            - kdcube:role:super-admin
+      resources:
+        - resource: "*/api/integrations/bundles/*/*/records@1-0/public/records_export*"
+          label: Records REST API
+          operations:
+            records_export:
+              label: Export records
+              description: Export records visible to the approving user.
+              grants:
+                - records:read
+```
+
+At request time:
+
+```text
+Authorization: Bearer <delegated-client access token>
+  -> managed REST guard validates token, resource, authority, grants, operation consent
+  -> proc projects grantor_user_id into UserSession and ExternalEventPayload
+  -> application operation receives the delegated platform-user context
+```
+
+This flow is orthogonal to the platform authority provider. The approving user
+may have signed in through Cognito, multi-Cognito, or an application-hosted
+platform authority. The REST guard only consumes the already-issued delegated
+credential record.
+
+For platform APIs, there is no application operation descriptor. Connection Hub
+still owns the resource and operation catalog:
+
+```yaml
+connections:
+  delegated_credentials:
+    oauth:
+      capabilities:
+        - grant: devops:deploy
+          label: Deploy runtime
+          delegable_roles:
+            - kdcube:role:super-admin
+      resources:
+        - resource: "*/api/platform/admin/redeploy*"
+          label: Platform redeploy API
+          operations:
+            platform_admin_redeploy:
+              label: Redeploy runtime
+              grants:
+                - devops:deploy
+```
+
+When a request carries `Authorization: Bearer <delegated-client access token>`,
+the Connection Hub authentication surface checks whether the URL matches a
+configured delegated resource. If it does, it validates the token, grant,
+resource, and selected operation and returns a projected `UserSession` for the
+grantor. Existing platform route dependencies then see the same roles and
+permissions they would see from a normal platform session.
+
+If the URL is not configured as a delegated resource, the Connection Hub
+delegated bearer path is ignored and normal platform authentication rules apply.
+Keep platform resource patterns one-operation-wide until the route has an
+explicit operation selector.
+
+For admin-created automation that may enter any KDCube API, Connection Hub uses
+the platform role itself as the delegable grant:
+
+```yaml
+connections:
+  delegated_credentials:
+    oauth:
+      capabilities:
+        - grant: kdcube:role:super-admin
+          label: Use all platform and application APIs
+          delegable_roles:
+            - kdcube:role:super-admin
+      resources:
+        - resource: "*"
+          label: All platform and application APIs
+          admin_only: true
+          grants:
+            - kdcube:role:super-admin
+```
+
+`resource: "*"` is deliberately special: non-admin users do not see it in
+Connection Hub, and the request-auth surface accepts it only when the
+server-side resource-grant map assigns `kdcube:role:super-admin` to `*` and the
+stored grantor authority projects the grantor with platform admin privilege.
+The role is the authority grant.
+
+Issued automation credentials store the boundary as `resource_grants`, not as a
+separate resource list plus a separate grant list. The Connection Hub access
+record exposes this same map:
+
+```json
+{
+  "resource_grants": {
+    "*": ["kdcube:role:super-admin"],
+    "*/api/integrations/bundles/*/*/records@1-0/public/records_export*": ["records:read"]
+  }
+}
+```
+
+The bearer token is not the authority source for this decision. Managed guards
+read the server-side grant record by access-token hash and derive matchable
+resources from the keys of `resource_grants`.
+
 ## Regression Checklist
 
 Use focused tests and one live connector test.
@@ -596,10 +755,10 @@ Use focused tests and one live connector test.
 2. DCR accepts only descriptor-allowed redirect URIs.
 3. Authorization requires an authenticated platform session.
 4. Consent POST validates CSRF and re-validates client, redirect URI, and PKCE.
-5. Token issue stores selected tools and nested named-service catalogs on both
+5. Token issue stores selected operations and nested named-service catalogs on both
    access grant and refresh record.
-6. Refresh rotation preserves selected tools and nested named-service catalogs.
-7. Integration token without a selected-tool grant fails closed at the managed
+6. Refresh rotation preserves selected operations and nested named-service catalogs.
+7. Integration token without a selected-operation grant fails closed at the managed
    bundle MCP guard.
 8. Users can consent only to grants permitted by the Connection Hub descriptor
    (`delegable_roles` / `delegable_permissions`).

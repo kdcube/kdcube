@@ -58,7 +58,7 @@ class GrantStore:
         code_challenge: str,
         sub: str,
         scopes: List[str],
-        tools: List[str],
+        operations: Optional[List[str]] = None,
         resource: Optional[str] = None,
         identity_scope: str = "",
         credential: Optional[Dict[str, Any]] = None,
@@ -73,7 +73,7 @@ class GrantStore:
             "code_challenge": code_challenge,
             "sub": sub,
             "scopes": scopes,
-            "tools": tools,
+            "operations": list(operations or []),
             "resource": resource or "",
             "identity_scope": identity_scope or "",
             "credential": credential or {},
@@ -100,7 +100,7 @@ class GrantStore:
         client_id: str,
         sub: str,
         scopes: List[str],
-        tools: Optional[List[str]] = None,
+        operations: Optional[List[str]] = None,
         resource: Optional[str] = None,
         identity_scope: str = "",
         credential: Optional[Dict[str, Any]] = None,
@@ -113,7 +113,7 @@ class GrantStore:
             "client_id": client_id,
             "sub": sub,
             "scopes": scopes,
-            "tools": list(tools or []),
+            "operations": list(operations or []),
             "resource": resource or "",
             "identity_scope": identity_scope or "",
             "credential": credential or {},
@@ -191,7 +191,7 @@ class GrantStore:
         await self._r.delete(self._key("refresh", refresh_token))
         return await self.create_refresh_token(
             client_id=rec["client_id"], sub=rec["sub"], scopes=rec["scopes"],
-            tools=rec.get("tools") or [],
+            operations=rec.get("operations") or [],
             resource=rec.get("resource") or "",
             identity_scope=rec.get("identity_scope") or "",
             credential=rec.get("credential") or {},
@@ -200,7 +200,7 @@ class GrantStore:
             named_services=rec.get("named_services") or {},
         )
 
-    # ------------------------- access-token tool grant -------------------------
+    # ---------------------- access-token operation grant ----------------------
 
     def _agrant_key(self, access_token: str) -> str:
         digest = hashlib.sha256(access_token.encode("utf-8")).hexdigest()
@@ -209,7 +209,7 @@ class GrantStore:
     async def bind_access_grant(
         self,
         access_token: str,
-        tools: List[str],
+        operations: List[str],
         ttl_seconds: int,
         *,
         credential: Optional[Dict[str, Any]] = None,
@@ -217,11 +217,11 @@ class GrantStore:
         delegation_edges: Optional[List[Dict[str, Any]]] = None,
         named_services: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Record the consented tool allowlist and credential envelope for a token."""
+        """Record the consented operation allowlist and credential envelope for a token."""
         await self._r.setex(
             self._agrant_key(access_token), max(1, int(ttl_seconds)),
             json.dumps({
-                "tools": list(tools or []),
+                "operations": list(operations or []),
                 "credential": credential or {},
                 "grantor_authority": grantor_authority or {},
                 "delegation_edges": list(delegation_edges or []),
@@ -241,11 +241,11 @@ class GrantStore:
         return payload if isinstance(payload, dict) else None
 
     async def get_access_grant(self, access_token: str) -> Optional[List[str]]:
-        """The consented tools bound to ``access_token`` (None if no grant record)."""
+        """The consented operations bound to ``access_token`` (None if no grant record)."""
         payload = await self.get_access_grant_record(access_token)
         if payload is None:
             return None
         try:
-            return list(payload.get("tools") or [])
+            return list(payload.get("operations") or [])
         except Exception:
             return None

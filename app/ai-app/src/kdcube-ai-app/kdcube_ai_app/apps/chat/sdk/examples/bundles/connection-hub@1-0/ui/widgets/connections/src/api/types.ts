@@ -111,6 +111,73 @@ export interface DelegationGrantOption {
   default?: boolean;
 }
 
+export interface DelegatedAccessGrantOption {
+  authority_id?: string;
+  identity_ref?: string;
+  grant: string;
+  label?: string;
+  description?: string;
+  source?: string;
+  matched_permissions?: string[];
+  matched_roles?: string[];
+}
+
+export interface DelegatedAccessOperationOption {
+  name: string;
+  label?: string;
+  description?: string;
+  grants?: string[];
+}
+
+export interface DelegatedAccessResourceOption {
+  resource: string;
+  label?: string;
+  identity_scope?: string;
+  grants?: string[];
+  admin_only?: boolean;
+  operations?: DelegatedAccessOperationOption[];
+}
+
+export interface DelegatedAccessRecord {
+  access_id: string;
+  label?: string;
+  client_id?: string;
+  delegate_subject?: string;
+  operations?: string[];
+  resource_grants?: Record<string, string[]>;
+  identity_scope?: string;
+  created_at?: number;
+  expires_at?: number;
+  last_four?: string;
+}
+
+export interface DelegatedAccessListResult {
+  ok?: boolean;
+  platform_user_id?: string;
+  grant_options?: DelegatedAccessGrantOption[];
+  resources?: DelegatedAccessResourceOption[];
+  items?: DelegatedAccessRecord[];
+  error?: string;
+  message?: string;
+}
+
+export interface DelegatedAccessCreateResult {
+  ok?: boolean;
+  access?: DelegatedAccessRecord;
+  access_token?: string;
+  authorization_header?: string;
+  error?: string;
+  message?: string;
+}
+
+export interface DelegatedAccessRevokeResult {
+  ok?: boolean;
+  removed?: boolean;
+  session_removed?: boolean;
+  error?: string;
+  message?: string;
+}
+
 export interface ConnectionEdgeChallengeResult {
   ok?: boolean;
   challenge?: ConnectionEdgeChallenge;

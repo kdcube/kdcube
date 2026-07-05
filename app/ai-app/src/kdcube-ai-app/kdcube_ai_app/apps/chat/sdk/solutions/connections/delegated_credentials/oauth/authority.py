@@ -49,16 +49,40 @@ def build_delegated_client_credential(
     grantor_subject: str,
     client_id: str,
     scopes: list[str] | tuple[str, ...],
-    tools: list[str] | tuple[str, ...],
     tenant: str,
     project: str,
     expires_in: int,
+    operations: list[str] | tuple[str, ...] | None = None,
     resource: str | None = None,
+    resources: list[str] | tuple[str, ...] | None = None,
+    resource_grants: Mapping[str, list[str] | tuple[str, ...]] | None = None,
     identity_scope: str = "",
     issued_at: int | None = None,
 ) -> CredentialEnvelope:
     iat = int(issued_at if issued_at is not None else time.time())
     subject = integration_subject(grantor_subject, client_id=client_id)
+    resource_list = [str(item or "").strip() for item in (resources or ()) if str(item or "").strip()]
+    if not resource_list and str(resource or "").strip():
+        resource_list = [str(resource or "").strip()]
+    cleaned_resource_grants = {
+        str(key or "").strip(): [
+            str(item or "").strip()
+            for item in (value or ())
+            if str(item or "").strip()
+        ]
+        for key, value in dict(resource_grants or {}).items()
+        if str(key or "").strip()
+    }
+    if not cleaned_resource_grants:
+        cleaned_resource_grants = {
+            item: [str(scope or "").strip() for scope in (scopes or ()) if str(scope or "").strip()]
+            for item in resource_list
+        }
+    operation_list = [
+        str(item or "").strip()
+        for item in (operations or ())
+        if str(item or "").strip()
+    ]
     return CredentialEnvelope(
         credential_id="cred_" + secrets.token_urlsafe(18),
         credential_kind=DELEGATED_CLIENT_CREDENTIAL_KIND,
@@ -74,8 +98,8 @@ def build_delegated_client_credential(
             "grantor_subject": str(grantor_subject or "").strip(),
             "client_id": str(client_id or "").strip(),
             "scopes": list(scopes or []),
-            "tools": list(tools or []),
-            "resource": str(resource or "").strip(),
+            "operations": operation_list,
+            "resource_grants": cleaned_resource_grants,
             "identity_scope": str(identity_scope or "grantor").strip() or "grantor",
         },
     )
@@ -112,9 +136,10 @@ class OAuthDelegatedClientAuthorityProvider:
             )
         ctx = dict(context or {})
         grant_record = ctx.get("grant_record") if isinstance(ctx.get("grant_record"), Mapping) else {}
-        tools = list(grant_record.get("tools") or envelope.attrs.get("tools") or [])
+        operations = list(grant_record.get("operations") or envelope.attrs.get("operations") or [])
         scopes = list(envelope.attrs.get("scopes") or [])
         identity_scope = envelope.attrs.get("identity_scope") or "grantor"
+        resource_grants = dict(envelope.attrs.get("resource_grants") or {})
         return AuthorityResolution(
             ok=True,
             authority_id=DELEGATED_CLIENT_AUTHORITY_ID,
@@ -129,8 +154,8 @@ class OAuthDelegatedClientAuthorityProvider:
                 "client_id": envelope.attrs.get("client_id"),
                 "grantor_subject": envelope.attrs.get("grantor_subject"),
                 "scopes": scopes,
-                "tools": tools,
-                "resource": envelope.attrs.get("resource"),
+                "operations": operations,
+                "resource_grants": resource_grants,
                 "identity_scope": identity_scope,
                 "token_present": bool(token),
             },

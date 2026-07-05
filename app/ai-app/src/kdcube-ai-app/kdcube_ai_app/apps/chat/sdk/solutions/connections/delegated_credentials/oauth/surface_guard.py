@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Elena Viter
 
-"""Managed auth guard for proc-served bundle MCP endpoints.
+"""Managed auth guards for proc-served bundle endpoints.
 
 This module is intentionally owned by the Connection Hub delegated-credential
-SDK, not by individual bundles. Bundle MCP apps may still perform
+SDK, not by individual bundles. Bundle MCP/REST apps may still perform
 domain-specific authorization after dispatch, but platform-managed credential,
-grant, and selected-tool checks happen at the proc bridge boundary.
+grant, and selected-operation checks happen at the proc bridge boundary.
 """
 
 from __future__ import annotations
@@ -14,12 +14,16 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Mapping
+from fnmatch import fnmatch
+from typing import Any, Iterable, Mapping
 
 from fastapi import Request
 from fastapi.responses import JSONResponse, Response
 
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_registry import CredentialEnvelope
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_projection import (
+    authority_has_platform_privilege,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.grants import oauth_tenant_project
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.store import (
     GrantStore,
@@ -36,6 +40,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.hub import (
 
 MANAGED_MCP_AUTH_MODE = "managed"
 LOGGER = logging.getLogger("kdcube.connection_hub.oauth.mcp_guard")
+REST_LOGGER = logging.getLogger("kdcube.connection_hub.oauth.rest_guard")
 
 
 def _as_list(value: Any) -> tuple[str, ...]:
@@ -49,6 +54,12 @@ def _as_list(value: Any) -> tuple[str, ...]:
 
 
 def mcp_auth_mode(auth: Mapping[str, Any] | None) -> str:
+    if not isinstance(auth, Mapping):
+        return ""
+    return str(auth.get("mode") or "").strip().lower()
+
+
+def rest_auth_mode(auth: Mapping[str, Any] | None) -> str:
     if not isinstance(auth, Mapping):
         return ""
     return str(auth.get("mode") or "").strip().lower()
@@ -70,6 +81,23 @@ class ManagedMcpAuthPolicy:
     selected_tool_grants: bool = True
 
 
+@dataclass(frozen=True)
+class ManagedRestOperationPolicy:
+    grants: tuple[str, ...] = ()
+    roles: tuple[str, ...] = ()
+    permissions: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ManagedRestAuthPolicy:
+    authority_id: str = ""
+    grants: tuple[str, ...] = ()
+    roles: tuple[str, ...] = ()
+    permissions: tuple[str, ...] = ()
+    operation_policies: Mapping[str, ManagedRestOperationPolicy] | None = None
+    selected_operation_grants: bool = False
+
+
 def _parse_tool_policies(value: Any) -> dict[str, ManagedMcpToolPolicy]:
     if not isinstance(value, Mapping):
         return {}
@@ -87,6 +115,23 @@ def _parse_tool_policies(value: Any) -> dict[str, ManagedMcpToolPolicy]:
     return out
 
 
+def _parse_rest_operation_policies(value: Any) -> dict[str, ManagedRestOperationPolicy]:
+    if not isinstance(value, Mapping):
+        return {}
+    out: dict[str, ManagedRestOperationPolicy] = {}
+    for raw_name, raw_policy in value.items():
+        name = str(raw_name or "").strip()
+        if not name:
+            continue
+        data = raw_policy if isinstance(raw_policy, Mapping) else {}
+        out[name] = ManagedRestOperationPolicy(
+            grants=_as_list(data.get("grants") or data.get("scopes") or data.get("required_grants")),
+            roles=_as_list(data.get("roles")),
+            permissions=_as_list(data.get("permissions")),
+        )
+    return out
+
+
 def managed_mcp_auth_policy(auth: Mapping[str, Any] | None) -> ManagedMcpAuthPolicy | None:
     if mcp_auth_mode(auth) != MANAGED_MCP_AUTH_MODE:
         return None
@@ -97,6 +142,31 @@ def managed_mcp_auth_policy(auth: Mapping[str, Any] | None) -> ManagedMcpAuthPol
         permissions=_as_list(data.get("permissions")),
         tool_policies=_parse_tool_policies(data.get("tools") or data.get("tool_policies")),
         selected_tool_grants=bool(data.get("selected_tool_grants", True)),
+    )
+
+
+def managed_rest_auth_policy(auth: Mapping[str, Any] | None) -> ManagedRestAuthPolicy | None:
+    if rest_auth_mode(auth) != MANAGED_MCP_AUTH_MODE:
+        return None
+    data = dict(auth or {})
+    operation_policies = _parse_rest_operation_policies(
+        data.get("operations")
+        or data.get("operation_policies")
+        or data.get("tools")
+        or data.get("tool_policies")
+    )
+    selected_operation_grants = data.get("selected_operation_grants")
+    if selected_operation_grants is None:
+        selected_operation_grants = data.get("selected_tool_grants")
+    if selected_operation_grants is None:
+        selected_operation_grants = bool(operation_policies)
+    return ManagedRestAuthPolicy(
+        authority_id=str(data.get("authority_id") or data.get("authority") or "").strip(),
+        grants=_as_list(data.get("grants") or data.get("scopes") or data.get("required_grants")),
+        roles=_as_list(data.get("roles")),
+        permissions=_as_list(data.get("permissions")),
+        operation_policies=operation_policies,
+        selected_operation_grants=bool(selected_operation_grants),
     )
 
 
@@ -273,6 +343,11 @@ def _request_resource(request: Request) -> str:
     return _normalize_resource(_request_public_url_without_query(request))
 
 
+def delegated_request_resource(request: Request) -> str:
+    """Return the public delegated-credential resource URL for a request."""
+    return _request_resource(request)
+
+
 def _connection_hub_tool_policies(request: Request) -> dict[str, ManagedMcpToolPolicy]:
     from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.config import (
         oauth_delegated_config,
@@ -291,9 +366,60 @@ def _connection_hub_tool_policies(request: Request) -> dict[str, ManagedMcpToolP
     return out
 
 
-def _credential_resource(envelope: CredentialEnvelope) -> str:
+def _connection_hub_rest_operation_policies(request: Request) -> dict[str, ManagedRestOperationPolicy]:
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.config import (
+        oauth_delegated_config,
+    )
+
+    cfg = oauth_delegated_config(request)
+    operations = cfg.resource_operation_catalog(_request_resource(request))
+    out: dict[str, ManagedRestOperationPolicy] = {}
+    for operation in operations:
+        name = str(getattr(operation, "name", "") or "").strip()
+        if not name:
+            continue
+        out[name] = ManagedRestOperationPolicy(
+            grants=_as_list(getattr(operation, "grants", ())),
+        )
+    return out
+
+
+def _credential_resources(envelope: CredentialEnvelope) -> tuple[str, ...]:
     attrs = envelope.attrs or {}
-    return _normalize_resource(attrs.get("resource"))
+    resource_grants = attrs.get("resource_grants")
+    resource_keys = resource_grants.keys() if isinstance(resource_grants, Mapping) else []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in resource_keys:
+        normalized = _normalize_resource(item)
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            out.append(normalized)
+    return tuple(out)
+
+
+def _credential_grants_for_resource(envelope: CredentialEnvelope, request_resource: str) -> set[str]:
+    attrs = envelope.attrs or {}
+    resource_grants = attrs.get("resource_grants")
+    if not isinstance(resource_grants, Mapping):
+        return set()
+    out: set[str] = set()
+    for resource, grants in resource_grants.items():
+        if _resource_matches(str(resource or ""), request_resource):
+            out.update(_as_list(grants))
+    return out
+
+
+def _resource_matches(credential_resource: str, request_resource: str) -> bool:
+    credential_resource = _normalize_resource(credential_resource)
+    request_resource = _normalize_resource(request_resource)
+    if not credential_resource or not request_resource:
+        return False
+    return credential_resource == request_resource or fnmatch(request_resource, credential_resource)
+
+
+def _any_resource_matches(credential_resources: Iterable[str], request_resource: str) -> bool:
+    return any(_resource_matches(resource, request_resource) for resource in credential_resources)
 
 
 async def _default_grant_store(request: Request) -> GrantStore:
@@ -341,14 +467,13 @@ def _grant_record_credential(grant_record: Mapping[str, Any] | None) -> Credenti
     return CredentialEnvelope()
 
 
-def delegated_mcp_runtime_projection(request: Request) -> dict[str, Any]:
+def _delegated_runtime_projection(request: Request, *, surface: str) -> dict[str, Any]:
     """Return request-local runtime identity facts for an accepted delegated token.
 
-    The managed MCP guard authenticates a delegated-client bearer after the proc
-    bridge has already built an anonymous MCP request session. This projection
-    is the single handoff that lets the proc bridge upgrade the request-local
-    session/comm-context before invoking the bundle MCP app and any nested
-    bundle/named-service calls.
+    Managed surface guards authenticate a delegated-client bearer after the
+    proc bridge has built a request session. This projection is the handoff that
+    lets the proc bridge upgrade the request-local session/comm-context before
+    invoking the app surface and any nested app/named-service calls.
     """
 
     delegated = getattr(getattr(request, "state", None), "delegated_credential", None)
@@ -373,10 +498,12 @@ def delegated_mcp_runtime_projection(request: Request) -> dict[str, Any]:
         return {}
 
     attrs = envelope.attrs or {}
+    resource_grants = dict(attrs.get("resource_grants") or {})
     user = delegated.get("user")
     user = user if isinstance(user, Mapping) else {}
-    grants = sorted(_credential_scopes(envelope))
-    tools = _as_list(grant_record.get("tools")) or _as_list(attrs.get("tools"))
+    request_resource = _request_resource(request)
+    grants = sorted(_credential_grants_for_resource(envelope, request_resource))
+    operations = _as_list(grant_record.get("operations")) or _as_list(attrs.get("operations"))
     grantor_user_id = str(projection.get("grantor_user_id") or delegated_primary_user_id(envelope)).strip()
     delegate_identity = str(projection.get("delegate_identity") or envelope.subject or "").strip()
     economics = projection.get("economics")
@@ -385,7 +512,7 @@ def delegated_mcp_runtime_projection(request: Request) -> dict[str, Any]:
     identity_authority: dict[str, Any] = dict(economics)
     identity_authority.update(
         {
-            "schema": "connection_hub.delegated_mcp_runtime_authority.v1",
+            "schema": f"connection_hub.delegated_{surface}_runtime_authority.v1",
             "authority_id": envelope.issuer_authority_id or "delegated_client",
             "issuer_authority_id": envelope.issuer_authority_id,
             "issuer_authenticator_id": envelope.issuer_authenticator_id,
@@ -400,8 +527,8 @@ def delegated_mcp_runtime_projection(request: Request) -> dict[str, Any]:
             "economics_projection": "platform_user",
             "grants": grants,
             "scopes": grants,
-            "tools": list(tools),
-            "resource": str(attrs.get("resource") or "").strip(),
+            "operations": list(operations),
+            "resource_grants": resource_grants,
             "identity_scope": normalize_delegated_identity_scope(attrs.get("identity_scope")),
             "delegation": dict(projection.get("delegation") or {}),
             "provenance": dict(projection.get("provenance") or economics.get("provenance") or {}),
@@ -412,10 +539,19 @@ def delegated_mcp_runtime_projection(request: Request) -> dict[str, Any]:
         if value not in ("", None, [], {})
     }
 
-    roles = _as_list(user.get("roles"))
-    permissions = _as_list(user.get("permissions")) or tuple(grants)
+    roles = (
+        _as_list(identity_authority.get("roles"))
+        or _as_list(grantor_authority.get("grantor_roles"))
+        or _as_list(user.get("roles"))
+    )
+    permissions = (
+        _as_list(identity_authority.get("permissions"))
+        or _as_list(grantor_authority.get("grantor_permissions"))
+        or _as_list(user.get("permissions"))
+        or tuple(grants)
+    )
     return {
-        "schema": "connection_hub.delegated_mcp_runtime_projection.v1",
+        "schema": f"connection_hub.delegated_{surface}_runtime_projection.v1",
         "user_id": grantor_user_id,
         "user_type": "external",
         "username": delegate_identity or str(user.get("sub") or "").strip() or None,
@@ -425,10 +561,198 @@ def delegated_mcp_runtime_projection(request: Request) -> dict[str, Any]:
         "delegate_identity": delegate_identity,
         "grantor_user_id": grantor_user_id,
         "identity_scope": identity_authority.get("identity_scope") or "",
-        "resource": identity_authority.get("resource") or "",
         "grants": grants,
-        "tools": list(tools),
+        "operations": list(operations),
     }
+
+
+def delegated_mcp_runtime_projection(request: Request) -> dict[str, Any]:
+    return _delegated_runtime_projection(request, surface="mcp")
+
+
+def delegated_rest_runtime_projection(request: Request) -> dict[str, Any]:
+    return _delegated_runtime_projection(request, surface="rest")
+
+
+async def delegated_platform_admin_runtime_projection(
+    request: Request,
+    *,
+    authority_id: str = "",
+) -> dict[str, Any]:
+    """Project an all-resource admin delegated token into a platform session.
+
+    This is the generic platform/API auth path used before a route-specific
+    managed REST guard exists. It accepts only credentials whose resource matches
+    the current request and whose grantor authority carries a platform admin
+    role. Non-admin delegated credentials remain resource/operation bounded and
+    are handled by managed REST/MCP guards.
+    """
+
+    token = _extract_bearer(request)
+    if not token:
+        return {}
+
+    user = await _authenticate_delegated_client_access_token(token)
+    if user is None:
+        return {}
+
+    grant_store = await _default_grant_store(request)
+    grant_record = await grant_store.get_access_grant_record(token)
+    envelope = _grant_record_credential(grant_record)
+    if authority_id and envelope.issuer_authority_id != authority_id:
+        return {}
+
+    credential_resources = _credential_resources(envelope)
+    request_resource = _request_resource(request)
+    if not _any_resource_matches(credential_resources, request_resource):
+        return {}
+
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.config import (
+        oauth_delegated_config,
+    )
+
+    resource_cfg = oauth_delegated_config(request).resource_config(request_resource)
+    required_grants = set(_as_list(getattr(resource_cfg, "grants", ())))
+    credential_grants = _credential_grants_for_resource(envelope, request_resource)
+    if required_grants and not required_grants.issubset(credential_grants):
+        return {}
+
+    try:
+        request.state.delegated_credential = {
+            "user": dict(user or {}),
+            "credential": envelope.to_dict(),
+            "grant_record": dict(grant_record or {}),
+        }
+    except Exception:
+        pass
+
+    runtime = delegated_rest_runtime_projection(request)
+    if not authority_has_platform_privilege(runtime.get("roles") or ()):
+        return {}
+
+    REST_LOGGER.info(
+        "[connection-hub.oauth.rest_guard] accepted all-resource admin token resource=%s subject=%s grantor=%s delegate=%s authority=%s scopes=%s",
+        request_resource,
+        user.get("sub") or "",
+        runtime.get("grantor_user_id") or "",
+        runtime.get("delegate_identity") or "",
+        envelope.issuer_authority_id,
+        sorted(credential_grants),
+    )
+    return runtime
+
+
+async def _authorize_delegated_managed_request(
+    *,
+    request: Request,
+    auth: Mapping[str, Any] | None,
+    authority_id: str,
+    roles: tuple[str, ...],
+    permissions: tuple[str, ...],
+    logger: logging.Logger,
+    surface_label: str,
+) -> tuple[JSONResponse | None, dict[str, Any], CredentialEnvelope, Mapping[str, Any]]:
+    token = _extract_bearer(request)
+    if not token:
+        logger.info(
+            "[connection-hub.oauth.%s_guard] denied reason=missing_bearer resource=%s",
+            surface_label,
+            _request_resource(request),
+        )
+        return (
+            _json_response(
+                401,
+                "unauthorized",
+                "Bearer access token is required",
+                headers=_oauth_challenge_headers(request, auth),
+            ),
+            {},
+            CredentialEnvelope(),
+            {},
+        )
+
+    user = await _authenticate_delegated_client_access_token(token)
+    if user is None:
+        logger.info(
+            "[connection-hub.oauth.%s_guard] denied reason=invalid_bearer resource=%s",
+            surface_label,
+            _request_resource(request),
+        )
+        return (
+            _json_response(
+                401,
+                "unauthorized",
+                "Bearer access token is invalid",
+                headers=_oauth_challenge_headers(request, auth),
+            ),
+            {},
+            CredentialEnvelope(),
+            {},
+        )
+
+    user_roles = set(user.get("roles") or [])
+    user_permissions = set(user.get("permissions") or [])
+
+    if roles and not user_roles.intersection(roles):
+        logger.info(
+            "[connection-hub.oauth.%s_guard] denied reason=missing_role required=%s roles=%s resource=%s",
+            surface_label,
+            list(roles),
+            sorted(user_roles),
+            _request_resource(request),
+        )
+        return _json_response(403, "forbidden", "required role is missing"), user, CredentialEnvelope(), {}
+    if permissions and not user_permissions.issuperset(permissions):
+        logger.info(
+            "[connection-hub.oauth.%s_guard] denied reason=missing_permission required=%s permissions=%s resource=%s",
+            surface_label,
+            list(permissions),
+            sorted(user_permissions),
+            _request_resource(request),
+        )
+        return _json_response(403, "forbidden", "required permission is missing"), user, CredentialEnvelope(), {}
+
+    grant_store = await _default_grant_store(request)
+    grant_record = await grant_store.get_access_grant_record(token)
+    envelope = _grant_record_credential(grant_record)
+    try:
+        request.state.delegated_credential = {
+            "user": dict(user or {}),
+            "credential": envelope.to_dict(),
+            "grant_record": dict(grant_record or {}),
+        }
+    except Exception:
+        pass
+
+    if authority_id and envelope.issuer_authority_id != authority_id:
+        logger.info(
+            "[connection-hub.oauth.%s_guard] denied reason=authority_mismatch required=%s got=%s resource=%s",
+            surface_label,
+            authority_id,
+            envelope.issuer_authority_id,
+            _request_resource(request),
+        )
+        return _json_response(403, "forbidden", "delegated credential authority mismatch"), user, envelope, grant_record or {}
+
+    credential_resources = _credential_resources(envelope)
+    request_resource = _request_resource(request)
+    if not credential_resources:
+        logger.info(
+            "[connection-hub.oauth.%s_guard] denied reason=credential_resource_missing request_resource=%s",
+            surface_label,
+            request_resource,
+        )
+        return _json_response(403, "forbidden", "delegated credential resource is missing"), user, envelope, grant_record or {}
+    if not _any_resource_matches(credential_resources, request_resource):
+        logger.info(
+            "[connection-hub.oauth.%s_guard] denied reason=resource_mismatch credential_resources=%s request_resource=%s",
+            surface_label,
+            list(credential_resources),
+            request_resource,
+        )
+        return _json_response(403, "forbidden", "delegated credential resource mismatch"), user, envelope, grant_record or {}
+
+    return None, user, envelope, grant_record or {}
 
 
 async def authorize_delegated_mcp_request(
@@ -511,22 +835,23 @@ async def authorize_delegated_mcp_request(
             )
             return _json_response(403, "forbidden", "delegated credential authority mismatch")
 
-    credential_resource = _credential_resource(envelope)
+    credential_resources = _credential_resources(envelope)
     request_resource = _request_resource(request)
-    if not credential_resource:
+    if not credential_resources:
         LOGGER.info(
             "[connection-hub.oauth.mcp_guard] denied reason=credential_resource_missing request_resource=%s",
             request_resource,
         )
         return _json_response(403, "forbidden", "delegated credential resource is missing")
-    if credential_resource != request_resource:
+    if not _any_resource_matches(credential_resources, request_resource):
         LOGGER.info(
-            "[connection-hub.oauth.mcp_guard] denied reason=resource_mismatch credential_resource=%s request_resource=%s",
-            credential_resource,
+            "[connection-hub.oauth.mcp_guard] denied reason=resource_mismatch credential_resources=%s request_resource=%s",
+            list(credential_resources),
             request_resource,
         )
         return _json_response(403, "forbidden", "delegated credential resource mismatch")
 
+    available_grants = _credential_grants_for_resource(envelope, request_resource)
     tool_calls = extract_mcp_tool_calls(body)
     if not tool_calls:
         runtime = delegated_mcp_runtime_projection(request)
@@ -537,19 +862,18 @@ async def authorize_delegated_mcp_request(
             runtime.get("grantor_user_id") or "",
             runtime.get("delegate_identity") or "",
             envelope.issuer_authority_id,
-            sorted(_credential_scopes(envelope)),
-            list(_as_list(grant_record.get("tools"))) if isinstance(grant_record, Mapping) else [],
+            sorted(available_grants),
+            list(_as_list(grant_record.get("operations"))) if isinstance(grant_record, Mapping) else [],
             runtime.get("identity_scope") or "",
         )
         return None
 
-    granted_tools = None
+    granted_operations = None
     if isinstance(grant_record, Mapping):
-        granted_tools = set(_as_list(grant_record.get("tools")))
+        granted_operations = set(_as_list(grant_record.get("operations")))
     tool_policies = _connection_hub_tool_policies(request)
     if not tool_policies:
         tool_policies = dict(policy.tool_policies or {})
-    available_grants = _credential_scopes(envelope)
 
     for rpc_id, tool_name in tool_calls:
         tool_policy = tool_policies.get(tool_name)
@@ -565,7 +889,7 @@ async def authorize_delegated_mcp_request(
                 return _rpc_tool_error(rpc_id, f"required delegated grant is missing for tool: {tool_name}")
 
         if policy.selected_tool_grants:
-            if granted_tools is None or tool_name not in granted_tools:
+            if granted_operations is None or tool_name not in granted_operations:
                 return _rpc_tool_error(
                     rpc_id,
                     f"tool not consented for this connection: {tool_name}",
@@ -580,9 +904,114 @@ async def authorize_delegated_mcp_request(
         runtime.get("delegate_identity") or "",
         envelope.issuer_authority_id,
         sorted(available_grants),
-        sorted(granted_tools or []),
+        sorted(granted_operations or []),
         runtime.get("identity_scope") or "",
         [tool for _, tool in tool_calls],
+    )
+    return None
+
+
+async def authorize_delegated_rest_request(
+    *,
+    request: Request,
+    auth: Mapping[str, Any] | None,
+    operation: str,
+    method: str = "",
+) -> Response | None:
+    """Return a denial response or None when the REST operation may run.
+
+    This is the REST analogue of the managed MCP guard. It is intentionally
+    independent of the platform authority that originally authenticated the
+    grantor. The bearer proves a delegated-client credential; the stored grant
+    record projects the runtime platform user.
+    """
+
+    policy = managed_rest_auth_policy(auth)
+    if policy is None:
+        return None
+
+    denial, user, envelope, grant_record = await _authorize_delegated_managed_request(
+        request=request,
+        auth=auth,
+        authority_id=policy.authority_id,
+        roles=policy.roles,
+        permissions=policy.permissions,
+        logger=REST_LOGGER,
+        surface_label="rest",
+    )
+    if denial is not None:
+        return denial
+
+    request_resource = _request_resource(request)
+    available_grants = _credential_grants_for_resource(envelope, request_resource)
+    if policy.grants and not available_grants.issuperset(policy.grants):
+        REST_LOGGER.info(
+            "[connection-hub.oauth.rest_guard] denied reason=missing_grant required=%s available=%s resource=%s operation=%s",
+            list(policy.grants),
+            sorted(available_grants),
+            request_resource,
+            operation,
+        )
+        return _json_response(403, "forbidden", "required delegated grant is missing")
+
+    operation_policies = _connection_hub_rest_operation_policies(request)
+    if not operation_policies:
+        operation_policies = dict(policy.operation_policies or {})
+    selected_operation_grants = policy.selected_operation_grants or bool(operation_policies)
+    operation_name = str(operation or "").strip()
+    operation_policy = operation_policies.get(operation_name)
+    if operation_policies and operation_policy is None:
+        REST_LOGGER.info(
+            "[connection-hub.oauth.rest_guard] denied reason=operation_not_allowed operation=%s configured=%s resource=%s",
+            operation_name,
+            sorted(operation_policies.keys()),
+            request_resource,
+        )
+        return _json_response(403, "forbidden", f"operation not allowed by endpoint policy: {operation_name}")
+
+    roles = set(user.get("roles") or [])
+    permissions = set(user.get("permissions") or [])
+    if operation_policy is not None:
+        if operation_policy.roles and not roles.intersection(operation_policy.roles):
+            return _json_response(403, "forbidden", f"required role is missing for operation: {operation_name}")
+        if operation_policy.permissions and not permissions.issuperset(operation_policy.permissions):
+            return _json_response(403, "forbidden", f"required permission is missing for operation: {operation_name}")
+        if operation_policy.grants and not available_grants.issuperset(operation_policy.grants):
+            REST_LOGGER.info(
+                "[connection-hub.oauth.rest_guard] denied reason=missing_operation_grant operation=%s required=%s available=%s resource=%s",
+                operation_name,
+                list(operation_policy.grants),
+                sorted(available_grants),
+                request_resource,
+            )
+            return _json_response(403, "forbidden", f"required delegated grant is missing for operation: {operation_name}")
+
+    granted_operations = None
+    if isinstance(grant_record, Mapping):
+        granted_operations = set(_as_list(grant_record.get("operations")))
+    if selected_operation_grants:
+        if granted_operations is None or operation_name not in granted_operations:
+            REST_LOGGER.info(
+                "[connection-hub.oauth.rest_guard] denied reason=operation_not_consented operation=%s consented=%s resource=%s",
+                operation_name,
+                sorted(granted_operations or []),
+                request_resource,
+            )
+            return _json_response(403, "forbidden", f"operation not consented for this connection: {operation_name}")
+
+    runtime = delegated_rest_runtime_projection(request)
+    REST_LOGGER.info(
+        "[connection-hub.oauth.rest_guard] accepted resource=%s method=%s operation=%s subject=%s grantor=%s delegate=%s authority=%s scopes=%s operations=%s identity_scope=%s",
+        request_resource,
+        method,
+        operation_name,
+        user.get("sub") or "",
+        runtime.get("grantor_user_id") or "",
+        runtime.get("delegate_identity") or "",
+        envelope.issuer_authority_id,
+        sorted(available_grants),
+        sorted(granted_operations or []),
+        runtime.get("identity_scope") or "",
     )
     return None
 
@@ -591,9 +1020,17 @@ __all__ = [
     "MANAGED_MCP_AUTH_MODE",
     "ManagedMcpAuthPolicy",
     "ManagedMcpToolPolicy",
+    "ManagedRestAuthPolicy",
+    "ManagedRestOperationPolicy",
     "authorize_delegated_mcp_request",
+    "authorize_delegated_rest_request",
+    "delegated_request_resource",
+    "delegated_platform_admin_runtime_projection",
     "delegated_mcp_runtime_projection",
+    "delegated_rest_runtime_projection",
     "extract_mcp_tool_calls",
     "managed_mcp_auth_policy",
+    "managed_rest_auth_policy",
     "mcp_auth_mode",
+    "rest_auth_mode",
 ]

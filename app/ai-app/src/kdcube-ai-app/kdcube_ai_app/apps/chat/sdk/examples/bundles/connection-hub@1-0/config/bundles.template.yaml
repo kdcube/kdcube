@@ -85,6 +85,11 @@ bundles:
                   - "http://localhost/callback"
                   - "http://127.0.0.1/callback"
               capabilities:
+                - grant: "kdcube:role:super-admin"
+                  label: "Use all platform and application APIs"
+                  description: "Admin-only delegated automation access to platform and application APIs."
+                  delegable_roles:
+                    - "kdcube:role:super-admin"
                 - grant: "conversations:read"
                   label: "Read your conversations"
                   description: "Read the approving user's own KDCube conversations through delegated named-service tools."
@@ -123,6 +128,11 @@ bundles:
                   delegable_permissions:
                     - "knowledge:read"
               resources:
+                - resource: "*"
+                  label: "All platform and application APIs"
+                  admin_only: true
+                  grants:
+                    - "kdcube:role:super-admin"
                 - resource: "*/api/integrations/bundles/*/*/user-memories@2026-06-26/public/mcp/memories*"
                   label: "User memories MCP"
                   identity_scope: "grantor_identity_family"

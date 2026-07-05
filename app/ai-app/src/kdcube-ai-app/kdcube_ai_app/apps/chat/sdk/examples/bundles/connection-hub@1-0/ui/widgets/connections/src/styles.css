@@ -220,6 +220,34 @@ h2 {
   overflow-wrap: anywhere;
 }
 
+.issued-token {
+  margin: 12px 0 0;
+  border: 1px solid rgba(82, 176, 68, 0.28);
+  border-radius: var(--r-lg);
+  background: rgba(232, 247, 229, 0.55);
+  padding: 10px 12px;
+}
+
+.issued-token-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.token-output {
+  width: 100%;
+  min-height: 80px;
+  margin-top: 10px;
+  resize: vertical;
+  border: 1px solid rgba(82, 176, 68, 0.28);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--ink);
+  padding: 8px 10px;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
 .badge {
   font-size: 11px;
   font-weight: 600;
@@ -232,6 +260,11 @@ h2 {
 .badge-ok {
   background: var(--teal-pale);
   color: var(--teal-dark);
+}
+
+.badge-admin {
+  background: var(--gold-pale);
+  color: var(--gold-dark);
 }
 
 .btn {
@@ -517,6 +550,69 @@ code {
   display: grid;
   gap: 8px;
   margin: 12px 0;
+}
+
+.resource-scope {
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--surface-2);
+}
+
+.resource-catalog {
+  margin: 14px 0 0;
+  border-top: 1px solid var(--line-soft);
+  padding-top: 14px;
+}
+
+.resource-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.resource-row {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-3);
+  padding: 10px 12px;
+}
+
+.resource-option {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.resource-option input {
+  margin-top: 2px;
+}
+
+.resource-option strong,
+.resource-option small {
+  display: block;
+}
+
+.resource-option strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.resource-option strong .badge {
+  display: inline-block;
+  margin-left: 8px;
+}
+
+.resource-option small {
+  color: var(--text-2);
+  line-height: 1.35;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
 }
 
 .grant-option {

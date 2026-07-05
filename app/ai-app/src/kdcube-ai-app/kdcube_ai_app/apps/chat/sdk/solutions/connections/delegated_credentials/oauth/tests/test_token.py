@@ -47,7 +47,7 @@ def ctx():
 async def _seed_code(store, *, redirect_uri="http://127.0.0.1:9000/callback", client_id="claude"):
     return await store.create_auth_code(
         client_id=client_id, redirect_uri=redirect_uri, code_challenge=CHALLENGE,
-        sub="google:admin@example.test", scopes=["records:read"], tools=["records_export"],
+        sub="google:admin@example.test", scopes=["records:read"], operations=["records_export"],
         identity_scope="grantor_identity_family",
     )
 
@@ -59,7 +59,7 @@ async def test_access_token_grant_binds_consented_tools(ctx):
     code = await store.create_auth_code(
         client_id="claude", redirect_uri="http://127.0.0.1:9000/callback",
         code_challenge=CHALLENGE, sub="google:admin@example.test",
-        scopes=["records:read"], tools=[],
+        scopes=["records:read"], operations=[],
         grantor_authority={
             "grantor_roles": ["kdcube:role:super-admin"],
             "grantor_permissions": ["kdcube:*:records:*;read"],
@@ -85,7 +85,7 @@ async def test_access_token_grant_binds_consented_tools(ctx):
     assert grant_record["grantor_authority"]["grantor_roles"] == ["kdcube:role:super-admin"]
     assert grant_record["grantor_authority"]["economics_budget_bypass"] is True
     refresh_record = await store.validate_refresh_token(body["refresh_token"])
-    assert refresh_record["tools"] == []
+    assert refresh_record["operations"] == []
     assert refresh_record["credential"]["issuer_authority_id"] == DELEGATED_CLIENT_AUTHORITY_ID
     assert refresh_record["grantor_authority"]["grantor_permissions"] == ["kdcube:*:records:*;read"]
 

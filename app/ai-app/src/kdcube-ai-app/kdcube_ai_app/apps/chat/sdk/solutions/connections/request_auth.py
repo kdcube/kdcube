@@ -25,6 +25,7 @@ from fastapi import Request
 from kdcube_ai_app.auth.AuthManager import (
     AuthManager,
     AuthenticationError,
+    AuthorizationError,
     PAID_ROLES,
     ensure_platform_registered_role,
 )
@@ -118,6 +119,8 @@ class RequestAuthResolver:
             return None
         try:
             session = await surface(request, context, self.session_factory)
+        except (AuthenticationError, AuthorizationError):
+            raise
         except Exception:
             logger.warning(
                 "Request-auth surface failed; continuing auth stack surface=%s",

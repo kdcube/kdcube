@@ -41,7 +41,9 @@ def _authority(
         "audience": "kdcube:delegated_client",
         "attrs": {
             "scopes": list(scopes or ["records:read"]),
-            "resource": resource,
+            "resource_grants": {
+                resource: list(scopes or ["records:read"]),
+            },
             "grantor_subject": grantor_subject,
             "identity_scope": identity_scope,
         },
@@ -141,6 +143,49 @@ def _client(monkeypatch, *, grant_record, auth=None, user=None, return_projectio
     return TestClient(app)
 
 
+def _rest_client(monkeypatch, *, grant_record, auth=None, user=None, operation="records_export"):
+    async def fake_authenticate(token: str):
+        if token != "reader":
+            return None
+        return user or {
+            "sub": "integration:automation:admin",
+            "roles": ["kdcube:role:delegated-client"],
+            "permissions": ["records:read"],
+        }
+
+    monkeypatch.setattr(
+        surface_guard,
+        "_authenticate_delegated_client_access_token",
+        fake_authenticate,
+    )
+
+    app = FastAPI()
+    app.state.oauth_grant_store = _GrantStore(grant_record)
+    auth = auth or {
+        "mode": "managed",
+        "authority_id": "delegated_client",
+        "operations": {
+            "records_export": {
+                "grants": ["records:read"],
+            },
+        },
+        "selected_operation_grants": True,
+    }
+
+    @app.post("/guard")
+    async def guard(request: Request):
+        denial = await surface_guard.authorize_delegated_rest_request(
+            request=request,
+            auth=auth,
+            operation=operation,
+            method="POST",
+        )
+        projection = surface_guard.delegated_rest_runtime_projection(request)
+        return denial or JSONResponse({"ok": True, "projection": projection})
+
+    return TestClient(app)
+
+
 def test_managed_guard_uses_connection_hub_resource_policy(monkeypatch):
     config = {
         "enabled": True,
@@ -169,7 +214,7 @@ def test_managed_guard_uses_connection_hub_resource_policy(monkeypatch):
             "permissions": ["records:read"],
         },
         grant_record={
-            "tools": ["records_export"],
+            "operations": ["records_export"],
             "credential": _authority(),
         },
     )
@@ -183,6 +228,191 @@ def test_managed_guard_uses_connection_hub_resource_policy(monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
+
+
+def test_managed_rest_guard_accepts_consented_operation(monkeypatch):
+    client = _rest_client(
+        monkeypatch,
+        grant_record={
+            "operations": ["records_export"],
+            "credential": _authority(),
+        },
+    )
+
+    response = client.post("/guard", headers={"Authorization": "Bearer reader"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["projection"]["schema"] == "connection_hub.delegated_rest_runtime_projection.v1"
+    assert payload["projection"]["grantor_user_id"] == "a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
+
+
+def test_managed_rest_guard_accepts_configured_resource_pattern(monkeypatch):
+    client = _rest_client(
+        monkeypatch,
+        grant_record={
+            "operations": ["records_export"],
+            "credential": _authority(resource="http://testserver/*"),
+        },
+    )
+
+    response = client.post("/guard", headers={"Authorization": "Bearer reader"})
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+
+
+def test_managed_rest_guard_scopes_grants_to_matching_resource(monkeypatch):
+    authority = _authority(scopes=["records:read"], resource=GUARD_RESOURCE)
+    authority["attrs"]["resource_grants"] = {
+        GUARD_RESOURCE: ["records:read"],
+        "http://testserver/other": ["records:write"],
+    }
+    client = _rest_client(
+        monkeypatch,
+        operation="records_update",
+        auth={
+            "mode": "managed",
+            "authority_id": "delegated_client",
+            "operations": {
+                "records_update": {
+                    "grants": ["records:write"],
+                },
+            },
+            "selected_operation_grants": True,
+        },
+        grant_record={
+            "operations": ["records_update"],
+            "credential": authority,
+        },
+    )
+
+    response = client.post("/guard", headers={"Authorization": "Bearer reader"})
+
+    assert response.status_code == 403
+    assert response.json()["error_description"] == (
+        "required delegated grant is missing for operation: records_update"
+    )
+
+
+def test_managed_rest_guard_accepts_wildcard_resource_grant(monkeypatch):
+    authority = _authority(scopes=["records:read"], resource=GUARD_RESOURCE)
+    authority["attrs"]["resource_grants"] = {
+        "*": ["records:write"],
+        GUARD_RESOURCE: ["records:read"],
+    }
+    client = _rest_client(
+        monkeypatch,
+        operation="records_update",
+        auth={
+            "mode": "managed",
+            "authority_id": "delegated_client",
+            "operations": {
+                "records_update": {
+                    "grants": ["records:write"],
+                },
+            },
+            "selected_operation_grants": True,
+        },
+        grant_record={
+            "operations": ["records_update"],
+            "credential": authority,
+        },
+    )
+
+    response = client.post("/guard", headers={"Authorization": "Bearer reader"})
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+
+
+def test_managed_rest_guard_rejects_unconsented_operation(monkeypatch):
+    client = _rest_client(
+        monkeypatch,
+        grant_record={
+            "operations": ["records_list"],
+            "credential": _authority(),
+        },
+    )
+
+    response = client.post("/guard", headers={"Authorization": "Bearer reader"})
+
+    assert response.status_code == 403
+    assert response.json()["error_description"] == (
+        "operation not consented for this connection: records_export"
+    )
+
+
+def test_managed_rest_guard_uses_connection_hub_resource_policy(monkeypatch):
+    config = {
+        "enabled": True,
+        "capabilities": [{"grant": "records:read"}],
+        "resources": [
+            {
+                "resource": GUARD_RESOURCE,
+                "operations": {
+                    "records_export": {
+                        "grants": ["records:read"],
+                    },
+                },
+            }
+        ],
+    }
+    client = _rest_client(
+        monkeypatch,
+        auth={
+            "mode": "managed",
+            "authority_id": "delegated_client",
+            "selected_operation_grants": True,
+        },
+        grant_record={
+            "operations": ["records_export"],
+            "credential": _authority(),
+        },
+    )
+    client.app.state.oauth_delegated_config = config
+
+    response = client.post("/guard", headers={"Authorization": "Bearer reader"})
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+
+
+def test_managed_rest_guard_resource_policy_requires_selected_operation(monkeypatch):
+    config = {
+        "enabled": True,
+        "capabilities": [{"grant": "records:read"}],
+        "resources": [
+            {
+                "resource": GUARD_RESOURCE,
+                "operations": {
+                    "records_export": {
+                        "grants": ["records:read"],
+                    },
+                },
+            }
+        ],
+    }
+    client = _rest_client(
+        monkeypatch,
+        auth={
+            "mode": "managed",
+            "authority_id": "delegated_client",
+        },
+        grant_record={
+            "operations": [],
+            "credential": _authority(),
+        },
+    )
+    client.app.state.oauth_delegated_config = config
+
+    response = client.post("/guard", headers={"Authorization": "Bearer reader"})
+
+    assert response.status_code == 403
+    assert response.json()["error_description"] == (
+        "operation not consented for this connection: records_export"
+    )
 
 
 def test_managed_guard_prefers_connection_hub_resource_policy_over_surface_tools(monkeypatch):
@@ -218,7 +448,7 @@ def test_managed_guard_prefers_connection_hub_resource_policy_over_surface_tools
             "permissions": ["records:read"],
         },
         grant_record={
-            "tools": ["records_export"],
+            "operations": ["records_export"],
             "credential": _authority(),
         },
     )
@@ -238,7 +468,7 @@ def test_managed_guard_allows_consented_tool(monkeypatch):
     client = _client(
         monkeypatch,
         grant_record={
-            "tools": ["records_export"],
+            "operations": ["records_export"],
             "credential": _authority(),
         },
     )
@@ -272,7 +502,7 @@ def test_managed_guard_allows_configured_non_feedback_tool(monkeypatch):
             "permissions": ["memories:read"],
         },
         grant_record={
-            "tools": ["memory_search"],
+            "operations": ["memory_search"],
             "credential": _memory_authority(),
         },
     )
@@ -307,7 +537,7 @@ def test_managed_guard_exposes_runtime_projection_for_proc_bridge(monkeypatch):
             "permissions": ["memories:read"],
         },
         grant_record={
-            "tools": ["memory_search"],
+            "operations": ["memory_search"],
             "credential": _authority(
                 scopes=["memories:read"],
                 grantor_subject="a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
@@ -336,6 +566,7 @@ def test_managed_guard_exposes_runtime_projection_for_proc_bridge(monkeypatch):
     assert projection["grantor_user_id"] == "a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
     assert projection["identity_scope"] == "grantor_identity_family"
     assert "memories:read" in projection["grants"]
+    assert "kdcube:role:super-admin" in projection["roles"]
     assert authority["economics_user_id"] == "a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
     assert authority["budget_bypass"] is True
     assert authority["actor_identity"] == "integration:claude:a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
@@ -359,7 +590,7 @@ def test_managed_guard_enforces_grants_per_called_tool(monkeypatch):
             "permissions": ["memories:read"],
         },
         grant_record={
-            "tools": ["memory_search", "memory_delete"],
+            "operations": ["memory_search", "memory_delete"],
             "credential": _memory_authority(),
         },
     )
@@ -380,7 +611,7 @@ def test_managed_guard_fails_closed_when_tool_not_consented(monkeypatch):
     client = _client(
         monkeypatch,
         grant_record={
-            "tools": [],
+            "operations": [],
             "credential": _authority(),
         },
     )
@@ -401,7 +632,7 @@ def test_managed_guard_rejects_resource_mismatch(monkeypatch):
     client = _client(
         monkeypatch,
         grant_record={
-            "tools": ["records_export"],
+            "operations": ["records_export"],
             "credential": _authority(resource="http://testserver/other"),
         },
     )
@@ -418,11 +649,11 @@ def test_managed_guard_rejects_resource_mismatch(monkeypatch):
 
 def test_managed_guard_rejects_missing_resource(monkeypatch):
     authority = _authority()
-    authority["attrs"].pop("resource")
+    authority["attrs"].pop("resource_grants")
     client = _client(
         monkeypatch,
         grant_record={
-            "tools": ["records_export"],
+            "operations": ["records_export"],
             "credential": authority,
         },
     )
@@ -441,7 +672,7 @@ def test_managed_guard_compares_forwarded_public_resource(monkeypatch):
     client = _client(
         monkeypatch,
         grant_record={
-            "tools": ["records_export"],
+            "operations": ["records_export"],
             "credential": _authority(
                 resource=(
                     "https://broodier-maxie-uninferrably.ngrok-free.dev"
@@ -470,7 +701,7 @@ def test_managed_guard_requires_bearer(monkeypatch):
     client = _client(
         monkeypatch,
         grant_record={
-            "tools": ["records_export"],
+            "operations": ["records_export"],
             "credential": _authority(),
         },
     )

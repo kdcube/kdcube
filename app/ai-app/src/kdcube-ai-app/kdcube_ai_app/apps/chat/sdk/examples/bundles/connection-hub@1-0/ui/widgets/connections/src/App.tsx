@@ -6,6 +6,8 @@ import { AuthenticatorsPanel } from './features/authenticators/AuthenticatorsPan
 import { clearAuthenticatorsError, loadAuthenticators } from './features/authenticators/authenticatorsSlice';
 import { ConnectionsList } from './features/connections/ConnectionsList';
 import { clearConnectionsError, loadCatalog } from './features/connections/connectionsSlice';
+import { DelegatedAccessPanel } from './features/delegatedAccess/DelegatedAccessPanel';
+import { clearDelegatedAccessError, loadDelegatedAccess } from './features/delegatedAccess/delegatedAccessSlice';
 import { IcloudPanel } from './features/email/IcloudPanel';
 import { clearEmailError, loadEmailStatus } from './features/email/emailSlice';
 import { ConnectionEdgesPanel } from './features/identity/ConnectionEdgesPanel';
@@ -29,6 +31,7 @@ function tabFromLocation(): ConnectionsTab {
   const params = new URLSearchParams(window.location.search);
   const value = (params.get('tab') || window.location.hash.replace(/^#/, '') || '').toLowerCase();
   if (value === 'accounts' || value === 'authenticators' || value === 'identity') return value;
+  if (value === 'delegatedaccess' || value === 'delegated-access' || value === 'delegated_access') return 'delegatedAccess';
   return 'identity';
 }
 
@@ -42,10 +45,12 @@ export default function App() {
   const [telegramConnectStatus] = useState<TelegramConnectStatus>('idle');
   const connectionsLoading = useAppSelector((s) => s.connections.loading);
   const authenticatorsLoading = useAppSelector((s) => s.authenticators.loading);
+  const delegatedAccessLoading = useAppSelector((s) => s.delegatedAccess.loading);
   const emailLoading = useAppSelector((s) => s.email.loading);
   const identityLoading = useAppSelector((s) => s.identity.loading);
   const connectionsError = useAppSelector((s) => s.connections.error);
   const authenticatorsError = useAppSelector((s) => s.authenticators.error);
+  const delegatedAccessError = useAppSelector((s) => s.delegatedAccess.error);
   const emailError = useAppSelector((s) => s.email.error);
   const identityError = useAppSelector((s) => s.identity.error);
 
@@ -56,18 +61,20 @@ export default function App() {
       void dispatch(loadConnectionEdges());
       void dispatch(loadAuthenticators());
       void dispatch(loadCatalog());
+      void dispatch(loadDelegatedAccess());
       void dispatch(loadEmailStatus());
     });
   }, [claimChallengeId, dispatch, telegramMiniAppMode]);
 
   const [refreshing, setRefreshing] = useState(false);
-  const loading = identityLoading || authenticatorsLoading || connectionsLoading || emailLoading;
-  const errors = [identityError, authenticatorsError, connectionsError, emailError].filter(Boolean) as string[];
+  const loading = identityLoading || authenticatorsLoading || connectionsLoading || delegatedAccessLoading || emailLoading;
+  const errors = [identityError, authenticatorsError, connectionsError, delegatedAccessError, emailError].filter(Boolean) as string[];
 
   const dismissErrors = () => {
     dispatch(clearIdentityError());
     dispatch(clearAuthenticatorsError());
     dispatch(clearConnectionsError());
+    dispatch(clearDelegatedAccessError());
     dispatch(clearEmailError());
   };
 
@@ -80,6 +87,7 @@ export default function App() {
         dispatch(loadConnectionEdges()).unwrap().catch(() => undefined),
         dispatch(loadAuthenticators()).unwrap().catch(() => undefined),
         dispatch(loadCatalog()).unwrap().catch(() => undefined),
+        dispatch(loadDelegatedAccess()).unwrap().catch(() => undefined),
         dispatch(loadEmailStatus()).unwrap().catch(() => undefined),
       ]);
     } finally {
@@ -141,6 +149,7 @@ export default function App() {
     >
       {activeTab === 'identity' ? <ConnectionEdgesPanel telegramConnectStatus={telegramConnectStatus} /> : null}
       {activeTab === 'authenticators' ? <AuthenticatorsPanel /> : null}
+      {activeTab === 'delegatedAccess' ? <DelegatedAccessPanel /> : null}
       {activeTab === 'accounts' ? (
         <>
           <ConnectionsList />

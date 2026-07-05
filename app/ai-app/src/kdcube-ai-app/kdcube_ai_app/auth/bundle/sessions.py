@@ -132,7 +132,6 @@ _CREDENTIAL_CLAIM_KEYS = {
     "audience",
     "session_id",
     "verified_authority",
-    "attrs",
     "iat",
     "exp",
 }

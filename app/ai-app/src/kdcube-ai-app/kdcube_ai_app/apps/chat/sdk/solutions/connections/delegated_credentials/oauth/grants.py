@@ -44,7 +44,7 @@ async def mint_delegated_client_access_token(
     *,
     authority=None,
     client_id: str = "",
-    tools: List[str] | None = None,
+    operations: List[str] | None = None,
     credential: Mapping[str, Any] | None = None,
     ttl_seconds: int = ACCESS_TOKEN_TTL_SECONDS,
 ) -> dict:
@@ -60,6 +60,7 @@ async def mint_delegated_client_access_token(
         authority = get_bundle_session_authority(tenant=tenant, project=project)
 
     isub = integration_subject(sub, client_id=client_id)
+    operation_list = list(operations or [])
     grant = await authority.login_or_register(
         sub=isub,
         username=f"delegated-client:{client_id or 'unknown'}",
@@ -73,9 +74,9 @@ async def mint_delegated_client_access_token(
             "delegated_client": {
                 "client_id": str(client_id or "").strip(),
                 "scopes": list(scopes or []),
-                "tools": list(tools or []),
+                "operations": operation_list,
             },
         },
         ttl_seconds=ttl_seconds,
     )
-    return {"access_token": grant.token, "expires_in": ttl_seconds}
+    return {"access_token": grant.token, "expires_in": ttl_seconds, "session_id": getattr(grant, "session_id", "")}

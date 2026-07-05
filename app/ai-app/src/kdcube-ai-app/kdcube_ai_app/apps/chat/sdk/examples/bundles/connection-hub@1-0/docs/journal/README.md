@@ -14,6 +14,8 @@ configuration.
 
 ## Entries
 
+- [2026-07-05 - Managed REST guard](2026-07-05-managed-rest-guard.md)
+- [2026-07-05 - Delegated access for automation](2026-07-05-delegated-access-for-automation.md)
 - [2026-07-01 - Authority registry descriptor](2026-07-01-authority-registry-descriptor.md)
 - [2026-06-29 - Delegated credential surface split](2026-06-29-delegated-credential-surface-split.md)
 - [2026-06-28 - Identity family resolver](2026-06-28-identity-family-resolver.md)

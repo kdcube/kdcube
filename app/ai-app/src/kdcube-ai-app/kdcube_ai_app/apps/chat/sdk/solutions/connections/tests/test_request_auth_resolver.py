@@ -5,8 +5,10 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.request_auth import RequestAuthResolver
-from kdcube_ai_app.auth.AuthManager import User
+from kdcube_ai_app.auth.AuthManager import AuthorizationError, User
 from kdcube_ai_app.auth.sessions import RequestContext, UserSession, UserType
 
 
@@ -207,3 +209,24 @@ async def test_request_auth_resolver_can_disable_connection_hub_surface():
     assert session.user_id == "platform-user"
     assert session.user_type == UserType.PRIVILEGED
     assert created["user_type"] == UserType.PRIVILEGED
+
+
+async def test_request_auth_resolver_propagates_connection_hub_authorization_error():
+    async def _factory(_context, _user_type, _user_data):
+        raise AssertionError("denied delegated resource must not create anonymous session")
+
+    async def _connection_hub_surface(_request, _context, _session_factory):
+        raise AuthorizationError("delegated credential denied")
+
+    resolver = RequestAuthResolver(auth_manager=None, session_factory=_factory)
+    resolver.install_connection_hub_surface(_connection_hub_surface)
+
+    with pytest.raises(AuthorizationError):
+        await resolver.resolve_session(
+            SimpleNamespace(),
+            RequestContext(
+                client_ip="127.0.0.1",
+                user_agent="test",
+                authorization_header="Bearer delegated-token",
+            ),
+        )

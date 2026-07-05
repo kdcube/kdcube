@@ -16,6 +16,7 @@ import logging
 from typing import Any, Mapping, Optional
 
 from fastapi import Request
+from fastapi.responses import JSONResponse
 
 from kdcube_ai_app.apps.chat.sdk.config import get_plain
 from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import (
@@ -37,13 +38,27 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.authenticators.models imp
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_projection import (
     authority_has_platform_privilege,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.config import (
+    oauth_delegated_config,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.surface_guard import (
+    authorize_delegated_rest_request,
+    delegated_platform_admin_runtime_projection,
+    delegated_request_resource,
+    delegated_rest_runtime_projection,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.request_auth import SessionFactory
+from kdcube_ai_app.auth.AuthManager import AuthenticationError, AuthorizationError, PAID_ROLES
 from kdcube_ai_app.auth.sessions import RequestContext, UserSession, UserType
+from kdcube_ai_app.infra.plugin.bundle_store import (
+    _get_bundle_props_from_authority as get_bundle_props_from_authority,
+)
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_CONNECTION_HUB_BUNDLE_ID = "connection-hub@1-0"
 DEFAULT_CONNECTION_HUB_AUTH_OPERATION = "request_authenticate"
+DEFAULT_DELEGATED_AUTHORITY_ID = "delegated_client"
 
 
 def _str(value: Any) -> str:
@@ -126,6 +141,36 @@ def _should_trace_auth_attempt(summary: Mapping[str, Any]) -> bool:
     return _should_attempt_connection_hub(summary)
 
 
+def _roles_user_type(roles: list[str] | tuple[str, ...] | None) -> UserType:
+    role_set = set(roles or [])
+    if authority_has_platform_privilege(role_set):
+        return UserType.PRIVILEGED
+    if PAID_ROLES & role_set:
+        return UserType.PAID
+    if role_set:
+        return UserType.REGISTERED
+    return UserType.EXTERNAL
+
+
+def _auth_error_from_denial(denial: JSONResponse) -> Exception:
+    status_code = getattr(denial, "status_code", 500)
+    raw = getattr(denial, "body", b"") or b""
+    message = ""
+    try:
+        import json
+
+        payload = json.loads(raw.decode("utf-8")) if raw else {}
+        if isinstance(payload, Mapping):
+            message = str(payload.get("error_description") or payload.get("detail") or payload.get("error") or "")
+    except Exception:
+        message = ""
+    if not message:
+        message = f"delegated credential rejected with status {status_code}"
+    if status_code == 401:
+        return AuthenticationError(message)
+    return AuthorizationError(message)
+
+
 class ConnectionHubAuthenticationSurface:
     """Gateway-facing authentication surface backed by the Connection Hub app.
 
@@ -179,6 +224,10 @@ class ConnectionHubAuthenticationSurface:
         context: RequestContext,
         session_factory: SessionFactory,
     ) -> Optional[UserSession]:
+        delegated_session = await self._try_delegated_platform_bearer(request, context, session_factory)
+        if delegated_session is not None:
+            return delegated_session
+
         include_body = self._should_include_body(request)
         envelope = await RequestEnvelope.from_request(request, include_body=include_body)
         summary = _external_auth_summary(envelope)
@@ -345,6 +394,153 @@ class ConnectionHubAuthenticationSurface:
             pg_pool=self.pg_pool,
         )
         return dict(result or {})
+
+    def _delegated_oauth_raw_config(self, request: Request) -> dict[str, Any]:
+        props = get_bundle_props_from_authority(
+            tenant=self.tenant,
+            project=self.project,
+            bundle_id=self.bundle_id,
+        )
+        props = props if isinstance(props, Mapping) else {}
+        connections = props.get("connections")
+        connections = connections if isinstance(connections, Mapping) else {}
+        delegated = connections.get("delegated_credentials")
+        delegated = delegated if isinstance(delegated, Mapping) else {}
+        raw = delegated.get("oauth")
+        cfg = dict(raw) if isinstance(raw, Mapping) else {}
+        cfg["tenant"] = self.tenant
+        cfg["project"] = self.project
+        cfg.setdefault("enabled", False)
+        if not cfg.get("issuer"):
+            path = (
+                f"/api/integrations/bundles/{self.tenant}/{self.project}/"
+                f"{self.bundle_id}/public/oauth"
+            )
+            try:
+                headers = request.headers
+                proto = str(headers.get("x-forwarded-proto") or request.url.scheme or "http").split(",", 1)[0].strip()
+                host = str(headers.get("x-forwarded-host") or headers.get("host") or request.url.netloc or "").split(",", 1)[0].strip()
+                if host:
+                    cfg["issuer"] = f"{proto}://{host}{path}".rstrip("/")
+            except Exception:
+                pass
+        return cfg
+
+    def _bind_delegated_oauth_config(self, request: Request) -> Any:
+        cfg = self._delegated_oauth_raw_config(request)
+        request.state.oauth_delegated_config = cfg
+        return oauth_delegated_config(request)
+
+    def _delegated_platform_resource_config(self, request: Request) -> Any:
+        cfg = self._bind_delegated_oauth_config(request)
+        if not cfg.enabled:
+            return None
+        resource = delegated_request_resource(request)
+        return cfg.resource_config(resource)
+
+    def _delegated_platform_operation(self, request: Request) -> str:
+        resource_cfg = self._delegated_platform_resource_config(request)
+        if resource_cfg is None:
+            return ""
+        cfg = self._bind_delegated_oauth_config(request)
+        operations = cfg.resource_operation_catalog(delegated_request_resource(request))
+        if not operations:
+            return ""
+        if len(operations) != 1:
+            raise AuthorizationError(
+                "delegated platform resource has ambiguous operation catalog: "
+                f"{delegated_request_resource(request)}"
+        )
+        return str(operations[0].name or "").strip()
+
+    def _delegated_platform_all_resources_enabled(self, request: Request) -> bool:
+        resource_cfg = self._delegated_platform_resource_config(request)
+        if resource_cfg is None:
+            return False
+        return bool(getattr(resource_cfg, "admin_only", False) and str(resource_cfg.resource or "").strip() == "*")
+
+    async def _session_from_delegated_projection(
+        self,
+        *,
+        request: Request,
+        context: RequestContext,
+        session_factory: SessionFactory,
+        projection: Mapping[str, Any],
+    ) -> UserSession:
+        roles = list(projection.get("roles") or [])
+        permissions = list(projection.get("permissions") or [])
+        identity_authority = dict(projection.get("identity_authority") or {})
+        user_id = _str(projection.get("user_id"))
+        if not user_id:
+            raise AuthorizationError("delegated credential did not resolve a platform user")
+        user_data = {
+            "user_id": user_id,
+            "username": projection.get("username") or user_id,
+            "roles": roles,
+            "permissions": permissions,
+            "identity_authority": identity_authority,
+        }
+        session = await session_factory(context, _roles_user_type(roles), user_data)
+        session.identity_authority = identity_authority
+        logger.info(
+            "[auth.connection_hub.surface] accepted delegated platform bearer tenant=%s project=%s resource=%s user_id=%s roles=%s grants=%s",
+            self.tenant,
+            self.project,
+            delegated_request_resource(request),
+            user_id,
+            roles,
+            projection.get("grants") or [],
+        )
+        return session
+
+    async def _try_delegated_platform_bearer(
+        self,
+        request: Request,
+        context: RequestContext,
+        session_factory: SessionFactory,
+    ) -> Optional[UserSession]:
+        auth_header = str(request.headers.get("authorization") or "").strip()
+        if not auth_header.lower().startswith("bearer "):
+            return None
+        operation = self._delegated_platform_operation(request)
+        if operation:
+            endpoint_auth = {
+                "mode": "managed",
+                "authority_id": DEFAULT_DELEGATED_AUTHORITY_ID,
+                "selected_operation_grants": True,
+            }
+            denial = await authorize_delegated_rest_request(
+                request=request,
+                auth=endpoint_auth,
+                operation=operation,
+                method=request.method,
+            )
+            if denial is not None:
+                raise _auth_error_from_denial(denial)
+            projection = delegated_rest_runtime_projection(request)
+            if not projection:
+                raise AuthorizationError("delegated credential did not produce a runtime projection")
+            return await self._session_from_delegated_projection(
+                request=request,
+                context=context,
+                session_factory=session_factory,
+                projection=projection,
+            )
+
+        if not self._delegated_platform_all_resources_enabled(request):
+            return None
+        projection = await delegated_platform_admin_runtime_projection(
+            request,
+            authority_id=DEFAULT_DELEGATED_AUTHORITY_ID,
+        )
+        if not projection:
+            return None
+        return await self._session_from_delegated_projection(
+            request=request,
+            context=context,
+            session_factory=session_factory,
+            projection=projection,
+        )
 
 
 def maybe_install_connection_hub_authentication_surface(

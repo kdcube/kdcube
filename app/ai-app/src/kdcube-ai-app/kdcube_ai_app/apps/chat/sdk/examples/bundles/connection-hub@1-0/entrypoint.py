@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import json
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any, Dict, Mapping, Optional
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
@@ -16,7 +17,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.telegram import (
     extract_telegram_init_data_from_request,
     validate_telegram_init_data,
 )
-from kdcube_ai_app.apps.chat.sdk.config import get_secret
+from kdcube_ai_app.apps.chat.sdk.config import get_secret, get_settings
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.authenticators.models import RequestEnvelope
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_registry_config import (
     authority_registry_config,
@@ -54,6 +55,9 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oau
     DEFAULT_DCR_REDIRECT_URIS,
     oauth_delegated_config,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.automation_access import (
+    AutomationAccessService,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.metadata import (
     authorization_server_metadata,
     protected_resource_metadata,
@@ -70,6 +74,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.mcp_metadata import (
     kdcube_icon_url,
     kdcube_website_url,
 )
+from kdcube_ai_app.infra.redis.client import get_async_redis_client
 
 BUNDLE_ID = "connection-hub@1-0"
 ENTRYPOINT_NAME = "connection-hub"
@@ -320,6 +325,25 @@ def _platform_delegation_grant_options(entrypoint: Any, platform_user_id: str) -
     return options
 
 
+def _platform_user_payload(entrypoint: Any, *, user_id: Optional[str] = None) -> Dict[str, Any]:
+    platform_user_id = _platform_user_id(entrypoint, user_id=user_id)
+    if not platform_user_id:
+        return {}
+    roles, permissions = _entrypoint_user_roles_permissions(entrypoint)
+    principal = resolve_principal_roles(
+        platform_user_id=platform_user_id,
+        identity_config=_identity_config(entrypoint),
+    )
+    roles = _dedupe(roles + _safe_list(principal.get("roles")))
+    permissions = _dedupe(permissions + _safe_list(principal.get("permissions")))
+    return {
+        "sub": platform_user_id,
+        "user_id": platform_user_id,
+        "roles": roles,
+        "permissions": permissions,
+    }
+
+
 def _edge_store(entrypoint: Any) -> ConnectionEdgeStore:
     return ConnectionEdgeStore(_storage_root_or_error(entrypoint))
 
@@ -442,6 +466,25 @@ def _bind_delegated_client_request_config(entrypoint: Any, request: Any) -> Dict
         request.state.oauth_delegated_issuer = str(cfg.get("issuer") or "").rstrip("/")
         request.state.connection_hub_authority_registry = _authority_registry_config(entrypoint)
     return cfg
+
+
+def _delegated_oauth_config_from_entrypoint(entrypoint: Any, request: Any) -> Any:
+    raw_cfg = _bind_delegated_client_request_config(entrypoint, request)
+    if request is not None:
+        return oauth_delegated_config(request)
+    state = SimpleNamespace(oauth_delegated_config=raw_cfg)
+    return oauth_delegated_config(SimpleNamespace(state=state))
+
+
+def _automation_access_service(entrypoint: Any, request: Any) -> AutomationAccessService:
+    tenant, project = _runtime_tenant_project(entrypoint)
+    redis = getattr(entrypoint, "redis", None) or get_async_redis_client(get_settings().REDIS_URL)
+    return AutomationAccessService(
+        redis=redis,
+        tenant=tenant,
+        project=project,
+        config=_delegated_oauth_config_from_entrypoint(entrypoint, request),
+    )
 
 
 def _delegated_client_capability_payload(request: Any, *, resource: str | None = None) -> list[dict[str, Any]]:
@@ -1077,6 +1120,9 @@ class ConnectionHubEntrypoint(BaseEntrypointWithMemory):
                             "authority_provider_entrypoint_resolve": {"visibility": {"user_types": []}},
                             "identity_family_resolve": {"visibility": {"user_types": []}},
                             "delegated_identity_scope_resolve": {"visibility": {"user_types": []}},
+                            "delegated_access_list": {"visibility": {"user_types": []}},
+                            "delegated_access_create": {"visibility": {"user_types": []}},
+                            "delegated_access_revoke": {"visibility": {"user_types": []}},
                             "identity_resolve": {"visibility": {"user_types": []}},
                             "authenticators_list": {"visibility": {"user_types": []}},
                             "authenticators_upsert": {"visibility": {"user_types": []}},
@@ -1133,6 +1179,12 @@ class ConnectionHubEntrypoint(BaseEntrypointWithMemory):
                         },
                         "capabilities": [
                             {
+                                "grant": "kdcube:role:super-admin",
+                                "label": "Use all platform and application APIs",
+                                "description": "Admin-only delegated automation access to platform and application APIs.",
+                                "delegable_roles": ["kdcube:role:super-admin"],
+                            },
+                            {
                                 "grant": "conversations:read",
                                 "label": "Read your conversations",
                                 "description": "Read the approving user's own KDCube conversations through delegated named-service tools.",
@@ -1177,6 +1229,12 @@ class ConnectionHubEntrypoint(BaseEntrypointWithMemory):
                             },
                         ],
                         "resources": [
+                            {
+                                "resource": "*",
+                                "label": "All platform and application APIs",
+                                "admin_only": True,
+                                "grants": ["kdcube:role:super-admin"],
+                            },
                             {
                                 "resource": "*/api/integrations/bundles/*/*/user-memories@2026-06-26/public/mcp/memories*",
                                 "label": "User memories MCP",
@@ -1435,6 +1493,66 @@ class ConnectionHubEntrypoint(BaseEntrypointWithMemory):
             return await oauth_token(request)
 
         return JSONResponse(status_code=404, content={"error": "oauth_route_not_found", "path": path})
+
+    # ── user-created delegated access for automation ───────────────────────
+
+    @api(method="GET", alias="delegated_access_list", route="operations", **_api_visibility("delegated_access_list"))
+    async def delegated_access_list(
+        self,
+        request: Any = None,
+        user_id: Optional[str] = None,
+        fingerprint: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        del fingerprint, kwargs
+        user = _platform_user_payload(self, user_id=user_id)
+        if not user:
+            return {"ok": False, "error": "delegated_access_requires_authenticated_user"}
+        return await _automation_access_service(self, request).list_access(user)
+
+    @api(method="POST", alias="delegated_access_create", route="operations", **_api_visibility("delegated_access_create"))
+    async def delegated_access_create(
+        self,
+        data: Optional[Dict[str, Any]] = None,
+        request: Any = None,
+        user_id: Optional[str] = None,
+        fingerprint: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        del fingerprint
+        payload = _payload(data, **kwargs)
+        user = _platform_user_payload(self, user_id=user_id)
+        if not user:
+            return {"ok": False, "error": "delegated_access_requires_authenticated_user"}
+        try:
+            return await _automation_access_service(self, request).create_access(
+                user,
+                label=str(payload.get("label") or "").strip(),
+                resource_grants=dict(payload.get("resource_grants") or {}),
+                operations=_safe_list(payload.get("operations")),
+                ttl_seconds=payload.get("ttl_seconds"),
+            )
+        except ValueError as exc:
+            return {"ok": False, "error": "invalid_delegated_access_request", "message": str(exc)}
+
+    @api(method="POST", alias="delegated_access_revoke", route="operations", **_api_visibility("delegated_access_revoke"))
+    async def delegated_access_revoke(
+        self,
+        data: Optional[Dict[str, Any]] = None,
+        request: Any = None,
+        user_id: Optional[str] = None,
+        fingerprint: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        del fingerprint
+        payload = _payload(data, **kwargs)
+        user = _platform_user_payload(self, user_id=user_id)
+        if not user:
+            return {"ok": False, "error": "delegated_access_requires_authenticated_user"}
+        return await _automation_access_service(self, request).revoke_access(
+            user,
+            access_id=str(payload.get("access_id") or "").strip(),
+        )
 
     # ── thin widget helper ops (Settings UI) ─────────────────────────────────
 

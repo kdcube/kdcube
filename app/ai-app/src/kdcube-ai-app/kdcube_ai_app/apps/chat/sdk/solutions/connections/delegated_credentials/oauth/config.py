@@ -67,6 +67,7 @@ class OAuthDelegatedResourceConfig:
     label: str = ""
     identity_scope: str = DEFAULT_DELEGATED_IDENTITY_SCOPE
     named_services: Mapping[str, Any] = field(default_factory=dict)
+    admin_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -107,10 +108,18 @@ class OAuthDelegatedClientConfig:
         text = str(resource or "").strip().rstrip("/")
         if not text:
             return None
+        fallback: OAuthDelegatedResourceConfig | None = None
         for item in self.resources:
             pattern = item.resource.rstrip("/")
-            if pattern == text or fnmatch(text, pattern):
+            if pattern == text:
                 return item
+            if pattern == "*":
+                fallback = item
+                continue
+            if fnmatch(text, pattern):
+                return item
+        if fallback is not None and fnmatch(text, fallback.resource.rstrip("/")):
+            return fallback
         return None
 
     def supported_scopes(self, resource: str | None = None) -> tuple[str, ...]:
@@ -125,7 +134,7 @@ class OAuthDelegatedClientConfig:
 
     def tools_for_resource(self, resource: str | None = None) -> tuple[OAuthDelegatedToolConfig, ...]:
         resource_cfg = self.resource_config(resource)
-        if resource_cfg and resource_cfg.tools:
+        if resource_cfg:
             return resource_cfg.tools
         seen: dict[str, OAuthDelegatedToolConfig] = {}
         for cap in self.capabilities:
@@ -161,6 +170,10 @@ class OAuthDelegatedClientConfig:
     def resource_tool_catalog(self, resource: str | None = None) -> tuple[OAuthDelegatedToolConfig, ...]:
         """Tool-centric catalog for protected-resource metadata and consent."""
         return self.tools_for_resource(resource)
+
+    def resource_operation_catalog(self, resource: str | None = None) -> tuple[OAuthDelegatedToolConfig, ...]:
+        """Operation-centric alias for REST/platform protected-resource consumers."""
+        return self.resource_tool_catalog(resource)
 
 
 def _state_for(source: Any) -> Any | None:
@@ -310,7 +323,12 @@ def _parse_resources(raw: Any) -> tuple[OAuthDelegatedResourceConfig, ...]:
         resource = _coerce_str(item.get("resource") or item.get("url") or item.get("pattern"))
         if not resource:
             continue
-        tools_raw = item.get("tools") or item.get("allowed_tools") or item.get("actions")
+        tools_raw = (
+            item.get("tools")
+            or item.get("operations")
+            or item.get("allowed_tools")
+            or item.get("actions")
+        )
         if isinstance(tools_raw, Mapping):
             tools = tuple(
                 tool
@@ -335,6 +353,7 @@ def _parse_resources(raw: Any) -> tuple[OAuthDelegatedResourceConfig, ...]:
                 label=_coerce_str(item.get("label")) or "",
                 identity_scope=normalize_delegated_identity_scope(item.get("identity_scope")),
                 named_services=named_services,
+                admin_only=_coerce_bool(item.get("admin_only") or item.get("adminOnly"), default=False),
             )
         )
     return tuple(out)

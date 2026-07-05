@@ -109,8 +109,11 @@ from kdcube_ai_app.infra.plugin.bundle_loader import (
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.surface_guard import (
     authorize_delegated_mcp_request,
+    authorize_delegated_rest_request,
     delegated_mcp_runtime_projection,
+    delegated_rest_runtime_projection,
     mcp_auth_mode,
+    rest_auth_mode,
 )
 from kdcube_ai_app.infra.secrets import (
     SecretsManagerError,
@@ -3043,7 +3046,7 @@ async def call_bundle_op(
         bundle_id: str,
         operation: str,
         request: Request,
-        session: UserSession = Depends(require_auth(RequireUser())),
+        session: UserSession = Depends(auth_without_pressure()),
 ):
     """
     Load (or reuse singleton) bundle instance and call its operation (e.g. suggestions()).
@@ -3069,7 +3072,7 @@ async def call_bundle_op_default(
         project: str,
         operation: str,
         request: Request,
-        session: UserSession = Depends(require_auth(RequireUser())),
+        session: UserSession = Depends(auth_without_pressure()),
 ):
     payload, uploaded_files = await _parse_bundle_request_payload(request)
     return await _call_bundle_op_limited(
@@ -3989,6 +3992,15 @@ def _build_public_api_request_session(request: Request) -> UserSession:
     return _build_mcp_request_session(request)
 
 
+def _ensure_operations_session_authorized(session: UserSession) -> None:
+    user_type = getattr(session, "user_type", None)
+    user_type_value = getattr(user_type, "value", user_type)
+    if str(user_type_value or "").lower() == UserType.ANONYMOUS.value:
+        raise HTTPException(status_code=401, detail="User is required.")
+    if not getattr(session, "roles", None):
+        raise HTTPException(status_code=403, detail="User has no roles assigned.")
+
+
 def _apply_delegated_mcp_runtime_projection(
     *,
     request: Request,
@@ -4035,6 +4047,62 @@ def _apply_delegated_mcp_runtime_projection(
         getattr(getattr(comm_context, "actor", None), "project_id", None) or "",
         bundle_id,
         endpoint_alias,
+        user_id,
+        user_type,
+        projection.get("delegate_identity") or "",
+        projection.get("grantor_user_id") or "",
+        identity_authority.get("authority_id") or identity_authority.get("issuer_authority_id") or "",
+        projection.get("grants") or [],
+        projection.get("identity_scope") or "",
+    )
+
+
+def _apply_delegated_rest_runtime_projection(
+    *,
+    request: Request,
+    session: UserSession,
+    comm_context: ExternalEventPayload,
+    bundle_id: str,
+    operation: str,
+) -> None:
+    projection = delegated_rest_runtime_projection(request)
+    if not projection:
+        return
+
+    user_id = str(projection.get("user_id") or "").strip()
+    identity_authority = projection.get("identity_authority")
+    if not user_id or not isinstance(identity_authority, Mapping):
+        return
+
+    roles = [str(item) for item in (projection.get("roles") or []) if str(item).strip()]
+    permissions = [str(item) for item in (projection.get("permissions") or []) if str(item).strip()]
+    username = str(projection.get("username") or projection.get("delegate_identity") or "").strip() or None
+    user_type = str(projection.get("user_type") or UserType.EXTERNAL.value).strip() or UserType.EXTERNAL.value
+
+    session.user_id = user_id
+    session.username = username
+    session.user_type = UserType.EXTERNAL
+    session.roles = roles
+    session.permissions = permissions
+    session.identity_authority = dict(identity_authority)
+
+    user = getattr(comm_context, "user", None)
+    if user is None:
+        comm_context.user = ExternalEventUser(user_type=user_type, user_id=user_id)
+        user = comm_context.user
+    user.user_id = user_id
+    user.username = username
+    user.user_type = user_type
+    user.roles = roles
+    user.permissions = permissions
+    user.identity_authority = dict(identity_authority)
+
+    logger.info(
+        "Managed REST runtime projection applied tenant=%s project=%s bundle=%s operation=%s user_id=%s user_type=%s delegate=%s grantor=%s authority=%s grants=%s identity_scope=%s",
+        getattr(getattr(comm_context, "actor", None), "tenant_id", None) or "",
+        getattr(getattr(comm_context, "actor", None), "project_id", None) or "",
+        bundle_id,
+        operation,
         user_id,
         user_type,
         projection.get("delegate_identity") or "",
@@ -4334,7 +4402,7 @@ async def call_bundle_op_get(
         bundle_id: str,
         operation: str,
         request: Request,
-        session: UserSession = Depends(require_auth(RequireUser())),
+        session: UserSession = Depends(auth_without_pressure()),
 ):
     payload = BundleSuggestionsRequest()
     return await _call_bundle_op_limited(
@@ -4645,6 +4713,25 @@ async def _call_bundle_op_inner(
         http_method=endpoint_spec.http_method,
         route=endpoint_spec.route,
     )
+    managed_rest_auth = rest_auth_mode(endpoint_auth) == "managed"
+    if managed_rest_auth:
+        denial = await authorize_delegated_rest_request(
+            request=request,
+            auth=endpoint_auth,
+            operation=endpoint_spec.alias,
+            method=request_method,
+        )
+        if denial is not None:
+            return denial
+        _apply_delegated_rest_runtime_projection(
+            request=request,
+            session=session,
+            comm_context=comm_context,
+            bundle_id=spec_resolved.id,
+            operation=endpoint_spec.alias,
+        )
+    elif route == "operations":
+        _ensure_operations_session_authorized(session)
     if not _endpoint_visible(endpoint_spec.user_types, endpoint_spec.roles, session, endpoint_auth):
         raise HTTPException(status_code=403, detail=f"Bundle operation {operation} is not visible to this user")
     _apply_rest_bundle_props_to_workflow(workflow=workflow, props=_props)

@@ -600,6 +600,23 @@ Current implementation:
 - `kdcube-services@1-0` is the current built-in managed MCP example. It exposes
   `conversations` and `named_services` MCP surfaces protected by
   `delegated_client`.
+- Application REST operations can also be protected by managed delegated
+  credentials through `surfaces.as_provider.api...auth`. This is a REST guard,
+  not generic browser/platform auth and not MCP guard reuse. It validates the
+  delegated bearer, resource, grant set, and selected operation, then projects
+  the grantor user into the runtime request context.
+- Platform REST APIs can opt into the same delegated credential model by
+  registering their resource pattern and one operation boundary in Connection
+  Hub's delegated credential resource catalog. The shared request-auth layer
+  validates the delegated bearer before the route handler runs and returns a
+  projected `UserSession` for the approving platform user. This is the
+  "delegated devops automation" shape and is independent of whether the
+  approving user signed in through Cognito or an application-hosted platform
+  authority.
+- Admin-created delegated automation can also use a configured all-resource
+  scope, `resource: "*"`, guarded by `admin_only: true` and the
+  `kdcube:role:super-admin` grant. Platform roles are grants in this authority
+  inventory.
 - `named_services` is the current generic MCP bridge over configured
   named-service namespaces such as `mem`, `task`, and `cnv`. Its MCP server
   advertises instructions to call `named_services_list` first, then inspect

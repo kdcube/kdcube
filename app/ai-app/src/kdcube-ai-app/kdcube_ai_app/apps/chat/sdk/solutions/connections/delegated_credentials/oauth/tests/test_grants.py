@@ -73,7 +73,7 @@ async def test_minter_passes_credential_metadata_to_session_authority():
         ["records:read"],
         authority=authority,
         client_id="claude",
-        tools=["records_export"],
+        operations=["records_export"],
         credential=credential,
         ttl_seconds=3600,
     )
@@ -81,4 +81,4 @@ async def test_minter_passes_credential_metadata_to_session_authority():
     metadata = authority.calls[0]["metadata"]
     assert metadata["credential"] == credential
     assert metadata["delegated_client"]["client_id"] == "claude"
-    assert metadata["delegated_client"]["tools"] == ["records_export"]
+    assert metadata["delegated_client"]["operations"] == ["records_export"]

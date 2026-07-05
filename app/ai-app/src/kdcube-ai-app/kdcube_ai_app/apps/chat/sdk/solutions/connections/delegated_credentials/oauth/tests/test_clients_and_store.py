@@ -113,13 +113,13 @@ async def test_auth_code_consume_returns_bound_payload(store):
         code_challenge=make_s256_challenge("v" * 50),
         sub="google:admin@example.test",
         scopes=["records:read"],
-        tools=["records_export"],
+        operations=["records_export"],
     )
     payload = await store.consume_auth_code(code)
     assert payload["client_id"] == "claude"
     assert payload["sub"] == "google:admin@example.test"
     assert payload["scopes"] == ["records:read"]
-    assert payload["tools"] == ["records_export"]
+    assert payload["operations"] == ["records_export"]
     assert payload["redirect_uri"] == "http://localhost:9999/callback"
 
 
@@ -127,7 +127,7 @@ async def test_auth_code_consume_returns_bound_payload(store):
 async def test_auth_code_is_single_use(store):
     code = await store.create_auth_code(
         client_id="claude", redirect_uri="http://localhost:9999/callback",
-        code_challenge=make_s256_challenge("v" * 50), sub="s", scopes=["records:read"], tools=[],
+        code_challenge=make_s256_challenge("v" * 50), sub="s", scopes=["records:read"], operations=[],
     )
     assert await store.consume_auth_code(code) is not None
     # Second consume must fail — replay protection.

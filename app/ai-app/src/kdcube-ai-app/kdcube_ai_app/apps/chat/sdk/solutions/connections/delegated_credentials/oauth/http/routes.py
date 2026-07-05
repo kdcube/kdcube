@@ -6,8 +6,9 @@
 
 GET renders the consent screen for an authenticated user; POST issues an
 authorization code (on approve) or bounces ``access_denied`` (on deny). The
-consent POST re-validates client/redirect/PKCE — it never trusts the rendered
-hidden fields blindly — and restricts granted tools to those valid for the scope.
+consent POST re-validates client/redirect/PKCE; it never trusts the rendered
+hidden fields blindly. MCP calls still name form entries ``tools``, but issued
+records store them as generic delegated operations.
 """
 from __future__ import annotations
 
@@ -734,7 +735,7 @@ async def authorize_consent(request: Request) -> Response:
         return delegation_denied
 
     valid_tools = {name for name, _, _ in tools_for_scopes(selected_scopes, config=cfg, resource=req.resource)}
-    selected = [t for t in form.getlist("tools") if t in valid_tools]
+    selected_operations = [t for t in form.getlist("tools") if t in valid_tools]
     resource_cfg = cfg.resource_config(req.resource)
     named_services = dict(resource_cfg.named_services or {}) if resource_cfg is not None else {}
     grantor_authority = _grantor_authority(user or {}, scopes=selected_scopes, inventory=inventory)
@@ -745,7 +746,7 @@ async def authorize_consent(request: Request) -> Response:
         code_challenge=req.code_challenge,
         sub=subject,
         scopes=selected_scopes,
-        tools=selected,
+        operations=selected_operations,
         resource=req.resource,
         identity_scope=resource_cfg.identity_scope if resource_cfg is not None else "",
         grantor_authority=grantor_authority,
@@ -772,7 +773,7 @@ def _minter_accepts_authority_kwargs(minter) -> bool:
     params = signature.parameters
     if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values()):
         return True
-    return any(name in params for name in ("client_id", "tools", "credential"))
+    return any(name in params for name in ("client_id", "operations", "credential"))
 
 
 @router.post("/oauth/logout", include_in_schema=False)
@@ -806,7 +807,7 @@ async def _issue_tokens(
     sub,
     scopes,
     client_id,
-    tools,
+    operations,
     resource=None,
     identity_scope="",
     grantor_authority=None,
@@ -823,7 +824,7 @@ async def _issue_tokens(
         grantor_subject=sub,
         client_id=client_id,
         scopes=scopes,
-        tools=tools,
+        operations=operations,
         tenant=tenant,
         project=project,
         resource=resource,
@@ -836,7 +837,7 @@ async def _issue_tokens(
             sub,
             scopes,
             client_id=client_id,
-            tools=tools,
+            operations=operations,
             credential=credential.to_dict(),
         )
     else:
@@ -849,18 +850,18 @@ async def _issue_tokens(
             grantor_subject=sub,
             client_id=client_id,
             scopes=scopes,
-            tools=tools,
+            operations=operations,
             tenant=tenant,
             project=project,
             resource=resource,
             identity_scope=identity_scope,
             expires_in=expires_in,
         )
-    # Bind the consented tool allowlist to THIS access token so /mcp tools/call can
-    # enforce it (the consent screen's per-tool selection is meaningless otherwise).
+    # Bind the consented operation allowlist to THIS access token so managed
+    # guards can enforce it.
     await store.bind_access_grant(
         access_token,
-        tools,
+        operations,
         expires_in,
         credential=credential.to_dict(),
         grantor_authority=dict(grantor_authority or {}),
@@ -869,7 +870,7 @@ async def _issue_tokens(
     )
     if refresh_token is None:
         refresh_token = await store.create_refresh_token(
-            client_id=client_id, sub=sub, scopes=scopes, tools=tools,
+            client_id=client_id, sub=sub, scopes=scopes, operations=operations,
             resource=resource,
             identity_scope=identity_scope,
             credential=credential.to_dict(),
@@ -916,7 +917,7 @@ async def token(request: Request) -> Response:
         return await _issue_tokens(
             request, store,
             sub=payload["sub"], scopes=payload["scopes"], client_id=client_id,
-            tools=payload.get("tools") or [],
+            operations=payload.get("operations") or [],
             resource=payload.get("resource"),
             identity_scope=payload.get("identity_scope") or "",
             grantor_authority=payload.get("grantor_authority") or {},
@@ -938,7 +939,7 @@ async def token(request: Request) -> Response:
         return await _issue_tokens(
             request, store,
             sub=rec["sub"], scopes=rec["scopes"], client_id=rec["client_id"],
-            tools=rec.get("tools") or [],
+            operations=rec.get("operations") or [],
             resource=rec.get("resource"),
             identity_scope=rec.get("identity_scope") or "",
             grantor_authority=rec.get("grantor_authority") or {},

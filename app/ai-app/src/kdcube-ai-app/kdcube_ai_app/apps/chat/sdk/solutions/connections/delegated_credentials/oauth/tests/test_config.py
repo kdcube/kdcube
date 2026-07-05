@@ -252,3 +252,38 @@ def test_delegated_client_resource_collects_nested_named_service_grants():
         "canvas:read",
         "canvas:write",
     )
+
+
+def test_delegated_client_wildcard_resource_does_not_fallback_to_global_tools():
+    app = FastAPI()
+    app.state.oauth_delegated_config = {
+        "enabled": True,
+        "capabilities": [
+            {
+                "grant": "kdcube:role:super-admin",
+                "label": "Use all platform and application APIs",
+                "tools": [
+                    {
+                        "name": "global_admin_tool",
+                        "label": "Global admin tool",
+                    },
+                ],
+            },
+        ],
+        "resources": [
+            {
+                "resource": "*",
+                "label": "All platform and application APIs",
+                "admin_only": True,
+                "grants": ["kdcube:role:super-admin"],
+            },
+        ],
+    }
+
+    cfg = oauth_delegated_config(app)
+    resource_cfg = cfg.resource_config("https://runtime.example.test/api/profile")
+
+    assert resource_cfg is not None
+    assert resource_cfg.admin_only is True
+    assert cfg.supported_scopes("https://runtime.example.test/api/profile") == ("kdcube:role:super-admin",)
+    assert cfg.tools_for_resource("https://runtime.example.test/api/profile") == ()

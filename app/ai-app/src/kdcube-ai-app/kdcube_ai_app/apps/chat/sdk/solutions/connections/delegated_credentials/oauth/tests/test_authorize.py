@@ -445,12 +445,12 @@ def test_consent_approve_issues_code_bound_to_selection(client):
     code = q["code"]
 
     # Inspect the fake Redis directly (sync) to confirm the code is bound to the
-    # consenting user + the selected tool, without re-entering the event loop.
+    # consenting user + the selected operation, without re-entering the event loop.
     import json
     raw = store._r.values[store._key("code", code)]
     payload = json.loads(raw)
     assert payload["sub"] == "google:admin@example.test"
-    assert payload["tools"] == ["records_export"]
+    assert payload["operations"] == ["records_export"]
     assert payload["scopes"] == ["records:read"]
     assert payload["delegation_edges"][0]["authority_id"] == "platform"
     assert payload["delegation_edges"][0]["grants"] == ["records:read"]
@@ -550,7 +550,7 @@ def test_consent_uses_platform_user_id_as_grantor_when_available(client):
     raw = store._r.values[store._key("code", code)]
     payload = json.loads(raw)
     assert payload["sub"] == "a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
-    assert payload["tools"] == ["memory_search"]
+    assert payload["operations"] == ["memory_search"]
     assert payload["scopes"] == ["memories:read"]
     assert payload["delegation_edges"][0]["identity_ref"] == "platform:a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
 

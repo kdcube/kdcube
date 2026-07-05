@@ -4,7 +4,7 @@ title: "Connection Recipes"
 summary: "Short recipes for Connection Hub flows such as creating connection edges from external channels, hosting bundle-backed platform login, using connected identities safely in app features, and delegating KDCube services to external clients."
 status: active
 tags: ["recipes", "connections", "connection-hub", "connection-edges", "external-channel", "delegated-credentials"]
-updated_at: 2026-07-03
+updated_at: 2026-07-05
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/integrations/telegram-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/link-from-external-channel-README.md
@@ -12,6 +12,8 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/platform-authority/host-platform-authority-in-bundle-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/use-connected-identities-in-product-feature-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/protect-bundle-mcp-with-managed-credentials-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/protect-bundle-rest-with-managed-credentials-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/create-delegated-automation-access-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/delegate-kdcube-service-to-external-client-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
 ---
@@ -30,6 +32,8 @@ are intentionally shorter and more task-oriented than the SDK architecture docs.
 | [Host A Platform Authority Flow In A Bundle](platform-authority/host-platform-authority-in-bundle-README.md) | A deployment wants a bundle-owned login UI/flow, such as Google login without Cognito, while Connection Hub owns platform authority registration and policy. |
 | [Use Connected Identities In A Product Feature](use-connected-identities-in-product-feature-README.md) | A product feature stores data by runtime actor, but should read one coherent set across the current user's connected identities. |
 | [Protect Bundle MCP With Managed Credentials](protect-bundle-mcp-with-managed-credentials-README.md) | A bundle exposes MCP tools and wants Connection Hub to manage delegated external-client access with per-tool grants. |
+| [Protect REST With Managed Credentials](protect-bundle-rest-with-managed-credentials-README.md) | An application REST operation or configured platform REST resource should accept delegated bearer tokens with per-operation grants. |
+| [Create Delegated Automation Access](create-delegated-automation-access-README.md) | A signed-in user needs to mint a short-lived bearer token for an automation, including admin-only all-resource access for platform admins. |
 | [Delegate A KDCube Service To An External Client](delegate-kdcube-service-to-external-client-README.md) | A user wants to connect Claude or another external client to a KDCube service with explicit consent and least-privilege tools. |
 
 ## Canonical SDK Docs
