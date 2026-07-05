@@ -5,6 +5,7 @@
 from __future__ import annotations
 import ast
 import asyncio
+import copy
 import hashlib
 import inspect
 import json, os, time, uuid, threading
@@ -38,6 +39,60 @@ _BUNDLE_PROPS_LOCK_KEY_FMT = "bundle:props:write:{tenant}:{project}:{bundle_id}"
 _BUNDLE_PROPS_LOCK_TTL_SECONDS = 30
 _BUNDLE_PROPS_LOCK_WAIT_SECONDS = 10.0
 _log = logging.getLogger(__name__)
+
+# ── per-process descriptor read caches ────────────────────────────────────────
+#
+# The bundle descriptor file (bundles.yaml) is the authority; every read still
+# stat()s it, and any content change (mtime_ns/size) triggers a fresh read +
+# parse in every process. Only the redundant YAML re-parse of an UNCHANGED file
+# is skipped. The cache stores the RAW parsed mapping (secret refs intact) —
+# secret-ref resolution (`_resolve_props_node`) still runs on every read, so
+# resolved secret values are never captured in the cache.
+#
+# Admin mutation paths (save_registry / set_bundle_props / put/patch props) all
+# rewrite the descriptor file through _write_mapping (atomic tmp+rename), which
+# both changes the stat key and explicitly pops this cache.
+_DESCRIPTOR_MAPPING_CACHE: Dict[str, Tuple[Tuple[int, int], Dict[str, Any]]] = {}
+_DESCRIPTOR_MAPPING_CACHE_LOCK = threading.Lock()
+
+# Per-process guard for the Redis write-back done on descriptor reads.
+# Maps redis key -> (descriptor stat key, monotonic ts of last write-back).
+# The write-back is skipped only while the descriptor is unchanged AND the last
+# write-back is younger than the refresh interval; the periodic re-assert
+# self-heals Redis after a flush/restart. Keys carry no TTL in Redis, so the
+# write-back is not a TTL heartbeat (verified: plain SET, no EX).
+_REDIS_WRITEBACK_REFRESH_SECONDS = 60.0
+_REDIS_WRITEBACK_STATE: Dict[str, Tuple[Tuple[int, int], float]] = {}
+_REDIS_WRITEBACK_STATE_LOCK = threading.Lock()
+
+
+def _redis_writeback_due(key: str, state: Optional[Tuple[int, int]]) -> bool:
+    """True when the Redis write-back for `key` should run."""
+    if state is None:
+        return True
+    with _REDIS_WRITEBACK_STATE_LOCK:
+        entry = _REDIS_WRITEBACK_STATE.get(key)
+    if entry is None:
+        return True
+    prev_state, ts = entry
+    if prev_state != state:
+        return True
+    return (time.monotonic() - ts) >= _REDIS_WRITEBACK_REFRESH_SECONDS
+
+
+def _record_redis_writeback(key: str, state: Optional[Tuple[int, int]]) -> None:
+    if state is None:
+        return
+    with _REDIS_WRITEBACK_STATE_LOCK:
+        _REDIS_WRITEBACK_STATE[key] = (state, time.monotonic())
+
+
+def clear_descriptor_read_caches() -> None:
+    """Drop per-process descriptor read caches (tests / explicit admin reset)."""
+    with _DESCRIPTOR_MAPPING_CACHE_LOCK:
+        _DESCRIPTOR_MAPPING_CACHE.clear()
+    with _REDIS_WRITEBACK_STATE_LOCK:
+        _REDIS_WRITEBACK_STATE.clear()
 
 
 def _admin_bundle_entry() -> "BundleEntry":
@@ -267,14 +322,77 @@ def cleanup_old_shared_example_bundles(
         _log.info("Cleaned %s old shared example bundle dirs for %s", removed, bundle_id)
     return removed
 
+# Example bundles are baked into the image, so the expensive share pass
+# (content hash + EFS lock/fsync + shared-root readdir) is memoized per
+# process, keyed by a cheap stat signature of the SOURCE directory. The
+# signature (relpath, size, mtime_ns of every file; no content reads, no EFS
+# access) detects any source change, so anything that mutates the source
+# mid-process still triggers a full re-share — the memo only ever skips work
+# for a provably unchanged source. Only SUCCESSFUL shares are memoized (the
+# exception fallback is retried on the next call), and a hit is re-validated
+# with one entrypoint stat so an out-of-band cleanup of the shared copy
+# self-heals instead of pinning a dangling path. Admin/runtime mutations never
+# rewrite the shared code copy in place (bundle props/refs live in the
+# descriptor file), so no other invalidation channel is needed.
+_EXAMPLE_SHARE_CACHE: Dict[str, Tuple[Tuple, Path]] = {}
+_EXAMPLE_SHARE_CACHE_LOCK = threading.Lock()
+
+
+def clear_example_share_cache() -> None:
+    with _EXAMPLE_SHARE_CACHE_LOCK:
+        _EXAMPLE_SHARE_CACHE.clear()
+
+
+def _dir_stat_signature(root: Path) -> Tuple:
+    """Stat-only change signature of a directory tree (no content reads)."""
+    entries = []
+    for p in sorted(root.rglob("*")):
+        try:
+            if not p.is_file():
+                continue
+            st = p.stat()
+        except OSError:
+            continue
+        entries.append((str(p.relative_to(root)), st.st_size, st.st_mtime_ns))
+    return tuple(entries)
+
+
 def _ensure_example_bundle_shared(bundle_root: Path) -> Path:
     """
     If running in Docker, copy example bundles from the image into the shared
     managed bundles root so sibling containers can mount them.
+
+    The resolved shared path is memoized per process keyed by a stat signature
+    of the source dir; the first call (and any source change) does the real
+    hashing/locking work.
     """
     if not _is_running_in_docker():
         return bundle_root
 
+    cache_key = str(bundle_root)
+    signature = _dir_stat_signature(bundle_root)
+    with _EXAMPLE_SHARE_CACHE_LOCK:
+        cached = _EXAMPLE_SHARE_CACHE.get(cache_key)
+    if cached is not None and cached[0] == signature:
+        cached_path = cached[1]
+        try:
+            if (cached_path / "entrypoint.py").exists():
+                return cached_path
+        except OSError:
+            pass
+        with _EXAMPLE_SHARE_CACHE_LOCK:
+            _EXAMPLE_SHARE_CACHE.pop(cache_key, None)
+
+    shared = _share_example_bundle(bundle_root)
+    if shared is not None:
+        with _EXAMPLE_SHARE_CACHE_LOCK:
+            _EXAMPLE_SHARE_CACHE[cache_key] = (signature, shared)
+        return shared
+    return bundle_root
+
+
+def _share_example_bundle(bundle_root: Path) -> Path | None:
+    """One real share pass; returns the shared path or None on failure."""
     try:
         version = compute_dir_sha256(bundle_root, skip_files=set())
         lock_path = _example_bundle_lock_path(bundle_root.name)
@@ -316,13 +434,27 @@ def _ensure_example_bundle_shared(bundle_root: Path) -> Path:
     except Exception as exc:
         fallback_dest = locals().get("dest_root", bundle_root)
         _log.warning("Failed to copy example bundle to %s: %s", fallback_dest, exc)
-        return bundle_root
+        return None
 
 def _examples_enabled() -> bool:
     return bool(get_settings().PLATFORM.APPLICATIONS.BUNDLES_INCLUDE_EXAMPLES)
 
+# Example entrypoints live in the immutable image; memoize the ast.parse-based
+# BUNDLE_ID discovery per process (it previously ran per registry read).
+_DECLARED_EXAMPLE_ID_CACHE: Dict[str, Optional[str]] = {}
+
+
 def _declared_example_bundle_id(bundle_root: Path) -> Optional[str]:
     entrypoint = bundle_root / "entrypoint.py"
+    cache_key = str(entrypoint)
+    if cache_key in _DECLARED_EXAMPLE_ID_CACHE:
+        return _DECLARED_EXAMPLE_ID_CACHE[cache_key]
+    result = _parse_declared_example_bundle_id(entrypoint)
+    _DECLARED_EXAMPLE_ID_CACHE[cache_key] = result
+    return result
+
+
+def _parse_declared_example_bundle_id(entrypoint: Path) -> Optional[str]:
     try:
         tree = ast.parse(entrypoint.read_text(encoding="utf-8"), filename=str(entrypoint))
     except Exception:
@@ -603,7 +735,13 @@ async def get_bundle_props(
     if store is not None:
         props = store.load_bundle_props(bundle_id)
         props = dict(props or {})
-        await redis.set(key, json.dumps(props, ensure_ascii=False))
+        state = None
+        state_fn = getattr(store, "descriptor_state_key", None)
+        if callable(state_fn):
+            state = state_fn()
+        if _redis_writeback_due(key, state):
+            await redis.set(key, json.dumps(props, ensure_ascii=False))
+            _record_redis_writeback(key, state)
         return props
     raw = await redis.get(key)
     if not raw:
@@ -1224,11 +1362,60 @@ class _FileBundleDescriptorStore:
 
         return _LockCtx(self)
 
+    def _descriptor_local_path(self) -> Path | None:
+        raw = str(self._bundles_yaml_uri or "").strip()
+        if raw.startswith("file://"):
+            raw = raw[len("file://"):]
+        try:
+            path = Path(raw)
+        except Exception:
+            return None
+        return path if path.is_absolute() else None
+
+    def descriptor_state_key(self) -> Tuple[int, int] | None:
+        """(mtime_ns, size) of the descriptor file, or None when unavailable."""
+        path = self._descriptor_local_path()
+        if path is None:
+            return None
+        try:
+            st = path.stat()
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size)
+
     def _load_mapping(self) -> Dict[str, Any]:
-        return _load_yaml_mapping_from_storage(self._bundles_yaml_uri, missing_ok=True)
+        """
+        Load the raw descriptor mapping, reusing the per-process parse cache
+        when the file is unchanged.
+
+        Freshness contract: the file is stat()ed on EVERY call; any change of
+        (mtime_ns, size) forces a fresh read + parse. To handle the race where
+        the file is replaced between stat and read, the file is stat()ed again
+        AFTER the read and the result is cached only when both stats agree —
+        otherwise the (consistent, atomic-rename) content is returned uncached
+        and the next call re-reads.
+        """
+        state_before = self.descriptor_state_key()
+        if state_before is not None:
+            with _DESCRIPTOR_MAPPING_CACHE_LOCK:
+                entry = _DESCRIPTOR_MAPPING_CACHE.get(self._bundles_yaml_uri)
+            if entry is not None and entry[0] == state_before:
+                return copy.deepcopy(entry[1])
+        payload = _load_yaml_mapping_from_storage(self._bundles_yaml_uri, missing_ok=True)
+        if state_before is not None and self.descriptor_state_key() == state_before:
+            with _DESCRIPTOR_MAPPING_CACHE_LOCK:
+                _DESCRIPTOR_MAPPING_CACHE[self._bundles_yaml_uri] = (
+                    state_before,
+                    copy.deepcopy(payload),
+                )
+        return payload
 
     def _write_mapping(self, payload: Dict[str, Any]) -> None:
         _write_yaml_mapping_to_storage(self._bundles_yaml_uri, payload)
+        # The rename changes (mtime_ns, size), but pop explicitly for immediate
+        # same-process coherence even on filesystems with coarse timestamps.
+        with _DESCRIPTOR_MAPPING_CACHE_LOCK:
+            _DESCRIPTOR_MAPPING_CACHE.pop(self._bundles_yaml_uri, None)
 
     def _bundle_items(self, payload: Dict[str, Any]) -> list[dict[str, Any]]:
         return _secrets_bundle_descriptor_items(payload)
@@ -1286,10 +1473,15 @@ class _FileBundleDescriptorStore:
     def load_registry_readonly(self) -> tuple["BundlesRegistry", Dict[str, Dict[str, Any]]] | None:
         # Read-only components such as ingress can read the descriptor file
         # without creating a sibling lock file under /config. Writers replace
-        # local descriptor files atomically, so readers see either the old or
-        # the new complete YAML document.
+        # local descriptor files atomically (tmp + rename), so readers see
+        # either the old or the new complete YAML document; a parse error here
+        # is therefore almost certainly transient — retry once before failing.
         with self._lock:
-            return self._registry_from_payload(self._load_mapping())
+            try:
+                return self._registry_from_payload(self._load_mapping())
+            except Exception:
+                time.sleep(0.05)
+                return self._registry_from_payload(self._load_mapping())
 
     def save_registry(
         self,
@@ -1339,7 +1531,11 @@ class _FileBundleDescriptorStore:
             self._write_mapping(payload)
 
     def load_bundle_props(self, bundle_id: str) -> Dict[str, Any]:
-        loaded = self.load_registry()
+        # Read-only path: no descriptor flock. Writers replace the file
+        # atomically, so lock-free reads are consistent (see
+        # load_registry_readonly); this keeps request-path reads off the
+        # (potentially networked) lock file entirely.
+        loaded = self.load_registry_readonly()
         if loaded is None:
             return {}
         _reg, props_map = loaded
@@ -1742,7 +1938,9 @@ async def load_registry(redis, tenant: Optional[str] = None, project: Optional[s
     # authority on every load so proc restarts and descriptor edits cannot
     # revive stale bundle state.
     if _is_live_file_authority(store):
-        loaded = store.load_registry()
+        # Read-only w.r.t. the descriptor file: no flock needed (writers replace
+        # the file atomically; see load_registry_readonly).
+        loaded = store.load_registry_readonly()
         if loaded is None:
             reg = BundlesRegistry()
             props_map: Dict[str, Dict[str, Any]] = {}
@@ -1750,8 +1948,15 @@ async def load_registry(redis, tenant: Optional[str] = None, project: Optional[s
             reg, props_map = loaded
         reg, _ = _merge_example_bundles(reg)
         reg = _ensure_admin_bundle(reg)
-        await redis.set(key, reg.model_dump_json())
-        await _sync_bundle_props_authoritative(redis, tenant=t, project=p, props_map=props_map)
+        # Refresh the Redis runtime cache only when the descriptor changed (or
+        # periodically, to self-heal after a Redis flush). Admin mutation paths
+        # rewrite the descriptor file AND set these keys directly, so a skipped
+        # write-back here never hides an admin update.
+        state = store.descriptor_state_key()
+        if _redis_writeback_due(key, state):
+            await redis.set(key, reg.model_dump_json())
+            await _sync_bundle_props_authoritative(redis, tenant=t, project=p, props_map=props_map)
+            _record_redis_writeback(key, state)
         return reg
 
     raw = await redis.get(key)

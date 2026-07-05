@@ -394,7 +394,13 @@ def _load_yaml_mapping_from_storage(storage_uri: str, *, missing_ok: bool = Fals
         raise SecretsManagerError(f"Failed to read secrets descriptor: {storage_uri}") from exc
 
     try:
-        payload = yaml.safe_load(raw) or {}
+        # Prefer the libyaml-backed loader when available; it is semantically
+        # equivalent to SafeLoader and substantially faster on large documents.
+        c_safe_loader = getattr(yaml, "CSafeLoader", None)
+        if c_safe_loader is not None:
+            payload = yaml.load(raw, Loader=c_safe_loader) or {}
+        else:
+            payload = yaml.safe_load(raw) or {}
     except Exception as exc:
         raise SecretsManagerError(f"Failed to parse secrets YAML: {storage_uri}") from exc
     if not isinstance(payload, dict):

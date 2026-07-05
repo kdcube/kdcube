@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 import os
 from pathlib import Path
@@ -12,6 +13,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
+from kdcube_ai_app.apps.chat.sdk.config_cache import get_plain_cache
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_registry_config import (
     platform_authority_auth_config,
 )
@@ -43,11 +45,22 @@ def _load_assembly_descriptor() -> dict[str, Any]:
     if not path or not path.exists():
         return {}
     try:
-        data = yaml.safe_load(path.read_text())
+        # Mtime/size-keyed parse cache (same pattern as settings.plain): the
+        # file is stat()ed per call, so any descriptor change re-parses; only
+        # the redundant re-parse of an unchanged file is skipped.
+        st = path.stat()
+        data = get_plain_cache(
+            path=str(path),
+            mtime_ns=st.st_mtime_ns,
+            size=st.st_size,
+            dotted_path="__assembly_descriptor__",
+            loader=lambda: yaml.safe_load(path.read_text()),
+        )
     except Exception as exc:
         logger.warning("Failed to load assembly descriptor for frontend config: %s", exc)
         return {}
-    return data if isinstance(data, dict) else {}
+    # Deep-copy: callers may embed/augment this mapping in per-request payloads.
+    return copy.deepcopy(data) if isinstance(data, dict) else {}
 
 
 def _assembly_from_settings(settings: Any) -> dict[str, Any]:
