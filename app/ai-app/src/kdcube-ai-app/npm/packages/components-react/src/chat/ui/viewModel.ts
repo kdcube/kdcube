@@ -20,6 +20,11 @@ export interface ChatViewModel {
   state: ChatState
   ready: boolean
   authed: boolean
+  /** Roles from the server profile; re-probed on each auth change (event-driven). */
+  roles: string[]
+  /** True when the current profile's roles include platform super-admin. Reactive:
+   *  updates when auth changes re-probe `/profile`. */
+  isSuperAdmin: boolean
   bootError: string | null
   hostView: HostView
   bundleId: string

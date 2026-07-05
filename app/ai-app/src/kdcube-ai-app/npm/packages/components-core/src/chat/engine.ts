@@ -160,6 +160,7 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
   let status: ChatEngineStatus = {
     ready: false,
     authed: false,
+    roles: [],
     bootError: null,
     hostView: config.initialHostView ?? 'expanded',
     dryRun: { enabled: false, loading: false, preview: null, error: null },
@@ -663,6 +664,10 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
     sessionId = profile.sessionId
     profileUserId = profile.userId
     dispatch(chatActions.setSessionId(profile.sessionId))
+    // Roles are re-probed on every auth resolution (initial boot + each
+    // host `kdcube-auth-changed` broadcast via refreshAuth), so role-gated UI
+    // stays reactive rather than a one-time mount snapshot.
+    setStatus({ roles: profile.roles })
     const userType = (profile.userType || '').toLowerCase()
     let isAuthed: boolean
     if (userType) {

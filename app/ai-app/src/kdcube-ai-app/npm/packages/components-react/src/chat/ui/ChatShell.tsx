@@ -97,6 +97,7 @@ export function ChatShell({
     bootError,
     setBootError,
     authed,
+    isSuperAdmin,
     hostView,
     kdcubePreview,
     bundleId,
@@ -782,6 +783,11 @@ export function ChatShell({
               </div>
 
               <div className="k-composer-zone border-t border-[var(--line-soft)] px-3 py-3">
+                {/* The ReAct dry-run tooling is a super-admin-only affordance. The
+                    check is reactive: roles are re-probed from /profile on each
+                    host auth-changed broadcast, so this appears/disappears when
+                    auth changes. */}
+                {isSuperAdmin ? (
                 <div className="k-react-preview-toggle">
                   <label>
                     <input
@@ -798,7 +804,8 @@ export function ChatShell({
                     </span>
                   ) : null}
                 </div>
-                {dryRunError || dryRunPreview ? (
+                ) : null}
+                {isSuperAdmin && (dryRunError || dryRunPreview) ? (
                   <section className="k-react-preview-panel" aria-label="ReAct context dry-run preview">
                     <div className="k-react-preview-head">
                       <div>

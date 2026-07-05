@@ -6,6 +6,7 @@
  * or settings-singleton coupling.
  */
 import { createContext, useContext, useMemo, type ReactNode } from 'react'
+import { isSuperAdmin } from '@kdcube/components-core/chat'
 import { useChatEngine, useChatState, useChatStatus } from '../binding.tsx'
 import type { ChatViewModel } from './viewModel.ts'
 
@@ -34,6 +35,8 @@ export function ChatViewModelProvider({ children, kdcubePreview = false }: ChatV
     state,
     ready: status.ready,
     authed: status.authed,
+    roles: status.roles,
+    isSuperAdmin: isSuperAdmin(status.roles),
     bootError: status.bootError,
     hostView: status.hostView,
     bundleId: engine.bundleId,

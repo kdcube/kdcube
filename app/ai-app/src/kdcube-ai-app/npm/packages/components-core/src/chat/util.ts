@@ -7,6 +7,15 @@
  * rendering stay in the view — they are not engine concerns.
  */
 
+/** Canonical platform super-admin role, matching the server profile's `roles`
+ *  entries (e.g. `kdcube:role:super-admin`). */
+export const SUPER_ADMIN_ROLE = 'kdcube:role:super-admin'
+
+/** Whether a roles list grants platform super-admin. */
+export function isSuperAdmin(roles: readonly string[] | null | undefined): boolean {
+  return Array.isArray(roles) && roles.includes(SUPER_ADMIN_ROLE)
+}
+
 export function timestampValue(value?: string): number {
   const parsed = value ? Date.parse(value) : NaN
   return Number.isFinite(parsed) ? parsed : Date.now()

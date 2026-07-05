@@ -23,6 +23,10 @@ export type HostView = 'compact' | 'expanded'
 export interface ChatEngineStatus {
   ready: boolean
   authed: boolean
+  /** Roles from the server profile (e.g. `kdcube:role:super-admin`). Re-probed on
+   *  every auth resolution, so it stays current when the host broadcasts an auth
+   *  change. Empty for anonymous/unauthenticated callers. */
+  roles: string[]
   bootError: string | null
   hostView: HostView
   dryRun: {
