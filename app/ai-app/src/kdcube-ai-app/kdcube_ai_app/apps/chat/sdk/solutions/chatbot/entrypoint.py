@@ -803,7 +803,56 @@ class BaseEntrypoint:
                 "src_path": source_path,
                 "target_path": self._safe_ui_shared_target_path(target),
             })
+        specs = self._with_implicit_ui_shared_sources(specs=specs, bundle_root=bundle_root)
         return specs
+
+    def _with_implicit_ui_shared_sources(
+        self,
+        *,
+        specs: list[Dict[str, Any]],
+        bundle_root: str,
+    ) -> list[Dict[str, Any]]:
+        """Add source-level sibling dependencies for subpackage materialization.
+
+        Some UI apps stage only a package subfolder, for example
+        ``npm://components-core/src/scene`` -> ``_shared/components-core/scene``.
+        The package source may still import sibling source folders such as
+        ``../shared``. Materialize those source siblings next to the requested
+        subfolder so the staged tree has the same relative layout as the package
+        source tree.
+        """
+        out = list(specs)
+        targets = {str(spec["target_path"]).replace("\\", "/") for spec in out}
+
+        def add_implicit(*, base: Dict[str, Any], name: str, source: str, target: pathlib.Path) -> None:
+            target_key = str(target).replace("\\", "/")
+            if target_key in targets:
+                return
+            source_path = self._resolve_ui_shared_source_path(source=source, bundle_root=bundle_root)
+            if not source_path.exists():
+                return
+            out.append({
+                "name": f"{base['name']}:{name}",
+                "source": source,
+                "src_path": source_path,
+                "target_path": target,
+            })
+            targets.add(target_key)
+
+        for spec in specs:
+            source = str(spec.get("source") or "").strip().replace("\\", "/").rstrip("/")
+            if source in {
+                "npm://components-core/src/chat",
+                "npm://components-core/src/canvas",
+                "npm://components-core/src/scene",
+            }:
+                add_implicit(
+                    base=spec,
+                    name="components-core-shared",
+                    source="npm://components-core/src/shared",
+                    target=spec["target_path"].parent / "shared",
+                )
+        return out
 
     def _compute_ui_build_signature(
         self,
