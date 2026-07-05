@@ -589,6 +589,15 @@ code {
   background: #fff;
 }
 
+.resource-option-stack {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+
+.resource-option-stack > span {
+  min-width: 0;
+}
+
 .resource-option input {
   margin-top: 2px;
 }
@@ -612,6 +621,46 @@ code {
   color: var(--text-2);
   line-height: 1.35;
   margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.resource-grants {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 2px;
+}
+
+.grant-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-height: 28px;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.25;
+  cursor: pointer;
+}
+
+.grant-chip:hover {
+  border-color: var(--line-strong);
+  background: var(--surface);
+}
+
+.grant-chip input {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.grant-chip span {
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 
