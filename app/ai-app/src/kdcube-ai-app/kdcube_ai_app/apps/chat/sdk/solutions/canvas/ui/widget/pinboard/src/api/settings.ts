@@ -85,6 +85,13 @@ class Settings {
     namespaceStyles: {} as Record<string, unknown>,
   };
 
+  // Namespace styles arrive asynchronously (bundle fetch, host CONFIG_RESPONSE,
+  // background retry). Subscribers — the React app — re-render cards when a
+  // late payload lands instead of staying colorless until a reload.
+  private stylesListeners = new Set<(styles: Record<string, unknown>) => void>();
+
+  private stylesFetch: Promise<boolean> | null = null;
+
   getBaseUrl(): string {
     if (isPlaceholder(this.values.baseUrl)) return window.location.origin;
     const trimmed = this.values.baseUrl.replace(/\/+$/, '');
@@ -119,6 +126,20 @@ class Settings {
     return { ...this.values.namespaceStyles };
   }
 
+  hasNamespaceStyles(): boolean {
+    return Object.keys(this.values.namespaceStyles).length > 0;
+  }
+
+  subscribeNamespaceStyles(listener: (styles: Record<string, unknown>) => void): () => void {
+    this.stylesListeners.add(listener);
+    return () => { this.stylesListeners.delete(listener); };
+  }
+
+  private notifyNamespaceStyles(): void {
+    const snapshot = this.getNamespaceStyles();
+    this.stylesListeners.forEach((listener) => listener(snapshot));
+  }
+
   private applyRuntimeConfig(config: RuntimeConfigPayload): boolean {
     const tenant = config.defaultTenant || config.tenant || config.tenant_id;
     const project = config.defaultProject || config.project || config.project_id;
@@ -135,6 +156,7 @@ class Settings {
       bundleId: config.defaultAppBundleId || this.values.bundleId,
       namespaceStyles: namespaceStyles || this.values.namespaceStyles,
     };
+    if (namespaceStyles) this.notifyNamespaceStyles();
     return Boolean(tenant || project || config.baseUrl || config.accessToken !== undefined || config.idToken !== undefined || idTokenHeader || config.defaultAppBundleId || namespaceStyles);
   }
 
@@ -166,13 +188,48 @@ class Settings {
     }
   }
 
-  private async loadNamespaceStyles(): Promise<boolean> {
+  /** Single-flight wrapper: concurrent callers share one in-flight fetch. */
+  private loadNamespaceStyles(): Promise<boolean> {
+    if (this.stylesFetch) return this.stylesFetch;
+    this.stylesFetch = this.fetchNamespaceStyles()
+      .catch(() => false)
+      .finally(() => { this.stylesFetch = null; });
+    return this.stylesFetch;
+  }
+
+  /**
+   * Retry ladder for a failed startup fetch. The presentation-config call is
+   * flaky on a deployed runtime (slow dispatch, transient aborts); giving up
+   * after one attempt left the board colorless for the whole session.
+   */
+  private async retryNamespaceStyles(): Promise<void> {
+    for (const delayMs of [1500, 4000]) {
+      await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+      if (this.hasNamespaceStyles()) return;
+      if (await this.loadNamespaceStyles()) return;
+    }
+  }
+
+  /**
+   * Fetch-if-empty, safe to call opportunistically (e.g. on board switch):
+   * no-op once styles are present, deduped while a fetch is in flight.
+   */
+  ensureNamespaceStyles(): void {
+    if (this.hasNamespaceStyles()) return;
+    void this.loadNamespaceStyles();
+  }
+
+  private async fetchNamespaceStyles(): Promise<boolean> {
     const tenant = this.getTenant();
     const project = this.getProject();
     const bundleId = this.getBundleId();
     if (!tenant || !project || !bundleId) return false;
     const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 1200);
+    // The presentation-config call dispatches through the bundle operations
+    // bridge and on a deployed runtime routinely takes well over a second; a
+    // 1.2s abort dropped the styles there and left every pin card colorless
+    // (the chat widget's identical fetch already carries this longer window).
+    const timeout = window.setTimeout(() => controller.abort(), 6000);
     try {
       const alias = 'namespace_presentation_config';
       const response = await fetch(
@@ -200,6 +257,7 @@ class Settings {
       const styles = body.namespace_styles || body.namespaceStyles;
       if (!styles || typeof styles !== 'object') return false;
       this.values = { ...this.values, namespaceStyles: styles };
+      this.notifyNamespaceStyles();
       return true;
     } catch {
       return false;
@@ -208,9 +266,20 @@ class Settings {
     }
   }
 
+  /**
+   * First styles attempt is awaited (boot renders colored when it succeeds);
+   * on failure boot proceeds and retries run in the background, re-coloring
+   * live via the styles subscription.
+   */
+  private bootstrapNamespaceStyles(): Promise<void> {
+    return this.loadNamespaceStyles().then((ok) => {
+      if (!ok && !this.hasNamespaceStyles()) void this.retryNamespaceStyles();
+    });
+  }
+
   setupParentListener(): Promise<boolean> {
     if (!this.needsRuntimeConfig()) {
-      return this.loadNamespaceStyles().then(() => true).catch(() => true);
+      return this.bootstrapNamespaceStyles().then(() => true);
     }
 
     let resolveReady: ((value: boolean) => void) | null = null;
@@ -218,7 +287,7 @@ class Settings {
     const finish = (ready: boolean) => {
       if (resolved) return;
       resolved = true;
-      this.loadNamespaceStyles().catch(() => false).finally(() => resolveReady?.(ready));
+      this.bootstrapNamespaceStyles().finally(() => resolveReady?.(ready));
     };
 
     window.addEventListener('message', (event: MessageEvent) => {

@@ -160,6 +160,17 @@ export default function App() {
   const [activeCanvasName, setActiveCanvasName] = useState('main')
   const [canvases, setCanvases] = useState<CanvasDefinition[]>([emptyCanvasDefinition('main')])
   const [canvasPatchEvent, setCanvasPatchEvent] = useState<CanvasPatchUiEvent | null>(null)
+  // Namespace styles drive pin-card colors and can land late (slow bundle
+  // fetch, background retry, host CONFIG_RESPONSE). Holding them in state —
+  // fed by the settings subscription — re-colors already-rendered cards the
+  // moment they arrive instead of leaving the board colorless until a reload.
+  const [namespaceStyles, setNamespaceStyles] = useState<Record<string, CanvasNamespaceStyle | string>>(
+    () => settings.getNamespaceStyles() as Record<string, CanvasNamespaceStyle | string>,
+  )
+
+  useEffect(() => settings.subscribeNamespaceStyles((styles) => {
+    setNamespaceStyles(styles as Record<string, CanvasNamespaceStyle | string>)
+  }), [])
 
   const activeCanvas = useMemo(
     () => canvases.find((canvas) => canvas.name === activeCanvasName) ?? emptyCanvasDefinition(activeCanvasName),
@@ -293,6 +304,9 @@ export default function App() {
   // omitted-canvas pin (UI drop or agent canvas.pin) lands on it, not "main".
   const handleCanvasChange = useCallback((name: string) => {
     setActiveCanvasName(name)
+    // The startup styles fetch can fail outright (transient abort / network);
+    // a board switch is a natural moment to recover — fetch-if-empty, deduped.
+    settings.ensureNamespaceStyles()
     if (!host) return
     void host.setActiveCanvas(name).catch(() => undefined)
     // Boot only fetched the initial board, so other boards live in `canvases`
@@ -482,7 +496,7 @@ export default function App() {
         onDropIngress={onDropIngress}
         onObjectAction={onObjectAction}
         onSearchPins={onSearchPins}
-        namespaceStyles={settings.getNamespaceStyles() as Record<string, CanvasNamespaceStyle | string>}
+        namespaceStyles={namespaceStyles}
         infoHtml={host?.getBoardInfoHtml() || undefined}
         /* When floated by the scene's window chrome (embedded), the host owns the
          * close/dock control — hide the board's own ✕ so there aren't two. */
