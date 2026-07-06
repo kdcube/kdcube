@@ -749,10 +749,12 @@ class SlackTools:
                 where="slack.upload_slack_file",
             )
         async with httpx.AsyncClient(timeout=120.0) as client:
+            # files.getUploadURLExternal only reads form/query arguments; a JSON
+            # body returns invalid_arguments ("missing required field: length").
             start_response = await client.post(
                 f"{SLACK_API}/files.getUploadURLExternal",
                 headers={"Authorization": f"Bearer {credential.access_token}"},
-                json={"filename": upload_filename, "length": upload_file["size_bytes"]},
+                data={"filename": upload_filename, "length": str(upload_file["size_bytes"])},
             )
             try:
                 start_data = start_response.json()
