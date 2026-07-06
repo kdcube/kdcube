@@ -2414,6 +2414,106 @@ class BaseWorkflow():
             intros=intros,
         )
 
+    async def apply_user_agent_selection(self, tool_config: Any, skill_config: Any) -> tuple:
+        """Narrow the configured tool/skill configs to this user's saved selection.
+
+        The user's per-agent selection (a deny-list stored per user / bundle /
+        agent in ``user_bundle_props``) can only remove entries from what the
+        bundle config grants; system tool groups stay locked on. FAILS OPEN:
+        no row, missing pool, store error — anything — returns the configs
+        unchanged. Also installs the per-turn named-service namespace deny-set
+        so denied namespaces vanish from the roster and from dispatch.
+        """
+        try:
+            from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.client_tools import (
+                set_denied_named_service_namespaces,
+            )
+
+            # Reset any deny-set left over from a previous turn on this task.
+            set_denied_named_service_namespaces(None)
+
+            runtime_ctx = getattr(self, "runtime_ctx", None)
+            user_id = str(getattr(runtime_ctx, "user_id", "") or "").strip()
+            bundle_id = str(getattr(runtime_ctx, "bundle_id", "") or "").strip()
+            agent_id = str(getattr(runtime_ctx, "agent_id", "") or "").strip()
+            tenant = str(getattr(runtime_ctx, "tenant", "") or "").strip()
+            project = str(getattr(runtime_ctx, "project", "") or "").strip()
+            if not user_id or not bundle_id or self.pg_pool is None:
+                return tool_config, skill_config
+
+            from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import (
+                narrow_agent_skill_config,
+                narrow_agent_tool_config,
+                selection_deltas,
+            )
+            from kdcube_ai_app.apps.chat.sdk.runtime.user_selection_store import (
+                UserAgentSelectionStore,
+            )
+
+            store = UserAgentSelectionStore(
+                pg_pool=self.pg_pool,
+                tenant=tenant or "default",
+                project=project or "default",
+            )
+            selection = await store.get_selection(
+                user_id=user_id,
+                bundle_id=bundle_id,
+                agent_id=agent_id,
+            )
+            disabled = (selection or {}).get("disabled") or {}
+            if not disabled:
+                return tool_config, skill_config
+
+            bundle_props = self.bundle_props if isinstance(self.bundle_props, Mapping) else {}
+            narrowed_tools = narrow_agent_tool_config(
+                tool_config,
+                disabled,
+                bundle_props=bundle_props,
+                agent_id=agent_id,
+            )
+            narrowed_skills = narrow_agent_skill_config(
+                skill_config,
+                disabled.get("skills") or [],
+            )
+
+            denied_namespaces = {
+                str(ns or "").strip().lower().rstrip(":")
+                for ns, flag in (disabled.get("named_services") or {}).items()
+                if flag and str(ns or "").strip()
+            }
+            if denied_namespaces:
+                set_denied_named_service_namespaces(denied_namespaces)
+
+            try:
+                self.logger.log(
+                    "[agent_selection.applied] "
+                    + json.dumps(
+                        {
+                            "user_id": user_id,
+                            "bundle_id": bundle_id,
+                            "agent_id": agent_id,
+                            **selection_deltas(disabled),
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                    level="INFO",
+                )
+            except Exception:
+                pass
+            return narrowed_tools, narrowed_skills
+        except Exception:
+            # Fail OPEN: a broken selection store must never silence the agent.
+            try:
+                self.logger.log(
+                    "[agent_selection] load/apply failed; using the configured set\n"
+                    + traceback.format_exc(),
+                    level="WARNING",
+                )
+            except Exception:
+                pass
+            return tool_config, skill_config
+
     def build_react(self,
                     scratchpad: TurnScratchpad,
                     mod_tools_spec: Optional[List[Dict[str, Any]]] = None,

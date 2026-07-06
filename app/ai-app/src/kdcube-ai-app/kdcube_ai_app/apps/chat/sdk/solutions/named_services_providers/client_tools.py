@@ -4,7 +4,8 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Mapping, Sequence
+from contextvars import ContextVar
+from typing import Any, Iterable, Mapping, Sequence
 
 from kdcube_ai_app.apps.chat.sdk.event_identity import normalize_agent_id
 
@@ -12,6 +13,31 @@ from kdcube_ai_app.apps.chat.sdk.event_identity import normalize_agent_id
 NAMED_SERVICE_TOOLS_MODULE = "kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.tools"
 NAMED_SERVICE_TOOLS_ALIAS = "named_services"
 DEFAULT_AGENT_TOOLS_ID = "default_agent"
+
+# Per-turn namespace deny-set (per-user agent selection). Consulted by
+# `named_service_namespaces` and the per-client tools-config lookup so denied
+# namespaces disappear for the turn — from the agent's namespace roster/intros
+# AND from operation dispatch. Set via `set_denied_named_service_namespaces`
+# in BaseWorkflow.apply_user_agent_selection; empty/None means nothing denied.
+_NAMED_SERVICE_NAMESPACE_DENY_CV: ContextVar[frozenset[str] | None] = ContextVar(
+    "kdcube_named_service_namespace_deny", default=None
+)
+
+
+def set_denied_named_service_namespaces(namespaces: Iterable[str] | None) -> None:
+    if not namespaces:
+        _NAMED_SERVICE_NAMESPACE_DENY_CV.set(None)
+        return
+    normalized = frozenset(
+        str(ns or "").strip().lower().rstrip(":")
+        for ns in namespaces
+        if str(ns or "").strip()
+    )
+    _NAMED_SERVICE_NAMESPACE_DENY_CV.set(normalized or None)
+
+
+def denied_named_service_namespaces() -> frozenset[str]:
+    return _NAMED_SERVICE_NAMESPACE_DENY_CV.get() or frozenset()
 
 
 def _get_path(data: Mapping[str, Any] | None, path: str, default: Any = None) -> Any:
@@ -174,6 +200,9 @@ def named_service_namespaces(bundle_props: Mapping[str, Any] | None) -> Mapping[
         if str(resolver.get("kind") or "").strip().lower() != "named_service":
             continue
         _merge_namespace_config(namespaces, str(resolver.get("namespace") or ""), resolver)
+    denied = denied_named_service_namespaces()
+    if denied:
+        namespaces = {ns: cfg for ns, cfg in namespaces.items() if ns not in denied}
     return namespaces
 
 
@@ -290,6 +319,11 @@ def named_service_namespace_client_tools_config(
     namespace: str,
     client_id: Any,
 ) -> Mapping[str, Any]:
+    # The agent-tools lookup below reads connections directly (not through
+    # named_service_namespaces), so the per-turn deny-set must gate here too:
+    # a denied namespace exposes no tool surface for the turn.
+    if _namespace_from_value(namespace) in denied_named_service_namespaces():
+        return {}
     configured = _named_service_namespace_agent_tools_config(
         bundle_props,
         namespace=namespace,

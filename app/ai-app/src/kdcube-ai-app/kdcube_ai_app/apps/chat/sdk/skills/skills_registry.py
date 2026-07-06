@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
 from contextvars import ContextVar
-from typing import Any, Dict, List, Optional, Iterable, Tuple, Set, Literal
+from typing import Any, Dict, List, Optional, Iterable, Sequence, Tuple, Set, Literal
 import fnmatch
 import pathlib
 import logging
@@ -550,6 +550,52 @@ class SkillsSubsystem:
         self._registry_cache = registry
         return registry
 
+    def picker_catalog(
+            self,
+            enabled_patterns: Optional[Sequence[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Concrete, user-pickable skills with front-matter for a selection UI.
+
+        Flattens the configured enabled patterns (e.g. ``public.*``) to the
+        concrete skills they cover; empty/None patterns mean the whole
+        registry. Internal-namespace and hidden-disclosure skills never appear
+        in a picker.
+        """
+        patterns = [str(p or "").strip() for p in (enabled_patterns or []) if str(p or "").strip()]
+
+        def _covered(full_id: str, namespace: str) -> bool:
+            if not patterns:
+                return True
+            for pat in patterns:
+                if pat.endswith(".*"):
+                    if namespace == pat[:-2]:
+                        return True
+                elif "*" in pat:
+                    if fnmatch.fnmatchcase(full_id, pat):
+                        return True
+                elif full_id == pat:
+                    return True
+            return False
+
+        out: List[Dict[str, Any]] = []
+        for spec in self.get_skill_registry().values():
+            namespace = spec.namespace or "public"
+            if namespace == "internal":
+                continue
+            if spec.is_disclosure_hidden():
+                continue
+            full_id = f"{namespace}.{spec.id}" if namespace else spec.id
+            if not _covered(full_id, namespace):
+                continue
+            out.append({
+                "id": full_id,
+                "name": spec.name or spec.id,
+                "description": spec.description or "",
+                "when_to_use": list(spec.when_to_use or []),
+                "namespace": namespace,
+            })
+        return sorted(out, key=lambda s: s["id"])
+
 
 def set_active_skills_subsystem(subsystem: SkillsSubsystem) -> None:
     SKILLS_SUBSYSTEM_CV.set(subsystem)
@@ -669,6 +715,17 @@ def skills_for_consumer(
         cfg = agents_config.get(consumer) or {}
         enabled = cfg.get("enabled")
         disabled = cfg.get("disabled")
+        # The "*" consumer is a catch-all DENY layer (per-user selection uses it
+        # so denials reach consumers without their own config entry). Only its
+        # disabled list merges in; a catch-all can never widen visibility.
+        star_cfg = agents_config.get("*") or {}
+        star_disabled = star_cfg.get("disabled")
+        if star_disabled:
+            merged_disabled = list(disabled or [])
+            for ref in star_disabled:
+                if ref not in merged_disabled:
+                    merged_disabled.append(ref)
+            disabled = merged_disabled
     enabled_set: Optional[Set[str]] = None
     disabled_set: Optional[Set[str]] = None
     enabled_ns: Optional[Set[str]] = None
@@ -695,7 +752,10 @@ def skills_for_consumer(
             resolved = resolve_skill_ref(ref)
             if resolved:
                 enabled_set.add(resolved)
-    elif disabled:
+    # Disabled applies on top of enabled (strictly narrowing): an enabled
+    # pattern may cover many skills, and a per-user denial must still be able
+    # to subtract one of them.
+    if disabled:
         disabled_set = set()
         disabled_ns = _normalize_ns_patterns(disabled)
         disabled_glob = [str(r).strip() for r in disabled if isinstance(r, str) and "*" in r and not r.endswith(".*")]

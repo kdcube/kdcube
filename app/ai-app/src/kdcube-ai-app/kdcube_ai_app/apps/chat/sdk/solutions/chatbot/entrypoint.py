@@ -344,6 +344,134 @@ class BaseEntrypoint:
                 pass
             return {"ok": False, "error": str(exc), "status": 500}
 
+    # -- per-user agent capability selection ----------------------------------
+    # A user narrows the CONFIGURED agent inventory (bundles.yaml is what the
+    # administrator granted); selection is a deny-list stored per (user, REAL
+    # bundle_id, agent) in user_bundle_props (subsystem='agents'). See
+    # runtime/agent_inventory.py + runtime/user_selection_store.py.
+
+    @staticmethod
+    def _agent_selection_payload(data: Optional[Dict[str, Any]], kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {}
+        if isinstance(data, Mapping):
+            nested = data.get("data")
+            source = nested if isinstance(nested, Mapping) else data
+            payload.update({str(k): v for k, v in source.items()})
+        for key, value in kwargs.items():
+            if key not in {"request", "alias", "route", "endpoint_alias"} and value is not None:
+                payload[key] = value
+        return payload
+
+    def _agent_selection_agent_id(self, payload: Mapping[str, Any]) -> str:
+        agent_id = str(payload.get("agent") or payload.get("agent_id") or "").strip()
+        if agent_id:
+            return agent_id
+        default_agent = self.bundle_prop("surfaces.as_consumer.default_agent", "")
+        return str(default_agent or "").strip() or "main"
+
+    def _agent_selection_identity(self) -> Dict[str, str]:
+        identity = self.runtime_identity()
+        bundle_id = str(getattr(getattr(self.config, "ai_bundle_spec", None), "id", "") or "")
+        return {
+            "tenant": identity.get("tenant") or self.settings.TENANT,
+            "project": identity.get("project") or self.settings.PROJECT,
+            "user_id": identity.get("user") or identity.get("fingerprint") or "anonymous",
+            "bundle_id": bundle_id,
+        }
+
+    def _agent_selection_store(self, identity: Mapping[str, str]):
+        from kdcube_ai_app.apps.chat.sdk.runtime.user_selection_store import UserAgentSelectionStore
+
+        if self.pg_pool is None:
+            raise RuntimeError("agent selection requires pg_pool")
+        return UserAgentSelectionStore(
+            pg_pool=self.pg_pool,
+            tenant=str(identity.get("tenant") or "default"),
+            project=str(identity.get("project") or "default"),
+        )
+
+    def _agent_capabilities_catalog(self, agent_id: str) -> Dict[str, Any]:
+        from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import agent_capabilities_catalog
+
+        return agent_capabilities_catalog(
+            self.bundle_props,
+            agent_id,
+            bundle_root=self._bundle_root(),
+        )
+
+    @api(method="POST", alias="agent_capabilities", route="operations", user_types=("registered", "paid", "privileged"))
+    async def agent_capabilities(self, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Dict[str, Any]:
+        """The pickable inventory of one agent + the caller's current selection.
+
+        Body: ``{"data": {"agent": "main"}}`` (agent optional; defaults to the
+        configured ``surfaces.as_consumer.default_agent``).
+        """
+        payload = self._agent_selection_payload(data, kwargs)
+        agent_id = self._agent_selection_agent_id(payload)
+        try:
+            catalog = self._agent_capabilities_catalog(agent_id)
+        except Exception as exc:
+            self.logger.log(f"[agent_capabilities] catalog failed: {traceback.format_exc()}", "ERROR")
+            return {"ok": False, "error": str(exc), "status": 500}
+        selection: Dict[str, Any] = {"schema_version": 1, "disabled": {}}
+        identity = self._agent_selection_identity()
+        try:
+            if self.pg_pool is not None and identity.get("bundle_id"):
+                store = self._agent_selection_store(identity)
+                selection = await store.get_selection(
+                    user_id=identity["user_id"],
+                    bundle_id=identity["bundle_id"],
+                    agent_id=agent_id,
+                )
+        except Exception:
+            # Selection read is best-effort; the inventory is still useful and
+            # the runtime fails open anyway.
+            self.logger.log("[agent_capabilities] selection read failed (fail-open)", "WARNING")
+        return {
+            "ok": True,
+            "agent": agent_id,
+            "capabilities": catalog,
+            "selection": selection,
+        }
+
+    @api(method="POST", alias="agent_selection_update", route="operations", user_types=("registered", "paid", "privileged"))
+    async def agent_selection_update(self, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Dict[str, Any]:
+        """Merge-write partial selection toggles, clamped to the live inventory.
+
+        Body: ``{"data": {"agent": "main", "disabled": {"tools": {"web_tools": true},
+        "mcp": {}, "named_services": {}, "skills": [...]}}}``. Per-key toggles:
+        ``true``/name-list disables, ``false`` re-enables; keys absent from the
+        patch keep their state. ``replace: true`` swaps the whole record.
+        """
+        payload = self._agent_selection_payload(data, kwargs)
+        agent_id = self._agent_selection_agent_id(payload)
+        patch = payload.get("disabled")
+        if not isinstance(patch, Mapping):
+            return {"ok": False, "error": "invalid_patch", "message": "body.data.disabled must be an object"}
+        identity = self._agent_selection_identity()
+        if self.pg_pool is None or not identity.get("bundle_id"):
+            return {"ok": False, "error": "storage_unavailable"}
+        try:
+            catalog = self._agent_capabilities_catalog(agent_id)
+            store = self._agent_selection_store(identity)
+            await store.ensure_schema()
+            selection = await store.set_selection(
+                user_id=identity["user_id"],
+                bundle_id=identity["bundle_id"],
+                agent_id=agent_id,
+                patch=patch,
+                catalog=catalog,
+                replace=bool(payload.get("replace")),
+            )
+        except Exception as exc:
+            self.logger.log(f"[agent_selection_update] failed: {traceback.format_exc()}", "ERROR")
+            return {"ok": False, "error": str(exc), "status": 500}
+        return {
+            "ok": True,
+            "agent": agent_id,
+            "selection": selection,
+        }
+
     async def on_bundle_load(self, **kwargs) -> None:
         """
         Optional one-time hook called when the bundle is first loaded

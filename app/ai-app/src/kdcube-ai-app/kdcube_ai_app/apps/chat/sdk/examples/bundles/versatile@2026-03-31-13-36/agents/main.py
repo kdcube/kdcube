@@ -298,6 +298,16 @@ class VersatileWorkflow(BaseWorkflow):
                     client_id,
                     bundle_root=BUNDLE_ROOT,
                 )
+                skill_config = agent_skill_config_from_bundle_props(
+                    self.bundle_props,
+                    client_id,
+                    bundle_root=BUNDLE_ROOT,
+                )
+                # Narrow the configured inventory to this user's saved per-agent
+                # selection (deny-list; fail-open; system tools immune). Runs
+                # BEFORE the consent preflight so a disabled tool group's
+                # connected-account claims can never prompt for consent.
+                tool_config, skill_config = await self.apply_user_agent_selection(tool_config, skill_config)
                 consent_preflight = await self.preflight_delegated_to_kdcube_tool_claims(tool_config)
                 if consent_preflight:
                     scratchpad.answer = (
@@ -310,11 +320,6 @@ class VersatileWorkflow(BaseWorkflow):
                     }
                     state["short_circuit"] = True
                     return state
-                skill_config = agent_skill_config_from_bundle_props(
-                    self.bundle_props,
-                    client_id,
-                    bundle_root=BUNDLE_ROOT,
-                )
                 additional_instructions = _resolve_react_additional_instructions(
                     self.comm_context,
                     bundle_props=self.bundle_props,
