@@ -1388,6 +1388,40 @@ def build_announce_runtime_limit_lines(*, runtime_ctx: Optional[RuntimeCtx]) -> 
     return lines
 
 
+def build_announce_inactive_tools_lines(*, runtime_ctx: Optional[RuntimeCtx]) -> List[str]:
+    """`[INACTIVE TOOLS THIS TURN]` — tools dropped for this turn (e.g. unmet
+    connected-account claims), grouped by provider.
+
+    Lives in ANNOUNCE (the uncached, per-round zone) rather than the static
+    instructions: the set changes the moment the user connects an account or
+    flips a toggle, and the cached system-prompt slice must stay byte-stable.
+    """
+    if runtime_ctx is None:
+        return []
+    groups = getattr(runtime_ctx, "inactive_tools", None)
+    groups = [g for g in groups if isinstance(g, dict)] if isinstance(groups, list) else []
+    if not groups:
+        return []
+    lines = ["[INACTIVE TOOLS THIS TURN]"]
+    for group in groups:
+        label = str(group.get("provider_label") or group.get("provider_id") or "External").strip() or "External"
+        tools = sorted({
+            str(t).rsplit(".", 1)[-1]
+            for t in (group.get("tools") or [])
+            if str(t or "").strip()
+        })
+        tool_list = ", ".join(tools)
+        lines.append(
+            f"  - {label} tools ({tool_list}): the user has no connected {label} account; "
+            f"they can connect one in Connection Hub."
+        )
+    lines.append(
+        "  Work with the remaining tools. When the request needs an inactive tool, say which "
+        "account to connect (named above) instead of attempting the call."
+    )
+    return lines
+
+
 def build_announce_text(
     *,
     iteration: int,
@@ -1478,6 +1512,11 @@ def build_announce_text(
     if show_status_sections and runtime_limit_lines:
         lines.append("")
         lines.extend(runtime_limit_lines)
+
+    inactive_tool_lines = build_announce_inactive_tools_lines(runtime_ctx=runtime_ctx)
+    if show_status_sections and inactive_tool_lines:
+        lines.append("")
+        lines.extend(inactive_tool_lines)
 
     if show_temporal:
         try:

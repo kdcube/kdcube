@@ -74,6 +74,71 @@ def _first_failure(missing: list[dict[str, Any]]) -> dict[str, Any]:
     return {}
 
 
+def _bare_tool_label(tool_name: str) -> str:
+    text = as_str(tool_name)
+    return text.rsplit(".", 1)[-1] if "." in text else text
+
+
+def _provider_label(provider_id: str) -> str:
+    text = as_str(provider_id)
+    return text[:1].upper() + text[1:] if text else "external"
+
+
+def unavailable_tools_by_provider(missing: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Group unmet-claim tool results by provider.
+
+    Returns ``[{provider_id, provider_label, connector_app_id, claims, tools}]``
+    so callers (banner text, agent notice) can name things concretely.
+    """
+    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    for tool_result in missing:
+        if not isinstance(tool_result, dict):
+            continue
+        tool_name = as_str(tool_result.get("tool_name"))
+        failures = tool_result.get("failures")
+        failure_list = [f for f in failures if isinstance(f, dict)] if isinstance(failures, list) else []
+        if not failure_list:
+            # user_required path carries raw policy dicts (connected_accounts).
+            accounts = tool_result.get("connected_accounts")
+            failure_list = [a for a in accounts if isinstance(a, dict)] if isinstance(accounts, list) else [{}]
+        for failure in failure_list:
+            provider_id = as_str(failure.get("provider_id"))
+            connector_app_id = as_str(failure.get("connector_app_id"))
+            key = (provider_id, connector_app_id)
+            group = groups.setdefault(key, {
+                "provider_id": provider_id,
+                "provider_label": _provider_label(provider_id),
+                "connector_app_id": connector_app_id,
+                "claims": [],
+                "tools": [],
+            })
+            claim = as_str(failure.get("claim"))
+            if claim and claim not in group["claims"]:
+                group["claims"].append(claim)
+            for raw_claim in failure.get("claims") if isinstance(failure.get("claims"), list) else []:
+                claim = as_str(raw_claim)
+                if claim and claim not in group["claims"]:
+                    group["claims"].append(claim)
+            if tool_name and tool_name not in group["tools"]:
+                group["tools"].append(tool_name)
+    return list(groups.values())
+
+
+def unavailable_tools_message(missing: list[dict[str, Any]]) -> str:
+    """A user-facing notice that NAMES the provider and affected tools."""
+    parts: list[str] = []
+    for group in unavailable_tools_by_provider(missing):
+        label = group["provider_label"]
+        tools = _clean_list(_bare_tool_label(t) for t in group["tools"])
+        shown = ", ".join(tools[:4]) + (", …" if len(tools) > 4 else "")
+        parts.append(
+            f"{label} tools are inactive ({shown}) — connect your {label} account in Connection Hub to use them."
+        )
+    return " ".join(parts) or (
+        "Some tools are inactive until their account is connected in Connection Hub."
+    )
+
+
 def connected_account_consent_payload(
     *,
     tenant: str,
@@ -101,9 +166,7 @@ def connected_account_consent_payload(
         claims=claims,
         tool_name=tool_name,
     )
-    message = (
-        "Connect the required external account in Connection Hub before this agent can use its configured tools."
-    )
+    message = unavailable_tools_message(missing)
     return {
         "ok": False,
         "schema": PREFLIGHT_SCHEMA,
@@ -184,4 +247,6 @@ __all__ = [
     "PREFLIGHT_SCHEMA",
     "connected_account_consent_payload",
     "preflight_tool_claim_policies",
+    "unavailable_tools_by_provider",
+    "unavailable_tools_message",
 ]

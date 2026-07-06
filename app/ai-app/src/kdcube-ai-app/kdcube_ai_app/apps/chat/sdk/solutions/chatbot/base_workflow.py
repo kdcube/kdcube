@@ -1273,6 +1273,109 @@ class BaseWorkflow():
             return result
         return None
 
+    async def apply_delegated_tool_claims(self, tool_config: Any) -> Any:
+        """Resolve connected-account claims and DROP the tools whose claims are
+        unmet — the turn always proceeds with everything else.
+
+        A missing account narrows the turn's tool set exactly like a
+        user-disabled group (same pure narrower). The affected providers +
+        tools are named in a notice event (informative, with the Connection Hub
+        link) and published on ``runtime_ctx.inactive_tools``, which the ReAct
+        ANNOUNCE composer renders as ``[INACTIVE TOOLS THIS TURN]`` — the
+        per-turn attention zone. The static instructions stay byte-stable
+        across claim-status changes, preserving the cached system-prompt slice.
+        FAILS OPEN: any resolver error keeps the configured set.
+
+        Returns the (possibly narrowed) tool config.
+        """
+        runtime_ctx = getattr(self, "runtime_ctx", None)
+        # Turn-local: always reset so a reused workflow never carries a stale
+        # inactive-tools announce into the next turn.
+        if runtime_ctx is not None:
+            runtime_ctx.inactive_tools = []
+        policies = list(getattr(tool_config, "tool_claim_policies", []) or [])
+        if not policies:
+            return tool_config
+        tenant = str(getattr(runtime_ctx, "tenant", "") or "").strip()
+        project = str(getattr(runtime_ctx, "project", "") or "").strip()
+        user_id = str(getattr(runtime_ctx, "user_id", "") or "").strip()
+        try:
+            from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube import (
+                preflight_tool_claim_policies,
+                unavailable_tools_by_provider,
+                unavailable_tools_message,
+            )
+            from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import (
+                narrow_agent_tool_config,
+            )
+
+            result = await preflight_tool_claim_policies(
+                entrypoint=self,
+                user_id=user_id,
+                policies=policies,
+                tenant=tenant,
+                project=project,
+            )
+        except Exception:
+            self.logger.log(traceback.format_exc(), level="ERROR")
+            return tool_config
+        if result.get("ok") is not False:
+            return tool_config
+
+        missing = result.get("missing") if isinstance(result.get("missing"), list) else []
+        # Deny exactly the claim-bearing tools that failed: `alias.name` denies
+        # one tool, a bare alias (connection-level policy) denies the group.
+        denied_tools: Dict[str, Any] = {}
+        for tool_result in missing:
+            tool_name = str((tool_result or {}).get("tool_name") or "").strip()
+            if not tool_name:
+                continue
+            if "." in tool_name:
+                alias, name = tool_name.split(".", 1)
+                current = denied_tools.get(alias)
+                if current is True:
+                    continue
+                names = list(current) if isinstance(current, list) else []
+                if name not in names:
+                    names.append(name)
+                denied_tools[alias] = names
+            else:
+                denied_tools[tool_name] = True
+        try:
+            narrowed = narrow_agent_tool_config(tool_config, {"tools": denied_tools}) if denied_tools else tool_config
+        except Exception:
+            self.logger.log(traceback.format_exc(), level="ERROR")
+            return tool_config
+
+        providers = unavailable_tools_by_provider(missing)
+        message = unavailable_tools_message(missing)
+        if runtime_ctx is not None:
+            runtime_ctx.inactive_tools = providers
+        try:
+            await self._emit(
+                {
+                    "type": "chat.step",
+                    "agent": "connection-hub",
+                    "step": "delegated_to_kdcube.claims",
+                    "status": "completed",
+                    "title": "Some tools are inactive",
+                    "data": {**result, "blocking": False, "providers": providers},
+                }
+            )
+        except Exception:
+            pass
+        try:
+            self.logger.log(
+                "[delegated_claims.applied] " + json.dumps(
+                    {"denied_tools": denied_tools, "message": message},
+                    ensure_ascii=False, sort_keys=True,
+                ),
+                level="INFO",
+            )
+        except Exception:
+            pass
+        return narrowed
+
     async def _emit_compaction_event(self, *, status: str, payload: Dict[str, Any] | None = None) -> None:
         payload_dict = _to_jsonable(dict(payload or {}))
         status_norm = str(status or payload_dict.get("status") or "update").strip().lower()

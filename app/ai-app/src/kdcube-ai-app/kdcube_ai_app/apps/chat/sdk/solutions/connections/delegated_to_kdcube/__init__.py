@@ -57,6 +57,8 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.prefl
     PREFLIGHT_SCHEMA,
     connected_account_consent_payload,
     preflight_tool_claim_policies,
+    unavailable_tools_by_provider,
+    unavailable_tools_message,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.store import (
     DelegatedToKdcubeStore,
@@ -100,6 +102,8 @@ __all__ = [
     "operations_for_user",
     "peek_state_payload",
     "preflight_tool_claim_policies",
+    "unavailable_tools_by_provider",
+    "unavailable_tools_message",
     "register_adapter",
     "resolve_adapter",
     "sign_state",

@@ -171,6 +171,12 @@ class RuntimeCtx:
     memory_announce_timeout_seconds: float = 1.5
     memory_hotset: List[Dict[str, Any]] = field(default_factory=list)
     memory_hotset_error: Optional[str] = None
+    # Tools inactive for THIS turn, grouped by provider (e.g. unmet
+    # connected-account claims): [{provider_id, provider_label,
+    # connector_app_id, claims, tools}]. Read by the ANNOUNCE composer only —
+    # turn-local by design, so the cached system-prompt slice stays byte-stable
+    # when claim status or user toggles change between turns.
+    inactive_tools: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -235,6 +241,7 @@ class RuntimeCtx:
             "memory_announce_timeout_seconds": float(self.memory_announce_timeout_seconds or 1.5),
             "memory_hotset": copy.deepcopy(self.memory_hotset or []),
             "memory_hotset_error": self.memory_hotset_error,
+            "inactive_tools": copy.deepcopy(self.inactive_tools or []),
         }
 
 

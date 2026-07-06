@@ -305,21 +305,16 @@ class VersatileWorkflow(BaseWorkflow):
                 )
                 # Narrow the configured inventory to this user's saved per-agent
                 # selection (deny-list; fail-open; system tools immune). Runs
-                # BEFORE the consent preflight so a disabled tool group's
-                # connected-account claims can never prompt for consent.
+                # BEFORE the claims check so a disabled tool group's
+                # connected-account claims are never even resolved.
                 tool_config, skill_config = await self.apply_user_agent_selection(tool_config, skill_config)
-                consent_preflight = await self.preflight_delegated_to_kdcube_tool_claims(tool_config)
-                if consent_preflight:
-                    scratchpad.answer = (
-                        "Connect the required external account in Connection Hub, then send your request again."
-                    )
-                    await self.finish_turn(scratchpad, ok=True)
-                    state["result"] = {
-                        "answer": scratchpad.answer,
-                        "suggested_followups": [],
-                    }
-                    state["short_circuit"] = True
-                    return state
+                # Tools whose connected-account claims are unmet DROP from this
+                # turn's tool set — the turn always proceeds with the rest. The
+                # notice event names the provider + affected tools with the
+                # Connection Hub link; the agent sees the same facts in the
+                # ANNOUNCE `[INACTIVE TOOLS THIS TURN]` section (turn-local via
+                # runtime_ctx, so the cached instructions slice stays stable).
+                tool_config = await self.apply_delegated_tool_claims(tool_config)
                 additional_instructions = _resolve_react_additional_instructions(
                     self.comm_context,
                     bundle_props=self.bundle_props,

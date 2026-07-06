@@ -74,7 +74,15 @@ class ConnectedAccountCredential:
     def error_envelope(self, *, where: str) -> dict[str, Any]:
         error = _as_dict(self.error_payload.get("error"))
         consent = _as_dict(self.error_payload.get("consent"))
-        message = _clean(error.get("message")) or "Connect the required external account in Connection Hub."
+        provider = _clean(self.provider_id) or _clean(consent.get("provider_id"))
+        provider_label = (provider[:1].upper() + provider[1:]) if provider else ""
+        tool = _clean(self.tool_name).rsplit(".", 1)[-1]
+        fallback = (
+            f"{provider_label} tools are inactive"
+            + (f" ({tool})" if tool else "")
+            + f" — connect your {provider_label} account in Connection Hub to use them."
+        ) if provider_label else "Connect the account this tool uses in Connection Hub."
+        message = _clean(error.get("message")) or fallback
         action_url = _consent_url(consent)
         action_label = _clean(consent.get("action_label")) or "Open Connection Hub"
         envelope = {
