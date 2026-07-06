@@ -1,5 +1,6 @@
 import { FormEvent, useState } from 'react';
 import { useAppDispatch, useAppSelector } from '../../app/hooks';
+import { PaneGroup } from '../../components/Pane';
 import {
   clearTelegramLinkChallenge,
   createTelegramLinkChallenge,
@@ -42,20 +43,15 @@ export function ConnectionEdgesPanel({ telegramConnectStatus = 'idle' }: Connect
     await dispatch(createTelegramLinkChallenge()).unwrap().catch(() => undefined);
   };
 
-  return (
+  const linkedPane = (
     <section className="card">
       <div className="card-head">
-        <div>
-          <h2>Connection edges</h2>
-          {platformUserId ? <p className="muted">Platform user: <code>{platformUserId}</code></p> : null}
-        </div>
+        <p className="muted" style={{ margin: 0 }}>
+          External identities that may represent this platform user, with
+          explicit delegated grants.
+        </p>
+        {platformUserId ? <span className="badge badge-ok" title={platformUserId}>you</span> : null}
       </div>
-
-      <p className="muted">
-        Record external identities that may represent this platform user, with
-        explicit delegated grants. External provider accounts live under
-        Delegated to KDCube; automation credentials live under Delegated by KDCube.
-      </p>
 
       <div className="proof-link">
         <div>
@@ -130,9 +126,16 @@ export function ConnectionEdgesPanel({ telegramConnectStatus = 'idle' }: Connect
       ) : (
         <p className="muted">No connection edges yet.</p>
       )}
+    </section>
+  );
 
-      <form className="form" onSubmit={submit}>
-        <div className="form-title">Add connection edge</div>
+  const addPane = (
+    <section className="card">
+      <form className="form form-flush" onSubmit={submit}>
+        <p className="muted" style={{ margin: 0 }}>
+          Record an external identity (email, Telegram id, external user id)
+          that may represent this platform user.
+        </p>
         <div className="inline-fields">
           <select className="input input-inline" value={provider} onChange={(event) => setProvider(event.target.value)}>
             {providerOptions.map((option) => (
@@ -157,5 +160,14 @@ export function ConnectionEdgesPanel({ telegramConnectStatus = 'idle' }: Connect
         </button>
       </form>
     </section>
+  );
+
+  return (
+    <PaneGroup
+      panes={[
+        { id: 'edges', title: 'Linked identities', content: linkedPane },
+        { id: 'edge-add', title: 'Add connection edge', content: addPane },
+      ]}
+    />
   );
 }

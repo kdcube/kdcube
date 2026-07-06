@@ -1,6 +1,7 @@
 import { FormEvent, useMemo, useState } from 'react';
 import type { AuthenticatorRow } from '../../api/types';
 import { useAppDispatch, useAppSelector } from '../../app/hooks';
+import { PaneGroup } from '../../components/Pane';
 import { loadAuthenticators, removeAuthenticator, upsertAuthenticator } from './authenticatorsSlice';
 
 const providerOrder = ['telegram', 'slack', 'oidc', 'google', 'webhook', 'api-key'];
@@ -129,22 +130,17 @@ export function AuthenticatorsPanel() {
     [items],
   );
 
-  return (
+  const listPane = (
     <section className="card">
-      <div className="card-head">
-        <div>
-          <h2>Request authenticators</h2>
-          <p className="muted">
-            Configure authenticator modules that can prove an incoming request identity.
-            Secrets are referenced here, but stored through the platform bundle-secret lifecycle.
-          </p>
-        </div>
-      </div>
+      <p className="muted" style={{ margin: 0 }}>
+        Authenticator modules that can prove an incoming request identity.
+        Secrets are referenced here, but stored through the platform
+        bundle-secret lifecycle.
+      </p>
 
       {localError ? <div className="error" role="alert">{localError}</div> : null}
 
-      <div className="auth-grid">
-        <div className="auth-list">
+      <div className="auth-list" style={{ marginTop: 12 }}>
           {rows.length ? rows.map((row) => (
             <div className="auth-row" key={row.authenticator_id}>
               <div>
@@ -181,9 +177,13 @@ export function AuthenticatorsPanel() {
           )) : (
             <p className="muted">No request authenticators configured yet.</p>
           )}
-        </div>
+      </div>
+    </section>
+  );
 
-        <form className="form auth-form" onSubmit={submit}>
+  const formPane = (
+    <section className="card">
+        <form className="form form-flush auth-form" onSubmit={submit}>
           <div className="form-title">{editing ? 'Edit authenticator metadata' : 'Add authenticator metadata'}</div>
           <p className="muted">
             This form writes metadata only. `authority_id` names the identity/grant
@@ -225,7 +225,15 @@ export function AuthenticatorsPanel() {
             ) : null}
           </div>
         </form>
-      </div>
     </section>
+  );
+
+  return (
+    <PaneGroup
+      panes={[
+        { id: 'authenticators', title: 'Request authenticators', content: listPane },
+        { id: 'authenticator-form', title: editing ? 'Edit authenticator' : 'Add authenticator', content: formPane },
+      ]}
+    />
   );
 }

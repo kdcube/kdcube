@@ -31,7 +31,7 @@ export function AppShell({
   children,
 }: AppShellProps) {
   return (
-    <div className="page" data-tab={activeTab}>
+    <div className="page page-viewport" data-tab={activeTab}>
       <div className="page-head">
         <div>
           <p className="eyebrow">Connection Hub</p>

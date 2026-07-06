@@ -1,5 +1,6 @@
 import { FormEvent, useMemo, useState } from 'react';
 import { useAppDispatch, useAppSelector } from '../../app/hooks';
+import { PaneGroup } from '../../components/Pane';
 import {
   clearIssuedDelegatedAccess,
   createDelegatedAccess,
@@ -74,42 +75,16 @@ export function DelegatedAccessPanel() {
     void dispatch(loadDelegatedAccess());
   };
 
-  return (
+  const grantedPane = (
     <section className="card">
       <div className="card-head">
-        <div>
-          <h2>Delegated by KDCube</h2>
-          {platformUserId ? <p className="muted">Platform user: <code>{platformUserId}</code></p> : null}
-        </div>
+        <p className="muted" style={{ margin: 0 }}>
+          Access this user granted to external automations and clients. Revoking
+          a grant stops that automation from calling KDCube.
+        </p>
+        {platformUserId ? <span className="badge badge-ok" title={platformUserId}>you</span> : null}
       </div>
 
-      <p className="muted">
-        Access this user granted to external automations and clients — created
-        here as a token, or approved through an OAuth connect (for example an
-        MCP client). Revoking a grant stops that automation from calling KDCube.
-      </p>
-
-      {issuedToken ? (
-        <div className="issued-token">
-          <div className="issued-token-head">
-            <div>
-              <div className="form-title">New automation credential</div>
-              <p className="muted">Copy this token now. It will not be shown again.</p>
-            </div>
-            <button className="btn btn-ghost" type="button" onClick={() => dispatch(clearIssuedDelegatedAccess())}>
-              Dismiss
-            </button>
-          </div>
-          {issuedAccess ? (
-            <div className="account-sub">
-              {issuedAccess.label || issuedAccess.access_id} · expires {formatDate(issuedAccess.expires_at)}
-            </div>
-          ) : null}
-          <textarea className="token-output" readOnly value={issuedHeader || `Bearer ${issuedToken}`} />
-        </div>
-      ) : null}
-
-      <div className="form-title">Granted access</div>
       {items.length ? (
         <ul className="accounts">
           {items.map((item) => (
@@ -142,13 +117,36 @@ export function DelegatedAccessPanel() {
         </ul>
       ) : (
         <p className="muted">
-          Nothing granted yet. Access appears here when you create a token below
-          or approve an external client's OAuth connect.
+          Nothing granted yet. Access appears here when you create an automation
+          token or approve an external client's OAuth connect.
         </p>
       )}
+    </section>
+  );
 
-      <form className="form" onSubmit={submit}>
-        <div className="form-title">Create automation access</div>
+  const createPane = (
+    <section className="card">
+      {issuedToken ? (
+        <div className="issued-token">
+          <div className="issued-token-head">
+            <div>
+              <div className="form-title">New automation credential</div>
+              <p className="muted">Copy this token now. It will not be shown again.</p>
+            </div>
+            <button className="btn btn-ghost" type="button" onClick={() => dispatch(clearIssuedDelegatedAccess())}>
+              Dismiss
+            </button>
+          </div>
+          {issuedAccess ? (
+            <div className="account-sub">
+              {issuedAccess.label || issuedAccess.access_id} · expires {formatDate(issuedAccess.expires_at)}
+            </div>
+          ) : null}
+          <textarea className="token-output" readOnly value={issuedHeader || `Bearer ${issuedToken}`} />
+        </div>
+      ) : null}
+
+      <form className="form form-flush" onSubmit={submit}>
         <input
           className="input"
           value={label}
@@ -210,5 +208,14 @@ export function DelegatedAccessPanel() {
         </button>
       </form>
     </section>
+  );
+
+  return (
+    <PaneGroup
+      panes={[
+        { id: 'granted', title: 'Granted access', content: grantedPane },
+        { id: 'create', title: 'Create automation access', content: createPane },
+      ]}
+    />
   );
 }

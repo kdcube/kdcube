@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { useAppDispatch, useAppSelector } from '../../app/hooks';
 import { AccountRow, type AccountStatusTone } from '../../components/AccountRow';
+import { PaneGroup } from '../../components/Pane';
 import { ConsentPlan, type ConsentPlanAction } from './ConsentPlan';
 import type { DelegatedToKdcubeAccount, DelegatedToKdcubeClaim, DelegatedToKdcubeProvider } from '../../api/types';
 import {
@@ -339,16 +340,13 @@ export function DelegatedToKdcubePanel() {
     );
   }
 
-  return (
+  const existingPane = (
     <section className="card">
       <div className="card-head">
-        <div>
-          <h2>Delegated to KDCube</h2>
-          <p className="muted">
-            External accounts this user allows KDCube applications or automation
-            to use.
-          </p>
-        </div>
+        <p className="muted" style={{ margin: 0 }}>
+          External accounts this user allows KDCube applications or automation
+          to use.
+        </p>
         <span className="badge badge-ok">{providerList.length} providers</span>
       </div>
 
@@ -434,19 +432,22 @@ export function DelegatedToKdcubePanel() {
           );
         })}
       </div>
+    </section>
+  );
 
+  const connectPane = (
+    <section className="card">
       <form
         ref={formRef}
-        className="form"
+        className="form form-flush"
         onSubmit={(event) => {
           event.preventDefault();
           if (!busy) void submit();
         }}
       >
-        <div className="form-title">Connect a new account</div>
-        <p className="muted">
+        <p className="muted" style={{ margin: 0 }}>
           Pick the provider, choose what KDCube may do with the account, then
-          approve. The result appears above as a connected account.
+          approve. The result appears in Connected accounts.
         </p>
         {formNotice ? <p className="notice success">{formNotice}</p> : null}
         <div className="inline-fields">
@@ -528,5 +529,14 @@ export function DelegatedToKdcubePanel() {
         )}
       </form>
     </section>
+  );
+
+  return (
+    <PaneGroup
+      panes={[
+        { id: 'accounts', title: 'Connected accounts', content: existingPane },
+        { id: 'connect', title: 'Connect a new account', content: connectPane },
+      ]}
+    />
   );
 }

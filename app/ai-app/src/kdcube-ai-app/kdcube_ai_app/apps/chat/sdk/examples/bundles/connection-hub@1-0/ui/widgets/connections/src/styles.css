@@ -622,6 +622,13 @@ h2 {
   padding-top: 16px;
 }
 
+/* Form living alone in a pane: the pane bar is its header. */
+.form-flush {
+  margin: 0;
+  border-top: 0;
+  padding-top: 0;
+}
+
 /* Uppercase micro-label, architecture "ROLE / DOCS & GUIDES" style. */
 .form-title {
   font-size: 10.5px;
@@ -1031,4 +1038,163 @@ code {
   .auth-row {
     flex-direction: column;
   }
+}
+
+/* ─── Pane system: pinned stack, floating windows, viewport-bound ───
+   The page never scrolls; every pane body scrolls internally. */
+.page-viewport {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: 12px;
+}
+
+.page-viewport .pane-group {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.pane-group {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+
+.pane {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: 0 1px 2px rgba(13, 30, 44, 0.04);
+  overflow: hidden;
+}
+
+.pane--floating {
+  position: fixed;
+  box-shadow: var(--shadow);
+  border-color: var(--line-strong);
+}
+
+.pane-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px 7px 12px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--surface-2);
+  user-select: none;
+}
+
+.pane--floating .pane-bar { cursor: grab; }
+.pane--floating .pane-bar:active { cursor: grabbing; }
+
+.pane-title {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pane-title::before {
+  content: '';
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--kind);
+  box-shadow: 0 0 0 3px rgba(var(--kind-rgb), 0.16);
+}
+
+.pane-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.pane-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+.pane-btn:hover {
+  color: var(--ink);
+  background: var(--surface);
+}
+
+.pane-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+}
+
+.pane-splitter {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -8px;
+  height: 8px;
+  cursor: row-resize;
+  z-index: 5;
+}
+
+.pane-splitter:hover::after {
+  content: '';
+  position: absolute;
+  left: 20%;
+  right: 20%;
+  top: 3px;
+  height: 2px;
+  border-radius: 999px;
+  background: rgba(var(--kind-rgb), 0.45);
+}
+
+.pane-grip {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 16px;
+  height: 16px;
+  border: 0;
+  background:
+    linear-gradient(135deg, transparent 52%, var(--muted) 54%, transparent 57%,
+      transparent 68%, var(--muted) 70%, transparent 73%) no-repeat;
+  cursor: nwse-resize;
+  opacity: 0.7;
+}
+
+.pane-grip:hover { opacity: 1; }
+
+/* Cards inside panes lose their own chrome — the pane is the card. */
+.pane-body > .card {
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+  margin: 0;
+  background: transparent;
 }
