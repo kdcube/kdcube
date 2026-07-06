@@ -1002,6 +1002,16 @@ a { color: inherit; }
 }
 .k-composer-attach-pill button:hover { color: var(--ink); }
 
+/* Composer-level banners sit in the same vertical band as the floating turn
+   navigation. Keep their action/dismiss controls out of that reserved rail
+   without moving the navigation controls themselves. */
+.k-composer-banners {
+  padding-right: clamp(56px, 7vw, 88px);
+}
+.k-chat-compact .k-composer-banners {
+  padding-right: 52px;
+}
+
 .k-react-preview-toggle {
   display: flex;
   align-items: center;

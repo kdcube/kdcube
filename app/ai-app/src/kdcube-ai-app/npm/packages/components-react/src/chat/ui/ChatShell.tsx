@@ -847,7 +847,7 @@ export function ChatShell({
                   </section>
                 ) : null}
                 {composerBanners.length > 0 ? (
-                  <div className="pb-2">
+                  <div className="k-composer-banners pb-2">
                     <BannerStrip banners={composerBanners} onDismiss={handleBannerDismiss} />
                   </div>
                 ) : null}
