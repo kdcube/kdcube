@@ -80,6 +80,11 @@ export function ChatViewModelProvider({ children, kdcubePreview = false }: ChatV
       load: engine.loadAgentCapabilities,
       toggle: engine.updateAgentSelection,
     },
+
+    connections: {
+      available: () => engine.hasHostHandler('open-connections'),
+      open: (source?: string) => engine.openConnections(source),
+    },
   }), [engine, state, status, kdcubePreview])
 
   return <ChatViewModelContext.Provider value={vm}>{children}</ChatViewModelContext.Provider>

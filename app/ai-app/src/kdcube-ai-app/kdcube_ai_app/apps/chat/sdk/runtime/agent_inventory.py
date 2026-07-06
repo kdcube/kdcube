@@ -13,7 +13,7 @@ Selection record shape (deny-list; absent key/entry = enabled):
 
     {
       "tools": {"<alias>": true | ["<tool_name>", ...]},
-      "mcp": {"<server_id>": true},
+      "mcp": {"<server_id>": true | ["<tool_name>", ...]},
       "named_services": {"<namespace>": true},
       "skills": ["<namespace>.<skill_id>", ...]
     }
@@ -190,12 +190,20 @@ def agent_capabilities_catalog(
             )
             if not server_id:
                 continue
-            mcp_out.append({
+            allowed = _string_list(connection.get("allowed") or connection.get("tools")) or ["*"]
+            entry: dict[str, Any] = {
                 "server_id": server_id,
                 "alias": alias or f"mcp_{server_id}",
                 "name": _norm(connection.get("name")) or server_id,
-                "tools": _string_list(connection.get("allowed") or connection.get("tools")) or ["*"],
-            })
+                "tools": allowed,
+            }
+            # Concrete configured names give per-tool toggles with no handshake.
+            # Wildcard servers get `tool_entries` best-effort via the cached
+            # runtime listing (enrich_catalog_mcp_tools); absent entries keep
+            # the server-level toggle only.
+            if "*" not in allowed:
+                entry["tool_entries"] = [{"name": name, "description": ""} for name in allowed]
+            mcp_out.append(entry)
             continue
 
         if kind == "named_service":
@@ -238,6 +246,98 @@ def agent_capabilities_catalog(
         "named_services": namespaces_out,
         "skills": skills_out,
     }
+
+
+def _mcp_services_config_from_props(bundle_props: Mapping[str, Any] | None) -> Any:
+    """MCP services config as the runtime resolves it (parity with
+    BaseWorkflow._resolve_mcp_services_config, trimmed to the mapping forms)."""
+    props = bundle_props or {}
+
+    def _get(path: str) -> Any:
+        cur: Any = props
+        for part in path.split("."):
+            if not isinstance(cur, Mapping) or part not in cur:
+                return None
+            cur = cur[part]
+        return cur
+
+    for base in ("surfaces.as_consumer.mcp", "mcp"):
+        raw = _get(f"{base}.services")
+        if isinstance(raw, Mapping) and raw:
+            return dict(raw)
+        if isinstance(raw, str) and raw.strip():
+            return raw
+        block = _get(base)
+        if isinstance(block, Mapping):
+            if isinstance(block.get("mcpServers"), Mapping) and block.get("mcpServers"):
+                return {"mcpServers": dict(block["mcpServers"])}
+            if isinstance(block.get("servers"), Mapping) and block.get("servers"):
+                return {"servers": dict(block["servers"])}
+    raw = _get("mcp_services")
+    if isinstance(raw, Mapping) and raw:
+        return dict(raw)
+    return None
+
+
+async def enrich_catalog_mcp_tools(
+    catalog: dict[str, Any],
+    bundle_props: Mapping[str, Any] | None,
+    *,
+    bundle_id: str = "",
+    timeout_seconds: float = 2.5,
+) -> dict[str, Any]:
+    """Best-effort per-tool listings for wildcard MCP servers (in place).
+
+    Uses the runtime MCP subsystem's redis-cached `list_tools` (a cache hit is
+    a plain read; a miss does one short live listing bounded by
+    ``timeout_seconds``). Any failure leaves the server without
+    ``tool_entries`` — the picker then offers the server-level toggle only.
+    """
+    pending = [
+        entry for entry in catalog.get("mcp") or []
+        if isinstance(entry, dict) and not entry.get("tool_entries")
+    ]
+    if not pending:
+        return catalog
+    try:
+        import asyncio
+
+        from kdcube_ai_app.apps.chat.sdk.runtime.mcp.mcp_tools_subsystem import (
+            MCPToolsSubsystem,
+        )
+
+        services_config = _mcp_services_config_from_props(bundle_props)
+        # One single-server listing per pending entry so results attribute to
+        # their server; each is individually bounded and individually optional.
+        for entry in pending:
+            try:
+                subsystem = MCPToolsSubsystem(
+                    bundle_id=str(bundle_id or "default"),
+                    mcp_tool_specs=[
+                        {"mcp": {"server_id": entry["server_id"], "alias": entry.get("alias"), "tools": ["*"]}}
+                    ],
+                    services_config=services_config,
+                )
+                tools = await asyncio.wait_for(
+                    subsystem.list_tools(),
+                    timeout=max(0.1, timeout_seconds),
+                )
+            except Exception:
+                continue
+            listed = [
+                {
+                    "name": _norm(getattr(tool, "id", "") or getattr(tool, "name", "")),
+                    "description": _first_para(str(getattr(tool, "description", "") or "")),
+                }
+                for tool in tools
+                if _norm(getattr(tool, "id", "") or getattr(tool, "name", ""))
+            ]
+            if listed:
+                entry["tool_entries"] = listed
+    except Exception:
+        # Graceful fallback: server-level toggles only.
+        pass
+    return catalog
 
 
 def _skill_enabled_patterns(skill_config: AgentSkillConfig) -> list[str]:
@@ -309,6 +409,13 @@ def clamp_selection(
             _norm(t.get("name")) for t in (group.get("tools") or []) if _norm(t.get("name"))
         }
     mcp_servers = {_norm(e.get("server_id")) for e in (catalog.get("mcp") or []) if _norm(e.get("server_id"))}
+    mcp_tool_names: dict[str, set[str]] = {
+        _norm(e.get("server_id")): {
+            _norm(t.get("name")) for t in (e.get("tool_entries") or []) if _norm(t.get("name"))
+        }
+        for e in (catalog.get("mcp") or [])
+        if _norm(e.get("server_id"))
+    }
     namespaces = {
         _norm_namespace(e.get("namespace"))
         for e in (catalog.get("named_services") or [])
@@ -335,8 +442,18 @@ def clamp_selection(
     if isinstance(raw_mcp, Mapping):
         for server_id, value in raw_mcp.items():
             server_id = _norm(server_id)
-            if server_id and server_id in mcp_servers and value is True:
+            if not server_id or server_id not in mcp_servers:
+                continue
+            if value is True:
                 out_mcp[server_id] = True
+                continue
+            # Per-tool MCP denial: only names the inventory actually lists
+            # (config allow-list or the cached listing). No known names =>
+            # only the server-level toggle exists.
+            known = mcp_tool_names.get(server_id) or set()
+            names = [n for n in _string_list(value) if n in known]
+            if names:
+                out_mcp[server_id] = names
 
     out_namespaces: dict[str, Any] = {}
     raw_namespaces = disabled.get("named_services")
@@ -381,6 +498,25 @@ def _disabled_tool_maps(disabled: Mapping[str, Any] | None) -> tuple[set[str], d
                 names = set(_string_list(value))
                 if names:
                     per_tool[alias] = names
+    return fully, per_tool
+
+
+def _disabled_mcp_maps(disabled: Mapping[str, Any] | None) -> tuple[set[str], dict[str, set[str]]]:
+    """Split the mcp deny map into fully-denied servers and per-tool denials."""
+    fully: set[str] = set()
+    per_tool: dict[str, set[str]] = {}
+    raw = (disabled or {}).get("mcp")
+    if isinstance(raw, Mapping):
+        for server_id, value in raw.items():
+            server_id = _norm(server_id)
+            if not server_id:
+                continue
+            if value is True:
+                fully.add(server_id)
+            else:
+                names = set(_string_list(value))
+                if names:
+                    per_tool[server_id] = names
     return fully, per_tool
 
 
@@ -482,7 +618,7 @@ def narrow_agent_tool_config(
         return cfg
 
     fully_disabled, per_tool_disabled = _disabled_tool_maps(disabled)
-    denied_servers = _disabled_flag_set(disabled, "mcp")
+    denied_servers, mcp_per_tool_disabled = _disabled_mcp_maps(disabled)
     denied_namespaces = _disabled_flag_set(disabled, "named_services", namespace=True)
 
     removed_aliases: set[str] = set(fully_disabled)
@@ -490,8 +626,12 @@ def narrow_agent_tool_config(
         alias: (list(names) if names is not None else None)
         for alias, names in cfg.allowed_tool_names_by_alias.items()
     }
+    mcp_denied_tool_ids: set[str] = set()
 
-    # MCP: drop denied servers (whole server per D3).
+    # MCP: drop denied servers whole; subtract per-tool denials — from the
+    # spec's concrete allow-list when configured, else via the spec's
+    # `denied_tools` deny-list the MCP subsystem applies after listing (a
+    # wildcard allow stays a wildcard: new server tools default ON).
     new_mcp_specs: list[dict[str, Any]] = []
     for spec in cfg.mcp_tool_specs:
         server_id = _norm(spec.get("server_id"))
@@ -499,7 +639,28 @@ def narrow_agent_tool_config(
         if server_id in denied_servers:
             removed_aliases.add(alias)
             continue
-        new_mcp_specs.append(dict(spec))
+        new_spec = dict(spec)
+        denied_names = mcp_per_tool_disabled.get(server_id) or set()
+        if denied_names:
+            configured = _string_list(new_spec.get("tools"))
+            if configured and "*" not in configured:
+                effective = [name for name in configured if name not in denied_names]
+                if not effective:
+                    removed_aliases.add(alias)
+                    continue
+                new_spec["tools"] = effective
+            else:
+                existing = set(_string_list(new_spec.get("denied_tools")))
+                new_spec["denied_tools"] = sorted(existing | denied_names)
+            current = allowed_map.get(alias)
+            if isinstance(current, list) and "*" not in current:
+                effective = [name for name in current if name not in denied_names]
+                if effective:
+                    allowed_map[alias] = effective
+            for name in denied_names:
+                mcp_denied_tool_ids.add(f"{alias}.{name}")
+                mcp_denied_tool_ids.add(f"mcp.{alias}.{name}")
+        new_mcp_specs.append(new_spec)
 
     # Named service: recompute the tool allowlist over enabled namespaces only.
     ns_aliases = _named_service_aliases(cfg)
@@ -555,7 +716,7 @@ def narrow_agent_tool_config(
     # user turned off.
     denied_tool_ids = {
         f"{alias}.{name}" for alias, names in per_tool_disabled.items() for name in names
-    }
+    } | mcp_denied_tool_ids
     new_tool_runtime = {
         tool_id: mode
         for tool_id, mode in _prune_tool_id_keys(cfg.tool_runtime, removed_aliases).items()
@@ -626,11 +787,17 @@ def selection_deltas(disabled: Mapping[str, Any] | None) -> dict[str, Any]:
     }
 
 
+# Public name for the light per-module tool-doc introspection so app bundles
+# (e.g. user-automation's picker) reuse it instead of re-implementing.
+module_tool_docs = _module_tool_docs
+
 __all__ = [
     "SYSTEM_TOOL_ALIASES",
     "agent_capabilities_catalog",
     "clamp_selection",
+    "enrich_catalog_mcp_tools",
     "is_system_tool_alias",
+    "module_tool_docs",
     "narrow_agent_skill_config",
     "narrow_agent_tool_config",
     "selection_deltas",

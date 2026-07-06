@@ -49,6 +49,11 @@ export interface HostEventMap {
   'context-removed': { ids: string[] }
   /** A user-facing notice from the server (rate limit, funding, economics, tips). */
   'service-notice': { text: string; tone: NoticeTone; kind?: string }
+  /** The user asked to manage connected accounts (Connection Hub). The host
+   *  opens its connections surface (e.g. the connection-hub bundle's
+   *  `connections_settings` widget). Component UI shows the entry point only
+   *  when a handler is registered (`emitter.has('open-connections')`). */
+  'open-connections': { source?: string }
   /** Transport/connection lifecycle changed. Informational. */
   'connection': { status: ConnectionStatus; detail?: string }
   /** The engine finished booting and is ready to use. */
@@ -65,6 +70,9 @@ export interface HostEventEmitter {
   on<E extends HostEventName>(event: E, handler: HostEventHandler<E>): () => void
   off<E extends HostEventName>(event: E, handler: HostEventHandler<E>): void
   emit<E extends HostEventName>(event: E, payload: HostEventMap[E]): void
+  /** True when at least one handler is registered — UI uses this to hide
+   *  entry points the host chose not to wire (e.g. the connections row). */
+  has(event: HostEventName): boolean
 }
 
 /** Minimal typed emitter with no external dependency. */
@@ -94,6 +102,9 @@ export function createHostEventEmitter(): HostEventEmitter {
           /* a misbehaving host handler must not break the engine */
         }
       }
+    },
+    has(event) {
+      return (handlers.get(event)?.size ?? 0) > 0
     },
   }
 }

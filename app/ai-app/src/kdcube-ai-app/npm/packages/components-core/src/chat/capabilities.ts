@@ -34,7 +34,12 @@ export interface AgentCapabilityMcpServer {
   server_id: string
   alias: string
   name: string
+  /** The configured allow-list as-is (may be `["*"]`). */
   tools: string[]
+  /** Concrete per-tool entries when knowable (configured names, or the
+   *  runtime's cached listing). Present => per-tool toggles; absent => the
+   *  server-level toggle only. */
+  tool_entries?: AgentCapabilityToolEntry[]
 }
 
 export interface AgentCapabilityNamespace {
@@ -63,7 +68,7 @@ export interface AgentCapabilitiesInventory {
 /** The saved deny-list. Absent key/entry = enabled (full configured set). */
 export interface AgentSelectionDisabled {
   tools?: Record<string, true | string[]>
-  mcp?: Record<string, true>
+  mcp?: Record<string, true | string[]>
   named_services?: Record<string, true>
   skills?: string[]
 }
@@ -73,7 +78,7 @@ export interface AgentSelectionDisabled {
  *  `skills` is a per-id boolean map. Keys absent from the patch keep state. */
 export interface AgentSelectionPatch {
   tools?: Record<string, boolean | string[]>
-  mcp?: Record<string, boolean>
+  mcp?: Record<string, boolean | string[]>
   named_services?: Record<string, boolean>
   skills?: Record<string, boolean>
 }
@@ -221,6 +226,64 @@ export function toolTogglePatch(
 
 export function isMcpServerDisabled(disabled: AgentSelectionDisabled, serverId: string): boolean {
   return disabled.mcp?.[serverId] === true
+}
+
+export function isMcpToolDisabled(disabled: AgentSelectionDisabled, serverId: string, name: string): boolean {
+  const entry = disabled.mcp?.[serverId]
+  if (entry === true) return true
+  return Array.isArray(entry) && entry.includes(name)
+}
+
+function mcpEntryNames(server: AgentCapabilityMcpServer): string[] {
+  return (server.tool_entries ?? []).map((tool) => tool.name)
+}
+
+/** Tri-state like a python tool group; servers without known tool entries are
+ *  simply on/off. */
+export function mcpServerState(
+  server: AgentCapabilityMcpServer,
+  disabled: AgentSelectionDisabled,
+): ToolGroupToggleState {
+  const entry = disabled.mcp?.[server.server_id]
+  if (!entry) return 'on'
+  if (entry === true) return 'off'
+  const names = mcpEntryNames(server)
+  const offCount = names.filter((name) => entry.includes(name)).length
+  if (offCount === 0) return 'on'
+  return names.length > 0 && offCount >= names.length ? 'off' : 'partial'
+}
+
+export function mcpServerTogglePatch(
+  server: AgentCapabilityMcpServer,
+  disabled: AgentSelectionDisabled,
+): AgentSelectionPatch {
+  return { mcp: { [server.server_id]: mcpServerState(server, disabled) === 'on' } }
+}
+
+/** Toggle ONE MCP tool. Collapses to the whole-server form when the result
+ *  covers everything (`true`) or nothing (`false`). Only meaningful when the
+ *  server has known `tool_entries` (the clamp rejects name-lists otherwise). */
+export function mcpToolTogglePatch(
+  server: AgentCapabilityMcpServer,
+  disabled: AgentSelectionDisabled,
+  toolName: string,
+): AgentSelectionPatch {
+  const names = mcpEntryNames(server)
+  const entry = disabled.mcp?.[server.server_id]
+  let nextOff: string[]
+  if (entry === true) {
+    nextOff = names.filter((name) => name !== toolName)
+  } else {
+    const current = Array.isArray(entry) ? entry.filter((name) => names.includes(name)) : []
+    nextOff = current.includes(toolName)
+      ? current.filter((name) => name !== toolName)
+      : [...current, toolName]
+  }
+  if (nextOff.length === 0) return { mcp: { [server.server_id]: false } }
+  if (names.length > 0 && names.every((name) => nextOff.includes(name))) {
+    return { mcp: { [server.server_id]: true } }
+  }
+  return { mcp: { [server.server_id]: nextOff } }
 }
 
 export function isNamespaceDisabled(disabled: AgentSelectionDisabled, namespace: string): boolean {

@@ -74,4 +74,12 @@ export interface ChatViewModel {
     load: ChatEngine['loadAgentCapabilities']
     toggle: ChatEngine['updateAgentSelection']
   }
+
+  /** Connection-Hub entry point. `available()` reflects whether the host
+   *  registered an `open-connections` handler (checked live, e.g. on menu
+   *  open); `open()` emits the host event. UI hides when unavailable. */
+  connections: {
+    available: () => boolean
+    open: (source?: string) => void
+  }
 }

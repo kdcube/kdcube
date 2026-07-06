@@ -43,7 +43,13 @@ const MOCK_INVENTORY = {
     },
   ],
   mcp: [
-    { server_id: 'knowledge', alias: 'knowledge', name: 'knowledge', tools: ['*'] },
+    {
+      server_id: 'knowledge', alias: 'knowledge', name: 'knowledge', tools: ['*'],
+      tool_entries: [
+        { name: 'kb_search', description: 'Search the knowledge base.' },
+        { name: 'kb_fetch', description: 'Fetch one document.' },
+      ],
+    },
   ],
   named_services: [
     { namespace: 'mem', alias: 'named_services', operations: ['provider.about', 'object.list'], tools: ['provider_about', 'list_objects'] },

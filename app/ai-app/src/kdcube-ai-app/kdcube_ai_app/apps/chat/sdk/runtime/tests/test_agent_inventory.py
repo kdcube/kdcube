@@ -375,3 +375,68 @@ def test_narrow_skill_config_appends_denials_to_all_consumers_and_star():
     # Original is untouched (pure narrowing).
     assert "disabled" not in cfg.agents_config["solver.react.v2.decision.v2.strong"]
     assert "*" not in cfg.agents_config
+
+
+# ── per-tool MCP (Phase 3) ────────────────────────────────────────────────────
+
+
+def _props_mcp_concrete() -> dict:
+    """MCP connection with a concrete allow-list (per-tool toggles, no handshake)."""
+    props = _props()
+    tools = props["surfaces"]["as_consumer"]["agents"]["main"]["tools"]
+    for tool in tools:
+        if tool.get("kind") == "mcp":
+            tool["allowed"] = ["kb_search", "kb_fetch"]
+    return props
+
+
+def test_catalog_concrete_mcp_allowlist_yields_tool_entries():
+    catalog = agent_capabilities_catalog(_props_mcp_concrete(), "main")
+    entry = catalog["mcp"][0]
+    assert entry["tools"] == ["kb_search", "kb_fetch"]
+    assert [t["name"] for t in entry["tool_entries"]] == ["kb_search", "kb_fetch"]
+
+    # Wildcard servers carry no tool_entries until enriched from the cached
+    # runtime listing.
+    wildcard = agent_capabilities_catalog(_props(), "main")["mcp"][0]
+    assert "tool_entries" not in wildcard
+
+
+def test_clamp_mcp_per_tool_names_against_known_entries():
+    catalog = agent_capabilities_catalog(_props_mcp_concrete(), "main")
+    clamped = clamp_selection(
+        {"mcp": {"knowledge": ["kb_fetch", "not_listed"]}},
+        catalog,
+    )
+    assert clamped == {"mcp": {"knowledge": ["kb_fetch"]}}
+
+    # A wildcard server without known names accepts only the whole-server form.
+    wildcard_catalog = agent_capabilities_catalog(_props(), "main")
+    assert clamp_selection({"mcp": {"knowledge": ["kb_fetch"]}}, wildcard_catalog) == {}
+    assert clamp_selection({"mcp": {"knowledge": True}}, wildcard_catalog) == {"mcp": {"knowledge": True}}
+
+
+def test_narrow_mcp_per_tool_concrete_allowlist():
+    props = _props_mcp_concrete()
+    cfg = _tool_cfg(props)
+    narrowed = narrow_agent_tool_config(cfg, {"mcp": {"knowledge": ["kb_fetch"]}})
+    spec = narrowed.mcp_tool_specs[0]
+    assert spec["tools"] == ["kb_search"]
+    assert narrowed.allowed_tool_names_by_alias["knowledge"] == ["kb_search"]
+
+    # Denying every listed tool collapses to the whole-server removal.
+    all_off = narrow_agent_tool_config(cfg, {"mcp": {"knowledge": ["kb_search", "kb_fetch"]}})
+    assert all_off.mcp_tool_specs == []
+    assert "knowledge" not in all_off.allowed_plugins
+
+
+def test_narrow_mcp_per_tool_wildcard_uses_denied_tools():
+    cfg = _tool_cfg(_props())
+    assert _tool_cfg(_props()).mcp_tool_specs[0]["tools"] == ["*"]
+    narrowed = narrow_agent_tool_config(cfg, {"mcp": {"knowledge": ["kb_fetch"]}})
+    spec = narrowed.mcp_tool_specs[0]
+    # Wildcard allow stays a wildcard (new server tools default ON); the
+    # denial rides as the subsystem-applied deny-list.
+    assert spec["tools"] == ["*"]
+    assert spec["denied_tools"] == ["kb_fetch"]
+    assert "knowledge" in narrowed.allowed_plugins

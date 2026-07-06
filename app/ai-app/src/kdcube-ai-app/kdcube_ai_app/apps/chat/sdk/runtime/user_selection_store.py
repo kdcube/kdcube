@@ -10,7 +10,7 @@ One row per (user, REAL bundle_id, agent): ``subsystem='agents'``,
       "schema_version": 1,
       "disabled": {
         "tools": {"<alias>": true | ["<tool_name>", ...]},
-        "mcp": {"<server_id>": true},
+        "mcp": {"<server_id>": true | ["<tool_name>", ...]},
         "named_services": {"<namespace>": true},
         "skills": ["<namespace>.<skill_id>", ...]
       },

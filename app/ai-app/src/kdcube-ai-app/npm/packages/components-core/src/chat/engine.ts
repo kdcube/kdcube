@@ -867,6 +867,12 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
       void loadAgentCapabilities(opts)
     },
     updateAgentSelection,
+    openConnections(source) {
+      emitter.emit('open-connections', { source: source || 'chat' })
+    },
+    hasHostHandler(event) {
+      return emitter.has(event)
+    },
     dispose() {
       disposed = true
       resetTransport()

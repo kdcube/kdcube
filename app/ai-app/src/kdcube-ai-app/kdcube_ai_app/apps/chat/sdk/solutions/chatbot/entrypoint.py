@@ -399,6 +399,27 @@ class BaseEntrypoint:
             bundle_root=self._bundle_root(),
         )
 
+    async def _agent_capabilities_catalog_enriched(self, agent_id: str) -> Dict[str, Any]:
+        """The catalog plus best-effort per-tool MCP listings.
+
+        Wildcard MCP servers get `tool_entries` from the runtime MCP
+        subsystem's cached listing (short timeout; a failure keeps the
+        server-level toggle only)."""
+        from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import enrich_catalog_mcp_tools
+
+        catalog = self._agent_capabilities_catalog(agent_id)
+        bundle_id = str(getattr(getattr(self.config, "ai_bundle_spec", None), "id", "") or "")
+        try:
+            timeout = float(self.bundle_prop("agents.capabilities.mcp_listing_timeout_seconds", 2.5) or 2.5)
+        except Exception:
+            timeout = 2.5
+        return await enrich_catalog_mcp_tools(
+            catalog,
+            self.bundle_props,
+            bundle_id=bundle_id,
+            timeout_seconds=timeout,
+        )
+
     @api(method="POST", alias="agent_capabilities", route="operations", user_types=("registered", "paid", "privileged"))
     async def agent_capabilities(self, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Dict[str, Any]:
         """The pickable inventory of one agent + the caller's current selection.
@@ -409,7 +430,7 @@ class BaseEntrypoint:
         payload = self._agent_selection_payload(data, kwargs)
         agent_id = self._agent_selection_agent_id(payload)
         try:
-            catalog = self._agent_capabilities_catalog(agent_id)
+            catalog = await self._agent_capabilities_catalog_enriched(agent_id)
         except Exception as exc:
             self.logger.log(f"[agent_capabilities] catalog failed: {traceback.format_exc()}", "ERROR")
             return {"ok": False, "error": str(exc), "status": 500}
@@ -452,7 +473,9 @@ class BaseEntrypoint:
         if self.pg_pool is None or not identity.get("bundle_id"):
             return {"ok": False, "error": "storage_unavailable"}
         try:
-            catalog = self._agent_capabilities_catalog(agent_id)
+            # Enriched so per-tool MCP denials clamp against the same listing
+            # the picker showed.
+            catalog = await self._agent_capabilities_catalog_enriched(agent_id)
             store = self._agent_selection_store(identity)
             await store.ensure_schema()
             selection = await store.set_selection(

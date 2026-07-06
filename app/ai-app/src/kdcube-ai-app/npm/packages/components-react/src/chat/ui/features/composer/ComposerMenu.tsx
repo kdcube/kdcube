@@ -21,10 +21,13 @@ import type {
   NamespaceStyleMap,
 } from '@kdcube/components-core/chat'
 import {
-  isMcpServerDisabled,
+  isMcpToolDisabled,
   isNamespaceDisabled,
   isSkillDisabled,
   isToolDisabled,
+  mcpServerState,
+  mcpServerTogglePatch,
+  mcpToolTogglePatch,
   toolGroupState,
   toolGroupTogglePatch,
   toolTogglePatch,
@@ -192,18 +195,39 @@ function ToolGroupsSection({ inventory, disabled, toggle }: CapabilityRowsProps)
 }
 
 function McpSection({ inventory, disabled, toggle }: CapabilityRowsProps) {
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   if (!inventory.mcp.length) return null
   return (
     <div>
       <SectionTitle>MCP servers</SectionTitle>
-      {inventory.mcp.map((server) => (
-        <MenuRow
-          key={server.server_id}
-          label={server.name || server.server_id}
-          checked={isMcpServerDisabled(disabled, server.server_id) ? 'off' : 'on'}
-          onToggle={() => toggle({ mcp: { [server.server_id]: !isMcpServerDisabled(disabled, server.server_id) } })}
-        />
-      ))}
+      {inventory.mcp.map((server) => {
+        const entries = server.tool_entries ?? []
+        const isOpen = Boolean(expanded[server.server_id])
+        return (
+          <div key={server.server_id}>
+            <MenuRow
+              label={server.name || server.server_id}
+              checked={mcpServerState(server, disabled)}
+              onToggle={() => toggle(mcpServerTogglePatch(server, disabled))}
+              expandable={entries.length > 0}
+              expanded={isOpen}
+              onExpand={() => setExpanded((current) => ({ ...current, [server.server_id]: !isOpen }))}
+            />
+            {isOpen
+              ? entries.map((tool) => (
+                  <MenuRow
+                    key={tool.name}
+                    child
+                    label={<code>{tool.name}</code>}
+                    sub={firstLine(tool.description)}
+                    checked={isMcpToolDisabled(disabled, server.server_id, tool.name) ? 'off' : 'on'}
+                    onToggle={() => toggle(mcpToolTogglePatch(server, disabled, tool.name))}
+                  />
+                ))
+              : null}
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -221,6 +245,44 @@ function ServicesSection({ inventory, disabled, toggle, namespaceStyles }: Capab
           onToggle={() => toggle({ named_services: { [entry.namespace]: !isNamespaceDisabled(disabled, entry.namespace) } })}
         />
       ))}
+    </div>
+  )
+}
+
+/** Connection-Hub entry: an ACTION row (opens the host's connections surface),
+ *  the first non-toggle descriptor proving the registry contract. Renders only
+ *  when the host registered an `open-connections` handler. */
+function ConnectorsSection({ vm, close }: ComposerMenuSectionContext) {
+  if (!vm.connections.available()) return null
+  return (
+    <div>
+      <SectionTitle>Connectors</SectionTitle>
+      <div className="k-menu-row">
+        <button
+          type="button"
+          role="menuitem"
+          className="k-menu-row-main"
+          onClick={() => {
+            vm.connections.open('composer-menu')
+            close()
+          }}
+        >
+          <span className="k-menu-row-text">
+            <span className="k-menu-row-label">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ marginRight: 6, verticalAlign: '-2px', display: 'inline' }}>
+                <path d="M12 22v-3M9 8V2M15 8V2M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8z" />
+              </svg>
+              Manage connections…
+            </span>
+            <span className="k-menu-row-sub">Connected accounts for tools like Gmail and Slack</span>
+          </span>
+          <span className="k-menu-row-state">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M9 6l6 6-6 6" />
+            </svg>
+          </span>
+        </button>
+      </div>
     </div>
   )
 }
@@ -251,6 +313,11 @@ function builtInSections(namespaceStyles: NamespaceStyleMap): ComposerMenuSectio
     capabilitySection('tools', 20, ToolGroupsSection),
     capabilitySection('mcp', 30, McpSection),
     capabilitySection('services', 40, ServicesSection),
+    {
+      id: 'connectors',
+      order: 50,
+      render: (ctx) => <ConnectorsSection {...ctx} />,
+    },
   ]
 }
 

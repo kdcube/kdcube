@@ -97,6 +97,45 @@ export function requestAuthRequired(): void {
   }
 }
 
+/**
+ * Ask the host scene to open its connections surface (the Connection-Hub
+ * settings widget). Contract:
+ *
+ *   widget -> host: { type: 'kdcube.surface.command',
+ *                     target_surface: 'connection_hub.settings',
+ *                     action: 'open', widget: '<chat-widget-id>', source }
+ *
+ * Hosts choose to handle it: a scene registers `connection_hub.settings` in
+ * its surface registry (e.g. via `scene.external_panels` config mounting the
+ * connection-hub bundle's `connections_settings` widget). Scenes without the
+ * surface ignore the command. Returns false when there is no parent frame —
+ * the caller (host-bridge) only registers the chat-side entry point when a
+ * parent exists, so the menu row hides in standalone usage.
+ */
+export function requestHostConnectionsOpen(source: string = 'chat'): boolean {
+  try {
+    if (typeof window === 'undefined' || window.parent === window) return false
+    window.parent.postMessage({
+      type: 'kdcube.surface.command',
+      target_surface: 'connection_hub.settings',
+      action: 'open',
+      widget: CHAT_WIDGET_ID,
+      source,
+    }, '*')
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function hasHostConnectionsChannel(): boolean {
+  try {
+    return typeof window !== 'undefined' && window.parent !== window
+  } catch {
+    return false
+  }
+}
+
 export interface HostObjectOpenPayload {
   response: Record<string, unknown>
   source: Record<string, unknown>

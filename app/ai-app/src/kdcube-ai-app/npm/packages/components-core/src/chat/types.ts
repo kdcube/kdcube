@@ -1,4 +1,4 @@
-import type { EngineConfig, HostEventEmitter } from '../shared/index.ts'
+import type { EngineConfig, HostEventEmitter, HostEventName } from '../shared/index.ts'
 import type { AttachedContext, ChatState } from './state.ts'
 import type { ContextChip } from './contextChips.ts'
 import type { ReactContextPreviewResponse, TurnReaction } from './protocol.ts'
@@ -101,6 +101,14 @@ export interface ChatEngine extends Pick<HostEventEmitter, 'on'> {
    *  `agent_selection_update` merge-write (only the changed toggles are sent).
    *  Takes effect from the next message. */
   updateAgentSelection(patch: AgentSelectionPatch): void
+
+  /** Ask the host to open its connections surface (Connection Hub). Emits the
+   *  `open-connections` host event; the host adapter routes it (e.g. a scene
+   *  surface command targeting the connection-hub settings widget). */
+  openConnections(source?: string): void
+  /** True when the host registered a handler for `event`. UI hides entry
+   *  points (like the connections row) the host chose not to wire. */
+  hasHostHandler(event: HostEventName): boolean
 
   /** Tear down transport + timers. */
   dispose(): void

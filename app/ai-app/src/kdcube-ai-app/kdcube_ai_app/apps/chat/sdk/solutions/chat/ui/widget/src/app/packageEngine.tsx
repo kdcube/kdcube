@@ -17,9 +17,11 @@ import {
 import type { EngineConfig } from '@kdcube/components-core'
 import type { AttachContextInput } from '@kdcube/components-core/chat'
 import {
+  hasHostConnectionsChannel,
   recognizeContextMessage,
   recognizeContextRemoval,
   requestAuthRequired,
+  requestHostConnectionsOpen,
   requestHostObjectOpen,
   requestHostView,
 } from '../host.ts'
@@ -186,6 +188,16 @@ function PackageEngineHost({ children }: { children: ReactNode }) {
           }
         } catch { /* best-effort parent sync */ }
       }),
+      /* Connection-Hub entry (composer "+" menu -> the host's connections
+       * surface). Registered only when a parent frame exists: the registered
+       * handler is what makes the menu row visible (`hasHostHandler`), so
+       * standalone usage shows no dead entry. Hosts choose to handle the
+       * posted `connection_hub.settings` surface command (see host.ts). */
+      ...(hasHostConnectionsChannel()
+        ? [engine.on('open-connections', ({ source }) => {
+            requestHostConnectionsOpen(source || 'chat')
+          })]
+        : []),
     ]
     return () => offs.forEach((off) => off())
   }, [engine])

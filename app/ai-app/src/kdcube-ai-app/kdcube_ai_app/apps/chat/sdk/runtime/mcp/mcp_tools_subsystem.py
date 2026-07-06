@@ -36,6 +36,9 @@ class MCPToolSpec:
     server_id: str
     alias: Optional[str] = None
     tools: Optional[List[str]] = None  # None or ["*"] means all
+    # Per-tool deny-list applied AFTER the allow filter (per-user selection can
+    # subtract tools from a wildcard allow without knowing the full listing).
+    denied_tools: Optional[List[str]] = None
 
 
 class MCPAdapterFactory(Protocol):
@@ -88,7 +91,13 @@ def _normalize_mcp_specs(raw_specs: List[Dict[str, Any]]) -> List[MCPToolSpec]:
             tools = spec.get("tools") or spec.get("tool_ids")
         if not server_id:
             continue
-        out.append(MCPToolSpec(server_id=str(server_id), alias=alias, tools=tools))
+        denied_raw = None
+        if isinstance(mcp_block, dict):
+            denied_raw = mcp_block.get("denied_tools") or mcp_block.get("denied")
+        if denied_raw is None:
+            denied_raw = spec.get("denied_tools") or spec.get("denied")
+        denied_tools = [str(t) for t in denied_raw] if isinstance(denied_raw, (list, tuple, set)) else None
+        out.append(MCPToolSpec(server_id=str(server_id), alias=alias, tools=tools, denied_tools=denied_tools))
     return out
 
 
@@ -230,6 +239,9 @@ class MCPToolsSubsystem:
                 continue
             if spec.tools and "*" not in spec.tools:
                 tools = [t for t in tools if t.id in set(spec.tools)]
+            if spec.denied_tools:
+                denied = set(spec.denied_tools)
+                tools = [t for t in tools if t.id not in denied]
             results.extend(tools)
         return results
 
@@ -246,6 +258,9 @@ class MCPToolsSubsystem:
             logger.info("MCP build_tool_entries: server=%s returned %d tools", spec.server_id, len(tools))
             if spec.tools and "*" not in spec.tools:
                 tools = [t for t in tools if t.id in set(spec.tools)]
+            if spec.denied_tools:
+                denied = set(spec.denied_tools)
+                tools = [t for t in tools if t.id not in denied]
             alias = spec.alias or f"mcp_{spec.server_id}"
             for t in tools:
                 params = _params_from_schema(t.params_schema)
