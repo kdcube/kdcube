@@ -130,6 +130,20 @@ class GrantStore:
             return None
         return json.loads(raw)
 
+    async def revoke_refresh_token(self, refresh_token: str) -> bool:
+        token = str(refresh_token or "").strip()
+        if not token:
+            return False
+        return bool(await self._r.delete(self._key("refresh", token)))
+
+    @property
+    def redis(self) -> Any:
+        return self._r
+
+    @property
+    def refresh_ttl(self) -> int:
+        return self._refresh_ttl
+
     # ------------------------------ consent CSRF ------------------------------
 
     async def create_csrf_token(self, sub: str) -> str:
@@ -228,6 +242,12 @@ class GrantStore:
                 "named_services": named_services or {},
             }),
         )
+
+    async def revoke_access_grant(self, access_token: str) -> bool:
+        token = str(access_token or "").strip()
+        if not token:
+            return False
+        return bool(await self._r.delete(self._agrant_key(token)))
 
     async def get_access_grant_record(self, access_token: str) -> Optional[Dict[str, Any]]:
         """Grant metadata bound to ``access_token`` (None if no grant record)."""

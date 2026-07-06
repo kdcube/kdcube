@@ -132,6 +132,10 @@ def _grantor_authority(
     return out
 
 
+ACCESS_SOURCE_MANUAL = "manual"
+ACCESS_SOURCE_OAUTH = "oauth"
+
+
 @dataclass(frozen=True)
 class AutomationAccessRecord:
     access_id: str
@@ -146,6 +150,11 @@ class AutomationAccessRecord:
     created_at: int = 0
     expires_at: int = 0
     last_four: str = ""
+    source: str = ACCESS_SOURCE_MANUAL
+    # OAuth-flow grants keep their live token material so revoke can kill the
+    # refresh token and the current access-grant binding. Never public.
+    refresh_token: str = ""
+    access_token: str = ""
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "AutomationAccessRecord":
@@ -166,6 +175,9 @@ class AutomationAccessRecord:
             created_at=int(value.get("created_at") or 0),
             expires_at=int(value.get("expires_at") or 0),
             last_four=_clean(value.get("last_four")),
+            source=_clean(value.get("source")) or ACCESS_SOURCE_MANUAL,
+            refresh_token=_clean(value.get("refresh_token")),
+            access_token=_clean(value.get("access_token")),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -183,11 +195,16 @@ class AutomationAccessRecord:
             "created_at": self.created_at,
             "expires_at": self.expires_at,
             "last_four": self.last_four,
+            "source": self.source,
+            "refresh_token": self.refresh_token,
+            "access_token": self.access_token,
         }
 
     def to_public_dict(self) -> dict[str, Any]:
         payload = self.to_dict()
         payload.pop("session_id", None)
+        payload.pop("refresh_token", None)
+        payload.pop("access_token", None)
         return {key: value for key, value in payload.items() if value not in ("", [], {})}
 
 
@@ -504,6 +521,64 @@ class AutomationAccessService:
             "authorization_header": f"Bearer {access_token}" if access_token else "",
         }
 
+    async def record_oauth_grant(
+        self,
+        *,
+        grantor_subject: str,
+        client_id: str,
+        client_label: str = "",
+        scopes: Iterable[str] = (),
+        operations: Iterable[str] = (),
+        resource: str = "",
+        identity_scope: str = "",
+        access_token: str = "",
+        refresh_token: str = "",
+    ) -> AutomationAccessRecord | None:
+        """Register (or update) an OAuth-flow delegated grant in the registry.
+
+        Called on every token issuance for an external client (initial consent
+        and refresh rotations), so the user sees the connection in Connection
+        Hub and revoking it invalidates the CURRENT refresh token and access
+        grant. One record per (grantor, client, resource): reconsent updates
+        it instead of piling up rows.
+        """
+        grantor = _clean(grantor_subject)
+        client = _clean(client_id)
+        if not grantor or not client:
+            return None
+        resource_value = _clean(resource)
+        digest = hashlib.sha256(f"{grantor}|{client}|{resource_value}".encode("utf-8")).hexdigest()[:16]
+        access_id = f"oauth-{digest}"
+        now = int(time.time())
+        created_at = now
+        existing_raw = await self._redis.get(self._record_key(access_id))
+        if existing_raw is not None:
+            try:
+                created_at = int(json.loads(existing_raw).get("created_at") or now)
+            except Exception:
+                created_at = now
+        ttl = max(60, int(self._store.refresh_ttl))
+        scope_list = _as_list(list(scopes))
+        record = AutomationAccessRecord(
+            access_id=access_id,
+            label=_clean(client_label) or client,
+            client_id=client,
+            grantor_subject=grantor,
+            delegate_subject=integration_subject(grantor, client_id=client),
+            operations=tuple(_as_list(list(operations))),
+            resource_grants={resource_value or "*": tuple(scope_list)},
+            identity_scope=_clean(identity_scope),
+            created_at=created_at,
+            expires_at=now + ttl,
+            source=ACCESS_SOURCE_OAUTH,
+            refresh_token=_clean(refresh_token),
+            access_token=_clean(access_token),
+        )
+        await self._redis.setex(self._record_key(access_id), ttl, json.dumps(record.to_dict()))
+        await self._redis.sadd(self._index_key(grantor), access_id)
+        await self._redis.expire(self._index_key(grantor), BUNDLE_SESSION_MAX_TTL_SECONDS)
+        return record
+
     async def revoke_access(self, user: Mapping[str, Any], *, access_id: str) -> dict[str, Any]:
         grantor_subject = _subject_from_user(user)
         if not grantor_subject:
@@ -523,10 +598,23 @@ class AutomationAccessService:
 
             authority = self._authority or get_bundle_session_authority(tenant=self._tenant, project=self._project)
             removed_session = bool(await authority.logout(session_id=record.session_id))
+        # OAuth-flow grants: kill the refresh token (no new access tokens) and
+        # the current access-grant binding (managed guards reject the bearer
+        # immediately).
+        refresh_revoked = False
+        if record.refresh_token:
+            refresh_revoked = bool(await self._store.revoke_refresh_token(record.refresh_token))
+        if record.access_token:
+            await self._store.revoke_access_grant(record.access_token)
         await self._redis.delete(self._record_key(access_id_value))
         if hasattr(self._redis, "srem"):
             await self._redis.srem(self._index_key(grantor_subject), access_id_value)
-        return {"ok": True, "removed": True, "session_removed": removed_session}
+        return {
+            "ok": True,
+            "removed": True,
+            "session_removed": removed_session,
+            "refresh_token_revoked": refresh_revoked,
+        }
 
 
 __all__ = [

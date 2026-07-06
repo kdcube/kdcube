@@ -184,7 +184,13 @@ async def test_automation_access_create_list_and_revoke():
     assert json.loads(raw_record)["session_id"] == "session-1"
 
     revoked = await service.revoke_access(user, access_id=created["access"]["access_id"])
-    assert revoked == {"ok": True, "removed": True, "session_removed": True}
+    assert revoked == {
+        "ok": True,
+        "removed": True,
+        "session_removed": True,
+        # Manual tokens carry no OAuth refresh token; only oauth-flow grants do.
+        "refresh_token_revoked": False,
+    }
     assert authority.logged_out == ["session-1"]
     assert await service.list_access(user) == {
         "ok": True,
@@ -338,3 +344,84 @@ async def test_automation_access_can_select_multiple_resources():
         "https://example.test/mcp": ["records:read"],
     }
     assert created["access"]["operations"] == ["records_export"]
+
+
+class _OAuthStore(_Store):
+    def __init__(self) -> None:
+        super().__init__()
+        self.refresh_ttl = 3600 * 24
+        self.revoked_refresh: list[str] = []
+        self.revoked_access: list[str] = []
+
+    async def revoke_refresh_token(self, refresh_token: str) -> bool:
+        self.revoked_refresh.append(refresh_token)
+        return True
+
+    async def revoke_access_grant(self, access_token: str) -> bool:
+        self.revoked_access.append(access_token)
+        return True
+
+
+@pytest.mark.asyncio
+async def test_oauth_grant_registers_lists_and_revokes():
+    """An external client connecting via OAuth becomes a visible, revocable grant."""
+    redis = _Redis()
+    store = _OAuthStore()
+    user = {
+        "sub": "platform-user-1",
+        "roles": ["kdcube:role:registered"],
+        "permissions": [],
+    }
+    service = AutomationAccessService(
+        redis=redis,
+        tenant="demo-tenant",
+        project="demo-project",
+        config=_config(),
+        grant_store=store,
+        authority=_Authority(),
+        minter=_minter,
+    )
+
+    record = await service.record_oauth_grant(
+        grantor_subject="platform-user-1",
+        client_id="dcr-claude",
+        client_label="Claude",
+        scopes=["records:read"],
+        operations=["records_export"],
+        resource="https://example.test/mcp",
+        access_token="kst1.oauth.token",
+        refresh_token="refresh-1",
+    )
+    assert record is not None
+
+    listed = await service.list_access(user)
+    items = listed["items"]
+    assert len(items) == 1
+    assert items[0]["source"] == "oauth"
+    assert items[0]["label"] == "Claude"
+    assert items[0]["resource_grants"] == {"https://example.test/mcp": ["records:read"]}
+    assert "refresh_token" not in items[0]
+    assert "access_token" not in items[0]
+
+    # Reconsent with wider scope updates the SAME row (no pile-up) and keeps created_at.
+    updated = await service.record_oauth_grant(
+        grantor_subject="platform-user-1",
+        client_id="dcr-claude",
+        client_label="Claude",
+        scopes=["records:read", "records:write"],
+        resource="https://example.test/mcp",
+        access_token="kst1.oauth.token2",
+        refresh_token="refresh-2",
+    )
+    assert updated is not None
+    assert updated.access_id == record.access_id
+    assert updated.created_at == record.created_at
+    assert len((await service.list_access(user))["items"]) == 1
+
+    revoked = await service.revoke_access(user, access_id=record.access_id)
+    assert revoked["ok"] is True and revoked["removed"] is True
+    assert revoked["refresh_token_revoked"] is True
+    # The CURRENT tokens die, not the ones rotated away earlier.
+    assert store.revoked_refresh == ["refresh-2"]
+    assert store.revoked_access == ["kst1.oauth.token2"]
+    assert (await service.list_access(user))["items"] == []

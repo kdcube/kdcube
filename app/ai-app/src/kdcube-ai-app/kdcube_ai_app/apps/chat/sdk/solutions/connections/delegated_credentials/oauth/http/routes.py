@@ -878,6 +878,42 @@ async def _issue_tokens(
             delegation_edges=list(delegation_edges or []),
             named_services=dict(named_services or {}),
         )
+    # Register the grant in the user's Connection Hub registry (Delegated by
+    # KDCube tab) so the connection is visible and revocable. Registry write
+    # failures must never fail token issuance.
+    try:
+        from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.automation_access import (
+            AutomationAccessService,
+        )
+
+        client_record = await store.get_client_record(client_id) or {}
+        client_metadata = dict(client_record.get("metadata") or {})
+        client_label = str(
+            client_metadata.get("client_name")
+            or client_metadata.get("name")
+            or client_metadata.get("client_uri")
+            or ""
+        ).strip()
+        service = AutomationAccessService(
+            redis=store.redis,
+            tenant=tenant,
+            project=project,
+            config=oauth_delegated_config(request),
+            grant_store=store,
+        )
+        await service.record_oauth_grant(
+            grantor_subject=sub,
+            client_id=client_id,
+            client_label=client_label,
+            scopes=scopes,
+            operations=operations,
+            resource=str(resource or ""),
+            identity_scope=identity_scope,
+            access_token=access_token,
+            refresh_token=str(refresh_token or ""),
+        )
+    except Exception:
+        LOGGER.exception("[connection-hub.oauth] failed to record delegated grant client=%s", client_id)
     return JSONResponse(
         {
             "access_token": access_token,

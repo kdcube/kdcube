@@ -84,32 +84,10 @@ export function DelegatedAccessPanel() {
       </div>
 
       <p className="muted">
-        Create bounded bearer credentials that KDCube delegates to external
-        automations so they can represent this user on selected KDCube resources.
+        Access this user granted to external automations and clients — created
+        here as a token, or approved through an OAuth connect (for example an
+        MCP client). Revoking a grant stops that automation from calling KDCube.
       </p>
-
-      {resources.length ? (
-        <div className="resource-catalog">
-          <div className="form-title">Resources and grants</div>
-          <p className="muted">
-            Each resource declares the grants that can be delegated for that surface. A credential stores resource-to-grants assignments, not a separate global grant list.
-          </p>
-          <div className="resource-list">
-            {resources.map((item) => (
-              <div className="resource-row" key={item.resource}>
-                <div>
-                  <div className="account-title">
-                    {item.label || item.resource}
-                    {item.admin_only ? <span className="badge badge-admin">admin</span> : null}
-                  </div>
-                  <div className="account-sub">{item.resource}</div>
-                  {item.grants?.length ? <div className="account-sub">Grants: {item.grants.join(', ')}</div> : null}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
 
       {issuedToken ? (
         <div className="issued-token">
@@ -131,6 +109,7 @@ export function DelegatedAccessPanel() {
         </div>
       ) : null}
 
+      <div className="form-title">Granted access</div>
       {items.length ? (
         <ul className="accounts">
           {items.map((item) => (
@@ -138,17 +117,20 @@ export function DelegatedAccessPanel() {
               <div>
                 <div className="account-title">
                   {item.label || item.access_id}
-                  <span className="badge badge-ok">automation</span>
+                  {item.source === 'oauth'
+                    ? <span className="badge badge-ok">connected app</span>
+                    : <span className="badge badge-warn">manual token</span>}
                 </div>
-                {item.client_id ? <div className="account-sub">{item.client_id}</div> : null}
-                {item.operations?.length ? <div className="account-sub">Operations: {item.operations.join(', ')}</div> : null}
+                {item.client_id && item.client_id !== item.label ? <div className="account-sub">{item.client_id}</div> : null}
                 {item.resource_grants && Object.keys(item.resource_grants).length ? (
                   <div className="account-sub">
-                    Resource grants: {Object.entries(item.resource_grants).map(([resource, grants]) => `${resource} -> ${grants.join(', ')}`).join('; ')}
+                    Access: {Object.entries(item.resource_grants).map(([resource, grants]) => `${resource === '*' ? 'all resources' : resource} → ${grants.join(', ')}`).join('; ')}
                   </div>
                 ) : null}
+                {item.operations?.length ? <div className="account-sub">Operations: {item.operations.join(', ')}</div> : null}
                 <div className="account-sub">
-                  Created {formatDate(item.created_at) || 'unknown'} · expires {formatDate(item.expires_at) || 'unknown'}
+                  {item.source === 'oauth' ? 'Approved' : 'Created'} {formatDate(item.created_at) || 'unknown'}
+                  {' · '}expires {formatDate(item.expires_at) || 'unknown'}
                   {item.last_four ? ` · token ends ${item.last_four}` : ''}
                 </div>
               </div>
@@ -159,7 +141,10 @@ export function DelegatedAccessPanel() {
           ))}
         </ul>
       ) : (
-        <p className="muted">No delegated automation access has been created yet.</p>
+        <p className="muted">
+          Nothing granted yet. Access appears here when you create a token below
+          or approve an external client's OAuth connect.
+        </p>
       )}
 
       <form className="form" onSubmit={submit}>

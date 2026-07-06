@@ -94,6 +94,7 @@ export interface DelegatedAccessRecord {
   created_at?: number;
   expires_at?: number;
   last_four?: string;
+  source?: 'manual' | 'oauth' | string;
 }
 
 export interface DelegatedAccessListResult {
