@@ -10,6 +10,9 @@ export interface AppShellProps {
   activeTab: ConnectionsTab;
   onTabChange: (tab: ConnectionsTab) => void;
   telegramConnectStatus?: 'idle' | 'connecting' | 'connected' | 'failed';
+  // Authenticator configuration is operator surface; the tab renders only
+  // for platform admins (the backend enforces it regardless).
+  showAuthenticators?: boolean;
   children: ReactNode;
 }
 
@@ -23,6 +26,7 @@ export function AppShell({
   activeTab,
   onTabChange,
   telegramConnectStatus = 'idle',
+  showAuthenticators = true,
   children,
 }: AppShellProps) {
   return (
@@ -60,13 +64,15 @@ export function AppShell({
         >
           Delegated by KDCube
         </button>
-        <button
-          type="button"
-          className={`tab ${activeTab === 'authenticators' ? 'active' : ''}`}
-          onClick={() => onTabChange('authenticators')}
-        >
-          Authenticators
-        </button>
+        {showAuthenticators ? (
+          <button
+            type="button"
+            className={`tab ${activeTab === 'authenticators' ? 'active' : ''}`}
+            onClick={() => onTabChange('authenticators')}
+          >
+            Authenticators
+          </button>
+        ) : null}
       </nav>
       {telegramConnectStatus === 'connecting' && (
         <div className="notice">Connecting the Telegram account to your signed-in KDCube user…</div>

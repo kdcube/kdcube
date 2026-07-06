@@ -23,6 +23,9 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.authenticators.models imp
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_registry_config import (
     authority_registry_config,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_projection import (
+    authority_has_platform_privilege,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_registry_client import AuthorityRegistryClient
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint_with_memory import BaseEntrypointWithMemory
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
@@ -332,6 +335,20 @@ def _platform_delegation_grant_options(entrypoint: Any, platform_user_id: str) -
             }
         )
     return options
+
+
+def _platform_admin_denied(entrypoint: Any) -> Dict[str, Any] | None:
+    """Guard for operator surface: authenticator config names authority
+    realms and secret refs, so only platform-privileged users may read or
+    write it, regardless of widget/descriptor visibility settings."""
+    roles, _permissions = _entrypoint_user_roles_permissions(entrypoint)
+    if authority_has_platform_privilege(roles):
+        return None
+    return {
+        "ok": False,
+        "error": "platform_admin_required",
+        "message": "Authenticator configuration is available to platform administrators only.",
+    }
 
 
 def _platform_user_payload(entrypoint: Any, *, user_id: Optional[str] = None) -> Dict[str, Any]:
@@ -2855,6 +2872,9 @@ class ConnectionHubEntrypoint(BaseEntrypointWithMemory):
         **kwargs: Any,
     ) -> Dict[str, Any]:
         del kwargs
+        denied = _platform_admin_denied(self)
+        if denied:
+            return denied
         provider_filter = str(provider or "").strip().lower()
         items = [
             dict(row)
@@ -2891,6 +2911,9 @@ class ConnectionHubEntrypoint(BaseEntrypointWithMemory):
         data: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
+        denied = _platform_admin_denied(self)
+        if denied:
+            return denied
         payload = _payload(data, **kwargs)
         if _contains_authenticator_secret_value(payload):
             return {
@@ -2952,6 +2975,9 @@ class ConnectionHubEntrypoint(BaseEntrypointWithMemory):
         authenticator_id: str = "",
         **kwargs: Any,
     ) -> Dict[str, Any]:
+        denied = _platform_admin_denied(self)
+        if denied:
+            return denied
         payload = _payload(data, authenticator_id=authenticator_id, **kwargs)
         result = await _authenticator_store(self).remove_row(
             authenticator_id=str(payload.get("authenticator_id") or "").strip(),

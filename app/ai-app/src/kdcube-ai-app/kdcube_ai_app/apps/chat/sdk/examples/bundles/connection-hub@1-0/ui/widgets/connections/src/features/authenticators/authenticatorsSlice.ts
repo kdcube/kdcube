@@ -13,6 +13,8 @@ export interface AuthenticatorsState {
   loading: boolean;
   busy: boolean;
   error: string;
+  // Operator surface: false when the backend answered platform_admin_required.
+  allowed: boolean;
 }
 
 const initialState: AuthenticatorsState = {
@@ -21,6 +23,7 @@ const initialState: AuthenticatorsState = {
   loading: true,
   busy: false,
   error: '',
+  allowed: true,
 };
 
 function message(e: unknown): string {
@@ -116,6 +119,13 @@ const authenticatorsSlice = createSlice({
     builder
       .addCase(loadAuthenticators.fulfilled, (state, action: PayloadAction<AuthenticatorsListResult>) => {
         state.loading = false;
+        if (action.payload.ok === false && action.payload.error === 'platform_admin_required') {
+          state.allowed = false;
+          state.items = [];
+          state.supportedProviders = [];
+          return;
+        }
+        state.allowed = true;
         state.items = Array.isArray(action.payload.items) ? action.payload.items : [];
         state.supportedProviders = Array.isArray(action.payload.supported_providers)
           ? action.payload.supported_providers

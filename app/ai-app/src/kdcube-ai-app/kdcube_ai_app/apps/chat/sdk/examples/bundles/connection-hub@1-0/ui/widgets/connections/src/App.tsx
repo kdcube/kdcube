@@ -52,6 +52,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<ConnectionsTab>(tabFromLocation);
   const [telegramConnectStatus] = useState<TelegramConnectStatus>('idle');
   const authenticatorsLoading = useAppSelector((s) => s.authenticators.loading);
+  const authenticatorsAllowed = useAppSelector((s) => s.authenticators.allowed);
   const delegatedAccessLoading = useAppSelector((s) => s.delegatedAccess.loading);
   const identityLoading = useAppSelector((s) => s.identity.loading);
   const delegatedToKdcubeLoading = useAppSelector((s) => s.delegatedToKdcube.loading);
@@ -131,6 +132,13 @@ export default function App() {
     };
   }, [telegramMiniAppMode, claimChallengeId, runtimeReady, refresh]);
 
+  // A non-admin can still land on the tab via URL/stale state; send them home.
+  useEffect(() => {
+    if (!authenticatorsAllowed && activeTab === 'authenticators') {
+      setActiveTab('identity');
+    }
+  }, [authenticatorsAllowed, activeTab]);
+
   const changeTab = useCallback((next: ConnectionsTab) => {
     setActiveTab(next);
     try {
@@ -182,9 +190,10 @@ export default function App() {
       activeTab={activeTab}
       onTabChange={changeTab}
       telegramConnectStatus={telegramConnectStatus}
+      showAuthenticators={authenticatorsAllowed}
     >
       {activeTab === 'identity' ? <ConnectionEdgesPanel telegramConnectStatus={telegramConnectStatus} /> : null}
-      {activeTab === 'authenticators' ? <AuthenticatorsPanel /> : null}
+      {activeTab === 'authenticators' && authenticatorsAllowed ? <AuthenticatorsPanel /> : null}
       {activeTab === 'delegatedAccess' ? <DelegatedAccessPanel /> : null}
       {activeTab === 'delegatedToKdcube' ? <DelegatedToKdcubePanel /> : null}
     </AppShell>
