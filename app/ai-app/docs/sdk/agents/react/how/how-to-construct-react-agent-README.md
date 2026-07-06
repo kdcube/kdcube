@@ -252,15 +252,33 @@ differ sharply by category:
   the inactive-tools notice and the memory hotset) changes nothing in the
   cached slice — that is precisely why the lifecycle rule in section 3 exists.
 
-Two platform behaviors build on this. The first ships with the composer menu:
-picking a different model shows an inline, non-blocking cost notice
-("Switching the model starts a fresh context cache — the next turn is billed
-at full input rates while the cache rebuilds."), and the first tool/skill
-toggle per menu-open shows the milder equivalent ("Changing tools or skills
-re-caches part of the context at full input cost on the next turn."); both are
-suppressed while the conversation has no turns yet, where nothing is cached.
-The second — a configurable **cold-cache policy**, letting an operator bound
-how often users may force cold turns — is the planned next enforcement step.
+Two platform behaviors build on this, and both ship. First, the composer menu
+states the mechanism before a costly change lands: picking a different model
+shows an inline, non-blocking cost notice ("Switching the model starts a fresh
+context cache — the next turn is billed at full input rates while the cache
+rebuilds."), and the first tool/skill toggle per menu-open shows the milder
+equivalent; both stay silent while the conversation has no turns yet, where
+nothing is cached.
+
+Second, the **cold-cache policy** — and because the user pays for the cache,
+the user holds it. Each user keeps a standing per-class policy
+(`cache_policy: {model_switch, capability_toggle}` in the same selection
+record) with values `accept`, `confirm` (the platform default), `defer_cold`,
+or `defer_conversation`; admin config supplies the default and the allowed set
+(`config.react.<agent>.cache.selection_change_policy`). Under `confirm`, the
+decision moment IS the policy picker: making a costly change in a warm
+conversation opens an inline choice — Apply now · Apply from next conversation
+· Apply when cache is cold — with "remember my choice" persisting the standing
+policy. Deferred choices park the change as a **pending delta** the runtime
+promotes when its trigger fires (a different conversation, or the warmness
+signal reading cold — where applying is free); the menu badges pending changes
+until then. At the runtime choke point, each conversation keeps the
+last-APPLIED selection snapshot: a change that lands on a warm conversation
+emits a **cold-turn marker** — an ANNOUNCE `[CACHE]` line for the agent plus
+`cache_cold_turn` metadata on the decision call's accounting, so the
+cache-rebuild premium is attributable as one identifiable component within the
+turn's spend sum (a turn's cost is always the sum of the spendings inside it).
+Everything fails open to the configured behavior.
 
 ## 6. How the chat component connects
 
@@ -273,7 +291,9 @@ The chat engine carries the agent identity and the selection UI end to end:
   and writes toggles through debounced `agent_selection_update` merge-writes.
   Sections: Model (radio pick with the configured default tagged), Skills,
   Tools (two-level per-tool rows), MCP servers, Services (namespaces), plus a
-  host-gated Connection-Hub entry.
+  Connection-Hub entry that renders only when opening it can actually happen —
+  a host that acks the `connection_hub.settings` surface command owns the
+  open, and without an ack the served connections widget opens directly.
 - Toggles apply **from the next message**: the backend reads the saved
   selection per turn, so there is no session invalidation — the next turn is
   simply built from the updated selection (with the cache cost from section 5

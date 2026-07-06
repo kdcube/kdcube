@@ -75,8 +75,26 @@ platform defaults
   < the user's validated supported_models pick   (per turn)
 ```
 
-The selection layer around `supported_models` (operations, storage, UI, cache
-cost) is owned by
+The same `cache` block bounds the user-held cold-cache policy:
+
+```yaml
+config:
+  react:
+    default_agent:
+      cache:
+        selection_change_policy: confirm      # one default for both classes
+        # or per class + an allowed set:
+        # selection_change_policy:
+        #   model_switch: confirm
+        #   capability_toggle: accept
+        #   allowed: [accept, confirm, defer_cold]
+```
+
+Values: `accept`, `confirm` (platform default), `defer_cold`,
+`defer_conversation`. The user's standing choice (stored in their selection
+record) wins inside the allowed set; admin config supplies only the default
+and the bounds. The selection layer around `supported_models` and the policy
+(operations, storage, UI, cache cost) is owned by
 [How To Construct A ReAct Agent](./how/how-to-construct-react-agent-README.md).
 
 ## Thinking rendering
@@ -157,6 +175,7 @@ When enabled, snapshots are written under `REACT_DEBUG_ROOT`, normally
 - `render_thinking`: when `true`, render live `react.thinking` blocks as `[thinking]` timeline sections. When `false`, hide those blocks from the rendered model context.
 - `agent_role_models`: the agent react block's role→model mapping; the runtime binds it into the invocation role_models overlay (a validated per-user model pick is applied on top per turn).
 - `inactive_tools`: turn-local provider groups for tools dropped this turn; rendered as the ANNOUNCE `[INACTIVE TOOLS THIS TURN]` section.
+- `cold_turn_marker`: turn-local record set when a selection change applied on a warm conversation; rendered as the ANNOUNCE `[CACHE]` line and joined to the decision call's accounting metadata (`cache_cold_turn`).
 - `session`: session-level configuration (see below).
 - `cache`: cache-related limits (see below).
 

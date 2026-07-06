@@ -3,8 +3,10 @@ id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-caching-README.m
 title: "Context Caching"
 summary: "Dual checkpoint caching strategy for stable prefixes and growing tails."
 tags: ["sdk", "agents", "react", "context", "caching"]
-keywords: ["cache checkpoints", "prefix", "tail", "Anthropic cache", "cache TTL"]
+keywords: ["cache checkpoints", "prefix", "tail", "Anthropic cache", "cache TTL", "cold turn marker", "cache_cold_turn", "selection change", "cold-cache policy", "cache_last_touch_at"]
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/how/how-to-construct-react-agent-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/user-settings/user-settings-solution-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/compaction-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-browser-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-layout.md
@@ -331,6 +333,42 @@ Passing data to a subagent also has a cost:
 Use stable subagent instructions for role and invariant behavior. Put changing
 task data in the current request, ANNOUNCE-like tail, or explicit handoff
 blocks.
+
+## Selection Changes, The Cold-Turn Marker, And The User-Held Policy
+
+Per-user selection changes are the main runtime source of deliberate cache
+invalidation, and the platform makes their cost visible and governable:
+
+- **Any tool/skill/MCP/namespace toggle colds the ENTIRE prompt for one
+  turn.** The decision call sends ONE cached system block (protocol +
+  instructions + text-rendered tool catalog + skill gallery + namespace
+  intros) ahead of the timeline messages; because system precedes messages, a
+  changed catalog segment invalidates every downstream cache point — the
+  history cannot survive a catalog change. The next turn re-writes the cache
+  and caching resumes.
+- **A model switch colds everything too, differently:** provider prompt
+  caches are per model, so the newly picked model starts with no cache at all.
+- **The cold-turn marker.** Each conversation persists the last-APPLIED
+  selection snapshot alongside the warmness signal (`cache_last_touch_at` +
+  the stored TTL) in the timeline payload. When a changed selection applies on
+  a warm conversation, the runtime sets `RuntimeCtx.cold_turn_marker`: the
+  agent sees a one-line ANNOUNCE `[CACHE]` section, the decision call's
+  accounting metadata carries `cache_cold_turn`, and a `kdcube.react.cache`
+  log line correlates the change with the next cache attempt. Accounting
+  already records `cache_creation_tokens` / `cache_read_tokens`; the marker
+  joins that cache-write premium to the causing action — one identifiable
+  component within the turn's spend sum (a turn's cost is always the sum of
+  the spendings inside it).
+- **The user decides when to pay.** The user pays for the cache, so the user
+  holds the selection-change policy (`accept`, `confirm` — the platform
+  default, `defer_cold`, `defer_conversation`; admin config bounds the set).
+  Under `confirm` the composer menu turns a costly change into an inline
+  choice (apply now / from the next conversation / when the cache is cold —
+  where applying is free); deferred changes park as a pending delta the
+  runtime promotes when the trigger fires. The selection layer itself is owned
+  by [How To Construct A ReAct Agent](./how/how-to-construct-react-agent-README.md);
+  the record and store semantics by the
+  [User Settings Solution](../../solutions/user-settings/user-settings-solution-README.md).
 
 ## Cold Cache Mitigation
 When a prompt cache expires on a provider where React uses explicit cache

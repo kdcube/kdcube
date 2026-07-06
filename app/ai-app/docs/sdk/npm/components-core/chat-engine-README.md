@@ -78,6 +78,7 @@ interface ChatEngine {
 
   loadAgentCapabilities(opts?): void
   updateAgentSelection(patch): void
+  submitAgentSelectionDecision(patch, options?): void
   openConnections(source?): void
   hasHostHandler(event): boolean
 
@@ -103,6 +104,12 @@ config live in
 - A pending patch still inside the debounce window is flushed when `send()`
   runs and on `dispose()`, so a toggle reaches the server before the turn it is
   meant to shape.
+- `submitAgentSelectionDecision(patch, {apply, cachePolicy})` is the confirm
+  picker's write: immediate (no debounce), `apply` = `now` |
+  `next_conversation` | `when_cold` (deferred modes park the change as
+  `state.capabilities.pending`), `cachePolicy` persists the user's standing
+  per-class cold-cache policy. `state.capabilities.cachePolicy` carries the
+  effective policy + admin bounds.
 - `openConnections()` emits the `open-connections` host event;
   `hasHostHandler('open-connections')` tells UI whether the host wired it —
   the composer menu hides its connections row otherwise.
