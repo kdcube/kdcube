@@ -4,7 +4,9 @@ The chat widget is an app widget that hosts a ReAct conversation and participate
 
 Read [Architecture Of What You Build](../../arch/architecture-of-what-you-build-README.md)
 first for the app/service-provider map. This recipe covers only the Chat/ReAct
-surface.
+surface. Declaring the AGENT behind the chat (per-agent config, tools/skills
+inventory, `supported_models`, the user-facing composer menu) is the
+[Chat With A ReAct Agent recipe](./chat-with-react-agent-README.md).
 
 ## Runtime Shape
 

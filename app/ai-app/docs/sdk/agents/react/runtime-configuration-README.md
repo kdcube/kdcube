@@ -52,6 +52,33 @@ config:
 
 The resolved value is passed through `RuntimeCtx.max_iterations`. Reactive external-event credit, when enabled, can temporarily add bounded extra iterations during the active turn.
 
+## Per-agent model configuration
+
+Two keys in the same agent-scoped chain shape which model the strong decision
+role runs:
+
+- `config.react.<agent_key>.role_models` — per-agent role→model mapping,
+  carried through `RuntimeCtx.agent_role_models` and bound by the runtime into
+  the invocation's role_models overlay before the loop starts.
+- `config.react.<agent_key>.supported_models` — the admin-allowed list users
+  may pick from (rows: `model`, `provider`, `label`, matching the economics
+  price-table naming). A validated user pick is applied per turn on top of
+  `agent_role_models` for role `solver.react.v2.decision.v2.strong`; a pick no
+  longer in the list falls back to the configured mapping.
+
+Effective resolution for that role, strongest last:
+
+```text
+platform defaults
+  < app-level config.role_models
+  < agent react block role_models        (RuntimeCtx.agent_role_models)
+  < the user's validated supported_models pick   (per turn)
+```
+
+The selection layer around `supported_models` (operations, storage, UI, cache
+cost) is owned by
+[How To Construct A ReAct Agent](./how/how-to-construct-react-agent-README.md).
+
 ## Thinking rendering
 
 Live model thinking blocks are persisted as `react.thinking` timeline blocks. Rendering them into the active ReAct context is controlled by:
@@ -128,6 +155,8 @@ When enabled, snapshots are written under `REACT_DEBUG_ROOT`, normally
 - `debug_timeline_root`: process-visible directory for render-debug files. It is normally populated from `REACT_DEBUG_ROOT`; CLI and ECS deployments mount it as `/react-debug`.
 - `debug_timeline_keep_files`: rolling retention for `rendered-*.txt` files. The platform default is `100`.
 - `render_thinking`: when `true`, render live `react.thinking` blocks as `[thinking]` timeline sections. When `false`, hide those blocks from the rendered model context.
+- `agent_role_models`: the agent react block's role→model mapping; the runtime binds it into the invocation role_models overlay (a validated per-user model pick is applied on top per turn).
+- `inactive_tools`: turn-local provider groups for tools dropped this turn; rendered as the ANNOUNCE `[INACTIVE TOOLS THIS TURN]` section.
 - `session`: session-level configuration (see below).
 - `cache`: cache-related limits (see below).
 

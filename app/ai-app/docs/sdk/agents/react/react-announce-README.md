@@ -56,6 +56,30 @@ This section is the authoritative round-local signal for output sizing. Older
 cached context or static bundle instructions may describe the policy, but ANNOUNCE
 contains the current remaining capacity.
 
+## Inactive tools in ANNOUNCE
+ANNOUNCE includes an `[INACTIVE TOOLS THIS TURN]` section when tools were
+dropped from the current turn's tool set — for example when a tool's
+connected-account claims are unmet. It renders right after `[RUNTIME LIMITS]`
+and only when `RuntimeCtx.inactive_tools` carries entries.
+
+Each line names the provider, its inactive tools, the reason (no connected
+account for that provider), and that the user can connect one in Connection
+Hub; a closing line instructs the agent to work with the remaining tools and,
+when the request needs an inactive tool, to name the account to connect
+instead of attempting the call.
+
+```text
+[INACTIVE TOOLS THIS TURN]
+  - Slack tools (post_slack_message, search_slack): the user has no connected Slack account; they can connect one in Connection Hub.
+  Work with the remaining tools. When the request needs an inactive tool, say which account to connect (named above) instead of attempting the call.
+```
+
+The section lives in ANNOUNCE because the set is turn-local (it changes the
+moment the user connects an account or flips a toggle); keeping it out of the
+instruction text preserves the cached prompt slice. The construction-side story
+is owned by
+[How To Construct A ReAct Agent](./how/how-to-construct-react-agent-README.md).
+
 ## Feedback in ANNOUNCE
 - Feedback updates are fetched **only at turn start** (timeline load).
 - If cache is **hot**, feedback remains in ANNOUNCE each round until a cold turn incorporates it.

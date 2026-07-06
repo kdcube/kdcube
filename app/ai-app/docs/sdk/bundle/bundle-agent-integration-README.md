@@ -383,9 +383,22 @@ This affects SDK model calls routed through `ModelServiceBase` /
 `ModelRouter`. Direct provider clients that bypass the SDK router will not see
 the override.
 
+### Per-User Model Pick
+
+When the app declares `config.react.<agent>.supported_models`, a signed-in
+user's saved pick is applied per turn on top of this chain for role
+`solver.react.v2.decision.v2.strong` — owned by
+[How To Construct A ReAct Agent](../agents/react/how/how-to-construct-react-agent-README.md).
+
 ### React Agent Inputs
 
 A React bundle agent is configured through `BaseWorkflow.build_react(...)`.
+
+The per-agent config surface (tools/skills inventory + the react block) and
+the per-user selection operations (`agent_capabilities`,
+`agent_selection_update`) ship on the SDK entrypoint base for every chat app;
+the full selection model is owned by
+[How To Construct A ReAct Agent](../agents/react/how/how-to-construct-react-agent-README.md).
 
 ```text
 bundle workflow

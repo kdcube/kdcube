@@ -45,6 +45,7 @@ Read order for app builders:
 | [Scene](scene-README.md) | You are composing multiple widgets/surfaces into one browser scene. |
 | [Canvas Pinboard](pinboard-README.md) | You want objects from different realms pinned, searched, moved, opened, and reused as context. |
 | [Chat Widget](chat-README.md) | You are embedding a ReAct chat surface that attaches, emits, and consumes context. |
+| [Chat With A ReAct Agent](chat-with-react-agent-README.md) | You are declaring the agent behind the chat — per-agent config incl. `supported_models` and the tools/skills inventory — and letting users customize it via the composer menu. |
 
 ## Planes Checklist
 

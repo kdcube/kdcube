@@ -95,6 +95,17 @@ drop targets. See
   error: the composer shows no profile-fetch error banner. Identity-gated host
   affordances stay hidden until a signed-in profile is confirmed.
 
+## The composer "+" menu (per-user agent customization)
+
+The composer bar's "+" button opens a per-user, per-agent menu for signed-in
+users: pick the model (when the app declares `supported_models`), and toggle
+the agent's skills, tool groups (with per-tool rows), MCP servers, and
+named-service namespaces — always a subset of what the app config grants, with
+system tool groups locked on. Toggles save optimistically and apply from the
+next message. The full model — inventory, deny-list semantics, model override,
+and the prompt-cache cost of each switch — is owned by
+[How To Construct A ReAct Agent](../../agents/react/how/how-to-construct-react-agent-README.md).
+
 ## Reusing the chat: headless engine + custom UI
 
 The widget is split into a **headless engine** and a **view**, so you can keep
