@@ -331,6 +331,7 @@ function InlineMarkdownEditor({
   placeholder,
   saveLabel,
   saveDisabled,
+  autoFocus = true,
 }: {
   value: string
   onChange: (next: string) => void
@@ -339,6 +340,15 @@ function InlineMarkdownEditor({
   placeholder?: string
   saveLabel?: string
   saveDisabled?: boolean
+  /**
+   * Focus the textarea when it mounts. Keep the default for editors that
+   * mount on a user action (description edit, new text card). Composers that
+   * mount WITH the board (each card's comment box in its flyout) must pass
+   * false: focusing them triggers the browser's focus-reveal, which scrolls
+   * the board — with many cards the LAST card's hidden composer wins and the
+   * board boots panned to the far corner.
+   */
+  autoFocus?: boolean
 }) {
   const [mode, setMode] = useState<'raw' | 'rendered'>('raw')
   return (
@@ -370,7 +380,7 @@ function InlineMarkdownEditor({
           value={value}
           onChange={(event) => onChange(event.target.value)}
           placeholder={placeholder}
-          autoFocus
+          autoFocus={autoFocus}
         />
       ) : (
         <div className="canvas-mde-preview">
@@ -2793,6 +2803,9 @@ export function CanvasBoard({
                       placeholder="Add a comment… (markdown supported)"
                       saveLabel="Post comment"
                       saveDisabled={!commentDraft.trim()}
+                      /* Mounts with the card (hidden flyout) — never steal
+                       * focus at board load; see InlineMarkdownEditor. */
+                      autoFocus={false}
                     />
                   </section>
                 </div>

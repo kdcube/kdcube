@@ -276,7 +276,6 @@ function App() {
       <button
         type="button"
         className="kdc-raise-veil"
-        title="Bring window to front"
         aria-label="Bring window to front"
         onPointerDown={() => {
           managerRef.current.front(alias)
