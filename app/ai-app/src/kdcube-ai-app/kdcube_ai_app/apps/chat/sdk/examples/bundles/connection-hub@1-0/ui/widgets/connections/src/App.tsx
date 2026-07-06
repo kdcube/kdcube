@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { settings } from './api/settings';
 import { useAppDispatch, useAppSelector } from './app/hooks';
 import { AppShell, type ConnectionsTab } from './components/AppShell';
@@ -83,7 +83,10 @@ export default function App() {
   };
 
   // Re-fetch after finishing OAuth in another tab. Doesn't blank the page.
+  const refreshInFlight = useRef(false);
   const refresh = useCallback(async () => {
+    if (refreshInFlight.current) return;
+    refreshInFlight.current = true;
     setRefreshing(true);
     try {
       await Promise.all([
@@ -93,9 +96,26 @@ export default function App() {
         dispatch(loadDelegatedToKdcube()).unwrap().catch(() => undefined),
       ]);
     } finally {
+      refreshInFlight.current = false;
       setRefreshing(false);
     }
   }, [dispatch]);
+
+  // The OAuth approval happens in another tab; when the user comes back,
+  // re-fetch so account cards and the consent plan reflect what they just
+  // approved without hunting for the manual refresh button.
+  useEffect(() => {
+    if (telegramMiniAppMode || claimChallengeId || !runtimeReady) return;
+    const onReturn = () => {
+      if (document.visibilityState === 'visible') void refresh();
+    };
+    window.addEventListener('focus', onReturn);
+    document.addEventListener('visibilitychange', onReturn);
+    return () => {
+      window.removeEventListener('focus', onReturn);
+      document.removeEventListener('visibilitychange', onReturn);
+    };
+  }, [telegramMiniAppMode, claimChallengeId, runtimeReady, refresh]);
 
   const changeTab = useCallback((next: ConnectionsTab) => {
     setActiveTab(next);
