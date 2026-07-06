@@ -661,6 +661,67 @@ connector_app_id: demo
 Then check that the connected account was created for the same KDCube platform
 user who is running the agent.
 
+## Named-Service MCP Namespace
+
+The same Slack integration is also exposed through the generic named-services
+MCP surface as namespace `slack` when `kdcube-services@1-0` is configured with
+the Slack namespace boundary.
+
+```text
+https://<PUBLIC_HOST>/api/integrations/bundles/<TENANT>/<PROJECT>/kdcube-services@1-0/public/mcp/named_services
+```
+
+This is the path for external agents such as Claude connectors. The MCP consent
+uses KDCube delegated grants:
+
+| Delegated grant | Allows |
+| --- | --- |
+| `slack:read` | list connected Slack accounts/channels, search, read channel history, download visible files |
+| `slack:write` | post messages and upload files |
+
+Those delegated grants do not replace provider claims. The connected Slack
+account still needs the specific provider claims that match the operation:
+`slack:search`, `slack:channels`, `slack:history`, `slack:files:read`,
+`slack:files:write`, `slack:assistant:search`, or `slack:post`.
+
+The namespace supports:
+
+| Named-service operation | Use |
+| --- | --- |
+| `provider.about` | Explain the Slack namespace to the agent. |
+| `provider.capabilities` | List the currently supported operations. |
+| `object.schema` | Show refs, object kinds, filters, actions, and grant hints. |
+| `object.list` | List connected Slack accounts; with `filters.kind=channels`, list channels for a connected account. |
+| `object.search` | Search Slack messages/files through classic search or Slack assistant search. |
+| `object.get` | Read a channel history ref or download a file ref. |
+| `object.action` | `post_message`, `upload_file`, `download_file`, or `assistant_search_info`. |
+
+Useful prompts after connecting the named-services MCP connector:
+
+```text
+Use the slack namespace. List my connected Slack accounts and then list channels for the first account.
+```
+
+```text
+Use the slack namespace. Search Slack for "customer onboarding" and show the top 5 message refs.
+```
+
+```text
+Use the slack namespace. Read the recent history for Slack channel C1234567890 and summarize linked files.
+```
+
+```text
+Use the slack namespace. Download Slack file F1234567890.
+```
+
+```text
+Use the slack namespace. Post "hello from KDCube" to Slack channel C1234567890.
+```
+
+The agent should discover the namespace with `named_services_list`, then call
+`named_services_capabilities` and `named_services_schema` before using
+`named_services_search`, `named_services_get`, or `named_services_call`.
+
 ## Storage Boundary
 
 Connection Hub owns the connected-account registry. Account metadata is stored

@@ -1,13 +1,14 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/recipes/kdcube_for_agents/named-services-mcp-README.md
 title: "Make A Named Service Agent-Friendly (MCP)"
-summary: "What a named-service namespace should implement so a generic external agent (Claude over MCP) can discover, search, read files, and act through object refs alone — using the conv namespace as the worked example."
+summary: "What a named-service namespace should implement so a generic external agent (Claude over MCP) can discover, search, read files, and act through object refs alone — using conv as the worked example and mail/slack as integration namespaces."
 status: active
-tags: ["recipes", "kdcube-for-agents", "named-services", "mcp", "conv", "search", "files", "schema", "agent"]
-updated_at: 2026-07-02
+tags: ["recipes", "kdcube-for-agents", "named-services", "mcp", "conv", "mail", "slack", "search", "files", "schema", "agent"]
+updated_at: 2026-07-06
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/delegate-kdcube-service-to-external-client-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/integrations/mail-named-service-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/integrations/slack-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/components/named-service-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/providers-README.md
 ---
@@ -36,6 +37,10 @@ Two neighbours own the parts this recipe points at rather than restates:
 
 One MCP surface exposes generic, namespace-agnostic tools. The agent picks the
 namespace and operation; the surface routes to the matching provider.
+
+The reference `kdcube-services@1-0` surface includes platform namespaces such as
+`conv`, application-context namespaces such as `mail`, and connected-account
+integration namespaces such as `slack`.
 
 ```text
 MCP surface: kdcube-services@1-0 / public/mcp/named_services
@@ -318,6 +323,40 @@ Overview without a query (temporal catalog):
 2. get     the conversation ref that looks relevant
 ```
 
+Work with a connected Slack workspace:
+
+```text
+1. list    namespace=slack
+     -> slack:<account_id> account refs visible to the current KDCube user
+2. call    operation=object.list, namespace=slack,
+           params={filters: {kind: "channels", account_id: "<account_id>"}}
+     -> slack:<account_id>:channel:<channel_id> refs
+3. search  namespace=slack, query="customer onboarding"
+     -> Slack message/file hits visible to a connected Slack account
+4. get     slack:<account_id>:channel:<channel_id>
+     -> recent channel history with file refs
+5. call    operation=object.action, action=post_message,
+           object_ref=slack:<account_id>:channel:<channel_id>,
+           payload={text: "..."}
+     -> posted message metadata
+```
+
+For integration namespaces, there are two authorization layers:
+
+```text
+External MCP delegated grants:
+  slack:read / slack:write
+  authorize the agent to use the KDCube Slack namespace.
+
+Connected-account provider claims:
+  slack:search / slack:history / slack:files:read / slack:post / ...
+  authorize KDCube to call Slack for the current platform user.
+```
+
+If the agent has the MCP grant but the user has not connected Slack, or the
+connected account lacks the provider claim, the provider returns a Connection
+Hub consent payload instead of guessing or retrying.
+
 ## Agent-Friendly Checklist
 
 ```text
@@ -350,5 +389,6 @@ Overview without a query (temporal catalog):
 
 - [Named-Service App](../components/named-service-README.md)
 - [Delegate A KDCube Service To An External Client](../connections/delegate-kdcube-service-to-external-client-README.md)
+- [Slack Integration](../connections/integrations/slack-README.md)
 - [Protect A Bundle MCP With Managed Credentials](../connections/protect-bundle-mcp-with-managed-credentials-README.md)
 - [Namespace Service Providers](../../sdk/namespace-services/providers-README.md)

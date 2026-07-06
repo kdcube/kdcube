@@ -90,12 +90,20 @@ The reference SDK includes first provider-backed tool modules:
 | `kdcube_ai_app.apps.chat.sdk.integrations.slack.tools` | `search_slack`, `list_slack_channels`, `read_slack_channel_history`, `download_slack_file`, `upload_slack_file`, `slack_assistant_search_info`, `slack_assistant_search`, `post_slack_message` | `slack:search`, `slack:channels`, `slack:history`, `slack:files:read`, `slack:files:write`, `slack:assistant:search`, `slack:post` |
 
 The same provider claims can also back named-service providers. The reference
-SDK includes `kdcube_ai_app.apps.chat.sdk.integrations.mail.named_service`,
-which exposes one provider-neutral `mail` namespace over connected mail
-accounts. External agents reach it through
-`kdcube-services@1-0/public/mcp/named_services`; Connection Hub grants
-`mail:read`/`mail:send` at the KDCube delegated layer, while the provider tool
-still enforces `gmail:read`/`gmail:send` before calling Gmail.
+SDK includes:
+
+- `kdcube_ai_app.apps.chat.sdk.integrations.mail.named_service`, which exposes
+  one provider-neutral `mail` namespace over connected mail accounts.
+- `kdcube_ai_app.apps.chat.sdk.integrations.slack.named_service`, which exposes
+  one `slack` namespace over connected Slack workspaces.
+
+External agents reach these namespaces through
+`kdcube-services@1-0/public/mcp/named_services`. Connection Hub grants
+`mail:read`/`mail:send` or `slack:read`/`slack:write` at the KDCube delegated
+layer, while the provider tool still enforces the connected-account provider
+claims such as `gmail:read`, `gmail:send`, `slack:search`, `slack:history`,
+`slack:files:read`, `slack:files:write`, and `slack:post` before calling the
+external provider.
 
 Example application tool declaration:
 

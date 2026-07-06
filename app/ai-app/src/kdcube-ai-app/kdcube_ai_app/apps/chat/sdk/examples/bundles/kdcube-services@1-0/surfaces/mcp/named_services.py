@@ -29,14 +29,16 @@ Use this workflow:
 1. Call named_services_list first, unless the user explicitly named a namespace
    and operation.
 2. Use namespaces exactly as returned by named_services_list, for example mem,
-   task, cnv, conv, or mail.
+   task, cnv, conv, mail, or slack.
 3. For an unfamiliar namespace, call named_services_capabilities and
    named_services_schema before search/get/write operations.
 4. Use named_services_search to find objects before named_services_get when the
    exact object ref is not known.
 5. Only use write, action, host-file, delete, or generic call tools when the user
    clearly asks for that operation and the namespace capability allows it. For
-   mail, actions include download_attachments, send, and forward.
+   mail, actions include download_attachments, send, and forward. For slack,
+   actions include post_message, upload_file, download_file, and
+   assistant_search_info.
 6. If a call reports missing grants or a forbidden operation, explain which
    namespace/tool needs additional consent instead of retrying blindly.
 """
@@ -140,7 +142,7 @@ def build_named_services_mcp_app(
     async def _named_services_capabilities(
         namespace: Annotated[
             str,
-            Field(description="Configured named-service namespace, for example 'mem', 'task', 'cnv', 'conv', or 'mail'."),
+            Field(description="Configured named-service namespace, for example 'mem', 'task', 'cnv', 'conv', 'mail', or 'slack'."),
         ],
         provider: Annotated[
             str,
@@ -162,7 +164,7 @@ def build_named_services_mcp_app(
     async def _named_services_schema(
         namespace: Annotated[
             str,
-            Field(description="Configured named-service namespace, for example 'mem' or 'mail'."),
+            Field(description="Configured named-service namespace, for example 'mem', 'mail', or 'slack'."),
         ],
         object_kind: Annotated[
             str,
@@ -191,7 +193,7 @@ def build_named_services_mcp_app(
     async def _named_services_search(
         namespace: Annotated[
             str,
-            Field(description="Configured named-service namespace, for example 'mem' or 'mail'."),
+            Field(description="Configured named-service namespace, for example 'mem', 'mail', or 'slack'."),
         ],
         query: Annotated[
             str,

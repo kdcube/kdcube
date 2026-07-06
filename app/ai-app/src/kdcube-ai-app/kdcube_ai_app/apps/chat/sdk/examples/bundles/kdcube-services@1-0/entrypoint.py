@@ -19,6 +19,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.conversation.search_backend import (
     make_conversation_search_backend,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.mail import make_mail_named_service_provider
+from kdcube_ai_app.apps.chat.sdk.integrations.slack import make_slack_named_service_provider
 from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import ConversationStore
 from kdcube_ai_app.infra.plugin.bundle_loader import api, bundle_entrypoint, bundle_id, mcp, ui_widget
 from kdcube_ai_app.infra.service_hub.inventory import BundleState, Config
@@ -182,6 +183,12 @@ class KDCubeServicesEntrypoint(BaseEntrypoint):
         )
         providers.append(
             make_mail_named_service_provider(
+                entrypoint=self,
+                bundle_id=self._named_services_bundle_id(),
+            )
+        )
+        providers.append(
+            make_slack_named_service_provider(
                 entrypoint=self,
                 bundle_id=self._named_services_bundle_id(),
             )
