@@ -1,8 +1,8 @@
 /* connection-hub connections widget — kdcube design language, aligned with
    the website architecture explorer (light theme): #EEF5F5 canvas, white
    cards with kind-colored left accents and dots, JetBrains Mono entity
-   names, uppercase micro-labels, pill badges. Notice/error semantics keep
-   the kdcube green-tip / warm-red conventions. */
+   names, uppercase micro-labels, pill badges. Status colors come from the
+   website status palette (success/warn/danger). */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
 
 :root {
@@ -28,23 +28,18 @@
   --purple:       #6B63FE;
   --sky:          #38B8C8;
 
-  --green:        #52B044;
-  --green-dark:   #3A8030;
-  --green-pale:   #E8F7E5;
-
-  --gold:         #F0BC2E;
-  --gold-dark:    #9A6D05;
+  /* Status palette from the website (styles.css status colors), with
+     darker text shades for light-surface contrast. */
+  --ok:           #22c55e;
+  --ok-rgb:       34, 197, 94;
+  --ok-text:      #15803D;
+  --warn:         #f59e0b;
+  --warn-rgb:     245, 158, 11;
+  --warn-text:    #B45309;
+  --danger:       #f87171;
+  --danger-rgb:   248, 113, 113;
+  --danger-text:  #B91C1C;
   --gold-gate:    #B8860B;   /* governance gold, light theme */
-
-  --gold-pale:    #FFF8DC;
-
-  --pink:         #F7609A;
-  --pink-dark:    #C03272;
-  --pink-pale:    #FFE0EF;
-
-  --red:          #E04935;
-  --red-dark:     #B5331F;
-  --red-pale:     #FDE3DD;
 
   --focus:        rgba(1, 190, 178, 0.40);
 
@@ -149,12 +144,11 @@ h2 {
   color: var(--ink);
 }
 
-/* Notices — pale-green for tips/success, warm-red for system errors.
-   Mirrors the kdcube .notice.success convention. */
+/* Notices — website status palette: tinted success/warn/danger. */
 .note {
-  background: rgba(232, 247, 229, 0.55);
-  color: var(--green-dark);
-  border: 1px solid rgba(82, 176, 68, 0.28);
+  background: rgba(var(--ok-rgb), 0.08);
+  color: var(--ok-text);
+  border: 1px solid rgba(var(--ok-rgb), 0.35);
   border-radius: var(--r-lg);
   padding: 10px 12px;
   margin: 0 0 16px;
@@ -232,9 +226,9 @@ h2 {
 }
 
 .error {
-  background: rgba(253, 227, 221, 0.6);
-  color: var(--red-dark);
-  border: 1px solid rgba(224, 73, 53, 0.35);
+  background: rgba(var(--danger-rgb), 0.1);
+  color: var(--danger-text);
+  border: 1px solid rgba(var(--danger-rgb), 0.4);
   border-radius: var(--r-lg);
   padding: 10px 12px;
   margin: 0 0 16px;
@@ -251,15 +245,15 @@ h2 {
 }
 
 .notice.success {
-  background: rgba(232, 247, 229, 0.55);
-  color: var(--green-dark);
-  border-color: rgba(82, 176, 68, 0.28);
+  background: rgba(var(--ok-rgb), 0.08);
+  color: var(--ok-text);
+  border-color: rgba(var(--ok-rgb), 0.35);
 }
 
 .notice.warning {
-  background: var(--gold-pale);
-  color: var(--gold-dark);
-  border-color: rgba(240, 188, 46, 0.55);
+  background: rgba(var(--warn-rgb), 0.1);
+  color: var(--warn-text);
+  border-color: rgba(var(--warn-rgb), 0.4);
 }
 
 .muted {
@@ -353,7 +347,7 @@ h2 {
 }
 
 .account-error {
-  color: var(--red-dark);
+  color: var(--danger-text);
   font-size: 12px;
   margin-top: 2px;
   overflow-wrap: anywhere;
@@ -420,9 +414,9 @@ h2 {
 }
 
 .plan-step-done .plan-step-mark {
-  background: var(--green-pale);
-  border-color: var(--green);
-  color: var(--green-dark);
+  background: rgba(var(--ok-rgb), 0.1);
+  border-color: var(--ok);
+  color: var(--ok-text);
 }
 
 .plan-step-done .plan-step-body {
@@ -437,15 +431,15 @@ h2 {
 }
 
 .claim-chip-done {
-  background: var(--green-pale);
-  border-color: var(--green);
-  color: var(--green-dark);
+  background: rgba(var(--ok-rgb), 0.1);
+  border-color: rgba(var(--ok-rgb), 0.5);
+  color: var(--ok-text);
 }
 
 .claim-chip-missing {
-  background: var(--gold-pale);
-  border-color: var(--gold);
-  color: var(--gold-dark);
+  background: rgba(var(--warn-rgb), 0.12);
+  border-color: rgba(var(--warn-rgb), 0.5);
+  color: var(--warn-text);
 }
 
 .integration-provider-list {
@@ -492,9 +486,9 @@ h2 {
 
 .issued-token {
   margin: 12px 0 0;
-  border: 1px solid rgba(82, 176, 68, 0.28);
+  border: 1px solid rgba(var(--ok-rgb), 0.35);
   border-radius: var(--r-lg);
-  background: rgba(232, 247, 229, 0.55);
+  background: rgba(var(--ok-rgb), 0.08);
   padding: 10px 12px;
 }
 
@@ -510,7 +504,7 @@ h2 {
   min-height: 80px;
   margin-top: 10px;
   resize: vertical;
-  border: 1px solid rgba(82, 176, 68, 0.28);
+  border: 1px solid rgba(var(--ok-rgb), 0.35);
   border-radius: var(--r-md);
   background: var(--surface);
   color: var(--ink);
@@ -537,15 +531,15 @@ h2 {
 }
 
 .badge-warn {
-  color: var(--gold-dark);
-  background: rgba(240, 188, 46, 0.14);
-  border-color: rgba(240, 188, 46, 0.5);
+  color: var(--warn-text);
+  background: rgba(var(--warn-rgb), 0.12);
+  border-color: rgba(var(--warn-rgb), 0.5);
 }
 
 .badge-error {
-  color: var(--red-dark);
-  background: rgba(224, 73, 53, 0.1);
-  border-color: rgba(224, 73, 53, 0.45);
+  color: var(--danger-text);
+  background: rgba(var(--danger-rgb), 0.1);
+  border-color: rgba(var(--danger-rgb), 0.5);
 }
 
 .badge-admin {
@@ -581,16 +575,16 @@ h2 {
   margin: 12px 0 0;
 }
 
-/* Destructive / disconnect — pink, per kdcube destructive-action token. */
+/* Destructive / disconnect — website danger family. */
 .btn-ghost {
   background: transparent;
-  color: var(--pink-dark);
+  color: var(--danger-text);
   border: 1px solid var(--line);
 }
 
 .btn-ghost:hover:not(:disabled) {
-  background: var(--pink-pale);
-  border-color: rgba(192, 50, 114, 0.35);
+  background: rgba(var(--danger-rgb), 0.08);
+  border-color: rgba(var(--danger-rgb), 0.4);
 }
 
 .btn-link {
@@ -653,9 +647,9 @@ h2 {
 }
 
 .flow-steps li.done {
-  border-color: rgba(82, 176, 68, 0.28);
-  background: rgba(232, 247, 229, 0.6);
-  color: var(--green-dark);
+  border-color: rgba(var(--ok-rgb), 0.35);
+  background: rgba(var(--ok-rgb), 0.08);
+  color: var(--ok-text);
 }
 
 .flow-steps-numbered li {
@@ -692,8 +686,8 @@ h2 {
 }
 
 .challenge-ok {
-  background: rgba(232, 247, 229, 0.55);
-  border-color: rgba(82, 176, 68, 0.28);
+  background: rgba(var(--ok-rgb), 0.08);
+  border-color: rgba(var(--ok-rgb), 0.35);
 }
 
 .challenge-row {
