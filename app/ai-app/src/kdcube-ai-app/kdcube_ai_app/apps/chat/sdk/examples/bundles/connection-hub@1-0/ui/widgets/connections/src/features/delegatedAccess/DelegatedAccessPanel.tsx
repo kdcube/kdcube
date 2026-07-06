@@ -134,7 +134,7 @@ export function DelegatedAccessPanel() {
                   {item.last_four ? ` · token ends ${item.last_four}` : ''}
                 </div>
               </div>
-              <button className="btn btn-ghost" type="button" disabled={busy} onClick={() => revoke(item.access_id)}>
+              <button className="btn btn-danger" type="button" disabled={busy} onClick={() => revoke(item.access_id)}>
                 Revoke
               </button>
             </li>

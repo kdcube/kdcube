@@ -165,7 +165,7 @@ export function TelegramMiniAppLinkPanel() {
                   <div className="account-sub">Delegated grants: {delegatedGrants.join(', ')}</div>
                 ) : null}
               </div>
-              <button className="btn btn-ghost" type="button" disabled={busy} onClick={unlink}>
+              <button className="btn btn-danger" type="button" disabled={busy} onClick={unlink}>
                 Unlink
               </button>
             </div>

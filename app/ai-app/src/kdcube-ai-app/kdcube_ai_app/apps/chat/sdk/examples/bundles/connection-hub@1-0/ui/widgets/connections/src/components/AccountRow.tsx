@@ -44,7 +44,7 @@ export function AccountRow({
       </div>
       <div className="account-actions">
         {actions}
-        <button className="btn btn-ghost" onClick={onDisconnect} disabled={busy}>
+        <button className="btn btn-danger" onClick={onDisconnect} disabled={busy}>
           Disconnect
         </button>
       </div>

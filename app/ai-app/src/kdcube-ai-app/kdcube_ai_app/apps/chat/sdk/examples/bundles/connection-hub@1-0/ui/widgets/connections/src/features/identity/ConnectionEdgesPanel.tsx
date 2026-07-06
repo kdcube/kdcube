@@ -117,7 +117,7 @@ export function ConnectionEdgesPanel({ telegramConnectStatus = 'idle' }: Connect
                 {edge.grants?.length ? <div className="account-sub">Grants: {edge.grants.join(', ')}</div> : null}
               </div>
               <button
-                className="btn btn-ghost"
+                className="btn btn-danger"
                 disabled={busy}
                 onClick={() => remove(providerValue, subjectValue)}
               >

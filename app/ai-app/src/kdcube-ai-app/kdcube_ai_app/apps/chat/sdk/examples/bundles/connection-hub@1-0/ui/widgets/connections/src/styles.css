@@ -288,19 +288,25 @@ h2 {
 
 .account {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px 12px;
   background: var(--surface);
   border: 1px solid var(--line-soft);
   border-radius: var(--r-md);
   padding: 10px 12px;
-  transition: transform 0.2s ease, border-color 0.2s ease;
+  transition: border-color 0.2s ease;
+}
+
+.account-info,
+.account > div:first-child {
+  flex: 1 1 240px;
+  min-width: 0;
 }
 
 .account:hover {
   border-color: var(--line-strong);
-  transform: translateX(2px);
 }
 
 .account-compact {
@@ -312,11 +318,12 @@ h2 {
   font-size: 12.5px;
   font-weight: 600;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 4px 8px;
   color: var(--ink);
   min-width: 0;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 /* Kind dot with soft ring, architecture-card style. */
@@ -334,8 +341,9 @@ h2 {
 
 .account-sub {
   color: var(--muted);
-  font-size: 13px;
-  overflow-wrap: anywhere;
+  font-size: 12.5px;
+  line-height: 1.45;
+  overflow-wrap: break-word;
 }
 
 .account-detail {
@@ -355,8 +363,9 @@ h2 {
 .account-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
-  flex-shrink: 0;
+  margin-left: auto;
 }
 
 /* Deep-linked from a chat consent card: draw the eye to the account the
@@ -456,15 +465,14 @@ h2 {
 }
 
 .integration-provider-head {
-  display: grid;
-  grid-template-columns: minmax(120px, 0.55fr) minmax(0, 1fr);
-  gap: 12px;
-  align-items: start;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .claim-list {
   display: flex;
-  justify-content: flex-end;
+  justify-content: flex-start;
   flex-wrap: wrap;
   gap: 6px;
   min-width: 0;
@@ -573,14 +581,27 @@ h2 {
   margin: 12px 0 0;
 }
 
-/* Destructive / disconnect — website danger family. */
+/* Neutral secondary — quiet bordered button. */
 .btn-ghost {
-  background: transparent;
-  color: var(--danger-text);
+  background: var(--surface);
+  color: var(--text-2);
   border: 1px solid var(--line);
 }
 
 .btn-ghost:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--surface-2);
+  border-color: var(--line-strong);
+}
+
+/* Destructive (Disconnect / Revoke / Unlink / Remove) — danger family. */
+.btn-danger {
+  background: var(--surface);
+  color: var(--danger-text);
+  border: 1px solid var(--line);
+}
+
+.btn-danger:hover:not(:disabled) {
   background: rgba(var(--danger-rgb), 0.08);
   border-color: rgba(var(--danger-rgb), 0.4);
 }

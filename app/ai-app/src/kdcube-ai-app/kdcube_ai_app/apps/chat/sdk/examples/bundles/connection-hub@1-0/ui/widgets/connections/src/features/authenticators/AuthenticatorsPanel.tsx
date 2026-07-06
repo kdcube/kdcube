@@ -172,7 +172,7 @@ export function AuthenticatorsPanel() {
                   Edit
                 </button>
                 {row.source === 'postgres' ? (
-                  <button className="btn btn-ghost" type="button" disabled={busy} onClick={() => remove(row)}>
+                  <button className="btn btn-danger" type="button" disabled={busy} onClick={() => remove(row)}>
                     Remove
                   </button>
                 ) : null}
