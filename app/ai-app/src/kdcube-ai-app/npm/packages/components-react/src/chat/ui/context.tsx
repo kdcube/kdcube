@@ -79,6 +79,7 @@ export function ChatViewModelProvider({ children, kdcubePreview = false }: ChatV
       ...state.capabilities,
       load: engine.loadAgentCapabilities,
       toggle: engine.updateAgentSelection,
+      decide: engine.submitAgentSelectionDecision,
     },
 
     connections: {

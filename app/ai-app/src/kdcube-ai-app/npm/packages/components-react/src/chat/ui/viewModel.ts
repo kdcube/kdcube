@@ -73,6 +73,8 @@ export interface ChatViewModel {
   capabilities: AgentCapabilitiesState & {
     load: ChatEngine['loadAgentCapabilities']
     toggle: ChatEngine['updateAgentSelection']
+    /** One explicit cold-cache decision (the confirm picker). */
+    decide: ChatEngine['submitAgentSelectionDecision']
   }
 
   /** Connection-Hub entry point. `available()` reflects whether the host

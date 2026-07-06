@@ -8,10 +8,13 @@
  */
 import type { EngineRuntime } from '../runtime.ts'
 import type {
+  AgentCachePolicy,
   AgentCapabilitiesInventory,
   AgentModelPick,
+  AgentSelectionApplyMode,
   AgentSelectionDisabled,
   AgentSelectionPatch,
+  AgentSelectionPending,
 } from '../capabilities.ts'
 import { buildRequestHeaders, downloadBlobAsFile, requireScope } from './http.ts'
 import type {
@@ -369,7 +372,14 @@ export interface AgentCapabilitiesResponse {
   ok: boolean
   agent: string
   capabilities: AgentCapabilitiesInventory
-  selection: { schema_version?: number; disabled?: AgentSelectionDisabled; model?: AgentModelPick | null }
+  selection: {
+    schema_version?: number
+    disabled?: AgentSelectionDisabled
+    model?: AgentModelPick | null
+    cache_policy?: Record<string, string>
+    pending?: AgentSelectionPending | null
+  }
+  cache_policy?: AgentCachePolicy
   error?: string
   message?: string
 }
@@ -381,10 +391,22 @@ export interface AgentSelectionUpdateResponse {
     schema_version?: number
     disabled?: AgentSelectionDisabled
     model?: AgentModelPick | null
+    cache_policy?: Record<string, string>
+    pending?: AgentSelectionPending | null
     updated_at?: string
   }
   error?: string
   message?: string
+}
+
+export interface AgentSelectionWriteOptions {
+  /** Cold-cache choice for this write. Default 'now'; deferred modes park the
+   *  change as a pending delta the runtime promotes on its trigger. */
+  apply?: AgentSelectionApplyMode
+  /** Anchors the next-conversation trigger. */
+  conversationId?: string | null
+  /** Persist the user's standing per-class policy alongside. */
+  cachePolicy?: Record<string, string>
 }
 
 /** The agent's configured inventory + the caller's saved selection (deny-list). */
@@ -417,9 +439,11 @@ export async function submitAgentSelectionUpdate(
   runtime: EngineRuntime,
   agentId: string,
   patch: AgentSelectionPatch,
+  options: AgentSelectionWriteOptions = {},
 ): Promise<AgentSelectionUpdateResponse> {
   const { tenant, project } = requireScope(runtime)
   const { model, ...disabled } = patch
+  const apply = options.apply && options.apply !== 'now' ? options.apply : undefined
   const response = await fetch(operationsUrl(runtime, 'agent_selection_update', runtime.bundleId, tenant, project), {
     method: 'POST',
     credentials: runtime.credentials,
@@ -429,6 +453,8 @@ export async function submitAgentSelectionUpdate(
         agent: agentId,
         disabled,
         ...(model !== undefined ? { model } : {}),
+        ...(apply ? { apply, conversation_id: options.conversationId || '' } : {}),
+        ...(options.cachePolicy ? { cache_policy: options.cachePolicy } : {}),
       },
     }),
   })

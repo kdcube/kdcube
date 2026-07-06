@@ -50,10 +50,12 @@ import {
 } from './reducers.ts'
 import { applySelectionPatch } from './capabilities.ts'
 import type {
+  AgentCachePolicy,
   AgentCapabilitiesInventory,
   AgentModelPick,
   AgentSelectionDisabled,
   AgentSelectionPatch,
+  AgentSelectionPending,
 } from './capabilities.ts'
 
 function contextStringData(context: AttachedContext, key: string): string {
@@ -302,6 +304,8 @@ const slice = createSlice({
         inventory: AgentCapabilitiesInventory
         disabled: AgentSelectionDisabled
         model?: AgentModelPick | null
+        cachePolicy?: AgentCachePolicy | null
+        pending?: AgentSelectionPending | null
       }>,
     ) {
       state.capabilities.status = 'ready'
@@ -310,6 +314,8 @@ const slice = createSlice({
       state.capabilities.inventory = action.payload.inventory
       state.capabilities.disabled = action.payload.disabled
       state.capabilities.model = action.payload.model ?? null
+      state.capabilities.cachePolicy = action.payload.cachePolicy ?? null
+      state.capabilities.pending = action.payload.pending ?? null
     },
     capabilitiesLoadError(state, action: PayloadAction<string>) {
       state.capabilities.status = 'error'
@@ -331,10 +337,17 @@ const slice = createSlice({
     /** Reconcile with the server's clamped record after a save round-trips. */
     capabilitiesSelectionSaved(
       state,
-      action: PayloadAction<{ disabled: AgentSelectionDisabled; model?: AgentModelPick | null }>,
+      action: PayloadAction<{
+        disabled: AgentSelectionDisabled
+        model?: AgentModelPick | null
+        pending?: AgentSelectionPending | null
+      }>,
     ) {
       state.capabilities.disabled = action.payload.disabled
       state.capabilities.model = action.payload.model ?? null
+      if (action.payload.pending !== undefined) {
+        state.capabilities.pending = action.payload.pending
+      }
       state.capabilities.saving = false
       state.capabilities.saveError = null
     },

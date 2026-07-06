@@ -70,6 +70,34 @@ export interface AgentModelPick {
   model: string
 }
 
+/** Cold-cache selection-change policy values. The user pays for the cache, so
+ *  the user holds the policy; admin config supplies default + allowed set. */
+export type AgentSelectionChangePolicy = 'accept' | 'confirm' | 'defer_cold' | 'defer_conversation'
+
+export interface AgentCachePolicy {
+  effective: {
+    model_switch: AgentSelectionChangePolicy
+    capability_toggle: AgentSelectionChangePolicy
+  }
+  allowed: AgentSelectionChangePolicy[]
+  default: {
+    model_switch: AgentSelectionChangePolicy
+    capability_toggle: AgentSelectionChangePolicy
+  }
+}
+
+/** A deferred selection change awaiting its trigger. */
+export interface AgentSelectionPending {
+  disabled?: AgentSelectionPatch
+  model?: AgentModelPick | null
+  apply: 'next_conversation' | 'when_cold'
+  since_conversation_id?: string
+  created_at?: string
+}
+
+/** How one selection write lands: immediately, or parked until a trigger. */
+export type AgentSelectionApplyMode = 'now' | 'next_conversation' | 'when_cold'
+
 export interface AgentCapabilitiesInventory {
   agent: string
   tools: AgentCapabilityToolGroup[]
@@ -114,6 +142,10 @@ export interface AgentCapabilitiesState {
   disabled: AgentSelectionDisabled
   /** The user's model pick; null = the configured default runs. */
   model: AgentModelPick | null
+  /** Effective cold-cache policy (user-held over admin default) + bounds. */
+  cachePolicy: AgentCachePolicy | null
+  /** A deferred change awaiting its trigger (badged in the menu). */
+  pending: AgentSelectionPending | null
   saving: boolean
   saveError: string | null
 }
@@ -125,6 +157,8 @@ export const initialCapabilitiesState: AgentCapabilitiesState = {
   inventory: null,
   disabled: {},
   model: null,
+  cachePolicy: null,
+  pending: null,
   saving: false,
   saveError: null,
 }

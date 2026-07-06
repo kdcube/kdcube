@@ -10,7 +10,12 @@
  * banner appears, which does not affect menu verification.
  */
 import { applySelectionPatch } from '@kdcube/components-core/chat'
-import type { AgentModelPick, AgentSelectionDisabled, AgentSelectionPatch } from '@kdcube/components-core/chat'
+import type {
+  AgentModelPick,
+  AgentSelectionDisabled,
+  AgentSelectionPatch,
+  AgentSelectionPending,
+} from '@kdcube/components-core/chat'
 
 const MOCK_INVENTORY = {
   agent: 'main',
@@ -78,6 +83,21 @@ const MOCK_INVENTORY = {
 export function installCapabilitiesMock(): void {
   let disabled: AgentSelectionDisabled = {}
   let model: AgentModelPick | null = null
+  let cachePolicy: Record<string, string> = {}
+  let pending: AgentSelectionPending | null = null
+  const params = new URLSearchParams(window.location.search)
+  // `?policy=confirm|accept|defer_cold|defer_conversation` — the admin default
+  // for BOTH classes in mock mode (platform default: confirm).
+  const adminDefault = params.get('policy') || 'confirm'
+  const effectivePolicy = () => ({
+    model_switch: cachePolicy.model_switch || adminDefault,
+    capability_toggle: cachePolicy.capability_toggle || adminDefault,
+  })
+  const cachePolicyBlock = () => ({
+    effective: effectivePolicy(),
+    allowed: ['accept', 'confirm', 'defer_cold', 'defer_conversation'],
+    default: { model_switch: adminDefault, capability_toggle: adminDefault },
+  })
   const realFetch = window.fetch.bind(window)
 
   const json = (body: unknown, status = 200) =>
@@ -100,18 +120,41 @@ export function installCapabilitiesMock(): void {
       return json({ items: [{ conversation_id: 'mock-conv-1', title: 'Mock conversation', started_at: new Date().toISOString(), last_activity_at: new Date().toISOString() }] })
     }
     if (url.includes('/operations/agent_capabilities')) {
-      return json({ ok: true, agent: 'main', capabilities: MOCK_INVENTORY, selection: { schema_version: 1, disabled, model } })
+      return json({
+        ok: true, agent: 'main', capabilities: MOCK_INVENTORY,
+        selection: { schema_version: 1, disabled, model, cache_policy: cachePolicy, pending },
+        cache_policy: cachePolicyBlock(),
+      })
     }
     if (url.includes('/operations/agent_selection_update')) {
       const body = JSON.parse(String(init?.body ?? '{}')) as {
-        data?: { disabled?: AgentSelectionPatch; model?: AgentModelPick | null }
+        data?: {
+          disabled?: AgentSelectionPatch
+          model?: AgentModelPick | null
+          apply?: string
+          conversation_id?: string
+          cache_policy?: Record<string, string>
+        }
       }
-      disabled = applySelectionPatch(disabled, body.data?.disabled ?? {})
-      if (body.data && 'model' in body.data) {
-        model = body.data.model ?? null
+      const apply = body.data?.apply || 'now'
+      if (body.data?.cache_policy) {
+        cachePolicy = { ...cachePolicy, ...body.data.cache_policy }
       }
-      console.info('[mock] agent_selection_update ->', JSON.stringify({ disabled, model }))
-      return json({ ok: true, agent: 'main', selection: { schema_version: 1, disabled, model } })
+      if (apply === 'next_conversation' || apply === 'when_cold') {
+        pending = {
+          ...(body.data?.disabled && Object.keys(body.data.disabled).length ? { disabled: body.data.disabled } : {}),
+          ...(body.data && 'model' in body.data ? { model: body.data.model ?? null } : {}),
+          apply,
+          since_conversation_id: body.data?.conversation_id || '',
+        }
+      } else {
+        disabled = applySelectionPatch(disabled, body.data?.disabled ?? {})
+        if (body.data && 'model' in body.data) {
+          model = body.data.model ?? null
+        }
+      }
+      console.info('[mock] agent_selection_update ->', JSON.stringify({ apply, disabled, model, cachePolicy, pending }))
+      return json({ ok: true, agent: 'main', selection: { schema_version: 1, disabled, model, cache_policy: cachePolicy, pending } })
     }
     return realFetch(input as RequestInfo, init)
   }

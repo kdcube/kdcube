@@ -101,6 +101,13 @@ export interface ChatEngine extends Pick<HostEventEmitter, 'on'> {
    *  `agent_selection_update` merge-write (only the changed toggles are sent).
    *  Takes effect from the next message. */
   updateAgentSelection(patch: AgentSelectionPatch): void
+  /** One explicit cold-cache decision (the confirm picker): immediate write
+   *  with `apply` = now | next_conversation | when_cold and an optional
+   *  standing `cachePolicy` ("remember my choice"). */
+  submitAgentSelectionDecision(
+    patch: AgentSelectionPatch,
+    options?: { apply?: 'now' | 'next_conversation' | 'when_cold'; cachePolicy?: Record<string, string> },
+  ): void
 
   /** Ask the host to open its connections surface (Connection Hub). Emits the
    *  `open-connections` host event; the host adapter routes it (e.g. a scene

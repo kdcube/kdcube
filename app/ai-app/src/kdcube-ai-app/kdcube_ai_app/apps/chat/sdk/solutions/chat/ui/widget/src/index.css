@@ -2194,3 +2194,33 @@ button.k-menu-status:hover { background: var(--surface-2); }
   line-height: 1.45;
   color: var(--ink);
 }
+
+/* Composer-menu confirm picker (the cold-cache decision moment). */
+.k-menu-confirm {
+  margin: 4px 8px 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: var(--accent-soft);
+}
+.k-menu-confirm-text {
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--ink);
+}
+.k-menu-confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 7px;
+}
+.k-menu-confirm-remember {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 7px;
+  font-size: 10.5px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.k-menu-confirm-remember input { accent-color: var(--accent); }

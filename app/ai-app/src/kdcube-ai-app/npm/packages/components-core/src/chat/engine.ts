@@ -655,6 +655,8 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
         inventory: response.capabilities,
         disabled: response.selection?.disabled ?? {},
         model: response.selection?.model ?? null,
+        cachePolicy: response.cache_policy ?? null,
+        pending: response.selection?.pending ?? null,
       }))
     } catch (error) {
       dispatch(chatActions.capabilitiesLoadError(messageForError(error)))
@@ -675,12 +677,44 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
       dispatch(chatActions.capabilitiesSelectionSaved({
         disabled: response.selection?.disabled ?? {},
         model: response.selection?.model ?? null,
+        pending: response.selection?.pending ?? null,
       }))
       /* Toggles queued while this save was in flight stay optimistic on top of
        * the server's clamped record; their own flush reconciles them. */
       if (pendingSelectionPatch) {
         dispatch(chatActions.capabilitiesPatchApplied(pendingSelectionPatch))
       }
+    } catch (error) {
+      dispatch(chatActions.capabilitiesSaveError(messageForError(error)))
+    }
+  }
+
+  /** One explicit cold-cache decision from the confirm picker: an immediate
+   *  write (no debounce) carrying the apply mode + optional standing policy.
+   *  Deferred modes park the change server-side; the state reconciles from
+   *  the response (pending set, active unchanged). */
+  const submitAgentSelectionDecision = async (
+    patch: AgentSelectionPatch,
+    options: { apply?: 'now' | 'next_conversation' | 'when_cold'; cachePolicy?: Record<string, string> } = {},
+  ) => {
+    if (!authedRef) return
+    const apply = options.apply ?? 'now'
+    if (apply === 'now') {
+      // Optimistic like a plain toggle; the standing policy rides the flush.
+      dispatch(chatActions.capabilitiesPatchApplied(patch))
+    }
+    dispatch(chatActions.capabilitiesSaving(true))
+    try {
+      const response = await submitAgentSelectionUpdate(runtime, runtime.agentId, patch, {
+        apply,
+        conversationId: getChat().conversationId,
+        cachePolicy: options.cachePolicy,
+      })
+      dispatch(chatActions.capabilitiesSelectionSaved({
+        disabled: response.selection?.disabled ?? {},
+        model: response.selection?.model ?? null,
+        pending: response.selection?.pending ?? null,
+      }))
     } catch (error) {
       dispatch(chatActions.capabilitiesSaveError(messageForError(error)))
     }
@@ -871,6 +905,9 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
       void loadAgentCapabilities(opts)
     },
     updateAgentSelection,
+    submitAgentSelectionDecision(patch, options) {
+      void submitAgentSelectionDecision(patch, options)
+    },
     openConnections(source) {
       emitter.emit('open-connections', { source: source || 'chat' })
     },
