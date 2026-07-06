@@ -1,7 +1,7 @@
 ---
 id: connection-hub@1-0/integrations/slack
 title: "Connection Hub — Slack setup"
-summary: "Operator step-by-step to create the Slack OAuth connector app the connection-hub uses (search + post scopes), the delegated to KDCube redirect URI, app approval, and where the client_id/secret go."
+summary: "Operator step-by-step to create the Slack OAuth connector app the connection-hub uses for search, post, channel listing/history, files, and assistant search; includes the delegated to KDCube redirect URI, app approval, and where the client_id/secret go."
 status: "active"
 tags: ["integration", "connections", "oauth", "slack", "operator-setup", "prerequisites"]
 keywords: ["slack oauth app", "slack app approval", "search:read", "chat:write", "delegated_to_kdcube_oauth_callback", "slack client_secret", "workspace admin"]
@@ -21,10 +21,10 @@ state secret.
 > consent to install it into **their** workspace, and we store **their** user
 > token. You only install it into your own workspace for testing.
 
-> **User token, not bot token.** Reading the user's own messages (`search:read`)
-> needs a **user** token. The connector requests scopes under `user_scope` and
-> stores `authed_user.access_token` — so the requested scopes below are **User
-> Token Scopes**.
+> **User token, not bot token.** Reading/posting/searching as the connected
+> Slack user needs a **user** token. The connector requests scopes under
+> `user_scope` and stores `authed_user.access_token` — so the requested scopes
+> below are **User Token Scopes**.
 
 Official refs: Slack apps <https://api.slack.com/apps> · distribution
 <https://api.slack.com/start/distributing> · scopes <https://api.slack.com/scopes>
@@ -32,7 +32,7 @@ Official refs: Slack apps <https://api.slack.com/apps> · distribution
 | # | Where | Action | Output |
 | --- | --- | --- | --- |
 | 1 | <https://api.slack.com/apps> → **Create New App** → *From scratch* | Name it, pick a (your) workspace to develop in. | App created |
-| 2 | **OAuth & Permissions** → Scopes → **User Token Scopes** | Add `search:read` and `chat:write`. These act as the user. | Scopes set |
+| 2 | **OAuth & Permissions** → Scopes → **User Token Scopes** | Add `search:read`, `chat:write`, `channels:read`, `groups:read`, `im:read`, `mpim:read`, `channels:history`, `groups:history`, `im:history`, `mpim:history`, `files:read`, `files:write`, and the split `search:read.*` assistant-search scopes. These act as the user. | Scopes set |
 | 3 | **OAuth & Permissions** → Redirect URLs | Add the delegated to KDCube callback: `…/connection-hub@1-0/public/delegated_to_kdcube_oauth_callback` | Redirect registered |
 | 4 | **Manage Distribution** → **Activate Public Distribution** | Complete the checklist (HTTPS redirect, no hardcoded info) and turn it ON. **This is what lets random users in other workspaces connect.** | App is publicly installable |
 | 5 | **Basic Information** → App Credentials | Copy **Client ID** and **Client Secret**. | Credentials |
@@ -66,12 +66,40 @@ config:
             slack:post:
               label: Post to Slack
               provider_scopes: [chat:write]
+            slack:channels:
+              label: List Slack channels
+              provider_scopes: [channels:read, groups:read, im:read, mpim:read]
+            slack:history:
+              label: Read Slack history
+              provider_scopes: [channels:history, groups:history, im:history, mpim:history]
+            slack:files:read:
+              label: Read Slack files
+              provider_scopes: [files:read]
+            slack:files:write:
+              label: Upload Slack files
+              provider_scopes: [files:write]
+            slack:assistant:search:
+              label: Use Slack assistant search
+              provider_scopes:
+                - search:read.public
+                - search:read.private
+                - search:read.im
+                - search:read.mpim
+                - search:read.files
+                - search:read.users
           connector_apps:
             demo:
               label: Demo Slack
               client_id: <SLACK_CLIENT_ID>
               client_secret_ref: connections.delegated_to_kdcube.providers.slack.connector_apps.demo.client_secret
-              allowed_claims: [slack:search, slack:post]
+              allowed_claims:
+                - slack:search
+                - slack:post
+                - slack:channels
+                - slack:history
+                - slack:files:read
+                - slack:files:write
+                - slack:assistant:search
               enabled: true
 ```
 

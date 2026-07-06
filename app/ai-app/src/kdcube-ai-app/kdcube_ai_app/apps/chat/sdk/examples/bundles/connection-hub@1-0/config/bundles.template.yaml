@@ -408,6 +408,11 @@ bundles:
                 allowed_claims:
                 - "slack:search"
                 - "slack:post"
+                - "slack:channels"
+                - "slack:history"
+                - "slack:files:read"
+                - "slack:files:write"
+                - "slack:assistant:search"
             claims:
               slack:search:
                 label: "Search Slack"
@@ -419,6 +424,42 @@ bundles:
                 description: "Post messages into Slack destinations allowed by the approving user."
                 provider_scopes:
                 - "chat:write"
+              slack:channels:
+                label: "List Slack channels"
+                description: "List Slack conversations visible to the approving user."
+                provider_scopes:
+                - "channels:read"
+                - "groups:read"
+                - "im:read"
+                - "mpim:read"
+              slack:history:
+                label: "Read Slack history"
+                description: "Read Slack conversation history visible to the approving user."
+                provider_scopes:
+                - "channels:history"
+                - "groups:history"
+                - "im:history"
+                - "mpim:history"
+              slack:files:read:
+                label: "Read Slack files"
+                description: "Read and download Slack files visible to the approving user."
+                provider_scopes:
+                - "files:read"
+              slack:files:write:
+                label: "Upload Slack files"
+                description: "Upload files to Slack destinations allowed by the approving user."
+                provider_scopes:
+                - "files:write"
+              slack:assistant:search:
+                label: "Use Slack assistant search"
+                description: "Use Slack AI semantic search across messages, files, channels, and users where available."
+                provider_scopes:
+                - "search:read.public"
+                - "search:read.private"
+                - "search:read.im"
+                - "search:read.mpim"
+                - "search:read.files"
+                - "search:read.users"
           icloud_mail:
             label: "iCloud Mail"
             adapter: "email.imap_smtp_app_password"

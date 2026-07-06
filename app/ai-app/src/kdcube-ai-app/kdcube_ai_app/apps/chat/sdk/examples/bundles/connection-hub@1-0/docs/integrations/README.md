@@ -87,7 +87,7 @@ The reference SDK includes first provider-backed tool modules:
 | Module | Tools | Required claims |
 | --- | --- | --- |
 | `kdcube_ai_app.apps.chat.sdk.integrations.google.gmail_tools` | `search_gmail`, `read_gmail_message`, `download_gmail_attachments`, `send_gmail`, `forward_gmail_message` | `gmail:read`, `gmail:send` |
-| `kdcube_ai_app.apps.chat.sdk.integrations.slack.tools` | `search_slack`, `post_slack_message` | `slack:search`, `slack:post` |
+| `kdcube_ai_app.apps.chat.sdk.integrations.slack.tools` | `search_slack`, `list_slack_channels`, `read_slack_channel_history`, `download_slack_file`, `upload_slack_file`, `slack_assistant_search_info`, `slack_assistant_search`, `post_slack_message` | `slack:search`, `slack:channels`, `slack:history`, `slack:files:read`, `slack:files:write`, `slack:assistant:search`, `slack:post` |
 
 The same provider claims can also back named-service providers. The reference
 SDK includes `kdcube_ai_app.apps.chat.sdk.integrations.mail.named_service`,

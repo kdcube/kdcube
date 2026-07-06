@@ -39,19 +39,30 @@ current user.
 
 ```text
 Operator creates Slack app
-  User Token Scopes: search:read, chat:write
+  User Token Scopes:
+    search:read, chat:write
+    channels:read/groups:read/im:read/mpim:read
+    channels:history/groups:history/im:history/mpim:history
+    files:read/files:write
+    search:read.* for Slack assistant search
   Redirect URL: KDCube delegated-to-KDCube OAuth callback
         |
         v
 Operator configures Connection Hub
   provider: slack
   connector app: demo
-  claims: slack:search, slack:post
+  claims: slack:search, slack:post, slack:channels, slack:history,
+          slack:files:read, slack:files:write, slack:assistant:search
         |
         v
 Application tool declares required connected-account claims
   search_slack -> slack:search
   post_slack_message -> slack:post
+  list_slack_channels -> slack:channels
+  read_slack_channel_history -> slack:history
+  download_slack_file -> slack:files:read
+  upload_slack_file -> slack:files:write
+  slack_assistant_search_info/slack_assistant_search -> slack:assistant:search
         |
         v
 User opens Connection Hub -> Delegated to KDCube / Connected accounts
@@ -83,23 +94,32 @@ then connect their own Slack account or workspace through that app.
 ```text
 search:read
 chat:write
+channels:read
+groups:read
+im:read
+mpim:read
+channels:history
+groups:history
+im:history
+mpim:history
+files:read
+files:write
+search:read.public
+search:read.private
+search:read.im
+search:read.mpim
+search:read.files
+search:read.users
 ```
 
 Use **User Token Scopes**, not bot scopes. KDCube stores
 `authed_user.access_token`, because these tools act as the connected Slack user.
 
-Slack also offers split search scopes such as `search:read.public`,
-`search:read.private`, `search:read.im`, `search:read.mpim`, and
-`search:read.users`. Do not use those for the current KDCube `search_slack`
-tool. They belong to Slack's `assistant.search.context` /
-`assistant.search.info` methods. The current KDCube `search_slack` tool calls
-Slack's `search.messages` method, which requires the generic `search:read`
-user-token scope.
-
-There is no `assistant:search` scope for this setup. If KDCube later adds a
-separate tool backed by Slack's `assistant.search.context` method, that tool
-should declare a different KDCube claim and map it to the needed split
-`search:read.*` scopes.
+The current KDCube `search_slack` tool calls Slack's classic
+`search.messages` method, which requires the generic `search:read` user-token
+scope. The newer `slack_assistant_search` tool calls
+`assistant.search.context`, so it maps to Slack's split `search:read.*` scopes
+instead.
 
 6. In **OAuth & Permissions** -> **Redirect URLs**, add the exact KDCube
    callback URL:
@@ -173,11 +193,14 @@ What to share with a Slack admin:
 - the Slack app name shown in Slack, for example `KDCube`;
 - the Slack app installation/authorization URL from **Manage Distribution** or
   the **Add to Slack** link;
-- the requested user-token scopes, currently `search:read` and `chat:write`;
+- the requested user-token scopes from this recipe, including `search:read`,
+  `chat:write`, conversation read/history scopes, `files:read`, `files:write`,
+  and the split `search:read.*` scopes for Slack assistant search;
 - the KDCube callback host/domain that receives OAuth redirects;
 - a short explanation that KDCube stores per-user/per-workspace delegated
   credentials and uses them only for approved KDCube claims such as
-  `slack:search` and `slack:post`.
+  `slack:search`, `slack:post`, `slack:history`, `slack:files:read`,
+  `slack:files:write`, and `slack:assistant:search`.
 
 Do not share the Slack client secret with workspace users or admins. The client
 secret stays in KDCube secrets.
@@ -211,7 +234,7 @@ adapter.
 | OAuth Tokens / Install to workspace | Not required for the normal KDCube user-connect flow. You may install to your own workspace only for Slack-side testing. | KDCube starts OAuth from Connection Hub when each user connects their account. |
 | Redirect URLs | Add every exact KDCube callback URL for each host/tenant/project that will run this Slack app. | Slack rejects OAuth when the request `redirect_uri` is not registered. |
 | Bot Token Scopes | Not needed by the current KDCube Slack tools. | The adapter stores and uses Slack user tokens, not bot tokens. |
-| User Token Scopes | Add `search:read` and `chat:write`. | These are the scopes mapped by KDCube claims `slack:search` and `slack:post` for the current SDK tools. |
+| User Token Scopes | Add the scopes listed above. | These are the Slack scopes mapped by KDCube claims such as `slack:search`, `slack:post`, `slack:history`, `slack:files:read`, `slack:files:write`, and `slack:assistant:search`. |
 
 The old callback path `connection_oauth_callback` is not the current
 delegated-to-KDCube connected-account callback. The current callback is:
@@ -228,6 +251,13 @@ Useful Slack references:
 
 - <https://docs.slack.dev/authentication/installing-with-oauth/>
 - <https://docs.slack.dev/reference/methods/chat.postMessage/>
+- <https://docs.slack.dev/reference/methods/conversations.list/>
+- <https://docs.slack.dev/reference/methods/conversations.history/>
+- <https://docs.slack.dev/reference/methods/files.info/>
+- <https://docs.slack.dev/reference/methods/files.getUploadURLExternal/>
+- <https://docs.slack.dev/reference/methods/files.completeUploadExternal/>
+- <https://docs.slack.dev/reference/methods/assistant.search.info/>
+- <https://docs.slack.dev/reference/methods/assistant.search.context/>
 - <https://docs.slack.dev/reference/scopes/search.read/>
 - <https://docs.slack.dev/reference/scopes/chat.write/>
 
@@ -263,6 +293,11 @@ bundles:
                     allowed_claims:
                       - slack:search
                       - slack:post
+                      - slack:channels
+                      - slack:history
+                      - slack:files:read
+                      - slack:files:write
+                      - slack:assistant:search
                 claims:
                   slack:search:
                     label: Search Slack
@@ -274,6 +309,42 @@ bundles:
                     description: Post messages into Slack destinations allowed by the approving user.
                     provider_scopes:
                       - chat:write
+                  slack:channels:
+                    label: List Slack channels
+                    description: List Slack conversations visible to the approving user.
+                    provider_scopes:
+                      - channels:read
+                      - groups:read
+                      - im:read
+                      - mpim:read
+                  slack:history:
+                    label: Read Slack history
+                    description: Read Slack conversation history visible to the approving user.
+                    provider_scopes:
+                      - channels:history
+                      - groups:history
+                      - im:history
+                      - mpim:history
+                  slack:files:read:
+                    label: Read Slack files
+                    description: Read and download Slack files visible to the approving user.
+                    provider_scopes:
+                      - files:read
+                  slack:files:write:
+                    label: Upload Slack files
+                    description: Upload files to Slack destinations allowed by the approving user.
+                    provider_scopes:
+                      - files:write
+                  slack:assistant:search:
+                    label: Use Slack assistant search
+                    description: Use Slack AI semantic search where available.
+                    provider_scopes:
+                      - search:read.public
+                      - search:read.private
+                      - search:read.im
+                      - search:read.mpim
+                      - search:read.files
+                      - search:read.users
 ```
 
 `bundles.secrets.yaml`:
@@ -319,9 +390,33 @@ Example main-agent tool block:
   alias: slack
   allowed:
     - search_slack
+    - list_slack_channels
+    - read_slack_channel_history
+    - download_slack_file
+    - upload_slack_file
+    - slack_assistant_search_info
+    - slack_assistant_search
     - post_slack_message
   tool_traits:
     search_slack:
+      strategy:
+        - exploration
+    list_slack_channels:
+      strategy:
+        - exploration
+    read_slack_channel_history:
+      strategy:
+        - exploration
+    download_slack_file:
+      strategy:
+        - exploration
+    upload_slack_file:
+      strategy:
+        - exploitation
+    slack_assistant_search_info:
+      strategy:
+        - exploration
+    slack_assistant_search:
       strategy:
         - exploration
     post_slack_message:
@@ -336,6 +431,54 @@ Example main-agent tool block:
               connector_app_id: demo
               claims:
                 - slack:search
+    list_slack_channels:
+      connections:
+        delegated_to_kdcube:
+          connected_accounts:
+            - provider_id: slack
+              connector_app_id: demo
+              claims:
+                - slack:channels
+    read_slack_channel_history:
+      connections:
+        delegated_to_kdcube:
+          connected_accounts:
+            - provider_id: slack
+              connector_app_id: demo
+              claims:
+                - slack:history
+    download_slack_file:
+      connections:
+        delegated_to_kdcube:
+          connected_accounts:
+            - provider_id: slack
+              connector_app_id: demo
+              claims:
+                - slack:files:read
+    upload_slack_file:
+      connections:
+        delegated_to_kdcube:
+          connected_accounts:
+            - provider_id: slack
+              connector_app_id: demo
+              claims:
+                - slack:files:write
+    slack_assistant_search_info:
+      connections:
+        delegated_to_kdcube:
+          connected_accounts:
+            - provider_id: slack
+              connector_app_id: demo
+              claims:
+                - slack:assistant:search
+    slack_assistant_search:
+      connections:
+        delegated_to_kdcube:
+          connected_accounts:
+            - provider_id: slack
+              connector_app_id: demo
+              claims:
+                - slack:assistant:search
     post_slack_message:
       connections:
         delegated_to_kdcube:
@@ -386,6 +529,26 @@ Search Slack for "KDCube" and show the top 5 matches.
 ```
 
 ```text
+List the Slack channels I can access.
+```
+
+```text
+Read the last 20 messages from Slack channel C1234567890 and summarize files mentioned there.
+```
+
+```text
+Download Slack file F1234567890 into this conversation workspace.
+```
+
+```text
+Upload the report artifact to Slack channel C1234567890 with the comment "Draft report".
+```
+
+```text
+Use Slack assistant search to find recent context about customer onboarding, including files.
+```
+
+```text
 Post "hello from KDCube" to Slack channel <channel-id>.
 ```
 
@@ -395,6 +558,17 @@ Expected behavior:
   that the chat UI can surface as a consent/connect action;
 - if Slack is connected with `slack:search`, `search_slack` can search;
 - if Slack is connected with `slack:post`, `post_slack_message` can post;
+- if Slack is connected with `slack:channels`, `list_slack_channels` can list
+  visible conversations;
+- if Slack is connected with `slack:history`, `read_slack_channel_history` can
+  read visible conversation history;
+- if Slack is connected with `slack:files:read`, `download_slack_file` can
+  materialize visible Slack files as KDCube artifacts;
+- if Slack is connected with `slack:files:write`, `upload_slack_file` can upload
+  KDCube artifacts to Slack;
+- if Slack is connected with `slack:assistant:search`,
+  `slack_assistant_search_info` and `slack_assistant_search` can use Slack's AI
+  semantic search where Slack enables it for the workspace;
 - if the account lacks the needed claim, the user must reconnect or upgrade the
   connected account with that claim.
 
@@ -432,6 +606,37 @@ Check that:
 - the KDCube claim `slack:post` maps to `chat:write`;
 - the connected account was approved with `slack:post`;
 - the channel id is valid and the user can post there.
+
+### Slack Channel Listing Or History Fails
+
+Check that:
+
+- `channels:read`, `groups:read`, `im:read`, and `mpim:read` are registered
+  when using `list_slack_channels`;
+- `channels:history`, `groups:history`, `im:history`, and `mpim:history` are
+  registered when using `read_slack_channel_history`;
+- the connected account was approved with `slack:channels` or `slack:history`;
+- the connected Slack user can see the channel/conversation being read.
+
+### Slack File Download Or Upload Fails
+
+Check that:
+
+- `files:read` is registered and approved for `download_slack_file`;
+- `files:write` is registered and approved for `upload_slack_file`;
+- downloaded files are visible to the connected Slack user;
+- uploaded files are KDCube artifact paths, not arbitrary local filesystem paths;
+- Slack workspace policy permits file upload.
+
+### Slack Assistant Search Fails
+
+Check that:
+
+- the Slack workspace supports assistant search;
+- `slack_assistant_search_info` returns `is_ai_search_enabled: true`;
+- the Slack app has the split `search:read.*` scopes required by
+  `assistant.search.context`;
+- the connected account was approved with `slack:assistant:search`.
 
 ### Provider Appears But OAuth Does Not Start
 

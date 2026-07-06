@@ -148,9 +148,29 @@ bundles:
                     kind: python
                     module: kdcube_ai_app.apps.chat.sdk.integrations.slack.tools
                     alias: slack
-                    allowed: [search_slack, post_slack_message]
+                    allowed:
+                      - search_slack
+                      - list_slack_channels
+                      - read_slack_channel_history
+                      - download_slack_file
+                      - upload_slack_file
+                      - slack_assistant_search_info
+                      - slack_assistant_search
+                      - post_slack_message
                     tool_traits:
                       search_slack:
+                        strategy: [exploration]
+                      list_slack_channels:
+                        strategy: [exploration]
+                      read_slack_channel_history:
+                        strategy: [exploration]
+                      download_slack_file:
+                        strategy: [exploration]
+                      upload_slack_file:
+                        strategy: [exploitation]
+                      slack_assistant_search_info:
+                        strategy: [exploration]
+                      slack_assistant_search:
                         strategy: [exploration]
                       post_slack_message:
                         strategy: [exploitation]
@@ -162,6 +182,48 @@ bundles:
                               - provider_id: slack
                                 connector_app_id: demo
                                 claims: [slack:search]
+                      list_slack_channels:
+                        connections:
+                          delegated_to_kdcube:
+                            connected_accounts:
+                              - provider_id: slack
+                                connector_app_id: demo
+                                claims: [slack:channels]
+                      read_slack_channel_history:
+                        connections:
+                          delegated_to_kdcube:
+                            connected_accounts:
+                              - provider_id: slack
+                                connector_app_id: demo
+                                claims: [slack:history]
+                      download_slack_file:
+                        connections:
+                          delegated_to_kdcube:
+                            connected_accounts:
+                              - provider_id: slack
+                                connector_app_id: demo
+                                claims: [slack:files:read]
+                      upload_slack_file:
+                        connections:
+                          delegated_to_kdcube:
+                            connected_accounts:
+                              - provider_id: slack
+                                connector_app_id: demo
+                                claims: [slack:files:write]
+                      slack_assistant_search_info:
+                        connections:
+                          delegated_to_kdcube:
+                            connected_accounts:
+                              - provider_id: slack
+                                connector_app_id: demo
+                                claims: [slack:assistant:search]
+                      slack_assistant_search:
+                        connections:
+                          delegated_to_kdcube:
+                            connected_accounts:
+                              - provider_id: slack
+                                connector_app_id: demo
+                                claims: [slack:assistant:search]
                       post_slack_message:
                         connections:
                           delegated_to_kdcube:
