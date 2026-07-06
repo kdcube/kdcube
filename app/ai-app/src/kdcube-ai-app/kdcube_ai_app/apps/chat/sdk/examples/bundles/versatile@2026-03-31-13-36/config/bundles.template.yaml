@@ -466,6 +466,35 @@ bundles:
                 # receives this through scene_surface_config and registers each
                 # target_surface locally; object semantics still come from the
                 # owning provider resolver.
+                #
+                # `components` names the iframe-mounted served widgets the rail
+                # summons (same model as the website scene host's
+                # scene.components). The scene ships built-in defaults for
+                # pinboard / chat / memories / usage; entries here override a
+                # default by alias (enabled: false removes it) or add a new
+                # component from any deployed app (bundle_id + widget_alias, or
+                # an explicit route). Per-component keys: title, accent, gated,
+                # views, size {w,h}, full {w,h}, target_surfaces, drop
+                # {effect: attach|pin|open, patterns, target_surface},
+                # placement (docked|floating — docked components sit in a
+                # static stage slot and unpin into a floating window; pinboard
+                # and chat are docked by default), rail (false hides the rail
+                # button for surface-command-only components), default_open,
+                # order.
+                components:
+                  # Example: the stats app usage dashboard — enable where that
+                  # app is deployed.
+                  stats:
+                    enabled: false
+                    bundle_id: kdcube.stats@2026-05-20-12-05
+                    widget_alias: usage
+                    route: public/widgets/usage
+                    title: Stats
+                    accent: orange
+                    gated: false
+                    views: true
+                    size: { w: 720, h: 520 }
+                    order: 40
                 external_panels:
                   - id: task_panel
                     label: Tasks

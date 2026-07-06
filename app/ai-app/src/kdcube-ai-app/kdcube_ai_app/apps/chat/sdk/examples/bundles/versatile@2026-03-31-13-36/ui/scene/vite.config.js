@@ -72,7 +72,6 @@ export default defineConfig({
       { find: '@kdcube/components-core/scene', replacement: sceneRuntimeEntry },
       { find: '@kdcube/components-core/events', replacement: eventsRuntimeEntry },
       { find: '@kdcube/components-core/canvas', replacement: componentsCoreCanvasEntry },
-      { find: 'lucide-react', replacement: require.resolve('lucide-react') },
       { find: /^react$/, replacement: require.resolve('react') },
       { find: /^react-dom$/, replacement: require.resolve('react-dom') },
       { find: /^react-dom\/client$/, replacement: require.resolve('react-dom/client') },

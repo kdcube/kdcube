@@ -525,9 +525,13 @@ class VersatileEntrypoint(BaseEntrypointWithEconomics):
         external_panels = scene_config.get("external_panels")
         if not isinstance(external_panels, list):
             external_panels = []
+        components = scene_config.get("components")
+        if not isinstance(components, Mapping):
+            components = {}
         namespace_styles = self._namespace_styles()
         return {
             "ok": True,
+            "components": dict(components),
             "external_panels": external_panels,
             "namespace_styles": namespace_styles,
         }
