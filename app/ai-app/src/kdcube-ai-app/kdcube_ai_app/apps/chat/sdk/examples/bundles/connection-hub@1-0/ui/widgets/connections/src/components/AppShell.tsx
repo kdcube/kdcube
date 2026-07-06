@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { TabGuide } from './TabGuide';
 
 export type ConnectionsTab = 'identity' | 'delegatedToKdcube' | 'delegatedAccess' | 'authenticators';
 
@@ -37,11 +38,6 @@ export function AppShell({
           {refreshing ? 'Refreshing…' : '↻ Refresh'}
         </button>
       </div>
-      <p className="note">
-        Link identities for login/routing, delegate external accounts to KDCube,
-        or issue bounded KDCube credentials to automation. OAuth connects open in
-        a new tab.
-      </p>
       <nav className="tabs" aria-label="Connection Hub sections">
         <button
           type="button"
@@ -74,6 +70,7 @@ export function AppShell({
           </button>
         ) : null}
       </nav>
+      <TabGuide tab={activeTab} />
       {telegramConnectStatus === 'connecting' && (
         <div className="notice">Connecting the Telegram account to your signed-in KDCube user…</div>
       )}
