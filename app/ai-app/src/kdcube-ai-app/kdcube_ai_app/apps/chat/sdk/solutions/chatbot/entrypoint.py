@@ -348,7 +348,7 @@ class BaseEntrypoint:
     # A user narrows the CONFIGURED agent inventory (bundles.yaml is what the
     # administrator granted); selection is a deny-list stored per (user, REAL
     # bundle_id, agent) in user_bundle_props (subsystem='agents'). See
-    # runtime/agent_inventory.py + runtime/user_selection_store.py.
+    # runtime/agent_inventory.py + solutions/user_settings/agent_selection.py.
 
     @staticmethod
     def _agent_selection_payload(data: Optional[Dict[str, Any]], kwargs: Dict[str, Any]) -> Dict[str, Any]:
@@ -380,7 +380,7 @@ class BaseEntrypoint:
         }
 
     def _agent_selection_store(self, identity: Mapping[str, str]):
-        from kdcube_ai_app.apps.chat.sdk.runtime.user_selection_store import UserAgentSelectionStore
+        from kdcube_ai_app.apps.chat.sdk.solutions.user_settings import UserAgentSelectionStore
 
         if self.pg_pool is None:
             raise RuntimeError("agent selection requires pg_pool")
@@ -448,11 +448,33 @@ class BaseEntrypoint:
             # Selection read is best-effort; the inventory is still useful and
             # the runtime fails open anyway.
             self.logger.log("[agent_capabilities] selection read failed (fail-open)", "WARNING")
+        cache_policy: Dict[str, Any] = {}
+        try:
+            from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import (
+                effective_selection_change_policy,
+                react_selection_change_policy,
+            )
+
+            admin = react_selection_change_policy(self.bundle_props, agent_id)
+            effective = effective_selection_change_policy(
+                self.bundle_props, agent_id, selection.get("cache_policy"),
+            )
+            cache_policy = {
+                "effective": effective,
+                "allowed": admin["allowed"],
+                "default": {k: admin[k] for k in ("model_switch", "capability_toggle")},
+            }
+        except Exception:
+            self.logger.log("[agent_capabilities] cache policy resolve failed (fail-open)", "WARNING")
         return {
             "ok": True,
             "agent": agent_id,
             "capabilities": catalog,
             "selection": selection,
+            # The user-held cold-cache policy: effective per delta class, the
+            # admin-allowed set, and the admin default (any pending deferred
+            # delta rides selection.pending).
+            "cache_policy": cache_policy,
         }
 
     @api(method="POST", alias="agent_selection_update", route="operations", user_types=("registered", "paid", "privileged"))
@@ -468,21 +490,31 @@ class BaseEntrypoint:
         "model": …}`` sets it (clamped to the agent's ``supported_models``),
         ``"model": null`` clears it back to the configured default; omitted
         keeps the stored pick.
+
+        Cold-cache choices ride the same body too: ``"apply": "now" |
+        "next_conversation" | "when_cold"`` (deferred choices park the change
+        as a pending delta the runtime promotes on its trigger;
+        ``conversation_id`` anchors the next-conversation trigger) and
+        ``"cache_policy": {"model_switch": …, "capability_toggle": …}``
+        persists the user's standing policy (clamped to the admin-allowed set).
         """
         payload = self._agent_selection_payload(data, kwargs)
         agent_id = self._agent_selection_agent_id(payload)
         patch = payload.get("disabled")
         has_model = "model" in payload
-        if not isinstance(patch, Mapping) and not has_model:
+        raw_cache_policy = payload.get("cache_policy")
+        if not isinstance(patch, Mapping) and not has_model and not isinstance(raw_cache_policy, Mapping):
             return {
                 "ok": False,
                 "error": "invalid_patch",
-                "message": "body.data needs a disabled object and/or a model field",
+                "message": "body.data needs a disabled object, a model field, and/or a cache_policy object",
             }
         identity = self._agent_selection_identity()
         if self.pg_pool is None or not identity.get("bundle_id"):
             return {"ok": False, "error": "storage_unavailable"}
         try:
+            from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import clamp_cache_policy
+
             # Enriched so per-tool MCP denials clamp against the same listing
             # the picker showed.
             catalog = await self._agent_capabilities_catalog_enriched(agent_id)
@@ -495,6 +527,13 @@ class BaseEntrypoint:
                 patch=patch if isinstance(patch, Mapping) else None,
                 catalog=catalog,
                 replace=bool(payload.get("replace")),
+                apply=str(payload.get("apply") or "now"),
+                conversation_id=str(payload.get("conversation_id") or ""),
+                cache_policy=(
+                    clamp_cache_policy(raw_cache_policy, self.bundle_props, agent_id)
+                    if isinstance(raw_cache_policy, Mapping)
+                    else None
+                ),
                 **({"model": payload.get("model")} if has_model else {}),
             )
         except Exception as exc:

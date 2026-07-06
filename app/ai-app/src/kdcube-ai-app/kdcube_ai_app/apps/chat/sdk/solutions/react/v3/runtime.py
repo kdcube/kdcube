@@ -3322,10 +3322,17 @@ class ReactSolverV2:
         stream_policy_violation: Optional[StreamPolicyViolation] = None
         interrupted_raw_text = ""
         try:
+            _cold_turn_marker = getattr(self.ctx_browser.runtime_ctx, "cold_turn_marker", None)
             async with with_accounting(
                 self.ctx_browser.runtime_ctx.bundle_id,
                 agent=role,
-                metadata={"agent": role},
+                # `cache_cold_turn` joins the cache-write premium recorded by
+                # accounting (cache_creation_tokens) to the causing selection
+                # change — one identifiable component within the turn's spend.
+                metadata={
+                    "agent": role,
+                    **({"cache_cold_turn": _cold_turn_marker} if isinstance(_cold_turn_marker, dict) else {}),
+                },
             ):
                 decision = await retry_with_compaction(
                     ctx_browser=self.ctx_browser,

@@ -218,6 +218,7 @@ def build_timeline_payload(
     last_rendered_event_cursor: Optional[TimelineEventCursor] = None,
     cache_last_touch_at: Optional[int] = None,
     cache_last_ttl_seconds: Optional[int] = None,
+    agent_selection_snapshot: Optional[Dict[str, Any]] = None,
     last_known_feedback_ts: Optional[str] = None,
     include_sources_pool: bool = True,
 ) -> Dict[str, Any]:
@@ -240,6 +241,7 @@ def build_timeline_payload(
         ),
         "cache_last_touch_at": cache_last_touch_at,
         "cache_last_ttl_seconds": cache_last_ttl_seconds,
+        "agent_selection_snapshot": dict(agent_selection_snapshot) if isinstance(agent_selection_snapshot, dict) else None,
         "last_known_feedback_ts": last_known_feedback_ts or "",
     }
 
@@ -280,6 +282,9 @@ def parse_timeline_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             cache_last_ttl_seconds = int(cache_last_ttl_seconds)
         except Exception:
             cache_last_ttl_seconds = None
+    agent_selection_snapshot = payload.get("agent_selection_snapshot")
+    if not isinstance(agent_selection_snapshot, dict):
+        agent_selection_snapshot = None
     last_known_feedback_ts = payload.get("last_known_feedback_ts")
     if isinstance(last_known_feedback_ts, str):
         last_known_feedback_ts = last_known_feedback_ts.strip()
@@ -299,6 +304,7 @@ def parse_timeline_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         "last_rendered_event_cursor": last_rendered_event_cursor,
         "cache_last_touch_at": cache_last_touch_at,
         "cache_last_ttl_seconds": cache_last_ttl_seconds,
+        "agent_selection_snapshot": agent_selection_snapshot,
         "last_known_feedback_ts": last_known_feedback_ts,
     }
 
@@ -1722,6 +1728,10 @@ class Timeline:
     last_external_event_seq: Optional[int] = None
     cache_last_touch_at: Optional[int] = None
     cache_last_ttl_seconds: Optional[int] = None
+    # Last APPLIED per-user agent selection for this conversation (deny-list +
+    # model pick). Compared against the stored selection each turn to classify
+    # cache-colding deltas; persists with the conversation.
+    agent_selection_snapshot: Optional[Dict[str, Any]] = None
     last_known_feedback_ts: str = ""
 
     def __post_init__(self) -> None:
@@ -1758,6 +1768,7 @@ class Timeline:
             last_external_event_seq=parsed.get("last_external_event_seq"),
             cache_last_touch_at=parsed.get("cache_last_touch_at"),
             cache_last_ttl_seconds=parsed.get("cache_last_ttl_seconds"),
+            agent_selection_snapshot=parsed.get("agent_selection_snapshot"),
             last_known_feedback_ts=parsed.get("last_known_feedback_ts") or "",
         )
         cursor = parsed.get("last_rendered_event_cursor")
@@ -1776,6 +1787,7 @@ class Timeline:
             last_rendered_event_cursor=self.last_rendered_event_cursor,
             cache_last_touch_at=self.cache_last_touch_at,
             cache_last_ttl_seconds=self.cache_last_ttl_seconds,
+            agent_selection_snapshot=self.agent_selection_snapshot,
             last_known_feedback_ts=self.last_known_feedback_ts,
         )
 
@@ -1803,6 +1815,7 @@ class Timeline:
                 last_rendered_event_cursor=self.last_rendered_event_cursor,
                 cache_last_touch_at=self.cache_last_touch_at,
                 cache_last_ttl_seconds=self.cache_last_ttl_seconds,
+                agent_selection_snapshot=self.agent_selection_snapshot,
                 last_known_feedback_ts=self.last_known_feedback_ts,
                 include_sources_pool=True,
             )
@@ -7484,6 +7497,7 @@ class Timeline:
             last_rendered_event_cursor=self.last_rendered_event_cursor,
             cache_last_touch_at=self.cache_last_touch_at,
             cache_last_ttl_seconds=self.cache_last_ttl_seconds,
+            agent_selection_snapshot=self.agent_selection_snapshot,
             last_known_feedback_ts=self.last_known_feedback_ts,
             include_sources_pool=True,
         )

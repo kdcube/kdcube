@@ -229,6 +229,180 @@ def match_supported_model(
     return None
 
 
+# ── cold-cache: selection-change classification + user-held policy ───────────
+
+# Selection-change policy values. The USER pays for the cache, so the USER
+# holds the policy; admin config supplies the default and the allowed set.
+SELECTION_CHANGE_POLICIES = ("accept", "confirm", "defer_cold", "defer_conversation")
+DEFAULT_SELECTION_CHANGE_POLICY = "confirm"
+
+# Delta classes (a selection change belongs to one or both).
+SELECTION_CHANGE_MODEL = "model_switch"
+SELECTION_CHANGE_CAPABILITY = "capability_toggle"
+
+_DISABLED_REASONS = (
+    ("tools", "tool_toggle"),
+    ("mcp", "mcp_toggle"),
+    ("named_services", "namespace_toggle"),
+    ("skills", "skill_toggle"),
+)
+
+
+def selection_snapshot(disabled: Mapping[str, Any] | None, model: Any) -> dict[str, Any]:
+    """The canonical APPLIED-selection snapshot persisted per conversation."""
+    return {
+        "disabled": dict(disabled) if isinstance(disabled, Mapping) else {},
+        "model": normalize_model_pick(model),
+    }
+
+
+def _category_norm(disabled: Mapping[str, Any] | None, key: str) -> Any:
+    raw = (disabled or {}).get(key) if isinstance(disabled, Mapping) else None
+    if key == "skills":
+        return sorted(_string_list(raw))
+    if not isinstance(raw, Mapping):
+        return {}
+    out: dict[str, Any] = {}
+    for name, value in raw.items():
+        name = _norm(name)
+        if not name or not value:
+            continue
+        out[name] = True if value is True else sorted(_string_list(value))
+    return out
+
+
+def classify_selection_change(
+    prev: Mapping[str, Any] | None,
+    curr: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Diff two applied-selection snapshots into cache-relevant delta classes.
+
+    Returns ``{changed, classes, reasons, prev_model, new_model}`` where
+    ``classes`` ⊆ {model_switch, capability_toggle} and ``reasons`` names the
+    concrete toggle kinds (tool/skill/mcp/namespace) plus model_switch.
+    """
+    prev = prev if isinstance(prev, Mapping) else {}
+    curr = curr if isinstance(curr, Mapping) else {}
+    prev_model = normalize_model_pick(prev.get("model"))
+    new_model = normalize_model_pick(curr.get("model"))
+    reasons: list[str] = []
+    classes: list[str] = []
+    if prev_model != new_model:
+        reasons.append(SELECTION_CHANGE_MODEL)
+        classes.append(SELECTION_CHANGE_MODEL)
+    prev_disabled = prev.get("disabled")
+    curr_disabled = curr.get("disabled")
+    for key, reason in _DISABLED_REASONS:
+        if _category_norm(prev_disabled, key) != _category_norm(curr_disabled, key):
+            reasons.append(reason)
+            if SELECTION_CHANGE_CAPABILITY not in classes:
+                classes.append(SELECTION_CHANGE_CAPABILITY)
+    return {
+        "changed": bool(reasons),
+        "classes": classes,
+        "reasons": reasons,
+        "prev_model": prev_model,
+        "new_model": new_model,
+    }
+
+
+def normalize_selection_change_policy(value: Any, *, allowed: Sequence[str] | None = None) -> str:
+    text = _norm(value).lower()
+    pool = [p for p in (allowed or SELECTION_CHANGE_POLICIES) if p in SELECTION_CHANGE_POLICIES]
+    if text in pool:
+        return text
+    if DEFAULT_SELECTION_CHANGE_POLICY in pool:
+        return DEFAULT_SELECTION_CHANGE_POLICY
+    return pool[0] if pool else DEFAULT_SELECTION_CHANGE_POLICY
+
+
+def react_selection_change_policy(
+    bundle_props: Mapping[str, Any] | None,
+    agent_id: str | None,
+) -> dict[str, Any]:
+    """Admin defaults/bounds for the selection-change policy.
+
+    Config (same agent-key chain as the rest of the react block)::
+
+        react:
+          default_agent:
+            cache:
+              selection_change_policy: confirm            # one default for both classes
+              # or:
+              selection_change_policy:
+                model_switch: confirm
+                capability_toggle: accept
+                allowed: [accept, confirm, defer_cold]
+
+    Returns ``{model_switch, capability_toggle, allowed}`` — the platform
+    default is ``confirm`` for both classes with the full set allowed.
+    """
+    raw: Any = None
+    for block in _react_agent_config_blocks(bundle_props, agent_id):
+        cache_cfg = block.get("cache")
+        if isinstance(cache_cfg, Mapping) and cache_cfg.get("selection_change_policy") is not None:
+            raw = cache_cfg.get("selection_change_policy")
+            break
+    allowed = list(SELECTION_CHANGE_POLICIES)
+    model_default = DEFAULT_SELECTION_CHANGE_POLICY
+    capability_default = DEFAULT_SELECTION_CHANGE_POLICY
+    if isinstance(raw, str):
+        model_default = capability_default = normalize_selection_change_policy(raw)
+    elif isinstance(raw, Mapping):
+        raw_allowed = [p for p in _string_list(raw.get("allowed")) if p in SELECTION_CHANGE_POLICIES]
+        if raw_allowed:
+            allowed = raw_allowed
+        base = raw.get("default")
+        if base is not None:
+            model_default = capability_default = normalize_selection_change_policy(base, allowed=allowed)
+        if raw.get(SELECTION_CHANGE_MODEL) is not None:
+            model_default = normalize_selection_change_policy(raw.get(SELECTION_CHANGE_MODEL), allowed=allowed)
+        if raw.get(SELECTION_CHANGE_CAPABILITY) is not None:
+            capability_default = normalize_selection_change_policy(raw.get(SELECTION_CHANGE_CAPABILITY), allowed=allowed)
+    return {
+        SELECTION_CHANGE_MODEL: model_default,
+        SELECTION_CHANGE_CAPABILITY: capability_default,
+        "allowed": allowed,
+    }
+
+
+def effective_selection_change_policy(
+    bundle_props: Mapping[str, Any] | None,
+    agent_id: str | None,
+    user_cache_policy: Mapping[str, Any] | None,
+) -> dict[str, str]:
+    """The user's standing policy over the admin default, clamped to the
+    admin-allowed set: the user pays for the cache, so the user decides."""
+    admin = react_selection_change_policy(bundle_props, agent_id)
+    allowed = admin["allowed"]
+    out: dict[str, str] = {}
+    for klass in (SELECTION_CHANGE_MODEL, SELECTION_CHANGE_CAPABILITY):
+        user_value = (user_cache_policy or {}).get(klass) if isinstance(user_cache_policy, Mapping) else None
+        if _norm(user_value).lower() in allowed:
+            out[klass] = _norm(user_value).lower()
+        else:
+            out[klass] = admin[klass]
+    return out
+
+
+def clamp_cache_policy(
+    policy: Mapping[str, Any] | None,
+    bundle_props: Mapping[str, Any] | None,
+    agent_id: str | None,
+) -> dict[str, str]:
+    """Write-side clamp for the user's standing `cache_policy` patch: only the
+    two known classes, only admin-allowed values; everything else drops."""
+    admin = react_selection_change_policy(bundle_props, agent_id)
+    allowed = admin["allowed"]
+    out: dict[str, str] = {}
+    if isinstance(policy, Mapping):
+        for klass in (SELECTION_CHANGE_MODEL, SELECTION_CHANGE_CAPABILITY):
+            value = _norm(policy.get(klass)).lower()
+            if value in allowed:
+                out[klass] = value
+    return out
+
+
 # ── catalog (the pickable inventory) ─────────────────────────────────────────
 
 
@@ -945,11 +1119,18 @@ def selection_deltas(disabled: Mapping[str, Any] | None) -> dict[str, Any]:
 module_tool_docs = _module_tool_docs
 
 __all__ = [
+    "DEFAULT_SELECTION_CHANGE_POLICY",
+    "SELECTION_CHANGE_CAPABILITY",
+    "SELECTION_CHANGE_MODEL",
+    "SELECTION_CHANGE_POLICIES",
     "SYSTEM_TOOL_ALIASES",
     "USER_MODEL_TARGET_ROLE",
     "agent_capabilities_catalog",
+    "clamp_cache_policy",
     "clamp_selection",
+    "classify_selection_change",
     "configured_strong_model",
+    "effective_selection_change_policy",
     "enrich_catalog_mcp_tools",
     "is_system_tool_alias",
     "match_supported_model",
@@ -957,6 +1138,8 @@ __all__ = [
     "narrow_agent_skill_config",
     "narrow_agent_tool_config",
     "normalize_model_pick",
+    "react_selection_change_policy",
     "react_supported_models",
     "selection_deltas",
+    "selection_snapshot",
 ]

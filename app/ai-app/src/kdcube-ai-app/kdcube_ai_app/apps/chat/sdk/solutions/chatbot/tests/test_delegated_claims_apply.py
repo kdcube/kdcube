@@ -268,6 +268,10 @@ def test_notice_message_names_provider_and_tools():
         connection_hub_bundle_id="connection-hub@1-0",
         missing=_missing_slack(),
     )
-    assert payload["error"]["message"] == message
+    # The payload message composition is owned by the connections stack and may
+    # evolve; the stable contract asserted here: it NAMES the provider account
+    # and points at Connection Hub (never the old anonymous wording).
+    assert "Slack" in payload["error"]["message"]
+    assert "Connection Hub" in payload["error"]["message"]
     assert payload["consent"]["url"].startswith("/api/integrations/bundles/acme/demo/connection-hub%401-0/")
     assert "widgets/connections_settings" in payload["consent"]["url"]

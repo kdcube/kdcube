@@ -2517,6 +2517,28 @@ class BaseWorkflow():
             intros=intros,
         )
 
+    def _conversation_cache_is_warm(self, timeline: Any) -> bool:
+        """Whether this conversation's prompt cache is plausibly still warm.
+
+        Uses the persisted warmness signal (`cache_last_touch_at` +
+        `cache_last_ttl_seconds`) the timeline carries across turns. No touch
+        timestamp (fresh conversation / legacy payload) reads as cold — and a
+        cold cache makes selection changes free by definition.
+        """
+        if timeline is None:
+            return False
+        touch = getattr(timeline, "cache_last_touch_at", None)
+        if not touch:
+            return False
+        ttl = getattr(timeline, "cache_last_ttl_seconds", None)
+        if not ttl:
+            session = getattr(getattr(self, "runtime_ctx", None), "session", None)
+            ttl = getattr(session, "cache_ttl_seconds", None) or 300
+        try:
+            return (time.time() - int(touch)) < int(ttl)
+        except Exception:
+            return False
+
     async def apply_user_agent_selection(self, tool_config: Any, skill_config: Any) -> tuple:
         """Narrow the configured tool/skill configs to this user's saved selection.
 
@@ -2549,14 +2571,19 @@ class BaseWorkflow():
                 return tool_config, skill_config
 
             from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import (
+                SELECTION_CHANGE_CAPABILITY,
+                SELECTION_CHANGE_MODEL,
                 USER_MODEL_TARGET_ROLE,
+                classify_selection_change,
+                effective_selection_change_policy,
                 match_supported_model,
                 narrow_agent_skill_config,
                 narrow_agent_tool_config,
                 react_supported_models,
                 selection_deltas,
+                selection_snapshot,
             )
-            from kdcube_ai_app.apps.chat.sdk.runtime.user_selection_store import (
+            from kdcube_ai_app.apps.chat.sdk.solutions.user_settings import (
                 UserAgentSelectionStore,
             )
 
@@ -2570,8 +2597,101 @@ class BaseWorkflow():
                 bundle_id=bundle_id,
                 agent_id=agent_id,
             )
-            disabled = (selection or {}).get("disabled") or {}
             bundle_props = self.bundle_props if isinstance(self.bundle_props, Mapping) else {}
+            if runtime_ctx is not None:
+                runtime_ctx.cold_turn_marker = None
+
+            # ── cold-cache governance ─────────────────────────────────────────
+            # The USER pays for the cache, so the USER decides when a
+            # cache-colding change lands; admin config only bounds the policy.
+            # Compares the stored selection against the conversation's
+            # last-APPLIED snapshot (persisted with the timeline), promotes a
+            # deferred pending delta when its trigger fires, and pins the
+            # snapshot when the user's policy defers an active delta.
+            timeline = None
+            try:
+                timeline = getattr(self.ctx_browser, "timeline", None)
+            except Exception:
+                timeline = None
+            warm = self._conversation_cache_is_warm(timeline)
+            conversation_id = str(getattr(runtime_ctx, "conversation_id", "") or "").strip()
+            promoted_policy = ""
+            pending = (selection or {}).get("pending")
+            if isinstance(pending, Mapping) and pending:
+                apply_mode = str(pending.get("apply") or "").strip().lower()
+                since_conversation = str(pending.get("since_conversation_id") or "").strip()
+                triggered = (
+                    (apply_mode == "next_conversation" and conversation_id != since_conversation)
+                    or (apply_mode == "when_cold" and not warm)
+                )
+                if triggered:
+                    try:
+                        selection = await store.promote_pending(
+                            user_id=user_id,
+                            bundle_id=bundle_id,
+                            agent_id=agent_id,
+                        )
+                        promoted_policy = apply_mode
+                    except Exception:
+                        self.logger.log(
+                            "[agent_selection] pending promotion failed; active selection stays\n"
+                            + traceback.format_exc(),
+                            level="WARNING",
+                        )
+
+            disabled = (selection or {}).get("disabled") or {}
+            supported = react_supported_models(bundle_props, agent_id)
+            matched_pick = match_supported_model((selection or {}).get("model"), supported)
+            curr_snapshot = selection_snapshot(disabled, matched_pick)
+            prev_snapshot = getattr(timeline, "agent_selection_snapshot", None) if timeline is not None else None
+            change = classify_selection_change(prev_snapshot, curr_snapshot)
+            pinned = False
+            if change["changed"] and isinstance(prev_snapshot, Mapping) and not promoted_policy:
+                policy = effective_selection_change_policy(
+                    bundle_props, agent_id, (selection or {}).get("cache_policy"),
+                )
+                def _blocks_now(klass: str) -> bool:
+                    value = policy.get(klass, "")
+                    if value == "defer_conversation":
+                        return True
+                    if value == "defer_cold":
+                        return warm
+                    return False
+                # Pin only when EVERY delta class defers; `accept` and
+                # `confirm` (stored = UI-confirmed) adopt immediately.
+                pinned = bool(change["classes"]) and all(_blocks_now(k) for k in change["classes"])
+            if pinned:
+                disabled = dict((prev_snapshot or {}).get("disabled") or {})
+                matched_pick = match_supported_model((prev_snapshot or {}).get("model"), supported)
+            else:
+                if change["changed"]:
+                    marker = {
+                        "reason": (change["classes"][0] if len(change["classes"]) == 1 else "selection_change"),
+                        "reasons": change["reasons"],
+                        "classes": change["classes"],
+                        "deltas": selection_deltas(disabled),
+                        "prev_model": change["prev_model"],
+                        "new_model": change["new_model"],
+                        "policy": promoted_policy or "",
+                        "warm": bool(warm and isinstance(prev_snapshot, Mapping)),
+                    }
+                    if runtime_ctx is not None and isinstance(prev_snapshot, Mapping):
+                        runtime_ctx.cold_turn_marker = marker
+                    try:
+                        self.logger.log(
+                            "kdcube.react.cache " + json.dumps(
+                                {"event": "selection_change_applied", "conversation_id": conversation_id, **marker},
+                                ensure_ascii=False, sort_keys=True, default=str,
+                            ),
+                            level="INFO",
+                        )
+                    except Exception:
+                        pass
+                if timeline is not None:
+                    try:
+                        timeline.agent_selection_snapshot = curr_snapshot
+                    except Exception:
+                        pass
 
             # ── model pick (independent of the deny-list) ─────────────────────
             # Turn-local: rebase agent_role_models from config FIRST so a
@@ -2581,16 +2701,12 @@ class BaseWorkflow():
             if runtime_ctx is not None:
                 try:
                     runtime_ctx.agent_role_models = _react_role_models(bundle_props, agent_id=agent_id)
-                    matched = match_supported_model(
-                        (selection or {}).get("model"),
-                        react_supported_models(bundle_props, agent_id),
-                    )
-                    if matched:
+                    if matched_pick:
                         runtime_ctx.agent_role_models = {
                             **runtime_ctx.agent_role_models,
-                            USER_MODEL_TARGET_ROLE: dict(matched),
+                            USER_MODEL_TARGET_ROLE: dict(matched_pick),
                         }
-                        applied_model = matched
+                        applied_model = dict(matched_pick)
                 except Exception:
                     # Fail OPEN to the configured role model.
                     self.logger.log(

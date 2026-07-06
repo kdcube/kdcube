@@ -177,6 +177,11 @@ class RuntimeCtx:
     # turn-local by design, so the cached system-prompt slice stays byte-stable
     # when claim status or user toggles change between turns.
     inactive_tools: List[Dict[str, Any]] = field(default_factory=list)
+    # Turn-local cold-turn marker: set when a selection change (model switch /
+    # capability toggle) applied on a warm conversation, so the cache-rebuild
+    # premium is attributable as one component within the turn's spend sum.
+    # Shape: {reason, reasons, deltas, prev_model?, new_model?, policy?, warm}.
+    cold_turn_marker: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -242,6 +247,7 @@ class RuntimeCtx:
             "memory_hotset": copy.deepcopy(self.memory_hotset or []),
             "memory_hotset_error": self.memory_hotset_error,
             "inactive_tools": copy.deepcopy(self.inactive_tools or []),
+            "cold_turn_marker": copy.deepcopy(self.cold_turn_marker) if self.cold_turn_marker else None,
         }
 
 

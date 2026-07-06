@@ -11,7 +11,7 @@ import pytest
 
 from kdcube_ai_app.apps.chat.sdk.runtime.skill_config import AgentSkillConfig
 from kdcube_ai_app.apps.chat.sdk.runtime.tool_config import AgentToolConfig
-from kdcube_ai_app.apps.chat.sdk.runtime.user_selection_store import agent_selection_key
+from kdcube_ai_app.apps.chat.sdk.solutions.user_settings import agent_selection_key
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.base_workflow import BaseWorkflow
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.client_tools import (
     denied_named_service_namespaces,
@@ -73,7 +73,13 @@ def _workflow_stub(*, pg_pool, user_id="u1", bundle_id="bundle@1-0", agent_id="m
         user_id=user_id,
         bundle_id=bundle_id,
         agent_id=agent_id,
+        conversation_id="conv-1",
+        cold_turn_marker=None,
     )
+    # Cold-cache governance collaborators: no loaded timeline in unit stubs
+    # (reads as a fresh/cold conversation), warmness helper bound explicitly.
+    stub.ctx_browser = SimpleNamespace(timeline=None)
+    stub._conversation_cache_is_warm = lambda timeline: False
     return stub
 
 

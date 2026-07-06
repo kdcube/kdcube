@@ -9,7 +9,7 @@ import json
 import pytest
 
 from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import agent_capabilities_catalog
-from kdcube_ai_app.apps.chat.sdk.runtime.user_selection_store import (
+from kdcube_ai_app.apps.chat.sdk.solutions.user_settings import (
     AGENT_SELECTION_SUBSYSTEM,
     UserAgentSelectionStore,
     agent_selection_key,

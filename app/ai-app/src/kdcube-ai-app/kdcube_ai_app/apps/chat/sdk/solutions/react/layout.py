@@ -1422,6 +1422,34 @@ def build_announce_inactive_tools_lines(*, runtime_ctx: Optional[RuntimeCtx]) ->
     return lines
 
 
+def build_announce_cold_turn_lines(*, runtime_ctx: Optional[RuntimeCtx]) -> List[str]:
+    """`[CACHE]` — one small turn-local line when a selection change applied on
+    a warm conversation: the context re-caches this turn, and the rebuild
+    premium is one identifiable component within this turn's spend sum."""
+    if runtime_ctx is None:
+        return []
+    marker = getattr(runtime_ctx, "cold_turn_marker", None)
+    if not isinstance(marker, dict) or not marker.get("warm", True):
+        return []
+    reasons = [str(r) for r in (marker.get("reasons") or []) if str(r or "").strip()]
+    reason_text = ", ".join(reasons) or str(marker.get("reason") or "selection_change")
+    detail = ""
+    prev_model = marker.get("prev_model") or {}
+    new_model = marker.get("new_model") or {}
+    if isinstance(prev_model, dict) or isinstance(new_model, dict):
+        prev_id = str((prev_model or {}).get("model") or "").strip()
+        new_id = str((new_model or {}).get("model") or "").strip()
+        if prev_id or new_id:
+            detail = f" ({prev_id or 'configured default'} -> {new_id or 'configured default'})"
+    lines = ["[CACHE]"]
+    lines.append(
+        f"  cold turn: {reason_text}{detail}; the context re-caches at full input rates this turn."
+    )
+    return lines
+
+
+
+
 def build_announce_text(
     *,
     iteration: int,
@@ -1517,6 +1545,11 @@ def build_announce_text(
     if show_status_sections and inactive_tool_lines:
         lines.append("")
         lines.extend(inactive_tool_lines)
+
+    cold_turn_lines = build_announce_cold_turn_lines(runtime_ctx=runtime_ctx)
+    if show_status_sections and cold_turn_lines:
+        lines.append("")
+        lines.extend(cold_turn_lines)
 
     if show_temporal:
         try:
