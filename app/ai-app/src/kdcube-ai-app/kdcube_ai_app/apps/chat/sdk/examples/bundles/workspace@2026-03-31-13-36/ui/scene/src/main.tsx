@@ -50,7 +50,17 @@ import {
   type SceneExternalPanelConfig,
 } from './sceneConfig'
 import { dataBusSocketFor, ensureSocketConnected } from './dataBus'
-import { FloatingWindow, Rail, setViewportBottomClip, useWindowManager, type RailEntry, type WindowSizing } from './windows'
+import {
+  FloatingWindow,
+  Rail,
+  buriedAliases,
+  externalPanelSurfaceRegistrations,
+  setViewportBottomClip,
+  useWindowManager,
+  windowRectFromState,
+  type RailEntry,
+  type WindowSizing,
+} from '@kdcube/components-react/scene'
 import { componentIcon, TasksIcon } from './icons'
 import './styles.css'
 
@@ -398,20 +408,18 @@ function App() {
       })
     })
     if (externalPanel) {
-      Object.entries(externalPanel.surfaces || {}).forEach(([targetSurface, surface]) => {
-        registry[targetSurface] = {
-          label: surface.label || externalPanel.label,
-          ensureOpen: () => openComponent(externalAlias, { expanded: Boolean(surface.expanded) }),
-          isReady: () => Boolean(frameRefs.current[externalAlias]?.contentWindow),
-          postCommand: (command) => postToFrame(externalAlias, command as Record<string, unknown>),
-          commandFromOpen: (request) => {
-            const providerCommand = providerSurfaceCommandFromOpen(request)
-            if (providerCommand) return { ...(surface.command || {}), ...providerCommand, target_surface: targetSurface }
-            if (surface.command) return { ...surface.command }
-            return null
-          },
-        }
-      })
+      // The panel's `surfaces` config drives the whole open chain — summon +
+      // `expanded`, `command` / `command_from_open` semantics, and delivery in
+      // the widget's own `widget_message_type` vocabulary — via the package's
+      // external-panel routing (so a provider open of e.g.
+      // `task_tracker.issue_editor` reaches the widget as a command it acts on).
+      Object.assign(registry, externalPanelSurfaceRegistrations(externalPanel, {
+        ensureOpen: (_targetSurface, surface) => openComponent(externalAlias, {
+          ...(surface.expanded !== undefined ? { expanded: surface.expanded } : {}),
+        }),
+        isReady: () => Boolean(frameRefs.current[externalAlias]?.contentWindow),
+        postToPanel: (message) => postToFrame(externalAlias, message as Record<string, unknown>),
+      }))
     }
     return registry
   }, [components, externalAlias, externalPanel, openComponent, postToFrame])
@@ -964,29 +972,14 @@ function App() {
   // OVERLAPS its rect — that window gets the raise veil. This covers docked
   // windows too: a docked tile under a floating window must raise on
   // activation (all windows share one z band; docked tiles simply start low).
-  const windowRect = (alias: string): { left: number; top: number; right: number; bottom: number } | null => {
-    const st = manager.wins[alias]
-    if (!st?.open) return null
-    if (st.floating) return { left: st.x, top: st.y, right: st.x + st.w, bottom: st.y + st.h }
+  const buriedWindows = buriedAliases(manager.wins, (alias, state) => {
+    if (state.floating) return windowRectFromState(state)
     const tile = tileRefs.current[alias]
     if (!tile) return null
     const r = tile.getBoundingClientRect()
     return { left: r.left, top: r.top, right: r.right, bottom: r.bottom }
-  }
-  const openWindowAliases = Object.keys(manager.wins).filter((id) => manager.wins[id].open)
-  const isBuried = (alias: string): boolean => {
-    const st = manager.wins[alias]
-    const rect = windowRect(alias)
-    if (!st?.open || !rect) return false
-    return openWindowAliases.some((other) => {
-      if (other === alias) return false
-      const o = manager.wins[other]
-      if (o.z <= st.z) return false
-      const orect = windowRect(other)
-      if (!orect) return false
-      return orect.left < rect.right && orect.right > rect.left && orect.top < rect.bottom && orect.bottom > rect.top
-    })
-  }
+  })
+  const isBuried = (alias: string): boolean => buriedWindows.has(alias)
 
   const railEntries: RailEntry[] = []
   components.forEach((spec) => {

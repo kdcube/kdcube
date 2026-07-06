@@ -604,6 +604,12 @@ bundles:
               components_react_canvas:
                 src_folder: npm://components-react/src/canvas
                 target: _shared/components-react/canvas
+              # Scene-host shell: rail, window manager, component registry,
+              # CONFIG handshake, sceneHost.css. The scene host imports it as
+              # @kdcube/components-react/scene.
+              components_react_scene:
+                src_folder: npm://components-react/src/scene
+                target: _shared/components-react/scene
               components_core_canvas:
                 src_folder: npm://components-core/src/canvas
                 target: _shared/components-core/canvas

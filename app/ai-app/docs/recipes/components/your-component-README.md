@@ -73,6 +73,31 @@ Add only data to the scene config:
 
 The component receives `kdcube.surface.command`, preserves `object_ref`, and translates the command into its own local state/API calls.
 
+## Provider Opens Toward Your Surfaces
+
+When your provider resolves `object.action(open)`, return
+`ui_event.target_surface` naming a surface you declared (component
+`target_surfaces` or an external-panel `surfaces` entry). The scene executes
+that surface's descriptor: it summons the owning window, applies the
+declared `expanded` state, and — for a surface with
+`command_from_open: provider_surface_open` — forwards your open payload as
+the widget command, posted under the panel's `widget_message_type`. Your
+widget then receives at minimum:
+
+```json
+{
+  "type": "<your widget_message_type>",
+  "widget": "<your widget alias>",
+  "action": "open",
+  "object_ref": "your:object:...",
+  "target_surface": "your.namespace.viewer"
+}
+```
+
+Handle it by switching to the view that renders that object. Descriptor
+semantics:
+[External Panels And Provider-Open Routing](../../sdk/solutions/scene/config/README.md#external-panels-and-provider-open-routing).
+
 ## Context Rules
 
 ```text

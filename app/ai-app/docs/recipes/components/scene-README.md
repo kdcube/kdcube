@@ -92,6 +92,28 @@ The scene config is data, not hardcoded widget logic. A scene profile should dec
 
 `liveEventsTransport` is per widget and per profile. Use `scene` when the widget should receive Event Bus messages through the host. Use `sse` when the widget is intentionally connected to another runtime or must own its live stream.
 
+An app-owned scene host declares the same routing server-side. An external
+panel mounts another app's widget and maps target surfaces to per-surface
+descriptors, including editor-surface routing for provider opens:
+
+```yaml
+external_panels:
+  - id: task_panel
+    bundle_id: task-tracker@1-0
+    widget_alias: task_tracker_tasks
+    widget_message_type: kdcube-task-tracker-widget-command
+    open_message_types: [kdcube-task-tracker-open-issue, kdcube-task-tracker-create-issue]
+    surfaces:
+      task_tracker.issue_list:   { expanded: false, command: {action: refresh} }
+      task_tracker.issue_editor: { expanded: true,  command_from_open: provider_surface_open }
+```
+
+With this shape, opening a task pin resolves to
+`ui_event.target_surface = task_tracker.issue_editor` and the scene summons
+the panel expanded with the issue loaded (the open payload is forwarded as
+the widget command). Descriptor semantics:
+[External Panels And Provider-Open Routing](../../sdk/solutions/scene/config/README.md#external-panels-and-provider-open-routing).
+
 ## Event Flow
 
 ```text

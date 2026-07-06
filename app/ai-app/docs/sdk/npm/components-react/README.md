@@ -30,6 +30,7 @@ and DOM event wiring.
 | `@kdcube/components-react` | Shared React export surface. |
 | `@kdcube/components-react/chat` | `ChatStoreProvider`, hooks, `Chat`, `ChatShell`, `useChatViewModel`. |
 | `@kdcube/components-react/canvas` | `CanvasBoard` plus re-exported core canvas types/helpers. |
+| `@kdcube/components-react/scene` | Scene-host shell: component registry, host plumbing, rail/windows, external-panel surface routing (`externalPanelSurfaceRegistrations`). Import `sceneHost.css` for the skin. |
 
 ## Chat
 

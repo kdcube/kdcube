@@ -57,6 +57,14 @@ const materializedComponentsCoreCanvas = path.resolve(__dirname, '_shared/compon
 const componentsCoreCanvasEntry = fs.existsSync(materializedComponentsCoreCanvas)
   ? materializedComponentsCoreCanvas
   : findInWorkspace(__dirname, 'npm/packages/components-core/src/canvas/index.ts')
+// Scene-host shell (@kdcube/components-react/scene — rail, window manager,
+// registry, host plumbing, sceneHost.css). Same materialized-_shared +
+// workspace-fallback resolution; the stylesheet resolves next to the entry.
+const materializedComponentsReactScene = path.resolve(__dirname, '_shared/components-react/scene/index.ts')
+const sceneShellEntry = fs.existsSync(materializedComponentsReactScene)
+  ? materializedComponentsReactScene
+  : findInWorkspace(__dirname, 'npm/packages/components-react/src/scene/index.ts')
+const sceneShellCss = path.resolve(path.dirname(sceneShellEntry), 'sceneHost.css')
 // The canvas stylesheet sits next to the component entry; resolve the subpath
 // explicitly so the `@import '@kdcube/components-react/canvas/canvasBoard.css'` in
 // styles.css finds it (the entry alias points at index.ts).
@@ -69,6 +77,8 @@ export default defineConfig({
     alias: [
       { find: '@kdcube/components-react/canvas/canvasBoard.css', replacement: canvasComponentCss },
       { find: '@kdcube/components-react/canvas', replacement: canvasComponentEntry },
+      { find: '@kdcube/components-react/scene/sceneHost.css', replacement: sceneShellCss },
+      { find: '@kdcube/components-react/scene', replacement: sceneShellEntry },
       { find: '@kdcube/components-core/scene', replacement: sceneRuntimeEntry },
       { find: '@kdcube/components-core/events', replacement: eventsRuntimeEntry },
       { find: '@kdcube/components-core/canvas', replacement: componentsCoreCanvasEntry },

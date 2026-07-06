@@ -15,6 +15,14 @@
  *     `components` map over host-owned defaults,
  *   normalizeExternalPanelConfig, normalizeDropAccepts, asRecord, asString.
  *
+ * External-panel surface routing (externalPanels.ts — pure):
+ *   externalPanelSurfaceRegistrations(panel, hooks) — build the
+ *     SceneRuntime registrations for a panel's `surfaces` config
+ *     (summon + `expanded`, `command` / `command_from_open` semantics,
+ *     `widget_message_type` delivery),
+ *   externalPanelCommandFromOpen, externalPanelWidgetMessage,
+ *   SceneExternalPanelHostHooks.
+ *
  * Host plumbing (host.ts — pure):
  *   SceneRouteContext, sceneRouteContext, sceneContextFromConfig,
  *   requestSceneRuntimeConfig (ask an embedding host),
@@ -31,5 +39,6 @@
  *   rectsIntersect, windowRectFromState, buriedAliases (raise-veil overlap).
  */
 export * from './registry'
+export * from './externalPanels'
 export * from './host'
 export * from './windows'

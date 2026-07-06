@@ -4,7 +4,7 @@ title: "Scene Configuration Examples"
 summary: "Frontend and backend config examples for composing a generic scene from apps, surfaces, named services, events, and runtime scopes."
 status: draft
 tags: ["sdk", "solutions", "scene", "configuration", "apps", "named-services", "event-bus", "data-bus"]
-updated_at: 2026-07-06
+updated_at: 2026-07-07
 see_also:
   - docs/sdk/solutions/scene/generic-scene-contract-README.md
   - docs/sdk/solutions/scene/scene-composition-README.md
@@ -60,7 +60,8 @@ surfaces:
           - id: task_panel
             bundle_id: task-tracker@1-0
             widget_alias: task_tracker_tasks
-            # ... surfaces / event forwarding, see backend-bundles.yaml.example
+            # ... surfaces / event forwarding — see
+            # "External Panels And Provider-Open Routing" below
 ```
 
 `scene_surface_config` returns `components`, `external_panels`, and
@@ -87,6 +88,67 @@ Per-component keys:
 
 The docked/floating window behavior behind `placement` is described in
 [Scene Composition](../scene-composition-README.md).
+
+## External Panels And Provider-Open Routing
+
+`external_panels` mounts another app's served widget as a summonable panel and
+declares which target surfaces that panel owns. This is the second half of the
+provider-open contract: when a provider resolves `object.action(open)` and
+returns `ui_event.target_surface`, the scene looks the surface up in its
+runtime registry — the surface may be owned by a component
+(`target_surfaces`, e.g. `sdk.memory.viewer` on the `memory_item` component)
+or by an external panel (`surfaces`). Both resolve through the same registry;
+the panel adds a per-surface descriptor that tells the host what to do with
+the open:
+
+```yaml
+external_panels:
+  - id: task_panel
+    label: Tasks
+    bundle_id: task-tracker@1-0
+    widget_alias: task_tracker_tasks
+    widget_message_type: kdcube-task-tracker-widget-command
+    open_message_types:
+      - kdcube-task-tracker-open-issue
+      - kdcube-task-tracker-create-issue
+    surfaces:
+      task_tracker.issue_list:
+        expanded: false
+        command: { action: refresh }
+      task_tracker.issue_editor:
+        expanded: true
+        command_from_open: provider_surface_open
+```
+
+Panel-level keys:
+
+| Key | What the host does with it |
+| --- | --- |
+| `bundle_id` + `widget_alias` | The served widget iframed into the panel window. |
+| `widget_message_type` | The widget's own host-command vocabulary. Every command delivered to a panel surface is posted with this `type` (plus `widget: <widget_alias>`), so the widget recognizes it; without this key the scene-level `kdcube.surface.command` type is kept. |
+| `open_message_types` | Widget-emitted intents that summon the panel expanded (the widget asks its host to open the owning editor surface). |
+| `service_event_type` / `service_forward_message_type` | One claimed project service event forwarded into the mounted widget under the given message type. |
+
+Per-surface descriptor keys (`surfaces.<target_surface>`):
+
+| Key | What the host does with it |
+| --- | --- |
+| `expanded` | Window state applied when an open resolves toward this surface: `true` summons the panel expanded (full size), `false` compact. |
+| `command` | Static command posted to the widget when this surface is targeted (e.g. `{action: refresh}` for a list surface). |
+| `command_from_open: provider_surface_open` | Forward the provider's open payload as the widget command: the scene builds the command from the open response (`action: open`, `object_ref`, `ui_event` fields, title) and posts it — under `widget_message_type` — so the widget switches to the right view with that object loaded. A surface declaring a static `command` and no `command_from_open` posts only the static command. |
+
+With the example above, opening a `task:issue:` pin (or a task from chat)
+resolves to `ui_event.target_surface = task_tracker.issue_editor`: the scene
+summons the Tasks panel expanded and posts
+`{type: kdcube-task-tracker-widget-command, action: open, object_ref: task:issue:..., ...}`
+into the widget — the editor view opens with that issue. The same open routed
+at `task_tracker.issue_list` just refreshes the compact list.
+
+The reusable implementation lives in `@kdcube/components-react/scene`
+(`externalPanelSurfaceRegistrations`); any scene host that registers panel
+surfaces through it gets this contract. The full referent panel shape is in
+the workspace app's config template
+(`surfaces.as_consumer.ui.scene.external_panels`).
 
 ```text
 website/app scene config

@@ -91,6 +91,10 @@ scene host deliverDrop
   open   -> call provider object.action(open), then route ui_event.target_surface
 ```
 
+When `ui_event.target_surface` names an external-panel surface, its descriptor
+decides the delivered command and window state — see
+[External Panels And Provider-Open Routing](config/README.md#external-panels-and-provider-open-routing).
+
 The overlay is host UI, not a widget. It exists because browser native drag/drop
 does not reliably cross nested iframe boundaries, especially cross-origin. The
 host receives source drag messages, owns the active drag context, and builds

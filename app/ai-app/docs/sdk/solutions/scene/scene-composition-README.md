@@ -118,6 +118,11 @@ Source surface or host
      example: postMessage({ action: "open", object_ref, view: "expanded" })
 ```
 
+A target surface owned by an external panel executes its per-surface
+descriptor at the last step (summon + `expanded`, `command_from_open`
+forwarding under the panel's `widget_message_type`) — see
+[External Panels And Provider-Open Routing](config/README.md#external-panels-and-provider-open-routing).
+
 ## What The Host Owns
 
 | Concern | Owner |
