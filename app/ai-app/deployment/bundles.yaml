@@ -1,6 +1,1667 @@
-# Mounted into proc as /config/bundles.yaml in descriptor-first deployments.
-# This file remains the portable/export descriptor view of bundle registry state.
+# Default bundle descriptors for a fresh KDCube install (base complectation).
+# Staged into the runtime config dir by the installer when the operator does
+# not supply their own descriptor set; everything here remains editable via
+# the AI Bundles dashboard afterwards (the file stays the authority).
+#
+# Contents: config overlays for the built-in service apps that ship in the
+# image and are auto-discovered (no path/module entries needed):
+#   connection-hub@1-0        identity, consent, delegated credentials, OAuth
+#   kdcube-services@1-0       managed MCP surfaces + named-services bridge
+#   user-memories@2026-06-26  the mem provider + memories widget
+#   workspace@2026-03-31-13-36  showcase scene + chat wired to everything
+#
+# Placeholders:
+#   <TENANT>, <PROJECT>       substituted by the installer at init
+#   <PUBLIC_HOST>             substituted from KDCUBE_PUBLIC_HOST when set,
+#                             otherwise left for the operator (OAuth redirect
+#                             URIs and webhooks need the real public host)
+#   <VI_BUILD_DEST_ABSOLUTE_PATH>  resolved at widget-build time by the
+#                             runtime — leave verbatim
+# Matching secrets skeleton: bundles.secrets.yaml (same directory).
 bundles:
-  version: "1"
-  default_bundle_id: "workspace@2026-03-31-13-36"
-  items: []
+  version: '1'
+  default_bundle_id: workspace@2026-03-31-13-36
+  items:
+  - id: connection-hub@1-0
+    name: Connection Hub
+    singleton: false
+    config:
+      connections:
+        oauth:
+          public_base_url: https://<PUBLIC_HOST>
+        delegated_credentials:
+          oauth:
+            enabled: true
+            brand: KDCube
+            issuer: ''
+            public_clients:
+            - client_id: claude
+              redirect_uris:
+              - https://claude.ai/api/mcp/auth_callback
+              - http://localhost/callback
+              - http://127.0.0.1/callback
+            dynamic_client_registration:
+              allowed_redirect_uris:
+              - https://claude.ai/api/mcp/auth_callback
+              - http://localhost/callback
+              - http://127.0.0.1/callback
+            capabilities:
+            - grant: kdcube:role:super-admin
+              label: Use all platform and application APIs
+              description: Admin-only delegated automation access to every authenticated KDCube platform and application API.
+              delegable_roles:
+              - kdcube:role:super-admin
+              delegable_permissions:
+              - kdcube:role:super-admin
+            - grant: conversations:read
+              label: Read your conversations
+              description: Read the approving user's own KDCube conversations through delegated named-service tools.
+              delegable_roles:
+              - kdcube:role:chat-user
+              - kdcube:role:paid
+              - kdcube:role:privileged
+              - kdcube:role:super-admin
+              delegable_permissions:
+              - kdcube:*:conversations:*;read
+            - grant: conversations:read:any_user
+              label: Read any user's conversations
+              description: Admin read of a selected user's conversations through the conv named service.
+              delegable_roles:
+              - kdcube:role:super-admin
+              delegable_permissions:
+              - kdcube:*:conversations:*;read:any_user
+            - grant: memories:read
+              label: Read KDCube memories
+              description: Read the user's KDCube memory notes through delegated MCP tools.
+              delegable_roles:
+              - kdcube:role:chat-user
+              - kdcube:role:paid
+              - kdcube:role:privileged
+              - kdcube:role:super-admin
+              delegable_permissions:
+              - memories:read
+            - grant: memories:write
+              label: Write KDCube memories
+              description: Create or update the user's KDCube memory notes through delegated named-service tools.
+              delegable_roles:
+              - kdcube:role:chat-user
+              - kdcube:role:paid
+              - kdcube:role:privileged
+              - kdcube:role:super-admin
+              delegable_permissions:
+              - memories:write
+            - grant: tasks:read
+              label: Read KDCube tasks
+              description: Read task objects through delegated named-service tools.
+              delegable_roles:
+              - kdcube:role:chat-user
+              - kdcube:role:paid
+              - kdcube:role:privileged
+              - kdcube:role:super-admin
+              delegable_permissions:
+              - tasks:read
+            - grant: tasks:write
+              label: Write KDCube tasks
+              description: Create or update task objects through delegated named-service tools.
+              delegable_roles:
+              - kdcube:role:chat-user
+              - kdcube:role:paid
+              - kdcube:role:privileged
+              - kdcube:role:super-admin
+              delegable_permissions:
+              - tasks:write
+            - grant: canvas:read
+              label: Read KDCube canvas
+              description: Read canvas objects through delegated named-service tools.
+              delegable_roles:
+              - kdcube:role:chat-user
+              - kdcube:role:paid
+              - kdcube:role:privileged
+              - kdcube:role:super-admin
+              delegable_permissions:
+              - canvas:read
+            - grant: canvas:write
+              label: Write KDCube canvas
+              description: Create or update canvas objects through delegated named-service tools.
+              delegable_roles:
+              - kdcube:role:chat-user
+              - kdcube:role:paid
+              - kdcube:role:privileged
+              - kdcube:role:super-admin
+              delegable_permissions:
+              - canvas:write
+            - grant: knowledge:read
+              label: Read KDCube knowledge
+              description: Read KDCube knowledge notes through delegated MCP tools.
+              delegable_roles:
+              - kdcube:role:chat-user
+              - kdcube:role:paid
+              - kdcube:role:privileged
+              - kdcube:role:super-admin
+              delegable_permissions:
+              - knowledge:read
+            - grant: named_services:use
+              label: Use KDCube named services
+              description: Discover and call configured KDCube named-service namespaces through delegated MCP tools.
+              delegable_roles:
+              - kdcube:role:chat-user
+              - kdcube:role:paid
+              - kdcube:role:privileged
+              - kdcube:role:super-admin
+              delegable_permissions:
+              - named_services:use
+            - grant: mail:read
+              label: Read connected mail
+              description: Search and read messages and attachments from mail accounts connected to KDCube.
+              delegable_roles:
+              - kdcube:role:chat-user
+              - kdcube:role:paid
+              - kdcube:role:privileged
+              - kdcube:role:super-admin
+              delegable_permissions:
+              - mail:read
+            - grant: mail:send
+              label: Send connected mail
+              description: Send or forward messages through mail accounts connected to KDCube.
+              delegable_roles:
+              - kdcube:role:chat-user
+              - kdcube:role:paid
+              - kdcube:role:privileged
+              - kdcube:role:super-admin
+              delegable_permissions:
+              - mail:send
+            - grant: slack:read
+              label: Read connected Slack
+              description: List channels, search messages/files, read channel history, and download files through Slack accounts
+                connected to KDCube.
+              delegable_roles:
+              - kdcube:role:chat-user
+              - kdcube:role:paid
+              - kdcube:role:privileged
+              - kdcube:role:super-admin
+              delegable_permissions:
+              - slack:read
+            - grant: slack:write
+              label: Write connected Slack
+              description: Post messages and upload files through Slack accounts connected to KDCube.
+              delegable_roles:
+              - kdcube:role:chat-user
+              - kdcube:role:paid
+              - kdcube:role:privileged
+              - kdcube:role:super-admin
+              delegable_permissions:
+              - slack:write
+            resources:
+            - resource: '*'
+              label: All platform and application APIs
+              description: Admin-only delegated automation scope for every authenticated KDCube platform and application API.
+              admin_only: true
+              grants:
+              - kdcube:role:super-admin
+            - resource: '*/api/integrations/bundles/*/*/kdcube-services@1-0/public/mcp/conversations*'
+              label: KDCube conversations MCP
+              tools:
+                conversations_export:
+                  label: Export conversations
+                  description: Read conversation transcripts for feedback triage.
+                  grants:
+                  - conversations:read
+            - resource: '*/api/integrations/bundles/*/*/kdcube-services@1-0/public/mcp/named_services*'
+              label: KDCube named services MCP
+              tools:
+                named_services_list:
+                  label: List named services
+                  description: List configured named-service namespaces and operation grants.
+                  grants:
+                  - named_services:use
+                named_services_about:
+                  label: Named service about
+                  description: Read a provider about payload for a configured namespace.
+                  grants:
+                  - named_services:use
+                named_services_capabilities:
+                  label: Named service capabilities
+                  description: Read provider capabilities for a configured namespace.
+                  grants:
+                  - named_services:use
+                named_services_schema:
+                  label: Named service schema
+                  description: Read an object schema for a configured namespace.
+                  grants:
+                  - named_services:use
+                named_services_search:
+                  label: Named service search
+                  description: Search objects in a configured namespace.
+                  grants:
+                  - named_services:use
+                named_services_get:
+                  label: Named service get
+                  description: Read one object from a configured namespace.
+                  grants:
+                  - named_services:use
+                named_services_upsert:
+                  label: Named service upsert
+                  description: Create or update one object in a configured namespace.
+                  grants:
+                  - named_services:use
+                named_services_host_file:
+                  label: Named service host file
+                  description: Host or register a file/ref in a configured namespace.
+                  grants:
+                  - named_services:use
+                named_services_action:
+                  label: Named service action
+                  description: Run a bounded provider action on one object.
+                  grants:
+                  - named_services:use
+                named_services_delete:
+                  label: Named service delete
+                  description: Delete or archive one object in a configured namespace.
+                  grants:
+                  - named_services:use
+                named_services_call:
+                  label: Named service call
+                  description: Run a generic call against a configured namespace.
+                  grants:
+                  - named_services:use
+              named_services:
+                namespaces:
+                  mem:
+                    label: User memories
+                    description: KDCube memory notes for the approving user.
+                    authority_id: delegated_client
+                    tools:
+                      about:
+                        operation: provider.about
+                        label: About memories
+                        description: Explain the memory namespace and how to use it.
+                        grants:
+                        - memories:read
+                      capabilities:
+                        operation: provider.capabilities
+                        label: Memory capabilities
+                        description: Read provider capabilities for the memory namespace.
+                        grants:
+                        - memories:read
+                      list:
+                        operation: object.list
+                        label: List memories
+                        description: List memory notes visible to the delegated connection.
+                        grants:
+                        - memories:read
+                      schema:
+                        operation: object.schema
+                        label: Memory schema
+                        description: Read the object schema for memory notes.
+                        grants:
+                        - memories:read
+                      search:
+                        operation: object.search
+                        label: Search memories
+                        description: Search memory notes visible to the delegated connection.
+                        grants:
+                        - memories:read
+                      get:
+                        operation: object.get
+                        label: Read one memory
+                        description: Read one memory note by object ref.
+                        grants:
+                        - memories:read
+                      upsert:
+                        operation: object.upsert
+                        label: Write memory
+                        description: Create or update a memory note.
+                        grants:
+                        - memories:write
+                      action:
+                        operation: object.action
+                        label: Memory action
+                        description: Run a bounded provider action on a memory note.
+                        grants:
+                        - memories:read
+                      delete:
+                        operation: object.delete
+                        label: Delete memory
+                        description: Delete or archive a memory note.
+                        grants:
+                        - memories:write
+                      call:
+                        label: Generic memory call
+                        description: Generic memory namespace call with per-operation grants.
+                        operations:
+                          provider.about:
+                            label: About memories
+                            description: Explain the memory namespace and how to use it.
+                            grants:
+                            - memories:read
+                          provider.capabilities:
+                            label: Memory capabilities
+                            description: Read provider capabilities for the memory namespace.
+                            grants:
+                            - memories:read
+                          object.list:
+                            label: List memories
+                            description: List memory notes visible to the delegated connection.
+                            grants:
+                            - memories:read
+                          object.schema:
+                            label: Memory schema
+                            description: Read the object schema for memory notes.
+                            grants:
+                            - memories:read
+                          object.search:
+                            label: Search memories
+                            description: Search memory notes visible to the delegated connection.
+                            grants:
+                            - memories:read
+                          object.get:
+                            label: Read one memory
+                            description: Read one memory note by object ref.
+                            grants:
+                            - memories:read
+                          object.upsert:
+                            label: Write memory
+                            description: Create or update a memory note.
+                            grants:
+                            - memories:write
+                          object.action:
+                            label: Memory action
+                            description: Run a bounded provider action on a memory note.
+                            grants:
+                            - memories:read
+                          object.delete:
+                            label: Delete memory
+                            description: Delete or archive a memory note.
+                            grants:
+                            - memories:write
+                  task:
+                    label: Tasks
+                    description: KDCube task objects for the approving user.
+                    authority_id: delegated_client
+                    tools:
+                      about:
+                        operation: provider.about
+                        label: About tasks
+                        description: Explain the task namespace and how to use it.
+                        grants:
+                        - tasks:read
+                      list:
+                        operation: object.list
+                        label: List tasks
+                        description: List task objects visible to the delegated connection.
+                        grants:
+                        - tasks:read
+                      schema:
+                        operation: object.schema
+                        label: Task schema
+                        description: Read the object schema for tasks.
+                        grants:
+                        - tasks:read
+                      search:
+                        operation: object.search
+                        label: Search tasks
+                        description: Search task objects visible to the delegated connection.
+                        grants:
+                        - tasks:read
+                      upsert:
+                        operation: object.upsert
+                        label: Write task
+                        description: Create or update a task object.
+                        grants:
+                        - tasks:write
+                      host_file:
+                        operation: object.host_file
+                        label: Host task file
+                        description: Host or register a file/ref in the task namespace.
+                        grants:
+                        - tasks:write
+                      delete:
+                        operation: object.delete
+                        label: Delete task
+                        description: Delete or archive a task object.
+                        grants:
+                        - tasks:write
+                      call:
+                        label: Generic task call
+                        description: Generic task namespace call with per-operation grants.
+                        operations:
+                          provider.about:
+                            label: About tasks
+                            description: Explain the task namespace and how to use it.
+                            grants:
+                            - tasks:read
+                          object.list:
+                            label: List tasks
+                            description: List task objects visible to the delegated connection.
+                            grants:
+                            - tasks:read
+                          object.schema:
+                            label: Task schema
+                            description: Read the object schema for tasks.
+                            grants:
+                            - tasks:read
+                          object.search:
+                            label: Search tasks
+                            description: Search task objects visible to the delegated connection.
+                            grants:
+                            - tasks:read
+                          object.upsert:
+                            label: Write task
+                            description: Create or update a task object.
+                            grants:
+                            - tasks:write
+                          object.host_file:
+                            label: Host task file
+                            description: Host or register a file/ref in the task namespace.
+                            grants:
+                            - tasks:write
+                          object.delete:
+                            label: Delete task
+                            description: Delete or archive a task object.
+                            grants:
+                            - tasks:write
+                  cnv:
+                    label: Canvas
+                    description: KDCube canvas objects for the approving user.
+                    authority_id: delegated_client
+                    tools:
+                      about:
+                        operation: provider.about
+                        label: About canvas
+                        description: Explain the canvas namespace and how to use it.
+                        grants:
+                        - canvas:read
+                      list:
+                        operation: object.list
+                        label: List canvas objects
+                        description: List canvas objects visible to the delegated connection.
+                        grants:
+                        - canvas:read
+                      schema:
+                        operation: object.schema
+                        label: Canvas schema
+                        description: Read the object schema for canvas objects.
+                        grants:
+                        - canvas:read
+                      search:
+                        operation: object.search
+                        label: Search canvas
+                        description: Search canvas objects visible to the delegated connection.
+                        grants:
+                        - canvas:read
+                      upsert:
+                        operation: object.upsert
+                        label: Write canvas
+                        description: Create or update a canvas object.
+                        grants:
+                        - canvas:write
+                      call:
+                        label: Generic canvas call
+                        description: Generic canvas namespace call with per-operation grants.
+                        operations:
+                          provider.about:
+                            label: About canvas
+                            description: Explain the canvas namespace and how to use it.
+                            grants:
+                            - canvas:read
+                          object.list:
+                            label: List canvas objects
+                            description: List canvas objects visible to the delegated connection.
+                            grants:
+                            - canvas:read
+                          object.schema:
+                            label: Canvas schema
+                            description: Read the object schema for canvas objects.
+                            grants:
+                            - canvas:read
+                          object.search:
+                            label: Search canvas
+                            description: Search canvas objects visible to the delegated connection.
+                            grants:
+                            - canvas:read
+                          object.upsert:
+                            label: Write canvas
+                            description: Create or update a canvas object.
+                            grants:
+                            - canvas:write
+                  conv:
+                    label: Conversations
+                    description: KDCube conversations for the approving user.
+                    authority_id: delegated_client
+                    tools:
+                      about:
+                        operation: provider.about
+                        label: About conversations
+                        description: Explain the conversations namespace and how to use it.
+                        grants:
+                        - conversations:read
+                      list:
+                        operation: object.list
+                        label: List conversations
+                        description: List the delegated user's conversations.
+                        grants:
+                        - conversations:read
+                      schema:
+                        operation: object.schema
+                        label: Conversation schema
+                        description: Read the object schema for conversations.
+                        grants:
+                        - conversations:read
+                      search:
+                        operation: object.search
+                        label: Search conversations
+                        description: Search the delegated user's conversations.
+                        grants:
+                        - conversations:read
+                      get:
+                        operation: object.get
+                        label: Read one conversation
+                        description: Read one full conversation by ref.
+                        grants:
+                        - conversations:read
+                      call:
+                        label: Generic conversations call
+                        description: Generic conversations namespace call with per-operation grants.
+                        operations:
+                          provider.about:
+                            label: About conversations
+                            description: Explain the conversations namespace and how to use it.
+                            grants:
+                            - conversations:read
+                          object.list:
+                            label: List conversations
+                            description: List the delegated user's conversations.
+                            grants:
+                            - conversations:read
+                          object.schema:
+                            label: Conversation schema
+                            description: Read the object schema for conversations.
+                            grants:
+                            - conversations:read
+                          object.search:
+                            label: Search conversations
+                            description: Search the delegated user's conversations.
+                            grants:
+                            - conversations:read
+                          object.get:
+                            label: Read one conversation
+                            description: Read one full conversation by ref.
+                            grants:
+                            - conversations:read
+                  mail:
+                    label: Mail
+                    description: Search, read, download attachments from, send, and forward messages through connected mail
+                      accounts.
+                    authority_id: delegated_client
+                    tools:
+                      about:
+                        operation: provider.about
+                        label: About mail
+                        description: Explain the mail namespace and connected-account model.
+                        grants:
+                        - mail:read
+                      capabilities:
+                        operation: provider.capabilities
+                        label: Mail capabilities
+                        description: Read provider capabilities for connected mail accounts.
+                        grants:
+                        - mail:read
+                      list:
+                        operation: object.list
+                        label: List mail accounts
+                        description: List connected mail accounts available to the delegated connection.
+                        grants:
+                        - mail:read
+                      schema:
+                        operation: object.schema
+                        label: Mail schema
+                        description: Read the mail object schema and ref format.
+                        grants:
+                        - mail:read
+                      search:
+                        operation: object.search
+                        label: Search mail
+                        description: Search messages in connected mail accounts.
+                        grants:
+                        - mail:read
+                      get:
+                        operation: object.get
+                        label: Read mail message
+                        description: Read one mail message and its attachment metadata by ref.
+                        grants:
+                        - mail:read
+                      action:
+                        operation: object.action
+                        label: Mail action
+                        description: Download attachments, send mail, or forward a message through a connected mail account.
+                        operations:
+                          object.action:
+                            label: Mail action
+                            description: Run a bounded mail action. download_attachments requires mail:read; send requires
+                              mail:send; forward requires mail:read and mail:send.
+                            grants:
+                            - mail:read
+                            - mail:send
+                      call:
+                        label: Generic mail call
+                        description: Generic mail namespace call with per-operation grants.
+                        operations:
+                          provider.about:
+                            label: About mail
+                            description: Explain the mail namespace and connected-account model.
+                            grants:
+                            - mail:read
+                          provider.capabilities:
+                            label: Mail capabilities
+                            description: Read provider capabilities for connected mail accounts.
+                            grants:
+                            - mail:read
+                          object.list:
+                            label: List mail accounts
+                            description: List connected mail accounts available to the delegated connection.
+                            grants:
+                            - mail:read
+                          object.schema:
+                            label: Mail schema
+                            description: Read the mail object schema and ref format.
+                            grants:
+                            - mail:read
+                          object.search:
+                            label: Search mail
+                            description: Search messages in connected mail accounts.
+                            grants:
+                            - mail:read
+                          object.get:
+                            label: Read mail message
+                            description: Read one mail message and its attachment metadata by ref.
+                            grants:
+                            - mail:read
+                          object.action:
+                            label: Mail action
+                            description: Download attachments, send mail, or forward a message through a connected mail account.
+                            grants:
+                            - mail:read
+                            - mail:send
+                  slack:
+                    label: Slack
+                    description: List Slack workspaces/channels, search messages/files, read channel history, download files,
+                      post messages, and upload files through connected Slack accounts.
+                    authority_id: delegated_client
+                    tools:
+                      about:
+                        operation: provider.about
+                        label: About Slack
+                        description: Explain the Slack namespace and connected-account model.
+                        grants:
+                        - slack:read
+                      capabilities:
+                        operation: provider.capabilities
+                        label: Slack capabilities
+                        description: Read provider capabilities for connected Slack workspaces.
+                        grants:
+                        - slack:read
+                      list:
+                        operation: object.list
+                        label: List Slack
+                        description: List connected Slack accounts, or channels when filters.kind is channels.
+                        grants:
+                        - slack:read
+                      schema:
+                        operation: object.schema
+                        label: Slack schema
+                        description: Read the Slack object schema and ref format.
+                        grants:
+                        - slack:read
+                      search:
+                        operation: object.search
+                        label: Search Slack
+                        description: Search Slack messages/files through connected Slack accounts.
+                        grants:
+                        - slack:read
+                      get:
+                        operation: object.get
+                        label: Read Slack object
+                        description: Read Slack account/channel/file objects by ref.
+                        grants:
+                        - slack:read
+                      action:
+                        operation: object.action
+                        label: Slack action
+                        description: Post messages, upload files, download files, or inspect Slack assistant search availability.
+                        operations:
+                          object.action:
+                            label: Slack action
+                            description: Run a bounded Slack action. post_message/upload_file require slack:write; download_file/assistant_search_info
+                              require slack:read.
+                            grants:
+                            - slack:read
+                            - slack:write
+                      call:
+                        label: Generic Slack call
+                        description: Generic Slack namespace call with per-operation grants.
+                        operations:
+                          provider.about:
+                            label: About Slack
+                            description: Explain the Slack namespace and connected-account model.
+                            grants:
+                            - slack:read
+                          provider.capabilities:
+                            label: Slack capabilities
+                            description: Read provider capabilities for connected Slack workspaces.
+                            grants:
+                            - slack:read
+                          object.list:
+                            label: List Slack
+                            description: List connected Slack accounts or channels.
+                            grants:
+                            - slack:read
+                          object.schema:
+                            label: Slack schema
+                            description: Read the Slack object schema and ref format.
+                            grants:
+                            - slack:read
+                          object.search:
+                            label: Search Slack
+                            description: Search Slack messages/files through connected Slack accounts.
+                            grants:
+                            - slack:read
+                          object.get:
+                            label: Read Slack object
+                            description: Read Slack account/channel/file objects by ref.
+                            grants:
+                            - slack:read
+                          object.action:
+                            label: Slack action
+                            description: Post messages, upload files, download files, or inspect Slack assistant search availability.
+                            grants:
+                            - slack:read
+                            - slack:write
+            - resource: '*/api/integrations/bundles/*/*/user-memories@2026-06-26/public/mcp/memories*'
+              identity_scope: grantor_identity_family
+              tools:
+                memory_search:
+                  label: Search memories
+                  description: Search memory notes visible to the connected user.
+                  grants:
+                  - memories:read
+                memory_get:
+                  label: Read one memory
+                  description: Read a memory note by id.
+                  grants:
+                  - memories:read
+            - resource: '*/api/integrations/bundles/*/*/knowledge@1-0/public/mcp/knowledge_managed*'
+              label: KDCube knowledge MCP
+              tools:
+                get_access_context:
+                  label: Get access context
+                  description: Inspect the current knowledge access context.
+                  grants:
+                  - knowledge:read
+                about:
+                  label: About KDCube knowledge
+                  description: Explain when and how to use the KDCube knowledge server.
+                  grants:
+                  - knowledge:read
+                search:
+                  label: Search knowledge
+                  description: Search KDCube knowledge visible to this delegated connection.
+                  grants:
+                  - knowledge:read
+                read_refs:
+                  label: Read references
+                  description: Read exact knowledge or source references returned by search.
+                  grants:
+                  - knowledge:read
+        providers: {}
+        delegated_to_kdcube:
+          enabled: true
+          oauth:
+            public_base_url: https://<PUBLIC_HOST>
+          providers:
+            google:
+              label: Google
+              adapter: google.oauth
+              enabled: true
+              connector_apps:
+                gmail:
+                  label: Gmail
+                  enabled: true
+                  client_id: <FILL_ME>
+                  client_secret_ref: connections.delegated_to_kdcube.providers.google.connector_apps.gmail.client_secret
+                  allowed_claims:
+                  - gmail:read
+                  - gmail:send
+              claims:
+                gmail:read:
+                  label: Read Gmail
+                  description: Search and read Gmail messages for the approving user.
+                  provider_scopes:
+                  - openid
+                  - email
+                  - profile
+                  - https://www.googleapis.com/auth/gmail.readonly
+                gmail:send:
+                  label: Send Gmail
+                  description: Send email through the approving user's Gmail account.
+                  provider_scopes:
+                  - openid
+                  - email
+                  - profile
+                  - https://www.googleapis.com/auth/gmail.send
+            slack:
+              label: Slack
+              adapter: slack.oauth_user_token
+              enabled: true
+              connector_apps:
+                demo:
+                  label: KDCube Slack
+                  enabled: true
+                  client_id: <FILL_ME>
+                  client_secret_ref: connections.delegated_to_kdcube.providers.slack.connector_apps.demo.client_secret
+                  allowed_claims:
+                  - slack:search
+                  - slack:post
+                  - slack:channels
+                  - slack:history
+                  - slack:files:read
+                  - slack:files:write
+                  - slack:assistant:search
+              claims:
+                slack:search:
+                  label: Search Slack
+                  description: Search Slack content visible to the approving user.
+                  provider_scopes:
+                  - search:read
+                slack:post:
+                  label: Post to Slack
+                  description: Post messages into Slack destinations allowed by the approving user.
+                  provider_scopes:
+                  - chat:write
+                slack:channels:
+                  label: List Slack channels
+                  description: List Slack conversations visible to the approving user.
+                  provider_scopes:
+                  - channels:read
+                  - groups:read
+                  - im:read
+                  - mpim:read
+                slack:history:
+                  label: Read Slack history
+                  description: Read Slack conversation history visible to the approving user.
+                  provider_scopes:
+                  - channels:history
+                  - groups:history
+                  - im:history
+                  - mpim:history
+                slack:files:read:
+                  label: Read Slack files
+                  description: Read and download Slack files visible to the approving user.
+                  provider_scopes:
+                  - files:read
+                slack:files:write:
+                  label: Upload Slack files
+                  description: Upload files to Slack destinations allowed by the approving user.
+                  provider_scopes:
+                  - files:write
+                slack:assistant:search:
+                  label: Use Slack assistant search
+                  description: Use Slack AI semantic search across messages, files, channels, and users where available.
+                  provider_scopes:
+                  - search:read.public
+                  - search:read.private
+                  - search:read.im
+                  - search:read.mpim
+                  - search:read.files
+                  - search:read.users
+            icloud_mail:
+              label: iCloud Mail
+              adapter: email.imap_smtp_app_password
+              enabled: true
+              connector_apps:
+                app_password:
+                  label: iCloud app-specific password
+                  enabled: true
+                  allowed_claims:
+                  - email:read
+                  - email:send
+              claims:
+                email:read:
+                  label: Read mail
+                  description: Read mail through IMAP for the connected mailbox.
+                email:send:
+                  label: Send mail
+                  description: Send mail through SMTP for the connected mailbox.
+      identity:
+        enabled: true
+        authenticator_selector_cache:
+          enabled: true
+          ttl_seconds: 30
+        role_resolver:
+          mode: platform
+        role_bindings: {}
+        authenticators:
+        - id: telegram.kdcube_ref
+          provider: telegram
+          where: built-in
+          enabled: true
+          role_providing: false
+          secret_ref: identity.authenticators.telegram_kdcube_ref.bot_token
+          definition:
+            label: KDCube Ref Telegram bot
+            web_app_auth_max_age_seconds: 86400
+        link_flows:
+          telegram:
+            enabled: true
+            challenge_ttl_seconds: 600
+            platform_claim_url: ''
+      authority_registry:
+        authorities:
+          kdcube.platform:
+            label: KDCube platform authority
+            platform: true
+            providers:
+              cognito:
+                type: multi_cognito
+                enabled: true
+                label: KDCube Cognito platform session
+                authenticator:
+                  type: cognito_id_token
+                  id_token_header_name: X-ID-Token
+                  region: <FILL_ME>
+                  user_pool_id: <FILL_ME>
+                  app_client_id: <FILL_ME>
+                  service_client_id: <FILL_ME>
+                  jwks_cache_ttl_seconds: 86400
+                  cookie:
+                    auth_token_cookie_name: __Secure-LATC
+                    id_token_cookie_name: __Secure-LITC
+                    masqueraded_token_cookie_name: __Secure-LMTC
+                  trusted_providers:
+                  - alias: <FILL_ME>
+                    kind: cognito
+                    region: <FILL_ME>
+                    user_pool_id: <FILL_ME>
+                    app_client_id: <FILL_ME>
+      ui:
+        widgets:
+          connections_settings:
+            enabled: true
+            src_folder: ui/widgets/connections
+            build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
+  - id: kdcube-services@1-0
+    name: KDCube Services
+    singleton: false
+    config:
+      surfaces:
+        as_provider:
+          bundle:
+            visibility:
+              allowed_roles: []
+          mcp:
+            conversations:
+              auth:
+                mode: managed
+                authority_id: delegated_client
+                selected_tool_grants: true
+            named_services:
+              auth:
+                mode: managed
+                authority_id: delegated_client
+                selected_tool_grants: true
+  - id: user-memories@2026-06-26
+    singleton: false
+    config:
+      surfaces:
+        as_provider:
+          bundle:
+            visibility:
+              allowed_roles: []
+          widget:
+            memories:
+              visibility:
+                user_types: []
+                roles: []
+          mcp:
+            memories:
+              auth:
+                mode: managed
+                authority_id: delegated_client
+                tools:
+                  memory_search:
+                    grants:
+                    - memories:read
+                  memory_get:
+                    grants:
+                    - memories:read
+                selected_tool_grants: true
+      memory:
+        enabled: true
+        widget:
+          enabled: true
+          allow_write: true
+          default_scope_filter: all_user_memories
+          allow_all_user_memories: true
+          limit: 30
+      ui:
+        widgets:
+          memories:
+            enabled: true
+            src_folder: sdk://context/memory/ui/widget/memories
+            build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
+  - id: workspace@2026-03-31-13-36
+    singleton: false
+    config:
+      namespace_styles:
+        conv:fi:
+          label: file
+          icon_svg: <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14
+            2v6h6"/></svg>
+          color: '#ca8a04'
+          border: '#ca8a04'
+          focus: '#facc15'
+          background: '#fffbeb'
+        cnv:
+          label: canvas
+          icon_svg: <svg viewBox="0 0 24 24"><path d="M12 17v5"/><path d="M9 10.76V6a3 3 0 0 1 6 0v4.76"/><path d="M5 10h14l-1
+            7H6z"/></svg>
+          color: '#7c3aed'
+          border: '#7c3aed'
+          focus: '#a78bfa'
+          background: '#f5f3ff'
+        mem:
+          label: memory
+          icon_svg: <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+          color: '#16a34a'
+          border: '#16a34a'
+          focus: '#22c55e'
+          background: '#ecfdf5'
+        task:
+          label: task
+          icon_svg: <svg viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13"/><path d="m3 6 1 1 2-2M3 12l1 1 2-2M3 18l1
+            1 2-2"/></svg>
+          color: '#2563eb'
+          border: '#2563eb'
+          focus: '#60a5fa'
+          background: '#eff6ff'
+        conv:
+          label: conversation
+          icon_svg: <svg viewBox="0 0 24 24"><path d="M21 15a4 4 0 0 1-4 4H7l-4 4V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg>
+          color: '#08bdb2'
+          border: '#08bdb2'
+          focus: '#5eead4'
+          background: '#e8fbf8'
+      canvas:
+        info_html: "<h3>Pin board</h3>\n<p>Keep things in quick reach — as <strong>pins</strong>, links to\nobjects from anywhere\
+          \ in the system, and the assistant understands them.\nA pin is a proxy; the real object stays in its own app.</p>\n\
+          <p><strong>Pinning isn't sending.</strong> To use a pin in chat, drag it\nin — one pin for that object, or the whole\
+          \ board (or “Pin board to chat”)\nto share its top pins at once. From a pin you can also open it in its app\nor\
+          \ download it.</p>\n<h4>What goes on it</h4>\n<ul>\n  <li><strong>Your text</strong> — notes or drafts (markdown).</li>\n\
+          \  <li><strong>Attachments</strong> — files you drop in.</li>\n  <li><strong>Chat pins</strong> — conversations\
+          \ and files from chat.</li>\n  <li><strong>Task pins</strong> — a task from the Tasks panel.</li>\n  <li><strong>Memory\
+          \ pins</strong> — a saved memory from Memories.</li>\n</ul>\n<p>Pins connect things to actions: once shared, the\
+          \ assistant can use\nthem as sources to build on, or act on them in the apps they live in —\nand it can add, comment\
+          \ on, or refine cards.</p>\n"
+      react:
+        default_agent:
+          event_source_pipeline:
+            enabled: true
+          # Per-user model choice for the strong decision role
+          # (solver.react.v2.decision.v2.strong): users pick ONE of these in
+          # the chat composer menu; the pick overrides role_models for their
+          # turns. Rows mirror the economics price-table models.
+          supported_models:
+          - model: claude-sonnet-4-6
+            provider: anthropic
+            label: Sonnet 4.6
+          - model: claude-haiku-4-5-20251001
+            provider: anthropic
+            label: Haiku 4.5
+          additional_instructions: '[KDCUBE DOC LINKS]
+
+            Knowledge-base articles cite kdcube documentation sources with refs of the form
+
+            repo:<repo-name>/<path-inside-repo>, for example
+
+            repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/mcp-README.md.
+
+            These refs point into kdcube''s GitHub repositories (GitHub organization: kdcube).
+
+            When citing or listing such a source for the user, present it as a browsable GitHub URL:
+
+            https://github.com/kdcube/<repo-name>/blob/main/<path-inside-repo>
+
+            For the example above:
+
+            https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/tools/mcp-README.md
+
+            The segment after "repo:" up to the first "/" is the repository name; everything after
+
+            that first "/" is the file path inside that repository.
+
+            '
+      execution:
+        runtime:
+          mode: docker
+          container_strategy: split
+          max_file_bytes: 20m
+          max_exec_workspace_delta_bytes: 50m
+          max_workspace_bytes: 50m
+          workspace_monitor_interval_s: 0.5
+      telemetry_sink:
+        # Telemetry ingest endpoint; served by the stats app when deployed.
+        endpoint_url: <FILL_ME>
+        auth_header: X-Telemetry-Token
+      surfaces:
+        as_provider:
+          bundle:
+            visibility:
+              allowed_roles: []
+          api:
+            operations:
+              telegram_user_admin_data:
+                POST:
+                  visibility:
+                    user_types: []
+                    roles:
+                    - kdcube:role:super-admin
+              telegram_user_admin_upsert:
+                POST:
+                  visibility:
+                    user_types: []
+                    roles:
+                    - kdcube:role:super-admin
+              telegram_user_admin_delete:
+                POST:
+                  visibility:
+                    user_types: []
+                    roles:
+                    - kdcube:role:super-admin
+          widget:
+            pinboard:
+              visibility:
+                user_types: []
+                roles: []
+            telegram_miniapp:
+              visibility:
+                user_types: []
+                roles: []
+            usage_card:
+              visibility:
+                user_types: []
+                roles: []
+            workspace_chat:
+              visibility:
+                user_types: []
+                roles: []
+        as_consumer:
+          mcp:
+            services:
+              mcpServers:
+                # Served by the knowledge@1-0 app when deployed.
+                knowledge:
+                  transport: streamable-http
+                  url: https://<PUBLIC_HOST>/api/integrations/bundles/<TENANT>/<PROJECT>/knowledge@1-0/public/mcp/knowledge
+          default_agent: main
+          agents:
+            main:
+              tools:
+              - kind: python
+                module: kdcube_ai_app.apps.chat.sdk.tools.io_tools
+                alias: io_tools
+                allowed:
+                - tool_call
+                name: io
+              - kind: python
+                module: kdcube_ai_app.apps.chat.sdk.tools.ctx_tools
+                alias: ctx_tools
+                allowed:
+                - merge_sources
+                - fetch_ctx
+                name: context
+              - kind: python
+                module: kdcube_ai_app.apps.chat.sdk.tools.exec_tools
+                alias: exec_tools
+                allowed:
+                - execute_code_python
+                tool_traits:
+                  execute_code_python:
+                    strategy:
+                    - exploration
+                    - exploitation
+                name: exec
+              - kind: python
+                module: kdcube_ai_app.apps.chat.sdk.tools.web_tools
+                alias: web_tools
+                allowed:
+                - web_search
+                - web_fetch
+                tool_traits:
+                  web_search:
+                    strategy:
+                    - exploration
+                  web_fetch:
+                    strategy:
+                    - exploration
+                runtime:
+                  web_search: local
+                  web_fetch: local
+                name: web
+              - name: gmail
+                kind: python
+                module: kdcube_ai_app.apps.chat.sdk.integrations.google.gmail_tools
+                alias: gmail
+                allowed:
+                - search_gmail
+                - read_gmail_message
+                - download_gmail_attachments
+                - send_gmail
+                - forward_gmail_message
+                tool_traits:
+                  search_gmail:
+                    strategy:
+                    - exploration
+                  read_gmail_message:
+                    strategy:
+                    - exploration
+                  download_gmail_attachments:
+                    strategy:
+                    - exploration
+                  send_gmail:
+                    strategy:
+                    - exploitation
+                  forward_gmail_message:
+                    strategy:
+                    - exploitation
+                tool_claims:
+                  search_gmail:
+                    connections:
+                      delegated_to_kdcube:
+                        connected_accounts:
+                        - provider_id: google
+                          connector_app_id: gmail
+                          claims:
+                          - gmail:read
+                  read_gmail_message:
+                    connections:
+                      delegated_to_kdcube:
+                        connected_accounts:
+                        - provider_id: google
+                          connector_app_id: gmail
+                          claims:
+                          - gmail:read
+                  download_gmail_attachments:
+                    connections:
+                      delegated_to_kdcube:
+                        connected_accounts:
+                        - provider_id: google
+                          connector_app_id: gmail
+                          claims:
+                          - gmail:read
+                  send_gmail:
+                    connections:
+                      delegated_to_kdcube:
+                        connected_accounts:
+                        - provider_id: google
+                          connector_app_id: gmail
+                          claims:
+                          - gmail:send
+                  forward_gmail_message:
+                    connections:
+                      delegated_to_kdcube:
+                        connected_accounts:
+                        - provider_id: google
+                          connector_app_id: gmail
+                          claims:
+                          - gmail:read
+                          - gmail:send
+              - name: slack
+                kind: python
+                module: kdcube_ai_app.apps.chat.sdk.integrations.slack.tools
+                alias: slack
+                allowed:
+                - search_slack
+                - list_slack_channels
+                - read_slack_channel_history
+                - download_slack_file
+                - upload_slack_file
+                - slack_assistant_search_info
+                - slack_assistant_search
+                - post_slack_message
+                tool_traits:
+                  search_slack:
+                    strategy:
+                    - exploration
+                  list_slack_channels:
+                    strategy:
+                    - exploration
+                  read_slack_channel_history:
+                    strategy:
+                    - exploration
+                  download_slack_file:
+                    strategy:
+                    - exploration
+                  upload_slack_file:
+                    strategy:
+                    - exploitation
+                  slack_assistant_search_info:
+                    strategy:
+                    - exploration
+                  slack_assistant_search:
+                    strategy:
+                    - exploration
+                  post_slack_message:
+                    strategy:
+                    - exploitation
+                tool_claims:
+                  search_slack:
+                    connections:
+                      delegated_to_kdcube:
+                        connected_accounts:
+                        - provider_id: slack
+                          connector_app_id: demo
+                          claims:
+                          - slack:search
+                  list_slack_channels:
+                    connections:
+                      delegated_to_kdcube:
+                        connected_accounts:
+                        - provider_id: slack
+                          connector_app_id: demo
+                          claims:
+                          - slack:channels
+                  read_slack_channel_history:
+                    connections:
+                      delegated_to_kdcube:
+                        connected_accounts:
+                        - provider_id: slack
+                          connector_app_id: demo
+                          claims:
+                          - slack:history
+                  download_slack_file:
+                    connections:
+                      delegated_to_kdcube:
+                        connected_accounts:
+                        - provider_id: slack
+                          connector_app_id: demo
+                          claims:
+                          - slack:files:read
+                  upload_slack_file:
+                    connections:
+                      delegated_to_kdcube:
+                        connected_accounts:
+                        - provider_id: slack
+                          connector_app_id: demo
+                          claims:
+                          - slack:files:write
+                  slack_assistant_search_info:
+                    connections:
+                      delegated_to_kdcube:
+                        connected_accounts:
+                        - provider_id: slack
+                          connector_app_id: demo
+                          claims:
+                          - slack:assistant:search
+                  slack_assistant_search:
+                    connections:
+                      delegated_to_kdcube:
+                        connected_accounts:
+                        - provider_id: slack
+                          connector_app_id: demo
+                          claims:
+                          - slack:assistant:search
+                  post_slack_message:
+                    connections:
+                      delegated_to_kdcube:
+                        connected_accounts:
+                        - provider_id: slack
+                          connector_app_id: demo
+                          claims:
+                          - slack:post
+              - kind: python
+                module: kdcube_ai_app.apps.chat.sdk.tools.rendering_tools
+                alias: rendering_tools
+                allowed:
+                - write_pptx
+                - write_png
+                - write_pdf
+                - write_docx
+                tool_traits:
+                  write_pptx:
+                    strategy:
+                    - exploitation
+                  write_png:
+                    strategy:
+                    - exploitation
+                  write_pdf:
+                    strategy:
+                    - exploitation
+                  write_docx:
+                    strategy:
+                    - exploitation
+                name: rendering
+              - kind: named_service
+                alias: named_services
+                namespaces:
+                  task:
+                    allowed:
+                    - provider.about
+                    - object.list
+                    - object.search
+                    - object.schema
+                    - object.upsert
+                    - object.host_file
+                    - object.delete
+                  mem:
+                    announce:
+                      enabled: true
+                      limit: 8
+                      scope_filter: all_user_memories
+                    allowed:
+                    - provider.about
+                    - object.list
+                    - object.search
+                    - object.schema
+                    - object.upsert
+                    - object.action
+                    - object.delete
+                    tool_traits:
+                      upsert_object:
+                        strategy:
+                        - neutral
+                      object_action:
+                        strategy:
+                        - neutral
+                  cnv:
+                    allowed:
+                    - provider.about
+                    - object.list
+                    - object.search
+                    - object.schema
+                    - object.upsert
+                    tool_traits:
+                      upsert_object:
+                        strategy:
+                        - exploitation
+                tool_traits:
+                  provider_about:
+                    strategy:
+                    - exploration
+                  list_objects:
+                    strategy:
+                    - exploration
+                  search_objects:
+                    strategy:
+                    - exploration
+                  object_schema:
+                    strategy:
+                    - exploration
+                  upsert_object:
+                    strategy:
+                    - exploitation
+                  object_action:
+                    strategy:
+                    - exploitation
+                  host_file:
+                    strategy:
+                    - exploitation
+                  delete_object:
+                    strategy:
+                    - exploitation
+                name: task_service
+              - kind: mcp
+                server_id: knowledge
+                alias: knowledge
+                allowed:
+                - '*'
+                tool_traits:
+                  '*':
+                    strategy:
+                    - exploration
+                name: knowledge
+              event_sources:
+              - kind: named_service
+                namespace: task
+                enabled: true
+                discovery:
+                  mode: service_discovery
+                policies:
+                  block_production:
+                    mode: provider
+                    operation: block.produce
+                  pull:
+                    mode: provider
+                    operation: object.get
+              - kind: named_service
+                namespace: mem
+                enabled: true
+                discovery:
+                  mode: service_discovery
+                policies:
+                  block_production:
+                    mode: provider
+                    operation: block.produce
+                  pull:
+                    mode: provider
+                    operation: object.get
+          ui:
+            scene:
+              # The Tasks panel and the task named-service namespace are served
+              # by the task-tracker@1-0 app when deployed.
+              external_panels:
+              - id: task_panel
+                label: Tasks
+                title: Tasks
+                bundle_id: task-tracker@1-0
+                widget_alias: task_tracker_tasks
+                widget_message_type: kdcube-task-tracker-widget-command
+                service_event_type: task_tracker.task.changed
+                service_forward_message_type: kdcube-task-tracker-task-changed
+                open_message_types:
+                - kdcube-task-tracker-open-issue
+                - kdcube-task-tracker-create-issue
+                surfaces:
+                  task_tracker.issue_list:
+                    label: task list
+                    expanded: false
+                    command:
+                      action: refresh
+                  task_tracker.issue_editor:
+                    label: task editor
+                    expanded: true
+                    command_from_open: provider_surface_open
+            canvas:
+              resolvers:
+              - kind: named_service
+                namespace: mem
+                enabled: true
+                discovery:
+                  mode: service_discovery
+                allowed:
+                - object.resolve
+                - object.action
+              - kind: named_service
+                namespace: task
+                enabled: true
+                discovery:
+                  mode: service_discovery
+                allowed:
+                - object.resolve
+                - object.action
+      connections:
+        connection_hub:
+          bundle_id: connection-hub@1-0
+      integrations:
+        telegram.kdcube_ref:
+          provider: telegram
+          where: built-in
+          enabled: true
+          secret_refs:
+            bot_token: integrations.telegram_kdcube_ref.definition.bot_token
+            webhook_secret: integrations.telegram_kdcube_ref.definition.webhook_secret
+          definition:
+            bot_name: <FILL_ME>
+            bot_username: <FILL_ME>
+            webhook:
+              url: https://<PUBLIC_HOST>/api/integrations/bundles/<TENANT>/<PROJECT>/workspace@2026-03-31-13-36/public/telegram_webhook?integration_id=telegram.kdcube_ref
+              send_responses: true
+              stream_activity: true
+            web_app_auth_max_age_seconds: 86400
+      ui:
+        main_view:
+          src_folder: ui/scene
+          build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
+          shared_sources:
+            components_react_canvas:
+              src_folder: npm://components-react/src/canvas
+              target: _shared/components-react/canvas
+            components_core_canvas:
+              src_folder: npm://components-core/src/canvas
+              target: _shared/components-core/canvas
+            components_core_scene:
+              src_folder: npm://components-core/src/scene
+              target: _shared/components-core/scene
+            components_core_events:
+              src_folder: npm://components-core/src/events
+              target: _shared/components-core/events
+        widgets:
+          workspace_chat:
+            enabled: true
+            src_folder: sdk://solutions/chat/ui/widget
+            engine: package-ui
+          usage_card:
+            enabled: true
+            src_folder: sdk://infra/economics/ui/widget/usage-card
+            build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
+            shared_sources:
+              components_core:
+                src_folder: npm://components-core/src
+                target: _shared/components-core
+          telegram_miniapp:
+            enabled: true
+            src_folder: ui/widgets/telegram_miniapp
+            build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
+            shared_sources:
+              telegram_widget:
+                src_folder: sdk://integrations/telegram/ui/widget.telegram
+                target: _shared/telegram-widget
+          pinboard:
+            enabled: true
+            src_folder: sdk://solutions/canvas/ui/widget/pinboard
+            build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
+            shared_sources:
+              components_react_canvas:
+                src_folder: npm://components-react/src/canvas
+                target: _shared/components-react/canvas
+              components_core_canvas:
+                src_folder: npm://components-core/src/canvas
+                target: _shared/components-core/canvas
+      role_models:
+        solver.react.v2.decision.v2.strong:
+          provider: anthropic
+          model: claude-sonnet-4-6
+        context.compaction.summary:
+          provider: anthropic
+          model: claude-sonnet-4-6
+        context.compaction.turn_prefix:
+          provider: anthropic
+          model: claude-sonnet-4-6

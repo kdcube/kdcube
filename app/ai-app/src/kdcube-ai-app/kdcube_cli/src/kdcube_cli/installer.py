@@ -15,7 +15,7 @@ import tempfile
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 from urllib.parse import unquote, urlparse, urlsplit, urlunsplit
 
 from rich.console import Console
@@ -1228,6 +1228,67 @@ def stage_bundles_secrets_descriptor(
             shutil.copyfile(source_path, target_path)
         return True
     return ensure_bundles_secrets_template(target_path, ai_app_root)
+
+
+# Placeholders the runtime resolves later; the installer must leave them.
+_RUNTIME_RESOLVED_PLACEHOLDERS = {"<VI_BUILD_DEST_ABSOLUTE_PATH>", "<VITE_BUILD_DEST_ABSOLUTE_PATH>"}
+_PLACEHOLDER_RE = re.compile(r"<[A-Z][A-Z0-9_]*>")
+
+
+def parameterize_default_bundle_descriptors(
+    config_dir: Path,
+    *,
+    tenant: Optional[str],
+    project: Optional[str],
+    public_host: Optional[str] = None,
+) -> List[str]:
+    """Fill install-scoped placeholders in the DEFAULT-staged bundle descriptors.
+
+    Runs only on the default-descriptor bootstrap path (never on
+    operator-supplied files). Substitutes <TENANT>/<PROJECT> from the install
+    context and <PUBLIC_HOST> when known; returns the sorted list of
+    placeholders still unfilled (minus runtime-resolved ones) so init can
+    print a loud first-run checklist instead of failing mysteriously later.
+    """
+    replacements: Dict[str, str] = {}
+    if tenant:
+        replacements["<TENANT>"] = str(tenant)
+    if project:
+        replacements["<PROJECT>"] = str(project)
+    if public_host:
+        replacements["<PUBLIC_HOST>"] = str(public_host).replace("https://", "").replace("http://", "").strip("/")
+    remaining: Set[str] = set()
+    for name in ("bundles.yaml", "bundles.secrets.yaml"):
+        path = config_dir / name
+        if not path.exists():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        for placeholder, value in replacements.items():
+            text = text.replace(placeholder, value)
+        path.write_text(text, encoding="utf-8")
+        for match in _PLACEHOLDER_RE.findall(text):
+            if match not in _RUNTIME_RESOLVED_PLACEHOLDERS:
+                remaining.add(match)
+    return sorted(remaining)
+
+
+def report_unfilled_descriptor_slots(config_dir: Path, unfilled: List[str]) -> None:
+    if not unfilled:
+        return
+    console = Console()
+    console.print("\n[bold yellow]First-run checklist — descriptor slots to fill:[/bold yellow]")
+    console.print(
+        f"[yellow]The staged defaults in {config_dir} still carry placeholders: "
+        f"{', '.join(unfilled)}.[/yellow]"
+    )
+    console.print(
+        "[yellow]Fill them in bundles.yaml / bundles.secrets.yaml (each slot has a comment saying "
+        "where the value comes from), or via the AI Bundles dashboard after start. "
+        "Affected features stay inactive until their slots are filled; everything else runs.[/yellow]"
+    )
 
 
 def ensure_gateway_template(target_path: Path, ai_app_root: Path) -> None:
@@ -4616,6 +4677,16 @@ def run_setup(
     try:
         final_assembly = load_release_descriptor_soft(Path(release_descriptor_path).expanduser()) if release_descriptor_path else {}
         install_tenant, install_project = descriptor_context_from_assembly(final_assembly)
+        if default_descriptor_bootstrap:
+            # Only the installer-staged defaults get parameterized — never an
+            # operator-supplied descriptor set.
+            unfilled = parameterize_default_bundle_descriptors(
+                config_dir,
+                tenant=install_tenant,
+                project=install_project,
+                public_host=os.getenv("KDCUBE_PUBLIC_HOST", "").strip() or None,
+            )
+            report_unfilled_descriptor_slots(config_dir, unfilled)
         meta = {
             "install_mode": install_mode or "upstream",
             "platform_ref": release_ref or "",
