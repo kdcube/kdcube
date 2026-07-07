@@ -255,32 +255,38 @@ export function DelegatedToKdcubePanel() {
     })[0];
   }, [planProvider, accounts, deepLink, planRequestedClaims]);
 
-  const runPlanAction = (action: ConsentPlanAction) => {
+  // The plan hands over the claims to submit: the account's held claims plus
+  // whatever the user kept ticked in step 3 (they may untick any requested
+  // claim before connecting).
+  const runPlanAction = (action: ConsentPlanAction, planClaims: string[]) => {
     if (!planProvider) return;
     const appId = deepLink.connectorAppId || firstConnectorAppId(planProvider);
+    const targetClaims = planClaims.length ? planClaims : planRequestedClaims;
     if (action === 'connect') {
       if (oauthEnabled(planProvider, appId)) {
-        void launchOAuth(planProvider.provider_id, appId, planRequestedClaims);
+        void launchOAuth(planProvider.provider_id, appId, targetClaims);
         return;
       }
       setProviderId(planProvider.provider_id);
       setConnectorAppId(appId);
-      setClaims(planRequestedClaims);
+      setClaims(targetClaims);
       setFormNotice(`Enter the ${providerLabel(planProvider)} account details and its credential below.`);
       formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       return;
     }
     if (!planAccount) return;
-    if (action === 'reconnect') {
-      reconnect(planAccount);
+    const accountAppId = planAccount.connector_app_id || appId;
+    if (oauthEnabled(planProvider, accountAppId)) {
+      void launchOAuth(planProvider.provider_id, accountAppId, targetClaims);
       return;
     }
-    const merged = Array.from(new Set([...(planAccount.claims || []), ...planRequestedClaims]));
-    if (oauthEnabled(planProvider, planAccount.connector_app_id || appId)) {
-      void launchOAuth(planProvider.provider_id, planAccount.connector_app_id || appId, merged);
-      return;
-    }
-    prefillForAccount(planAccount, merged, 'Check the additional access this account should approve, then reconnect it.');
+    prefillForAccount(
+      planAccount,
+      targetClaims,
+      action === 'reconnect'
+        ? 'Enter a fresh credential to reconnect this account.'
+        : 'Check the additional access this account should approve, then reconnect it.',
+    );
   };
 
   const toggleClaim = (claimId: string) => {

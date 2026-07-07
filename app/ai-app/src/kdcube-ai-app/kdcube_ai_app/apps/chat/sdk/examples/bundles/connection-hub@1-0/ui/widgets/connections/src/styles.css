@@ -456,6 +456,31 @@ h2 {
   color: var(--warn-text);
 }
 
+/* Consent-plan step 3: requested claims are checkbox chips (all preselected;
+   the user unticks what they keep to themselves). Approved claims stay the
+   locked claim-chip-done convention. */
+.claim-chip-toggle {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.claim-chip-toggle input {
+  accent-color: var(--teal);
+  margin: 0;
+  width: 11px;
+  height: 11px;
+  flex: 0 0 auto;
+}
+
+.plan-claims-note {
+  display: block;
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
 .integration-provider-list {
   display: flex;
   flex-direction: column;

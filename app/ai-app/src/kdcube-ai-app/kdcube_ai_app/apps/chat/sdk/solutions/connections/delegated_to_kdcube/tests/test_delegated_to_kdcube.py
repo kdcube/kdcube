@@ -917,3 +917,67 @@ def test_consent_payload_scopes_claims_to_the_named_provider():
     assert "slack" not in payload["error"]["message"]
     # The other provider's failure stays visible in the raw missing list.
     assert any(item["tool_name"] == "slack.read_slack_channel_history" for item in payload["missing"])
+
+
+def _multi_claim_oauth_config():
+    """OAuth provider with three claims so a user-picked subset is observable
+    in the requested scopes (the consent-plan claim checkboxes feed this)."""
+    register_adapter(_FakeOAuthAdapter())
+    return delegated_to_kdcube_config(
+        {
+            "enabled": True,
+            "providers": {
+                "test": {
+                    "label": "Test Provider",
+                    "adapter": "test.oauth",
+                    "claims": {
+                        "test:read": {"label": "Read", "provider_scopes": ["provider.read"]},
+                        "test:write": {"label": "Write", "provider_scopes": ["provider.write"]},
+                        "test:files": {
+                            "label": "Files",
+                            "provider_scopes": ["provider.files.read", "provider.files.write"],
+                        },
+                    },
+                    "connector_apps": {
+                        "default": {
+                            "label": "Default OAuth app",
+                            "client_id": "test-client",
+                            "client_secret_ref": "connections.delegated_to_kdcube.providers.test.connector_apps.default.client_secret",
+                            "allowed_claims": ["test:read", "test:write", "test:files"],
+                        }
+                    },
+                }
+            },
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_start_oauth_requests_scopes_for_the_selected_claims_only(monkeypatch):
+    """Surfaced case: the consent plan lets the user untick requested claims;
+    the OAuth start must ask the provider for exactly the picked claims'
+    scopes (union, deduped)."""
+    _install_fake_storage(monkeypatch)
+    ops = operations_for_user(user_id="user-1", config=_multi_claim_oauth_config())
+
+    started = await ops.start_oauth(
+        {
+            "provider_id": "test",
+            "connector_app_id": "default",
+            "claims": ["test:read", "test:files"],
+        },
+        user_id="user-1",
+        callback_url="https://kdcube.example.test/oauth/callback",
+        state_store=MemoryOAuthStateStore(),
+        state_secret="state-secret",
+    )
+
+    assert started["ok"] is True
+    assert started["claims"] == ["test:files", "test:read"]
+    assert set(started["provider_scopes"]) == {
+        "provider.read",
+        "provider.files.read",
+        "provider.files.write",
+    }
+    assert "provider.write" not in started["provider_scopes"]
+    assert "provider.write" not in started["authorize_url"]
