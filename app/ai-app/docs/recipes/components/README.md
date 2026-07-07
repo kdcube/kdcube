@@ -43,6 +43,7 @@ Read order for app builders:
 | [Your Component](your-component-README.md) | You are adding a new app/widget and need to choose which ecosystem planes it uses. |
 | [Named-Service App](named-service-README.md) | You want a regular app/domain realm to become an agent-usable service provider. |
 | [Scene](scene-README.md) | You are composing multiple widgets/surfaces into one browser scene. |
+| [Scene Surface Command](scene-surface-command-README.md) | One widget should summon and direct another (declare the contract, receive + ack, emit with fallback). |
 | [Canvas Pinboard](pinboard-README.md) | You want objects from different realms pinned, searched, moved, opened, and reused as context. |
 | [Chat Widget](chat-README.md) | You are embedding a ReAct chat surface that attaches, emits, and consumes context. |
 | [Chat With A ReAct Agent](chat-with-react-agent-README.md) | You are declaring the agent behind the chat — per-agent config incl. `supported_models` and the tools/skills inventory — and letting users customize it via the composer menu. |

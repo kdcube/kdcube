@@ -4,7 +4,7 @@ title: "Scene Event Orchestration"
 summary: "Concrete contract for host-side scene event routing: runtime-scoped event streams, widget subscription claims, self-owned stream opt-out, and Event Bus/Data Bus boundaries."
 status: draft
 tags: ["sdk", "solutions", "scene", "events", "event-bus", "data-bus", "widgets", "postmessage", "sse"]
-updated_at: 2026-06-23
+updated_at: 2026-07-07
 keywords:
   [
     "scene event orchestration",
@@ -21,6 +21,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/ecosystem-component/components-ecosystem-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-composition-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-surface-registry-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-surface-commands-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/cross-surface-context-drag-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/surface-layering-README.md
   - repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/npm/packages/components-core/src/events
@@ -37,6 +38,8 @@ This document covers persistent runtime events. Cross-surface drag/drop uses the
 scene overlay control plane in
 [Cross-Surface Context Drag](cross-surface-context-drag-README.md); those
 messages are transient browser UI messages, not Event Bus subscriptions.
+Direct surface-to-surface commands (summon a widget with a payload, with acks)
+are specified in [Scene Surface Commands](scene-surface-commands-README.md).
 
 The rule:
 

@@ -4,7 +4,7 @@ title: "Generic Scene Contract"
 summary: "Gold-standard target design for a config-driven scene: surfaces, namespace presentation, context drag, event relay, generic surface commands, and widget responsibilities."
 status: design
 tags: ["sdk", "solutions", "scene", "components", "widgets", "configuration", "surface-command", "event-bus", "data-bus", "named-services"]
-updated_at: 2026-06-23
+updated_at: 2026-07-07
 keywords:
   [
     "generic scene contract",
@@ -26,6 +26,7 @@ see_also:
   - docs/sdk/solutions/scene/scene-auth-README.md
   - docs/sdk/solutions/scene/cross-surface-context-drag-README.md
   - docs/sdk/solutions/scene/scene-surface-registry-README.md
+  - docs/sdk/solutions/scene/scene-surface-commands-README.md
   - docs/sdk/solutions/scene/surface-layering-README.md
   - src/kdcube-ai-app/npm/packages/components-core/src/scene
 ---
@@ -72,6 +73,10 @@ Every specific widget command is a widget-side concern. A task editor may
 translate this envelope into its local state shape. A memory viewer may
 translate it into a focus call. A chat widget may translate an `attach` action
 into context chips. The scene core still emits the same envelope.
+
+The command mechanics — contract declaration, host routing with readiness
+queueing, and both ack shapes — are specified in
+[Scene Surface Commands](scene-surface-commands-README.md).
 
 ## Terms
 
