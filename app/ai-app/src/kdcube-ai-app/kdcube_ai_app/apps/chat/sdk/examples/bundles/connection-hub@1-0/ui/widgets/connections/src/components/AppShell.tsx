@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { TabGuide } from './TabGuide';
 
-export type ConnectionsTab = 'identity' | 'delegatedToKdcube' | 'delegatedAccess' | 'authenticators';
+export type ConnectionsTab = 'identity' | 'delegatedToKdcube' | 'providerConnections' | 'delegatedAccess' | 'authenticators';
 
 export interface AppShellProps {
   errors: string[];
@@ -55,6 +55,13 @@ export function AppShell({
           onClick={() => onTabChange('delegatedToKdcube')}
         >
           Delegated to KDCube
+        </button>
+        <button
+          type="button"
+          className={`tab ${activeTab === 'providerConnections' ? 'active' : ''}`}
+          onClick={() => onTabChange('providerConnections')}
+        >
+          Provider connections
         </button>
         <button
           type="button"

@@ -63,6 +63,26 @@ const GUIDES: Record<ConnectionsTab, Guide> = {
       },
     ],
   },
+  providerConnections: {
+    summary:
+      'Connect provider accounts — Slack, Gmail — through KDCube\'s connector apps. '
+      + 'Each access tier states what it grants; a connect asks the provider for exactly the tiers you check, '
+      + 'and reconnecting an account adds tiers on top of the ones it already holds.',
+    links: [
+      {
+        label: 'Connect Gmail',
+        href: `${DOCS}/recipes/connections/integrations/google-gmail-README.md`,
+      },
+      {
+        label: 'Connect Slack',
+        href: `${DOCS}/recipes/connections/integrations/slack-README.md`,
+      },
+      {
+        label: 'Connection Hub solution map',
+        href: `${DOCS}/sdk/solutions/connections/connection-hub-solution-README.md`,
+      },
+    ],
+  },
   delegatedAccess: {
     summary:
       'Access you granted to automations and external clients. Create bounded tokens for your own '

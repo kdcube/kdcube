@@ -260,3 +260,83 @@ export interface DelegatedToKdcubeOAuthStartResult {
   error?: string;
   message?: string;
 }
+
+// ── provider connections (connections_* ops; registry-driven OAuth) ─────────
+
+// The connections_* ops report failures either as a plain string or as a
+// structured {code, message} object — accept both.
+export type ConnectionsError = string | { code?: string; message?: string; details?: Record<string, unknown> } | null;
+
+// User-facing claim bundle a provider offers at connect time; picking tiers
+// makes the OAuth ask exactly the union of the picked tiers' scopes.
+export interface ConnectionsClaimTier {
+  id: string;
+  label?: string;
+  description?: string;
+  scopes?: string[];
+}
+
+export interface ConnectionsClientApp {
+  app_id: string;
+  provider: string;
+  label?: string;
+  enabled?: boolean;
+  scopes?: string[]; // the per-app scope ceiling
+}
+
+export interface ConnectionsAccount {
+  account_id: string;
+  provider: string;
+  app_id?: string;
+  external_user_id?: string;
+  display_name?: string;
+  email?: string;
+  workspace?: string;
+  status?: string;
+  scope?: string[]; // scopes the provider granted on the last consent
+  has_token?: boolean;
+  // Present when the provider declares claim_tiers: which tiers the granted
+  // scopes fully cover (true = the account already holds that tier).
+  tier_coverage?: Record<string, boolean>;
+  connected_at?: string;
+  updated_at?: string;
+}
+
+export interface ConnectionsProviderRow {
+  provider: string;
+  label?: string;
+  enabled?: boolean;
+  configured?: boolean;
+  connected?: boolean;
+  apps?: ConnectionsClientApp[];
+  accounts?: ConnectionsAccount[];
+  claim_tiers?: ConnectionsClaimTier[]; // display order; [] when the provider offers a single all-in consent
+}
+
+export interface ConnectionsCatalogResult {
+  ok?: boolean;
+  user_id?: string;
+  providers?: ConnectionsProviderRow[];
+  error?: ConnectionsError;
+  message?: string;
+}
+
+export interface ConnectionsStartOAuthResult {
+  ok?: boolean;
+  provider?: string;
+  app_id?: string;
+  authorize_url?: string;
+  state_id?: string;
+  redirect_uri?: string;
+  error?: ConnectionsError;
+  message?: string;
+}
+
+export interface ConnectionsDisconnectResult {
+  ok?: boolean;
+  provider?: string;
+  deleted?: boolean;
+  accounts?: ConnectionsAccount[];
+  error?: ConnectionsError;
+  message?: string;
+}

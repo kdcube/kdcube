@@ -3,6 +3,7 @@ import authenticatorsReducer from '../features/authenticators/authenticatorsSlic
 import delegatedAccessReducer from '../features/delegatedAccess/delegatedAccessSlice';
 import identityReducer from '../features/identity/identitySlice';
 import delegatedToKdcubeReducer from '../features/delegatedToKdcube/delegatedToKdcubeSlice';
+import providerConnectionsReducer from '../features/providerConnections/providerConnectionsSlice';
 
 export const store = configureStore({
   reducer: {
@@ -10,6 +11,7 @@ export const store = configureStore({
     delegatedAccess: delegatedAccessReducer,
     identity: identityReducer,
     delegatedToKdcube: delegatedToKdcubeReducer,
+    providerConnections: providerConnectionsReducer,
   },
 });
 

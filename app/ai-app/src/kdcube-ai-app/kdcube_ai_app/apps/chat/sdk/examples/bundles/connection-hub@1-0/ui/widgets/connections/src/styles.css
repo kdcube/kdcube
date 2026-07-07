@@ -779,6 +779,25 @@ code {
   gap: 8px;
 }
 
+/* claim-tier picker on provider connect cards: one checkbox row per tier,
+   bold tier name + muted description, "granted" mark on tiers the account
+   being reconnected already holds. */
+.tier-list { margin: 10px 0 4px; display: flex; flex-direction: column; gap: 8px; }
+.tier-item { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; }
+.tier-item input { accent-color: var(--teal); margin-top: 2px; flex: 0 0 auto; }
+.tier-body { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.tier-name { font-weight: 600; font-size: 12.5px; color: var(--ink); display: inline-flex; align-items: center; gap: 6px; }
+.tier-desc { font-size: 12px; color: var(--muted); line-height: 1.45; overflow-wrap: anywhere; }
+.tier-granted {
+  font-weight: 500;
+  font-size: 11px;
+  color: var(--ok-text);
+  background: rgba(var(--ok-rgb), 0.1);
+  border: 1px solid rgba(var(--ok-rgb), 0.5);
+  border-radius: var(--r-sm);
+  padding: 0 6px;
+}
+
 /* per-connect scope selection */
 .scopes { margin: 8px 0 4px; display: flex; flex-direction: column; gap: 6px; }
 .small { font-size: 12px; color: var(--text-2); }

@@ -12,6 +12,8 @@ import { TelegramClaimPage } from './features/identity/TelegramClaimPage';
 import { TelegramMiniAppLinkPanel } from './features/identity/TelegramMiniAppLinkPanel';
 import { DelegatedToKdcubePanel } from './features/delegatedToKdcube/DelegatedToKdcubePanel';
 import { clearDelegatedToKdcubeError, loadDelegatedToKdcube } from './features/delegatedToKdcube/delegatedToKdcubeSlice';
+import { ProviderConnectionsPanel } from './features/providerConnections/ProviderConnectionsPanel';
+import { clearProviderConnectionsError, loadProviderConnections } from './features/providerConnections/providerConnectionsSlice';
 
 function claimChallengeFromLocation(): string {
   const params = new URLSearchParams(window.location.search);
@@ -38,6 +40,12 @@ function tabFromLocation(): ConnectionsTab {
     || value === 'delegated-to-kdcube'
     || value === 'delegated_to_kdcube'
   ) return 'delegatedToKdcube';
+  if (
+    value === 'providerconnections'
+    || value === 'provider-connections'
+    || value === 'provider_connections'
+    || value === 'providers'
+  ) return 'providerConnections';
   if (value === 'delegatedaccess' || value === 'delegated-access' || value === 'delegated_access') return 'delegatedAccess';
   if (value === 'delegatedbykdcube' || value === 'delegated-by-kdcube' || value === 'delegated_by_kdcube') return 'delegatedAccess';
   return 'identity';
@@ -56,10 +64,12 @@ export default function App() {
   const delegatedAccessLoading = useAppSelector((s) => s.delegatedAccess.loading);
   const identityLoading = useAppSelector((s) => s.identity.loading);
   const delegatedToKdcubeLoading = useAppSelector((s) => s.delegatedToKdcube.loading);
+  const providerConnectionsLoading = useAppSelector((s) => s.providerConnections.loading);
   const authenticatorsError = useAppSelector((s) => s.authenticators.error);
   const delegatedAccessError = useAppSelector((s) => s.delegatedAccess.error);
   const identityError = useAppSelector((s) => s.identity.error);
   const delegatedToKdcubeError = useAppSelector((s) => s.delegatedToKdcube.error);
+  const providerConnectionsError = useAppSelector((s) => s.providerConnections.error);
 
   useEffect(() => {
     void settings.setupParentListener().then(async () => {
@@ -69,18 +79,20 @@ export default function App() {
       void dispatch(loadAuthenticators());
       void dispatch(loadDelegatedAccess());
       void dispatch(loadDelegatedToKdcube());
+      void dispatch(loadProviderConnections());
     });
   }, [claimChallengeId, dispatch, telegramMiniAppMode]);
 
   const [refreshing, setRefreshing] = useState(false);
-  const loading = identityLoading || authenticatorsLoading || delegatedAccessLoading || delegatedToKdcubeLoading;
-  const errors = [identityError, authenticatorsError, delegatedAccessError, delegatedToKdcubeError].filter(Boolean) as string[];
+  const loading = identityLoading || authenticatorsLoading || delegatedAccessLoading || delegatedToKdcubeLoading || providerConnectionsLoading;
+  const errors = [identityError, authenticatorsError, delegatedAccessError, delegatedToKdcubeError, providerConnectionsError].filter(Boolean) as string[];
 
   const dismissErrors = () => {
     dispatch(clearIdentityError());
     dispatch(clearAuthenticatorsError());
     dispatch(clearDelegatedAccessError());
     dispatch(clearDelegatedToKdcubeError());
+    dispatch(clearProviderConnectionsError());
   };
 
   // Re-fetch after finishing OAuth in another tab. Doesn't blank the page.
@@ -95,6 +107,7 @@ export default function App() {
         dispatch(loadAuthenticators()).unwrap().catch(() => undefined),
         dispatch(loadDelegatedAccess()).unwrap().catch(() => undefined),
         dispatch(loadDelegatedToKdcube()).unwrap().catch(() => undefined),
+        dispatch(loadProviderConnections()).unwrap().catch(() => undefined),
       ]);
     } finally {
       refreshInFlight.current = false;
@@ -204,6 +217,7 @@ export default function App() {
       {activeTab === 'authenticators' && authenticatorsAllowed ? <AuthenticatorsPanel /> : null}
       {activeTab === 'delegatedAccess' ? <DelegatedAccessPanel /> : null}
       {activeTab === 'delegatedToKdcube' ? <DelegatedToKdcubePanel /> : null}
+      {activeTab === 'providerConnections' ? <ProviderConnectionsPanel /> : null}
     </AppShell>
   );
 }
