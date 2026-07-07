@@ -391,10 +391,21 @@ export function ChatShell({
     dispatch(chatActions.clearBanners())
   }
 
+  /* The floating turn-nav column renders only for multi-turn chats (or while
+   * scrolled up). Its visibility is marked on the layout root so the
+   * stylesheet can reserve the column's horizontal band — message toolbars,
+   * banners, and text end before the nav begins — with zero gutter on
+   * single-turn chats where the nav is absent. `k-embed-bleed` marks the
+   * host-embed column (max-w-none), whose content reaches the viewport's
+   * right edge at every width. */
+  const turnNavVisible = visibleTurns.length > 1 || showScrollDown
+
   return (
     <div className={`shell-grid ${previewTile ? 'k-preview-stage' : ''}`} onPointerDownCapture={NOOP}>
       <div
-        className={`relative flex w-full flex-col ${hostEmbedMode ? 'mx-0' : 'mx-auto'} ${
+        className={`relative flex w-full flex-col ${hostEmbedMode ? 'mx-0 k-embed-bleed' : 'mx-auto'} ${
+          turnNavVisible ? 'k-has-turn-nav' : ''
+        } ${
           previewTile
             ? 'my-6 h-[560px] max-w-[600px] overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--surface)] shadow-lg'
             : compact
@@ -402,7 +413,7 @@ export function ChatShell({
               : `min-h-screen lg:h-screen ${hostEmbedMode ? 'max-w-none' : 'max-w-[1320px]'} lg:overflow-hidden`
         }`}
       >
-        {visibleTurns.length > 1 || showScrollDown ? (
+        {turnNavVisible ? (
           <div className={`k-turn-nav ${previewTile ? 'k-scroll-in-tile' : ''}`}>
             {visibleTurns.length > 1 ? (
               <>

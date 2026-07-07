@@ -798,6 +798,35 @@ a { color: inherit; }
      banner's dismiss button in the compact/embedded layout. */
   pointer-events: none; }
 .k-turn-nav.k-scroll-in-tile { position: absolute; right: 14px; bottom: 104px; }
+/* ── Turn-nav band reservation ─────────────────────────────────────────────
+   The nav column's width is pinned by --k-turn-nav-w (sized to its widest
+   element, the Latest pill) and the reserved band derives from it — the nav
+   and the content padding stay in sync through the shared variables:
+     band = column width + the nav's right offset (24px) + an 10px gap.
+   Reserved ONLY while the nav renders (.k-has-turn-nav, multi-turn chats) and
+   only where content reaches the viewport's right edge: the compact column,
+   the host-embed column (max-w-none at any width), and the centered expanded
+   column below 1536px — the width where (viewport − 1320px)/2 first clears
+   the band, verified against max-w-[1320px]. Message toolbars, banner
+   controls, and text end before the nav column begins; real buttons never
+   stack on real buttons. */
+:root {
+  --k-turn-nav-w: 84px;
+  --k-turn-nav-band: calc(var(--k-turn-nav-w) + 24px + 10px);
+}
+.k-turn-nav { width: var(--k-turn-nav-w); }
+.k-has-turn-nav.k-chat-compact .k-chat-scroll,
+.k-has-turn-nav.k-embed-bleed .k-chat-scroll,
+.k-has-turn-nav.k-chat-compact .k-composer-banners,
+.k-has-turn-nav.k-embed-bleed .k-composer-banners {
+  padding-right: var(--k-turn-nav-band);
+}
+@media (max-width: 1535px) {
+  .k-has-turn-nav .k-chat-scroll,
+  .k-has-turn-nav .k-composer-banners {
+    padding-right: var(--k-turn-nav-band);
+  }
+}
 .k-turn-nav-btn { pointer-events: auto;
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   height: 30px; min-width: 30px; padding: 0 9px; border-radius: 999px; border: 1px solid var(--line);

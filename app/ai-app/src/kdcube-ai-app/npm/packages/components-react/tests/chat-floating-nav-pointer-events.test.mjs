@@ -43,4 +43,31 @@ for (const sheet of STYLESHEETS) {
     assert.match(body, /position:\s*relative/)
     assert.match(body, /z-index:\s*5/)
   })
+
+  test(`nav band derives from the shared width variable (${label})`, () => {
+    // The reserved band is computed from the nav column's own width variable
+    // (sized to the Latest pill) — the two stay in sync by construction.
+    assert.match(css, /--k-turn-nav-band:\s*calc\(var\(--k-turn-nav-w\)/)
+    assert.match(css, /\.k-turn-nav\s*\{\s*width:\s*var\(--k-turn-nav-w\)/)
+  })
+
+  test(`full-bleed layouts reserve the nav band while the nav renders (${label})`, () => {
+    // Compact and host-embed columns pad the message scroll area and the
+    // composer banner strip by the band — message toolbars and banner
+    // controls end before the nav column begins. Scoped to
+    // .k-has-turn-nav, so single-turn chats keep a clean right edge.
+    assert.match(
+      css,
+      /\.k-has-turn-nav\.k-chat-compact \.k-chat-scroll,\s*\.k-has-turn-nav\.k-embed-bleed \.k-chat-scroll,\s*\.k-has-turn-nav\.k-chat-compact \.k-composer-banners,\s*\.k-has-turn-nav\.k-embed-bleed \.k-composer-banners\s*\{\s*padding-right:\s*var\(--k-turn-nav-band\)/,
+    )
+  })
+
+  test(`the centered expanded column reserves the band below its clearance width (${label})`, () => {
+    // Below 1536px the (viewport − 1320px)/2 centering margin is narrower
+    // than the band, so the reservation applies there too.
+    assert.match(
+      css,
+      /@media \(max-width: 1535px\)\s*\{\s*\.k-has-turn-nav \.k-chat-scroll,\s*\.k-has-turn-nav \.k-composer-banners\s*\{\s*padding-right:\s*var\(--k-turn-nav-band\)/,
+    )
+  })
 }
