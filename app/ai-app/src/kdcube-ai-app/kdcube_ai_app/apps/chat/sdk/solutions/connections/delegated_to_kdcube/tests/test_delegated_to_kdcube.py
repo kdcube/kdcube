@@ -981,3 +981,68 @@ async def test_start_oauth_requests_scopes_for_the_selected_claims_only(monkeypa
     }
     assert "provider.write" not in started["provider_scopes"]
     assert "provider.write" not in started["authorize_url"]
+
+
+def test_consent_payload_lists_the_blocked_tools_for_its_provider():
+    """The banner's second option ("turn off the tools that need it") needs the
+    blocked tool names — scoped to the consent's provider, with tools failed by
+    another provider staying out."""
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube import (
+        connected_account_consent_payload,
+    )
+
+    payload = connected_account_consent_payload(
+        tenant="demo-tenant",
+        project="demo-project",
+        connection_hub_bundle_id="connection-hub@1-0",
+        missing=[
+            {
+                "ok": False,
+                "tool_name": "slack.upload_slack_file",
+                "failures": [
+                    {
+                        "ok": False,
+                        "provider_id": "slack",
+                        "connector_app_id": "demo",
+                        "claim": "slack:files:write",
+                        "error": "claim_upgrade_required",
+                        "retry_hint": True,
+                    }
+                ],
+            },
+            {
+                "ok": False,
+                "tool_name": "slack.post_slack_message",
+                "failures": [
+                    {
+                        "ok": False,
+                        "provider_id": "slack",
+                        "connector_app_id": "demo",
+                        "claim": "slack:post",
+                        "error": "claim_upgrade_required",
+                        "retry_hint": True,
+                    }
+                ],
+            },
+            {
+                "ok": False,
+                "tool_name": "gmail.send_gmail",
+                "failures": [
+                    {
+                        "ok": False,
+                        "provider_id": "google",
+                        "connector_app_id": "gmail",
+                        "claim": "gmail:send",
+                        "error": "connect_required",
+                        "retry_hint": True,
+                    }
+                ],
+            },
+        ],
+    )
+
+    consent = payload["consent"]
+    assert consent["provider_id"] == "slack"
+    assert consent["tools"] == ["slack.upload_slack_file", "slack.post_slack_message"]
+    # The full cross-provider tool list stays available at the payload top.
+    assert "gmail.send_gmail" in payload["tools"]

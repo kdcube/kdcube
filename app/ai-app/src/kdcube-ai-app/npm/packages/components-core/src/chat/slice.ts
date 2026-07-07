@@ -192,10 +192,26 @@ const slice = createSlice({
       return addBanner(state as ChatState, action.payload.tone, action.payload.text, action.payload.placement ?? 'top')
     },
     dismissBanner(state, action: PayloadAction<string>) {
+      // A dismissed consent banner stays dismissed for the conversation: its
+      // signature is remembered, and the identical consent state stays quiet.
+      // A CHANGED claims set carries a new signature and shows again.
+      const target = state.banners.find((banner) => banner.id === action.payload)
+      if (target?.consentSignature && !state.dismissedConsentSignatures.includes(target.consentSignature)) {
+        state.dismissedConsentSignatures.push(target.consentSignature)
+      }
       state.banners = state.banners.filter((banner) => banner.id !== action.payload)
     },
     clearBanners(state) {
       state.banners = []
+    },
+
+    // --- Composer-menu tool spotlight (consent banner's "turn off tools") ---
+    spotlightTools(state, action: PayloadAction<string[]>) {
+      const tools = action.payload.map((item) => String(item || '').trim()).filter(Boolean)
+      state.toolSpotlight = tools.length ? { tools, nonce: Date.now() } : null
+    },
+    clearToolSpotlight(state) {
+      state.toolSpotlight = null
     },
 
     // --- Turn feedback (signed-in user's reaction per assistant turn) ---
@@ -262,6 +278,8 @@ const slice = createSlice({
       state.conversationId = null
       state.conversationTitle = null
       state.feedback = {}
+      state.dismissedConsentSignatures = []
+      state.toolSpotlight = null
     },
     appendTurn(state, action: PayloadAction<ChatTurn>) {
       state.turns = [...state.turns, action.payload]
@@ -285,6 +303,8 @@ const slice = createSlice({
       /* Cleared here; App re-hydrates the map via fetchTurnFeedbacks once
        * the conversation turns are in place. */
       state.feedback = {}
+      state.dismissedConsentSignatures = []
+      state.toolSpotlight = null
       state.conversationId = conv.conversation_id
       state.conversationTitle =
         (conv as unknown as { conversation_title?: string | null }).conversation_title

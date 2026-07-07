@@ -8,6 +8,7 @@ function BannerStripImpl({
   banners,
   onDismiss,
   onOpenConnections,
+  onAdjustTools,
 }: {
   banners: Banner[]
   onDismiss: (id: string) => void
@@ -15,6 +16,10 @@ function BannerStripImpl({
    *  (the `connections.hub.open` scene contract) instead of the plain link.
    *  Passed only when the host registered an `open-connections` handler. */
   onOpenConnections?: (consent: ConnectionsConsentOpen) => void
+  /** The consent banner's second real option: open the composer tools menu
+   *  with the blocked tools highlighted so the user can turn them off
+   *  instead of granting the access. */
+  onAdjustTools?: (tools: string[]) => void
 }) {
   if (banners.length === 0) return null
   const noticeClass = (tone: BannerTone) => {
@@ -53,6 +58,16 @@ function BannerStripImpl({
             >
               {banner.actionLabel || 'Open'}
             </a>
+          ) : null}
+          {banner.consentTools?.length && onAdjustTools ? (
+            <button
+              type="button"
+              className="k-btn k-ghost k-notice-action"
+              title="Open the tools menu with these tools highlighted"
+              onClick={() => onAdjustTools(banner.consentTools as string[])}
+            >
+              Turn off the tools that need it
+            </button>
           ) : null}
           <button
             type="button"

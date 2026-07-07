@@ -213,6 +213,18 @@ def connected_account_consent_payload(
         and as_str(item.get("provider_id")) == provider_id
         and (not connector_app_id or as_str(item.get("connector_app_id") or connector_app_id) == connector_app_id)
     )
+    # Tools blocked by THIS provider's failures — the banner's second option
+    # ("turn off the tools that need it") lists exactly these.
+    provider_tools = _clean_list(
+        tool_result.get("tool_name")
+        for tool_result in missing
+        if any(
+            isinstance(item, dict)
+            and as_str(item.get("provider_id")) == provider_id
+            and (not connector_app_id or as_str(item.get("connector_app_id") or connector_app_id) == connector_app_id)
+            for item in (tool_result.get("failures") if isinstance(tool_result.get("failures"), list) else [])
+        )
+    )
     reason = as_str(failure.get("reason") or failure.get("error")) or REASON_CONNECT_REQUIRED
     retry_hint = bool(failure.get("retry_hint"))
     account_id = as_str(failure.get("account_id"))
@@ -262,6 +274,7 @@ def connected_account_consent_payload(
             "candidates": candidates,
             "tool_id": tool_name,
             "tool_label": tool_name,
+            "tools": provider_tools,
             "url": url,
             "action_label": _ACTION_LABELS.get(reason, "Open Connection Hub"),
         },

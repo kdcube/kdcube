@@ -2033,6 +2033,9 @@ a { color: inherit; }
 }
 .k-menu-divider { margin: 6px 4px; border-top: 1px solid var(--line-soft); }
 .k-menu-row { display: flex; align-items: stretch; gap: 2px; }
+/* Consent-banner spotlight: the tools a blocked capability needs, highlighted
+   when the user chooses to turn them off instead of granting access. */
+.k-menu-row-spotlight { border-radius: 6px; background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
 .k-menu-row-main {
   display: flex;
   flex: 1 1 auto;

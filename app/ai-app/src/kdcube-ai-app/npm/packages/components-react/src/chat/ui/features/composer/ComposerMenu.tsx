@@ -14,6 +14,8 @@
  * descriptor, no menu changes.
  */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { chatActions } from '@kdcube/components-core/chat'
+import { useAppDispatch } from '../../support/hooks.ts'
 import type {
   AgentCapabilitiesInventory,
   AgentSelectionDisabled,
@@ -97,6 +99,7 @@ function MenuRow({
   expanded,
   onExpand,
   child = false,
+  spotlight = false,
 }: {
   label: ReactNode
   sub?: string
@@ -106,9 +109,10 @@ function MenuRow({
   expanded?: boolean
   onExpand?: () => void
   child?: boolean
+  spotlight?: boolean
 }) {
   return (
-    <div className={`k-menu-row ${child ? 'k-menu-row-child' : ''}`}>
+    <div className={`k-menu-row ${child ? 'k-menu-row-child' : ''}${spotlight ? ' k-menu-row-spotlight' : ''}`}>
       <button
         type="button"
         role="menuitemcheckbox"
@@ -204,6 +208,9 @@ interface CapabilityRowsProps {
   toggle: (patch: AgentSelectionPatch) => void
   namespaceStyles: NamespaceStyleMap
   pending?: AgentSelectionPending | null
+  /** Tool names to highlight + scroll to (`alias.tool`, or a bare group
+   *  alias). Set when the consent banner opens the menu to turn tools off. */
+  spotlight?: string[]
 }
 
 /** Radio-style single model pick from the admin-allowed `supported_models`
@@ -269,13 +276,56 @@ function SkillsSection({ inventory, disabled, toggle }: CapabilityRowsProps) {
   )
 }
 
-function ToolGroupsSection({ inventory, disabled, toggle, pending }: CapabilityRowsProps) {
+function ToolGroupsSection({ inventory, disabled, toggle, pending, spotlight }: CapabilityRowsProps) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const groups = inventory.tools.filter((group) => !group.system)
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  // `alias.tool` highlights one tool row (auto-expanding its group); a bare
+  // alias highlights the whole group row.
+  const spotlightKey = (spotlight ?? []).join('|')
+  const spotlightMap = useMemo(() => {
+    const map = new Map<string, Set<string> | 'group'>()
+    for (const raw of spotlight ?? []) {
+      const name = String(raw || '').trim()
+      if (!name) continue
+      const dot = name.indexOf('.')
+      if (dot < 0) {
+        map.set(name, 'group')
+        continue
+      }
+      const alias = name.slice(0, dot)
+      const tool = name.slice(dot + 1)
+      const entry = map.get(alias)
+      if (entry === 'group') continue
+      if (entry instanceof Set) entry.add(tool)
+      else map.set(alias, new Set([tool]))
+    }
+    return map
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [spotlightKey])
+  useEffect(() => {
+    if (!spotlightMap.size) return
+    setExpanded((current) => {
+      const next = { ...current }
+      spotlightMap.forEach((entry, alias) => {
+        if (entry !== 'group') next[alias] = true
+      })
+      return next
+    })
+    const timer = window.setTimeout(() => {
+      containerRef.current?.querySelector('.k-menu-row-spotlight')?.scrollIntoView({ block: 'nearest' })
+    }, 60)
+    return () => window.clearTimeout(timer)
+  }, [spotlightMap])
   if (!groups.length) return null
   const pendingTools = pending?.disabled?.tools ?? {}
+  const groupSpotlit = (alias: string) => spotlightMap.get(alias) === 'group'
+  const toolSpotlit = (alias: string, toolName: string) => {
+    const entry = spotlightMap.get(alias)
+    return entry instanceof Set && entry.has(toolName)
+  }
   return (
-    <div>
+    <div ref={containerRef}>
       <SectionTitle>Tools</SectionTitle>
       {groups.map((group) => {
         const state = toolGroupState(group, disabled)
@@ -294,6 +344,7 @@ function ToolGroupsSection({ inventory, disabled, toggle, pending }: CapabilityR
               expandable={group.tools.length > 0}
               expanded={isOpen}
               onExpand={() => setExpanded((current) => ({ ...current, [group.alias]: !isOpen }))}
+              spotlight={groupSpotlit(group.alias)}
             />
             {isOpen
               ? group.tools.map((tool) => (
@@ -304,6 +355,7 @@ function ToolGroupsSection({ inventory, disabled, toggle, pending }: CapabilityR
                     sub={firstLine(tool.description)}
                     checked={isToolDisabled(disabled, group.alias, tool.name) ? 'off' : 'on'}
                     onToggle={() => toggle(toolTogglePatch(group, disabled, tool.name))}
+                    spotlight={toolSpotlit(group.alias, tool.name)}
                   />
                 ))
               : null}
@@ -425,6 +477,7 @@ function builtInSections(namespaceStyles: NamespaceStyleMap): ComposerMenuSectio
           toggle={toggle}
           namespaceStyles={namespaceStyles}
           pending={pending}
+          spotlight={vm.state.toolSpotlight?.tools}
         />
       )
     },
@@ -461,9 +514,30 @@ export function ComposerMenu({
   extraSections?: ComposerMenuSectionDescriptor[]
 }) {
   const vm = useChatViewModel()
+  const dispatch = useAppDispatch()
   const [open, setOpen] = useState(false)
   const anchorRef = useRef<HTMLDivElement | null>(null)
   const capabilities = vm.capabilities
+
+  /* A consent banner's "turn off the tools" option requests a spotlight:
+   * open the menu; the tools section highlights + scrolls to the tools.
+   * Closing the menu clears the request. */
+  const spotlightNonce = vm.state.toolSpotlight?.nonce ?? 0
+  useEffect(() => {
+    if (spotlightNonce) setOpen(true)
+  }, [spotlightNonce])
+  const wasOpenRef = useRef(false)
+  useEffect(() => {
+    if (open) {
+      wasOpenRef.current = true
+      return
+    }
+    if (wasOpenRef.current) {
+      wasOpenRef.current = false
+      dispatch(chatActions.clearToolSpotlight())
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
 
   /* Cache-cost notices. A fresh conversation has nothing cached yet, so the
    * notices would be noise there — suppressed via the already-exposed turn

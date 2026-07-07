@@ -30,6 +30,13 @@ export interface Banner {
    *  connected-account consent card; hosts that route `open-connections`
    *  receive it instead of the plain `actionUrl` navigation. */
   consent?: ConnectionsConsentOpen
+  /** Consent identity (`provider|sorted-claims`): one banner per provider at a
+   *  time (a new consent state supersedes the older banner) and the dismissal
+   *  memory key (an identical state stays quiet after dismiss). */
+  consentSignature?: string
+  /** Tools blocked by the missing claims — the banner's second option lets
+   *  the user turn these off instead of granting the access. */
+  consentTools?: string[]
   /** Where the notice renders. `'composer'` = right above the chat input
    *  (chat-send / rate-limit / economic notices). `'top'` (default) =
    *  app-level strip at the top (boot/connection, list errors). */
@@ -295,6 +302,13 @@ export interface ChatState {
   composerContexts: AttachedContext[]
   turns: ChatTurn[]
   banners: Banner[]
+  /** Consent signatures dismissed this conversation: the identical consent
+   *  state stays quiet; a changed claims set shows again. Reset on
+   *  conversation switch. */
+  dismissedConsentSignatures: string[]
+  /** Composer-menu spotlight request: open the tools menu with these tools
+   *  highlighted (set by the consent banner's "turn off the tools" option). */
+  toolSpotlight: { tools: string[]; nonce: number } | null
   /** Signed-in user's saved reaction per assistant turn id. */
   feedback: Record<string, TurnReaction>
   inputLocked: boolean
@@ -319,6 +333,8 @@ export const initialState: ChatState = {
   composerContexts: [],
   turns: [],
   banners: [],
+  dismissedConsentSignatures: [],
+  toolSpotlight: null,
   feedback: {},
   inputLocked: false,
   inputLockMessage: null,

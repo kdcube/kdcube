@@ -254,6 +254,13 @@ export function ChatShell({
     engine.connections.open('consent-card', consent)
   })
   const bannerOpenConnections = engine.connections.available() ? handleBannerOpenConnections : undefined
+  /* The consent banner's second option: spotlight the blocked tools in the
+   * composer "+" menu so the user can turn them off instead of granting the
+   * access. Registered users only — the menu itself is authed-only. */
+  const handleBannerAdjustTools = useStableCallback((tools: string[]) => {
+    dispatch(chatActions.spotlightTools(tools))
+  })
+  const bannerAdjustTools = engine.authed ? handleBannerAdjustTools : undefined
   const handleConversationSelect = engine.loadConversation
   const handleConversationDelete = engine.deleteConversation
   const handleConversationRefresh = engine.refreshConversationList
@@ -659,7 +666,7 @@ export function ChatShell({
                   </button>
                 </div>
               ) : null}
-              <BannerStrip banners={topBanners} onDismiss={handleBannerDismiss} onOpenConnections={bannerOpenConnections} />
+              <BannerStrip banners={topBanners} onDismiss={handleBannerDismiss} onOpenConnections={bannerOpenConnections} onAdjustTools={bannerAdjustTools} />
             </div>
           ) : null}
 
@@ -855,7 +862,7 @@ export function ChatShell({
                 ) : null}
                 {composerBanners.length > 0 ? (
                   <div className="k-composer-banners pb-2">
-                    <BannerStrip banners={composerBanners} onDismiss={handleBannerDismiss} onOpenConnections={bannerOpenConnections} />
+                    <BannerStrip banners={composerBanners} onDismiss={handleBannerDismiss} onOpenConnections={bannerOpenConnections} onAdjustTools={bannerAdjustTools} />
                   </div>
                 ) : null}
                 <Composer

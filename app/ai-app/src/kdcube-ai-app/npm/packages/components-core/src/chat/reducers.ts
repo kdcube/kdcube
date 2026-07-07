@@ -132,6 +132,8 @@ function connectedAccountConsentBanner(data: Record<string, unknown> | undefined
   actionLabel: string
   actionUrl: string
   consent: ConnectionsConsentOpen
+  signature: string
+  tools: string[]
 } | null {
   const payload = findConnectedAccountConsentPayload(data)
   if (!payload) return null
@@ -161,6 +163,9 @@ function connectedAccountConsentBanner(data: Record<string, unknown> | undefined
   const claimText = claims.length ? ` (${claims.join(', ')})` : ''
   const text = message
     || `Connect or approve ${subject || 'an external account'}${claimText}${tool ? ` for ${tool}` : ''}.`
+  const blockedTools = Array.isArray(consent.tools)
+    ? consent.tools.map((item) => stringValue(item)).filter(Boolean)
+    : []
   return {
     text,
     actionLabel: stringValue(consent.action_label || payload.action_label) || 'Open Connection Hub',
@@ -171,7 +176,49 @@ function connectedAccountConsentBanner(data: Record<string, unknown> | undefined
       accountId: stringValue(consent.account_id),
       url,
     }),
+    signature: `${stringValue(consent.provider_id)}|${[...claims].sort().join(',')}`,
+    tools: blockedTools,
   }
+}
+
+/** One consent banner per provider at a time, with dismissal memory.
+ *
+ * - A signature the user dismissed this conversation stays quiet.
+ * - The identical signature already on screen stays as-is (stable id, so
+ *   dismiss keeps working while turn envelopes repeat the consent state).
+ * - A NEW consent state for the same provider supersedes the older banner
+ *   (a stale connect_required vanishes once the state becomes
+ *   claim_upgrade_required with fewer claims). */
+export function upsertConsentBanner(
+  state: ChatState,
+  input: {
+    text: string
+    actionLabel: string
+    actionUrl: string
+    consent: ConnectionsConsentOpen
+    signature: string
+    tools: string[]
+  },
+): ChatState {
+  const trimmed = input.text.trim()
+  if (!trimmed || !input.signature) return state
+  if (state.dismissedConsentSignatures.includes(input.signature)) return state
+  if (state.banners.some((banner) => banner.consentSignature === input.signature)) return state
+  const providerPrefix = input.signature.slice(0, input.signature.indexOf('|') + 1)
+  const kept = state.banners.filter(
+    (banner) => !(banner.consentSignature && banner.consentSignature.startsWith(providerPrefix)),
+  )
+  const banners = [{
+    id: createLocalId('banner'),
+    tone: 'warning' as BannerTone,
+    text: trimmed,
+    placement: 'composer' as const,
+    ...(input.actionLabel && input.actionUrl ? { actionLabel: input.actionLabel, actionUrl: input.actionUrl } : {}),
+    consent: input.consent,
+    consentSignature: input.signature,
+    ...(input.tools.length ? { consentTools: input.tools } : {}),
+  }, ...kept].slice(0, 4)
+  return { ...state, banners }
 }
 
 function canonicalPayloadRef(
@@ -1125,15 +1172,7 @@ export function applyChatStep(state: ChatState, env: ChatStepEnvelope): ChatStat
   )
   const consentBanner = connectedAccountConsentBanner(env.data)
   const stateWithBanner = consentBanner
-    ? addBanner(
-        syncedState,
-        'warning',
-        consentBanner.text,
-        'composer',
-        consentBanner.actionUrl
-          ? { label: consentBanner.actionLabel, url: consentBanner.actionUrl, consent: consentBanner.consent }
-          : null,
-      )
+    ? upsertConsentBanner(syncedState, consentBanner)
     : syncedState
   return updateTurn(stateWithBanner, env.conversation.turn_id, (turn) => {
     const timestamp = timestampValue(env.timestamp)
