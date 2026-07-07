@@ -129,6 +129,43 @@ export function ChatShell({
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
   const autoScrollRef = useRef(true)
 
+  /* Idle-fade presence for the floating turn-nav: the conversation owns the
+   * full column, so the nav reserves no space — it shows while the user
+   * navigates (scroll activity, turn changes, hover, keyboard focus) and
+   * fades out fully after ~1.5s idle (opacity + pointer-events off, so faded
+   * buttons never intercept clicks on content beneath). A JS timer drives it
+   * because "scroll went idle" and "a turn arrived" are events CSS can't
+   * observe; the fade itself is a pure CSS transition. */
+  const TURN_NAV_IDLE_MS = 1500
+  const [turnNavAwake, setTurnNavAwake] = useState(true)
+  const turnNavIdleTimer = useRef<number | null>(null)
+  const turnNavHoldRef = useRef(false)
+  const wakeTurnNav = useStableCallback(() => {
+    setTurnNavAwake(true)
+    if (turnNavIdleTimer.current !== null) window.clearTimeout(turnNavIdleTimer.current)
+    turnNavIdleTimer.current = window.setTimeout(() => {
+      turnNavIdleTimer.current = null
+      if (!turnNavHoldRef.current) setTurnNavAwake(false)
+    }, TURN_NAV_IDLE_MS)
+  })
+  /* Hover/keyboard-focus over the nav holds it visible; leaving re-arms the
+   * idle fade. React's onFocus/onBlur bubble, so any button's focus counts. */
+  const holdTurnNav = useStableCallback(() => {
+    turnNavHoldRef.current = true
+    setTurnNavAwake(true)
+    if (turnNavIdleTimer.current !== null) {
+      window.clearTimeout(turnNavIdleTimer.current)
+      turnNavIdleTimer.current = null
+    }
+  })
+  const releaseTurnNav = useStableCallback(() => {
+    turnNavHoldRef.current = false
+    wakeTurnNav()
+  })
+  useEffect(() => () => {
+    if (turnNavIdleTimer.current !== null) window.clearTimeout(turnNavIdleTimer.current)
+  }, [])
+
   const activeScroller = (): HTMLElement | null => {
     const el = scrollContainerRef.current
     if (!el) return null
@@ -169,16 +206,20 @@ export function ChatShell({
     }
 
     measure()
+    const onScrollActivity = () => {
+      measure()
+      wakeTurnNav()
+    }
     const el = scrollContainerRef.current
-    if (el) el.addEventListener('scroll', measure, { passive: true })
-    window.addEventListener('scroll', measure, { passive: true })
+    if (el) el.addEventListener('scroll', onScrollActivity, { passive: true })
+    window.addEventListener('scroll', onScrollActivity, { passive: true })
     window.addEventListener('resize', measure)
     return () => {
-      if (el) el.removeEventListener('scroll', measure)
-      window.removeEventListener('scroll', measure)
+      if (el) el.removeEventListener('scroll', onScrollActivity)
+      window.removeEventListener('scroll', onScrollActivity)
       window.removeEventListener('resize', measure)
     }
-  }, [hostView, ready])
+  }, [hostView, ready, wakeTurnNav])
 
   const scrollToBottom = () => {
     autoScrollRef.current = true
@@ -213,6 +254,12 @@ export function ChatShell({
   }
 
   const visibleTurns = useMemo(() => state.turns.filter(isVisibleTurn), [state.turns])
+
+  /* A turn arriving (or loading a conversation) is navigation activity:
+   * surface the nav, then let it fade. */
+  useEffect(() => {
+    if (visibleTurns.length > 1) wakeTurnNav()
+  }, [visibleTurns.length, wakeTurnNav])
   const lastTurn = visibleTurns[visibleTurns.length - 1]
   const scrollSignature = `${visibleTurns.length}:${lastTurn?.id ?? ''}:${lastTurn?.answer.length ?? 0}:${lastTurn?.timeline.length ?? 0}:${lastTurn?.artifacts.length ?? 0}:${state.banners.length}:${ready ? 1 : 0}`
   useEffect(() => {
@@ -391,21 +438,12 @@ export function ChatShell({
     dispatch(chatActions.clearBanners())
   }
 
-  /* The floating turn-nav column renders only for multi-turn chats (or while
-   * scrolled up). Its visibility is marked on the layout root so the
-   * stylesheet can reserve the column's horizontal band — message toolbars,
-   * banners, and text end before the nav begins — with zero gutter on
-   * single-turn chats where the nav is absent. `k-embed-bleed` marks the
-   * host-embed column (max-w-none), whose content reaches the viewport's
-   * right edge at every width. */
   const turnNavVisible = visibleTurns.length > 1 || showScrollDown
 
   return (
     <div className={`shell-grid ${previewTile ? 'k-preview-stage' : ''}`} onPointerDownCapture={NOOP}>
       <div
-        className={`relative flex w-full flex-col ${hostEmbedMode ? 'mx-0 k-embed-bleed' : 'mx-auto'} ${
-          turnNavVisible ? 'k-has-turn-nav' : ''
-        } ${
+        className={`relative flex w-full flex-col ${hostEmbedMode ? 'mx-0' : 'mx-auto'} ${
           previewTile
             ? 'my-6 h-[560px] max-w-[600px] overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--surface)] shadow-lg'
             : compact
@@ -414,7 +452,13 @@ export function ChatShell({
         }`}
       >
         {turnNavVisible ? (
-          <div className={`k-turn-nav ${previewTile ? 'k-scroll-in-tile' : ''}`}>
+          <div
+            className={`k-turn-nav ${previewTile ? 'k-scroll-in-tile' : ''}${turnNavAwake ? '' : ' k-turn-nav-idle'}`}
+            onMouseEnter={holdTurnNav}
+            onMouseLeave={releaseTurnNav}
+            onFocus={holdTurnNav}
+            onBlur={releaseTurnNav}
+          >
             {visibleTurns.length > 1 ? (
               <>
                 <button type="button" className="k-turn-nav-btn" onClick={() => scrollToTurn('first')} aria-label="Jump to first message" title="First message">

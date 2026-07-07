@@ -2,13 +2,17 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 
-// Surfaced live (compact/embedded chat): the fixed turn-nav column's container
-// box swallowed clicks meant for the composer banner's dismiss button — the
-// buttons are right-aligned inside a wider flex column, so the transparent
-// strip beside them (and the gaps between them) intercepted the pointer.
-// Guard the standard overlay pattern in BOTH stylesheets that carry the rule:
-// pointer-events none on the passive container, auto on its buttons, and the
-// banner row layering above passive overlays.
+// The floating turn-nav is a TRANSIENT overlay: the conversation owns the
+// full column, so the nav never reserves space. Two rules make its overlap
+// harmless, pinned here in BOTH stylesheets that carry them:
+//   1. pointer-events pattern — the passive container is click-transparent;
+//      only its buttons take clicks (surfaced: the container box swallowed
+//      the composer banner's dismiss in compact view);
+//   2. idle-fade presence — after idle the nav is opacity 0 AND its buttons
+//      drop pointer-events, so faded buttons never intercept the message
+//      copy controls beneath; keyboard focus always shows it back.
+// Space reservation (padding-right bands) is rejected by design: the fade,
+// never the layout, resolves the overlap.
 
 const STYLESHEETS = [
   new URL('../examples/standalone/chat-ui.css', import.meta.url),
@@ -19,7 +23,10 @@ const STYLESHEETS = [
 ]
 
 function ruleBody(css, selector) {
-  const start = css.indexOf(`${selector} {`)
+  // Anchor at a line start so `.k-turn-nav-btn` finds its own rule rather
+  // than the `.k-turn-nav-idle .k-turn-nav-btn` descendant rule.
+  const needle = `\n${selector} {`
+  const start = css.startsWith(`${selector} {`) ? 0 : css.indexOf(needle)
   assert.notEqual(start, -1, `rule ${selector} is declared`)
   const open = css.indexOf('{', start)
   const close = css.indexOf('}', open)
@@ -34,40 +41,36 @@ for (const sheet of STYLESHEETS) {
     assert.match(ruleBody(css, '.k-turn-nav'), /pointer-events:\s*none/)
   })
 
-  test(`turn-nav buttons stay clickable (${label})`, () => {
+  test(`turn-nav buttons stay clickable while visible (${label})`, () => {
     assert.match(ruleBody(css, '.k-turn-nav-btn'), /pointer-events:\s*auto/)
+  })
+
+  test(`turn-nav fades via a pure opacity transition (${label})`, () => {
+    assert.match(ruleBody(css, '.k-turn-nav'), /transition:\s*opacity\s*200ms/)
+  })
+
+  test(`idle turn-nav is fully hidden AND click-transparent (${label})`, () => {
+    // The visible/hidden pair: hidden = opacity 0 coupled with the BUTTONS
+    // dropping pointer-events, so a faded nav never intercepts the copy
+    // controls beneath it.
+    assert.match(ruleBody(css, '.k-turn-nav-idle'), /opacity:\s*0/)
+    assert.match(ruleBody(css, '.k-turn-nav-idle .k-turn-nav-btn'), /pointer-events:\s*none/)
+  })
+
+  test(`keyboard focus always shows the turn-nav (${label})`, () => {
+    assert.match(ruleBody(css, '.k-turn-nav-idle:focus-within'), /opacity:\s*1/)
+    assert.match(ruleBody(css, '.k-turn-nav-idle:focus-within .k-turn-nav-btn'), /pointer-events:\s*auto/)
+  })
+
+  test(`no space reservation for the nav remains (${label})`, () => {
+    assert.doesNotMatch(css, /--k-turn-nav-band/)
+    assert.doesNotMatch(css, /k-has-turn-nav/)
+    assert.doesNotMatch(css, /k-embed-bleed/)
   })
 
   test(`banner row layers above passive overlays (${label})`, () => {
     const body = ruleBody(css, '.k-notice')
     assert.match(body, /position:\s*relative/)
     assert.match(body, /z-index:\s*5/)
-  })
-
-  test(`nav band derives from the shared width variable (${label})`, () => {
-    // The reserved band is computed from the nav column's own width variable
-    // (sized to the Latest pill) — the two stay in sync by construction.
-    assert.match(css, /--k-turn-nav-band:\s*calc\(var\(--k-turn-nav-w\)/)
-    assert.match(css, /\.k-turn-nav\s*\{\s*width:\s*var\(--k-turn-nav-w\)/)
-  })
-
-  test(`full-bleed layouts reserve the nav band while the nav renders (${label})`, () => {
-    // Compact and host-embed columns pad the message scroll area and the
-    // composer banner strip by the band — message toolbars and banner
-    // controls end before the nav column begins. Scoped to
-    // .k-has-turn-nav, so single-turn chats keep a clean right edge.
-    assert.match(
-      css,
-      /\.k-has-turn-nav\.k-chat-compact \.k-chat-scroll,\s*\.k-has-turn-nav\.k-embed-bleed \.k-chat-scroll,\s*\.k-has-turn-nav\.k-chat-compact \.k-composer-banners,\s*\.k-has-turn-nav\.k-embed-bleed \.k-composer-banners\s*\{\s*padding-right:\s*var\(--k-turn-nav-band\)/,
-    )
-  })
-
-  test(`the centered expanded column reserves the band below its clearance width (${label})`, () => {
-    // Below 1536px the (viewport − 1320px)/2 centering margin is narrower
-    // than the band, so the reservation applies there too.
-    assert.match(
-      css,
-      /@media \(max-width: 1535px\)\s*\{\s*\.k-has-turn-nav \.k-chat-scroll,\s*\.k-has-turn-nav \.k-composer-banners\s*\{\s*padding-right:\s*var\(--k-turn-nav-band\)/,
-    )
   })
 }
