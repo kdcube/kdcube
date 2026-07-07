@@ -1,4 +1,4 @@
-import type { EngineConfig, HostEventEmitter, HostEventName } from '../shared/index.ts'
+import type { ConnectionsConsentOpen, EngineConfig, HostEventEmitter, HostEventName } from '../shared/index.ts'
 import type { AttachedContext, ChatState } from './state.ts'
 import type { ContextChip } from './contextChips.ts'
 import type { ReactContextPreviewResponse, TurnReaction } from './protocol.ts'
@@ -111,8 +111,10 @@ export interface ChatEngine extends Pick<HostEventEmitter, 'on'> {
 
   /** Ask the host to open its connections surface (Connection Hub). Emits the
    *  `open-connections` host event; the host adapter routes it (e.g. a scene
-   *  surface command targeting the connection-hub settings widget). */
-  openConnections(source?: string): void
+   *  surface command targeting the connection-hub settings widget). `consent`
+   *  carries the structured deep-link when the open comes from a
+   *  connected-account consent card. */
+  openConnections(source?: string, consent?: ConnectionsConsentOpen): void
   /** True when the host registered a handler for `event`. UI hides entry
    *  points (like the connections row) the host chose not to wire. */
   hasHostHandler(event: HostEventName): boolean

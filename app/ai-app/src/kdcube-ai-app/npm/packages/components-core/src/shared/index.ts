@@ -8,6 +8,7 @@ export type {
   ObjectRef,
   ConnectionStatus,
   NoticeTone,
+  ConnectionsConsentOpen,
   HostEventMap,
   HostEventName,
   HostEventHandler,

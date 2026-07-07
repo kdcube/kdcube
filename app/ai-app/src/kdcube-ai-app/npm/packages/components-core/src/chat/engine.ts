@@ -908,8 +908,8 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
     submitAgentSelectionDecision(patch, options) {
       void submitAgentSelectionDecision(patch, options)
     },
-    openConnections(source) {
-      emitter.emit('open-connections', { source: source || 'chat' })
+    openConnections(source, consent) {
+      emitter.emit('open-connections', { source: source || 'chat', ...(consent ? { consent } : {}) })
     },
     hasHostHandler(event) {
       return emitter.has(event)

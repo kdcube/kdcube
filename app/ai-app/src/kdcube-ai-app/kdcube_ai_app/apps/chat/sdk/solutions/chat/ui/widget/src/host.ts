@@ -31,6 +31,7 @@
  * widget picks up to open the stream — no reload.
  */
 
+import type { ConnectionsConsentOpen } from '@kdcube/components-core/chat'
 import {
   CHAT_CONTEXT_ATTACH_MESSAGE,
   CHAT_CONTEXT_FOCUS_MESSAGE,
@@ -118,6 +119,10 @@ export function requestAuthRequired(): void {
  *      entry point (`canOpenConnections()` is false).
  */
 export const CONNECTION_HUB_SURFACE = 'connection_hub.settings'
+/** Target surface of the `connections.hub.open` scene contract — consent-card
+ *  opens carry a structured ui_event payload and land on the hub's
+ *  provider-connections card. */
+export const CONNECTION_HUB_CONNECTIONS_SURFACE = 'connection_hub.connections'
 const CONNECTION_HUB_ACK_TIMEOUT_MS = 600
 const DEFAULT_CONNECTION_HUB_BUNDLE_ID = 'connection-hub@1-0'
 
@@ -163,7 +168,7 @@ export function canOpenConnections(): boolean {
   }
 }
 
-function postConnectionsCommandAndAwaitAck(source: string): Promise<boolean> {
+function postConnectionsCommandAndAwaitAck(source: string, consent?: ConnectionsConsentOpen): Promise<boolean> {
   return new Promise((resolve) => {
     const commandId = `connhub_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
     let settled = false
@@ -184,28 +189,45 @@ function postConnectionsCommandAndAwaitAck(source: string): Promise<boolean> {
     window.addEventListener('message', onMessage)
     const timer = window.setTimeout(() => finish(false), CONNECTION_HUB_ACK_TIMEOUT_MS)
     try {
-      window.parent.postMessage({
+      const command: Record<string, unknown> = {
         type: 'kdcube.surface.command',
-        target_surface: CONNECTION_HUB_SURFACE,
+        target_surface: consent ? CONNECTION_HUB_CONNECTIONS_SURFACE : CONNECTION_HUB_SURFACE,
         action: 'open',
         command_id: commandId,
         widget: CHAT_WIDGET_ID,
         source,
-      }, '*')
+      }
+      if (consent) {
+        // The scene forwards `ui_event` verbatim to the hub widget — the
+        // settled `connections.hub.open` payload shape.
+        const uiEvent: Record<string, unknown> = {
+          tab: consent.tab || 'provider_connections',
+          provider: consent.provider,
+        }
+        if (consent.tiers.length) uiEvent.tiers = consent.tiers
+        if (consent.accountId) uiEvent.account_id = consent.accountId
+        command.ui_event = uiEvent
+      }
+      window.parent.postMessage(command, '*')
     } catch {
       finish(false)
     }
   })
 }
 
-/** Run the open-connections chain. Returns which path handled it. */
-export async function openConnectionsSurface(source: string = 'chat'): Promise<'host' | 'direct' | 'none'> {
+/** Run the open-connections chain. Returns which path handled it. A consent
+ *  payload targets the hub's provider-connections card (scene contract
+ *  `connections.hub.open`); its served deep-link URL is the direct fallback. */
+export async function openConnectionsSurface(
+  source: string = 'chat',
+  consent?: ConnectionsConsentOpen,
+): Promise<'host' | 'direct' | 'none'> {
   try {
     if (typeof window !== 'undefined' && window.parent !== window) {
-      const acked = await postConnectionsCommandAndAwaitAck(source)
+      const acked = await postConnectionsCommandAndAwaitAck(source, consent)
       if (acked) return 'host'
     }
-    const url = connectionsWidgetUrl()
+    const url = (consent?.url || '').trim() || connectionsWidgetUrl()
     if (url) {
       window.open(url, '_blank', 'noopener')
       return 'direct'

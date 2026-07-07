@@ -12,6 +12,7 @@ import type {
   StepStatus,
   TurnReaction,
 } from './protocol.ts'
+import type { ConnectionsConsentOpen } from '../shared/index.ts'
 import type { AgentCapabilitiesState } from './capabilities.ts'
 import { initialCapabilitiesState } from './capabilities.ts'
 
@@ -25,6 +26,10 @@ export interface Banner {
   text: string
   actionLabel?: string
   actionUrl?: string
+  /** Structured Connection-Hub open payload when the banner is a
+   *  connected-account consent card; hosts that route `open-connections`
+   *  receive it instead of the plain `actionUrl` navigation. */
+  consent?: ConnectionsConsentOpen
   /** Where the notice renders. `'composer'` = right above the chat input
    *  (chat-send / rate-limit / economic notices). `'top'` (default) =
    *  app-level strip at the top (boot/connection, list errors). */

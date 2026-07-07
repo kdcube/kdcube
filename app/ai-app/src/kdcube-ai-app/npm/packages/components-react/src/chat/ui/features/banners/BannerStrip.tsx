@@ -2,14 +2,19 @@
  *  banners array + stable `onDismiss` skips re-render during streaming. */
 import { memo } from 'react'
 import type { BannerTone } from '@kdcube/components-core/chat'
-import type { Banner } from '@kdcube/components-core/chat'
+import type { Banner, ConnectionsConsentOpen } from '@kdcube/components-core/chat'
 
 function BannerStripImpl({
   banners,
   onDismiss,
+  onOpenConnections,
 }: {
   banners: Banner[]
   onDismiss: (id: string) => void
+  /** Routes a consent card's action through the host's connections surface
+   *  (the `connections.hub.open` scene contract) instead of the plain link.
+   *  Passed only when the host registered an `open-connections` handler. */
+  onOpenConnections?: (consent: ConnectionsConsentOpen) => void
 }) {
   if (banners.length === 0) return null
   const noticeClass = (tone: BannerTone) => {
@@ -31,7 +36,15 @@ function BannerStripImpl({
       {banners.map((banner) => (
         <div key={banner.id} className={noticeClass(banner.tone)}>
           <div className="min-w-0 flex-1">{banner.text}</div>
-          {banner.actionUrl ? (
+          {banner.consent && onOpenConnections ? (
+            <button
+              type="button"
+              className="k-btn k-ghost k-notice-action"
+              onClick={() => onOpenConnections(banner.consent as ConnectionsConsentOpen)}
+            >
+              {banner.actionLabel || 'Open'}
+            </button>
+          ) : banner.actionUrl ? (
             <a
               className="k-btn k-ghost k-notice-action"
               href={banner.actionUrl}

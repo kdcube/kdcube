@@ -195,8 +195,8 @@ function PackageEngineHost({ children }: { children: ReactNode }) {
        * wait, else the served connections widget opens directly in a new tab
        * (see host.ts). A rendered row never silently lands nowhere. */
       ...(canOpenConnections()
-        ? [engine.on('open-connections', ({ source }) => {
-            void openConnectionsSurface(source || 'chat').then((path) => {
+        ? [engine.on('open-connections', ({ source, consent }) => {
+            void openConnectionsSurface(source || 'chat', consent).then((path) => {
               console.info(`[kdcube.chat] connections open path=${path}`)
             })
           })]

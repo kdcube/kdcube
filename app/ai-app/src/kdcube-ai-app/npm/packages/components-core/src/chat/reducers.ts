@@ -59,13 +59,15 @@ import type {
 import { initialState } from './state.ts'
 import { canonicalObjectRef, durableHistoricalObjectRef } from './refs.ts'
 import { messageWithContextChips } from './contextChips.ts'
+import { connectionsConsentOpen } from './connectionsConsent.ts'
+import type { ConnectionsConsentOpen } from '../shared/index.ts'
 
 export function addBanner(
   state: ChatState,
   tone: BannerTone,
   text: string,
   placement: 'top' | 'composer' = 'top',
-  action?: { label?: string; url?: string } | null,
+  action?: { label?: string; url?: string; consent?: ConnectionsConsentOpen } | null,
 ): ChatState {
   const trimmed = text.trim()
   if (!trimmed) return state
@@ -80,6 +82,7 @@ export function addBanner(
     text: trimmed,
     placement,
     ...(actionLabel && actionUrl ? { actionLabel, actionUrl } : {}),
+    ...(action?.consent ? { consent: action.consent } : {}),
   }, ...state.banners].slice(0, 4)
   return { ...state, banners }
 }
@@ -128,6 +131,7 @@ function connectedAccountConsentBanner(data: Record<string, unknown> | undefined
   text: string
   actionLabel: string
   actionUrl: string
+  consent: ConnectionsConsentOpen
 } | null {
   const payload = findConnectedAccountConsentPayload(data)
   if (!payload) return null
@@ -161,6 +165,12 @@ function connectedAccountConsentBanner(data: Record<string, unknown> | undefined
     text,
     actionLabel: stringValue(consent.action_label || payload.action_label) || 'Open Connection Hub',
     actionUrl: url,
+    consent: connectionsConsentOpen({
+      provider: stringValue(consent.provider_id),
+      claims,
+      accountId: stringValue(consent.account_id),
+      url,
+    }),
   }
 }
 
@@ -1120,7 +1130,9 @@ export function applyChatStep(state: ChatState, env: ChatStepEnvelope): ChatStat
         'warning',
         consentBanner.text,
         'composer',
-        consentBanner.actionUrl ? { label: consentBanner.actionLabel, url: consentBanner.actionUrl } : null,
+        consentBanner.actionUrl
+          ? { label: consentBanner.actionLabel, url: consentBanner.actionUrl, consent: consentBanner.consent }
+          : null,
       )
     : syncedState
   return updateTurn(stateWithBanner, env.conversation.turn_id, (turn) => {

@@ -33,6 +33,7 @@ export const CONFIG_IDENTITY = 'BUNDLE_WORKSPACE_MAIN_VIEW'
 export const CHAT_CONFIG_IDENTITY = 'BUNDLE_WORKSPACE_CHAT_VIEW'
 export const CHAT_WIDGET_ALIAS = 'workspace_chat'
 export const MEMORY_WIDGET_BUNDLE_ID = 'user-memories@2026-06-26'
+export const CONNECTION_HUB_BUNDLE_ID = 'connection-hub@1-0'
 
 // The scene host's vocabulary stays stable; the shapes are the package's.
 export type RouteContext = SceneRouteContext
@@ -201,6 +202,29 @@ export function defaultComponentSpecs(): SceneComponentSpec[] {
       defaultOpen: false,
       enabled: true,
       order: 60,
+    },
+    {
+      // Connection Hub settings widget — the `connections.hub.open` surface
+      // contract lands here (declared via targetSurfaces, exactly like the
+      // website scene's contract for the same widget). Chat consent cards
+      // summon it with a `kdcube.surface.command` whose ui_event carries
+      // tab/provider/tiers/account_id.
+      alias: 'connection_hub',
+      bundleId: CONNECTION_HUB_BUNDLE_ID,
+      widgetAlias: 'connections_settings',
+      params: { tab: 'delegated_to_kdcube' },
+      title: 'Connection Hub',
+      accent: 'purple',
+      gated: true,
+      views: false,
+      size: { w: 760, h: 640 },
+      full: { w: 1040, h: 760 },
+      targetSurfaces: ['connection_hub.connections', 'connection_hub.settings'],
+      placement: 'floating',
+      rail: true,
+      defaultOpen: false,
+      enabled: true,
+      order: 70,
     },
   ]
 }

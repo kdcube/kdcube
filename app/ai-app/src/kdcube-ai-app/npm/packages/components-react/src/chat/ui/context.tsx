@@ -7,6 +7,7 @@
  */
 import { createContext, useContext, useMemo, type ReactNode } from 'react'
 import { isSuperAdmin } from '@kdcube/components-core/chat'
+import type { ConnectionsConsentOpen } from '@kdcube/components-core/chat'
 import { useChatEngine, useChatState, useChatStatus } from '../binding.tsx'
 import type { ChatViewModel } from './viewModel.ts'
 
@@ -84,7 +85,7 @@ export function ChatViewModelProvider({ children, kdcubePreview = false }: ChatV
 
     connections: {
       available: () => engine.hasHostHandler('open-connections'),
-      open: (source?: string) => engine.openConnections(source),
+      open: (source?: string, consent?: ConnectionsConsentOpen) => engine.openConnections(source, consent),
     },
   }), [engine, state, status, kdcubePreview])
 

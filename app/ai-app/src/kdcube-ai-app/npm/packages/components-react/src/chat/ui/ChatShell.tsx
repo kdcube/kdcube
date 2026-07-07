@@ -10,7 +10,7 @@
  *   <ChatStoreProvider config={...}><MyOwnChatUI /></ChatStoreProvider>
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { BannerTone, ConversationSummary, NamespaceStyleMap } from '@kdcube/components-core/chat'
+import type { BannerTone, ConnectionsConsentOpen, ConversationSummary, NamespaceStyleMap } from '@kdcube/components-core/chat'
 import type { ChatTurn } from '@kdcube/components-core/chat'
 import { findActiveTurn } from '@kdcube/components-core/chat'
 import { useAppDispatch, useStableCallback } from './support/hooks.ts'
@@ -247,6 +247,13 @@ export function ChatShell({
     }
     dispatch(chatActions.dismissBanner(id))
   })
+  /* Consent-card actions route through the host's connections surface (the
+   * `connections.hub.open` contract) when the host wired `open-connections`;
+   * with no handler BannerStrip keeps the plain deep-link anchor. */
+  const handleBannerOpenConnections = useStableCallback((consent: ConnectionsConsentOpen) => {
+    engine.connections.open('consent-card', consent)
+  })
+  const bannerOpenConnections = engine.connections.available() ? handleBannerOpenConnections : undefined
   const handleConversationSelect = engine.loadConversation
   const handleConversationDelete = engine.deleteConversation
   const handleConversationRefresh = engine.refreshConversationList
@@ -652,7 +659,7 @@ export function ChatShell({
                   </button>
                 </div>
               ) : null}
-              <BannerStrip banners={topBanners} onDismiss={handleBannerDismiss} />
+              <BannerStrip banners={topBanners} onDismiss={handleBannerDismiss} onOpenConnections={bannerOpenConnections} />
             </div>
           ) : null}
 
@@ -848,7 +855,7 @@ export function ChatShell({
                 ) : null}
                 {composerBanners.length > 0 ? (
                   <div className="k-composer-banners pb-2">
-                    <BannerStrip banners={composerBanners} onDismiss={handleBannerDismiss} />
+                    <BannerStrip banners={composerBanners} onDismiss={handleBannerDismiss} onOpenConnections={bannerOpenConnections} />
                   </div>
                 ) : null}
                 <Composer

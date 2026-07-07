@@ -13,6 +13,7 @@ import type {
   AgentCapabilitiesState,
   ChatEngine,
   ChatState,
+  ConnectionsConsentOpen,
   HostView,
   ReactContextPreviewResponse,
 } from '@kdcube/components-core/chat'
@@ -82,6 +83,6 @@ export interface ChatViewModel {
    *  open); `open()` emits the host event. UI hides when unavailable. */
   connections: {
     available: () => boolean
-    open: (source?: string) => void
+    open: (source?: string, consent?: ConnectionsConsentOpen) => void
   }
 }
