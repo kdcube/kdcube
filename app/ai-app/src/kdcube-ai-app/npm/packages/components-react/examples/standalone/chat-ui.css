@@ -361,6 +361,10 @@ a { color: inherit; }
 
 /* Notices */
 .k-notice {
+  /* Interactive banner controls layer above passive floating overlays
+     (the turn-nav column shares the same viewport corner in compact view). */
+  position: relative;
+  z-index: 5;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -787,9 +791,15 @@ a { color: inherit; }
 /* Turn navigation cluster: a vertical stack matching the Latest pill. First/
    Prev/Next step between user messages; Latest jumps to the bottom. */
 .k-turn-nav { position: fixed; right: 24px; bottom: 96px; z-index: 4;
-  display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+  display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
+  /* The column is a passive overlay: only its BUTTONS take clicks. The
+     container box (wider than the right-aligned icon buttons, plus the gaps)
+     otherwise swallows clicks meant for content under it — e.g. the composer
+     banner's dismiss button in the compact/embedded layout. */
+  pointer-events: none; }
 .k-turn-nav.k-scroll-in-tile { position: absolute; right: 14px; bottom: 104px; }
-.k-turn-nav-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+.k-turn-nav-btn { pointer-events: auto;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   height: 30px; min-width: 30px; padding: 0 9px; border-radius: 999px; border: 1px solid var(--line);
   background: var(--surface); color: var(--text); font-size: 12px; font-weight: 500;
   box-shadow: 0 2px 6px rgba(13, 30, 44, 0.08); cursor: pointer; transition: background 140ms ease; }
