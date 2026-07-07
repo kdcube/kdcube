@@ -134,6 +134,7 @@ function connectedAccountConsentBanner(data: Record<string, unknown> | undefined
   consent: ConnectionsConsentOpen
   signature: string
   tools: string[]
+  claims: string[]
 } | null {
   const payload = findConnectedAccountConsentPayload(data)
   if (!payload) return null
@@ -158,11 +159,12 @@ function connectedAccountConsentBanner(data: Record<string, unknown> | undefined
     || payload.connect_url
     || payload.action_url,
   )
-  const message = stringValue(error.message || payload.message)
+  // The claims render as compact chips after the sentence, so the text drops
+  // the server's inline "(needs: …)" enumeration and stays short.
+  const message = stringValue(error.message || payload.message).replace(/\s*\(needs:[^)]*\)/, '')
   const subject = [provider, connector].filter(Boolean).join(' / ')
-  const claimText = claims.length ? ` (${claims.join(', ')})` : ''
   const text = message
-    || `Connect or approve ${subject || 'an external account'}${claimText}${tool ? ` for ${tool}` : ''}.`
+    || `Connect or approve ${subject || 'an external account'}${tool ? ` for ${tool}` : ''}.`
   const blockedTools = Array.isArray(consent.tools)
     ? consent.tools.map((item) => stringValue(item)).filter(Boolean)
     : []
@@ -178,6 +180,7 @@ function connectedAccountConsentBanner(data: Record<string, unknown> | undefined
     }),
     signature: `${stringValue(consent.provider_id)}|${[...claims].sort().join(',')}`,
     tools: blockedTools,
+    claims,
   }
 }
 
@@ -198,6 +201,7 @@ export function upsertConsentBanner(
     consent: ConnectionsConsentOpen
     signature: string
     tools: string[]
+    claims: string[]
   },
 ): ChatState {
   const trimmed = input.text.trim()
@@ -217,6 +221,7 @@ export function upsertConsentBanner(
     consent: input.consent,
     consentSignature: input.signature,
     ...(input.tools.length ? { consentTools: input.tools } : {}),
+    ...(input.claims.length ? { consentClaims: input.claims } : {}),
   }, ...kept].slice(0, 4)
   return { ...state, banners }
 }

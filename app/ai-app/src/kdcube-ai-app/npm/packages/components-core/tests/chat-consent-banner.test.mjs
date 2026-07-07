@@ -45,6 +45,18 @@ function baseState() {
 
 const SEVEN = ['slack:search', 'slack:channels', 'slack:history', 'slack:files:read', 'slack:files:write', 'slack:assistant:search', 'slack:post']
 
+test('the banner carries the claims as chips and lifts the inline enumeration from the text', () => {
+  const shown = applyChatStep(baseState(), consentEnvelope('turn-1', {
+    claims: ['slack:files:write', 'slack:post'],
+    message: 'Your Slack account is connected but has not approved the required access (needs: slack:files:write, slack:post). Approve it in Connection Hub, then retry.',
+  }))
+  assert.equal(shown.banners.length, 1)
+  const banner = shown.banners[0]
+  assert.deepEqual(banner.consentClaims, ['slack:files:write', 'slack:post'])
+  assert.doesNotMatch(banner.text, /needs:/)
+  assert.match(banner.text, /has not approved the required access\. Approve it in Connection Hub, then retry\./)
+})
+
 test('a repeated consent state keeps ONE banner with a stable id', () => {
   const first = applyChatStep(baseState(), consentEnvelope('turn-1', { claims: SEVEN, message: 'Connect your Slack account.' }))
   assert.equal(first.banners.length, 1)

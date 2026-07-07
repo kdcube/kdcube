@@ -378,6 +378,37 @@ a { color: inherit; }
 }
 .k-notice strong { color: var(--ink); font-weight: 600; }
 .k-notice .k-notice-action { margin-left: 8px; }
+/* ── Banner layout: row when it fits, stack when it can't ──────────────────
+   The strip is a size container. Wide containers keep the single row (text ·
+   actions · dismiss). Below 600px — the measured width where the row stops
+   fitting: ~200px readable text + "Approve access" (~110px) + "Turn off the
+   tools that need it" (~215px) + dismiss (28px) + gaps/padding (~50px) — the
+   banner stacks: full-width text, actions on their own wrapping row, dismiss
+   pinned top-right with the text padded clear of it. Claims render as
+   compact code chips after the sentence, so wrapping reads cleanly in both
+   layouts. */
+.k-banner-strip { container-type: inline-size; }
+.k-banner-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; flex: 0 0 auto; }
+.k-banner-claims { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-left: 6px; vertical-align: baseline; }
+.k-banner-claim {
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+@container (max-width: 599px) {
+  .k-banner-strip .k-notice { display: block; padding-right: 34px; }
+  .k-banner-strip .k-banner-body { display: block; }
+  .k-banner-strip .k-banner-claims { display: flex; margin: 6px 0 0; }
+  .k-banner-strip .k-banner-actions { margin-top: 8px; }
+  .k-banner-strip .k-banner-actions .k-notice-action { margin-left: 0; }
+  .k-banner-strip .k-banner-dismiss { position: absolute; top: 5px; right: 5px; }
+}
 .k-notice.k-info    { border-color: rgba(56,184,200,0.35); background: rgba(224,245,248,0.55); }
 .k-notice.k-success { border-color: rgba(82,176,68,0.35);  background: rgba(232,247,229,0.55); }
 .k-notice.k-warning { border-color: rgba(240,188,46,0.45); background: rgba(255,248,220,0.6);  }

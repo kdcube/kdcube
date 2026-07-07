@@ -37,6 +37,9 @@ export interface Banner {
   /** Tools blocked by the missing claims — the banner's second option lets
    *  the user turn these off instead of granting the access. */
   consentTools?: string[]
+  /** The claims the consent asks for, rendered as compact chips after the
+   *  sentence (the text itself stays short). */
+  consentClaims?: string[]
   /** Where the notice renders. `'composer'` = right above the chat input
    *  (chat-send / rate-limit / economic notices). `'top'` (default) =
    *  app-level strip at the top (boot/connection, list errors). */

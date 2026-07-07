@@ -36,42 +36,62 @@ function BannerStripImpl({
         return 'k-notice k-info'
     }
   }
+  /* Layout contract (k-banner-strip is a size container): wide containers
+   * keep the single row — text, actions, dismiss; narrow containers stack —
+   * full-width text first, the action buttons on their own row, the dismiss
+   * pinned top-right. The claims render as compact code chips after the
+   * sentence, so the text wraps cleanly in both layouts. */
+  const hasActions = (banner: Banner) =>
+    Boolean((banner.consent && onOpenConnections) || banner.actionUrl || (banner.consentTools?.length && onAdjustTools))
   return (
-    <div className="flex flex-col gap-2">
+    <div className="k-banner-strip flex flex-col gap-2">
       {banners.map((banner) => (
         <div key={banner.id} className={noticeClass(banner.tone)}>
-          <div className="min-w-0 flex-1">{banner.text}</div>
-          {banner.consent && onOpenConnections ? (
-            <button
-              type="button"
-              className="k-btn k-ghost k-notice-action"
-              onClick={() => onOpenConnections(banner.consent as ConnectionsConsentOpen)}
-            >
-              {banner.actionLabel || 'Open'}
-            </button>
-          ) : banner.actionUrl ? (
-            <a
-              className="k-btn k-ghost k-notice-action"
-              href={banner.actionUrl}
-              target="_blank"
-              rel="noreferrer"
-            >
-              {banner.actionLabel || 'Open'}
-            </a>
-          ) : null}
-          {banner.consentTools?.length && onAdjustTools ? (
-            <button
-              type="button"
-              className="k-btn k-ghost k-notice-action"
-              title="Open the tools menu with these tools highlighted"
-              onClick={() => onAdjustTools(banner.consentTools as string[])}
-            >
-              Turn off the tools that need it
-            </button>
+          <div className="k-banner-body min-w-0 flex-1">
+            <span>{banner.text}</span>
+            {banner.consentClaims?.length ? (
+              <span className="k-banner-claims">
+                {banner.consentClaims.map((claim) => (
+                  <code key={claim} className="k-banner-claim">{claim}</code>
+                ))}
+              </span>
+            ) : null}
+          </div>
+          {hasActions(banner) ? (
+            <div className="k-banner-actions">
+              {banner.consent && onOpenConnections ? (
+                <button
+                  type="button"
+                  className="k-btn k-ghost k-notice-action"
+                  onClick={() => onOpenConnections(banner.consent as ConnectionsConsentOpen)}
+                >
+                  {banner.actionLabel || 'Open'}
+                </button>
+              ) : banner.actionUrl ? (
+                <a
+                  className="k-btn k-ghost k-notice-action"
+                  href={banner.actionUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {banner.actionLabel || 'Open'}
+                </a>
+              ) : null}
+              {banner.consentTools?.length && onAdjustTools ? (
+                <button
+                  type="button"
+                  className="k-btn k-ghost k-notice-action"
+                  title="Open the tools menu with these tools highlighted"
+                  onClick={() => onAdjustTools(banner.consentTools as string[])}
+                >
+                  Turn off the tools that need it
+                </button>
+              ) : null}
+            </div>
           ) : null}
           <button
             type="button"
-            className="k-iconbtn k-borderless"
+            className="k-iconbtn k-borderless k-banner-dismiss"
             onClick={() => onDismiss(banner.id)}
             aria-label="Dismiss"
             title="Dismiss"
