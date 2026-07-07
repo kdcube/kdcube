@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppDispatch } from '../../app/hooks';
 import { AccountRow } from '../../components/AccountRow';
 import type { ConnectionsAccount, ConnectionsClaimTier, ConnectionsProviderRow } from '../../api/types';
@@ -7,6 +7,14 @@ import {
   loadProviderConnections,
   startProviderConnectionsOAuth,
 } from './providerConnectionsSlice';
+
+// Parsed ?provider=…&tiers=…&account_id=… deep link (see the panel); the
+// panel hands it only to the matching provider's card.
+export interface ProviderDeepLink {
+  provider: string;
+  tiers: string[];
+  accountId: string;
+}
 
 function providerLabel(row: ConnectionsProviderRow): string {
   return row.label || row.provider;
@@ -33,22 +41,52 @@ function heldTierIds(account: ConnectionsAccount, tiers: ConnectionsClaimTier[])
 
 // One provider connect card: claim-tier picker (when the provider declares
 // tiers) + Connect, and the user's connected accounts with reconnect (held
-// tiers stay granted; checked tiers ride along) and disconnect.
-export function ProviderConnectCard({ row, busy }: { row: ConnectionsProviderRow; busy: boolean }) {
+// tiers stay granted; checked tiers ride along) and disconnect. A deep link
+// scrolls the card into view and preselects its tiers/account.
+export function ProviderConnectCard({
+  row,
+  busy,
+  deepLink,
+}: {
+  row: ConnectionsProviderRow;
+  busy: boolean;
+  deepLink?: ProviderDeepLink;
+}) {
   const dispatch = useAppDispatch();
   const label = providerLabel(row);
   const tiers = useMemo<ConnectionsClaimTier[]>(() => row.claim_tiers ?? [], [row]);
   const apps = useMemo(() => (row.apps ?? []).filter((app) => app.enabled !== false), [row]);
   const accounts = row.accounts ?? [];
 
+  // Deep-link seeding (mount-time): only tiers this provider declares count,
+  // and account_id must name one of the user's accounts — anything else
+  // degrades to the plain card.
+  const declaredIds = tiers.map((tier) => tier.id);
+  const requestedTiers = (deepLink?.tiers ?? []).filter((id) => declaredIds.includes(id));
+  const deepLinkAccount = deepLink?.accountId
+    ? accounts.find((account) => account.account_id === deepLink.accountId) ?? null
+    : null;
+
   const [appId, setAppId] = useState('');
   const selectedAppId = appId || apps[0]?.app_id || '';
   // Reconnect targets an existing account: its held tiers stay granted, the
   // checked ones are added on top.
-  const [reconnectAccount, setReconnectAccount] = useState<ConnectionsAccount | null>(null);
-  // Connect default: the first tier (the read tier) checked. In reconnect
-  // mode `checked` holds only the tiers being added; held tiers ride along.
-  const [checked, setChecked] = useState<string[]>(() => (tiers[0]?.id ? [tiers[0].id] : []));
+  const [reconnectAccount, setReconnectAccount] = useState<ConnectionsAccount | null>(deepLinkAccount);
+  // Connect default: the requested (deep-linked) tiers, else the first tier
+  // (the read tier) checked. In reconnect mode `checked` holds only the tiers
+  // being added; held tiers ride along.
+  const [checked, setChecked] = useState<string[]>(() => {
+    if (deepLinkAccount) return requestedTiers;
+    if (requestedTiers.length) return requestedTiers;
+    return tiers[0]?.id ? [tiers[0].id] : [];
+  });
+
+  // Deep-linked users land straight on this card.
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (deepLink) cardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const held = reconnectAccount ? heldTierIds(reconnectAccount, tiers) : [];
   const submitted = useMemo(() => {
@@ -102,7 +140,7 @@ export function ProviderConnectCard({ row, busy }: { row: ConnectionsProviderRow
   };
 
   return (
-    <div className="integration-provider">
+    <div className="integration-provider" ref={cardRef}>
       <div className="integration-provider-head">
         <div>
           <div className="account-title">{label}</div>
@@ -191,6 +229,7 @@ export function ProviderConnectCard({ row, busy }: { row: ConnectionsProviderRow
                 statusLabel={connected ? 'connected' : 'reconnect required'}
                 statusTone={connected ? 'ok' : 'error'}
                 detail={tiers.length && grantedLabels.length ? `Granted: ${grantedLabels.join(' · ')}` : undefined}
+                highlighted={deepLink?.accountId === account.account_id}
                 busy={busy}
                 actions={tiers.length ? (
                   <button
