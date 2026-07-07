@@ -12,8 +12,9 @@ import { TelegramClaimPage } from './features/identity/TelegramClaimPage';
 import { TelegramMiniAppLinkPanel } from './features/identity/TelegramMiniAppLinkPanel';
 import { DelegatedToKdcubePanel } from './features/delegatedToKdcube/DelegatedToKdcubePanel';
 import { clearDelegatedToKdcubeError, loadDelegatedToKdcube } from './features/delegatedToKdcube/delegatedToKdcubeSlice';
-import { ProviderConnectionsPanel } from './features/providerConnections/ProviderConnectionsPanel';
+import { ProviderConnectionsPanel, type ProviderSummon } from './features/providerConnections/ProviderConnectionsPanel';
 import { clearProviderConnectionsError, loadProviderConnections } from './features/providerConnections/providerConnectionsSlice';
+import { ackConnectionsHubOpen, parseConnectionsHubOpen } from './api/surfaceCommand';
 
 function claimChallengeFromLocation(): string {
   const params = new URLSearchParams(window.location.search);
@@ -27,9 +28,10 @@ function widgetModeFromLocation(): string {
 
 type TelegramConnectStatus = 'idle' | 'connecting' | 'connected' | 'failed';
 
-function tabFromLocation(): ConnectionsTab {
-  const params = new URLSearchParams(window.location.search);
-  const value = (params.get('tab') || window.location.hash.replace(/^#/, '') || '').toLowerCase();
+// One tab-token normalizer for both entry paths: the URL (?tab=…/#…) and the
+// scene's `connections.hub.open` surface command.
+function tabFromValue(raw: string): ConnectionsTab | null {
+  const value = String(raw || '').trim().toLowerCase();
   if (value === 'authenticators' || value === 'identity') return value;
   if (
     value === 'accounts'
@@ -48,7 +50,13 @@ function tabFromLocation(): ConnectionsTab {
   ) return 'providerConnections';
   if (value === 'delegatedaccess' || value === 'delegated-access' || value === 'delegated_access') return 'delegatedAccess';
   if (value === 'delegatedbykdcube' || value === 'delegated-by-kdcube' || value === 'delegated_by_kdcube') return 'delegatedAccess';
-  return 'identity';
+  return null;
+}
+
+function tabFromLocation(): ConnectionsTab {
+  const params = new URLSearchParams(window.location.search);
+  const value = params.get('tab') || window.location.hash.replace(/^#/, '') || '';
+  return tabFromValue(value) ?? 'identity';
 }
 
 export default function App() {
@@ -58,6 +66,7 @@ export default function App() {
   const telegramMiniAppMode = widgetMode === 'telegram-miniapp' || widgetMode === 'telegram_miniapp';
   const [runtimeReady, setRuntimeReady] = useState(false);
   const [activeTab, setActiveTab] = useState<ConnectionsTab>(tabFromLocation);
+  const [hubSummon, setHubSummon] = useState<ProviderSummon | null>(null);
   const [telegramConnectStatus] = useState<TelegramConnectStatus>('idle');
   const authenticatorsLoading = useAppSelector((s) => s.authenticators.loading);
   const authenticatorsAllowed = useAppSelector((s) => s.authenticators.allowed);
@@ -172,6 +181,31 @@ export default function App() {
     }
   }, []);
 
+  // Scene hosts summon this widget with a `connections.hub.open` surface
+  // command (?tab / provider / tiers / account_id as ui_event payload) — apply
+  // the same state as the URL deep-link path, at runtime, and ack the host.
+  useEffect(() => {
+    if (telegramMiniAppMode || claimChallengeId) return;
+    const onSurfaceCommand = (event: MessageEvent) => {
+      const command = parseConnectionsHubOpen(event.data);
+      if (!command) return;
+      const tab = tabFromValue(command.tab)
+        ?? ((command.provider || command.tiers.length || command.accountId) ? 'providerConnections' : null);
+      if (tab) changeTab(tab);
+      if (command.provider) {
+        setHubSummon({
+          nonce: Date.now(),
+          provider: command.provider,
+          tiers: command.tiers,
+          accountId: command.accountId,
+        });
+      }
+      ackConnectionsHubOpen(command, 'applied');
+    };
+    window.addEventListener('message', onSurfaceCommand);
+    return () => window.removeEventListener('message', onSurfaceCommand);
+  }, [telegramMiniAppMode, claimChallengeId, changeTab]);
+
   if (telegramMiniAppMode) {
     if (!runtimeReady) {
       return (
@@ -218,7 +252,7 @@ export default function App() {
       {activeTab === 'authenticators' && authenticatorsAllowed ? <AuthenticatorsPanel /> : null}
       {activeTab === 'delegatedAccess' ? <DelegatedAccessPanel /> : null}
       {activeTab === 'delegatedToKdcube' ? <DelegatedToKdcubePanel /> : null}
-      {activeTab === 'providerConnections' ? <ProviderConnectionsPanel /> : null}
+      {activeTab === 'providerConnections' ? <ProviderConnectionsPanel summon={hubSummon ?? undefined} /> : null}
     </AppShell>
   );
 }

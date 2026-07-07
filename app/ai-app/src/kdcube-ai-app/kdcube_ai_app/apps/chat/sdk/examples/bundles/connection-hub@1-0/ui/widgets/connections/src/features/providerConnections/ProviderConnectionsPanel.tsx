@@ -18,12 +18,21 @@ function providerDeepLinkFromLocation(): ProviderDeepLink {
   };
 }
 
+// A runtime summon (scene surface command `connections.hub.open`) carries the
+// same fields as the URL deep link plus a nonce; a fresh nonce remounts the
+// targeted card so it re-seeds its tier/reconnect state and scrolls into view.
+export interface ProviderSummon extends ProviderDeepLink {
+  nonce: number;
+}
+
 // Provider connections tab: one connect card per connections-catalog provider
 // (Slack, Gmail, …), sorted by label. Tokens land in the shared connection
 // store the `connections` named service resolves from.
-export function ProviderConnectionsPanel() {
+export function ProviderConnectionsPanel({ summon }: { summon?: ProviderSummon }) {
   const { providers, busy } = useAppSelector((s) => s.providerConnections);
-  const [deepLink] = useState<ProviderDeepLink>(providerDeepLinkFromLocation);
+  const [urlDeepLink] = useState<ProviderDeepLink>(providerDeepLinkFromLocation);
+  const deepLink: ProviderDeepLink = summon ?? urlDeepLink;
+  const summonNonce = summon?.nonce ?? 0;
   const rows = useMemo(
     () => providers.slice().sort((a, b) => (a.label || a.provider).localeCompare(b.label || b.provider)),
     [providers],
@@ -41,14 +50,17 @@ export function ProviderConnectionsPanel() {
       </div>
       {rows.length ? (
         <div className="integration-provider-list">
-          {rows.map((row) => (
-            <ProviderConnectCard
-              key={row.provider}
-              row={row}
-              busy={busy}
-              deepLink={deepLink.provider === row.provider ? deepLink : undefined}
-            />
-          ))}
+          {rows.map((row) => {
+            const targeted = deepLink.provider === row.provider;
+            return (
+              <ProviderConnectCard
+                key={targeted ? `${row.provider}:${summonNonce}` : row.provider}
+                row={row}
+                busy={busy}
+                deepLink={targeted ? deepLink : undefined}
+              />
+            );
+          })}
         </div>
       ) : (
         <p className="muted">Providers appear here once this environment configures them.</p>
