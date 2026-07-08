@@ -75,6 +75,7 @@ Curated index of platform, service, and SDK documentation.
 * MCP Integration: [mcp-README.md](sdk/tools/mcp-README.md)
 * Skills: [skills-README.md](sdk/skills/skills-README.md)
 * Custom Skills: [custom-skills-README.md](sdk/skills/custom-skills-README.md)
+* Per-User Agent Capabilities: [capabilities-README.md](sdk/solutions/user-settings/capabilities-README.md)
 * User Memory: [how-react-remembers-README.md](sdk/memory/how-react-remembers-README.md)
 * Claude Code Agent: [claude-code-README.md](sdk/agents/claude/claude-code-README.md)
 
