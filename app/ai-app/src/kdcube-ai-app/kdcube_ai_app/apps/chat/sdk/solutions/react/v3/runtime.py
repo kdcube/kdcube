@@ -42,8 +42,11 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.live_events import (
 from kdcube_ai_app.apps.chat.sdk.solutions.react.layout import (
     assistant_completion_texts,
     build_assistant_completion_attempt_blocks,
+    build_assistant_completion_deferred_blocks,
     build_tool_catalog,
     build_working_summary_attempt_blocks,
+    collapse_equivalent_completion_texts,
+    completion_attempt_texts_equivalent,
     record_assistant_completion_attempt,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.call import get_react_tools_catalog
@@ -245,6 +248,10 @@ class ReactSolverV2:
             if fseq > int(self._latest_followup_seq_seen or 0):
                 self._latest_followup_seq_seen = fseq
         try:
+            self._note_consent_granted_event(event=event)
+        except Exception:
+            pass
+        try:
             event_id = getattr(event, "message_id", None) or ""
             credit_awarded = self._award_reactive_iteration_credit(type=type_norm, event=event)
             self.log.log(
@@ -256,6 +263,55 @@ class ReactSolverV2:
         except Exception:
             pass
         return True
+
+    def _note_consent_granted_event(self, *, event: Any) -> None:
+        """A mid-turn `connections.consent.granted` lane event joins the same
+        `[CONNECTED ACCOUNTS UPDATE]` announce notion the turn-start transition
+        check publishes: the provider group lands in
+        ``runtime_ctx.reactivated_tools`` so the next round's announce states
+        the tools are active. The event's timeline block (folded by the lane
+        watcher) stays the factual record; this is the announce-side note."""
+        payload = getattr(event, "payload", None)
+        payload = payload if isinstance(payload, dict) else {}
+        accepted = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+        semantic_type = str(accepted.get("type") or "").strip().lower()
+        if semantic_type != "connections.consent.granted":
+            return
+        runtime_ctx = getattr(self.ctx_browser, "runtime_ctx", None) if self.ctx_browser else None
+        if runtime_ctx is None:
+            return
+        facts = accepted.get("payload") if isinstance(accepted.get("payload"), dict) else {}
+        if isinstance(facts.get("event"), dict):
+            facts = facts["event"]
+        if not str(facts.get("provider_id") or "").strip():
+            facts = payload
+        provider_id = str(facts.get("provider_id") or "").strip()
+        claims = [str(c) for c in (facts.get("claims") or []) if str(c or "").strip()]
+        tools = [str(t) for t in (facts.get("tools") or []) if str(t or "").strip()]
+        if not provider_id or not tools:
+            return
+        groups = getattr(runtime_ctx, "reactivated_tools", None)
+        groups = list(groups) if isinstance(groups, list) else []
+        for group in groups:
+            if isinstance(group, dict) and str(group.get("provider_id") or "") == provider_id:
+                merged_tools = sorted({*(str(t) for t in (group.get("tools") or [])), *tools})
+                merged_claims = sorted({*(str(c) for c in (group.get("claims") or [])), *claims})
+                group["tools"] = merged_tools
+                group["claims"] = merged_claims
+                break
+        else:
+            groups.append({
+                "provider_id": provider_id,
+                "provider_label": provider_id[:1].upper() + provider_id[1:],
+                "connector_app_id": str(facts.get("connector_app_id") or "").strip(),
+                "claims": claims,
+                "tools": tools,
+            })
+        runtime_ctx.reactivated_tools = groups
+        self.log.log(
+            f"[react.v3] consent granted mid-turn: provider={provider_id} claims={claims} tools={tools}",
+            level="INFO",
+        )
 
     def _award_reactive_iteration_credit(self, *, type: str, event: Any) -> int:
         runtime_ctx = getattr(self.ctx_browser, "runtime_ctx", None) if self.ctx_browser else None
@@ -4181,11 +4237,38 @@ class ReactSolverV2:
                 int(self._latest_external_event_seq_seen or 0),
                 int(getattr(getattr(self.ctx_browser, "timeline", None), "last_external_event_seq", 0) or 0),
             )
-            if latest_seen_after_decision > int(visible_external_event_seq or 0):
-                state["retry_decision"] = True
-                state["exit_reason"] = None
-                state["final_answer"] = None
-                state["suggested_followups"] = []
+            final_answer_text = (decision.get("final_answer") or "").strip()
+            # Stall-breaker (cost ceiling): a completion attempt equivalent to
+            # the immediately previous DEFERRED attempt means the deferral
+            # produced no new outcome and re-looping only burns budget — the
+            # answer is accepted regardless of the gates. Two consecutive
+            # equivalent provisional attempts are a stall by definition.
+            deferred_prev = state.get("deferred_completion_attempt") if isinstance(state.get("deferred_completion_attempt"), dict) else {}
+            stall_break = bool(
+                final_answer_text
+                and str(deferred_prev.get("text") or "").strip()
+                and completion_attempt_texts_equivalent(str(deferred_prev.get("text") or ""), final_answer_text)
+            )
+            defer_reason = ""
+            if stall_break:
+                try:
+                    self.log.log(
+                        f"[react.v3] completion stall-breaker: force-accepting an attempt equivalent to the "
+                        f"previous deferred one turn={self._current_turn_id()} iteration={iteration} "
+                        f"deferred_count={int(deferred_prev.get('count') or 0)}",
+                        level="WARNING",
+                    )
+                except Exception:
+                    pass
+                # Best-effort lane hygiene; the acceptance stands either way.
+                try:
+                    try_close = getattr(self.ctx_browser, "try_close_external_event_handler", None) if self.ctx_browser else None
+                    if callable(try_close):
+                        await try_close()
+                except Exception:
+                    pass
+            elif latest_seen_after_decision > int(visible_external_event_seq or 0):
+                defer_reason = "external_events_arrived"
                 try:
                     self.log.log(
                         f"[react.v3] external event arrived during decision; forcing another round "
@@ -4200,33 +4283,66 @@ class ReactSolverV2:
                 if callable(try_close):
                     handler_closed = await try_close()
                 if handler_closed is False:
-                    state["retry_decision"] = True
-                    state["exit_reason"] = None
-                    state["final_answer"] = None
-                    state["suggested_followups"] = []
+                    defer_reason = "event_lane_close_deferred"
                     try:
                         self.log.log("[react.v3] event-bus close gate deferred final answer; forcing another round", level="INFO")
                     except Exception:
                         pass
-                else:
-                    final_answer_text = (decision.get("final_answer") or "").strip()
-                    state["exit_reason"] = "steer" if bool(state.get("steer_finalize_mode")) else action
-                    state["final_answer"] = final_answer_text
-                    state["suggested_followups"] = decision.get("suggested_followups") or []
-                    if working_summary_text:
-                        state["working_summary"] = working_summary_text
-                        try:
-                            self.scratchpad.react_working_summary = working_summary_text
-                        except Exception:
-                            pass
-                    try:
-                        sf = state.get("suggested_followups") or []
-                        self.log.log(
-                            f"[react.v3] decision followups: count={len(sf)}",
-                            level="INFO",
+            if defer_reason:
+                state["retry_decision"] = True
+                state["exit_reason"] = None
+                state["final_answer"] = None
+                state["suggested_followups"] = []
+                state["deferred_completion_attempt"] = {
+                    "text": final_answer_text,
+                    "count": int(deferred_prev.get("count") or 0) + 1,
+                    "reason": defer_reason,
+                }
+                # Every attempt marker gets a rendered verdict: a deferred
+                # completion tells the model WHY it re-loops and what to do —
+                # a bare provisional marker makes re-emitting the only
+                # rational move.
+                try:
+                    timeline = getattr(self.ctx_browser, "timeline", None) if self.ctx_browser else None
+                    block_factory = getattr(timeline, "block", None)
+                    contribute = getattr(self.ctx_browser, "contribute", None) if self.ctx_browser else None
+                    entries = getattr(self.scratchpad, "assistant_completion_attempts", []) or []
+                    if final_answer_text and entries and callable(block_factory) and callable(contribute):
+                        outcome_blocks = build_assistant_completion_deferred_blocks(
+                            runtime=self.ctx_browser.runtime_ctx,
+                            attempt_index=len(entries),
+                            reason=defer_reason,
+                            ts=datetime.datetime.utcnow().isoformat() + "Z",
+                            block_factory=block_factory,
                         )
+                        if outcome_blocks:
+                            contribute(blocks=outcome_blocks)
+                except Exception:
+                    self.log.log(traceback.format_exc(), level="ERROR")
+            else:
+                state.pop("deferred_completion_attempt", None)
+                if stall_break:
+                    state["completion_stall_break"] = {
+                        "iteration": int(iteration),
+                        "equivalent_deferred_count": int(deferred_prev.get("count") or 0),
+                    }
+                state["exit_reason"] = "steer" if bool(state.get("steer_finalize_mode")) else action
+                state["final_answer"] = final_answer_text
+                state["suggested_followups"] = decision.get("suggested_followups") or []
+                if working_summary_text:
+                    state["working_summary"] = working_summary_text
+                    try:
+                        self.scratchpad.react_working_summary = working_summary_text
                     except Exception:
                         pass
+                try:
+                    sf = state.get("suggested_followups") or []
+                    self.log.log(
+                        f"[react.v3] decision followups: count={len(sf)}",
+                        level="INFO",
+                    )
+                except Exception:
+                    pass
 
         try:
             if notes and not bundle_mode:
@@ -4722,7 +4838,10 @@ class ReactSolverV2:
         scratchpad_completion_texts = assistant_completion_texts(self.scratchpad)
         completion_texts = block_completion_texts or scratchpad_completion_texts
         state_answer_text = (state.get("final_answer") or "").strip()
-        final_answers = list(completion_texts or [])
+        # One answer per ACCEPTED completion: a turn legitimately produces
+        # several answers (followups mid-turn), but equivalent re-attempts of
+        # the SAME completion collapse to the last text of the run.
+        final_answers = collapse_equivalent_completion_texts(list(completion_texts or []))
         if not final_answers and state_answer_text:
             final_answers = [state_answer_text]
         final_answer_text = (

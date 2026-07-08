@@ -16,6 +16,7 @@ conversation, so a new conversation simply overwrites the record.
 from __future__ import annotations
 
 import asyncio
+import datetime as _dt
 import logging
 from typing import Any
 
@@ -33,7 +34,11 @@ PENDING_CONSENT_KEY = "delegated_to_kdcube.blocked_snapshot"
 # provider_id, connector_app_id, claims, tools, recorded_at}]}.
 PENDING_DEMANDS_REGISTRY_KEY = "delegated_to_kdcube.consent_demands"
 
+# Semantic event type. The TRANSPORT lane kind is uniformly "external_event"
+# (the shape the react timeline fold renders); the semantic type rides nested
+# in payload.event.type, same as user followups/steers.
 CONSENT_GRANTED_EVENT_KIND = "connections.consent.granted"
+CONSENT_GRANTED_EVENT_TRANSPORT_KIND = "external_event"
 CONSENT_GRANTED_EVENT_SOURCE_ID = "connection_hub.consent"
 
 
@@ -341,21 +346,51 @@ async def author_consent_granted_events(
                     )
                 provider_label = (provider_key[:1].upper() + provider_key[1:])
                 claims_list = sorted(entry_claims)
+                event_text = consent_granted_event_text(
+                    provider_label=provider_label,
+                    claims=claims_list,
+                    tools=[tool_name],
+                )
+                grant_facts = {
+                    "provider_id": provider_key,
+                    "connector_app_id": str(entry.get("connector_app_id") or connector_app_id or ""),
+                    "claims": claims_list,
+                    "account_id": str(account_id or ""),
+                    "tools": [tool_name],
+                }
+                event_ts = (
+                    _dt.datetime.now(_dt.timezone.utc)
+                    .isoformat()
+                    .replace("+00:00", "Z")
+                )
                 await source.publish(
-                    kind=CONSENT_GRANTED_EVENT_KIND,
+                    # Transport kind is uniformly "external_event"; the react
+                    # timeline fold renders exactly this shape into a visible
+                    # block (a user followup is the reference behavior). The
+                    # semantic type rides in payload.event.type.
+                    kind=CONSENT_GRANTED_EVENT_TRANSPORT_KIND,
                     source="connection_hub",
                     event_source_id=CONSENT_GRANTED_EVENT_SOURCE_ID,
-                    text=consent_granted_event_text(
-                        provider_label=provider_label,
-                        claims=claims_list,
-                        tools=[tool_name],
-                    ),
+                    text=event_text,
                     payload={
-                        "provider_id": provider_key,
-                        "connector_app_id": str(entry.get("connector_app_id") or connector_app_id or ""),
-                        "claims": claims_list,
-                        "account_id": str(account_id or ""),
-                        "tools": [tool_name],
+                        "text": event_text,
+                        "event": {
+                            "type": CONSENT_GRANTED_EVENT_KIND,
+                            "event_source_id": CONSENT_GRANTED_EVENT_SOURCE_ID,
+                            "reactive": False,
+                            "timestamp": event_ts,
+                            # The nested payload.event carries the model-facing
+                            # sentence and the grant facts; the timeline fold
+                            # surfaces it as the event block's `ret` body.
+                            "payload": {
+                                "mime": "text/markdown",
+                                "event": {
+                                    "text": event_text,
+                                    **grant_facts,
+                                },
+                            },
+                        },
+                        **grant_facts,
                     },
                     # Passive by construction: no task payload means the
                     # promoter acks the event; it can never start a turn.

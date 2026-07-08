@@ -40,6 +40,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.layout import (
     build_assistant_completion_attempt_blocks,
     build_tool_catalog,
     build_working_summary_attempt_blocks,
+    collapse_equivalent_completion_texts,
     record_assistant_completion_attempt,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.call import get_react_tools_catalog
@@ -2982,7 +2983,9 @@ class ReactSolverV2:
         scratchpad_completion_texts = assistant_completion_texts(self.scratchpad)
         completion_texts = block_completion_texts or scratchpad_completion_texts
         state_answer_text = (state.get("final_answer") or "").strip()
-        final_answers = list(completion_texts or [])
+        # One answer per ACCEPTED completion: equivalent re-attempts of the
+        # SAME completion collapse to the last text of the run.
+        final_answers = collapse_equivalent_completion_texts(list(completion_texts or []))
         if not final_answers and state_answer_text:
             final_answers = [state_answer_text]
         final_answer_text = (

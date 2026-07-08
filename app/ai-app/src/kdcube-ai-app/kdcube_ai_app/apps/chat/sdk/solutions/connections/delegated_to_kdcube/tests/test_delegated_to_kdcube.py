@@ -1315,17 +1315,32 @@ async def test_consent_completion_authors_one_event_per_demand_and_clears(monkey
     assert authored == 1
     assert len(sources) == 1 and len(sources[0].published) == 1
     event = sources[0].published[0]
-    assert event["kind"] == "connections.consent.granted"
+    # Transport kind is the uniform lane envelope ("external_event") so the
+    # react timeline fold renders the event as a visible block — the semantic
+    # type rides nested in payload.event.type (followup shape is the
+    # reference behavior).
+    assert event["kind"] == "external_event"
     assert event["event_source_id"] == "connection_hub.consent"
     # Passive by construction: no task payload -> the promoter acks; no turn.
     assert event["task_payload"] is None
-    assert event["payload"] == {
-        "provider_id": "slack",
-        "connector_app_id": "demo",
-        "claims": ["slack:post"],
-        "account_id": "acct-1",
-        "tools": ["slack.post_slack_message"],
-    }
+    payload = event["payload"]
+    assert payload["provider_id"] == "slack"
+    assert payload["connector_app_id"] == "demo"
+    assert payload["claims"] == ["slack:post"]
+    assert payload["account_id"] == "acct-1"
+    assert payload["tools"] == ["slack.post_slack_message"]
+    assert payload["text"] == event["text"]
+    nested = payload["event"]
+    assert nested["type"] == "connections.consent.granted"
+    assert nested["event_source_id"] == "connection_hub.consent"
+    assert nested["reactive"] is False
+    assert nested["timestamp"].endswith("Z")
+    # The nested payload.event carries the model-facing sentence + grant facts
+    # (the timeline fold surfaces it as the event block's `ret` body).
+    nested_body = nested["payload"]["event"]
+    assert nested_body["text"] == event["text"]
+    assert nested_body["claims"] == ["slack:post"]
+    assert nested_body["tools"] == ["slack.post_slack_message"]
     assert "approved Slack access (slack:post)" in event["text"]
     assert "post_slack_message" in event["text"]
     assert "usable now" in event["text"]

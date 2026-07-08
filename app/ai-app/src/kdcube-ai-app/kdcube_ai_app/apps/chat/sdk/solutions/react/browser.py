@@ -780,6 +780,21 @@ class ContextBrowser:
                 if getattr(event, "stream_id", None):
                     max_cursor = str(getattr(event, "stream_id", "") or max_cursor)
                 if not blocks:
+                    # Consumed with nothing to render: handler-processed in
+                    # full. Advance the rendered-event cursor (close gate) and
+                    # ack consumption on application.
+                    try:
+                        self._timeline.note_processed_external_event(
+                            timestamp=event_timestamp(event),
+                            event_id=event_id(event),
+                            sequence=int(getattr(event, "sequence", 0) or 0),
+                        )
+                    except Exception:
+                        self.log.log(
+                            "[timeline.external]: failed to advance cursor for no-block event\n" + traceback.format_exc(),
+                            "ERROR",
+                        )
+                    max_applied_seq = max(max_applied_seq, int(getattr(event, "sequence", 0) or 0))
                     continue
                 self._last_external_event_reader_result["events_materialized"] = (
                     int(self._last_external_event_reader_result.get("events_materialized") or 0) + 1
@@ -935,6 +950,30 @@ class ContextBrowser:
                 self._timeline.last_external_event_seq = max(
                     int(self._timeline.last_external_event_seq or 0),
                     int(event.sequence or 0),
+                )
+                # A consumed event with nothing to render is handler-processed
+                # in full: advance the rendered-event cursor so the close gate
+                # can settle. Without this, one no-block event defers every
+                # later `complete` with new_events_after_handler_snapshot.
+                try:
+                    self._timeline.note_processed_external_event(
+                        timestamp=event_timestamp(event),
+                        event_id=event_id(event),
+                        sequence=int(getattr(event, "sequence", 0) or 0),
+                    )
+                except Exception:
+                    self.log.log(
+                        "[timeline.external]: failed to advance cursor for no-block event\n" + traceback.format_exc(),
+                        "ERROR",
+                    )
+                # Consumption is acked on application regardless of whether
+                # the event rendered blocks.
+                max_applied_seq = max(max_applied_seq, int(event.sequence or 0))
+                self.log.log(
+                    f"[timeline.external]: consumed without blocks conversation={self._runtime_ctx.conversation_id} "
+                    f"current_turn={self._runtime_ctx.turn_id} event_id={getattr(event, 'message_id', '')} "
+                    f"kind={getattr(event, 'kind', '')} seq={getattr(event, 'sequence', 0)}",
+                    "INFO",
                 )
                 continue
             await self._timeline.contribute_async(blocks)

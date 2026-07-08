@@ -3,6 +3,7 @@
 
 # kdcube_ai_app/apps/chat/sdk/runtime/solution/react/v2/layout.py
 
+import difflib
 import json
 import datetime
 import time
@@ -94,6 +95,103 @@ def record_assistant_completion_attempt(
 def latest_assistant_completion_text(scratchpad: Any) -> str:
     texts = assistant_completion_texts(scratchpad)
     return texts[-1] if texts else ""
+
+
+def _normalized_completion_text(text: Any) -> str:
+    return " ".join(str(text or "").split()).casefold()
+
+
+def completion_attempt_texts_equivalent(
+    left: Any,
+    right: Any,
+    *,
+    threshold: float = 0.9,
+) -> bool:
+    """Two completion attempts are equivalent when their normalized texts are
+    identical or highly similar (trivial wording variations between re-emits
+    of the same answer). Cheap by construction: whitespace-collapsed casefold
+    plus a length precheck before the sequence ratio."""
+    a = _normalized_completion_text(left)
+    b = _normalized_completion_text(right)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    shorter, longer = (len(a), len(b)) if len(a) <= len(b) else (len(b), len(a))
+    if longer and (shorter / longer) < threshold:
+        return False
+    # autojunk off: on prose-sized strings the popular-character heuristic
+    # (spaces) collapses the match and near-identical texts score low.
+    matcher = difflib.SequenceMatcher(None, a, b, autojunk=False)
+    if matcher.quick_ratio() < threshold:
+        return False
+    return matcher.ratio() >= threshold
+
+
+def collapse_equivalent_completion_texts(texts: List[str]) -> List[str]:
+    """Collapse consecutive equivalent completion attempts into one answer
+    each (keeping the LAST text of each run). A turn legitimately produces
+    multiple answers when followups arrive mid-turn; equivalent re-attempts of
+    the SAME completion are one answer."""
+    collapsed: List[str] = []
+    for raw in texts or []:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        if collapsed and completion_attempt_texts_equivalent(collapsed[-1], text):
+            collapsed[-1] = text
+            continue
+        collapsed.append(text)
+    return collapsed
+
+
+def build_assistant_completion_deferred_blocks(
+    *,
+    runtime: RuntimeCtx,
+    attempt_index: int,
+    reason: str,
+    ts: Optional[str],
+    block_factory,
+) -> List[Dict[str, Any]]:
+    """The rendered VERDICT for a completion attempt the runtime held back
+    from finalizing the turn. Every attempt marker gets an outcome: without
+    this block the model only sees its own provisional attempt and re-emitting
+    it is the only rational move."""
+    tid = (getattr(runtime, "turn_id", None) or "").strip()
+    if not tid:
+        return []
+    try:
+        idx = max(1, int(attempt_index))
+    except Exception:
+        idx = 1
+    reason_key = str(reason or "").strip() or "external_events_arrived"
+    if reason_key == "external_events_arrived":
+        body = (
+            f"Completion attempt {idx} was held back from finalizing the turn: new conversation "
+            "events arrived while it was being written, and the timeline above now includes them. "
+            "Review the newest events and finish the turn with a `complete` action — reuse attempt "
+            f"{idx}'s text unchanged if the new events do not change the outcome."
+        )
+    else:
+        body = (
+            f"Completion attempt {idx} was held back from finalizing the turn while the conversation "
+            "event lane settled. Nothing further is required from the events. Finish the turn with a "
+            f"`complete` action — attempt {idx}'s text is a valid final answer to reuse."
+        )
+    meta: Dict[str, Any] = {
+        "completion_attempt_index": idx,
+        "completion_attempt_outcome": "deferred",
+        "completion_attempt_defer_reason": reason_key,
+    }
+    return [block_factory(
+        type="assistant.completion.attempt.outcome",
+        author="assistant",
+        turn_id=tid,
+        ts=str(ts or "").strip(),
+        path=f"conv:ar:{tid}.assistant.completion.attempt.{idx}.outcome",
+        text=body,
+        meta=meta,
+    )]
 
 
 def assistant_completion_texts(scratchpad: Any) -> List[str]:

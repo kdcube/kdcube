@@ -1752,6 +1752,42 @@ class Timeline:
     def last_render_processed_event_timestamp(self) -> str:
         return self.last_rendered_event_cursor.timestamp
 
+    def note_processed_external_event(
+        self,
+        *,
+        timestamp: str,
+        event_id: str = "",
+        sequence: Optional[int] = None,
+    ) -> None:
+        """Advance the rendered-event cursor for an external event the handler
+        fully processed without producing timeline blocks.
+
+        The event-bus close gate settles when the handler-processed cursor
+        reaches the lane state's last processed event. A no-block event can
+        never advance the cursor through a render pass (there is nothing to
+        render), so it counts as handler-processed at application time —
+        otherwise every subsequent `complete` is deferred with
+        ``new_events_after_handler_snapshot`` for the rest of the turn.
+        """
+        ts = str(timestamp or "").strip()
+        if not ts:
+            return
+        seq_val: Optional[int] = None
+        if sequence is not None:
+            try:
+                seq_val = int(sequence)
+            except Exception:
+                seq_val = None
+        candidate = TimelineEventCursor(
+            timestamp=ts,
+            event_id=str(event_id or "").strip(),
+            sequence=seq_val,
+        )
+        self.last_rendered_event_cursor = _later_timeline_event_cursor(
+            self.last_rendered_event_cursor,
+            candidate,
+        )
+
     @classmethod
     def from_payload(cls, payload: Dict[str, Any], *, runtime: RuntimeCtx, svc: Optional[Any] = None) -> "Timeline":
         parsed = parse_timeline_payload(payload or {})
@@ -6694,6 +6730,22 @@ class Timeline:
                         sources_used = []
                 if sources_used:
                     lines.append(f"[sources_used: {sources_used}]")
+                if text:
+                    lines.append(text)
+                text = "\n".join(lines).strip()
+            elif btype == "assistant.completion.attempt.outcome":
+                lines = ["[ASSISTANT MESSAGE ATTEMPT OUTCOME]"]
+                if ts:
+                    lines.append(f"[ts: {ts}]")
+                if path:
+                    lines.append(f"[path: {path}]")
+                if isinstance(meta, dict):
+                    attempt_index = meta.get("completion_attempt_index")
+                    if attempt_index is not None:
+                        lines.append(f"[attempt: {attempt_index}]")
+                    outcome = str(meta.get("completion_attempt_outcome") or "").strip()
+                    if outcome:
+                        lines.append(f"[outcome: {outcome}]")
                 if text:
                     lines.append(text)
                 text = "\n".join(lines).strip()

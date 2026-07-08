@@ -461,3 +461,165 @@ async def test_browser_marks_applied_external_events_consumed(tmp_path):
         assert stored.consumed_by_turn_id == "turn_current"
     finally:
         await browser.stop_external_event_listener()
+
+
+def _grant_runtime_and_browser(tmp_path, source):
+    runtime = RuntimeCtx(
+        tenant="tenant",
+        project="project",
+        user_id="user_1",
+        user_type="privileged",
+        conversation_id="conv_1",
+        turn_id="turn_current",
+        bundle_id="bundle@1",
+        started_at="2026-04-11T10:00:00Z",
+        outdir=str(tmp_path / "out"),
+        workdir=str(tmp_path / "work"),
+        external_event_source=source,
+    )
+    browser = ContextBrowser(
+        ctx_client=_FakeCtxClient(),
+        runtime_ctx=runtime,
+    )
+    return runtime, browser
+
+
+_GRANT_TEXT = (
+    "The user approved Slack access (slack:history). The tools that needed it "
+    "(read_slack_channel_history) are usable now — retry what was blocked if it "
+    "is still wanted."
+)
+
+
+def _grant_payload() -> dict:
+    facts = {
+        "provider_id": "slack",
+        "connector_app_id": "demo",
+        "claims": ["slack:history"],
+        "account_id": "acct-1",
+        "tools": ["slack.read_slack_channel_history"],
+    }
+    return {
+        "text": _GRANT_TEXT,
+        "event": {
+            "type": "connections.consent.granted",
+            "event_source_id": "connection_hub.consent",
+            "reactive": False,
+            "timestamp": "2026-07-08T11:07:54.514617Z",
+            "payload": {
+                "mime": "text/markdown",
+                "event": {"text": _GRANT_TEXT, **facts},
+            },
+        },
+        **facts,
+    }
+
+
+@pytest.mark.asyncio
+async def test_consent_granted_event_folds_into_live_turn_and_close_gate_settles(tmp_path):
+    """A passive (task_payload=None) consent grant authored into a LIVE turn:
+    the lane fold renders it as a visible timeline block, applies it exactly
+    once, marks it consumed, and the very next `complete` passes the event-bus
+    close gate — the turn terminates instead of demoting the answer to a
+    provisional attempt every round."""
+    redis = _FakeRedis()
+    source = build_conversation_external_event_source(
+        redis=redis,
+        tenant="tenant",
+        project="project",
+        conversation_id="conv_1",
+    )
+    _, browser = _grant_runtime_and_browser(tmp_path, source)
+    await browser.load_timeline()
+    try:
+        orchestrator = browser._ensure_event_bus_orchestrator()
+        await orchestrator.open_handler(turn_id="turn_current")
+
+        event = await source.publish(
+            kind="external_event",
+            source="connection_hub",
+            event_source_id="connection_hub.consent",
+            text=_GRANT_TEXT,
+            payload=_grant_payload(),
+            # Passive by construction: the promoter acks it; only the live
+            # turn's lane watcher (or the next turn's fold) consumes it.
+            task_payload=None,
+        )
+
+        changed = await browser._fold_external_events(call_hooks=False)
+        assert changed >= 1
+
+        blocks = browser.timeline.get_turn_blocks()
+        assert any("approved Slack access" in str(b.get("text") or "") for b in blocks), (
+            "the grant must be a visible timeline block for the model"
+        )
+
+        # Applied once: a second fold pass adds nothing.
+        assert await browser._fold_external_events(call_hooks=False) == 0
+
+        # Consumption acked on application.
+        stored = await source.get_event(event.message_id)
+        assert stored is not None
+        assert stored.consumed_by_turn_id == "turn_current"
+
+        # After the round that rendered the event, finalize settles: the close
+        # gate accepts instead of deferring with new_events_after_handler_snapshot.
+        await browser.timeline.render()
+        closed = await browser.try_close_external_event_handler()
+        assert closed is True
+    finally:
+        await browser.stop_external_event_listener()
+
+
+@pytest.mark.asyncio
+async def test_no_block_lane_event_never_wedges_the_close_gate(tmp_path):
+    """Regression for the completion livelock (turn_2026-07-08-11-07-27-129):
+    an event the fold consumes WITHOUT producing blocks (here the legacy grant
+    shape whose transport kind is the semantic type) must still advance the
+    handler-processed cursor and be marked consumed. Before the fix the lane
+    state cursor moved past the rendered cursor forever and EVERY subsequent
+    `complete` was deferred (`new_events_after_handler_snapshot`) until
+    iteration exhaustion."""
+    redis = _FakeRedis()
+    source = build_conversation_external_event_source(
+        redis=redis,
+        tenant="tenant",
+        project="project",
+        conversation_id="conv_1",
+    )
+    _, browser = _grant_runtime_and_browser(tmp_path, source)
+    await browser.load_timeline()
+    try:
+        orchestrator = browser._ensure_event_bus_orchestrator()
+        await orchestrator.open_handler(turn_id="turn_current")
+
+        event = await source.publish(
+            kind="connections.consent.granted",
+            source="connection_hub",
+            event_source_id="connection_hub.consent",
+            text=_GRANT_TEXT,
+            payload={
+                "provider_id": "slack",
+                "claims": ["slack:history"],
+                "tools": ["slack.read_slack_channel_history"],
+            },
+            task_payload=None,
+        )
+
+        changed = await browser._fold_external_events(call_hooks=False)
+        assert changed == 0  # unknown transport kind renders nothing
+
+        # Handler-processed cursor advanced at application time...
+        cursor = browser.timeline.last_rendered_event_cursor
+        assert cursor.event_id == event.message_id
+
+        # ...consumption acked on application...
+        stored = await source.get_event(event.message_id)
+        assert stored is not None
+        assert stored.consumed_by_turn_id == "turn_current"
+
+        # ...so the close gate settles: `complete` terminates the turn.
+        closed = await browser.try_close_external_event_handler()
+        assert closed is True
+    finally:
+        await browser.stop_external_event_listener()
