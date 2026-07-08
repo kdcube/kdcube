@@ -22,7 +22,6 @@ see_also:
 # Docs Index
 
 Curated index of platform, service, and SDK documentation.
-![pixel-cubes.svg](../../../assets/pixel-cubes.svg)
 
 ## Start Here
 

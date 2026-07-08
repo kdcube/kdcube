@@ -18,8 +18,6 @@ It intentionally avoids deployment-specific domains, bucket names, AWS account i
 tenant ids, project ids, and descriptor values. Deployment repositories may carry
 more concrete diagrams and resource names.
 
-![Generic ECS deployment topology](./ecs-arch.svg)
-
 ## 1. Topology
 
 External traffic enters through the public edge and then through one ALB-facing
@@ -27,10 +25,11 @@ service:
 
 ```text
 browser
-  -> optional DNS / CDN / WAF
-  -> Application Load Balancer
-  -> web-proxy
+  -> optional DNS / CDN / WAF          (edge layer)
+  -> Application Load Balancer         (public subnets; ACM TLS)
+  -> web-proxy                         (sole ALB target group)
   -> internal ECS services through Cloud Map DNS
+     (ECS services, databases, cache, and EFS stay in private subnets)
 ```
 
 `web-proxy` is the only external application target behind the ALB. Internal

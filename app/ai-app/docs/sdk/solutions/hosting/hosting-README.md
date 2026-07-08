@@ -24,7 +24,28 @@ attachment or Slack file out. This solution is the hosting room that makes
 both directions work over plain JSON transports, with bytes always traveling
 out-of-band over HTTP.
 
-![The hosting use case: inbound upload-slot flow into the staging area and the consuming action; outbound signed download URLs with turn-free provider fetch](hosting-flow.svg)
+```text
+THE HOSTING ROOM — file bytes for agents without a chat turn
+
+EXTERNAL AGENT (MCP)            KDCUBE GATEWAY APP                    PROVIDER (GMAIL/SLACK)
+
+INBOUND: agent file -> provider
+request_upload  ------------->  mint signed upload slot
+POST bytes to slot URL ------>  staging area on disk
+                                $STORAGE_PATH/kdcube-integration-staging/<id>/
+action with staged_ref ------>  ephemeral turn workspace runs
+                                the same tool chat runs  ----------->  mail sent / file posted
+                                on success: staged file consumed + deleted
+
+OUTBOUND: provider file -> agent
+object.get / download  ------>  returns {encoding: "url", url, expires_at}
+GET url  -------------------->  token verified; credential re-resolved
+                                under the requester's identity  ---->  bytes fetched turn-free
+        <---------------------  bytes stream back over HTTP
+
+Staged files never used: discard_upload removes them at once; the TTL sweep
+removes them within ~1h. Bytes never ride inside tool calls.
+```
 
 ## Where the pieces live
 

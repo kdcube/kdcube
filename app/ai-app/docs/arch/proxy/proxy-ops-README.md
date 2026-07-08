@@ -25,7 +25,17 @@ The proxy runs every inbound request through six phases in sequence:
 5. **Path-based routing** — dispatches to five upstream backends by URL prefix.
 6. **Protocol handling** — SSE (buffering off, 600 s timeout), WebSocket upgrade, SPA 404 fallback.
 
-![proxy-full-pipeline.svg](proxy-full-pipeline.svg)
+```text
+client
+  -> 1 SSL/TLS termination        (HTTP->HTTPS redirect; direct-IP -> 444)
+  -> 2 security headers + gzip    (HSTS, X-Frame-Options, X-XSS, Referrer-Policy)
+  -> 3 anti-DDoS + rate limiting  (conn limit, limit_req 10r/s zones, timeouts, bot filter)
+  -> 4 WAF inspection             (SQLi, XSS, path traversal — when enabled)
+  -> 5 auth cookie unmask         (proxylogin /v1/unmask -> inject real cookies)
+  -> 6 path-based routing         (6 route groups -> 5 backends)
+  -> 7 protocol handling          (SSE buffering off, WebSocket upgrade, SPA fallback)
+  -> web-ui :80 | proxylogin | chat-ingress :8010 | chat-proc :8020 | kb :8000
+```
 
 Phase ordering matters: rate limiting (phase 3) runs *before* auth cookie handling (phase 4), so a DDoS burst is dropped before burning a `proxylogin` round-trip.
 
@@ -102,7 +112,14 @@ limit_req_status 429;
 
 ## Anti-DDoS hardening
 
-![proxy-and-antiddos-layers.svg](proxy-and-antiddos-layers.svg)
+```text
+incoming request
+  -> connection limit      max 50/IP (Slowloris)           -> excess: conn dropped
+  -> rate limiting         limit_req 10r/s, burst=20       -> excess: 429
+  -> scanner / bot filter  bad UA, probe paths             -> match: 403 / 444
+  -> timeout hardening     10s header, 15s body            -> slow: connection closed
+  -> pass to next phase
+```
 The following changes extend the base rate limiting into a layered anti-DDoS posture.
 
 ### Connection limits (Slowloris + resource exhaustion)
@@ -196,7 +213,16 @@ location @generic_error {
 
 ## WAF protection
 
-![proxy-waf-pipeline.svg](proxy-waf-pipeline.svg)
+```text
+incoming request
+  -> WAF unit (lua-resty-waf / ModSecurity)
+       signature inspection: SQLi, XSS, path traversal, bad UA
+       score threshold: anomaly score > 5
+         ACTIVE mode   -> 403 blocked
+         SIMULATE mode -> log only, no block
+  -> auth unmask (unmask_token(), inject cookies)
+  -> proxy to backend
+```
 OpenResty runs LuaJIT natively, so WAF inspection runs inline in the request pipeline — no recompile, no nginx Plus license required.
 
 > **Note on nginx Plus JWT module:** the paid `ngx_http_auth_jwt_module` is irrelevant to this stack. OpenResty uses `lua-resty-jwt` (free, OPM) for any JWT validation, and our auth flow delegates token validation to `proxylogin` rather than the proxy layer.
