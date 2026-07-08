@@ -672,43 +672,110 @@ def _realm_payload_from_spec(spec: Any, allowed_operations: Sequence[str]) -> di
                         if claim not in merged:
                             merged.append(claim)
 
+    # Human layer of the realm's self-description (the same contract the
+    # agent reads): labels + user-terms descriptions per operation/action,
+    # the purpose sentence, and the third-party dependency sentence. Only
+    # declared text renders — a missing description is a realm defect fixed
+    # at the source, never invented here.
+    presentation = metadata.get("presentation")
+    presentation = dict(presentation) if isinstance(presentation, Mapping) else {}
+    presented_operations = presentation.get("operations")
+    presented_operations = presented_operations if isinstance(presented_operations, Mapping) else {}
+    presented_actions = presentation.get("actions")
+    presented_actions = presented_actions if isinstance(presented_actions, Mapping) else {}
+
+    # Per-entry third-party line from the declared provider/claim labels:
+    # "via your connected Google account · send mail".
+    def _via_line(claims: list[str] | None) -> str:
+        if not claims or not isinstance(raw_requirements, (list, tuple)):
+            return ""
+        for raw in raw_requirements:
+            if not isinstance(raw, Mapping):
+                continue
+            provider_label = _norm(raw.get("provider_label"))
+            claim_labels = raw.get("claim_labels")
+            claim_labels = claim_labels if isinstance(claim_labels, Mapping) else {}
+            named = [str(claim_labels.get(claim) or "").strip() for claim in claims]
+            named = [item for item in named if item]
+            if provider_label and named:
+                return f"via your connected {provider_label} account · {', '.join(named)}"
+            if provider_label:
+                return f"via your connected {provider_label} account"
+        return ""
+
     actions_out: list[dict[str, Any]] = []
     if _operation_key_allowed("object.action", allowed):
         raw_actions = metadata.get("actions")
         if isinstance(raw_actions, Mapping):
             for name in sorted(raw_actions):
+                presented = presented_actions.get(name)
+                presented = presented if isinstance(presented, Mapping) else {}
                 entry: dict[str, Any] = {
                     "name": str(name),
-                    "description": _first_para(str(raw_actions.get(name) or "")),
+                    "description": _first_para(
+                        str(presented.get("description") or raw_actions.get(name) or "")
+                    ),
                 }
+                label_text = _norm(presented.get("label"))
+                if label_text:
+                    entry["label"] = label_text
                 claims = by_operation_union.get(f"object.action.{name}")
                 if claims:
                     entry["claims"] = sorted(claims)
+                    via = _via_line(entry["claims"])
+                    if via:
+                        entry["via"] = via
                 actions_out.append(entry)
 
     operations_out: list[dict[str, Any]] = []
     for op in allowed:
         if op == "object.action" and actions_out:
             continue  # the named actions expand this operation
+        presented = presented_operations.get(op)
+        presented = presented if isinstance(presented, Mapping) else {}
         entry = {
             "name": op,
-            "description": _NAMED_SERVICE_OPERATION_DESCRIPTIONS.get(op, ""),
+            "description": _first_para(
+                str(presented.get("description") or _NAMED_SERVICE_OPERATION_DESCRIPTIONS.get(op, ""))
+            ),
         }
+        label_text = _norm(presented.get("label"))
+        if label_text:
+            entry["label"] = label_text
         claims = by_operation_union.get(op)
         if claims:
             entry["claims"] = sorted(claims)
+            via = _via_line(entry["claims"])
+            if via:
+                entry["via"] = via
         operations_out.append(entry)
+
+    objects_out: list[dict[str, Any]] = []
+    raw_object_kinds = metadata.get("object_kinds")
+    if isinstance(raw_object_kinds, Mapping):
+        for kind in sorted(raw_object_kinds):
+            objects_out.append({
+                "name": str(kind),
+                "description": _first_para(str(raw_object_kinds.get(kind) or "")),
+            })
 
     label = _norm(getattr(spec, "label", ""))
     description = _first_para(str(getattr(spec, "description", "") or ""))
+    about = _first_para(str(presentation.get("about") or "")) or description
+    third_party = _first_para(str(presentation.get("third_party") or ""))
     if not (label or description or requirements_out or actions_out):
         return None
     payload: dict[str, Any] = {
         "label": label,
         "description": description,
+        "about": about,
         "operations": operations_out,
         "actions": actions_out,
     }
+    if third_party:
+        payload["third_party"] = third_party
+    if objects_out:
+        payload["objects"] = objects_out
     if requirements_out:
         payload["connected_accounts"] = requirements_out
     return payload

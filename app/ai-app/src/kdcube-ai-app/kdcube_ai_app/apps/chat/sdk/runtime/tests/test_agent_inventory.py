@@ -802,3 +802,88 @@ def test_namespace_claim_policies_keep_flat_realms_flat():
     assert policies[0]["connected_accounts"][0]["claims"] == sorted(
         SLACK_CONNECTED_ACCOUNT_REQUIREMENTS[0]["claims"]
     )
+
+
+# ── The human layer: the realm card speaks the service's own contract ────────
+
+
+@pytest.mark.asyncio
+async def test_realm_card_carries_the_services_own_human_contract():
+    """The catalog passes through the realm's self-description in user terms:
+    purpose sentence, third-party dependency, object kinds, and per-entry
+    human labels/descriptions + via-lines — all from the SAME declaration the
+    agent reads, never invented downstream."""
+    from kdcube_ai_app.apps.chat.sdk.integrations.mail.named_service import (
+        MailNamedServiceProvider,
+    )
+    from kdcube_ai_app.apps.chat.sdk.integrations.slack.named_service import (
+        slack_named_service_spec,
+    )
+    from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import (
+        enrich_catalog_named_service_realms,
+    )
+    from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import (
+        NamedServiceProviderSpec,
+    )
+
+    mail_spec_meta = getattr(MailNamedServiceProvider, "__named_service_spec__", None)
+    if mail_spec_meta is None:
+        # Build from the decorator registration path used at runtime.
+        from kdcube_ai_app.apps.chat.sdk.integrations.mail import named_service as mail_ns
+
+        mail_spec_meta = NamedServiceProviderSpec(
+            provider_id="kdcube.mail",
+            namespace="mail",
+            label="Mail",
+            description="Provider-neutral mail namespace over user-connected accounts.",
+            metadata={
+                "connected_accounts": mail_ns.MAIL_CONNECTED_ACCOUNT_REQUIREMENTS,
+                "actions": {
+                    name: str((meta or {}).get("description") or "")
+                    for name, meta in (mail_ns.MAIL_SCHEMA.get("actions") or {}).items()
+                },
+                "presentation": mail_ns.MAIL_PRESENTATION,
+                "object_kinds": {
+                    kind: str((meta or {}).get("description") or "")
+                    for kind, meta in (mail_ns.MAIL_SCHEMA.get("object_kinds") or {}).items()
+                },
+            },
+        )
+
+    catalog = {
+        "named_services": [
+            {"namespace": "mail", "alias": "named_services",
+             "operations": ["object.list", "object.search", "object.get", "object.action"]},
+            {"namespace": "slack", "alias": "named_services",
+             "operations": ["object.list", "object.search", "object.get", "object.action"]},
+        ]
+    }
+    out = await enrich_catalog_named_service_realms(
+        catalog,
+        discovery=_FakeDiscovery({"mail": mail_spec_meta, "slack": slack_named_service_spec()}),
+    )
+    mail_realm, slack_realm = (e["realm"] for e in out["named_services"])
+
+    # Purpose + third-party, in user terms.
+    assert mail_realm["about"] == "Read, search, and send email from the mail accounts you connect."
+    assert mail_realm["third_party"] == "Works with your mailbox through your connected Google account."
+    assert slack_realm["about"] == "Search, read, and post in the Slack workspaces you connect."
+    assert slack_realm["third_party"] == "Works with your Slack workspace through your connected Slack account."
+
+    # Object kinds with their one-liners (from the schema the agent reads).
+    slack_objects = {o["name"]: o["description"] for o in slack_realm["objects"]}
+    assert "One Slack conversation/channel visible to the connected account." in slack_objects.values()
+
+    # Entries lead with the human name; the grammar token stays as `name`.
+    mail_actions = {a["name"]: a for a in mail_realm["actions"]}
+    assert mail_actions["send"]["label"] == "Send email"
+    assert mail_actions["send"]["description"] == "Send an email from your connected mail account."
+    # Third-party transparency per entry, from declared labels.
+    assert mail_actions["send"]["via"] == "via your connected Google account · send mail"
+    assert mail_actions["forward"]["via"] == "via your connected Google account · read mail, send mail"
+
+    slack_ops = {o["name"]: o for o in slack_realm["operations"]}
+    assert slack_ops["object.search"]["label"] == "Search messages"
+    assert slack_ops["object.search"]["description"] == "Search messages across channels you can see."
+    slack_actions = {a["name"]: a for a in slack_realm["actions"]}
+    assert slack_actions["post_message"]["label"] == "Post a message"

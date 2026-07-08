@@ -2173,6 +2173,28 @@ a { color: inherit; }
   gap: 8px;
   padding: 4px 8px 4px 10px;
 }
+/* The grammar token beside a human entry title — demoted to a small mono
+   hint (the human name leads; the token stays discoverable). */
+.k-menu-entry-token {
+  margin-left: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9.5px;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  padding: 0;
+}
+/* Quiet one-liner in the expanded service card: the third-party dependency,
+   the object kinds, or the honest "hasn't described itself yet" state. */
+.k-menu-card-line {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+  font-style: italic;
+  color: var(--muted);
+}
 .k-menu-row-text { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
 .k-menu-row-label {
   font-size: 13px;

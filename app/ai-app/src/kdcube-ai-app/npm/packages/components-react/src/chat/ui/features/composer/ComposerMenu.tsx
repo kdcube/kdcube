@@ -510,7 +510,7 @@ function RealmEntryRow({
   namespace: string
   entryKeys: string[]
   entryKey: string
-  entry: { name: string; description?: string; claims?: string[] }
+  entry: { name: string; label?: string; description?: string; via?: string; claims?: string[] }
   disabled: AgentSelectionDisabled
   toggle: (patch: AgentSelectionPatch) => void
   consent?: AgentCapabilityConsent
@@ -534,11 +534,21 @@ function RealmEntryRow({
       />
     )
   }
+  const sub = [entry.description, entry.via].filter(Boolean).join(' · ')
   return (
     <MenuRow
       child
-      label={<code>{entry.name}</code>}
-      sub={entry.description || undefined}
+      label={
+        entry.label
+          ? (
+              <>
+                {entry.label}
+                <code className="k-menu-entry-token">{entry.name}</code>
+              </>
+            )
+          : <code>{entry.name}</code>
+      }
+      sub={sub || undefined}
       checked={isNamespaceEntryDisabled(disabled, namespace, entryKey) ? 'off' : 'on'}
       onToggle={() => toggle(namespaceEntryTogglePatch(namespace, entryKeys, disabled, entryKey))}
       aside={aside}
@@ -546,11 +556,24 @@ function RealmEntryRow({
   )
 }
 
+/** A quiet one-liner inside the expanded service card (the third-party
+ *  dependency, the object kinds, or the honest "hasn't described itself"
+ *  state). Renders only declared text. */
+function ServiceCardLine({ text, title }: { text: string; title?: string }) {
+  return (
+    <div className="k-menu-row k-menu-row-child">
+      <span className="k-menu-row-static">
+        <span className="k-menu-card-line" title={title || text}>{text}</span>
+      </span>
+    </div>
+  )
+}
+
 /** A namespace's toggleable internals: allowed operations by their own token,
  *  named actions as `object.action.<name>` (denying the action blocks that
  *  action name in the grammar's dispatch). */
 function namespaceInternals(entry: { realm?: { operations?: { name: string }[]; actions?: { name: string }[] } }): {
-  item: { name: string; description?: string; claims?: string[] }
+  item: { name: string; label?: string; description?: string; via?: string; claims?: string[] }
   key: string
 }[] {
   const realm = entry.realm
@@ -574,14 +597,18 @@ function ServicesSection({ inventory, disabled, toggle, namespaceStyles, spotlig
         const internals = namespaceInternals(entry)
         const entryKeys = internals.map(({ key }) => key)
         const isOpen = Boolean(expanded[entry.namespace])
+        const objectsLine = (realm?.objects ?? [])
+          .map((kind) => kind.name.split('.').pop() || kind.name)
+          .filter(Boolean)
+          .join(' · ')
         return (
           <div key={entry.namespace}>
             <MenuRow
               label={realm?.label || namespaceLabel(entry.namespace, namespaceStyles)}
-              sub={realm?.description || undefined}
+              sub={realm?.about || realm?.description || undefined}
               checked={namespaceState(entry.namespace, entryKeys, disabled)}
               onToggle={() => toggle(namespaceTogglePatch(entry.namespace, entryKeys, disabled))}
-              expandable={internals.length > 0}
+              expandable
               expanded={isOpen}
               onExpand={() => setExpanded((current) => ({ ...current, [entry.namespace]: !isOpen }))}
               spotlight={spotlit.has(entry.namespace) || spotlit.has(entry.alias)}
@@ -593,6 +620,18 @@ function ServicesSection({ inventory, disabled, toggle, namespaceStyles, spotlig
                 />
               )}
             />
+            {isOpen && realm?.third_party ? <ServiceCardLine text={realm.third_party} /> : null}
+            {isOpen && objectsLine ? (
+              <ServiceCardLine
+                text={`Objects: ${objectsLine}`}
+                title={(realm?.objects ?? [])
+                  .map((kind) => `${kind.name}${kind.description ? ` — ${kind.description}` : ''}`)
+                  .join('\n')}
+              />
+            ) : null}
+            {isOpen && !realm ? (
+              <ServiceCardLine text="This service hasn't described itself yet." />
+            ) : null}
             {isOpen
               ? internals.map(({ item, key }) => (
                   <RealmEntryRow

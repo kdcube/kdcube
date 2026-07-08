@@ -60,7 +60,13 @@ export interface AgentCapabilityMcpServer {
 /** One operation or named action inside a namespace's realm view. */
 export interface AgentCapabilityRealmEntry {
   name: string
+  /** Human title from the realm's own presentation ("Send email"); the
+   *  grammar token (`name`) demotes to a hint when this is present. */
+  label?: string
   description?: string
+  /** Third-party line in human words: "via your connected Google account ·
+   *  send mail" — declared provider/claim labels, never UI-invented. */
+  via?: string
   /** Provider claims this entry needs — present only when the realm
    *  declared per-operation differentiation (e.g. mail read vs send). */
   claims?: string[]
@@ -71,6 +77,12 @@ export interface AgentCapabilityRealmEntry {
 export interface AgentCapabilityRealm {
   label?: string
   description?: string
+  /** The realm's purpose sentence in user terms. */
+  about?: string
+  /** The service's third-party dependency, stated plainly. */
+  third_party?: string
+  /** Object kinds the service works in (name + one-liner). */
+  objects?: { name: string; description?: string }[]
   operations?: AgentCapabilityRealmEntry[]
   actions?: AgentCapabilityRealmEntry[]
   connected_accounts?: {

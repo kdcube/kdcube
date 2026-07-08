@@ -109,7 +109,12 @@ MAIL_CONNECTED_ACCOUNT_REQUIREMENTS = [
     {
         "provider_id": GMAIL_PROVIDER_ID,
         "connector_app_id": GMAIL_CONNECTOR_APP_ID,
+        "provider_label": "Google",
         "claims": [GMAIL_READ_CLAIM, GMAIL_SEND_CLAIM],
+        "claim_labels": {
+            GMAIL_READ_CLAIM: "read mail",
+            GMAIL_SEND_CLAIM: "send mail",
+        },
         "claims_by_operation": {
             "object.list": [GMAIL_READ_CLAIM],
             "object.search": [GMAIL_READ_CLAIM],
@@ -184,6 +189,29 @@ MAIL_INTRO = (
     "object.get to read a message, and object.action with download_attachments, "
     "send, or forward for bounded mail actions."
 )
+
+# Human layer of the realm's self-description — the same contract the agent
+# reads via provider.about/schema, in user terms. The picker renders these
+# verbatim; missing text here is a realm defect, never a UI invention.
+MAIL_PRESENTATION = {
+    "about": "Read, search, and send email from the mail accounts you connect.",
+    "third_party": "Works with your mailbox through your connected Google account.",
+    "operations": {
+        "provider.about": {"label": "Service overview", "description": "What this mail service does and how to use it."},
+        "provider.capabilities": {"label": "Capabilities", "description": "The operations and behaviors this service declares."},
+        "object.list": {"label": "List accounts", "description": "List your connected mail accounts."},
+        "object.search": {"label": "Search mail", "description": "Search messages across your connected mail accounts."},
+        "object.get": {"label": "Read a message", "description": "Read one message or attachment from your mailbox."},
+        "object.schema": {"label": "Object reference", "description": "The shapes and refs of this service's objects."},
+    },
+    "actions": {
+        ACTION_SEND: {"label": "Send email", "description": "Send an email from your connected mail account."},
+        ACTION_FORWARD: {"label": "Forward email", "description": "Forward a message from your mailbox, optionally with its attachments."},
+        ACTION_DOWNLOAD_ATTACHMENTS: {"label": "Download attachments", "description": "Save a message's attachments as files."},
+        ACTION_REQUEST_UPLOAD: {"label": "Attach a file", "description": "Stage one outbound file for a send or forward."},
+        ACTION_DISCARD_UPLOAD: {"label": "Discard staged file", "description": "Remove a staged outbound file before it is used."},
+    },
+}
 
 MAIL_SCHEMA = {
     "namespace": MAIL_NAMESPACE,
@@ -444,6 +472,11 @@ def _error_from_tool(result: Mapping[str, Any], *, request: NamedServiceRequest,
         "actions": {
             name: str((meta or {}).get("description") or "").strip()
             for name, meta in (MAIL_SCHEMA.get("actions") or {}).items()
+        },
+        "presentation": MAIL_PRESENTATION,
+        "object_kinds": {
+            kind: str((meta or {}).get("description") or "").strip()
+            for kind, meta in (MAIL_SCHEMA.get("object_kinds") or {}).items()
         },
     },
 )

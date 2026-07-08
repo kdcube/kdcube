@@ -85,3 +85,31 @@ for (const sheet of STYLESHEETS) {
     assert.doesNotMatch(block, /cursor:/)
   })
 }
+
+// The expanded namespace reads as a SERVICE CARD: human entry titles with the
+// grammar token demoted to a small mono hint, and quiet card lines for the
+// third-party dependency / object kinds / honest not-yet-described state.
+for (const sheet of STYLESHEETS) {
+  const label = sheet.pathname.split('/').slice(-3).join('/')
+  const css = readFileSync(sheet, 'utf8')
+
+  test(`grammar tokens demote to a small mono hint (${label})`, () => {
+    const start = css.indexOf('.k-menu-entry-token {')
+    assert.ok(start >= 0, '.k-menu-entry-token exists')
+    const block = css.slice(start, css.indexOf('}', start))
+    assert.match(block, /font-family:\s*ui-monospace/)
+    assert.match(block, /color:\s*var\(--muted\)/)
+    // plain hint, no chip dressing
+    assert.match(block, /background:\s*none/)
+    assert.match(block, /border:\s*0/)
+  })
+
+  test(`service card lines are quiet one-liners that ellipsize (${label})`, () => {
+    const start = css.indexOf('.k-menu-card-line {')
+    assert.ok(start >= 0, '.k-menu-card-line exists')
+    const block = css.slice(start, css.indexOf('}', start))
+    assert.match(block, /text-overflow:\s*ellipsis/)
+    assert.match(block, /white-space:\s*nowrap/)
+    assert.match(block, /color:\s*var\(--muted\)/)
+  })
+}

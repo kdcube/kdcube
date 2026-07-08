@@ -126,7 +126,17 @@ SLACK_CONNECTED_ACCOUNT_REQUIREMENTS = [
     {
         "provider_id": SLACK_PROVIDER_ID,
         "connector_app_id": SLACK_CONNECTOR_APP_ID,
+        "provider_label": "Slack",
         "claims": sorted(set(SLACK_CONNECTED_ACCOUNT_CLAIMS.values())),
+        "claim_labels": {
+            SLACK_SEARCH_CLAIM: "search messages",
+            SLACK_CHANNELS_CLAIM: "list channels",
+            SLACK_HISTORY_CLAIM: "read history",
+            SLACK_FILES_READ_CLAIM: "read files",
+            SLACK_FILES_WRITE_CLAIM: "upload files",
+            SLACK_POST_CLAIM: "post messages",
+            SLACK_ASSISTANT_SEARCH_CLAIM: "assistant search",
+        },
     }
 ]
 
@@ -172,6 +182,30 @@ SLACK_INTRO = (
     "search messages/files, object.get to read channel history or download a "
     "file, and object.action to post messages or upload files."
 )
+
+# Human layer of the realm's self-description — the same contract the agent
+# reads via provider.about/schema, in user terms. The picker renders these
+# verbatim; missing text here is a realm defect, never a UI invention.
+SLACK_PRESENTATION = {
+    "about": "Search, read, and post in the Slack workspaces you connect.",
+    "third_party": "Works with your Slack workspace through your connected Slack account.",
+    "operations": {
+        "provider.about": {"label": "Service overview", "description": "What this Slack service does and how to use it."},
+        "provider.capabilities": {"label": "Capabilities", "description": "The operations and behaviors this service declares."},
+        "object.list": {"label": "List accounts & channels", "description": "List your connected Slack accounts and the channels they can see."},
+        "object.search": {"label": "Search messages", "description": "Search messages across channels you can see."},
+        "object.get": {"label": "Read history & files", "description": "Read channel history or fetch a shared file."},
+        "object.schema": {"label": "Object reference", "description": "The shapes and refs of this service's objects."},
+    },
+    "actions": {
+        ACTION_POST_MESSAGE: {"label": "Post a message", "description": "Post a message to a Slack channel as you."},
+        ACTION_UPLOAD_FILE: {"label": "Upload a file", "description": "Upload a file into a Slack channel."},
+        ACTION_DOWNLOAD_FILE: {"label": "Download a file", "description": "Save a shared Slack file."},
+        ACTION_ASSISTANT_SEARCH_INFO: {"label": "Assistant search availability", "description": "Check whether Slack AI assistant search is available in your workspace."},
+        ACTION_REQUEST_UPLOAD: {"label": "Attach a file", "description": "Stage one outbound file for an upload."},
+        ACTION_DISCARD_UPLOAD: {"label": "Discard staged file", "description": "Remove a staged outbound file before it is used."},
+    },
+}
 
 SLACK_SCHEMA = {
     "namespace": SLACK_NAMESPACE,
@@ -298,6 +332,11 @@ def slack_named_service_spec(*, bundle_id: str | None = None) -> NamedServicePro
             "actions": {
                 name: str((meta or {}).get("description") or "").strip()
                 for name, meta in (SLACK_SCHEMA.get("actions") or {}).items()
+            },
+            "presentation": SLACK_PRESENTATION,
+            "object_kinds": {
+                kind: str((meta or {}).get("description") or "").strip()
+                for kind, meta in (SLACK_SCHEMA.get("object_kinds") or {}).items()
             },
             "canonical_refs": SLACK_SCHEMA["refs"],
         },
