@@ -24,6 +24,10 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.model
     ToolClaimPolicy,
     as_str,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.public_base import (
+    public_base_url_from_hub_props,
+    set_connection_hub_public_base_url,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.store import DelegatedToKdcubeStore
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.connection_edges import (
     connection_hub_bundle_id_from_entrypoint,
@@ -78,6 +82,14 @@ class DelegatedToKdcubeClient:
     @classmethod
     def from_entrypoint(cls, entrypoint: Any, *, user_id: str, store: DelegatedToKdcubeStore | None = None) -> "DelegatedToKdcubeClient":
         config = delegated_to_kdcube_config_from_entrypoint(entrypoint)
+        try:
+            hub_public_base = str(
+                entrypoint.bundle_prop("connections.oauth.public_base_url", "") or ""
+            ).strip()
+        except Exception:
+            hub_public_base = ""
+        if hub_public_base:
+            set_connection_hub_public_base_url(hub_public_base)
         return cls.from_user(user_id=user_id, config=config, bundle_id=CONNECTION_HUB_BUNDLE_ID, store=store)
 
     @classmethod
@@ -120,6 +132,11 @@ class DelegatedToKdcubeClient:
             current_props = getattr(entrypoint, "bundle_props", None)
             if isinstance(current_props, dict):
                 props = dict(current_props)
+        # The hub props carry the deployment's public base URL (the OAuth
+        # source of truth); remember it so consent deep links ship absolute.
+        hub_public_base = public_base_url_from_hub_props(props)
+        if hub_public_base:
+            set_connection_hub_public_base_url(hub_public_base)
 
         async def _client_secret_resolver(*, provider_id: str, connector_app_id: str, connector_app: Any) -> str:
             configured_ref = _clean(getattr(connector_app, "client_secret_ref", ""))

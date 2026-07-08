@@ -1565,3 +1565,102 @@ async def test_grant_drops_legacy_addressless_demand_without_authoring(monkeypat
     # Both entries left the registry: the addressed one by authoring, the
     # address-less one by dropping.
     assert ("user-1", "connection-hub@1-0", PENDING_DEMANDS_REGISTRY_KEY) not in store
+
+
+# ── Consent deep link is absolute ────────────────────────────────────────────
+# The deep link travels beyond the app origin (external MCP agents relay it
+# verbatim), so the shared payload builder prefixes the deployment's public
+# base URL — the same `connections.oauth.public_base_url` source of truth
+# OAuth redirect building uses. Chat and MCP agree because the builder is one.
+
+
+def test_consent_payload_url_is_absolute_with_public_base():
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.preflight import (
+        connected_account_consent_payload,
+    )
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.public_base import (
+        set_connection_hub_public_base_url,
+    )
+
+    set_connection_hub_public_base_url("https://demo.kdcube.example/")
+    try:
+        payload = connected_account_consent_payload(
+            tenant="demo-tenant",
+            project="demo-project",
+            connection_hub_bundle_id="connection-hub@1-0",
+            missing=[
+                {
+                    "ok": False,
+                    "tool_name": "slack.search_slack",
+                    "failures": [
+                        {
+                            "ok": False,
+                            "provider_id": "slack",
+                            "connector_app_id": "demo",
+                            "claim": "slack:search",
+                            "error": "connect_required",
+                            "retry_hint": True,
+                        }
+                    ],
+                }
+            ],
+        )
+    finally:
+        set_connection_hub_public_base_url("")
+
+    url = payload["consent"]["url"]
+    assert url.startswith("https://demo.kdcube.example/api/integrations/bundles/")
+    assert "tab=delegated_to_kdcube" in url
+    assert "provider_id=slack" in url
+    assert "claims=slack%3Asearch" in url
+    assert "tool_name=slack.search_slack" in url
+
+
+def test_consent_payload_url_stays_relative_without_public_base_with_params_intact():
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.preflight import (
+        connected_account_consent_payload,
+    )
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.public_base import (
+        set_connection_hub_public_base_url,
+    )
+
+    set_connection_hub_public_base_url("")
+    payload = connected_account_consent_payload(
+        tenant="demo-tenant",
+        project="demo-project",
+        connection_hub_bundle_id="connection-hub@1-0",
+        missing=[
+            {
+                "ok": False,
+                "tool_name": "slack.search_slack",
+                "failures": [
+                    {
+                        "ok": False,
+                        "provider_id": "slack",
+                        "connector_app_id": "demo",
+                        "claim": "slack:search",
+                        "error": "connect_required",
+                        "retry_hint": True,
+                    }
+                ],
+            }
+        ],
+    )
+
+    url = payload["consent"]["url"]
+    assert url.startswith("/api/integrations/bundles/demo-tenant/demo-project/")
+    assert "tab=delegated_to_kdcube" in url
+    assert "provider_id=slack" in url
+    assert "claims=slack%3Asearch" in url
+
+
+def test_hub_props_public_base_extraction():
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.public_base import (
+        public_base_url_from_hub_props,
+    )
+
+    props = {"connections": {"oauth": {"public_base_url": "https://demo.kdcube.example/"}}}
+    assert public_base_url_from_hub_props(props) == "https://demo.kdcube.example"
+    assert public_base_url_from_hub_props({}) == ""
+    assert public_base_url_from_hub_props(None) == ""
+    assert public_base_url_from_hub_props({"connections": {}}) == ""

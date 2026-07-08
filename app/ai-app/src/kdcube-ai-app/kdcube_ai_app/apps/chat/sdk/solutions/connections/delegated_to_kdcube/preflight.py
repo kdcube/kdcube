@@ -20,6 +20,10 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.model
     ToolClaimPolicy,
     as_str,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.public_base import (
+    PUBLIC_BASE_URL_CONFIG_KEY,
+    connection_hub_public_base_url,
+)
 
 
 CONSENT_NEEDED_CODE = "needs_connected_account_consent"
@@ -27,6 +31,8 @@ PREFLIGHT_SCHEMA = "connection_hub.delegated_to_kdcube.tool_claim_preflight.v1"
 
 
 LOGGER = logging.getLogger("kdcube.connections.delegated_to_kdcube")
+
+_WARNED_RELATIVE_CONSENT_URL = False
 
 
 def _clean_list(values: Iterable[Any]) -> list[str]:
@@ -65,12 +71,27 @@ def _connection_hub_widget_url(
         query["tool_name"] = tool_name
     if account_id:
         query["account_id"] = account_id
-    return (
+    path = (
         "/api/integrations/bundles/"
         f"{quote(tenant, safe='')}/{quote(project, safe='')}/"
         f"{quote(connection_hub_bundle_id or DEFAULT_CONNECTION_HUB_BUNDLE_ID, safe='')}/"
         f"widgets/connections_settings?{urlencode(query)}"
     )
+    # The deep link travels beyond the app origin (external MCP agents relay
+    # it verbatim), so it ships ABSOLUTE — browsers on the app origin handle
+    # absolute equally well. Same source of truth as OAuth redirect building.
+    base = connection_hub_public_base_url()
+    if base:
+        return f"{base}{path}"
+    global _WARNED_RELATIVE_CONSENT_URL
+    if not _WARNED_RELATIVE_CONSENT_URL:
+        _WARNED_RELATIVE_CONSENT_URL = True
+        LOGGER.warning(
+            "[delegated.consent] consent deep link stays RELATIVE: set %s in the "
+            "Connection Hub bundle config so external clients receive an absolute URL",
+            PUBLIC_BASE_URL_CONFIG_KEY,
+        )
+    return path
 
 
 def _first_failure(missing: list[dict[str, Any]]) -> dict[str, Any]:

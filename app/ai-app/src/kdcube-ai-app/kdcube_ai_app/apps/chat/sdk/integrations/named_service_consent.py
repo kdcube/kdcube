@@ -119,10 +119,14 @@ def _consent_instructions(
     that — per reason, scoped to the attempted action's claims."""
     provider_label = (provider_id[:1].upper() + provider_id[1:]) if provider_id else "the provider"
     claim_text = ", ".join(claims) if claims else "the required access"
+    # Only an ABSOLUTE URL is openable by the user this text reaches (an
+    # external agent relays it verbatim, outside the app origin). A relative
+    # path names the destination instead of handing out a dead link.
+    link_is_openable = connection_hub_url.startswith(("http://", "https://"))
     link_part = (
         f"Share this Connection Hub link with the user: {connection_hub_url}"
-        if connection_hub_url
-        else "Ask the user to open Connection Hub"
+        if link_is_openable
+        else "Ask the user to open Connection Hub in the KDCube app"
     )
     if reason == REASON_ACCOUNT_REQUIRED:
         return (

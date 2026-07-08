@@ -642,19 +642,30 @@ async def test_actions_dispatch_to_slack_transport():
 
 @pytest.mark.asyncio
 async def test_no_consent_attempt_carries_agent_instructions_and_seeded_deep_link():
-    provider = _Provider([])
-
-    response = await provider.object_search(
-        _ctx(),
-        NamedServiceRequest(operation=OBJECT_SEARCH, namespace=SLACK_NAMESPACE, query="revenue"),
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.public_base import (
+        set_connection_hub_public_base_url,
     )
+
+    provider = _Provider([])
+    # Live deployments carry connections.oauth.public_base_url; the deep link
+    # ships absolute so an external MCP client can relay it verbatim.
+    set_connection_hub_public_base_url("https://demo.kdcube.example")
+    try:
+        response = await provider.object_search(
+            _ctx(),
+            NamedServiceRequest(operation=OBJECT_SEARCH, namespace=SLACK_NAMESPACE, query="revenue"),
+        )
+    finally:
+        set_connection_hub_public_base_url("")
 
     assert response.status == 403
     details = response.error.details
     # Demand-driven scoping: exactly the attempted action's claim, never a union.
     assert details["claims"] == ["slack:search"]
-    # Deep link lands on the delegated-to-KDCube plan seeded with those claims.
+    # Deep link is ABSOLUTE and lands on the delegated-to-KDCube plan seeded
+    # with those claims.
     url = details["connection_hub_url"]
+    assert url.startswith("https://demo.kdcube.example/api/integrations/bundles/")
     assert "tab=delegated_to_kdcube" in url
     assert "provider_id=slack" in url
     assert "claims=slack%3Asearch" in url
@@ -663,8 +674,28 @@ async def test_no_consent_attempt_carries_agent_instructions_and_seeded_deep_lin
     # surface has no chat banner).
     instructions = details["instructions"]
     assert "retry" in instructions.lower()
-    assert details["connection_hub_url"] in instructions
+    assert url in instructions
     assert "slack:search" in instructions
+
+
+@pytest.mark.asyncio
+async def test_without_public_base_instructions_name_the_hub_instead_of_a_dead_link():
+    provider = _Provider([])
+
+    response = await provider.object_search(
+        _ctx(),
+        NamedServiceRequest(operation=OBJECT_SEARCH, namespace=SLACK_NAMESPACE, query="revenue"),
+    )
+
+    details = response.error.details
+    url = details["connection_hub_url"]
+    # Relative fallback keeps params intact...
+    assert url.startswith("/api/integrations/bundles/")
+    assert "claims=slack%3Asearch" in url
+    # ...and the instructions never hand out a path the user cannot open.
+    instructions = details["instructions"]
+    assert url not in instructions
+    assert "Connection Hub" in instructions
 
 
 @pytest.mark.asyncio
