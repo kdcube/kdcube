@@ -514,11 +514,35 @@ def _automation_access_service(entrypoint: Any, request: Any) -> AutomationAcces
 
 
 def _delegated_to_kdcube_operations(entrypoint: Any, platform_user_id: str) -> Any:
+    async def _consent_granted_notifier(
+        *, provider_id: str, connector_app_id: str, claims: list, account_id: str,
+    ) -> None:
+        # Author `connections.consent.granted` conversation events for every
+        # pending demand this grant satisfies (ingress event inception via the
+        # per-conversation lane; passive — never starts a turn).
+        from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.consent_demand import (
+            author_consent_granted_events,
+        )
+
+        redis = getattr(entrypoint, "redis", None)
+        if redis is None:
+            return
+        await author_consent_granted_events(
+            redis=redis,
+            user_id=platform_user_id,
+            provider_id=provider_id,
+            connector_app_id=connector_app_id,
+            granted_claims=claims,
+            account_id=account_id,
+            connection_hub_bundle_id=BUNDLE_ID,
+        )
+
     return operations_for_user(
         user_id=platform_user_id,
         config=delegated_to_kdcube_config(getattr(entrypoint, "bundle_props", {}) or {}),
         bundle_id=BUNDLE_ID,
         store=DelegatedToKdcubeStore(user_id=platform_user_id, bundle_id=BUNDLE_ID),
+        consent_granted_notifier=_consent_granted_notifier,
     )
 
 

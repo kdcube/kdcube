@@ -103,9 +103,19 @@ LOGGER = logging.getLogger("kdcube.connections.delegated_to_kdcube")
 class DelegatedToKdcubeOperations:
     """Operation facade used by Connection Hub routes and tests."""
 
-    def __init__(self, *, config: DelegatedToKdcubeConfig, store: DelegatedToKdcubeStore) -> None:
+    def __init__(
+        self,
+        *,
+        config: DelegatedToKdcubeConfig,
+        store: DelegatedToKdcubeStore,
+        consent_granted_notifier: Callable[..., Any] | None = None,
+    ) -> None:
         self.config = config
         self.store = store
+        # Called (best-effort) after a consent persists, with the granted
+        # facts — the hub binds it to author `connections.consent.granted`
+        # conversation events for pending demands (see consent_demand.py).
+        self.consent_granted_notifier = consent_granted_notifier
 
     async def catalog(self, *, provider_id: str = "") -> dict[str, Any]:
         accounts = await self.store.list_accounts(provider_id=provider_id)
@@ -289,6 +299,20 @@ class DelegatedToKdcubeOperations:
                     metadata=stored.metadata,
                 )
             )
+        # The grant is an authored conversation event: notify (best-effort)
+        # so pending demands in chat conversations learn the consent landed.
+        if self.consent_granted_notifier is not None:
+            try:
+                result = self.consent_granted_notifier(
+                    provider_id=provider_id,
+                    connector_app_id=connector_app_id,
+                    claims=list(claims),
+                    account_id=stored.account_id,
+                )
+                if hasattr(result, "__await__"):
+                    await result
+            except Exception:
+                LOGGER.warning("[delegated.consent] granted notifier failed (best-effort)", exc_info=True)
         return {"ok": True, "account": stored.public_dict()}
 
     async def start_oauth(
@@ -469,9 +493,14 @@ def operations_for_user(
     config: DelegatedToKdcubeConfig,
     bundle_id: str = CONNECTION_HUB_BUNDLE_ID,
     store: DelegatedToKdcubeStore | None = None,
+    consent_granted_notifier: Callable[..., Any] | None = None,
 ) -> DelegatedToKdcubeOperations:
     resolved_store = store or DelegatedToKdcubeStore(user_id=user_id, bundle_id=bundle_id)
-    return DelegatedToKdcubeOperations(config=config, store=resolved_store)
+    return DelegatedToKdcubeOperations(
+        config=config,
+        store=resolved_store,
+        consent_granted_notifier=consent_granted_notifier,
+    )
 
 
 __all__ = ["DelegatedToKdcubeOperations", "operations_for_user"]

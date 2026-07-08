@@ -272,10 +272,13 @@ async def test_disabled_group_claims_never_resolve(monkeypatch):
 
     await BaseWorkflow.apply_delegated_tool_claims(stub, cfg)
     # The demanded tool left the configured set (user turned it off): nothing
-    # to resolve, no announce, and the pending record clears — no recurrence.
+    # to resolve, no announce, and the conversation's pending snapshot clears —
+    # no recurrence. (The hub-addressed registry entry may persist until a
+    # matching grant consumes it; it drives event authoring, never announces.)
     assert seen == []
     assert stub.runtime_ctx.reactivated_tools == []
-    assert not props, "the pending demand cleared with the tool deselected"
+    snapshot_keys = [key for key in props if key[2] == "delegated_to_kdcube.blocked_snapshot"]
+    assert not snapshot_keys, "the pending snapshot cleared with the tool deselected"
 
 
 def test_notice_message_names_provider_and_tools():

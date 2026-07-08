@@ -182,6 +182,7 @@ async def _announce_consent_demand(
     connector_app_id: str,
     claims: list,
     tool_name: str,
+    connection_hub_bundle_id: str = "",
 ) -> None:
     """Demand-driven consent: the ATTEMPT raises the ask (shared bookkeeping
     in ``delegated_to_kdcube/consent_demand.py``; the bound tool communicator
@@ -200,6 +201,7 @@ async def _announce_consent_demand(
             claims=claims,
             tool_name=tool_name,
             identity=get_current_user_identity() or {},
+            connection_hub_bundle_id=connection_hub_bundle_id,
         )
     except Exception:
         logger.debug("consent demand announce unavailable", exc_info=True)
@@ -310,6 +312,7 @@ async def resolve_connected_account_claim(
                 connector_app_id=result.connector_app_id or connector_app_id,
                 claims=[result.claim or claim],
                 tool_name=tool_name,
+                connection_hub_bundle_id=connection_hub_bundle_id,
             )
         return ConnectedAccountCredential(
             ok=False,

@@ -1210,3 +1210,245 @@ def test_consent_bookkeeping_stays_off_the_event_loop():
 
     store_source = pathlib.Path(store_mod.__file__).read_text(encoding="utf-8")
     assert "asyncio.to_thread(self.list_accounts_sync" in store_source
+
+
+class _FakeLaneSource:
+    """Stands in for RedisConversationExternalEventSource in tests."""
+
+    def __init__(self, entry, fail: bool = False):
+        self.entry = dict(entry)
+        self.fail = fail
+        self.published: list[dict] = []
+
+    async def publish(self, **kwargs):
+        if self.fail:
+            raise RuntimeError("lane unavailable")
+        self.published.append(kwargs)
+        return kwargs
+
+
+def _demand_kwargs(**overrides):
+    base = dict(
+        user_id="user-1",
+        bundle_id="workspace@test",
+        conversation_id="conv-1",
+        provider_id="slack",
+        provider_label="Slack",
+        connector_app_id="demo",
+        claims=["slack:post"],
+        tool_name="slack.post_slack_message",
+        tenant="demo-tenant",
+        project="demo-project",
+        agent_id="main",
+        connection_hub_bundle_id="connection-hub@1-0",
+    )
+    base.update(overrides)
+    return base
+
+
+@pytest.mark.asyncio
+async def test_consent_demand_records_the_conversation_address(monkeypatch):
+    """(a) The demand registry entry carries everything needed to author the
+    granted event back into the conversation later."""
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.consent_demand import (
+        PENDING_DEMANDS_REGISTRY_KEY,
+        record_consent_demand,
+    )
+
+    from kdcube_ai_app.apps.chat.sdk import config as sdk_config
+    store: dict = {}
+    monkeypatch.setattr(sdk_config, "get_user_prop", lambda key, *, user_id=None, bundle_id=None, default=None: store.get((user_id, bundle_id, key), default))
+    monkeypatch.setattr(sdk_config, "set_user_prop", lambda key, value, *, user_id=None, bundle_id=None: store.__setitem__((user_id, bundle_id, key), value))
+    monkeypatch.setattr(sdk_config, "delete_user_prop", lambda key, *, user_id=None, bundle_id=None: store.pop((user_id, bundle_id, key), None))
+
+    assert await record_consent_demand(**_demand_kwargs()) is True
+
+    registry = store[("user-1", "connection-hub@1-0", PENDING_DEMANDS_REGISTRY_KEY)]
+    entry = registry["demands"][0]
+    assert entry["conversation_id"] == "conv-1"
+    assert entry["tenant"] == "demo-tenant"
+    assert entry["project"] == "demo-project"
+    assert entry["bundle_id"] == "workspace@test"
+    assert entry["agent_id"] == "main"
+    assert entry["provider_id"] == "slack"
+    assert entry["claims"] == ["slack:post"]
+    assert entry["tool_name"] == "slack.post_slack_message"
+
+
+@pytest.mark.asyncio
+async def test_consent_completion_authors_one_event_per_demand_and_clears(monkeypatch):
+    """(b)(c)(d) Completion authors exactly one lane event per matching demand
+    with the granted payload, no task payload (passive: the promoter acks it,
+    nothing resembling a turn can start), and clears the records — a second
+    completion authors nothing (one event per demand)."""
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.consent_demand import (
+        author_consent_granted_events,
+        read_pending_consent,
+        record_consent_demand,
+    )
+    from kdcube_ai_app.apps.chat.sdk import config as sdk_config
+
+    store: dict = {}
+    monkeypatch.setattr(sdk_config, "get_user_prop", lambda key, *, user_id=None, bundle_id=None, default=None: store.get((user_id, bundle_id, key), default))
+    monkeypatch.setattr(sdk_config, "set_user_prop", lambda key, value, *, user_id=None, bundle_id=None: store.__setitem__((user_id, bundle_id, key), value))
+    monkeypatch.setattr(sdk_config, "delete_user_prop", lambda key, *, user_id=None, bundle_id=None: store.pop((user_id, bundle_id, key), None))
+
+    await record_consent_demand(**_demand_kwargs())
+
+    sources: list[_FakeLaneSource] = []
+
+    def factory(entry):
+        source = _FakeLaneSource(entry)
+        sources.append(source)
+        return source
+
+    authored = await author_consent_granted_events(
+        redis=None,
+        user_id="user-1",
+        provider_id="slack",
+        granted_claims=["slack:post", "slack:search"],
+        connector_app_id="demo",
+        account_id="acct-1",
+        connection_hub_bundle_id="connection-hub@1-0",
+        source_factory=factory,
+    )
+    assert authored == 1
+    assert len(sources) == 1 and len(sources[0].published) == 1
+    event = sources[0].published[0]
+    assert event["kind"] == "connections.consent.granted"
+    assert event["event_source_id"] == "connection_hub.consent"
+    # Passive by construction: no task payload -> the promoter acks; no turn.
+    assert event["task_payload"] is None
+    assert event["payload"] == {
+        "provider_id": "slack",
+        "connector_app_id": "demo",
+        "claims": ["slack:post"],
+        "account_id": "acct-1",
+        "tools": ["slack.post_slack_message"],
+    }
+    assert "approved Slack access (slack:post)" in event["text"]
+    assert "post_slack_message" in event["text"]
+    assert "usable now" in event["text"]
+
+    # (e) The conversation's pending snapshot lost the event-covered tool —
+    # the turn-start announce stays silent; the event is the record.
+    pending = await read_pending_consent(user_id="user-1", bundle_id="workspace@test", conversation_id="conv-1")
+    assert pending == []
+
+    # One event per demand: consenting again authors nothing.
+    again = await author_consent_granted_events(
+        redis=None,
+        user_id="user-1",
+        provider_id="slack",
+        granted_claims=["slack:post", "slack:search"],
+        connection_hub_bundle_id="connection-hub@1-0",
+        source_factory=factory,
+    )
+    assert again == 0
+
+
+@pytest.mark.asyncio
+async def test_publish_failure_keeps_the_record_for_the_announce_fallback(monkeypatch):
+    """(f) When the lane publish fails, the demand stays recorded — the
+    turn-start [CONNECTED ACCOUNTS UPDATE] announce covers the grant."""
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.consent_demand import (
+        PENDING_DEMANDS_REGISTRY_KEY,
+        author_consent_granted_events,
+        read_pending_consent,
+        record_consent_demand,
+    )
+    from kdcube_ai_app.apps.chat.sdk import config as sdk_config
+
+    store: dict = {}
+    monkeypatch.setattr(sdk_config, "get_user_prop", lambda key, *, user_id=None, bundle_id=None, default=None: store.get((user_id, bundle_id, key), default))
+    monkeypatch.setattr(sdk_config, "set_user_prop", lambda key, value, *, user_id=None, bundle_id=None: store.__setitem__((user_id, bundle_id, key), value))
+    monkeypatch.setattr(sdk_config, "delete_user_prop", lambda key, *, user_id=None, bundle_id=None: store.pop((user_id, bundle_id, key), None))
+
+    await record_consent_demand(**_demand_kwargs())
+
+    authored = await author_consent_granted_events(
+        redis=None,
+        user_id="user-1",
+        provider_id="slack",
+        granted_claims=["slack:post"],
+        connection_hub_bundle_id="connection-hub@1-0",
+        source_factory=lambda entry: _FakeLaneSource(entry, fail=True),
+    )
+    assert authored == 0
+    registry = store[("user-1", "connection-hub@1-0", PENDING_DEMANDS_REGISTRY_KEY)]
+    assert len(registry["demands"]) == 1
+    pending = await read_pending_consent(user_id="user-1", bundle_id="workspace@test", conversation_id="conv-1")
+    assert pending and pending[0]["tools"] == ["slack.post_slack_message"]
+
+
+@pytest.mark.asyncio
+async def test_unrelated_grants_author_nothing(monkeypatch):
+    """(f cont.) A grant with no recorded demand (proactive menu consent, or a
+    different provider/claims) authors no event; records stay untouched."""
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.consent_demand import (
+        author_consent_granted_events,
+        record_consent_demand,
+    )
+    from kdcube_ai_app.apps.chat.sdk import config as sdk_config
+
+    store: dict = {}
+    monkeypatch.setattr(sdk_config, "get_user_prop", lambda key, *, user_id=None, bundle_id=None, default=None: store.get((user_id, bundle_id, key), default))
+    monkeypatch.setattr(sdk_config, "set_user_prop", lambda key, value, *, user_id=None, bundle_id=None: store.__setitem__((user_id, bundle_id, key), value))
+    monkeypatch.setattr(sdk_config, "delete_user_prop", lambda key, *, user_id=None, bundle_id=None: store.pop((user_id, bundle_id, key), None))
+
+    # No demand at all -> proactive consent authors nothing.
+    sources: list = []
+    authored = await author_consent_granted_events(
+        redis=None, user_id="user-1", provider_id="google", granted_claims=["gmail:read"],
+        connection_hub_bundle_id="connection-hub@1-0",
+        source_factory=lambda entry: sources.append(entry),
+    )
+    assert authored == 0 and sources == []
+
+    # A demand for ANOTHER provider stays untouched by this grant.
+    await record_consent_demand(**_demand_kwargs())
+    authored = await author_consent_granted_events(
+        redis=None, user_id="user-1", provider_id="google", granted_claims=["gmail:read"],
+        connection_hub_bundle_id="connection-hub@1-0",
+        source_factory=lambda entry: sources.append(entry),
+    )
+    assert authored == 0 and sources == []
+
+
+@pytest.mark.asyncio
+async def test_connect_credential_fires_the_consent_granted_notifier(monkeypatch):
+    """Hub wiring: a persisted consent (OAuth complete AND the credential-form
+    path both land here) hands the granted facts to the notifier that authors
+    the conversation events."""
+    _install_fake_storage(monkeypatch)
+    granted: list[dict] = []
+
+    async def notifier(**kwargs):
+        granted.append(kwargs)
+
+    ops = operations_for_user(
+        user_id="user-1",
+        config=_multi_claim_oauth_config(),
+        consent_granted_notifier=notifier,
+    )
+    state_store = MemoryOAuthStateStore()
+    started = await ops.start_oauth(
+        {"provider_id": "test", "connector_app_id": "default", "claims": ["test:read", "test:write"]},
+        user_id="user-1",
+        callback_url="https://kdcube.example.test/oauth/callback",
+        state_store=state_store,
+        state_secret="state-secret",
+    )
+    completed = await ops.complete_oauth(
+        code="code-1",
+        state=started["authorize_url"].split("state=", 1)[1].split("&", 1)[0],
+        callback_url="https://kdcube.example.test/oauth/callback",
+        state_store=state_store,
+        state_secret="state-secret",
+        client_secret_resolver=lambda **kwargs: "test-secret",
+    )
+    assert completed["ok"] is True
+    assert len(granted) == 1
+    assert granted[0]["provider_id"] == "test"
+    assert sorted(granted[0]["claims"]) == ["test:read", "test:write"]
+    assert granted[0]["account_id"] == completed["account"]["account_id"]
