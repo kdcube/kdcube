@@ -42,12 +42,13 @@ const SOURCE = readFileSync(
   'utf8',
 )
 
-test('one body renders into both shells (shared interaction state)', () => {
-  // The body node is computed once, above the shells...
+test('one body renders into every shell (shared interaction state)', () => {
+  // The body node comes from useCapabilityPickerBody above the shells:
+  // popover, in-chat modal, and the served full-page widget.
   const bodyRenders = SOURCE.match(/\{body\}/g) ?? []
-  assert.equal(bodyRenders.length, 2, 'the same {body} mounts in the popover and in the modal')
+  assert.equal(bodyRenders.length, 3, 'the same {body} mounts in the popover, the modal, and the page')
   // ...and the confirm picker re-anchors when the presentation switches.
-  assert.match(SOURCE, /\[confirmState, view\]/)
+  assert.match(SOURCE, /\[confirmState, presentation\]/)
 })
 
 test('expand and collapse affordances are present', () => {
@@ -79,5 +80,41 @@ for (const sheet of STYLESHEETS) {
     assert.ok(start >= 0)
     const block = css.slice(start, css.indexOf('}', start))
     assert.match(block, /overflow:\s*auto/)
+  })
+}
+
+// Third shell: the served capability widget renders the SAME body full-page.
+test('the full-page shell reuses the shared picker body', () => {
+  assert.match(SOURCE, /export function useCapabilityPickerBody/)
+  assert.match(SOURCE, /export function CapabilityPickerPage/)
+  // The page presentation drives the hook with active: true.
+  const pageStart = SOURCE.indexOf('export function CapabilityPickerPage')
+  const pageBlock = SOURCE.slice(pageStart, SOURCE.indexOf('export function ComposerMenu'))
+  assert.match(pageBlock, /useCapabilityPickerBody\(/)
+  assert.match(pageBlock, /active: true/)
+  assert.match(pageBlock, /k-menu-expanded/)
+  assert.match(pageBlock, /k-menu-page/)
+})
+
+test('the standalone vm reuses the shared selection logic, not a fork', () => {
+  const standalone = readFileSync(
+    new URL('../src/chat/ui/features/composer/CapabilityPickerStandalone.tsx', import.meta.url),
+    'utf8',
+  )
+  assert.match(standalone, /applySelectionPatch/)
+  assert.match(standalone, /mergeSelectionPatches/)
+  assert.match(standalone, /useStandaloneCapabilitiesVm/)
+})
+
+for (const sheet of STYLESHEETS) {
+  const label = sheet.pathname.split('/').slice(-3).join('/')
+  const css = readFileSync(sheet, 'utf8')
+
+  test(`full-page shell styles exist with the readable column (${label})`, () => {
+    assert.ok(css.includes('.k-menu-page {'), '.k-menu-page exists')
+    const start = css.indexOf('.k-menu-page .k-menu-expanded')
+    assert.ok(start >= 0, 'page column bounds the expanded body')
+    const block = css.slice(start, css.indexOf('}', start))
+    assert.match(block, /max-width:\s*920px/)
   })
 }

@@ -2182,6 +2182,33 @@ a { color: inherit; }
   overflow: visible;
   text-overflow: clip;
 }
+
+/* Full-page presentation (the served capability widget): the same picker
+   body in a readable page column — expanded wrap rules apply via
+   .k-menu-expanded. */
+.k-menu-page {
+  min-height: 100vh;
+  padding: 18px 20px 28px;
+  background: var(--bg, var(--surface));
+  box-sizing: border-box;
+}
+.k-menu-page .k-menu-expanded { max-width: 920px; margin: 0 auto; }
+.k-menu-page-head {
+  max-width: 920px;
+  margin: 0 auto 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.k-menu-page-title {
+  font-size: 16px;
+  font-weight: 650;
+  color: var(--ink);
+}
+.k-menu-page-sub {
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
 .k-menu-row-text { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
 .k-menu-row-label {
   font-size: 13px;

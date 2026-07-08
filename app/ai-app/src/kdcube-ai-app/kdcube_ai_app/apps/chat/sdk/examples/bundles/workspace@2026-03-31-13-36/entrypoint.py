@@ -537,6 +537,33 @@ class WorkspaceEntrypoint(BaseEntrypointWithEconomics):
         }
 
     @api(
+        alias="capabilities_widget",
+        route="operations",
+        **_api_visibility("capabilities_widget"),
+    )
+    @ui_widget(
+        icon={
+            "tailwind": "heroicons-outline:adjustments-horizontal",
+            "lucide": "SlidersHorizontal",
+        },
+        alias="capabilities",
+        **_widget_visibility("capabilities"),
+    )
+    def capabilities_widget(self, **kwargs):
+        # Static fallback served when the built widget is not yet on disk.
+        # The platform routes the real UI from
+        # sdk://solutions/chat/ui/widget-capabilities once the bundle build
+        # ran: the full-page presentation of the SAME capability picker the
+        # chat composer's "+" menu drives (agent_capabilities +
+        # agent_selection_update operations on this bundle).
+        del kwargs
+        return [
+            "<div style=\"font-family:system-ui,sans-serif;padding:16px\">"
+            "Tools &amp; skills is served from sdk://solutions/chat/ui/widget-capabilities after build."
+            "</div>"
+        ]
+
+    @api(
         alias="pinboard_widget",
         route="operations",
         **_api_visibility("pinboard_widget"),
@@ -1175,6 +1202,20 @@ class WorkspaceEntrypoint(BaseEntrypointWithEconomics):
                                 "src_folder": "npm://components-core/src",
                                 "target": "_shared/components-core",
                             },
+                        },
+                    },
+                    "capabilities": {
+                        "enabled": True,
+                        # Full-page capability picker: the SAME picker body the
+                        # composer "+" menu drives, served as its own widget.
+                        # Ops it needs (agent_capabilities /
+                        # agent_selection_update) live on this entrypoint.
+                        "src_folder": "sdk://solutions/chat/ui/widget-capabilities",
+                        "build_command": "npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build",
+                        "shared_sources": {
+                            "components_core": "npm://components-core/src",
+                            "components_react": "npm://components-react/src",
+                            "chat_ui_css": "npm://components-react/examples/standalone",
                         },
                     },
                     "telegram_miniapp": {

@@ -204,6 +204,26 @@ export function defaultComponentSpecs(): SceneComponentSpec[] {
       order: 60,
     },
     {
+      // Full-page capability picker — the same picker the chat composer's
+      // "+" menu drives, served by this bundle's `capabilities` widget
+      // (agent_capabilities + agent_selection_update live here too).
+      alias: 'capabilities',
+      bundleId: '',
+      widgetAlias: 'capabilities',
+      title: 'Tools & Skills',
+      accent: 'teal',
+      gated: true,
+      views: false,
+      size: { w: 720, h: 640 },
+      full: { w: 1040, h: 760 },
+      targetSurfaces: ['sdk.agent.capabilities'],
+      placement: 'floating',
+      rail: true,
+      defaultOpen: false,
+      enabled: true,
+      order: 65,
+    },
+    {
       // Connection Hub settings widget — the `connections.hub.open` surface
       // contract lands here (declared via targetSurfaces, exactly like the
       // website scene's contract for the same widget). Chat consent cards

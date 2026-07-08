@@ -747,55 +747,33 @@ function modelKey(pick: { provider?: string; model?: string } | null | undefined
   return pick?.model ? `${pick.provider ?? ''}:${pick.model}` : ''
 }
 
-export function ComposerMenu({
-  disabled = false,
+/** The picker's interaction core, shared by every presentation (popover,
+ *  in-chat modal, full-page widget): capabilities lifecycle, cache-cost
+ *  notices, the confirm flow, and the section render. State lives in the
+ *  CALLER's component (this is a hook), so switching shells mid-interaction
+ *  keeps the confirm/notice state — one body, any shell.
+ *  `active` gates load/reset (popover open state; a full page passes true). */
+export function useCapabilityPickerBody({
+  vm,
   namespaceStyles = {},
   extraSections = [],
+  close,
+  active,
+  presentation = 'popover',
 }: {
-  disabled?: boolean
+  vm: ChatViewModel
   namespaceStyles?: NamespaceStyleMap
   extraSections?: ComposerMenuSectionDescriptor[]
-}) {
-  const vm = useChatViewModel()
-  const dispatch = useAppDispatch()
-  const [open, setOpen] = useState(false)
-  /* One picker, two presentations: the compact popover for quick toggles and
-   * a wide in-widget modal where the service-card prose wraps instead of
-   * ellipsizing. The SAME body node renders into whichever shell is active;
-   * all interaction state (checkboxes via the store, spotlight, the confirm
-   * picker) lives above the shells, so switching mid-interaction keeps it. */
-  const [view, setView] = useState<'popover' | 'modal'>('popover')
-  const anchorRef = useRef<HTMLDivElement | null>(null)
+  close: () => void
+  active: boolean
+  presentation?: string
+}): ReactNode {
   const capabilities = vm.capabilities
-
-  /* A consent banner's "turn off the tools" option requests a spotlight:
-   * open the menu; the tools section highlights + scrolls to the tools.
-   * A namespace target (service card, long prose) or a long target list
-   * opens the READABLE expanded form directly. Closing clears the request. */
-  const spotlightNonce = vm.state.toolSpotlight?.nonce ?? 0
-  useEffect(() => {
-    if (!spotlightNonce) return
-    setView(preferredMenuPresentation(vm.state.toolSpotlight?.tools, capabilities.inventory))
-    setOpen(true)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [spotlightNonce])
-  const wasOpenRef = useRef(false)
-  useEffect(() => {
-    if (open) {
-      wasOpenRef.current = true
-      return
-    }
-    if (wasOpenRef.current) {
-      wasOpenRef.current = false
-      dispatch(chatActions.clearToolSpotlight())
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open])
 
   /* Cache-cost notices. A fresh conversation has nothing cached yet, so the
    * notices would be noise there — suppressed via the already-exposed turn
-   * list. Both reset per menu-open: the model notice tracks the pick that was
-   * active when the menu opened (returning to it clears the notice); the
+   * list. Both reset per activation: the model notice tracks the pick that was
+   * active when the picker opened (returning to it clears the notice); the
    * toggle notice shows once after the first capability toggle. */
   const conversationHasTurns = vm.state.turns.length > 0
   const openInitialModelRef = useRef<string | null>(null)
@@ -810,7 +788,7 @@ export function ComposerMenu({
    * scrolled 420px viewport when the user is mid-list (exactly where the
    * spotlight put them). The row's check stays put by design until the
    * decision, so an off-screen picker made the click look dead. Bring the
-   * question to the click. */
+   * question to the click — and re-anchor when the presentation switches. */
   const confirmRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
     if (!confirmState) return
@@ -818,24 +796,23 @@ export function ComposerMenu({
       confirmRef.current?.scrollIntoView({ block: 'nearest' })
     }, 30)
     return () => window.clearTimeout(timer)
-  }, [confirmState, view])
+  }, [confirmState, presentation])
 
   useEffect(() => {
-    if (open) capabilities.load()
-    if (!open) {
+    if (active) capabilities.load()
+    if (!active) {
       openInitialModelRef.current = null
       setToggledThisOpen(false)
       setConfirmState(null)
       setRememberChoice(false)
-      setView('popover')
     }
-  }, [open, capabilities])
+  }, [active, capabilities])
 
   useEffect(() => {
-    if (open && capabilities.status === 'ready' && openInitialModelRef.current === null) {
+    if (active && capabilities.status === 'ready' && openInitialModelRef.current === null) {
       openInitialModelRef.current = modelKey(capabilities.model)
     }
-  }, [open, capabilities.status, capabilities.model])
+  }, [active, capabilities.status, capabilities.model])
 
   /* Decision routing — the decision moment IS the policy picker. On a fresh
    * conversation (nothing cached) every change just applies. On a warm-ish
@@ -891,6 +868,167 @@ export function ComposerMenu({
     && modelKey(capabilities.model) !== openInitialModelRef.current
   const toggleNoticeVisible = conversationHasTurns && toggledThisOpen
 
+  const sections = useMemo(() => {
+    return [...builtInSections(namespaceStyles), ...extraSections]
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+  }, [namespaceStyles, extraSections])
+
+  if (capabilities.status === 'loading' || capabilities.status === 'idle') {
+    return (
+      <div className="k-menu-status">
+        <span className="k-menu-spinner" aria-hidden="true" />
+        Loading tools &amp; skills…
+      </div>
+    )
+  }
+  if (capabilities.status === 'error') {
+    return (
+      <button type="button" className="k-menu-status" onClick={() => capabilities.load({ force: true })}>
+        Couldn&rsquo;t load tools &amp; skills. Tap to retry.
+      </button>
+    )
+  }
+  const rendered = sections
+    .map((section) => ({ id: section.id, node: section.render({ vm: vmForSections, close }) }))
+    .filter((section) => section.node !== null && section.node !== undefined && section.node !== false)
+  return rendered.length ? (
+    <>
+      {rendered.map((section, index) => (
+        <div key={section.id}>
+          {index > 0 ? <div className="k-menu-divider" role="separator" /> : null}
+          {section.node}
+          {section.id === 'model' && confirmState?.klass === 'model_switch' ? (
+            <div ref={confirmRef}>
+              <ConfirmPicker
+                text={MODEL_SWITCH_CACHE_NOTICE}
+                allowed={allowedPolicies}
+                remember={rememberChoice}
+                onRemember={setRememberChoice}
+                onDecide={resolveConfirm}
+              />
+            </div>
+          ) : null}
+          {section.id === 'model' && !confirmState && modelNoticeVisible ? (
+            <div className="k-menu-notice" role="note">{MODEL_SWITCH_CACHE_NOTICE}</div>
+          ) : null}
+        </div>
+      ))}
+      {confirmState?.klass === 'capability_toggle' ? (
+        <div ref={confirmRef}>
+          <ConfirmPicker
+            text={CAPABILITY_TOGGLE_CACHE_NOTICE}
+            allowed={allowedPolicies}
+            remember={rememberChoice}
+            onRemember={setRememberChoice}
+            onDecide={resolveConfirm}
+          />
+        </div>
+      ) : null}
+      {!confirmState && toggleNoticeVisible ? (
+        <div className="k-menu-notice" role="note">{CAPABILITY_TOGGLE_CACHE_NOTICE}</div>
+      ) : null}
+      {pending ? (
+        <div className="k-menu-notice" role="note">
+          {pending.apply === 'when_cold' ? PENDING_WHEN_COLD_NOTICE : PENDING_NEXT_CONVERSATION_NOTICE}
+        </div>
+      ) : null}
+      <div className="k-menu-foot">
+        {capabilities.saveError
+          ? 'Changes couldn’t be saved. They’ll retry with your next change.'
+          : 'Changes apply from your next message.'}
+      </div>
+    </>
+  ) : (
+    <div className="k-menu-status">This agent uses its full configured set.</div>
+  )
+}
+
+/** Full-page presentation (the served capability widget): the SAME picker
+ *  body inside a readable page column with the expanded wrap rules. */
+export function CapabilityPickerPage({
+  vm,
+  namespaceStyles = {},
+  extraSections = [],
+  title = 'Tools & skills',
+  subtitle,
+}: {
+  vm: ChatViewModel
+  namespaceStyles?: NamespaceStyleMap
+  extraSections?: ComposerMenuSectionDescriptor[]
+  title?: string
+  subtitle?: string
+}) {
+  const body = useCapabilityPickerBody({
+    vm,
+    namespaceStyles,
+    extraSections,
+    close: () => {},
+    active: true,
+    presentation: 'page',
+  })
+  return (
+    <div className="k-menu-page">
+      <div className="k-menu-page-head">
+        <div className="k-menu-page-title">{title}</div>
+        {subtitle ? <div className="k-menu-page-sub">{subtitle}</div> : null}
+      </div>
+      <div className="k-menu-expanded" role="menu" aria-label="Tools and skills">
+        {body}
+      </div>
+    </div>
+  )
+}
+
+export function ComposerMenu({
+  disabled = false,
+  namespaceStyles = {},
+  extraSections = [],
+}: {
+  disabled?: boolean
+  namespaceStyles?: NamespaceStyleMap
+  extraSections?: ComposerMenuSectionDescriptor[]
+}) {
+  const vm = useChatViewModel()
+  const dispatch = useAppDispatch()
+  const [open, setOpen] = useState(false)
+  /* One picker, two in-chat presentations: the compact popover for quick
+   * toggles and a wide in-widget modal where the service-card prose wraps
+   * instead of ellipsizing. The SAME body node renders into whichever shell
+   * is active; all interaction state (checkboxes via the store, spotlight,
+   * the confirm picker) lives in useCapabilityPickerBody above the shells,
+   * so switching mid-interaction keeps it. */
+  const [view, setView] = useState<'popover' | 'modal'>('popover')
+  const anchorRef = useRef<HTMLDivElement | null>(null)
+  const capabilities = vm.capabilities
+
+  /* A consent banner's "turn off the tools" option requests a spotlight:
+   * open the menu; the tools section highlights + scrolls to the tools.
+   * A namespace target (service card, long prose) or a long target list
+   * opens the READABLE expanded form directly. Closing clears the request. */
+  const spotlightNonce = vm.state.toolSpotlight?.nonce ?? 0
+  useEffect(() => {
+    if (!spotlightNonce) return
+    setView(preferredMenuPresentation(vm.state.toolSpotlight?.tools, capabilities.inventory))
+    setOpen(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [spotlightNonce])
+  const wasOpenRef = useRef(false)
+  useEffect(() => {
+    if (open) {
+      wasOpenRef.current = true
+      return
+    }
+    if (wasOpenRef.current) {
+      wasOpenRef.current = false
+      dispatch(chatActions.clearToolSpotlight())
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
+
+  useEffect(() => {
+    if (!open) setView('popover')
+  }, [open])
+
   useEffect(() => {
     if (!open) return
     function onKeyDown(event: globalThis.KeyboardEvent) {
@@ -900,85 +1038,19 @@ export function ComposerMenu({
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [open])
 
-  const sections = useMemo(() => {
-    return [...builtInSections(namespaceStyles), ...extraSections]
-      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-  }, [namespaceStyles, extraSections])
+  const close = () => setOpen(false)
+
+  const body = useCapabilityPickerBody({
+    vm,
+    namespaceStyles,
+    extraSections,
+    close,
+    active: open,
+    presentation: view,
+  })
 
   // Registered users only; the ops behind the menu require an authenticated caller.
   if (!vm.authed) return null
-
-  const close = () => setOpen(false)
-
-  let body: ReactNode
-  if (capabilities.status === 'loading' || capabilities.status === 'idle') {
-    body = (
-      <div className="k-menu-status">
-        <span className="k-menu-spinner" aria-hidden="true" />
-        Loading tools &amp; skills…
-      </div>
-    )
-  } else if (capabilities.status === 'error') {
-    body = (
-      <button type="button" className="k-menu-status" onClick={() => capabilities.load({ force: true })}>
-        Couldn&rsquo;t load tools &amp; skills. Tap to retry.
-      </button>
-    )
-  } else {
-    const rendered = sections
-      .map((section) => ({ id: section.id, node: section.render({ vm: vmForSections, close }) }))
-      .filter((section) => section.node !== null && section.node !== undefined && section.node !== false)
-    body = rendered.length ? (
-      <>
-        {rendered.map((section, index) => (
-          <div key={section.id}>
-            {index > 0 ? <div className="k-menu-divider" role="separator" /> : null}
-            {section.node}
-            {section.id === 'model' && confirmState?.klass === 'model_switch' ? (
-              <div ref={confirmRef}>
-                <ConfirmPicker
-                  text={MODEL_SWITCH_CACHE_NOTICE}
-                  allowed={allowedPolicies}
-                  remember={rememberChoice}
-                  onRemember={setRememberChoice}
-                  onDecide={resolveConfirm}
-                />
-              </div>
-            ) : null}
-            {section.id === 'model' && !confirmState && modelNoticeVisible ? (
-              <div className="k-menu-notice" role="note">{MODEL_SWITCH_CACHE_NOTICE}</div>
-            ) : null}
-          </div>
-        ))}
-        {confirmState?.klass === 'capability_toggle' ? (
-          <div ref={confirmRef}>
-            <ConfirmPicker
-              text={CAPABILITY_TOGGLE_CACHE_NOTICE}
-              allowed={allowedPolicies}
-              remember={rememberChoice}
-              onRemember={setRememberChoice}
-              onDecide={resolveConfirm}
-            />
-          </div>
-        ) : null}
-        {!confirmState && toggleNoticeVisible ? (
-          <div className="k-menu-notice" role="note">{CAPABILITY_TOGGLE_CACHE_NOTICE}</div>
-        ) : null}
-        {pending ? (
-          <div className="k-menu-notice" role="note">
-            {pending.apply === 'when_cold' ? PENDING_WHEN_COLD_NOTICE : PENDING_NEXT_CONVERSATION_NOTICE}
-          </div>
-        ) : null}
-        <div className="k-menu-foot">
-          {capabilities.saveError
-            ? 'Changes couldn’t be saved. They’ll retry with your next change.'
-            : 'Changes apply from your next message.'}
-        </div>
-      </>
-    ) : (
-      <div className="k-menu-status">This agent uses its full configured set.</div>
-    )
-  }
 
   return (
     <div ref={anchorRef} className="k-composer-menu-anchor">

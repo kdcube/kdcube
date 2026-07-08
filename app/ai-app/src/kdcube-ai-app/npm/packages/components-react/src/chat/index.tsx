@@ -25,6 +25,12 @@ export {
   useChatViewModel,
   type ChatViewModel,
   ComposerMenu,
+  CapabilityPickerPage,
+  useCapabilityPickerBody,
+  useStandaloneCapabilitiesVm,
+  type StandaloneCapabilitiesResponse,
+  type StandaloneCapabilityRuntime,
+  type StandaloneSelectionWriteOptions,
   type ComposerMenuSectionContext,
   type ComposerMenuSectionDescriptor,
 } from './ui/index.ts'
