@@ -91,13 +91,58 @@ CONSENT_ERROR_CONTRACT = {
         "candidates",
         "connection_hub_url",
         "action_label",
+        "instructions",
     ],
     "candidates": "Labeled account summaries: {account_id, label, email, workspace, status, claims}.",
     "retry_hint": (
         "true when retrying the same call after the Connection Hub action "
         "(or resending with account_id) should succeed."
     ),
+    "instructions": (
+        "Agent-facing next step for this exact failure: show the user "
+        "connection_hub_url, name the claims, retry the same call after approval."
+    ),
 }
+
+
+def _consent_instructions(
+    *,
+    reason: str,
+    provider_id: str,
+    claims: list[str],
+    connection_hub_url: str,
+) -> str:
+    """The agent-facing next step for one consent failure.
+
+    This surface has no chat banner: the consent loop is this response, the
+    Connection Hub link, and a retry. The wording tells the agent exactly
+    that — per reason, scoped to the attempted action's claims."""
+    provider_label = (provider_id[:1].upper() + provider_id[1:]) if provider_id else "the provider"
+    claim_text = ", ".join(claims) if claims else "the required access"
+    link_part = (
+        f"Share this Connection Hub link with the user: {connection_hub_url}"
+        if connection_hub_url
+        else "Ask the user to open Connection Hub"
+    )
+    if reason == REASON_ACCOUNT_REQUIRED:
+        return (
+            f"Several {provider_label} accounts match. Resend the SAME call with "
+            "account_id set to one of candidates[].account_id — no consent action needed."
+        )
+    if reason == REASON_RECONNECT_REQUIRED:
+        return (
+            f"The connected {provider_label} account's credential no longer works. "
+            f"{link_part} to reconnect it ({claim_text}), then retry this exact call."
+        )
+    if reason == REASON_CLAIM_UPGRADE_REQUIRED:
+        return (
+            f"A {provider_label} account is connected but has not approved {claim_text}. "
+            f"{link_part} to approve exactly those claims, then retry this exact call."
+        )
+    return (
+        f"No {provider_label} account is connected for {claim_text}. "
+        f"{link_part} to connect one and approve those claims, then retry this exact call."
+    )
 
 
 def account_credential_status(account: ConnectedAccount) -> str:
@@ -127,16 +172,26 @@ def consent_details(consent: Mapping[str, Any]) -> dict[str, Any]:
     """
     data = _as_dict(consent)
     candidates = data.get("candidates")
+    reason = as_str(data.get("reason"))
+    provider_id = as_str(data.get("provider_id"))
+    claims = [as_str(item) for item in data.get("claims") or [] if as_str(item)]
+    connection_hub_url = as_str(data.get("url"))
     return {
-        "reason": as_str(data.get("reason")),
+        "reason": reason,
         "retry_hint": bool(data.get("retry_hint")),
-        "provider_id": as_str(data.get("provider_id")),
+        "provider_id": provider_id,
         "connector_app_id": as_str(data.get("connector_app_id")),
-        "claims": [as_str(item) for item in data.get("claims") or [] if as_str(item)],
+        "claims": claims,
         "account_id": as_str(data.get("account_id")),
         "candidates": [dict(item) for item in candidates if isinstance(item, Mapping)] if isinstance(candidates, list) else [],
-        "connection_hub_url": as_str(data.get("url")),
+        "connection_hub_url": connection_hub_url,
         "action_label": as_str(data.get("action_label")),
+        "instructions": _consent_instructions(
+            reason=reason,
+            provider_id=provider_id,
+            claims=claims,
+            connection_hub_url=connection_hub_url,
+        ),
     }
 
 

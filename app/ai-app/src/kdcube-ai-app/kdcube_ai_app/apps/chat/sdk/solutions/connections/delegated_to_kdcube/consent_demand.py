@@ -110,11 +110,19 @@ async def record_consent_demand(
     conversation — the caller emits the chat consent event exactly once per
     demand; retries of the same tool in the same conversation stay quiet
     server-side (the banner reducer's signature dedupe covers client replays).
+
+    A demand is a CONVERSATION fact: it exists to raise the banner there and
+    to author the granted event back into that lane. A caller with no full
+    conversation address (an external MCP attempt is turn-less and
+    conversation-less) records nothing — that client's consent loop is the
+    structured response + Connection Hub link + retry.
     """
     provider_key = str(provider_id or "").strip()
     tool_key = str(tool_name or "").strip()
     claim_list = [str(c).strip() for c in (claims or []) if str(c or "").strip()]
     if not provider_key or not tool_key:
+        return False
+    if not str(user_id or "").strip() or not str(bundle_id or "").strip() or not str(conversation_id or "").strip():
         return False
     pending = await read_pending_consent(user_id=user_id, bundle_id=bundle_id, conversation_id=conversation_id)
     for group in pending:
@@ -198,7 +206,10 @@ async def _register_demand_address(
     """Append this demand (with its full conversation address) to the
     hub-addressed registry, so consent completion can author the granted
     event back into the conversation. One entry per (conversation, provider,
-    tool). Best-effort."""
+    tool). Best-effort. Only a FULL address registers: without a conversation
+    there is no lane to author the granted event into."""
+    if not str(user_id or "").strip() or not str(conversation_id or "").strip():
+        return
     try:
         import time
 
@@ -328,6 +339,15 @@ async def author_consent_granted_events(
             tenant = str(entry.get("tenant") or "")
             project = str(entry.get("project") or "")
             tool_name = str(entry.get("tool_name") or "")
+            if not conversation_id.strip():
+                # No conversation address means no lane to author into — the
+                # grant is complete without an event (the caller's consent
+                # loop was response + link + retry). Drop the entry.
+                LOGGER.info(
+                    "[delegated.consent] demand without conversation address dropped on grant: provider=%s tool=%s user=%s",
+                    provider_key, tool_name, clean_user,
+                )
+                continue
             try:
                 if source_factory is not None:
                     source = source_factory(entry)

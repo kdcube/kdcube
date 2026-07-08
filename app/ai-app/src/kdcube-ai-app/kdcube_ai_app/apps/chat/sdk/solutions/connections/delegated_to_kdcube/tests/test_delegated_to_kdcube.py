@@ -1467,3 +1467,101 @@ async def test_connect_credential_fires_the_consent_granted_notifier(monkeypatch
     assert granted[0]["provider_id"] == "test"
     assert sorted(granted[0]["claims"]) == ["test:read", "test:write"]
     assert granted[0]["account_id"] == completed["account"]["account_id"]
+
+
+# ── Conversation-less demands (external MCP attempts) ────────────────────────
+# An MCP named-service attempt has no chat conversation. Demand bookkeeping is
+# a CONVERSATION fact: with no address there is no banner to raise and no lane
+# to author the granted event into — record nothing, author nothing, never
+# error. The MCP client's consent loop is response + link + retry only.
+
+
+@pytest.mark.asyncio
+async def test_record_consent_demand_without_conversation_records_nothing(monkeypatch):
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.consent_demand import (
+        record_consent_demand,
+    )
+    from kdcube_ai_app.apps.chat.sdk import config as sdk_config
+
+    store: dict = {}
+    monkeypatch.setattr(sdk_config, "get_user_prop", lambda key, *, user_id=None, bundle_id=None, default=None: store.get((user_id, bundle_id, key), default))
+    monkeypatch.setattr(sdk_config, "set_user_prop", lambda key, value, *, user_id=None, bundle_id=None: store.__setitem__((user_id, bundle_id, key), value))
+    monkeypatch.setattr(sdk_config, "delete_user_prop", lambda key, *, user_id=None, bundle_id=None: store.pop((user_id, bundle_id, key), None))
+
+    assert await record_consent_demand(**_demand_kwargs(conversation_id="")) is False
+    assert await record_consent_demand(**_demand_kwargs(conversation_id="   ")) is False
+    assert await record_consent_demand(**_demand_kwargs(user_id="")) is False
+    assert await record_consent_demand(**_demand_kwargs(bundle_id="")) is False
+    # No pending snapshot, no hub-registry entry — nothing at all.
+    assert store == {}
+
+
+@pytest.mark.asyncio
+async def test_grant_drops_legacy_addressless_demand_without_authoring(monkeypatch):
+    """A registry entry with no conversation address (legacy write) resolves
+    on grant by dropping: no lane event, no error, registry cleaned; addressed
+    demands in the same grant still author normally."""
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.consent_demand import (
+        PENDING_DEMANDS_REGISTRY_KEY,
+        author_consent_granted_events,
+    )
+    from kdcube_ai_app.apps.chat.sdk import config as sdk_config
+
+    store: dict = {
+        ("user-1", "connection-hub@1-0", PENDING_DEMANDS_REGISTRY_KEY): {
+            "demands": [
+                {
+                    # Legacy poison: no conversation address.
+                    "conversation_id": "",
+                    "tenant": "demo-tenant",
+                    "project": "demo-project",
+                    "bundle_id": "workspace@test",
+                    "agent_id": "",
+                    "provider_id": "slack",
+                    "connector_app_id": "demo",
+                    "claims": ["slack:post"],
+                    "tool_name": "slack.post_slack_message",
+                },
+                {
+                    "conversation_id": "conv-1",
+                    "tenant": "demo-tenant",
+                    "project": "demo-project",
+                    "bundle_id": "workspace@test",
+                    "agent_id": "main",
+                    "provider_id": "slack",
+                    "connector_app_id": "demo",
+                    "claims": ["slack:post"],
+                    "tool_name": "slack.post_slack_message",
+                },
+            ]
+        }
+    }
+    monkeypatch.setattr(sdk_config, "get_user_prop", lambda key, *, user_id=None, bundle_id=None, default=None: store.get((user_id, bundle_id, key), default))
+    monkeypatch.setattr(sdk_config, "set_user_prop", lambda key, value, *, user_id=None, bundle_id=None: store.__setitem__((user_id, bundle_id, key), value))
+    monkeypatch.setattr(sdk_config, "delete_user_prop", lambda key, *, user_id=None, bundle_id=None: store.pop((user_id, bundle_id, key), None))
+
+    sources: list[_FakeLaneSource] = []
+
+    def factory(entry):
+        source = _FakeLaneSource(entry)
+        sources.append(source)
+        return source
+
+    authored = await author_consent_granted_events(
+        redis=None,
+        user_id="user-1",
+        provider_id="slack",
+        granted_claims=["slack:post"],
+        connector_app_id="demo",
+        account_id="acct-1",
+        connection_hub_bundle_id="connection-hub@1-0",
+        source_factory=factory,
+    )
+
+    # Only the ADDRESSED demand authored an event.
+    assert authored == 1
+    assert len(sources) == 1
+    assert sources[0].entry["conversation_id"] == "conv-1"
+    # Both entries left the registry: the addressed one by authoring, the
+    # address-less one by dropping.
+    assert ("user-1", "connection-hub@1-0", PENDING_DEMANDS_REGISTRY_KEY) not in store

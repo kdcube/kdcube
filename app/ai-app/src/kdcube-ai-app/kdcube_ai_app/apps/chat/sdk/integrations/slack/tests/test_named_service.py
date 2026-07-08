@@ -631,3 +631,128 @@ async def test_actions_dispatch_to_slack_transport():
     assert posted.ok is True
     assert uploaded.ok is True
     assert [call[0] for call in provider._slack.calls] == ["post_slack_message", "upload_slack_file"]
+
+
+# ── External-agent (MCP) no-consent path ─────────────────────────────────────
+# An external MCP client holds namespace grants but ZERO provider consent. The
+# structured error IS its whole consent loop: scoped claims for the attempted
+# action, labeled candidates, the delegated-to-KDCube deep link seeded with
+# exactly those claims, retry_hint, and agent-facing instructions.
+
+
+@pytest.mark.asyncio
+async def test_no_consent_attempt_carries_agent_instructions_and_seeded_deep_link():
+    provider = _Provider([])
+
+    response = await provider.object_search(
+        _ctx(),
+        NamedServiceRequest(operation=OBJECT_SEARCH, namespace=SLACK_NAMESPACE, query="revenue"),
+    )
+
+    assert response.status == 403
+    details = response.error.details
+    # Demand-driven scoping: exactly the attempted action's claim, never a union.
+    assert details["claims"] == ["slack:search"]
+    # Deep link lands on the delegated-to-KDCube plan seeded with those claims.
+    url = details["connection_hub_url"]
+    assert "tab=delegated_to_kdcube" in url
+    assert "provider_id=slack" in url
+    assert "claims=slack%3Asearch" in url
+    assert details["retry_hint"] is True
+    # Agent-facing instructions: link + claims + retry, self-contained (this
+    # surface has no chat banner).
+    instructions = details["instructions"]
+    assert "retry" in instructions.lower()
+    assert details["connection_hub_url"] in instructions
+    assert "slack:search" in instructions
+
+
+@pytest.mark.asyncio
+async def test_account_required_instructions_say_resend_with_account_id():
+    provider = _Provider([_account("acc-1", "slack:post"), _account("acc-2", "slack:post")])
+    consent = {
+        "kind": "delegated_to_kdcube.connected_account",
+        "reason": REASON_ACCOUNT_REQUIRED,
+        "retry_hint": True,
+        "provider_id": "slack",
+        "connector_app_id": "demo",
+        "claims": ["slack:post"],
+        "account_id": "",
+        "candidates": [
+            {"account_id": "acc-1", "label": "Workspace acc-1"},
+            {"account_id": "acc-2", "label": "Workspace acc-2"},
+        ],
+        "url": "/api/integrations/bundles/demo/project/connection-hub%401-0/widgets/connections_settings?tab=delegated_to_kdcube",
+        "action_label": "Choose account",
+    }
+
+    async def _ambiguous_post(**kwargs: Any) -> dict[str, Any]:
+        del kwargs
+        return {
+            "ok": False,
+            "error": {
+                "code": "needs_connected_account_consent",
+                "message": "Several connected accounts can satisfy this claim; choose an account_id.",
+                "consent": consent,
+            },
+            "consent": consent,
+            "ret": {"ok": False},
+        }
+
+    provider._slack.post_slack_message = _ambiguous_post
+
+    response = await provider.object_action(
+        _ctx(),
+        NamedServiceRequest(
+            operation=OBJECT_ACTION,
+            namespace=SLACK_NAMESPACE,
+            action=ACTION_POST_MESSAGE,
+            payload={"channel": "C123", "text": "hello"},
+        ),
+    )
+
+    assert response.status == 403
+    details = response.error.details
+    assert details["reason"] == REASON_ACCOUNT_REQUIRED
+    # Choice failures instruct a resend with account_id — no consent action.
+    instructions = details["instructions"]
+    assert "account_id" in instructions
+    assert "candidates" in instructions
+    assert [c["account_id"] for c in details["candidates"]] == ["acc-1", "acc-2"]
+
+
+@pytest.mark.asyncio
+async def test_no_consent_attempt_records_no_conversation_demand(monkeypatch):
+    """MCP attempts are conversation-less: the provider consent error performs
+    ZERO demand bookkeeping — no pending snapshot, no hub-registry entry, no
+    lane event. The consent loop is response + link + retry only."""
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube import (
+        consent_demand,
+    )
+    from kdcube_ai_app.apps.chat.sdk import config as sdk_config
+
+    demand_calls: list = []
+    prop_writes: list = []
+    original_record = consent_demand.record_consent_demand
+
+    async def _spy_record(**kwargs):
+        demand_calls.append(kwargs)
+        return await original_record(**kwargs)
+
+    monkeypatch.setattr(consent_demand, "record_consent_demand", _spy_record)
+    monkeypatch.setattr(
+        sdk_config, "set_user_prop",
+        lambda *a, **k: prop_writes.append((a, k)),
+        raising=False,
+    )
+
+    provider = _Provider([])
+    response = await provider.object_search(
+        _ctx(),
+        NamedServiceRequest(operation=OBJECT_SEARCH, namespace=SLACK_NAMESPACE, query="revenue"),
+    )
+
+    assert response.status == 403
+    assert response.error.code == "needs_connected_account_consent"
+    assert demand_calls == []
+    assert prop_writes == []
