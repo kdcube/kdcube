@@ -4,7 +4,7 @@ title: "Namespace Services: Integration Flow"
 summary: "Visual host/client integration flow for namespace service providers, using task-tracker and workspace as the current reference path."
 status: design
 tags: ["sdk", "namespace-services", "integration", "task-tracker", "workspace", "scene", "canvas", "chat"]
-updated_at: 2026-06-23
+updated_at: 2026-07-09
 keywords:
   [
     "namespace service integration",
@@ -139,8 +139,8 @@ spec (rides discovery)
   about/schema/intro ------------> AGENT: learns the grammar and works the realm
   metadata.presentation
   metadata.object_kinds ---------> USER: the capability picker's service card —
-  metadata.connected_accounts       purpose, works-with, human entry labels,
-                                    per-entry access lines, consent chips,
+  metadata.connected_accounts       purpose, works-with, capability groups
+                                    (entry details on expand), consent chips,
                                     per-operation/action narrowing
 ```
 

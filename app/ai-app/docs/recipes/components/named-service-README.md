@@ -50,6 +50,11 @@ spec.metadata
   object_kinds                {kind: one-liner}
 ```
 
+Declare this metadata on BOTH spec declarations when the provider has two —
+the instance-spec helper and the `@named_service_provider(...)` registration;
+one place only leaves raw grammar tokens on the card (see
+[Providers — The Presentation Layer](../../sdk/namespace-services/providers-README.md)).
+
 Provider-backed realms (acting through a user's external account) also
 declare `metadata.connected_accounts` — provider/connector ids, claims,
 `claims_by_operation` where the realm truly differentiates, and human

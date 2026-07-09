@@ -4,7 +4,7 @@ title: "Per-User Agent Capabilities"
 summary: "How users control what an agent may use for them: the admin inventory as the ceiling, per-user selection that narrows within it, runtime narrowing that makes denied capabilities uncallable, the capability picker's three shells (composer popover, expanded modal, served `capabilities` widget), and the service cards realms self-describe into."
 status: current
 tags: ["sdk", "solutions", "user-settings", "capabilities", "agent-selection", "named-services", "picker", "widget"]
-updated_at: 2026-07-08
+updated_at: 2026-07-09
 keywords:
   [
     "agent_capabilities",
@@ -117,13 +117,19 @@ spec's metadata (see
 | `presentation.about` | The purpose line under the realm label ("Read, search, and send email from the mail accounts you connect."). |
 | `presentation.third_party` | The dependency line ("Works with your Slack workspace through your connected Slack account."). |
 | `object_kinds` (name → one-liner) | The compact "Objects: message · attachment · account" line, full descriptions in the tooltip. |
-| `presentation.operations` / `presentation.actions` (name → label + description) | Entry rows titled by human name ("Send email"), the grammar token demoted to a mono hint, one-line description. |
+| `presentation.operations` / `presentation.actions` (name → label + description) | Group summaries and detail rows: the human names ("Send email") title each entry and join into its group's summary line; the grammar token rides the detail row as a mono hint. |
 | `connected_accounts` (provider_id, connector_app_id, claims, `claims_by_operation`, provider_label, claim_labels) | Per-entry "via your connected Google account · send mail" lines and the consent chips. |
 
-Every entry row is a toggle (the namespace-operation/action granularity
-above). A namespace whose realm is unresolvable expands to exactly
-"This service hasn't described itself yet." — the honest state; the UI
-invents no copy.
+The card presents the realm's entries as three human capability groups —
+Read / Create & update / Actions — classified from the realm's own entries
+(named actions always land in Actions; operation tokens classify by verb).
+Each group is one toggle, summarized by its entries' human labels; expanding
+a group's details reveals the per-entry rows, each still a toggle (the
+namespace-operation/action granularity above). Entries the admin excluded
+collapse to one quiet expandable line per service; its tooltip names the
+admin fix path (`namespaces.<ns>.allowed`). A namespace whose realm is
+unresolvable expands to exactly "This service hasn't described itself yet."
+— the honest state; the UI invents no copy.
 
 ## Consent and cache cost (pointers)
 

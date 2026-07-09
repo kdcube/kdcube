@@ -4,7 +4,7 @@ title: "Namespace Services: Providers"
 summary: "Transport-neutral SDK concept for bundles and platform subsystems that publish namespace service provider surfaces: namespace ownership, object operations, resolvers, capabilities, relations, and integrations over API, MCP, Data Bus, or local adapters."
 status: design
 tags: ["sdk", "namespace-services", "named-service-provider", "services", "namespaces", "objects", "resolvers", "mcp", "api", "data-bus", "bundles"]
-updated_at: 2026-06-23
+updated_at: 2026-07-09
 keywords:
   [
     "named service provider",
@@ -425,6 +425,12 @@ metadata={
 | `presentation.operations` / `presentation.actions` | Human label + user-terms description per entry ("Send email", "Pin to a board"). |
 | `object_kinds` (name → one-liner) | The card's compact objects line. |
 
+WARNING: a provider that both builds an instance `NamedServiceProviderSpec`
+(a spec helper) and registers via `@named_service_provider(...)` must declare
+this `metadata` in BOTH places — the decorator's spec is what discovery
+publishes, and a registration without it renders raw grammar tokens in the
+service card (the canvas regression).
+
 Provider-backed realms additionally declare their connected-account
 requirements (below); internal realms declare none — nothing is invented.
 Shipped exemplars: `integrations/mail/named_service.py` (differentiated
@@ -485,6 +491,12 @@ never by hitting denials. A realm with internal access requirements
     }
 ],
 ```
+
+`surface.kind` also accepts `scene`/`surface` for an on-scene affordance:
+`target_surface` names the mounted scene surface, optional `ui_event` rides
+the summon, optional `url` is the standalone fallback. A `widget`/`url`
+surface may add the same `target_surface` + `ui_event` fields so hosts
+prefer an on-scene summon over navigation.
 
 ONE declaration feeds TWO surfaces: the proactive Capabilities service card
 (requirement row + affordance, a status chip when the platform resolves one)
