@@ -11,7 +11,7 @@ export function StorageActions() {
       <button type="button" onClick={() => void dispatch(loadList())} disabled={loading}>
         Refresh
       </button>
-      <button type="button" onClick={() => void dispatch(exportSelected())} disabled={disabled}>
+      <button className="primary" type="button" onClick={() => void dispatch(exportSelected())} disabled={disabled}>
         {exporting ? 'Exporting...' : 'Export selected'}
       </button>
       <button

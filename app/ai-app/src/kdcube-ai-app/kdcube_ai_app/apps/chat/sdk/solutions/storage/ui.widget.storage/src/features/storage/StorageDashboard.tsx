@@ -39,7 +39,7 @@ export function StorageDashboard() {
     <div className="storage-layout">
       <header className="page-header">
         <div>
-          <div className="eyebrow">Operational storage</div>
+          <div className="eyebrow">Storage</div>
           <h1>Bundle storage</h1>
         </div>
         <StorageActions />

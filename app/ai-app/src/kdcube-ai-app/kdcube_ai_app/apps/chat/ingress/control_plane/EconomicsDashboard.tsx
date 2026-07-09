@@ -1217,19 +1217,19 @@ const Card: React.FC<{ children: React.ReactNode; className?: string }> = ({ chi
 );
 
 const CardHeader: React.FC<{ title: string; subtitle?: string; action?: React.ReactNode }> = ({ title, subtitle, action }) => (
-    <div className="border-b border-[#E6F1F0] px-4 py-3">
-        <div className="flex items-start justify-between gap-4">
-            <div>
-                <h2 className="text-lg font-semibold text-[#0D1E2C]">{title}</h2>
-                {subtitle && <p className="mt-1 text-sm leading-relaxed text-[#3A5672]">{subtitle}</p>}
+    <div className="shrink-0 border-b border-[#E6F1F0] px-3.5 py-2">
+        <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+                <h2 className="text-[12.5px] font-semibold leading-5 text-[#10304B]">{title}</h2>
+                {subtitle && <p className="truncate text-[11.5px] leading-4 text-[#7A99B0]">{subtitle}</p>}
             </div>
-            {action && <div className="pt-1">{action}</div>}
+            {action && <div className="shrink-0">{action}</div>}
         </div>
     </div>
 );
 
 const CardBody: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className = '' }) => (
-    <div className={`px-4 py-4 ${className}`}>
+    <div className={`px-3.5 py-3 ${className}`}>
         {children}
     </div>
 );
@@ -1246,9 +1246,9 @@ const Callout: React.FC<{
         success: 'bg-[rgba(34,197,94,0.08)] border-[rgba(34,197,94,0.35)] text-[#15803D]',
     };
     return (
-        <div className={`rounded-xl border p-3 ${tones[tone]}`}>
-            {title && <div className="text-sm font-semibold mb-1">{title}</div>}
-            <div className="text-sm leading-relaxed">{children}</div>
+        <div className={`rounded-lg border px-2.5 py-1.5 text-[11.5px] leading-snug ${tones[tone]}`}>
+            {title && <span className="font-semibold">{title} — </span>}
+            {children}
         </div>
     );
 };
@@ -1272,7 +1272,7 @@ const Button: React.FC<{
             type={type}
             onClick={onClick}
             disabled={disabled}
-            className={`rounded-lg px-3 py-2 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${variants[variant]} ${className}`}
+            className={`inline-flex h-8 items-center justify-center whitespace-nowrap rounded-lg px-3 text-[12.5px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${variants[variant]} ${className}`}
         >
             {children}
         </button>
@@ -1293,7 +1293,7 @@ const Input: React.FC<{
     className?: string;
 }> = ({ label, value, onChange, type = 'text', placeholder, required, min, max, step, list, className = '' }) => (
     <div className={className}>
-        {label && <label className="mb-1.5 block text-sm font-medium text-[#0D1E2C]">{label}</label>}
+        {label && <label className="mb-1 block truncate text-[10.5px] font-bold uppercase tracking-[0.08em] text-[#7A99B0]">{label}</label>}
         <input
             type={type}
             value={value}
@@ -1304,7 +1304,7 @@ const Input: React.FC<{
             max={max}
             step={step}
             list={list}
-            className="w-full rounded-md border border-[#D8ECEB] bg-white px-3 py-2
+            className="h-8 w-full rounded-md border border-[#D8ECEB] bg-white px-2.5 text-[12.5px]
                  focus:ring-2 focus:ring-[#01BEB2]/30 focus:border-[#01BEB2] transition-colors
                  placeholder:text-[#7A99B0]"
         />
@@ -1320,11 +1320,11 @@ const Select: React.FC<{
     className?: string;
 }> = ({ label, value, onChange, options, children, className = '' }) => (
     <div className={className}>
-        {label && <label className="mb-1.5 block text-sm font-medium text-[#0D1E2C]">{label}</label>}
+        {label && <label className="mb-1 block truncate text-[10.5px] font-bold uppercase tracking-[0.08em] text-[#7A99B0]">{label}</label>}
         <select
             value={value}
             onChange={onChange}
-            className="w-full rounded-md border border-[#D8ECEB] bg-white px-3 py-2
+            className="h-8 w-full rounded-md border border-[#D8ECEB] bg-white px-2 text-[12.5px]
                  focus:ring-2 focus:ring-[#01BEB2]/30 focus:border-[#01BEB2] transition-colors"
         >
             {options ? options.map(o => <option key={o.value} value={o.value}>{o.label}</option>) : children}
@@ -1339,15 +1339,15 @@ const TextArea: React.FC<{
     placeholder?: string;
     rows?: number;
     className?: string;
-}> = ({ label, value, onChange, placeholder, rows = 3, className = '' }) => (
+}> = ({ label, value, onChange, placeholder, rows = 2, className = '' }) => (
     <div className={className}>
-        {label && <label className="mb-1.5 block text-sm font-medium text-[#0D1E2C]">{label}</label>}
+        {label && <label className="mb-1 block truncate text-[10.5px] font-bold uppercase tracking-[0.08em] text-[#7A99B0]">{label}</label>}
         <textarea
             value={value}
             onChange={onChange}
             placeholder={placeholder}
             rows={rows}
-            className="w-full rounded-md border border-[#D8ECEB] bg-white px-3 py-2
+            className="w-full rounded-md border border-[#D8ECEB] bg-white px-2.5 py-1.5 text-[12.5px]
                  focus:ring-2 focus:ring-[#01BEB2]/30 focus:border-[#01BEB2] transition-colors
                  placeholder:text-[#7A99B0]"
         />
@@ -1359,23 +1359,23 @@ const StatCard: React.FC<{
     value: string | number;
     hint?: string;
 }> = ({ label, value, hint }) => (
-    <div className="rounded-xl border border-[#E6F1F0] bg-white px-4 py-3 shadow-[0_1px_2px_rgba(13,30,44,0.04)]">
-        <p className="text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0]">{label}</p>
-        <p className="mt-1 text-xl font-semibold text-[#0D1E2C]">{value}</p>
-        {hint && <p className="mt-1 text-xs text-[#3A5672]">{hint}</p>}
+    <div className="rounded-xl border border-[#E6F1F0] bg-white px-3 py-2 shadow-[0_1px_2px_rgba(13,30,44,0.04)]">
+        <p className="truncate text-[10.5px] font-bold uppercase tracking-[0.08em] text-[#7A99B0]">{label}</p>
+        <p className="mt-0.5 truncate font-mono text-[15px] font-semibold text-[#0D1E2C]">{value}</p>
+        {hint && <p className="mt-0.5 truncate text-[11px] text-[#7A99B0]">{hint}</p>}
     </div>
 );
 
 const LoadingSpinner: React.FC = () => (
-    <div className="flex items-center justify-center py-8">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#E6F1F0] border-t-[#01BEB2]"></div>
+    <div className="flex items-center justify-center py-4">
+        <div className="h-6 w-6 animate-spin rounded-full border-2 border-[#E6F1F0] border-t-[#01BEB2]"></div>
     </div>
 );
 
 const EmptyState: React.FC<{ message: string; icon?: string }> = ({ message, icon = '📭' }) => (
-    <div className="py-8 text-center">
-        <div className="mb-3 text-4xl">{icon}</div>
-        <p className="text-[#3A5672]">{message}</p>
+    <div className="py-4 text-center">
+        <div className="mb-1 text-xl">{icon}</div>
+        <p className="text-[12px] text-[#3A5672]">{message}</p>
     </div>
 );
 
@@ -1455,7 +1455,7 @@ const Pill: React.FC<{ tone?: 'neutral' | 'success' | 'warning' | 'danger'; chil
         danger: 'bg-[rgba(248,113,113,0.1)] text-[#B91C1C] border-[rgba(248,113,113,0.4)]',
     };
     return (
-        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide border ${tones[tone]}`}>
+        <span className={`inline-flex items-center px-1.5 py-px rounded-md text-[10.5px] font-bold uppercase tracking-wide border ${tones[tone]}`}>
       {children}
     </span>
     );
@@ -1494,18 +1494,18 @@ const CompactUsageRow: React.FC<{
 }> = ({ label, used, limit, remaining, usedUsd, limitUsd, remainingUsd }) => {
     const hasUsd = usedUsd != null || limitUsd != null || remainingUsd != null;
     return (
-    <div className="rounded-lg border border-[#E6F1F0] bg-white px-3 py-2 text-sm">
+    <div className="rounded-lg border border-[#E6F1F0] bg-white px-2.5 py-1.5 text-[12px]">
         <div className="flex items-center justify-between gap-3">
             <span className="text-[#3A5672]">{label}</span>
-            <span className="font-semibold text-[#0D1E2C]">
+            <span className="font-mono font-semibold text-[#0D1E2C]">
                 {hasUsd ? `$${Number(usedUsd || 0).toFixed(2)} / ${formatUsdLimit(limitUsd)}` : `${formatCount(used)} / ${formatCount(limit)}`}
             </span>
         </div>
-        <div className="mt-1 text-xs text-[#7A99B0]">
+        <div className="mt-0.5 text-[11px] text-[#7A99B0]">
             Remaining: {hasUsd ? formatUsdLimit(remainingUsd) : formatCount(remaining)}
         </div>
         {hasUsd && (
-            <div className="mt-1 text-xs text-[#7A99B0]">
+            <div className="mt-0.5 text-[11px] text-[#7A99B0]">
                 Tokens: {formatCount(used)} / {formatCount(limit)} · remaining {formatCount(remaining)}
             </div>
         )}
@@ -1523,14 +1523,14 @@ const PolicyMetricList: React.FC<{
         usd_per_month?: number | null;
     };
 }> = ({ policy }) => (
-    <div className="space-y-1 text-xs text-[#3A5672]">
-        <div>req/day: <span className="font-semibold text-[#0D1E2C]">{formatCount(policy.requests_per_day)}</span></div>
-        <div>req/month: <span className="font-semibold text-[#0D1E2C]">{formatCount(policy.requests_per_month)}</span></div>
-        <div>tok/hour: <span className="font-semibold text-[#0D1E2C]">{formatCount(policy.tokens_per_hour)}</span></div>
-        <div>tok/day: <span className="font-semibold text-[#0D1E2C]">{formatCount(policy.tokens_per_day)}</span></div>
-        <div>tok/month: <span className="font-semibold text-[#0D1E2C]">{formatCount(policy.tokens_per_month)}</span></div>
+    <div className="space-y-0.5 text-[11.5px] text-[#3A5672]">
+        <div>req/day: <span className="font-mono font-semibold text-[#0D1E2C]">{formatCount(policy.requests_per_day)}</span></div>
+        <div>req/month: <span className="font-mono font-semibold text-[#0D1E2C]">{formatCount(policy.requests_per_month)}</span></div>
+        <div>tok/hour: <span className="font-mono font-semibold text-[#0D1E2C]">{formatCount(policy.tokens_per_hour)}</span></div>
+        <div>tok/day: <span className="font-mono font-semibold text-[#0D1E2C]">{formatCount(policy.tokens_per_day)}</span></div>
+        <div>tok/month: <span className="font-mono font-semibold text-[#0D1E2C]">{formatCount(policy.tokens_per_month)}</span></div>
         {policy.usd_per_month != null && (
-            <div>month value: <span className="font-semibold text-[#0D1E2C]">${Number(policy.usd_per_month).toFixed(2)}</span></div>
+            <div>month value: <span className="font-mono font-semibold text-[#0D1E2C]">${Number(policy.usd_per_month).toFixed(2)}</span></div>
         )}
     </div>
 );
@@ -1540,7 +1540,7 @@ const Tabs: React.FC<{
     onChange: (id: string) => void;
     items: { id: string; label: string }[];
 }> = ({ active, onChange, items }) => (
-    <div className="flex flex-wrap gap-1 border-b border-[#E6F1F0]">
+    <div className="flex flex-wrap gap-1">
         {items.map((t) => {
             const isActive = active === t.id;
             return (
@@ -1548,10 +1548,10 @@ const Tabs: React.FC<{
                     key={t.id}
                     onClick={() => onChange(t.id)}
                     className={[
-                        "-mb-px rounded-t-md border-b-2 px-3 py-2 text-sm font-semibold transition-colors",
+                        "inline-flex h-8 items-center whitespace-nowrap rounded-lg border px-2.5 text-[12px] font-semibold transition-colors",
                         isActive
-                            ? "border-[#01BEB2] text-[#0D1E2C]"
-                            : "border-transparent text-[#3A5672] hover:bg-[#F6FAFA] hover:text-[#0D1E2C]",
+                            ? "border-[#01BEB2] bg-white text-[#10304B]"
+                            : "border-transparent text-[#3A5672] hover:bg-white hover:text-[#0D1E2C]",
                     ].join(' ')}
                 >
                     {t.label}
@@ -1562,13 +1562,13 @@ const Tabs: React.FC<{
 );
 
 const DividerTitle: React.FC<{ title: string; subtitle?: string }> = ({ title, subtitle }) => (
-    <div className="text-center">
-        <div className="text-[11px] font-bold tracking-[0.14em] uppercase text-[#009C92]">CONTROL PLANE</div>
-        <h1 className="mt-1 text-[21px] font-bold text-[#0D1E2C]">
+    <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5">
+        <span className="text-[10px] font-bold tracking-[0.14em] uppercase text-[#009C92]">CONTROL PLANE</span>
+        <h1 className="text-[15px] font-bold leading-6 text-[#0D1E2C]">
             {title}
         </h1>
         {subtitle && (
-            <p className="mt-2 text-sm leading-relaxed text-[#3A5672]">
+            <p className="truncate text-[11.5px] text-[#7A99B0]">
                 {subtitle}
             </p>
         )}
@@ -1580,35 +1580,35 @@ const DividerTitle: React.FC<{ title: string; subtitle?: string }> = ({ title, s
 // =============================================================================
 
 const Details: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
-    <details className="rounded-xl border border-[#E6F1F0] bg-white p-4">
-        <summary className="cursor-pointer text-sm font-semibold text-[#0D1E2C]">{title}</summary>
-        <div className="mt-3 text-sm text-[#3A5672] leading-relaxed space-y-2">{children}</div>
+    <details className="rounded-xl border border-[#E6F1F0] bg-white px-3 py-2">
+        <summary className="cursor-pointer text-[12px] font-semibold text-[#10304B]">{title}</summary>
+        <div className="mt-2 space-y-2 text-[11.5px] leading-snug text-[#3A5672]">{children}</div>
     </details>
 );
 
 const EconomicsOverview: React.FC<{ goTo?: (tabId: string) => void }> = ({ goTo }) => (
-    <details className="rounded-xl border border-[#E6F1F0] bg-white p-3 shadow-[0_1px_2px_rgba(13,30,44,0.04)]">
-        <summary className="cursor-pointer text-sm font-semibold text-[#0D1E2C]">
+    <details className="rounded-xl border border-[#E6F1F0] bg-white px-3 py-1.5 shadow-[0_1px_2px_rgba(13,30,44,0.04)]">
+        <summary className="cursor-pointer text-[12px] font-semibold text-[#10304B]">
             Funding rules and admin levers
         </summary>
-        <div className="mt-3 space-y-3">
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                <div className="rounded-lg border border-[#E6F1F0] bg-white p-3 text-sm text-[#3A5672]">
-                    <div className="font-semibold text-[#0D1E2C]">Plan quota</div>
-                    <div className="mt-1">
+        <div className="mt-2 space-y-2">
+            <div className="grid grid-cols-2 gap-2">
+                <div className="rounded-lg border border-[#E6F1F0] bg-white p-2 text-[11.5px] leading-snug text-[#3A5672]">
+                    <div className="font-semibold text-[#10304B]">Plan quota</div>
+                    <div className="mt-0.5">
                         The effective plan is the base plan, replaced by an active user override when one exists.
                         Plan quota is consumed first and is funded from the project budget.
                     </div>
                 </div>
-                <div className="rounded-lg border border-[#E6F1F0] bg-white p-3 text-sm text-[#3A5672]">
-                    <div className="font-semibold text-[#0D1E2C]">Wallet / personal credits</div>
-                    <div className="mt-1">
+                <div className="rounded-lg border border-[#E6F1F0] bg-white p-2 text-[11.5px] leading-snug text-[#3A5672]">
+                    <div className="font-semibold text-[#10304B]">Wallet / personal credits</div>
+                    <div className="mt-0.5">
                         Personal credits cover the part that cannot be funded by remaining quota or available project budget.
                     </div>
                 </div>
             </div>
             {goTo && (
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-1.5">
                     <Button variant="secondary" onClick={() => goTo('quotaBreakdown')}>Budget Breakdown</Button>
                     <Button variant="secondary" onClick={() => goTo('quotaPolicies')}>Plan Limits</Button>
                     <Button variant="secondary" onClick={() => goTo('lifetimeCredits')}>Wallet Credits</Button>
@@ -2591,385 +2591,387 @@ const EconomicsAdmin: React.FC = () => {
 
     return (
         <div className="h-screen overflow-hidden bg-[#EEF5F5]">
-            <div className="mx-auto flex h-full max-w-6xl flex-col gap-3 overflow-hidden px-4 py-4">
+            <div className="flex h-full max-w-none flex-col gap-2 overflow-hidden px-4 py-3">
                 {/* Header */}
-                <div className="shrink-0 space-y-3">
+                <div className="flex shrink-0 flex-wrap items-start justify-between gap-x-4 gap-y-1.5">
                     <DividerTitle
                         title="Economics"
                         subtitle="User quota policies, overrides, wallet credits, and application budget."
                     />
 
-                    <div className="max-w-4xl mx-auto">
+                    <div className="w-full max-w-xl xl:w-auto xl:min-w-[320px]">
                         <EconomicsOverview goTo={(tabId) => { clearMessages(); setViewMode(tabId); }} />
                     </div>
                 </div>
 
                 {/* Navigation */}
-                <div className="mx-auto max-w-5xl shrink-0">
+                <div className="shrink-0 border-b border-[#E6F1F0] pb-2">
                     <Tabs active={viewMode} onChange={(id) => { clearMessages(); setViewMode(id); }} items={tabs} />
                 </div>
 
                 {/* Messages */}
-                <div className="mx-auto max-w-5xl shrink-0 space-y-2">
-                    {success && <Callout tone="success" title="Success">{success}</Callout>}
-                    {error && <Callout tone="warning" title="Action failed">{error}</Callout>}
-                </div>
+                {(success || error) && (
+                    <div className="shrink-0 space-y-1.5">
+                        {success && <Callout tone="success" title="Success">{success}</Callout>}
+                        {error && <Callout tone="warning" title="Action failed">{error}</Callout>}
+                    </div>
+                )}
 
                 {/* Views */}
-                <div className="mx-auto min-h-0 w-full max-w-5xl space-y-4 overflow-y-auto pr-1">
+                <div className="relative min-h-0 w-full flex-1 overflow-hidden">
                     {/* Grant Trial */}
                     {viewMode === 'grantTrial' && (
-                        <Card>
-                            <CardHeader
-                                title="Grant Trial (temporary plan override)"
-                                subtitle="Gives the user a higher plan envelope for a limited time. This OVERRIDES base plan limits — it does not add."
-                            />
-                            <CardBody className="space-y-6">
-                                <Callout tone="info" title="What this does">
-                                    Use for onboarding, marketing trials, or time-limited upgrades. Daily/monthly counters keep resetting while the override is active.
-                                </Callout>
+                        <div className="grid h-full min-h-0 content-start gap-3 overflow-y-auto xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+                            <Card className="h-fit">
+                                <CardHeader
+                                    title="Grant Trial (temporary plan override)"
+                                    subtitle="Gives the user a higher plan envelope for a limited time. Overrides base plan limits — it does not add."
+                                />
+                                <CardBody>
+                                    <form onSubmit={handleGrantTrial} className="space-y-3">
+                                        <div className="grid grid-cols-3 gap-2.5">
+                                            <Input
+                                                label="User ID *"
+                                                value={trialUserId}
+                                                onChange={(e) => setTrialUserId(e.target.value)}
+                                                placeholder="user123"
+                                                required
+                                            />
+                                            <Input
+                                                label="Duration (days)"
+                                                type="number"
+                                                value={trialDays.toString()}
+                                                onChange={(e) => setTrialDays(parseInt(e.target.value || '7'))}
+                                                min={1}
+                                            />
+                                            <Input
+                                                label="Requests / day"
+                                                type="number"
+                                                value={trialRequests.toString()}
+                                                onChange={(e) => setTrialRequests(parseInt(e.target.value || '0'))}
+                                                min={1}
+                                            />
+                                            <div>
+                                                <Input
+                                                    label="Tokens / hour"
+                                                    type="number"
+                                                    value={trialTokensHour}
+                                                    onChange={(e) => setTrialTokensHour(e.target.value)}
+                                                    min={1}
+                                                />
+                                                {trialTokensHour && tokensToUsd(trialTokensHour) != null && (
+                                                    <div className="pt-0.5 text-[11px] text-[#7A99B0]">
+                                                        ≈ ${Number(tokensToUsd(trialTokensHour)).toFixed(2)}
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div>
+                                                <Input
+                                                    label="Tokens / day"
+                                                    type="number"
+                                                    value={trialTokensDay}
+                                                    onChange={(e) => setTrialTokensDay(e.target.value)}
+                                                    min={1}
+                                                />
+                                                {trialTokensDay && tokensToUsd(trialTokensDay) != null && (
+                                                    <div className="pt-0.5 text-[11px] text-[#7A99B0]">
+                                                        ≈ ${Number(tokensToUsd(trialTokensDay)).toFixed(2)}
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div>
+                                                <Input
+                                                    label="Tokens / month"
+                                                    type="number"
+                                                    value={trialTokensMonth}
+                                                    onChange={(e) => setTrialTokensMonth(e.target.value)}
+                                                    min={1}
+                                                />
+                                                {trialTokensMonth && tokensToUsd(trialTokensMonth) != null && (
+                                                    <div className="pt-0.5 text-[11px] text-[#7A99B0]">
+                                                        ≈ ${Number(tokensToUsd(trialTokensMonth)).toFixed(2)}
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div>
+                                                <Input
+                                                    label="USD / hour"
+                                                    type="number"
+                                                    value={trialUsdHour}
+                                                    onChange={(e) => setTrialUsdHour(e.target.value)}
+                                                    min={0}
+                                                    step="0.01"
+                                                />
+                                                {trialUsdHour && usdToTokens(trialUsdHour) != null && (
+                                                    <div className="pt-0.5 text-[11px] text-[#7A99B0]">
+                                                        ≈ {Number(usdToTokens(trialUsdHour)).toLocaleString()} tokens
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div>
+                                                <Input
+                                                    label="USD / day"
+                                                    type="number"
+                                                    value={trialUsdDay}
+                                                    onChange={(e) => setTrialUsdDay(e.target.value)}
+                                                    min={0}
+                                                    step="0.01"
+                                                />
+                                                {trialUsdDay && usdToTokens(trialUsdDay) != null && (
+                                                    <div className="pt-0.5 text-[11px] text-[#7A99B0]">
+                                                        ≈ {Number(usdToTokens(trialUsdDay)).toLocaleString()} tokens
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div>
+                                                <Input
+                                                    label="USD / month"
+                                                    type="number"
+                                                    value={trialUsdMonth}
+                                                    onChange={(e) => setTrialUsdMonth(e.target.value)}
+                                                    min={0}
+                                                    step="0.01"
+                                                />
+                                                {trialUsdMonth && usdToTokens(trialUsdMonth) != null && (
+                                                    <div className="pt-0.5 text-[11px] text-[#7A99B0]">
+                                                        ≈ {Number(usdToTokens(trialUsdMonth)).toLocaleString()} tokens
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
 
-                                <form onSubmit={handleGrantTrial} className="space-y-5">
-                                    <Input
-                                        label="User ID *"
-                                        value={trialUserId}
-                                        onChange={(e) => setTrialUserId(e.target.value)}
-                                        placeholder="user123"
-                                        required
-                                    />
-
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                        <Input
-                                            label="Duration (days)"
-                                            type="number"
-                                            value={trialDays.toString()}
-                                            onChange={(e) => setTrialDays(parseInt(e.target.value || '7'))}
-                                            min={1}
+                                        <TextArea
+                                            label="Notes"
+                                            value={trialNotes}
+                                            onChange={(e) => setTrialNotes(e.target.value)}
+                                            placeholder="Welcome trial for new user"
                                         />
-                                        <Input
-                                            label="Requests / day (override)"
-                                            type="number"
-                                            value={trialRequests.toString()}
-                                            onChange={(e) => setTrialRequests(parseInt(e.target.value || '0'))}
-                                            min={1}
-                                        />
-                                        <div>
-                                            <Input
-                                                label="Tokens / hour (override)"
-                                                type="number"
-                                                value={trialTokensHour}
-                                                onChange={(e) => setTrialTokensHour(e.target.value)}
-                                                min={1}
-                                            />
-                                            {trialTokensHour && tokensToUsd(trialTokensHour) != null && (
-                                                <div className="text-xs text-[#7A99B0] pt-1">
-                                                    ≈ ${Number(tokensToUsd(trialTokensHour)).toFixed(2)}
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
-                                    <div className="text-xs text-[#7A99B0]">
-                                        USD overrides tokens for the same window.
-                                    </div>
 
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                        <div>
-                                            <Input
-                                                label="Tokens / day (override)"
-                                                type="number"
-                                                value={trialTokensDay}
-                                                onChange={(e) => setTrialTokensDay(e.target.value)}
-                                                min={1}
-                                            />
-                                            {trialTokensDay && tokensToUsd(trialTokensDay) != null && (
-                                                <div className="text-xs text-[#7A99B0] pt-1">
-                                                    ≈ ${Number(tokensToUsd(trialTokensDay)).toFixed(2)}
-                                                </div>
-                                            )}
+                                        <div className="flex items-center justify-end gap-3">
+                                            <span className="text-[11.5px] text-[#7A99B0]">USD overrides tokens for the same window.</span>
+                                            <Button type="submit" disabled={loadingAction}>
+                                                {loadingAction ? 'Granting…' : 'Grant Trial'}
+                                            </Button>
                                         </div>
-                                        <div>
-                                            <Input
-                                                label="Tokens / month (override)"
-                                                type="number"
-                                                value={trialTokensMonth}
-                                                onChange={(e) => setTrialTokensMonth(e.target.value)}
-                                                min={1}
-                                            />
-                                            {trialTokensMonth && tokensToUsd(trialTokensMonth) != null && (
-                                                <div className="text-xs text-[#7A99B0] pt-1">
-                                                    ≈ ${Number(tokensToUsd(trialTokensMonth)).toFixed(2)}
-                                                </div>
-                                            )}
-                                        </div>
-                                        <div>
-                                            <Input
-                                                label="USD / hour (override)"
-                                                type="number"
-                                                value={trialUsdHour}
-                                                onChange={(e) => setTrialUsdHour(e.target.value)}
-                                                min={0}
-                                                step="0.01"
-                                            />
-                                            {trialUsdHour && usdToTokens(trialUsdHour) != null && (
-                                                <div className="text-xs text-[#7A99B0] pt-1">
-                                                    ≈ {Number(usdToTokens(trialUsdHour)).toLocaleString()} tokens
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
+                                    </form>
+                                </CardBody>
+                            </Card>
 
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                        <div>
-                                            <Input
-                                                label="USD / day (override)"
-                                                type="number"
-                                                value={trialUsdDay}
-                                                onChange={(e) => setTrialUsdDay(e.target.value)}
-                                                min={0}
-                                                step="0.01"
-                                            />
-                                            {trialUsdDay && usdToTokens(trialUsdDay) != null && (
-                                                <div className="text-xs text-[#7A99B0] pt-1">
-                                                    ≈ {Number(usdToTokens(trialUsdDay)).toLocaleString()} tokens
-                                                </div>
-                                            )}
-                                        </div>
-                                        <div>
-                                            <Input
-                                                label="USD / month (override)"
-                                                type="number"
-                                                value={trialUsdMonth}
-                                                onChange={(e) => setTrialUsdMonth(e.target.value)}
-                                                min={0}
-                                                step="0.01"
-                                            />
-                                            {trialUsdMonth && usdToTokens(trialUsdMonth) != null && (
-                                                <div className="text-xs text-[#7A99B0] pt-1">
-                                                    ≈ {Number(usdToTokens(trialUsdMonth)).toLocaleString()} tokens
-                                                </div>
-                                            )}
-                                        </div>
-                                        <div className="text-xs text-[#7A99B0] pt-6">
-                                            USD overrides tokens for the same window.
-                                        </div>
-                                    </div>
-
-                                    <TextArea
-                                        label="Notes"
-                                        value={trialNotes}
-                                        onChange={(e) => setTrialNotes(e.target.value)}
-                                        placeholder="Welcome trial for new user"
-                                    />
-
-                                    <Button type="submit" disabled={loadingAction}>
-                                        {loadingAction ? 'Granting…' : 'Grant Trial'}
-                                    </Button>
-                                </form>
-                            </CardBody>
-                        </Card>
+                            <Card className="h-fit">
+                                <CardHeader title="What this does" />
+                                <CardBody className="space-y-2 text-[11.5px] leading-snug text-[#3A5672]">
+                                    <p>Use for onboarding, marketing trials, or time-limited upgrades. Daily/monthly counters keep resetting while the override is active.</p>
+                                    <p>All limit fields are overrides: they replace the base plan envelope while the trial is active.</p>
+                                </CardBody>
+                            </Card>
+                        </div>
                     )}
 
                     {/* Update Tier */}
                     {viewMode === 'updateTier' && (
-                        <Card>
-                            <CardHeader
-                                title="Update Tier Override (partial updates)"
-                                subtitle="Only fields you provide are updated. Others remain unchanged. This is ideal for fine-tuning an existing override."
-                            />
-                            <CardBody className="space-y-6">
-                                <Callout tone="warning" title="Override semantics">
-                                    This does <strong>not</strong> top-up the base plan. It replaces it for as long as the override is active.
-                                </Callout>
-
-                                <form onSubmit={handleUpdateTierBudget} className="space-y-5">
-                                    <Input
-                                        label="User ID *"
-                                        value={updateUserId}
-                                        onChange={(e) => setUpdateUserId(e.target.value)}
-                                        placeholder="user456"
-                                        required
-                                    />
-
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <Input
-                                            label="Requests / day (empty = keep)"
-                                            type="number"
-                                            value={updateRequestsDay}
-                                            onChange={(e) => setUpdateRequestsDay(e.target.value)}
-                                            placeholder="100"
-                                        />
-                                        <Input
-                                            label="Requests / month (empty = keep)"
-                                            type="number"
-                                            value={updateRequestsMonth}
-                                            onChange={(e) => setUpdateRequestsMonth(e.target.value)}
-                                            placeholder="3000"
-                                        />
-                                        <div>
+                        <div className="grid h-full min-h-0 content-start gap-3 overflow-y-auto xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+                            <Card className="h-fit">
+                                <CardHeader
+                                    title="Update Tier Override (partial updates)"
+                                    subtitle="Only fields you provide are updated; empty fields keep their current value."
+                                />
+                                <CardBody>
+                                    <form onSubmit={handleUpdateTierBudget} className="space-y-3">
+                                        <div className="grid grid-cols-3 gap-2.5">
                                             <Input
-                                                label="Tokens / hour (empty = keep)"
-                                                type="number"
-                                                value={updateTokensHour}
-                                                onChange={(e) => setUpdateTokensHour(e.target.value)}
-                                                placeholder="500000"
+                                                label="User ID *"
+                                                value={updateUserId}
+                                                onChange={(e) => setUpdateUserId(e.target.value)}
+                                                placeholder="user456"
+                                                required
                                             />
-                                            {updateTokensHour && tokensToUsd(updateTokensHour) != null && (
-                                                <div className="text-xs text-[#7A99B0] pt-1">
-                                                    ≈ ${Number(tokensToUsd(updateTokensHour)).toFixed(2)}
-                                                </div>
-                                            )}
-                                        </div>
-                                        <div>
                                             <Input
-                                                label="Tokens / day (empty = keep)"
+                                                label="Requests / day"
                                                 type="number"
-                                                value={updateTokensDay}
-                                                onChange={(e) => setUpdateTokensDay(e.target.value)}
-                                                placeholder="10000000"
+                                                value={updateRequestsDay}
+                                                onChange={(e) => setUpdateRequestsDay(e.target.value)}
+                                                placeholder="100"
                                             />
-                                            {updateTokensDay && tokensToUsd(updateTokensDay) != null && (
-                                                <div className="text-xs text-[#7A99B0] pt-1">
-                                                    ≈ ${Number(tokensToUsd(updateTokensDay)).toFixed(2)}
-                                                </div>
-                                            )}
-                                        </div>
-                                        <div>
                                             <Input
-                                                label="Tokens / month (empty = keep)"
+                                                label="Requests / month"
                                                 type="number"
-                                                value={updateTokensMonth}
-                                                onChange={(e) => setUpdateTokensMonth(e.target.value)}
-                                                placeholder="300000000"
+                                                value={updateRequestsMonth}
+                                                onChange={(e) => setUpdateRequestsMonth(e.target.value)}
+                                                placeholder="3000"
                                             />
-                                            {updateTokensMonth && tokensToUsd(updateTokensMonth) != null && (
-                                                <div className="text-xs text-[#7A99B0] pt-1">
-                                                    ≈ ${Number(tokensToUsd(updateTokensMonth)).toFixed(2)}
-                                                </div>
-                                            )}
-                                        </div>
-                                        <div>
+                                            <div>
+                                                <Input
+                                                    label="Tokens / hour"
+                                                    type="number"
+                                                    value={updateTokensHour}
+                                                    onChange={(e) => setUpdateTokensHour(e.target.value)}
+                                                    placeholder="500000"
+                                                />
+                                                {updateTokensHour && tokensToUsd(updateTokensHour) != null && (
+                                                    <div className="pt-0.5 text-[11px] text-[#7A99B0]">
+                                                        ≈ ${Number(tokensToUsd(updateTokensHour)).toFixed(2)}
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div>
+                                                <Input
+                                                    label="Tokens / day"
+                                                    type="number"
+                                                    value={updateTokensDay}
+                                                    onChange={(e) => setUpdateTokensDay(e.target.value)}
+                                                    placeholder="10000000"
+                                                />
+                                                {updateTokensDay && tokensToUsd(updateTokensDay) != null && (
+                                                    <div className="pt-0.5 text-[11px] text-[#7A99B0]">
+                                                        ≈ ${Number(tokensToUsd(updateTokensDay)).toFixed(2)}
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div>
+                                                <Input
+                                                    label="Tokens / month"
+                                                    type="number"
+                                                    value={updateTokensMonth}
+                                                    onChange={(e) => setUpdateTokensMonth(e.target.value)}
+                                                    placeholder="300000000"
+                                                />
+                                                {updateTokensMonth && tokensToUsd(updateTokensMonth) != null && (
+                                                    <div className="pt-0.5 text-[11px] text-[#7A99B0]">
+                                                        ≈ ${Number(tokensToUsd(updateTokensMonth)).toFixed(2)}
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div>
+                                                <Input
+                                                    label="USD / hour"
+                                                    type="number"
+                                                    value={updateUsdHour}
+                                                    onChange={(e) => setUpdateUsdHour(e.target.value)}
+                                                    placeholder="5"
+                                                    min={0}
+                                                    step="0.01"
+                                                />
+                                                {updateUsdHour && usdToTokens(updateUsdHour) != null && (
+                                                    <div className="pt-0.5 text-[11px] text-[#7A99B0]">
+                                                        ≈ {Number(usdToTokens(updateUsdHour)).toLocaleString()} tokens
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div>
+                                                <Input
+                                                    label="USD / day"
+                                                    type="number"
+                                                    value={updateUsdDay}
+                                                    onChange={(e) => setUpdateUsdDay(e.target.value)}
+                                                    placeholder="50"
+                                                    min={0}
+                                                    step="0.01"
+                                                />
+                                                {updateUsdDay && usdToTokens(updateUsdDay) != null && (
+                                                    <div className="pt-0.5 text-[11px] text-[#7A99B0]">
+                                                        ≈ {Number(usdToTokens(updateUsdDay)).toLocaleString()} tokens
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div>
+                                                <Input
+                                                    label="USD / month"
+                                                    type="number"
+                                                    value={updateUsdMonth}
+                                                    onChange={(e) => setUpdateUsdMonth(e.target.value)}
+                                                    placeholder="500"
+                                                    min={0}
+                                                    step="0.01"
+                                                />
+                                                {updateUsdMonth && usdToTokens(updateUsdMonth) != null && (
+                                                    <div className="pt-0.5 text-[11px] text-[#7A99B0]">
+                                                        ≈ {Number(usdToTokens(updateUsdMonth)).toLocaleString()} tokens
+                                                    </div>
+                                                )}
+                                            </div>
                                             <Input
-                                                label="USD / hour (empty = keep)"
+                                                label="Max concurrent"
                                                 type="number"
-                                                value={updateUsdHour}
-                                                onChange={(e) => setUpdateUsdHour(e.target.value)}
+                                                value={updateMaxConcurrent}
+                                                onChange={(e) => setUpdateMaxConcurrent(e.target.value)}
                                                 placeholder="5"
-                                                min={0}
-                                                step="0.01"
                                             />
-                                            {updateUsdHour && usdToTokens(updateUsdHour) != null && (
-                                                <div className="text-xs text-[#7A99B0] pt-1">
-                                                    ≈ {Number(usdToTokens(updateUsdHour)).toLocaleString()} tokens
-                                                </div>
-                                            )}
-                                        </div>
-                                        <div>
                                             <Input
-                                                label="USD / day (empty = keep)"
+                                                label="Expires in days (empty = never)"
                                                 type="number"
-                                                value={updateUsdDay}
-                                                onChange={(e) => setUpdateUsdDay(e.target.value)}
-                                                placeholder="50"
-                                                min={0}
-                                                step="0.01"
+                                                value={updateExpiresDays}
+                                                onChange={(e) => setUpdateExpiresDays(e.target.value)}
+                                                placeholder="30"
                                             />
-                                            {updateUsdDay && usdToTokens(updateUsdDay) != null && (
-                                                <div className="text-xs text-[#7A99B0] pt-1">
-                                                    ≈ {Number(usdToTokens(updateUsdDay)).toLocaleString()} tokens
-                                                </div>
-                                            )}
-                                        </div>
-                                        <div>
-                                            <Input
-                                                label="USD / month (empty = keep)"
-                                                type="number"
-                                                value={updateUsdMonth}
-                                                onChange={(e) => setUpdateUsdMonth(e.target.value)}
-                                                placeholder="500"
-                                                min={0}
-                                                step="0.01"
+                                            <TextArea
+                                                label="Notes"
+                                                value={updateNotes}
+                                                onChange={(e) => setUpdateNotes(e.target.value)}
+                                                placeholder="Promotional campaign / compensation / beta program"
                                             />
-                                            {updateUsdMonth && usdToTokens(updateUsdMonth) != null && (
-                                                <div className="text-xs text-[#7A99B0] pt-1">
-                                                    ≈ {Number(usdToTokens(updateUsdMonth)).toLocaleString()} tokens
-                                                </div>
-                                            )}
                                         </div>
-                                        <Input
-                                            label="Max concurrent (empty = keep)"
-                                            type="number"
-                                            value={updateMaxConcurrent}
-                                            onChange={(e) => setUpdateMaxConcurrent(e.target.value)}
-                                            placeholder="5"
-                                        />
-                                        <Input
-                                            label="Expires in days (empty = never)"
-                                            type="number"
-                                            value={updateExpiresDays}
-                                            onChange={(e) => setUpdateExpiresDays(e.target.value)}
-                                            placeholder="30"
-                                        />
-                                    </div>
 
-                                    <TextArea
-                                        label="Notes"
-                                        value={updateNotes}
-                                        onChange={(e) => setUpdateNotes(e.target.value)}
-                                        placeholder="Promotional campaign / compensation / beta program"
-                                    />
+                                        <div className="flex items-center justify-end gap-3">
+                                            <span className="text-[11.5px] text-[#7A99B0]">Empty fields keep the current override value.</span>
+                                            <Button type="submit" disabled={loadingAction}>
+                                                {loadingAction ? 'Updating…' : 'Update Override'}
+                                            </Button>
+                                        </div>
+                                    </form>
+                                </CardBody>
+                            </Card>
 
-                                    <Button type="submit" disabled={loadingAction}>
-                                        {loadingAction ? 'Updating…' : 'Update Override'}
-                                    </Button>
-                                </form>
-                            </CardBody>
-                        </Card>
+                            <Card className="h-fit">
+                                <CardHeader title="Override semantics" />
+                                <CardBody>
+                                    <Callout tone="warning">
+                                        This does <strong>not</strong> top-up the base plan. It replaces it for as long as the override is active.
+                                    </Callout>
+                                </CardBody>
+                            </Card>
+                        </div>
                     )}
 
                     {/* Lookup */}
                     {viewMode === 'lookup' && (
-                        <Card>
+                        <div className="flex h-full min-h-0 flex-col gap-3">
+                        <Card className="shrink-0">
                             <CardHeader
                                 title="Lookup User Balance"
                                 subtitle="Shows active plan override (if any) and purchased lifetime credits (if any)."
                             />
-                            <CardBody className="space-y-6">
-                                <form onSubmit={handleLookupPlanBalance} className="space-y-4">
-                                    <div className="flex gap-3">
+                            <CardBody>
+                                <form onSubmit={handleLookupPlanBalance}>
+                                    <div className="flex items-center gap-2.5">
                                         <Input
                                             value={lookupUserId}
                                             onChange={(e) => setLookupUserId(e.target.value)}
                                             placeholder="user123"
                                             required
-                                            className="flex-1"
+                                            className="max-w-sm flex-1"
                                         />
                                         <Button type="submit" disabled={loadingAction}>
                                             {loadingAction ? 'Loading…' : 'Lookup'}
                                         </Button>
                                     </div>
                                 </form>
+                            </CardBody>
+                        </Card>
 
                                 {planBalance && (
-                                    <div className="space-y-5">
+                                    <Card className="flex min-h-0 flex-1 flex-col">
+                                    <CardBody className="min-h-0 flex-1 space-y-3 overflow-y-auto">
                                         <Callout tone="info" title="How requests are funded">
-                                            <div className="space-y-2">
-                                                <div>
-                                                    <strong>First:</strong> use as much effective plan quota as possible, funded by the project budget.
-                                                </div>
-                                                <div>
-                                                    <strong>Then:</strong> use wallet credits for any shortfall caused by quota or project budget limits.
-                                                </div>
-                                                <div className="text-[#3A5672]">
-                                                    Concurrency and provider budgets are enforced separately.
-                                                </div>
-                                            </div>
+                                            <strong>First:</strong> use as much effective plan quota as possible, funded by the project budget.{' '}
+                                            <strong>Then:</strong> use wallet credits for any shortfall caused by quota or project budget limits.
+                                            Concurrency and provider budgets are enforced separately.
                                         </Callout>
-                                        <div className="border-t border-[#E6F1F0] pt-6">
+                                        <div>
                                             <div className="flex items-baseline justify-between flex-wrap gap-2">
-                                                <h3 className="font-mono text-lg font-semibold text-[#0D1E2C]">
+                                                <h3 className="font-mono text-[12px] font-semibold text-[#0D1E2C]">
                                                     {planBalance.user_id}
                                                 </h3>
-                                                <div className="text-sm text-[#7A99B0]">
+                                                <div className="text-[11.5px] text-[#7A99B0]">
                                                     {planBalance.message || ''}
                                                 </div>
                                             </div>
@@ -2977,20 +2979,20 @@ const EconomicsAdmin: React.FC = () => {
                                             {!planBalance.has_plan_override && !planBalance.has_lifetime_budget ? (
                                                 <EmptyState message="No plan override and no purchased credits (base plan only)." icon="📋" />
                                             ) : (
-                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-5">
+                                                <div className="grid grid-cols-2 gap-2.5 mt-2">
                                                     {planBalance.has_plan_override && planBalance.plan_override && (
-                                                        <div className="rounded-xl border border-[#E6F1F0] bg-[#F6FAFA] p-5">
+                                                        <div className="rounded-xl border border-[#E6F1F0] bg-[#F6FAFA] p-3">
                                                             <div className="flex items-center justify-between">
                                                                 <div>
-                                                                    <div className="text-sm font-semibold text-[#0D1E2C]">Tier Override</div>
-                                                                    <div className="text-xs text-[#3A5672] mt-1">
+                                                                    <div className="text-[12.5px] font-semibold text-[#10304B]">Tier Override</div>
+                                                                    <div className="text-[11px] text-[#3A5672] mt-1">
                                                                         Replaces base plan while active
                                                                     </div>
                                                                 </div>
-                                                                <div className="text-2xl">🎯</div>
+                                                                <div className="text-lg">🎯</div>
                                                             </div>
 
-                                                            <div className="mt-4 space-y-2 text-sm">
+                                                            <div className="mt-2 space-y-1 text-[12px]">
                                                                 <div className="flex justify-between gap-3">
                                                                     <span className="text-[#3A5672]">Requests / day</span>
                                                                     <span className="font-semibold text-[#0D1E2C]">{planBalance.plan_override.requests_per_day ?? '—'}</span>
@@ -3025,12 +3027,12 @@ const EconomicsAdmin: React.FC = () => {
                                   </span>
                                                                 </div>
                                                                 {planBalance.plan_override.notes && (
-                                                                    <div className="pt-3 border-t border-[#E6F1F0] text-xs text-[#3A5672] italic">
+                                                                    <div className="pt-3 border-t border-[#E6F1F0] text-[11px] text-[#3A5672] italic">
                                                                         {planBalance.plan_override.notes}
                                                                     </div>
                                                                 )}
                                                                 {planBalance.plan_override.reference_model && (
-                                                                    <div className="pt-2 text-xs text-[#7A99B0]">
+                                                                    <div className="pt-2 text-[11px] text-[#7A99B0]">
                                                                         Reference: <span className="font-mono">{planBalance.plan_override.reference_model}</span>
                                                                     </div>
                                                                 )}
@@ -3039,18 +3041,18 @@ const EconomicsAdmin: React.FC = () => {
                                                     )}
 
                                                     {planBalance.has_lifetime_budget && planBalance.lifetime_budget && (
-                                                        <div className="rounded-xl border border-[#E6F1F0] bg-[#F6FAFA] p-5">
+                                                        <div className="rounded-xl border border-[#E6F1F0] bg-[#F6FAFA] p-3">
                                                             <div className="flex items-center justify-between">
                                                                 <div>
-                                                                    <div className="text-sm font-semibold text-[#0D1E2C]">Lifetime Credits</div>
-                                                                    <div className="text-xs text-[#3A5672] mt-1">
+                                                                    <div className="text-[12.5px] font-semibold text-[#10304B]">Lifetime Credits</div>
+                                                                    <div className="text-[11px] text-[#3A5672] mt-1">
                                                                         Purchased tokens (do not reset)
                                                                     </div>
                                                                 </div>
-                                                                <div className="text-2xl">💳</div>
+                                                                <div className="text-lg">💳</div>
                                                             </div>
 
-                                                            <div className="mt-4 space-y-2 text-sm">
+                                                            <div className="mt-2 space-y-1 text-[12px]">
                                                                 <div className="flex justify-between gap-3">
                                                                     <span className="text-[#3A5672]">Purchased</span>
                                                                     <span className="font-semibold text-[#0D1E2C]">
@@ -3081,26 +3083,23 @@ const EconomicsAdmin: React.FC = () => {
                                                 </div>
                                             )}
                                         </div>
-                                    </div>
+                                    </CardBody>
+                                    </Card>
                                 )}
-                            </CardBody>
-                        </Card>
+                        </div>
                     )}
 
                     {/* Quota Breakdown */}
                     {viewMode === 'quotaBreakdown' && (
-                        <Card>
+                        <div className="flex h-full min-h-0 flex-col gap-3">
+                        <Card className="shrink-0">
                             <CardHeader
                                 title="Budget Breakdown"
-                                subtitle="Shows effective plan quota, remaining headroom, and wallet capacity separately."
+                                subtitle="Effective policy = base plan with the active override applied; remaining quota from current counters; wallet shown separately."
                             />
-                            <CardBody className="space-y-4">
-                                <Callout tone="neutral" title="How to read this view">
-                                    Effective policy is the base plan with the active user override applied. Remaining quota is computed from current counters and effective limits. Wallet values are shown separately.
-                                </Callout>
-
-                                <form onSubmit={handleGetQuotaBreakdown} className="space-y-4">
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <CardBody>
+                                <form onSubmit={handleGetQuotaBreakdown}>
+                                    <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-end gap-2.5">
                                         <Input
                                             label="User ID *"
                                             value={breakdownUserId}
@@ -3114,15 +3113,17 @@ const EconomicsAdmin: React.FC = () => {
                                             onChange={(e) => setBreakdownBundleId(e.target.value)}
                                             placeholder="e.g. __project__ (global)"
                                         />
+                                        <Button type="submit" disabled={loadingAction}>
+                                            {loadingAction ? 'Analyzing…' : 'Get Breakdown'}
+                                        </Button>
                                     </div>
-                                    <Button type="submit" disabled={loadingAction}>
-                                        {loadingAction ? 'Analyzing…' : 'Get Breakdown'}
-                                    </Button>
                                 </form>
+                            </CardBody>
+                        </Card>
 
                                 {quotaBreakdown && (
-                                    <div className="space-y-4">
-                                        <div className="grid grid-cols-1 gap-3 md:grid-cols-5">
+                                    <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+                                        <div className="grid grid-cols-5 gap-2.5">
                                             <StatCard label="Plan" value={quotaBreakdown.plan_id || '—'} hint={quotaBreakdown.plan_source ? `source: ${quotaBreakdown.plan_source}` : undefined} />
                                             <StatCard label="Requests today" value={`${formatCount(quotaBreakdown.current_usage.requests_today)} / ${formatCount(quotaBreakdown.effective_policy.requests_per_day)}`} hint={`remaining ${formatCount(quotaBreakdown.remaining.requests_today)}`} />
                                             <StatCard
@@ -3138,26 +3139,26 @@ const EconomicsAdmin: React.FC = () => {
                                             <StatCard label="Wallet available" value={quotaBreakdown.lifetime_credits ? `$${Number(quotaBreakdown.lifetime_credits.available_usd || 0).toFixed(2)}` : '$0.00'} hint={quotaBreakdown.lifetime_credits ? 'available' : 'no wallet record'} />
                                         </div>
 
-                                        <div className="rounded-xl border border-[#E6F1F0] bg-[#F6FAFA] p-4">
+                                        <div className="rounded-xl border border-[#E6F1F0] bg-[#F6FAFA] p-3">
                                             <div className="flex items-center justify-between gap-3">
                                                 <div>
-                                                    <div className="text-sm font-semibold text-[#0D1E2C]">Plan limits</div>
-                                                    <div className="mt-1 text-xs text-[#3A5672]">Base plan, active override, and enforced policy.</div>
+                                                    <div className="text-[12.5px] font-semibold text-[#10304B]">Plan limits</div>
+                                                    <div className="mt-1 text-[11px] text-[#3A5672]">Base plan, active override, and enforced policy.</div>
                                                 </div>
                                                 {quotaBreakdown.reference_model && (
-                                                    <div className="text-right text-xs text-[#7A99B0]">Reference: <span className="font-mono">{quotaBreakdown.reference_model}</span></div>
+                                                    <div className="text-right text-[11px] text-[#7A99B0]">Reference: <span className="font-mono">{quotaBreakdown.reference_model}</span></div>
                                                 )}
                                             </div>
 
-                                            <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+                                            <div className="mt-2 grid grid-cols-3 gap-2.5">
                                                 <div className="rounded-lg border border-[#E6F1F0] bg-white p-3">
-                                                    <div className="mb-2 text-sm font-semibold text-[#0D1E2C]">Base</div>
+                                                    <div className="mb-2 text-[12.5px] font-semibold text-[#10304B]">Base</div>
                                                     <PolicyMetricList policy={quotaBreakdown.base_policy} />
                                                 </div>
 
                                                 <div className="rounded-lg border border-[#E6F1F0] bg-white p-3">
                                                     <div className="mb-2 flex items-center justify-between gap-2">
-                                                        <span className="text-sm font-semibold text-[#0D1E2C]">Override</span>
+                                                        <span className="text-[12.5px] font-semibold text-[#10304B]">Override</span>
                                                         {quotaBreakdown.plan_override ? (
                                                             quotaBreakdown.plan_override.active ? (
                                                                 <Pill tone="success">Active</Pill>
@@ -3173,26 +3174,26 @@ const EconomicsAdmin: React.FC = () => {
                                                     {quotaBreakdown.plan_override ? (
                                                         <>
                                                             <PolicyMetricList policy={quotaBreakdown.plan_override.limits} />
-                                                            <div className="mt-2 text-xs text-[#7A99B0]">
+                                                            <div className="mt-2 text-[11px] text-[#7A99B0]">
                                                                 Expires: {quotaBreakdown.plan_override.expires_at ? new Date(quotaBreakdown.plan_override.expires_at).toLocaleString() : '—'}
                                                             </div>
                                                         </>
                                                     ) : (
-                                                        <div className="text-xs text-[#3A5672]">No user override is configured.</div>
+                                                        <div className="text-[11px] text-[#3A5672]">No user override is configured.</div>
                                                     )}
                                                 </div>
 
                                                 <div className="rounded-lg border border-[#E6F1F0] bg-white p-3">
-                                                    <div className="mb-2 text-sm font-semibold text-[#0D1E2C]">Effective</div>
+                                                    <div className="mb-2 text-[12.5px] font-semibold text-[#10304B]">Effective</div>
                                                     <PolicyMetricList policy={quotaBreakdown.effective_policy} />
                                                 </div>
                                             </div>
                                         </div>
 
-                                        <div className="rounded-xl border border-[#E6F1F0] bg-[#F6FAFA] p-4">
-                                            <div className="text-sm font-semibold text-[#0D1E2C]">Plan quota now</div>
-                                            <div className="mt-1 text-xs text-[#3A5672]">Used / limit and remaining capacity for the effective plan.</div>
-                                            <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                                        <div className="rounded-xl border border-[#E6F1F0] bg-[#F6FAFA] p-3">
+                                            <div className="text-[12.5px] font-semibold text-[#10304B]">Plan quota now</div>
+                                            <div className="mt-1 text-[11px] text-[#3A5672]">Used / limit and remaining capacity for the effective plan.</div>
+                                            <div className="mt-2 grid grid-cols-2 gap-2">
                                                 <CompactUsageRow
                                                     label="Tokens / hour"
                                                     used={quotaBreakdown.current_usage.tokens_this_hour || 0}
@@ -3232,7 +3233,7 @@ const EconomicsAdmin: React.FC = () => {
                                                     limitUsd={quotaBreakdown.effective_policy.usd_per_month}
                                                     remainingUsd={quotaBreakdown.remaining.tokens_this_month_usd}
                                                 />
-                                                <div className="rounded-lg border border-[rgba(245,158,11,0.4)] bg-[rgba(245,158,11,0.1)] px-3 py-2 text-sm">
+                                                <div className="rounded-lg border border-[rgba(245,158,11,0.4)] bg-[rgba(245,158,11,0.1)] px-2.5 py-1.5 text-[12px]">
                                                     <div className="flex items-center justify-between gap-3">
                                                         <span className="text-[#B45309]">Plan reserved</span>
                                                         <span className="font-semibold text-[#B45309]">{formatUsdLimit(quotaBreakdown.current_usage.tokens_reserved_usd)}</span>
@@ -3241,7 +3242,7 @@ const EconomicsAdmin: React.FC = () => {
                                                         {formatCount(quotaBreakdown.current_usage.tokens_reserved || 0)} tokens held by in-flight requests
                                                     </div>
                                                 </div>
-                                                <div className="rounded-lg border border-[#E6F1F0] bg-white px-3 py-2 text-sm">
+                                                <div className="rounded-lg border border-[#E6F1F0] bg-white px-2.5 py-1.5 text-[12px]">
                                                     <div className="flex items-center justify-between gap-3">
                                                         <span className="text-[#3A5672]">Concurrent</span>
                                                         <span className="font-semibold text-[#0D1E2C]">
@@ -3253,40 +3254,40 @@ const EconomicsAdmin: React.FC = () => {
                                         </div>
 
                                         {quotaBreakdown.reset_windows ? (
-                                            <div className="rounded-xl border border-[#E6F1F0] bg-white p-3 text-sm text-[#3A5672]">
+                                            <div className="rounded-xl border border-[#E6F1F0] bg-white p-3 text-[12px] text-[#3A5672]">
                                                 <div className="font-semibold text-[#0D1E2C]">Rolling resets</div>
-                                                <div className="mt-1 grid grid-cols-1 gap-1 text-xs text-[#3A5672] md:grid-cols-3">
+                                                <div className="mt-1 grid grid-cols-3 gap-1 text-[11px] text-[#3A5672]">
                                                     <div>App: <span className="font-mono text-[#0D1E2C]">{quotaBreakdown.reset_windows.bundle_id}</span></div>
                                                     <div>Hourly: {quotaBreakdown.reset_windows.hour_reset_at ? new Date(quotaBreakdown.reset_windows.hour_reset_at).toLocaleString() : '—'}</div>
                                                     <div>30-day: {quotaBreakdown.reset_windows.month_reset_at ? new Date(quotaBreakdown.reset_windows.month_reset_at).toLocaleString() : '—'}</div>
                                                 </div>
                                             </div>
                                         ) : (
-                                            <div className="text-xs text-[#7A99B0]">
+                                            <div className="text-[11px] text-[#7A99B0]">
                                                 Provide an App ID (use <code>__project__</code> for global quotas) to see rolling reset timestamps.
                                             </div>
                                         )}
 
                                         <div className="rounded-xl border border-[rgba(34,197,94,0.35)] bg-[rgba(34,197,94,0.08)] p-4">
-                                            <div className="text-sm font-semibold text-[#15803D]">Wallet / personal credits</div>
+                                            <div className="text-[12.5px] font-semibold text-[#15803D]">Wallet / personal credits</div>
                                             <div className="mt-1 text-xs text-[#15803D]">Separate from plan quota. Used for shortfall capacity.</div>
                                             {!quotaBreakdown.lifetime_credits ? (
-                                                <div className="mt-3 text-sm text-[#15803D]">No wallet record for this user.</div>
+                                                <div className="mt-2 text-[12px] text-[#15803D]">No wallet record for this user.</div>
                                             ) : (
-                                                <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-4">
-                                                    <div className="rounded-lg border border-[rgba(34,197,94,0.35)] bg-white px-3 py-2 text-sm">
+                                                <div className="mt-2 grid grid-cols-4 gap-2">
+                                                    <div className="rounded-lg border border-[rgba(34,197,94,0.35)] bg-white px-2.5 py-1.5 text-[12px]">
                                                         <div className="text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#15803D]">Purchased</div>
                                                         <div className="mt-1 font-semibold text-[#15803D]">${Number(quotaBreakdown.lifetime_credits.purchased_usd || 0).toFixed(2)}</div>
                                                     </div>
-                                                    <div className="rounded-lg border border-[rgba(34,197,94,0.35)] bg-white px-3 py-2 text-sm">
+                                                    <div className="rounded-lg border border-[rgba(34,197,94,0.35)] bg-white px-2.5 py-1.5 text-[12px]">
                                                         <div className="text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#15803D]">Spent</div>
                                                         <div className="mt-1 font-semibold text-[#15803D]">${Number(quotaBreakdown.lifetime_credits.spent_usd || 0).toFixed(2)}</div>
                                                     </div>
-                                                    <div className="rounded-lg border border-[rgba(34,197,94,0.35)] bg-white px-3 py-2 text-sm">
+                                                    <div className="rounded-lg border border-[rgba(34,197,94,0.35)] bg-white px-2.5 py-1.5 text-[12px]">
                                                         <div className="text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#15803D]">Reserved</div>
                                                         <div className="mt-1 font-semibold text-[#15803D]">${Number(quotaBreakdown.lifetime_credits.reserved_usd || 0).toFixed(2)}</div>
                                                     </div>
-                                                    <div className="rounded-lg border border-[rgba(34,197,94,0.35)] bg-white px-3 py-2 text-sm">
+                                                    <div className="rounded-lg border border-[rgba(34,197,94,0.35)] bg-white px-2.5 py-1.5 text-[12px]">
                                                         <div className="text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#15803D]">Available</div>
                                                         <div className="mt-1 font-semibold text-[#15803D]">${Number(quotaBreakdown.lifetime_credits.available_usd || 0).toFixed(2)}</div>
                                                     </div>
@@ -3294,24 +3295,24 @@ const EconomicsAdmin: React.FC = () => {
                                             )}
                                         </div>
 
-                                        <div className="rounded-xl border border-[#E6F1F0] bg-[#F6FAFA] p-4">
+                                        <div className="rounded-xl border border-[#E6F1F0] bg-[#F6FAFA] p-3">
                                             <div className="flex items-center justify-between">
                                                 <div>
-                                                    <div className="text-sm font-semibold text-[#0D1E2C]">Subscription balance</div>
-                                                    <div className="mt-1 text-xs text-[#3A5672]">Per-period subscription credits</div>
+                                                    <div className="text-[12.5px] font-semibold text-[#10304B]">Subscription balance</div>
+                                                    <div className="mt-1 text-[11px] text-[#3A5672]">Per-period subscription credits</div>
                                                 </div>
                                             </div>
 
                                             {!quotaBreakdown.subscription_balance ? (
-                                                <div className="mt-4 text-sm text-[#3A5672]">
+                                                <div className="mt-2 text-[12px] text-[#3A5672]">
                                                     No subscription balance record for this user.
                                                 </div>
                                             ) : (
-                                                <div className="mt-4 space-y-3 text-sm">
-                                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs text-[#3A5672]">
+                                                <div className="mt-2 space-y-2 text-[12px]">
+                                                    <div className="grid grid-cols-2 gap-1.5 text-[11px] text-[#3A5672]">
                                                         {quotaBreakdown.subscription_balance.plan_id && (
                                                             <div>
-                                                                plan: <span className="font-mono text-[13px] font-semibold text-[#0D1E2C]">{quotaBreakdown.subscription_balance.plan_id}</span>
+                                                                plan: <span className="font-mono text-[12px] font-semibold text-[#0D1E2C]">{quotaBreakdown.subscription_balance.plan_id}</span>
                                                             </div>
                                                         )}
                                                         {quotaBreakdown.subscription_balance.status && (
@@ -3334,66 +3335,66 @@ const EconomicsAdmin: React.FC = () => {
                                                     </div>
 
                                                     {quotaBreakdown.subscription_balance.period_start && quotaBreakdown.subscription_balance.period_end && (
-                                                        <div className="text-xs text-[#3A5672]">
+                                                        <div className="text-[11px] text-[#3A5672]">
                                                             Period: {formatDateTime(quotaBreakdown.subscription_balance.period_start)} → {formatDateTime(quotaBreakdown.subscription_balance.period_end)}
                                                         </div>
                                                     )}
                                                     {quotaBreakdown.subscription_balance.period_status && (
-                                                        <div className="text-xs text-[#3A5672]">
+                                                        <div className="text-[11px] text-[#3A5672]">
                                                             Period status: {quotaBreakdown.subscription_balance.period_status}
                                                         </div>
                                                     )}
 
-                                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
-                                                        <div className="rounded-lg bg-white border border-[#E6F1F0] p-3">
+                                                    <div className="grid grid-cols-3 gap-2 text-[12px]">
+                                                        <div className="rounded-lg bg-white border border-[#E6F1F0] p-2">
                                                             <div className="text-[#3A5672]">Balance</div>
                                                             <div className="font-semibold text-[#0D1E2C]">
                                                                 ${Number(quotaBreakdown.subscription_balance.balance_usd || 0).toFixed(2)}
                                                             </div>
                                                             {quotaBreakdown.subscription_balance.balance_tokens != null && (
-                                                                <div className="text-xs text-[#7A99B0]">
+                                                                <div className="text-[11px] text-[#7A99B0]">
                                                                     {Number(quotaBreakdown.subscription_balance.balance_tokens).toLocaleString()} tokens
                                                                 </div>
                                                             )}
                                                         </div>
-                                                        <div className="rounded-lg bg-white border border-[#E6F1F0] p-3">
+                                                        <div className="rounded-lg bg-white border border-[#E6F1F0] p-2">
                                                             <div className="text-[#3A5672]">Reserved</div>
                                                             <div className="font-semibold text-[#0D1E2C]">
                                                                 ${Number(quotaBreakdown.subscription_balance.reserved_usd || 0).toFixed(2)}
                                                             </div>
                                                             {quotaBreakdown.subscription_balance.reserved_tokens != null && (
-                                                                <div className="text-xs text-[#7A99B0]">
+                                                                <div className="text-[11px] text-[#7A99B0]">
                                                                     {Number(quotaBreakdown.subscription_balance.reserved_tokens).toLocaleString()} tokens
                                                                 </div>
                                                             )}
                                                         </div>
-                                                        <div className="rounded-lg bg-white border border-[#E6F1F0] p-3">
+                                                        <div className="rounded-lg bg-white border border-[#E6F1F0] p-2">
                                                             <div className="text-[#3A5672]">Available</div>
                                                             <div className="font-semibold text-[#0D1E2C]">
                                                                 ${Number(quotaBreakdown.subscription_balance.available_usd || 0).toFixed(2)}
                                                             </div>
                                                             {quotaBreakdown.subscription_balance.available_tokens != null && (
-                                                                <div className="text-xs text-[#7A99B0]">
+                                                                <div className="text-[11px] text-[#7A99B0]">
                                                                     {Number(quotaBreakdown.subscription_balance.available_tokens).toLocaleString()} tokens
                                                                 </div>
                                                             )}
                                                         </div>
                                                     </div>
 
-                                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
-                                                        <div className="rounded-lg bg-white border border-[#E6F1F0] p-3">
+                                                    <div className="grid grid-cols-3 gap-2 text-[12px]">
+                                                        <div className="rounded-lg bg-white border border-[#E6F1F0] p-2">
                                                             <div className="text-[#3A5672]">Period top-up</div>
                                                             <div className="font-semibold text-[#0D1E2C]">
                                                                 ${Number(quotaBreakdown.subscription_balance.topup_usd ?? quotaBreakdown.subscription_balance.lifetime_added_usd ?? 0).toFixed(2)}
                                                             </div>
                                                         </div>
-                                                        <div className="rounded-lg bg-white border border-[#E6F1F0] p-3">
+                                                        <div className="rounded-lg bg-white border border-[#E6F1F0] p-2">
                                                             <div className="text-[#3A5672]">Period spent</div>
                                                             <div className="font-semibold text-[#0D1E2C]">
                                                                 ${Number(quotaBreakdown.subscription_balance.spent_usd ?? quotaBreakdown.subscription_balance.lifetime_spent_usd ?? 0).toFixed(2)}
                                                             </div>
                                                         </div>
-                                                        <div className="rounded-lg bg-white border border-[#E6F1F0] p-3">
+                                                        <div className="rounded-lg bg-white border border-[#E6F1F0] p-2">
                                                             <div className="text-[#3A5672]">Rolled over</div>
                                                             <div className="font-semibold text-[#0D1E2C]">
                                                                 ${Number(quotaBreakdown.subscription_balance.rolled_over_usd || 0).toFixed(2)}
@@ -3401,7 +3402,7 @@ const EconomicsAdmin: React.FC = () => {
                                                         </div>
                                                     </div>
 
-                                                    <div className="pt-2 text-xs text-[#3A5672]">
+                                                    <div className="pt-2 text-[11px] text-[#3A5672]">
                                                         Reference: <span className="font-mono">{quotaBreakdown.subscription_balance.reference_model || (economicsRef ? `${economicsRef.reference_provider}/${economicsRef.reference_model}` : '')}</span>
                                                     </div>
                                                 </div>
@@ -3410,27 +3411,27 @@ const EconomicsAdmin: React.FC = () => {
 
                                         {/* Reservations table */}
                                         {quotaBreakdown.active_reservations?.length > 0 && (
-                                            <div className="rounded-xl border border-[#E6F1F0] bg-[#F6FAFA] p-5">
-                                                <div className="text-sm font-semibold text-[#0D1E2C] mb-3">Active credit reservations</div>
-                                                <div className="overflow-x-auto">
-                                                    <table className="w-full text-sm">
-                                                        <thead className="bg-[#F6FAFA] border-b border-[#E6F1F0] text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0]">
+                                            <div className="rounded-xl border border-[#E6F1F0] bg-[#F6FAFA] p-3">
+                                                <div className="text-[12.5px] font-semibold text-[#10304B] mb-2">Active credit reservations</div>
+                                                <div className="max-h-72 overflow-auto rounded-lg border border-[#E6F1F0]">
+                                                    <table className="w-full text-[12px]">
+                                                        <thead className="sticky top-0 z-10 bg-[#F6FAFA] border-b border-[#E6F1F0] text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0]">
                                                         <tr>
-                                                            <th className="px-4 py-3 text-left font-bold">Reservation</th>
-                                                            <th className="px-4 py-3 text-left font-bold">App</th>
-                                                            <th className="px-4 py-3 text-right font-bold">Reserved (USD)</th>
-                                                            <th className="px-4 py-3 text-left font-bold">Expires</th>
-                                                            <th className="px-4 py-3 text-left font-bold">Notes</th>
+                                                            <th className="px-2.5 py-1.5 text-left font-bold">Reservation</th>
+                                                            <th className="px-2.5 py-1.5 text-left font-bold">App</th>
+                                                            <th className="px-2.5 py-1.5 text-right font-bold">Reserved (USD)</th>
+                                                            <th className="px-2.5 py-1.5 text-left font-bold">Expires</th>
+                                                            <th className="px-2.5 py-1.5 text-left font-bold">Notes</th>
                                                         </tr>
                                                         </thead>
                                                         <tbody className="divide-y divide-[#E6F1F0]">
                                                         {quotaBreakdown.active_reservations.map((r) => (
                                                             <tr key={r.reservation_id} className="hover:bg-white transition-colors">
-                                                                <td className="px-4 py-3 font-mono text-[13px] font-semibold text-[#0D1E2C]">{r.reservation_id}</td>
-                                                                <td className="px-4 py-3 font-mono text-[13px] text-[#0D1E2C]">{r.bundle_id ?? '—'}</td>
-                                                                <td className="px-4 py-3 text-right text-[#3A5672]">${Number(r.reserved_usd || 0).toFixed(2)}</td>
-                                                                <td className="px-4 py-3 text-[#3A5672]">{r.expires_at ? new Date(r.expires_at).toLocaleString() : '—'}</td>
-                                                                <td className="px-4 py-3 text-[#3A5672]">{r.notes ?? '—'}</td>
+                                                                <td className="px-2.5 py-1.5 font-mono text-[12px] font-semibold text-[#0D1E2C]">{r.reservation_id}</td>
+                                                                <td className="px-2.5 py-1.5 font-mono text-[12px] text-[#0D1E2C]">{r.bundle_id ?? '—'}</td>
+                                                                <td className="px-2.5 py-1.5 text-right text-[#3A5672]">${Number(r.reserved_usd || 0).toFixed(2)}</td>
+                                                                <td className="px-2.5 py-1.5 text-[#3A5672]">{r.expires_at ? new Date(r.expires_at).toLocaleString() : '—'}</td>
+                                                                <td className="px-2.5 py-1.5 text-[#3A5672]">{r.notes ?? '—'}</td>
                                                             </tr>
                                                         ))}
                                                         </tbody>
@@ -3440,52 +3441,43 @@ const EconomicsAdmin: React.FC = () => {
                                         )}
                                     </div>
                                 )}
-
-                            </CardBody>
-                        </Card>
+                        </div>
                     )}
 
                     {/* Quota Policies */}
                     {viewMode === 'quotaPolicies' && (
-                        <div className="space-y-6">
-                            <Card>
+                        <div className="grid h-full min-h-0 gap-3 xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+                            <Card className="flex min-h-0 flex-col">
                                 <CardHeader
                                     title="Set Plan Policy"
                                     subtitle="Base limits per plan_id (global for tenant/project). No bundle_id."
+                                    action={economicsRef ? (
+                                        <span className="text-[11px] text-[#7A99B0]">
+                                            Ref: <span className="font-mono">{economicsRef.reference_provider}/{economicsRef.reference_model}</span>
+                                        </span>
+                                    ) : undefined}
                                 />
-                                <CardBody className="space-y-6">
-                                    <Callout tone="neutral" title="Meaning">
-                                        This is the default quota envelope for a plan (free/wallet/admin). Daily is calendar day, hourly is a rolling 60‑minute window, and monthly is a rolling 30‑day window (anchored to first usage per app).
-                                    </Callout>
-                                    <Callout tone="neutral" title="Reservation Floor">
-                                        The platform reservation floor is set in the <span className="font-semibold">Reservation Floors</span> tab
-                                        (stored in the economics descriptor, picked up live). An app can still override per surface via
-                                        app props <span className="font-mono"> economics.reservation.&lt;floor&gt;</span>.
-                                    </Callout>
-                                    {economicsRef && (
-                                        <div className="text-xs text-[#7A99B0]">
-                                            Reference: <span className="font-mono">{economicsRef.reference_provider}/{economicsRef.reference_model}</span>
-                                        </div>
-                                    )}
-
-                                    <form onSubmit={handleSetQuotaPolicy} className="space-y-5">
-                                        <Select
-                                            label="Plan ID *"
-                                            value={policyPlanId}
-                                            onChange={(e) => setPolicyPlanId(e.target.value)}
-                                            options={PLAN_OPTIONS}
-                                        />
-                                        {policyPlanId === 'custom' && (
-                                            <Input
-                                                label="Custom plan_id *"
-                                                value={policyPlanIdCustom}
-                                                onChange={(e) => setPolicyPlanIdCustom(e.target.value)}
-                                                placeholder="e.g. enterprise-plan"
-                                                required
+                                <CardBody className="min-h-0 flex-1 space-y-3 overflow-y-auto">
+                                    <form onSubmit={handleSetQuotaPolicy} className="space-y-3">
+                                        <div className="grid grid-cols-2 gap-2.5">
+                                            <Select
+                                                label="Plan ID *"
+                                                value={policyPlanId}
+                                                onChange={(e) => setPolicyPlanId(e.target.value)}
+                                                options={PLAN_OPTIONS}
                                             />
-                                        )}
+                                            {policyPlanId === 'custom' && (
+                                                <Input
+                                                    label="Custom plan_id *"
+                                                    value={policyPlanIdCustom}
+                                                    onChange={(e) => setPolicyPlanIdCustom(e.target.value)}
+                                                    placeholder="e.g. enterprise-plan"
+                                                    required
+                                                />
+                                            )}
+                                        </div>
 
-                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                        <div className="grid grid-cols-3 gap-2.5">
                                             <Input
                                                 label="Max concurrent"
                                                 type="number"
@@ -3516,7 +3508,7 @@ const EconomicsAdmin: React.FC = () => {
                                                     placeholder="500000"
                                                 />
                                                 {policyTokensHour && tokensToUsd(policyTokensHour) != null && (
-                                                    <div className="text-xs text-[#7A99B0] pt-1">
+                                                    <div className="text-[11px] text-[#7A99B0] pt-1">
                                                         ≈ ${Number(tokensToUsd(policyTokensHour)).toFixed(2)}
                                                     </div>
                                                 )}
@@ -3530,7 +3522,7 @@ const EconomicsAdmin: React.FC = () => {
                                                     placeholder="1000000"
                                                 />
                                                 {policyTokensDay && tokensToUsd(policyTokensDay) != null && (
-                                                    <div className="text-xs text-[#7A99B0] pt-1">
+                                                    <div className="text-[11px] text-[#7A99B0] pt-1">
                                                         ≈ ${Number(tokensToUsd(policyTokensDay)).toFixed(2)}
                                                     </div>
                                                 )}
@@ -3544,7 +3536,7 @@ const EconomicsAdmin: React.FC = () => {
                                                     placeholder="30000000"
                                                 />
                                                 {policyTokensMonth && tokensToUsd(policyTokensMonth) != null && (
-                                                    <div className="text-xs text-[#7A99B0] pt-1">
+                                                    <div className="text-[11px] text-[#7A99B0] pt-1">
                                                         ≈ ${Number(tokensToUsd(policyTokensMonth)).toFixed(2)}
                                                     </div>
                                                 )}
@@ -3560,7 +3552,7 @@ const EconomicsAdmin: React.FC = () => {
                                                     step="0.01"
                                                 />
                                                 {policyUsdHour && usdToTokens(policyUsdHour) != null && (
-                                                    <div className="text-xs text-[#7A99B0] pt-1">
+                                                    <div className="text-[11px] text-[#7A99B0] pt-1">
                                                         ≈ {Number(usdToTokens(policyUsdHour)).toLocaleString()} tokens
                                                     </div>
                                                 )}
@@ -3576,7 +3568,7 @@ const EconomicsAdmin: React.FC = () => {
                                                     step="0.01"
                                                 />
                                                 {policyUsdDay && usdToTokens(policyUsdDay) != null && (
-                                                    <div className="text-xs text-[#7A99B0] pt-1">
+                                                    <div className="text-[11px] text-[#7A99B0] pt-1">
                                                         ≈ {Number(usdToTokens(policyUsdDay)).toLocaleString()} tokens
                                                     </div>
                                                 )}
@@ -3592,14 +3584,11 @@ const EconomicsAdmin: React.FC = () => {
                                                     step="0.01"
                                                 />
                                                 {policyUsdMonth && usdToTokens(policyUsdMonth) != null && (
-                                                    <div className="text-xs text-[#7A99B0] pt-1">
+                                                    <div className="text-[11px] text-[#7A99B0] pt-1">
                                                         ≈ {Number(usdToTokens(policyUsdMonth)).toLocaleString()} tokens
                                                     </div>
                                                 )}
                                             </div>
-                                        </div>
-                                        <div className="text-xs text-[#7A99B0]">
-                                            USD overrides tokens for the same window.
                                         </div>
 
                                         <TextArea
@@ -3609,61 +3598,71 @@ const EconomicsAdmin: React.FC = () => {
                                             placeholder="Free plan limits (global per tenant/project)"
                                         />
 
-                                        <Button type="submit" disabled={loadingAction}>
-                                            {loadingAction ? 'Saving…' : 'Save Policy'}
-                                        </Button>
+                                        <div className="flex items-center justify-end gap-3">
+                                            <span className="text-[11.5px] text-[#7A99B0]">USD overrides tokens for the same window.</span>
+                                            <Button type="submit" disabled={loadingAction}>
+                                                {loadingAction ? 'Saving…' : 'Save Policy'}
+                                            </Button>
+                                        </div>
                                     </form>
+
+                                    <Details title="How plan policies work">
+                                        <p>This is the default quota envelope for a plan (free/wallet/admin). Daily is calendar day, hourly is a rolling 60‑minute window, and monthly is a rolling 30‑day window (anchored to first usage per app).</p>
+                                        <p>The platform reservation floor is set in the <span className="font-semibold">Reservation Floors</span> tab
+                                        (stored in the economics descriptor, picked up live). An app can still override per surface via
+                                        app props <span className="font-mono"> economics.reservation.&lt;floor&gt;</span>.</p>
+                                    </Details>
                                 </CardBody>
                             </Card>
 
-                            <Card>
+                            <Card className="flex min-h-0 flex-col">
                                 <CardHeader
                                     title="Current Plan Quota Policies"
                                     subtitle={`${quotaPolicies.length} policy records`}
                                 />
-                                <CardBody>
+                                <CardBody className="flex min-h-0 flex-1 flex-col">
                                     {loadingData ? (
                                         <LoadingSpinner />
                                     ) : quotaPolicies.length === 0 ? (
                                         <EmptyState message="No plan policies configured." icon="📋" />
                                     ) : (
-                                        <div className="overflow-x-auto">
-                                            <table className="w-full text-sm">
-                                                <thead className="bg-[#F6FAFA] border-b border-[#E6F1F0] text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0]">
+                                        <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-[#E6F1F0]">
+                                            <table className="w-full text-[12px]">
+                                                <thead className="sticky top-0 z-10 bg-[#F6FAFA] border-b border-[#E6F1F0] text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0]">
                                                 <tr>
-                                                    <th className="px-6 py-4 text-left font-bold">Plan ID</th>
-                                                    <th className="px-6 py-4 text-right font-bold">Max concurrent</th>
-                                                    <th className="px-6 py-4 text-right font-bold">Req/day</th>
-                                                    <th className="px-6 py-4 text-right font-bold">Req/month</th>
-                                                    <th className="px-6 py-4 text-right font-bold">Tok/hour</th>
-                                                    <th className="px-6 py-4 text-right font-bold">Tok/day</th>
-                                                    <th className="px-6 py-4 text-right font-bold">Tok/month</th>
-                                                    <th className="px-6 py-4 text-right font-bold">USD/hour</th>
-                                                    <th className="px-6 py-4 text-right font-bold">USD/day</th>
-                                                    <th className="px-6 py-4 text-right font-bold">USD/month</th>
-                                                    <th className="px-6 py-4 text-left font-bold">Notes</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Plan ID</th>
+                                                    <th className="px-2.5 py-1.5 text-right font-bold">Max concurrent</th>
+                                                    <th className="px-2.5 py-1.5 text-right font-bold">Req/day</th>
+                                                    <th className="px-2.5 py-1.5 text-right font-bold">Req/month</th>
+                                                    <th className="px-2.5 py-1.5 text-right font-bold">Tok/hour</th>
+                                                    <th className="px-2.5 py-1.5 text-right font-bold">Tok/day</th>
+                                                    <th className="px-2.5 py-1.5 text-right font-bold">Tok/month</th>
+                                                    <th className="px-2.5 py-1.5 text-right font-bold">USD/hour</th>
+                                                    <th className="px-2.5 py-1.5 text-right font-bold">USD/day</th>
+                                                    <th className="px-2.5 py-1.5 text-right font-bold">USD/month</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Notes</th>
                                                 </tr>
                                                 </thead>
                                                 <tbody className="divide-y divide-[#E6F1F0]">
                                                 {quotaPolicies.map((policy, idx) => (
                                                     <tr key={idx} className="hover:bg-[#F6FAFA] transition-colors">
-                                                        <td className="px-6 py-4 font-mono text-[13px] font-semibold text-[#0D1E2C]">{policy.plan_id}</td>
-                                                        <td className="px-6 py-4 text-right text-[#3A5672]">{policy.max_concurrent ?? '—'}</td>
-                                                        <td className="px-6 py-4 text-right text-[#3A5672]">{policy.requests_per_day ?? '—'}</td>
-                                                        <td className="px-6 py-4 text-right text-[#3A5672]">{policy.requests_per_month ?? '—'}</td>
-                                                        <td className="px-6 py-4 text-right text-[#3A5672]">{policy.tokens_per_hour?.toLocaleString() ?? '—'}</td>
-                                                        <td className="px-6 py-4 text-right text-[#3A5672]">{policy.tokens_per_day?.toLocaleString() ?? '—'}</td>
-                                                        <td className="px-6 py-4 text-right text-[#3A5672]">{policy.tokens_per_month?.toLocaleString() ?? '—'}</td>
-                                                        <td className="px-6 py-4 text-right text-[#3A5672]">
+                                                        <td className="px-2.5 py-1.5 font-mono text-[12px] font-semibold text-[#0D1E2C]">{policy.plan_id}</td>
+                                                        <td className="px-2.5 py-1.5 text-right text-[#3A5672]">{policy.max_concurrent ?? '—'}</td>
+                                                        <td className="px-2.5 py-1.5 text-right text-[#3A5672]">{policy.requests_per_day ?? '—'}</td>
+                                                        <td className="px-2.5 py-1.5 text-right text-[#3A5672]">{policy.requests_per_month ?? '—'}</td>
+                                                        <td className="px-2.5 py-1.5 text-right text-[#3A5672]">{policy.tokens_per_hour?.toLocaleString() ?? '—'}</td>
+                                                        <td className="px-2.5 py-1.5 text-right text-[#3A5672]">{policy.tokens_per_day?.toLocaleString() ?? '—'}</td>
+                                                        <td className="px-2.5 py-1.5 text-right text-[#3A5672]">{policy.tokens_per_month?.toLocaleString() ?? '—'}</td>
+                                                        <td className="px-2.5 py-1.5 text-right text-[#3A5672]">
                                                             {policy.usd_per_hour != null ? `$${Number(policy.usd_per_hour).toFixed(2)}` : '—'}
                                                         </td>
-                                                        <td className="px-6 py-4 text-right text-[#3A5672]">
+                                                        <td className="px-2.5 py-1.5 text-right text-[#3A5672]">
                                                             {policy.usd_per_day != null ? `$${Number(policy.usd_per_day).toFixed(2)}` : '—'}
                                                         </td>
-                                                        <td className="px-6 py-4 text-right text-[#3A5672]">
+                                                        <td className="px-2.5 py-1.5 text-right text-[#3A5672]">
                                                             {policy.usd_per_month != null ? `$${Number(policy.usd_per_month).toFixed(2)}` : '—'}
                                                         </td>
-                                                        <td className="px-6 py-4 text-[#3A5672]">{policy.notes || '—'}</td>
+                                                        <td className="px-2.5 py-1.5 text-[#3A5672]">{policy.notes || '—'}</td>
                                                     </tr>
                                                 ))}
                                                 </tbody>
@@ -3671,7 +3670,7 @@ const EconomicsAdmin: React.FC = () => {
                                         </div>
                                     )}
                                     {quotaPolicies.length > 0 && quotaPolicies[0].reference_model && (
-                                        <div className="pt-3 text-xs text-[#7A99B0]">
+                                        <div className="pt-3 text-[11px] text-[#7A99B0]">
                                             Reference: <span className="font-mono">{quotaPolicies[0].reference_model}</span>
                                         </div>
                                     )}
@@ -3681,24 +3680,15 @@ const EconomicsAdmin: React.FC = () => {
                     )}
 
                     {viewMode === 'reservation' && (
-                        <div className="space-y-6">
-                            <Card>
+                        <div className="grid h-full min-h-0 gap-3 xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+                            <Card className="h-fit">
                                 <CardHeader
                                     title="Reservation Floors"
                                     subtitle="Platform default per-turn reservation floor (USD). Read live by apps each turn."
                                 />
-                                <CardBody className="space-y-6">
-                                    <Callout tone="neutral" title="Meaning">
-                                        The reservation floor is the minimum USD reserved before a turn runs. It is stored in the
-                                        economics descriptor (not the database) and is picked up live by running apps. A value of
-                                        <span className="font-mono"> 0 or less disables</span> the floor (estimate falls back to tokens).
-                                        An app can override per surface via app props
-                                        <span className="font-mono"> economics.reservation.&lt;floor&gt;</span>; omitting it inherits this default.
-                                        Only <span className="font-mono">chat</span> is consumed today.
-                                    </Callout>
-
-                                    <form onSubmit={handleSetReservation} className="space-y-5">
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <CardBody className="space-y-3">
+                                    <form onSubmit={handleSetReservation} className="space-y-3">
+                                        <div className="grid grid-cols-2 gap-2.5">
                                             <Input
                                                 label="Surface"
                                                 value={reservationFloor}
@@ -3706,49 +3696,60 @@ const EconomicsAdmin: React.FC = () => {
                                                 placeholder="chat"
                                             />
                                             <Input
-                                                label="Amount (USD)  •  ≤ 0 disables"
+                                                label="Amount (USD) · ≤ 0 disables"
                                                 type="number"
                                                 value={reservationAmount}
                                                 onChange={(e) => setReservationAmount(e.target.value)}
                                                 placeholder="2.0"
                                             />
                                         </div>
-                                        <Button type="submit" disabled={loadingAction}>
-                                            Save reservation floor
-                                        </Button>
+                                        <div className="flex justify-end">
+                                            <Button type="submit" disabled={loadingAction}>
+                                                Save reservation floor
+                                            </Button>
+                                        </div>
                                     </form>
+
+                                    <Details title="How reservation floors work">
+                                        <p>The reservation floor is the minimum USD reserved before a turn runs. It is stored in the
+                                        economics descriptor (not the database) and is picked up live by running apps. A value of
+                                        <span className="font-mono"> 0 or less disables</span> the floor (estimate falls back to tokens).
+                                        An app can override per surface via app props
+                                        <span className="font-mono"> economics.reservation.&lt;floor&gt;</span>; omitting it inherits this default.
+                                        Only <span className="font-mono">chat</span> is consumed today.</p>
+                                    </Details>
                                 </CardBody>
                             </Card>
 
-                            <Card>
+                            <Card className="flex min-h-0 flex-col">
                                 <CardHeader title="Current floors" subtitle={`${Object.keys(reservation).length} surface(s)`} />
-                                <CardBody>
+                                <CardBody className="flex min-h-0 flex-1 flex-col">
                                     {loadingData ? (
                                         <LoadingSpinner />
                                     ) : Object.keys(reservation).length === 0 ? (
                                         <EmptyState message="No reservation floors configured." icon="🪙" />
                                     ) : (
-                                        <div className="overflow-x-auto">
-                                            <table className="w-full text-sm">
-                                                <thead className="bg-[#F6FAFA] border-b border-[#E6F1F0] text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0]">
+                                        <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-[#E6F1F0]">
+                                            <table className="w-full text-[12px]">
+                                                <thead className="sticky top-0 z-10 bg-[#F6FAFA] border-b border-[#E6F1F0] text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0]">
                                                 <tr>
-                                                    <th className="px-6 py-4 text-left font-bold">Surface</th>
-                                                    <th className="px-6 py-4 text-right font-bold">Floor (USD)</th>
-                                                    <th className="px-6 py-4 text-left font-bold">State</th>
-                                                    <th className="px-6 py-4 text-right font-bold">Actions</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Surface</th>
+                                                    <th className="px-2.5 py-1.5 text-right font-bold">Floor (USD)</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">State</th>
+                                                    <th className="px-2.5 py-1.5 text-right font-bold">Actions</th>
                                                 </tr>
                                                 </thead>
                                                 <tbody className="divide-y divide-[#E6F1F0]">
                                                 {Object.entries(reservation).map(([floor, amount]) => (
                                                     <tr key={floor} className="hover:bg-[#F6FAFA] transition-colors">
-                                                        <td className="px-6 py-4 font-mono text-[13px] font-semibold text-[#0D1E2C]">{floor}</td>
-                                                        <td className="px-6 py-4 text-right text-[#3A5672]">
+                                                        <td className="px-2.5 py-1.5 font-mono text-[12px] font-semibold text-[#0D1E2C]">{floor}</td>
+                                                        <td className="px-2.5 py-1.5 text-right text-[#3A5672]">
                                                             {Number(amount) > 0 ? `$${Number(amount).toFixed(2)}` : '—'}
                                                         </td>
-                                                        <td className="px-6 py-4 text-[#3A5672]">
+                                                        <td className="px-2.5 py-1.5 text-[#3A5672]">
                                                             {Number(amount) > 0 ? 'enabled' : 'disabled'}
                                                         </td>
-                                                        <td className="px-6 py-4 text-right">
+                                                        <td className="px-2.5 py-1.5 text-right">
                                                             <Button
                                                                 variant="danger"
                                                                 onClick={() => handleDeleteReservation(floor)}
@@ -3770,18 +3771,14 @@ const EconomicsAdmin: React.FC = () => {
 
                     {/* Budget Policies */}
                     {viewMode === 'budgetPolicies' && (
-                        <div className="space-y-6">
-                            <Card>
+                        <div className="grid h-full min-h-0 gap-3 xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+                            <Card className="h-fit">
                                 <CardHeader
                                     title="Set Provider Budget Policy"
-                                    subtitle="Spending limits per provider for the tenant/project (no bundle_id)."
+                                    subtitle="Hard per-provider spending ceiling for the tenant/project (no bundle_id)."
                                 />
-                                <CardBody className="space-y-6">
-                                    <Callout tone="neutral" title="Meaning">
-                                        This is a hard ceiling to prevent runaway costs. Typical usage: cap Anthropic at $/day or $/month.
-                                    </Callout>
-
-                                    <form onSubmit={handleSetBudgetPolicy} className="space-y-5">
+                                <CardBody>
+                                    <form onSubmit={handleSetBudgetPolicy} className="space-y-3">
                                         <Input
                                             label="Provider *"
                                             value={budgetProvider}
@@ -3790,7 +3787,7 @@ const EconomicsAdmin: React.FC = () => {
                                             required
                                         />
 
-                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                        <div className="grid grid-cols-3 gap-2.5">
                                             <Input
                                                 label="USD / hour"
                                                 type="number"
@@ -3824,49 +3821,52 @@ const EconomicsAdmin: React.FC = () => {
                                             placeholder="Daily spending limit for provider"
                                         />
 
-                                        <Button type="submit" disabled={loadingAction}>
-                                            {loadingAction ? 'Saving…' : 'Save Budget Policy'}
-                                        </Button>
+                                        <div className="flex items-center justify-end gap-3">
+                                            <span className="text-[11.5px] text-[#7A99B0]">Hard ceiling against runaway provider costs.</span>
+                                            <Button type="submit" disabled={loadingAction}>
+                                                {loadingAction ? 'Saving…' : 'Save Budget Policy'}
+                                            </Button>
+                                        </div>
                                     </form>
                                 </CardBody>
                             </Card>
 
-                            <Card>
+                            <Card className="flex min-h-0 flex-col">
                                 <CardHeader
                                     title="Current Budget Policies"
                                     subtitle={`${budgetPolicies.length} policy records`}
                                 />
-                                <CardBody>
+                                <CardBody className="flex min-h-0 flex-1 flex-col">
                                     {loadingData ? (
                                         <LoadingSpinner />
                                     ) : budgetPolicies.length === 0 ? (
                                         <EmptyState message="No budget policies configured." icon="💵" />
                                     ) : (
-                                        <div className="overflow-x-auto">
-                                            <table className="w-full text-sm">
-                                                <thead className="bg-[#F6FAFA] border-b border-[#E6F1F0] text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0]">
+                                        <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-[#E6F1F0]">
+                                            <table className="w-full text-[12px]">
+                                                <thead className="sticky top-0 z-10 bg-[#F6FAFA] border-b border-[#E6F1F0] text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0]">
                                                 <tr>
-                                                    <th className="px-6 py-4 text-left font-bold">Provider</th>
-                                                    <th className="px-6 py-4 text-right font-bold">USD/hour</th>
-                                                    <th className="px-6 py-4 text-right font-bold">USD/day</th>
-                                                    <th className="px-6 py-4 text-right font-bold">USD/month</th>
-                                                    <th className="px-6 py-4 text-left font-bold">Notes</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Provider</th>
+                                                    <th className="px-2.5 py-1.5 text-right font-bold">USD/hour</th>
+                                                    <th className="px-2.5 py-1.5 text-right font-bold">USD/day</th>
+                                                    <th className="px-2.5 py-1.5 text-right font-bold">USD/month</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Notes</th>
                                                 </tr>
                                                 </thead>
                                                 <tbody className="divide-y divide-[#E6F1F0]">
                                                 {budgetPolicies.map((policy, idx) => (
                                                     <tr key={idx} className="hover:bg-[#F6FAFA] transition-colors">
-                                                        <td className="px-6 py-4 font-mono text-[13px] font-semibold text-[#0D1E2C]">{policy.provider}</td>
-                                                        <td className="px-6 py-4 text-right text-[#3A5672]">
+                                                        <td className="px-2.5 py-1.5 font-mono text-[12px] font-semibold text-[#0D1E2C]">{policy.provider}</td>
+                                                        <td className="px-2.5 py-1.5 text-right text-[#3A5672]">
                                                             {policy.usd_per_hour != null ? `$${policy.usd_per_hour.toFixed(2)}` : '—'}
                                                         </td>
-                                                        <td className="px-6 py-4 text-right text-[#3A5672]">
+                                                        <td className="px-2.5 py-1.5 text-right text-[#3A5672]">
                                                             {policy.usd_per_day != null ? `$${policy.usd_per_day.toFixed(2)}` : '—'}
                                                         </td>
-                                                        <td className="px-6 py-4 text-right text-[#3A5672]">
+                                                        <td className="px-2.5 py-1.5 text-right text-[#3A5672]">
                                                             {policy.usd_per_month != null ? `$${policy.usd_per_month.toFixed(2)}` : '—'}
                                                         </td>
-                                                        <td className="px-6 py-4 text-[#3A5672]">{policy.notes || '—'}</td>
+                                                        <td className="px-2.5 py-1.5 text-[#3A5672]">{policy.notes || '—'}</td>
                                                     </tr>
                                                 ))}
                                                 </tbody>
@@ -3880,19 +3880,15 @@ const EconomicsAdmin: React.FC = () => {
 
                     {/* Lifetime Credits */}
                     {viewMode === 'lifetimeCredits' && (
-                        <div className="space-y-6">
-                            <Card>
+                        <div className="grid h-full min-h-0 content-start gap-3 overflow-y-auto xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+                            <Card className="h-fit">
                                 <CardHeader
                                     title="Lifetime Credits (USD → tokens)"
                                     subtitle="One-time purchase adds tokens until depleted. These do not reset. Quoted using the backend reference model."
                                 />
-                                <CardBody className="space-y-6">
-                                    <Callout tone="info" title="Quick interpretation">
-                                        “Balance tokens” is what the user can spend. If balance drops below the admission threshold, the system may block paid usage.
-                                    </Callout>
-
-                                    <form onSubmit={handleAddLifetimeCredits} className="space-y-5">
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <CardBody className="space-y-3">
+                                    <form onSubmit={handleAddLifetimeCredits} className="space-y-3">
+                                        <div className="grid grid-cols-2 gap-2.5">
                                             <Input
                                                 label="User ID *"
                                                 value={lifetimeUserId}
@@ -3918,177 +3914,153 @@ const EconomicsAdmin: React.FC = () => {
                                             placeholder="Stripe payment ID / invoice / manual purchase note"
                                         />
 
-                                        <div className="flex flex-wrap gap-3">
-                                            <Button type="submit" disabled={loadingAction}>
-                                                {loadingAction ? 'Processing…' : 'Add Credits'}
-                                            </Button>
-                                            <Button
-                                                type="button"
-                                                variant="secondary"
-                                                onClick={() => handleCheckLifetimeBalance(new Event('submit') as any)}
-                                                disabled={loadingAction || !lifetimeUserId.trim()}
-                                            >
-                                                Check Balance
-                                            </Button>
-                                            <div className="text-sm text-[#7A99B0] flex items-center">
-                                                Reference model: <span className="ml-1 font-mono text-[13px] font-semibold text-[#0D1E2C]">{economicsRef ? `${economicsRef.reference_provider}/${economicsRef.reference_model}` : '…'}</span>
+                                        <div className="flex flex-wrap items-center justify-between gap-2.5">
+                                            <div className="text-[11.5px] text-[#7A99B0]">
+                                                Reference model: <span className="font-mono font-semibold text-[#0D1E2C]">{economicsRef ? `${economicsRef.reference_provider}/${economicsRef.reference_model}` : '…'}</span>
+                                            </div>
+                                            <div className="flex gap-2">
+                                                <Button
+                                                    type="button"
+                                                    variant="secondary"
+                                                    onClick={() => handleCheckLifetimeBalance(new Event('submit') as any)}
+                                                    disabled={loadingAction || !lifetimeUserId.trim()}
+                                                >
+                                                    Check Balance
+                                                </Button>
+                                                <Button type="submit" disabled={loadingAction}>
+                                                    {loadingAction ? 'Processing…' : 'Add Credits'}
+                                                </Button>
                                             </div>
                                         </div>
                                     </form>
+
+                                    <Callout tone="info" title="Quick interpretation">
+                                        “Balance tokens” is what the user can spend. If balance drops below the admission threshold, the system may block paid usage.
+                                    </Callout>
                                 </CardBody>
                             </Card>
 
-                            {lifetimeBalance && (
-                                <Card>
-                                    <CardHeader title={`Current Balance: ${lifetimeBalance.user_id}`} />
-                                    <CardBody className="space-y-5">
-                                        {lifetimeBalance.has_purchased_credits ? (
-                                            <>
-                                                <div className="grid grid-cols-1 gap-4">
-                                                    <StatCard label="Balance" value={`$${Number(lifetimeBalance.balance_usd || 0).toFixed(2)}`} />
-                                                </div>
-                                            </>
-                                        ) : (
-                                            <EmptyState message="No purchased credits found. This user operates on plan quotas only." icon="💳" />
-                                        )}
+                            <div className="flex min-h-0 flex-col gap-3">
+                                {lifetimeBalance && (
+                                    <Card className="shrink-0">
+                                        <CardHeader title={`Current Balance: ${lifetimeBalance.user_id}`} />
+                                        <CardBody>
+                                            {lifetimeBalance.has_purchased_credits ? (
+                                                <StatCard label="Balance" value={`$${Number(lifetimeBalance.balance_usd || 0).toFixed(2)}`} />
+                                            ) : (
+                                                <EmptyState message="No purchased credits found. This user operates on plan quotas only." icon="💳" />
+                                            )}
+                                        </CardBody>
+                                    </Card>
+                                )}
+
+                                <Card className="h-fit">
+                                    <CardHeader
+                                        title="What the USD conversion means"
+                                        subtitle="Purchases are quoted with a fixed reference model so USD→tokens is predictable."
+                                    />
+                                    <CardBody>
+                                        <div className="grid grid-cols-3 gap-2.5">
+                                            <div className="rounded-lg border border-[#E6F1F0] bg-[#F6FAFA] px-2.5 py-2">
+                                                <div className="text-[10.5px] font-bold uppercase tracking-[0.08em] text-[#7A99B0]">Example</div>
+                                                <div className="mt-0.5 font-mono text-[15px] font-semibold text-[#0D1E2C]">$5.00</div>
+                                                <div className="mt-0.5 text-[11px] text-[#7A99B0]">Reference model rate</div>
+                                            </div>
+                                            <div className="rounded-lg border border-[#E6F1F0] bg-[#F6FAFA] px-2.5 py-2">
+                                                <div className="text-[10.5px] font-bold uppercase tracking-[0.08em] text-[#7A99B0]">Example</div>
+                                                <div className="mt-0.5 font-mono text-[15px] font-semibold text-[#0D1E2C]">$10.00</div>
+                                                <div className="mt-0.5 text-[11px] text-[#7A99B0]">Reference model rate</div>
+                                            </div>
+                                            <div className="rounded-lg border border-[#E6F1F0] bg-[#F6FAFA] px-2.5 py-2">
+                                                <div className="text-[10.5px] font-bold uppercase tracking-[0.08em] text-[#7A99B0]">Example</div>
+                                                <div className="mt-0.5 font-mono text-[15px] font-semibold text-[#0D1E2C]">$50.00</div>
+                                                <div className="mt-0.5 text-[11px] text-[#7A99B0]">Reference model rate</div>
+                                            </div>
+                                        </div>
                                     </CardBody>
                                 </Card>
-                            )}
-
-                            <Card>
-                                <CardHeader
-                                    title="What the USD conversion means"
-                                    subtitle="We quote purchases using a fixed reference model so USD→tokens is predictable."
-                                />
-                                <CardBody>
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                        <div className="rounded-xl border border-[#E6F1F0] bg-[#F6FAFA] p-5">
-                                            <div className="text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0]">Example</div>
-                                            <div className="mt-2 text-2xl font-semibold text-[#0D1E2C]">$5.00</div>
-                                            <div className="mt-2 text-sm text-[#3A5672]">Converted using reference model rate</div>
-                                        </div>
-                                        <div className="rounded-xl border border-[#E6F1F0] bg-[#F6FAFA] p-5">
-                                            <div className="text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0]">Example</div>
-                                            <div className="mt-2 text-2xl font-semibold text-[#0D1E2C]">$10.00</div>
-                                            <div className="mt-2 text-sm text-[#3A5672]">Converted using reference model rate</div>
-                                        </div>
-                                        <div className="rounded-xl border border-[#E6F1F0] bg-[#F6FAFA] p-5">
-                                            <div className="text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0]">Example</div>
-                                            <div className="mt-2 text-2xl font-semibold text-[#0D1E2C]">$50.00</div>
-                                            <div className="mt-2 text-sm text-[#3A5672]">Converted using reference model rate</div>
-                                        </div>
-                                    </div>
-                                </CardBody>
-                            </Card>
+                            </div>
                         </div>
                     )}
 
                     {/* App Budget */}
                     {viewMode === 'appBudget' && (
-                        <div className="space-y-6">
-                            <Card>
-                                <CardHeader
-                                    title="Application Budget"
-                                    subtitle="Tenant/project wallet used for company-funded spending (typical: plan-funded usage)."
-                                />
-                                <CardBody className="space-y-6">
-                                    <Callout tone="neutral" title="Meaning">
-                                        This is the master budget for the tenant/project. If your policy charges plan-funded usage to the company,
-                                        spending will appear here.
-                                    </Callout>
+                        <div className="flex h-full min-h-0 flex-col gap-3">
+                            {loadingData ? (
+                                <Card className="shrink-0"><CardBody><LoadingSpinner /></CardBody></Card>
+                            ) : !appBudget ? (
+                                <Card className="shrink-0"><CardBody><EmptyState message="No budget data loaded." icon="💰" /></CardBody></Card>
+                            ) : (
+                                <div className="grid shrink-0 grid-cols-4 gap-2 xl:grid-cols-8">
+                                    <StatCard label="Current balance" value={`$${Number(appBudget.balance.balance_usd || 0).toFixed(2)}`} />
+                                    <StatCard label="Lifetime added" value={`$${Number(appBudget.balance.lifetime_added_usd || 0).toFixed(2)}`} />
+                                    <StatCard label="Lifetime spent" value={`$${Number(appBudget.balance.lifetime_spent_usd || 0).toFixed(2)}`} />
+                                    <StatCard
+                                        label="Overdraft limit"
+                                        value={appBudget.balance.overdraft_limit_usd == null
+                                            ? 'Unlimited'
+                                            : `$${Number(appBudget.balance.overdraft_limit_usd).toFixed(2)}`}
+                                    />
+                                    {appBudget.balance.available_usd != null && (
+                                        <StatCard label="Available" value={`$${Number(appBudget.balance.available_usd).toFixed(2)}`} />
+                                    )}
+                                    <StatCard label="Spend this hour" value={`$${Number(appBudget.current_month_spending?.hour || 0).toFixed(2)}`} />
+                                    <StatCard label="Spend today" value={`$${Number(appBudget.current_month_spending?.day || 0).toFixed(2)}`} />
+                                    <StatCard label="Spend this month" value={`$${Number(appBudget.current_month_spending?.month || 0).toFixed(2)}`} />
+                                </div>
+                            )}
 
-                                    {loadingData ? (
-                                        <LoadingSpinner />
-                                    ) : !appBudget ? (
-                                        <EmptyState message="No budget data loaded." icon="💰" />
-                                    ) : (
+                            <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-2">
+                                <div className="flex min-h-0 flex-col gap-3">
+                                    {!loadingData && appBudget && (
                                         <>
-                                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                                <StatCard label="Current balance" value={`$${Number(appBudget.balance.balance_usd || 0).toFixed(2)}`} />
-                                                <StatCard label="Lifetime added" value={`$${Number(appBudget.balance.lifetime_added_usd || 0).toFixed(2)}`} />
-                                                <StatCard label="Lifetime spent" value={`$${Number(appBudget.balance.lifetime_spent_usd || 0).toFixed(2)}`} />
-                                                <StatCard
-                                                    label="Overdraft limit"
-                                                    value={appBudget.balance.overdraft_limit_usd == null
-                                                        ? 'Unlimited'
-                                                        : `$${Number(appBudget.balance.overdraft_limit_usd).toFixed(2)}`}
-                                                />
-                                                {appBudget.balance.available_usd != null && (
-                                                    <StatCard label="Available" value={`$${Number(appBudget.balance.available_usd).toFixed(2)}`} />
-                                                )}
-                                            </div>
-
-                                            <div className="rounded-xl border border-[#E6F1F0] bg-[#F6FAFA] p-5">
-                                                <div className="text-sm font-semibold text-[#0D1E2C] mb-3">Current month spending</div>
-                                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                                    <div className="rounded-lg bg-white border border-[#E6F1F0] p-4">
-                                                        <div className="text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0]">This hour</div>
-                                                        <div className="mt-2 text-2xl font-semibold text-[#0D1E2C]">
-                                                            ${Number(appBudget.current_month_spending?.hour || 0).toFixed(2)}
-                                                        </div>
-                                                    </div>
-                                                    <div className="rounded-lg bg-white border border-[#E6F1F0] p-4">
-                                                        <div className="text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0]">Today</div>
-                                                        <div className="mt-2 text-2xl font-semibold text-[#0D1E2C]">
-                                                            ${Number(appBudget.current_month_spending?.day || 0).toFixed(2)}
-                                                        </div>
-                                                    </div>
-                                                    <div className="rounded-lg bg-white border border-[#E6F1F0] p-4">
-                                                        <div className="text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0]">This month</div>
-                                                        <div className="mt-2 text-2xl font-semibold text-[#0D1E2C]">
-                                                            ${Number(appBudget.current_month_spending?.month || 0).toFixed(2)}
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            </div>
 
                                             {appBudget.by_bundle && Object.keys(appBudget.by_bundle).length > 0 && (
-                                                <div className="rounded-xl border border-[#E6F1F0] bg-[#F6FAFA] p-5">
-                                                    <div className="text-sm font-semibold text-[#0D1E2C] mb-3">Spending by app</div>
-                                                    <div className="space-y-3">
+                                                <Card className="shrink-0">
+                                                    <CardHeader title="Spending by app" />
+                                                    <CardBody className="max-h-36 space-y-1.5 overflow-y-auto">
                                                         {Object.entries(appBudget.by_bundle).map(([bundleId, spending]) => (
                                                             <div
                                                                 key={bundleId}
-                                                                className="flex flex-col md:flex-row md:items-center md:justify-between gap-2
-                                           rounded-lg bg-white border border-[#E6F1F0] p-4"
+                                                                className="flex items-center justify-between gap-2 rounded-lg border border-[#E6F1F0] bg-white px-2.5 py-1.5"
                                                             >
-                                                                <div className="font-mono text-[13px] font-semibold text-[#0D1E2C]">{bundleId}</div>
-                                                                <div className="text-sm text-[#3A5672] flex flex-wrap gap-4">
-                                                                    <span>Hour: <strong className="text-[#0D1E2C]">${Number(spending.hour || 0).toFixed(2)}</strong></span>
-                                                                    <span>Day: <strong className="text-[#0D1E2C]">${Number(spending.day || 0).toFixed(2)}</strong></span>
-                                                                    <span>Month: <strong className="text-[#0D1E2C]">${Number(spending.month || 0).toFixed(2)}</strong></span>
+                                                                <div className="truncate font-mono text-[12px] font-semibold text-[#0D1E2C]">{bundleId}</div>
+                                                                <div className="flex shrink-0 flex-wrap gap-3 text-[11.5px] text-[#3A5672]">
+                                                                    <span>Hour: <strong className="font-mono text-[#0D1E2C]">${Number(spending.hour || 0).toFixed(2)}</strong></span>
+                                                                    <span>Day: <strong className="font-mono text-[#0D1E2C]">${Number(spending.day || 0).toFixed(2)}</strong></span>
+                                                                    <span>Month: <strong className="font-mono text-[#0D1E2C]">${Number(spending.month || 0).toFixed(2)}</strong></span>
                                                                 </div>
                                                             </div>
                                                         ))}
-                                                    </div>
-                                                </div>
+                                                    </CardBody>
+                                                </Card>
                                             )}
 
-                                            <div className="rounded-xl border border-[#E6F1F0] bg-[#F6FAFA] p-5">
-                                                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
-                                                    <div>
-                                                        <div className="text-sm font-semibold text-[#0D1E2C]">Budget absorption report</div>
-                                                        <div className="text-xs text-[#3A5672]">
-                                                            Project budget absorbs shortfalls when plan + wallet can’t cover actual spend.
+                                            <Card className="flex min-h-0 flex-1 flex-col">
+                                                <CardHeader
+                                                    title="Budget absorption report"
+                                                    subtitle="Project budget absorbs shortfalls when plan + wallet can’t cover actual spend."
+                                                    action={
+                                                        <div className="flex gap-1.5">
+                                                            <Button
+                                                                variant="secondary"
+                                                                onClick={handleLoadAbsorptionReport}
+                                                                disabled={loadingAbsorption}
+                                                            >
+                                                                {loadingAbsorption ? 'Loading…' : 'Run report'}
+                                                            </Button>
+                                                            <Button
+                                                                variant="secondary"
+                                                                onClick={handleExportAbsorptionCsv}
+                                                                disabled={loadingAbsorption}
+                                                            >
+                                                                {loadingAbsorption ? 'Exporting…' : 'Export CSV'}
+                                                            </Button>
                                                         </div>
-                                                    </div>
-                                                    <Button
-                                                        variant="secondary"
-                                                        onClick={handleLoadAbsorptionReport}
-                                                        disabled={loadingAbsorption}
-                                                    >
-                                                        {loadingAbsorption ? 'Loading…' : 'Run report'}
-                                                    </Button>
-                                                    <Button
-                                                        variant="secondary"
-                                                        onClick={handleExportAbsorptionCsv}
-                                                        disabled={loadingAbsorption}
-                                                    >
-                                                        {loadingAbsorption ? 'Exporting…' : 'Export CSV'}
-                                                    </Button>
-                                                </div>
-
-                                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                                                    }
+                                                />
+                                                <CardBody className="flex min-h-0 flex-1 flex-col gap-2.5">
+                                                <div className="grid shrink-0 grid-cols-3 gap-2.5">
                                                     <Select
                                                         label="Period"
                                                         value={absorptionPeriod}
@@ -4121,50 +4093,47 @@ const EconomicsAdmin: React.FC = () => {
                                                 ) : absorptionItems.length === 0 ? (
                                                     <EmptyState message="No absorption events found." icon="🧾" />
                                                 ) : (
-                                                    <div className="overflow-x-auto">
-                                                        <table className="min-w-full text-sm text-left">
-                                                            <thead className="text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0]">
+                                                    <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-[#E6F1F0]">
+                                                        <table className="min-w-full text-[12px] text-left">
+                                                            <thead className="sticky top-0 z-10 bg-[#F6FAFA] text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0]">
                                                                 <tr>
-                                                                    <th className="py-2 pr-4">Period</th>
+                                                                    <th className="px-2.5 py-1.5">Period</th>
                                                                     {absorptionGroupBy !== 'none' && (
-                                                                        <th className="py-2 pr-4">{absorptionGroupBy === 'user' ? 'User' : 'App'}</th>
+                                                                        <th className="px-2.5 py-1.5">{absorptionGroupBy === 'user' ? 'User' : 'App'}</th>
                                                                     )}
-                                                                    <th className="py-2 pr-4">Total absorbed</th>
-                                                                    <th className="py-2 pr-4">Subscription shortfall</th>
-                                                                    <th className="py-2 pr-4">Wallet plan shortfall</th>
-                                                                    <th className="py-2 pr-4">Subscription overage</th>
-                                                                    <th className="py-2 pr-4">Free plan overage</th>
-                                                                    <th className="py-2 pr-4">Events</th>
+                                                                    <th className="px-2.5 py-1.5">Total absorbed</th>
+                                                                    <th className="px-2.5 py-1.5">Subscription shortfall</th>
+                                                                    <th className="px-2.5 py-1.5">Wallet plan shortfall</th>
+                                                                    <th className="px-2.5 py-1.5">Subscription overage</th>
+                                                                    <th className="px-2.5 py-1.5">Free plan overage</th>
+                                                                    <th className="px-2.5 py-1.5">Events</th>
                                                                 </tr>
                                                             </thead>
                                                             <tbody className="text-[#3A5672]">
                                                                 {absorptionItems.map((row, idx) => (
                                                                     <tr key={`${row.period_start}-${idx}`} className="border-t border-[#E6F1F0]">
-                                                                        <td className="py-2 pr-4">{new Date(row.period_start).toLocaleString()}</td>
+                                                                        <td className="px-2.5 py-1.5">{new Date(row.period_start).toLocaleString()}</td>
                                                                         {absorptionGroupBy !== 'none' && (
-                                                                            <td className="py-2 pr-4 font-mono text-[13px]">{row.group_key || '-'}</td>
+                                                                            <td className="px-2.5 py-1.5 font-mono text-[12px]">{row.group_key || '-'}</td>
                                                                         )}
-                                                                        <td className="py-2 pr-4">${row.total_shortfall_usd.toFixed(2)}</td>
-                                                                        <td className="py-2 pr-4">${row.wallet_subscription_shortfall_usd.toFixed(2)}</td>
-                                                                        <td className="py-2 pr-4">${row.wallet_plan_shortfall_usd.toFixed(2)}</td>
-                                                                        <td className="py-2 pr-4">${row.subscription_overage_shortfall_usd.toFixed(2)}</td>
-                                                                        <td className="py-2 pr-4">${row.free_plan_shortfall_usd.toFixed(2)}</td>
-                                                                        <td className="py-2 pr-4">{row.events}</td>
+                                                                        <td className="px-2.5 py-1.5">${row.total_shortfall_usd.toFixed(2)}</td>
+                                                                        <td className="px-2.5 py-1.5">${row.wallet_subscription_shortfall_usd.toFixed(2)}</td>
+                                                                        <td className="px-2.5 py-1.5">${row.wallet_plan_shortfall_usd.toFixed(2)}</td>
+                                                                        <td className="px-2.5 py-1.5">${row.subscription_overage_shortfall_usd.toFixed(2)}</td>
+                                                                        <td className="px-2.5 py-1.5">${row.free_plan_shortfall_usd.toFixed(2)}</td>
+                                                                        <td className="px-2.5 py-1.5">{row.events}</td>
                                                                     </tr>
                                                                 ))}
                                                             </tbody>
                                                         </table>
                                                     </div>
                                                 )}
-                                            </div>
+                                                </CardBody>
+                                            </Card>
 
-                                            <Card>
-                                                <CardHeader
-                                                    title="Money Journey (who pays, in order)"
-                                                    subtitle="This helps explain why project budget goes negative."
-                                                />
-                                                <CardBody>
-                                                    <pre className="text-xs leading-relaxed text-[#3A5672] bg-[#F6FAFA] border border-[#E6F1F0] rounded-lg p-4 whitespace-pre-wrap">
+                                            <Details title="Money journey (who pays, in order)">
+                                                <p>The application budget is the master budget for the tenant/project; it also explains why the project budget can go negative.</p>
+                                                    <pre className="text-[11px] leading-relaxed text-[#3A5672] bg-[#F6FAFA] border border-[#E6F1F0] rounded-lg p-2.5 whitespace-pre-wrap">
 {`External (Stripe) subscription — primary: subscription budget
 subscription budget -> wallet overflow -> project absorbs
 actual over reserved: subscription headroom, then project (shortfall:subscription_overage)
@@ -4182,46 +4151,46 @@ Shortfall ledger notes:
 - shortfall:wallet_plan
 - shortfall:free_plan`}
                                                     </pre>
-                                                </CardBody>
-                                            </Card>
+                                            </Details>
+                                        </>
+                                    )}
+                                </div>
 
-                                            <Card>
+                                <div className="flex min-h-0 flex-col gap-3">
+                                    {!loadingData && appBudget && (
+                                            <Card className="flex min-h-0 flex-1 flex-col">
                                                 <CardHeader
                                                     title="Request lineage (per request_id)"
                                                     subtitle="Trace the full money journey for a single turn. request_id == turn_id."
                                                 />
-                                                <CardBody className="space-y-4">
-                                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                                <CardBody className="flex min-h-0 flex-1 flex-col gap-2.5">
+                                                    <div className="grid shrink-0 grid-cols-[minmax(0,1fr)_auto_auto] items-end gap-2.5">
                                                         <Input
                                                             label="request_id (turn_id) *"
                                                             value={lineageRequestId}
                                                             onChange={(e) => setLineageRequestId(e.target.value)}
                                                             placeholder="turn_..."
                                                         />
-                                                        <div className="flex items-end">
-                                                            <Button
-                                                                variant="secondary"
-                                                                onClick={handleLoadRequestLineage}
-                                                                disabled={loadingLineage}
-                                                            >
-                                                                {loadingLineage ? 'Loading…' : 'Lookup'}
-                                                            </Button>
-                                                        </div>
-                                                        <div className="flex items-end">
-                                                            <Button
-                                                                variant="secondary"
-                                                                onClick={handleCopyRequestId}
-                                                            >
-                                                                Copy request_id
-                                                            </Button>
-                                                        </div>
+                                                        <Button
+                                                            variant="secondary"
+                                                            onClick={handleLoadRequestLineage}
+                                                            disabled={loadingLineage}
+                                                        >
+                                                            {loadingLineage ? 'Loading…' : 'Lookup'}
+                                                        </Button>
+                                                        <Button
+                                                            variant="secondary"
+                                                            onClick={handleCopyRequestId}
+                                                        >
+                                                            Copy request_id
+                                                        </Button>
                                                     </div>
 
                                                     {loadingLineage ? (
                                                         <LoadingSpinner />
                                                     ) : lineageResult ? (
-                                                        <div className="space-y-6">
-                                                            <div className="rounded-xl border border-[#E6F1F0] bg-[#F6FAFA] p-4">
+                                                        <div className="min-h-0 flex-1 space-y-2.5 overflow-y-auto">
+                                                            <div className="rounded-xl border border-[#E6F1F0] bg-[#F6FAFA] p-3">
                                                                 <div className="text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0] mb-2">Project budget reservations</div>
                                                                 {lineageResult.project_budget?.reservations?.length ? (
                                                                     <table className="min-w-full text-xs text-left">
@@ -4253,7 +4222,7 @@ Shortfall ledger notes:
                                                                 )}
                                                             </div>
 
-                                                            <div className="rounded-xl border border-[#E6F1F0] bg-[#F6FAFA] p-4">
+                                                            <div className="rounded-xl border border-[#E6F1F0] bg-[#F6FAFA] p-3">
                                                                 <div className="text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0] mb-2">Project budget ledger</div>
                                                                 {lineageResult.project_budget?.ledger?.length ? (
                                                                     <table className="min-w-full text-xs text-left">
@@ -4283,7 +4252,7 @@ Shortfall ledger notes:
                                                                 )}
                                                             </div>
 
-                                                            <div className="rounded-xl border border-[#E6F1F0] bg-[#F6FAFA] p-4">
+                                                            <div className="rounded-xl border border-[#E6F1F0] bg-[#F6FAFA] p-3">
                                                                 <div className="text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0] mb-2">Subscription reservations</div>
                                                                 {lineageResult.subscription_budget?.reservations?.length ? (
                                                                     <table className="min-w-full text-xs text-left">
@@ -4315,7 +4284,7 @@ Shortfall ledger notes:
                                                                 )}
                                                             </div>
 
-                                                            <div className="rounded-xl border border-[#E6F1F0] bg-[#F6FAFA] p-4">
+                                                            <div className="rounded-xl border border-[#E6F1F0] bg-[#F6FAFA] p-3">
                                                                 <div className="text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0] mb-2">Subscription ledger</div>
                                                                 {lineageResult.subscription_budget?.ledger?.length ? (
                                                                     <table className="min-w-full text-xs text-left">
@@ -4347,7 +4316,7 @@ Shortfall ledger notes:
                                                                 )}
                                                             </div>
 
-                                                            <div className="rounded-xl border border-[#E6F1F0] bg-[#F6FAFA] p-4">
+                                                            <div className="rounded-xl border border-[#E6F1F0] bg-[#F6FAFA] p-3">
                                                                 <div className="text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0] mb-2">Wallet reservations</div>
                                                                 {lineageResult.wallet?.reservations?.length ? (
                                                                     <table className="min-w-full text-xs text-left">
@@ -4382,61 +4351,58 @@ Shortfall ledger notes:
                                                     )}
                                                 </CardBody>
                                             </Card>
-                                        </>
                                     )}
-                                </CardBody>
-                            </Card>
 
-                            <Card>
-                                <CardHeader title="Top up application budget" subtitle="Adds funds to the tenant/project wallet." />
-                                <CardBody className="space-y-6">
-                                    <Callout tone="warning" title="When you need this">
-                                        If you’re company-funding plan usage (or any fallback path), you want enough budget to prevent service disruption.
-                                    </Callout>
+                                    <Card className="shrink-0">
+                                        <CardHeader title="Top up application budget" subtitle="Adds funds to the tenant/project wallet." />
+                                        <CardBody>
+                                            <form onSubmit={handleTopupAppBudget}>
+                                                <div className="grid grid-cols-[140px_minmax(0,1fr)_auto] items-end gap-2.5">
+                                                    <Input
+                                                        label="Amount (USD) *"
+                                                        type="number"
+                                                        step="0.01"
+                                                        value={appBudgetTopup}
+                                                        onChange={(e) => setAppBudgetTopup(e.target.value)}
+                                                        placeholder="100.00"
+                                                        required
+                                                    />
+                                                    <TextArea
+                                                        label="Notes"
+                                                        rows={1}
+                                                        value={appBudgetNotes}
+                                                        onChange={(e) => setAppBudgetNotes(e.target.value)}
+                                                        placeholder="Monthly budget allocation"
+                                                    />
+                                                    <Button type="submit" disabled={loadingAction}>
+                                                        {loadingAction ? 'Processing…' : 'Add funds'}
+                                                    </Button>
+                                                </div>
+                                                <p className="mt-1.5 text-[11.5px] text-[#7A99B0]">Keep enough budget when company-funding plan usage to prevent service disruption.</p>
+                                            </form>
+                                        </CardBody>
+                                    </Card>
 
-                                    <form onSubmit={handleTopupAppBudget} className="space-y-5">
-                                        <Input
-                                            label="Amount (USD) *"
-                                            type="number"
-                                            step="0.01"
-                                            value={appBudgetTopup}
-                                            onChange={(e) => setAppBudgetTopup(e.target.value)}
-                                            placeholder="100.00"
-                                            required
-                                        />
-                                        <TextArea
-                                            label="Notes"
-                                            value={appBudgetNotes}
-                                            onChange={(e) => setAppBudgetNotes(e.target.value)}
-                                            placeholder="Monthly budget allocation"
-                                        />
-                                        <Button type="submit" disabled={loadingAction}>
-                                            {loadingAction ? 'Processing…' : 'Add funds'}
-                                        </Button>
-                                    </form>
-                                </CardBody>
-                            </Card>
-
-                            <Card>
-                                <CardHeader title="Budget flow examples" subtitle="Quick mental model for support & ops." />
-                                <CardBody className="space-y-4">
-                                    <Callout tone="info" title="Scenario: plan-funded usage">
-                                        User operates within effective plan limits → request allowed → company budget is charged (typical policy).
-                                    </Callout>
-                                    <Callout tone="success" title="Scenario: user-funded fallback">
-                                        User exceeds plan → purchased credits present → user credits are charged → app budget not used.
-                                    </Callout>
-                                    <Callout tone="warning" title="Scenario: mixed / policy-dependent">
-                                        Some flows may split charges depending on limiter policy and reservations (in-flight holds).
-                                    </Callout>
-                                </CardBody>
-                            </Card>
+                                    <Details title="Budget flow examples">
+                                        <Callout tone="info" title="Scenario: plan-funded usage">
+                                            User operates within effective plan limits → request allowed → company budget is charged (typical policy).
+                                        </Callout>
+                                        <Callout tone="success" title="Scenario: user-funded fallback">
+                                            User exceeds plan → purchased credits present → user credits are charged → app budget not used.
+                                        </Callout>
+                                        <Callout tone="warning" title="Scenario: mixed / policy-dependent">
+                                            Some flows may split charges depending on limiter policy and reservations (in-flight holds).
+                                        </Callout>
+                                    </Details>
+                                </div>
+                            </div>
                         </div>
                     )}
                     {/* Subscriptions */}
                     {viewMode === 'plans' && (
-                        <div className="space-y-6">
-                            <Card>
+                        <div className="grid h-full min-h-0 gap-3 xl:grid-cols-2">
+                            <div className="min-h-0 space-y-3 overflow-y-auto pr-1">
+                            <Card className="shrink-0">
                                 <CardHeader
                                     title="Plans"
                                     subtitle="Define plan_id → price mapping (internal or Stripe). Plan IDs drive quota policies."
@@ -4450,9 +4416,9 @@ Shortfall ledger notes:
                                         </Button>
                                     }
                                 />
-                                <CardBody className="space-y-6">
-                                    <form onSubmit={handleUpsertSubscriptionPlan} className="space-y-5">
-                                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                <CardBody className="space-y-3">
+                                    <form onSubmit={handleUpsertSubscriptionPlan} className="space-y-3">
+                                        <div className="grid grid-cols-4 gap-2.5">
                                             <Input
                                                 label="Plan ID *"
                                                 value={planId}
@@ -4479,15 +4445,15 @@ Shortfall ledger notes:
                                                 required
                                             />
                                             <div className="flex flex-col">
-                                                <label className="block text-sm font-medium text-[#0D1E2C] mb-2">Active</label>
-                                                <div className="flex items-center gap-3 h-full">
+                                                <label className="mb-1 block text-[10.5px] font-bold uppercase tracking-[0.08em] text-[#7A99B0]">Active</label>
+                                                <div className="flex h-8 items-center gap-2">
                                                     <input
                                                         type="checkbox"
                                                         checked={planActive}
                                                         onChange={(e) => setPlanActive(e.target.checked)}
                                                         className="h-4 w-4 rounded border-[#D8ECEB] text-[#01BEB2] focus:ring-[#01BEB2]/30"
                                                     />
-                                                    <span className="text-sm text-[#3A5672]">{planActive ? 'enabled' : 'disabled'}</span>
+                                                    <span className="text-[12px] text-[#3A5672]">{planActive ? 'enabled' : 'disabled'}</span>
                                                 </div>
                                             </div>
                                         </div>
@@ -4509,9 +4475,11 @@ Shortfall ledger notes:
                                             placeholder="Plan description, intended plan, or internal notes"
                                         />
 
-                                        <Button type="submit" disabled={loadingAction}>
-                                            {loadingAction ? 'Saving…' : 'Save Plan'}
-                                        </Button>
+                                        <div className="flex justify-end">
+                                            <Button type="submit" disabled={loadingAction}>
+                                                {loadingAction ? 'Saving…' : 'Save Plan'}
+                                            </Button>
+                                        </div>
                                     </form>
 
                                     {(loadingPlans || loadingData) ? (
@@ -4519,31 +4487,31 @@ Shortfall ledger notes:
                                     ) : subscriptionPlans.length === 0 ? (
                                         <EmptyState message="No plans configured yet." icon="🧾" />
                                     ) : (
-                                        <div className="overflow-x-auto">
-                                            <table className="w-full text-sm">
-                                                <thead className="bg-[#F6FAFA] border-b border-[#E6F1F0] text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0]">
+                                        <div className="max-h-72 overflow-auto rounded-lg border border-[#E6F1F0]">
+                                            <table className="w-full text-[12px]">
+                                                <thead className="sticky top-0 z-10 bg-[#F6FAFA] border-b border-[#E6F1F0] text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0]">
                                                 <tr>
-                                                    <th className="px-6 py-4 text-left font-bold">Plan ID</th>
-                                                    <th className="px-6 py-4 text-left font-bold">Provider</th>
-                                                    <th className="px-6 py-4 text-left font-bold">Stripe price</th>
-                                                    <th className="px-6 py-4 text-right font-bold">Monthly price</th>
-                                                    <th className="px-6 py-4 text-left font-bold">Active</th>
-                                                    <th className="px-6 py-4 text-left font-bold">Updated</th>
-                                                    <th className="px-6 py-4 text-left font-bold">Notes</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Plan ID</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Provider</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Stripe price</th>
+                                                    <th className="px-2.5 py-1.5 text-right font-bold">Monthly price</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Active</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Updated</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Notes</th>
                                                 </tr>
                                                 </thead>
                                                 <tbody className="divide-y divide-[#E6F1F0]">
                                                 {subscriptionPlans.map((plan) => (
                                                     <tr key={`${plan.tenant}:${plan.project}:${plan.plan_id}`} className="hover:bg-[#F6FAFA] transition-colors">
-                                                        <td className="px-6 py-4 font-mono text-[13px] font-semibold text-[#0D1E2C]">{plan.plan_id}</td>
-                                                        <td className="px-6 py-4 text-[#3A5672]">{plan.provider}</td>
-                                                        <td className="px-6 py-4 font-mono text-[13px] text-[#0D1E2C]">{plan.stripe_price_id || '—'}</td>
-                                                        <td className="px-6 py-4 text-right text-[#3A5672]">
+                                                        <td className="px-2.5 py-1.5 font-mono text-[12px] font-semibold text-[#0D1E2C]">{plan.plan_id}</td>
+                                                        <td className="px-2.5 py-1.5 text-[#3A5672]">{plan.provider}</td>
+                                                        <td className="px-2.5 py-1.5 font-mono text-[12px] text-[#0D1E2C]">{plan.stripe_price_id || '—'}</td>
+                                                        <td className="px-2.5 py-1.5 text-right text-[#3A5672]">
                                                             ${(Number(plan.monthly_price_cents || 0) / 100).toFixed(2)} ({plan.monthly_price_cents}¢)
                                                         </td>
-                                                        <td className="px-6 py-4 text-[#3A5672]">{plan.active ? 'yes' : 'no'}</td>
-                                                        <td className="px-6 py-4 text-[#3A5672]">{formatDateTime(plan.updated_at)}</td>
-                                                        <td className="px-6 py-4 text-[#3A5672]">{plan.notes || '—'}</td>
+                                                        <td className="px-2.5 py-1.5 text-[#3A5672]">{plan.active ? 'yes' : 'no'}</td>
+                                                        <td className="px-2.5 py-1.5 text-[#3A5672]">{formatDateTime(plan.updated_at)}</td>
+                                                        <td className="px-2.5 py-1.5 text-[#3A5672]">{plan.notes || '—'}</td>
                                                     </tr>
                                                 ))}
                                                 </tbody>
@@ -4558,9 +4526,9 @@ Shortfall ledger notes:
                                     title="Create Subscription"
                                     subtitle="Creates an internal or Stripe subscription using a plan_id."
                                 />
-                                <CardBody className="space-y-6">
-                                    <form onSubmit={handleCreateSubscription} className="space-y-5">
-                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <CardBody className="space-y-3">
+                                    <form onSubmit={handleCreateSubscription} className="space-y-3">
+                                        <div className="grid grid-cols-3 gap-2.5">
                                             <Select
                                                 label="Provider"
                                                 value={subProvider}
@@ -4595,7 +4563,7 @@ Shortfall ledger notes:
                                         </datalist>
 
                                         {subProvider === 'stripe' && (
-                                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                            <div className="grid grid-cols-3 gap-2.5">
                                                 <Input
                                                     label="stripe_price_id (optional override)"
                                                     value={subStripePriceId}
@@ -4618,9 +4586,11 @@ Shortfall ledger notes:
                                             </div>
                                         )}
 
-                                        <Button type="submit" disabled={loadingAction}>
-                                            {loadingAction ? 'Creating…' : 'Create Subscription'}
-                                        </Button>
+                                        <div className="flex justify-end">
+                                            <Button type="submit" disabled={loadingAction}>
+                                                {loadingAction ? 'Creating…' : 'Create Subscription'}
+                                            </Button>
+                                        </div>
                                     </form>
                                 </CardBody>
                             </Card>
@@ -4630,9 +4600,9 @@ Shortfall ledger notes:
                                     title="Lookup Subscription (by user)"
                                     subtitle="Shows the current subscription row stored in user_plans."
                                 />
-                                <CardBody className="space-y-6">
-                                    <form onSubmit={handleLookupSubscription} className="space-y-4">
-                                        <div className="flex gap-3">
+                                <CardBody className="space-y-3">
+                                    <form onSubmit={handleLookupSubscription} className="space-y-3">
+                                        <div className="flex items-end gap-2.5">
                                             <Input
                                                 value={subLookupUserId}
                                                 onChange={(e) => setSubLookupUserId(e.target.value)}
@@ -4647,7 +4617,7 @@ Shortfall ledger notes:
                                     </form>
 
                                     {subscription && (
-                                        <div className="rounded-xl border border-[#E6F1F0] bg-[#F6FAFA] p-5 text-sm space-y-3">
+                                        <div className="rounded-xl border border-[#E6F1F0] bg-[#F6FAFA] p-3 text-[12px] space-y-2">
                                             <div className="flex items-center justify-between">
                                                 <div className="font-semibold text-[#0D1E2C]">Subscription</div>
                                                 <DuePill sub={subscription} />
@@ -4656,7 +4626,7 @@ Shortfall ledger notes:
                                             <div className="space-y-2">
                                                 <div className="flex justify-between">
                                                     <span className="text-[#3A5672]">plan_id</span>
-                                                    <strong className="font-mono text-[13px]">{subscription.plan_id || '—'}</strong>
+                                                    <strong className="font-mono text-[12px]">{subscription.plan_id || '—'}</strong>
                                                 </div>
 
                                                 <div className="flex justify-between">
@@ -4693,78 +4663,78 @@ Shortfall ledger notes:
                                                     <>
                                                         <div className="flex justify-between">
                                                             <span className="text-[#3A5672]">stripe_customer_id</span>
-                                                            <strong className="font-mono text-[13px]">{subscription.stripe_customer_id || '—'}</strong>
+                                                            <strong className="font-mono text-[12px]">{subscription.stripe_customer_id || '—'}</strong>
                                                         </div>
                                                         <div className="flex justify-between">
                                                             <span className="text-[#3A5672]">stripe_subscription_id</span>
-                                                            <strong className="font-mono text-[13px]">{subscription.stripe_subscription_id || '—'}</strong>
+                                                            <strong className="font-mono text-[12px]">{subscription.stripe_subscription_id || '—'}</strong>
                                                         </div>
                                                     </>
                                                 )}
                                             </div>
 
                                             {subscriptionBalance && (
-                                                <div className="pt-4 border-t border-[#E6F1F0] space-y-2">
-                                                    <div className="text-sm font-semibold text-[#0D1E2C]">Subscription balance</div>
-                                                    <div className="text-xs text-[#3A5672]">
+                                                <div className="pt-2.5 border-t border-[#E6F1F0] space-y-2">
+                                                    <div className="text-[12.5px] font-semibold text-[#10304B]">Subscription balance</div>
+                                                    <div className="text-[11px] text-[#3A5672]">
                                                         Reference: <span className="font-mono">{subscriptionBalance.reference_model || (economicsRef ? `${economicsRef.reference_provider}/${economicsRef.reference_model}` : '')}</span>
                                                     </div>
                                                     {subscriptionBalance.period_start && subscriptionBalance.period_end && (
-                                                        <div className="text-xs text-[#3A5672]">
+                                                        <div className="text-[11px] text-[#3A5672]">
                                                             Period: {formatDateTime(subscriptionBalance.period_start)} → {formatDateTime(subscriptionBalance.period_end)}
                                                         </div>
                                                     )}
 
-                                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
-                                                        <div className="rounded-lg bg-white border border-[#E6F1F0] p-3">
+                                                    <div className="grid grid-cols-3 gap-2 text-[12px]">
+                                                        <div className="rounded-lg bg-white border border-[#E6F1F0] p-2">
                                                             <div className="text-[#3A5672]">Balance</div>
                                                             <div className="font-semibold text-[#0D1E2C]">
                                                                 ${Number(subscriptionBalance.balance_usd || 0).toFixed(2)}
                                                             </div>
                                                             {subscriptionBalance.balance_tokens != null && (
-                                                                <div className="text-xs text-[#7A99B0]">
+                                                                <div className="text-[11px] text-[#7A99B0]">
                                                                     {Number(subscriptionBalance.balance_tokens).toLocaleString()} tokens
                                                                 </div>
                                                             )}
                                                         </div>
-                                                        <div className="rounded-lg bg-white border border-[#E6F1F0] p-3">
+                                                        <div className="rounded-lg bg-white border border-[#E6F1F0] p-2">
                                                             <div className="text-[#3A5672]">Reserved</div>
                                                             <div className="font-semibold text-[#0D1E2C]">
                                                                 ${Number(subscriptionBalance.reserved_usd || 0).toFixed(2)}
                                                             </div>
                                                             {subscriptionBalance.reserved_tokens != null && (
-                                                                <div className="text-xs text-[#7A99B0]">
+                                                                <div className="text-[11px] text-[#7A99B0]">
                                                                     {Number(subscriptionBalance.reserved_tokens).toLocaleString()} tokens
                                                                 </div>
                                                             )}
                                                         </div>
-                                                        <div className="rounded-lg bg-white border border-[#E6F1F0] p-3">
+                                                        <div className="rounded-lg bg-white border border-[#E6F1F0] p-2">
                                                             <div className="text-[#3A5672]">Available</div>
                                                             <div className="font-semibold text-[#0D1E2C]">
                                                                 ${Number(subscriptionBalance.available_usd || 0).toFixed(2)}
                                                             </div>
                                                             {subscriptionBalance.available_tokens != null && (
-                                                                <div className="text-xs text-[#7A99B0]">
+                                                                <div className="text-[11px] text-[#7A99B0]">
                                                                     {Number(subscriptionBalance.available_tokens).toLocaleString()} tokens
                                                                 </div>
                                                             )}
                                                         </div>
                                                     </div>
 
-                                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
-                                                        <div className="rounded-lg bg-white border border-[#E6F1F0] p-3">
+                                                    <div className="grid grid-cols-3 gap-2 text-[12px]">
+                                                        <div className="rounded-lg bg-white border border-[#E6F1F0] p-2">
                                                             <div className="text-[#3A5672]">Period top-up</div>
                                                             <div className="font-semibold text-[#0D1E2C]">
                                                                 ${Number(subscriptionBalance.topup_usd ?? subscriptionBalance.lifetime_added_usd ?? 0).toFixed(2)}
                                                             </div>
                                                         </div>
-                                                        <div className="rounded-lg bg-white border border-[#E6F1F0] p-3">
+                                                        <div className="rounded-lg bg-white border border-[#E6F1F0] p-2">
                                                             <div className="text-[#3A5672]">Period spent</div>
                                                             <div className="font-semibold text-[#0D1E2C]">
                                                                 ${Number(subscriptionBalance.spent_usd ?? subscriptionBalance.lifetime_spent_usd ?? 0).toFixed(2)}
                                                             </div>
                                                         </div>
-                                                        <div className="rounded-lg bg-white border border-[#E6F1F0] p-3">
+                                                        <div className="rounded-lg bg-white border border-[#E6F1F0] p-2">
                                                             <div className="text-[#3A5672]">Rolled over</div>
                                                             <div className="font-semibold text-[#0D1E2C]">
                                                                 ${Number(subscriptionBalance.rolled_over_usd || 0).toFixed(2)}
@@ -4777,8 +4747,8 @@ Shortfall ledger notes:
                                             {/* Internal ops */}
                                             {subscription.provider === 'internal' &&
                                                 subscription.status === 'active' && (
-                                                    <div className="pt-4 border-t border-[#E6F1F0] flex flex-wrap items-center justify-between gap-3">
-                                                        <div className="text-xs text-[#3A5672]">
+                                                    <div className="pt-2.5 border-t border-[#E6F1F0] flex flex-wrap items-center justify-between gap-3">
+                                                        <div className="text-[11px] text-[#3A5672]">
                                                             Internal plans draw from the project budget bounded by quota. Reset re-anchors the month + day windows and clears hour buckets so all rolling counters start fresh.
                                                         </div>
 
@@ -4817,13 +4787,13 @@ Shortfall ledger notes:
                                     title="Subscription Balance Admin"
                                     subtitle="Manual top-ups for a user's subscription balance."
                                 />
-                                <CardBody className="space-y-6">
-                                    <div className="text-xs text-[#3A5672]">
+                                <CardBody className="space-y-3">
+                                    <div className="text-[11px] text-[#3A5672]">
                                         Manual top-ups apply to external subscription balances. Internal plans have no
                                         balance — use “Reset quota” in the lookup card to refresh their rolling quota windows.
                                     </div>
-                                    <form onSubmit={handleTopupSubscriptionBudget} className="space-y-4">
-                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                    <form onSubmit={handleTopupSubscriptionBudget} className="space-y-3">
+                                        <div className="grid grid-cols-3 gap-2.5">
                                             <Input
                                                 label="User ID *"
                                                 value={subBudgetUserId}
@@ -4846,7 +4816,7 @@ Shortfall ledger notes:
                                                 placeholder="Optional notes"
                                             />
                                         </div>
-                                        <label className="flex items-center gap-2 text-sm text-[#3A5672]">
+                                        <label className="flex items-center gap-2 text-[12px] text-[#3A5672]">
                                             <input
                                                 type="checkbox"
                                                 checked={subBudgetForceTopup}
@@ -4855,9 +4825,11 @@ Shortfall ledger notes:
                                             />
                                             Force topup (allow multiple in the same billing period)
                                         </label>
-                                        <Button type="submit" disabled={loadingAction}>
-                                            {loadingAction ? 'Processing…' : 'Top-up Subscription Balance'}
-                                        </Button>
+                                        <div className="flex justify-end">
+                                            <Button type="submit" disabled={loadingAction}>
+                                                {loadingAction ? 'Processing…' : 'Top-up Subscription Balance'}
+                                            </Button>
+                                        </div>
                                     </form>
                                 </CardBody>
                             </Card>
@@ -4867,9 +4839,9 @@ Shortfall ledger notes:
                                     title="Wallet Refund (Stripe)"
                                     subtitle="Refund a Stripe payment_intent. Credits are removed immediately; finalization happens via Stripe webhook."
                                 />
-                                <CardBody className="space-y-4">
-                                    <form onSubmit={handleWalletRefund} className="space-y-4">
-                                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                <CardBody className="space-y-3">
+                                    <form onSubmit={handleWalletRefund} className="space-y-3">
+                                        <div className="grid grid-cols-4 gap-2.5">
                                             <Input
                                                 label="User ID *"
                                                 value={walletRefundUserId}
@@ -4898,9 +4870,11 @@ Shortfall ledger notes:
                                                 placeholder="Optional notes"
                                             />
                                         </div>
-                                        <Button type="submit" variant="danger" disabled={loadingAction}>
-                                            {loadingAction ? 'Processing…' : 'Request Refund'}
-                                        </Button>
+                                        <div className="flex justify-end">
+                                            <Button type="submit" variant="danger" disabled={loadingAction}>
+                                                {loadingAction ? 'Processing…' : 'Request Refund'}
+                                            </Button>
+                                        </div>
                                     </form>
                                 </CardBody>
                             </Card>
@@ -4910,9 +4884,9 @@ Shortfall ledger notes:
                                     title="Cancel Stripe Subscription"
                                     subtitle="Request cancellation at period end (current balance remains usable)."
                                 />
-                                <CardBody className="space-y-4">
-                                    <form onSubmit={handleCancelSubscription} className="space-y-4">
-                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <CardBody className="space-y-3">
+                                    <form onSubmit={handleCancelSubscription} className="space-y-3">
+                                        <div className="grid grid-cols-3 gap-2.5">
                                             <Input
                                                 label="User ID"
                                                 value={cancelSubUserId}
@@ -4932,23 +4906,27 @@ Shortfall ledger notes:
                                                 placeholder="Optional notes"
                                             />
                                         </div>
-                                        <Button type="submit" variant="secondary" disabled={loadingAction}>
-                                            {loadingAction ? 'Submitting…' : 'Request Cancellation'}
-                                        </Button>
+                                        <div className="flex justify-end">
+                                            <Button type="submit" variant="secondary" disabled={loadingAction}>
+                                                {loadingAction ? 'Submitting…' : 'Request Cancellation'}
+                                            </Button>
+                                        </div>
                                     </form>
-                                    <div className="text-xs text-[#7A99B0]">
+                                    <div className="text-[11.5px] text-[#7A99B0]">
                                         Provide either User ID or Stripe Subscription ID.
                                     </div>
                                 </CardBody>
                             </Card>
+                            </div>
 
-                            <Card>
+                            <div className="min-h-0 space-y-3 overflow-y-auto pr-1">
+                            <Card className="shrink-0">
                                 <CardHeader
                                     title="Stripe Reconcile"
                                     subtitle="Check pending Stripe refund/cancel requests if a webhook was missed."
                                 />
-                                <CardBody className="space-y-4">
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+                                <CardBody className="space-y-3">
+                                    <div className="grid grid-cols-3 gap-2.5 items-end">
                                         <Select
                                             label="Kind"
                                             value={stripeReconcileKind}
@@ -4978,8 +4956,8 @@ Shortfall ledger notes:
                                         </Button>
                                     }
                                 />
-                                <CardBody className="space-y-4">
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <CardBody className="space-y-3">
+                                    <div className="grid grid-cols-3 gap-2.5">
                                         <Select
                                             label="Kind filter"
                                             value={pendingStripeKind}
@@ -4995,18 +4973,18 @@ Shortfall ledger notes:
                                     {pendingStripeItems.length === 0 ? (
                                         <EmptyState message="No pending Stripe requests loaded." icon="🧾" />
                                     ) : (
-                                        <div className="overflow-x-auto">
-                                            <table className="w-full text-sm">
-                                                <thead className="bg-[#F6FAFA] border-b border-[#E6F1F0] text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0]">
+                                        <div className="max-h-72 overflow-auto rounded-lg border border-[#E6F1F0]">
+                                            <table className="w-full text-[12px]">
+                                                <thead className="sticky top-0 z-10 bg-[#F6FAFA] border-b border-[#E6F1F0] text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0]">
                                                 <tr>
-                                                    <th className="px-6 py-4 text-left font-bold">Kind</th>
-                                                    <th className="px-6 py-4 text-left font-bold">User</th>
-                                                    <th className="px-6 py-4 text-left font-bold">Amount</th>
-                                                    <th className="px-6 py-4 text-left font-bold">Tokens</th>
-                                                    <th className="px-6 py-4 text-left font-bold">Stripe ID</th>
-                                                    <th className="px-6 py-4 text-left font-bold">Open</th>
-                                                    <th className="px-6 py-4 text-left font-bold">External ID</th>
-                                                    <th className="px-6 py-4 text-left font-bold">Created</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Kind</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">User</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Amount</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Tokens</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Stripe ID</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Open</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">External ID</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Created</th>
                                                 </tr>
                                                 </thead>
                                                 <tbody className="divide-y divide-[#E6F1F0]">
@@ -5014,16 +4992,16 @@ Shortfall ledger notes:
                                                     const stripeLink = stripeLinkForPending(p);
                                                     return (
                                                     <tr key={`${p.kind}:${p.external_id}`} className="hover:bg-[#F6FAFA] transition-colors">
-                                                        <td className="px-6 py-4 font-mono text-[13px] text-[#0D1E2C]">{p.kind}</td>
-                                                        <td className="px-6 py-4 font-mono text-[13px] text-[#0D1E2C]">{p.user_id || '—'}</td>
-                                                        <td className="px-6 py-4 text-[#3A5672]">
+                                                        <td className="px-2.5 py-1.5 font-mono text-[12px] text-[#0D1E2C]">{p.kind}</td>
+                                                        <td className="px-2.5 py-1.5 font-mono text-[12px] text-[#0D1E2C]">{p.user_id || '—'}</td>
+                                                        <td className="px-2.5 py-1.5 text-[#3A5672]">
                                                             {p.amount_usd != null ? `$${Number(p.amount_usd).toFixed(2)}` : '—'}
                                                         </td>
-                                                        <td className="px-6 py-4 text-[#3A5672]">
+                                                        <td className="px-2.5 py-1.5 text-[#3A5672]">
                                                             {p.tokens != null ? Number(p.tokens).toLocaleString() : '—'}
                                                         </td>
-                                                        <td className="px-6 py-4 font-mono text-[13px] text-[#0D1E2C]">{stripeLink?.id || '—'}</td>
-                                                        <td className="px-6 py-4">
+                                                        <td className="px-2.5 py-1.5 font-mono text-[12px] text-[#0D1E2C]">{stripeLink?.id || '—'}</td>
+                                                        <td className="px-2.5 py-1.5">
                                                             {stripeLink ? (
                                                                 <a
                                                                     href={stripeLink.url}
@@ -5037,8 +5015,8 @@ Shortfall ledger notes:
                                                                 <span className="text-[#7A99B0]">—</span>
                                                             )}
                                                         </td>
-                                                        <td className="px-6 py-4 font-mono text-[13px] text-[#3A5672]">{p.external_id}</td>
-                                                        <td className="px-6 py-4 text-[#3A5672]">{formatDateTime(p.created_at)}</td>
+                                                        <td className="px-2.5 py-1.5 font-mono text-[12px] text-[#3A5672]">{p.external_id}</td>
+                                                        <td className="px-2.5 py-1.5 text-[#3A5672]">{formatDateTime(p.created_at)}</td>
                                                     </tr>
                                                 );
                                                 })}
@@ -5059,8 +5037,8 @@ Shortfall ledger notes:
                                         </Button>
                                     }
                                 />
-                                <CardBody className="space-y-4">
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <CardBody className="space-y-3">
+                                    <div className="grid grid-cols-3 gap-2.5">
                                         <Input
                                             label="Kind filter (optional)"
                                             value={pendingEconomicsKind}
@@ -5083,18 +5061,18 @@ Shortfall ledger notes:
                                     {pendingEconomicsItems.length === 0 ? (
                                         <EmptyState message="No pending economics events loaded." icon="🧾" />
                                     ) : (
-                                        <div className="overflow-x-auto">
-                                            <table className="w-full text-sm">
-                                                <thead className="bg-[#F6FAFA] border-b border-[#E6F1F0] text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0]">
+                                        <div className="max-h-72 overflow-auto rounded-lg border border-[#E6F1F0]">
+                                            <table className="w-full text-[12px]">
+                                                <thead className="sticky top-0 z-10 bg-[#F6FAFA] border-b border-[#E6F1F0] text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0]">
                                                 <tr>
-                                                    <th className="px-6 py-4 text-left font-bold">Kind</th>
-                                                    <th className="px-6 py-4 text-left font-bold">User</th>
-                                                    <th className="px-6 py-4 text-left font-bold">Amount</th>
-                                                    <th className="px-6 py-4 text-left font-bold">Tokens</th>
-                                                    <th className="px-6 py-4 text-left font-bold">Stripe ID</th>
-                                                    <th className="px-6 py-4 text-left font-bold">Open</th>
-                                                    <th className="px-6 py-4 text-left font-bold">External ID</th>
-                                                    <th className="px-6 py-4 text-left font-bold">Created</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Kind</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">User</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Amount</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Tokens</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Stripe ID</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Open</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">External ID</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Created</th>
                                                 </tr>
                                                 </thead>
                                                 <tbody className="divide-y divide-[#E6F1F0]">
@@ -5102,16 +5080,16 @@ Shortfall ledger notes:
                                                     const stripeLink = stripeLinkForPending(p);
                                                     return (
                                                     <tr key={`${p.kind}:${p.external_id}`} className="hover:bg-[#F6FAFA] transition-colors">
-                                                        <td className="px-6 py-4 font-mono text-[13px] text-[#0D1E2C]">{p.kind}</td>
-                                                        <td className="px-6 py-4 font-mono text-[13px] text-[#0D1E2C]">{p.user_id || '—'}</td>
-                                                        <td className="px-6 py-4 text-[#3A5672]">
+                                                        <td className="px-2.5 py-1.5 font-mono text-[12px] text-[#0D1E2C]">{p.kind}</td>
+                                                        <td className="px-2.5 py-1.5 font-mono text-[12px] text-[#0D1E2C]">{p.user_id || '—'}</td>
+                                                        <td className="px-2.5 py-1.5 text-[#3A5672]">
                                                             {p.amount_usd != null ? `$${Number(p.amount_usd).toFixed(2)}` : '—'}
                                                         </td>
-                                                        <td className="px-6 py-4 text-[#3A5672]">
+                                                        <td className="px-2.5 py-1.5 text-[#3A5672]">
                                                             {p.tokens != null ? Number(p.tokens).toLocaleString() : '—'}
                                                         </td>
-                                                        <td className="px-6 py-4 font-mono text-[13px] text-[#0D1E2C]">{stripeLink?.id || '—'}</td>
-                                                        <td className="px-6 py-4">
+                                                        <td className="px-2.5 py-1.5 font-mono text-[12px] text-[#0D1E2C]">{stripeLink?.id || '—'}</td>
+                                                        <td className="px-2.5 py-1.5">
                                                             {stripeLink ? (
                                                                 <a
                                                                     href={stripeLink.url}
@@ -5125,8 +5103,8 @@ Shortfall ledger notes:
                                                                 <span className="text-[#7A99B0]">—</span>
                                                             )}
                                                         </td>
-                                                        <td className="px-6 py-4 font-mono text-[13px] text-[#3A5672]">{p.external_id}</td>
-                                                        <td className="px-6 py-4 text-[#3A5672]">{formatDateTime(p.created_at)}</td>
+                                                        <td className="px-2.5 py-1.5 font-mono text-[12px] text-[#3A5672]">{p.external_id}</td>
+                                                        <td className="px-2.5 py-1.5 text-[#3A5672]">{formatDateTime(p.created_at)}</td>
                                                     </tr>
                                                 );
                                                 })}
@@ -5142,9 +5120,9 @@ Shortfall ledger notes:
                                     title="Sweep Unused Subscription Balances"
                                     subtitle="Moves unused subscription balance to project budget for due subscriptions."
                                 />
-                                <CardBody className="space-y-4">
-                                    <form onSubmit={handleSweepSubscriptionRollovers} className="space-y-4">
-                                        <div className="flex gap-3">
+                                <CardBody className="space-y-3">
+                                    <form onSubmit={handleSweepSubscriptionRollovers} className="space-y-3">
+                                        <div className="flex items-end gap-2.5">
                                             <Input
                                                 label="User ID (optional)"
                                                 value={subSweepUserId}
@@ -5165,9 +5143,9 @@ Shortfall ledger notes:
                                     title="Reap Expired Subscription Reservations"
                                     subtitle="Cleans up expired reservation holds across subscription periods."
                                 />
-                                <CardBody className="space-y-4">
-                                    <form onSubmit={handleReapSubscriptionReservations} className="space-y-4">
-                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <CardBody className="space-y-3">
+                                    <form onSubmit={handleReapSubscriptionReservations} className="space-y-3">
+                                        <div className="grid grid-cols-3 gap-2.5">
                                             <Input
                                                 label="User ID (optional)"
                                                 value={subReapUserId}
@@ -5201,9 +5179,9 @@ Shortfall ledger notes:
                                     title="Subscription Period History"
                                     subtitle="Closed periods and ledger entries for a user's subscription."
                                 />
-                                <CardBody className="space-y-4">
-                                    <form onSubmit={handleLoadSubscriptionPeriods} className="space-y-4">
-                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <CardBody className="space-y-3">
+                                    <form onSubmit={handleLoadSubscriptionPeriods} className="space-y-3">
+                                        <div className="grid grid-cols-3 gap-2.5">
                                             <Input
                                                 label="User ID *"
                                                 value={subHistoryUserId}
@@ -5232,18 +5210,18 @@ Shortfall ledger notes:
                                     {subPeriods.length === 0 ? (
                                         <EmptyState message="No subscription periods loaded." icon="📚" />
                                     ) : (
-                                        <div className="overflow-x-auto">
-                                            <table className="w-full text-sm">
-                                                <thead className="bg-[#F6FAFA] border-b border-[#E6F1F0] text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0]">
+                                        <div className="max-h-72 overflow-auto rounded-lg border border-[#E6F1F0]">
+                                            <table className="w-full text-[12px]">
+                                                <thead className="sticky top-0 z-10 bg-[#F6FAFA] border-b border-[#E6F1F0] text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0]">
                                                 <tr>
-                                                    <th className="px-6 py-4 text-left font-bold">Period</th>
-                                                    <th className="px-6 py-4 text-left font-bold">Status</th>
-                                                    <th className="px-6 py-4 text-left font-bold">Topup</th>
-                                                    <th className="px-6 py-4 text-left font-bold">Spent</th>
-                                                    <th className="px-6 py-4 text-left font-bold">Rolled</th>
-                                                    <th className="px-6 py-4 text-left font-bold">Balance</th>
-                                                    <th className="px-6 py-4 text-left font-bold">Closed</th>
-                                                    <th className="px-6 py-4 text-left font-bold">Actions</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Period</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Status</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Topup</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Spent</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Rolled</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Balance</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Closed</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Actions</th>
                                                 </tr>
                                                 </thead>
                                                 <tbody className="divide-y divide-[#E6F1F0]">
@@ -5252,17 +5230,17 @@ Shortfall ledger notes:
                                                         key={p.period_key}
                                                         className={p.period_key === subSelectedPeriodKey ? 'bg-[rgba(1,190,178,0.07)]' : 'hover:bg-[#F6FAFA] transition-colors'}
                                                     >
-                                                        <td className="px-6 py-4 text-[#3A5672]">
+                                                        <td className="px-2.5 py-1.5 text-[#3A5672]">
                                                             <div className="font-medium text-[#0D1E2C]">{formatDateTime(p.period_start)} → {formatDateTime(p.period_end)}</div>
-                                                            <div className="font-mono text-xs text-[#7A99B0]">{p.period_key}</div>
+                                                            <div className="font-mono text-[11px] text-[#7A99B0]">{p.period_key}</div>
                                                         </td>
-                                                        <td className="px-6 py-4 text-[#3A5672]">{p.status}</td>
-                                                        <td className="px-6 py-4 text-[#3A5672]">${Number(p.topup_usd || 0).toFixed(2)}</td>
-                                                        <td className="px-6 py-4 text-[#3A5672]">${Number(p.spent_usd || 0).toFixed(2)}</td>
-                                                        <td className="px-6 py-4 text-[#3A5672]">${Number(p.rolled_over_usd || 0).toFixed(2)}</td>
-                                                        <td className="px-6 py-4 text-[#3A5672]">${Number(p.balance_usd || 0).toFixed(2)}</td>
-                                                        <td className="px-6 py-4 text-[#3A5672]">{formatDateTime(p.closed_at)}</td>
-                                                        <td className="px-6 py-4">
+                                                        <td className="px-2.5 py-1.5 text-[#3A5672]">{p.status}</td>
+                                                        <td className="px-2.5 py-1.5 text-[#3A5672]">${Number(p.topup_usd || 0).toFixed(2)}</td>
+                                                        <td className="px-2.5 py-1.5 text-[#3A5672]">${Number(p.spent_usd || 0).toFixed(2)}</td>
+                                                        <td className="px-2.5 py-1.5 text-[#3A5672]">${Number(p.rolled_over_usd || 0).toFixed(2)}</td>
+                                                        <td className="px-2.5 py-1.5 text-[#3A5672]">${Number(p.balance_usd || 0).toFixed(2)}</td>
+                                                        <td className="px-2.5 py-1.5 text-[#3A5672]">{formatDateTime(p.closed_at)}</td>
+                                                        <td className="px-2.5 py-1.5">
                                                             <Button
                                                                 type="button"
                                                                 variant="secondary"
@@ -5280,9 +5258,9 @@ Shortfall ledger notes:
                                     )}
 
                                     {subSelectedPeriodKey && (
-                                        <div className="pt-4 border-t border-[#E6F1F0] space-y-3">
+                                        <div className="pt-2.5 border-t border-[#E6F1F0] space-y-3">
                                             <div className="flex items-center justify-between">
-                                                <div className="text-sm text-[#3A5672]">
+                                                <div className="text-[12px] text-[#3A5672]">
                                                     Ledger for period: <span className="font-medium text-[#0D1E2C]">{subSelectedPeriodKey}</span>
                                                 </div>
                                                 <Button
@@ -5298,16 +5276,16 @@ Shortfall ledger notes:
                                             {subLedger.length === 0 ? (
                                                 <EmptyState message="No ledger entries for this period." icon="🧾" />
                                             ) : (
-                                                <div className="overflow-x-auto">
-                                                    <table className="w-full text-sm">
-                                                        <thead className="bg-[#F6FAFA] border-b border-[#E6F1F0] text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0]">
+                                                <div className="max-h-72 overflow-auto rounded-lg border border-[#E6F1F0]">
+                                                    <table className="w-full text-[12px]">
+                                                        <thead className="sticky top-0 z-10 bg-[#F6FAFA] border-b border-[#E6F1F0] text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0]">
                                                         <tr>
-                                                            <th className="px-6 py-4 text-left font-bold">Time</th>
-                                                            <th className="px-6 py-4 text-left font-bold">Kind</th>
-                                                            <th className="px-6 py-4 text-left font-bold">Amount</th>
-                                                            <th className="px-6 py-4 text-left font-bold">Provider</th>
-                                                            <th className="px-6 py-4 text-left font-bold">Note</th>
-                                                            <th className="px-6 py-4 text-left font-bold">Request</th>
+                                                            <th className="px-2.5 py-1.5 text-left font-bold">Time</th>
+                                                            <th className="px-2.5 py-1.5 text-left font-bold">Kind</th>
+                                                            <th className="px-2.5 py-1.5 text-left font-bold">Amount</th>
+                                                            <th className="px-2.5 py-1.5 text-left font-bold">Provider</th>
+                                                            <th className="px-2.5 py-1.5 text-left font-bold">Note</th>
+                                                            <th className="px-2.5 py-1.5 text-left font-bold">Request</th>
                                                         </tr>
                                                         </thead>
                                                         <tbody className="divide-y divide-[#E6F1F0]">
@@ -5316,14 +5294,14 @@ Shortfall ledger notes:
                                                             const sign = amt >= 0 ? '+' : '-';
                                                             return (
                                                                 <tr key={l.id} className="hover:bg-[#F6FAFA] transition-colors">
-                                                                    <td className="px-6 py-4 text-[#3A5672]">{formatDateTime(l.created_at)}</td>
-                                                                    <td className="px-6 py-4 font-mono text-[13px] text-[#0D1E2C]">{l.kind}</td>
-                                                                    <td className="px-6 py-4 font-semibold text-[#0D1E2C]">
+                                                                    <td className="px-2.5 py-1.5 text-[#3A5672]">{formatDateTime(l.created_at)}</td>
+                                                                    <td className="px-2.5 py-1.5 font-mono text-[12px] text-[#0D1E2C]">{l.kind}</td>
+                                                                    <td className="px-2.5 py-1.5 font-semibold text-[#0D1E2C]">
                                                                         {sign}${Math.abs(amt).toFixed(2)}
                                                                     </td>
-                                                                    <td className="px-6 py-4 text-[#3A5672]">{l.provider || '—'}</td>
-                                                                    <td className="px-6 py-4 text-[#3A5672]">{l.note || '—'}</td>
-                                                                    <td className="px-6 py-4 font-mono text-[13px] text-[#3A5672]">{l.request_id || '—'}</td>
+                                                                    <td className="px-2.5 py-1.5 text-[#3A5672]">{l.provider || '—'}</td>
+                                                                    <td className="px-2.5 py-1.5 text-[#3A5672]">{l.note || '—'}</td>
+                                                                    <td className="px-2.5 py-1.5 font-mono text-[12px] text-[#3A5672]">{l.request_id || '—'}</td>
                                                                 </tr>
                                                             );
                                                         })}
@@ -5350,8 +5328,8 @@ Shortfall ledger notes:
                                         </Button>
                                     }
                                 />
-                                <CardBody className="space-y-4">
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <CardBody className="space-y-3">
+                                    <div className="grid grid-cols-3 gap-2.5">
                                         <Select
                                             label="Provider filter"
                                             value={subsProviderFilter}
@@ -5367,29 +5345,29 @@ Shortfall ledger notes:
                                     {subsList.length === 0 ? (
                                         <EmptyState message="No subscriptions loaded (click Refresh)." icon="🧾" />
                                     ) : (
-                                        <div className="overflow-x-auto">
-                                            <table className="w-full text-sm">
-                                                <thead className="bg-[#F6FAFA] border-b border-[#E6F1F0] text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0]">
+                                        <div className="max-h-72 overflow-auto rounded-lg border border-[#E6F1F0]">
+                                            <table className="w-full text-[12px]">
+                                                <thead className="sticky top-0 z-10 bg-[#F6FAFA] border-b border-[#E6F1F0] text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0]">
                                                 <tr>
-                                                    <th className="px-6 py-4 text-left font-bold">User</th>
-                                                    <th className="px-6 py-4 text-left font-bold">Billing</th>
-                                                    <th className="px-6 py-4 text-left font-bold">Plan</th>
-                                                    <th className="px-6 py-4 text-left font-bold">Due</th>
-                                                    <th className="px-6 py-4 text-left font-bold">Next</th>
-                                                    <th className="px-6 py-4 text-left font-bold">Last</th>
-                                                    <th className="px-6 py-4 text-left font-bold">Updated</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">User</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Billing</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Plan</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Due</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Next</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Last</th>
+                                                    <th className="px-2.5 py-1.5 text-left font-bold">Updated</th>
                                                 </tr>
                                                 </thead>
                                                 <tbody className="divide-y divide-[#E6F1F0]">
                                                 {subsList.map((s) => (
                                                     <tr key={`${s.tenant}:${s.project}:${s.user_id}`} className="hover:bg-[#F6FAFA] transition-colors">
-                                                        <td className="px-6 py-4 font-mono text-[13px] font-semibold text-[#0D1E2C]">{s.user_id}</td>
-                                                        <td className="px-6 py-4 text-[#3A5672]">{providerLabel(s.provider)}</td>
-                                                        <td className="px-6 py-4 text-[#3A5672]">{s.plan_id || '—'}</td>
-                                                        <td className="px-6 py-4"><DuePill sub={s} /></td>
-                                                        <td className="px-6 py-4 text-[#3A5672]">{formatDateTime(s.next_charge_at)}</td>
-                                                        <td className="px-6 py-4 text-[#3A5672]">{formatDateTime(s.last_charged_at)}</td>
-                                                        <td className="px-6 py-4 text-[#3A5672]">{formatDateTime(s.updated_at)}</td>
+                                                        <td className="px-2.5 py-1.5 font-mono text-[12px] font-semibold text-[#0D1E2C]">{s.user_id}</td>
+                                                        <td className="px-2.5 py-1.5 text-[#3A5672]">{providerLabel(s.provider)}</td>
+                                                        <td className="px-2.5 py-1.5 text-[#3A5672]">{s.plan_id || '—'}</td>
+                                                        <td className="px-2.5 py-1.5"><DuePill sub={s} /></td>
+                                                        <td className="px-2.5 py-1.5 text-[#3A5672]">{formatDateTime(s.next_charge_at)}</td>
+                                                        <td className="px-2.5 py-1.5 text-[#3A5672]">{formatDateTime(s.last_charged_at)}</td>
+                                                        <td className="px-2.5 py-1.5 text-[#3A5672]">{formatDateTime(s.updated_at)}</td>
                                                     </tr>
                                                 ))}
                                                 </tbody>
@@ -5398,11 +5376,12 @@ Shortfall ledger notes:
                                     )}
                                 </CardBody>
                             </Card>
+                            </div>
                         </div>
                     )}
                     {/* Data lists loading indicator (global hint) */}
                     {(viewMode === 'quotaPolicies' || viewMode === 'budgetPolicies' || viewMode === 'appBudget' || viewMode === 'reservation') && loadingData && (
-                        <div className="text-center text-sm text-[#7A99B0]">Loading…</div>
+                        <div className="pointer-events-none absolute bottom-2 right-4 text-[11.5px] text-[#7A99B0]">Loading…</div>
                     )}
 
 
