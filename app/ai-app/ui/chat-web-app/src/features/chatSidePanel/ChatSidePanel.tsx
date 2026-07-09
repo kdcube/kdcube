@@ -8,6 +8,7 @@ import {
     Database,
     DatabaseZap,
     MessageSquareMore,
+    PlugZap,
 } from "lucide-react";
 import IconContainer from "../../components/IconContainer.tsx";
 import AnimatedExpander from "../../components/AnimatedExpander.tsx";
@@ -33,9 +34,13 @@ import {selectMainViewActive} from "../bundles/bundlesSlice.ts";
 import {getBundleWidgetPanelId} from "../bundles/utils.ts";
 import {SERVICES_APP_ID} from "../widgetPanels/widgetPanels.ts";
 
-// The services app's storage browser rides the side rail like the other
-// platform admin panels.
+// The side rail is the quick access for the platform control surfaces:
+// besides the services app's operation panels it pins served widgets from
+// the always-running control apps.
 const STORAGE_WIDGET_ALIAS = "bundle_storage";
+
+const CONNECTION_HUB_APP_ID = "connection-hub@1-0";
+const CONNECTIONS_WIDGET_ALIAS = "connections_settings";
 
 interface MenuButtonProps {
     children: ReactNode | ReactNode[];
@@ -185,6 +190,13 @@ const ChatSidePanel = () => {
                 >
                     <IconContainer icon={Database} size={1.5}/>
                 </MenuButton>
+                <MenuButton
+                    onClick={() => {
+                        onPanelButtonClick("connections");
+                    }}
+                >
+                    <IconContainer icon={PlugZap} size={1.5}/>
+                </MenuButton>
                 {showDebugControls && <MenuButton
                     onClick={() => {
                         onPanelButtonClick("debug");
@@ -218,6 +230,10 @@ const ChatSidePanel = () => {
                         <BundleWidgetPanel visible={visiblePanel === "storage"}
                                            bundleId={SERVICES_APP_ID}
                                            widgetAlias={STORAGE_WIDGET_ALIAS}
+                                           className={"w-full h-full absolute left-0 top-0"}/>
+                        <BundleWidgetPanel visible={visiblePanel === "connections"}
+                                           bundleId={CONNECTION_HUB_APP_ID}
+                                           widgetAlias={CONNECTIONS_WIDGET_ALIAS}
                                            className={"w-full h-full absolute left-0 top-0"}/>
                         {bundlePanels}
                         {showDebugControls && <DebugPanel visible={visiblePanel === "debug"}
