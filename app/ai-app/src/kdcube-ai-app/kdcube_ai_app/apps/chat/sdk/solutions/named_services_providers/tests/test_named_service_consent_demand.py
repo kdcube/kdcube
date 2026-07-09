@@ -1,23 +1,34 @@
 # SPDX-License-Identifier: MIT
 
-"""In-chat named-service tools speak the demand-driven consent contract.
+"""In-chat named-service consumer paths speak the demand-driven consent contract.
 
 A provider consent error (gate 2: connected-account claims inside the realm)
 raises the same ask as a direct tool attempt: the pending demand is recorded
 and ONE scoped chat consent event goes out. The mapping runs both directions:
 the banner lists the UNDERLYING provider claims (mail get → the gmail read
 claim) while the turn-off spotlight targets the NAMESPACE entry the user sees
-in the composer menu. The external MCP surface renders consent from the
-response itself and stays untouched.
+in the composer menu. One contract, every path: the react.pull rehoster path
+(server-side object.get) raises the identical demand. The external MCP
+surface renders consent from the response itself and stays untouched.
 """
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from kdcube_ai_app.apps.chat.sdk.events import EventSourceSubsystem
+from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import (
+    BundleOperationStreamResult,
+    bind_bundle_operation_stream_caller,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube import consent_demand
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
+    NamedServiceResponse,
+    register_configured_named_service_artifact_rehosters,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.tools import (
     _raise_named_service_consent_demand,
 )
@@ -100,6 +111,111 @@ async def test_plain_errors_and_successes_raise_nothing(monkeypatch):
         tool_name="get_object",
     )
     assert announced == []
+
+
+@pytest.mark.asyncio
+async def test_pull_of_a_slack_ref_without_claims_raises_the_demand_then_succeeds(tmp_path, monkeypatch):
+    """react.pull is THE reading path for provider-backed namespaces, so its
+    server-side object.get speaks the full consent contract: an unmet claim
+    propagates the structured consent error into the pull result AND records
+    exactly one scoped demand (banner spotlights the `slack` menu entry);
+    after consent the same pull materializes the artifact."""
+    announced = _record_announces(monkeypatch)
+    slack_ref = "slack:acct_1:channel:C0123"
+    granted = {"value": False}
+
+    async def _stream_caller(call):
+        assert call.data["operation"] == "object.get"
+        assert call.data["context"]["source"] == "react.pull"
+        assert call.data["object_ref"] == slack_ref
+        if not granted["value"]:
+            return NamedServiceResponse.error_response(
+                code="needs_connected_account_consent",
+                message="Connect Slack and approve slack:history.",
+                status=403,
+                details={
+                    "reason": "connect_required",
+                    "consent": {
+                        "kind": "delegated_to_kdcube.connected_account",
+                        "reason": "connect_required",
+                        "provider_id": "slack",
+                        "connector_app_id": "demo",
+                        "claims": ["slack:history"],
+                        "url": "/widgets/connections_settings?tab=delegated_to_kdcube&provider_id=slack&claims=slack%3Ahistory",
+                        "action_label": "Connect account",
+                    },
+                },
+                namespace="slack",
+                object_ref=slack_ref,
+            )
+
+        async def _chunks():
+            yield b"channel history"
+
+        return BundleOperationStreamResult(
+            chunks=_chunks(),
+            filename="history.md",
+            media_type="text/markdown",
+            response=NamedServiceResponse.ok_response(
+                namespace="slack", object_ref=slack_ref,
+            ).to_dict(),
+        )
+
+    event_sources = EventSourceSubsystem()
+    count = register_configured_named_service_artifact_rehosters(
+        event_sources,
+        tenant="tenant-a",
+        project="project-a",
+        namespaces={
+            "slack": {
+                "pull": {"operation": "object.get"},
+                "providers": [
+                    {
+                        "transport": "bundle_operation",
+                        "bundle_id": "kdcube-services@1-0",
+                        "provider": "slack",
+                        "operations": ["object.get"],
+                    }
+                ],
+            }
+        },
+    )
+    assert count == 1
+
+    ctx_browser = SimpleNamespace(runtime_ctx=SimpleNamespace(turn_id="turn_pull"))
+    with bind_bundle_operation_stream_caller(_stream_caller):
+        blocked = await event_sources.rehost_namespace_ref(
+            slack_ref, ctx_browser=ctx_browser, outdir=tmp_path,
+        )
+
+    # The structured consent story rides the pull's error result…
+    assert blocked["materialized"] == []
+    error = blocked["errors"][0]["error"]
+    assert error["code"] == "needs_connected_account_consent"
+    assert error["details"]["consent"]["claims"] == ["slack:history"]
+    assert "tab=delegated_to_kdcube" in error["details"]["consent"]["url"]
+    # …and exactly one scoped demand went out, identical to a direct attempt.
+    assert len(announced) == 1
+    demand = announced[0]
+    assert demand["provider_id"] == "slack"
+    assert demand["claims"] == ["slack:history"]
+    assert demand["tool_name"] == "slack"
+    assert demand["payload"]["consent"]["tools"] == ["slack"]
+    assert demand["payload"]["tools"] == ["react.pull"]
+
+    granted["value"] = True
+    with bind_bundle_operation_stream_caller(_stream_caller):
+        result = await event_sources.rehost_namespace_ref(
+            slack_ref, ctx_browser=ctx_browser, outdir=tmp_path,
+        )
+
+    assert result["errors"] == []
+    materialized = result["materialized"][0]
+    assert materialized["logical_path"].startswith("conv:fi:")
+    target = tmp_path / "workdir" / materialized["physical_path"]
+    assert target.read_bytes() == b"channel history"
+    # The successful pull raised no further demand.
+    assert len(announced) == 1
 
 
 @pytest.mark.asyncio

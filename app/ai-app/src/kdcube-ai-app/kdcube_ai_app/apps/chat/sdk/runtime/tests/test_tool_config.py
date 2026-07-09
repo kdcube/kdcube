@@ -106,6 +106,74 @@ def test_agent_tool_config_reads_as_consumer_surface_tools() -> None:
     }
 
 
+def test_no_namespace_with_object_get_drops_get_object_from_the_roster() -> None:
+    """The surfaced case: mail and slack consumed as named-service namespaces,
+    reading riding react.pull — with object.get in NO namespace's allowed list
+    (declared as an intentional exclusion instead), the get_object grammar
+    tool must not be advertised to ReAct at all."""
+    cfg = agent_tool_config_from_bundle_props(
+        {
+            "surfaces": {
+                "as_consumer": {
+                    "agents": {
+                        "main": {
+                            "tools": [
+                                {
+                                    "kind": "named_service",
+                                    "alias": "named_services",
+                                    "namespaces": {
+                                        "mail": {
+                                            "allowed": [
+                                                "provider.about",
+                                                "object.list",
+                                                "object.search",
+                                                "object.schema",
+                                                "object.action",
+                                            ],
+                                            "excluded": {
+                                                "object.get": {
+                                                    "reason": "Reading rides the context tools — the agent pulls mail refs directly.",
+                                                    "agent_hint": "Pull the ref with react.pull; read the materialized artifact with react.read.",
+                                                },
+                                            },
+                                        },
+                                        "slack": {
+                                            "allowed": [
+                                                "provider.about",
+                                                "object.list",
+                                                "object.search",
+                                                "object.schema",
+                                                "object.action",
+                                            ],
+                                            "excluded": {
+                                                "object.get": {
+                                                    "reason": "Reading rides the context tools — the agent pulls slack refs directly.",
+                                                    "agent_hint": "Pull the ref with react.pull; read the materialized artifact with react.read.",
+                                                },
+                                            },
+                                        },
+                                    },
+                                },
+                            ],
+                        },
+                    },
+                },
+            },
+        },
+        "main",
+    )
+
+    advertised = cfg.allowed_tool_names_by_alias["named_services"]
+    assert "get_object" not in advertised
+    assert advertised == [
+        "provider_about",
+        "list_objects",
+        "search_objects",
+        "object_schema",
+        "object_action",
+    ]
+
+
 def test_agent_tool_config_reads_tool_connected_account_claims() -> None:
     cfg = agent_tool_config_from_bundle_props(
         {

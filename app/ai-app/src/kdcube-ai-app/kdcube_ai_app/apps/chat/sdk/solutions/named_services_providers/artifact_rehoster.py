@@ -20,6 +20,9 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
 )
 
 from .client_tools import named_service_namespace_provider_configs_from_config
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.consent import (
+    raise_named_service_consent_demand,
+)
 from .transports.api_client import NamedServiceEndpoint, call_named_service_endpoint_stream
 from .types import OBJECT_GET, NamedServiceRequest
 
@@ -235,14 +238,23 @@ class NamedServiceArtifactNamespaceRehoster:
                 response.status,
                 response.error.code if response.error else "",
             )
+            error_dict = response.error.to_dict() if response.error else {
+                "code": "named_service_stream_failed",
+                "message": "Named-service stream request failed",
+                "details": {"status": response.status},
+            }
+            # One contract, every path: a provider consent error raised on the
+            # pull path records the same scoped demand + chat consent event as
+            # a direct named_services.* tool attempt would.
+            await raise_named_service_consent_demand(
+                {"ok": False, "error": error_dict},
+                namespace=self.namespace,
+                tool_name="react.pull",
+            )
             return {
                 "errors": [{
                     "object_ref": ref,
-                    "error": response.error.to_dict() if response.error else {
-                        "code": "named_service_stream_failed",
-                        "message": "Named-service stream request failed",
-                        "details": {"status": response.status},
-                    },
+                    "error": error_dict,
                     "response": response.to_dict(),
                 }]
             }

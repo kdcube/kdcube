@@ -428,6 +428,64 @@ bundles:
                   #       strategy: [exploitation]
                   #     delete_object:
                   #       strategy: [exploitation]
+                  # Mail and Slack follow the same design when consumed as
+                  # named-service namespaces (served by a provider app such
+                  # as kdcube-services): reading rides the context tools, so
+                  # object.get stays OUT of the allowed list and the agent
+                  # pulls mail:/slack: refs with react.pull. The paired pull
+                  # policies (see the commented mail/slack event_sources
+                  # below) call provider object.get server-side; connected-
+                  # account claims resolve there, and an unmet claim returns
+                  # the structured consent story and raises the same scoped
+                  # consent demand as a direct tool attempt. Enable this
+                  # connection and its paired pull policies TOGETHER, and
+                  # turn off the direct gmail/slack python tools above when
+                  # this surface is on.
+                  # - name: communications_service
+                  #   kind: named_service
+                  #   alias: named_services
+                  #   namespaces:
+                  #     mail:
+                  #       allowed:
+                  #         - provider.about
+                  #         - object.list
+                  #         - object.search
+                  #         - object.schema
+                  #         - object.action
+                  #       excluded:
+                  #         object.get:
+                  #           reason: "Reading rides the context tools — the agent pulls mail refs directly."
+                  #           agent_hint: >-
+                  #             Read a mail message or attachment by pulling its ref
+                  #             with react.pull (paths: ["mail:..."]). The content
+                  #             materializes as a conv:fi: artifact with provenance;
+                  #             read it with react.read or ranged reads.
+                  #     slack:
+                  #       allowed:
+                  #         - provider.about
+                  #         - object.list
+                  #         - object.search
+                  #         - object.schema
+                  #         - object.action
+                  #       excluded:
+                  #         object.get:
+                  #           reason: "Reading rides the context tools — the agent pulls slack refs directly."
+                  #           agent_hint: >-
+                  #             Read channel history or a shared file by pulling its
+                  #             ref with react.pull (paths: ["slack:..."]). The content
+                  #             materializes as a conv:fi: artifact with provenance;
+                  #             read it with react.read or ranged reads.
+                  #   tool_traits:
+                  #     provider_about:
+                  #       strategy: [exploration]
+                  #     list_objects:
+                  #       strategy: [exploration]
+                  #     search_objects:
+                  #       strategy: [exploration]
+                  #     object_schema:
+                  #       strategy: [exploration]
+                  #     object_action:
+                  #       strategy: [exploitation]
                 # Add namespace event-source policies here when external refs
                 # should render into the ReAct timeline and be pullable.
                 # Example:
@@ -469,6 +527,31 @@ bundles:
                       pull:
                         mode: provider
                         operation: object.get
+                  # Paired with the commented communications_service tool
+                  # connection above: these pull policies are what make
+                  # mail:/slack: refs readable at all (react.pull calls
+                  # provider object.get server-side and materializes a
+                  # conv:fi: artifact with provenance). Pull-only — the
+                  # mail/slack providers publish no block.produce. Enable
+                  # together with the tool connection.
+                  # - kind: named_service
+                  #   namespace: mail
+                  #   enabled: true
+                  #   discovery:
+                  #     mode: service_discovery
+                  #   policies:
+                  #     pull:
+                  #       mode: provider
+                  #       operation: object.get
+                  # - kind: named_service
+                  #   namespace: slack
+                  #   enabled: true
+                  #   discovery:
+                  #     mode: service_discovery
+                  #   policies:
+                  #     pull:
+                  #       mode: provider
+                  #       operation: object.get
                 skills:
                   custom_root: skills
                   consumers: {}
