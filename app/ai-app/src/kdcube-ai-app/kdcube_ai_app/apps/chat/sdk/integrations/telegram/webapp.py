@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 from typing import Any, Dict, Optional
 
 from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bundle_registry import (
@@ -12,6 +13,8 @@ from kdcube_ai_app.apps.chat.sdk.integrations.integration_config import select_i
 from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import get_current_bundle_id, get_current_request_context
 
 BUNDLE_ID = ""
+
+logger = logging.getLogger("kdcube.telegram.webapp")
 
 memory_widgets: Any = None
 settings_widgets: Any = None
@@ -159,11 +162,81 @@ def _linked_telegram_user(entrypoint: Any, *, user_id: Optional[str] = None) -> 
     return None
 
 
-def _conversation_result_for_user(entrypoint: Any, *, user_id: Optional[str] = None) -> Dict[str, Any]:
+def _identity_family_payload(result: Any) -> Dict[str, Any]:
+    """Unwrap the identity_family_resolve response from operation wrappers."""
+    candidates = [result]
+    if isinstance(result, dict):
+        candidates.extend([result.get("identity_family_resolve"), result.get("result")])
+    for candidate in candidates:
+        if isinstance(candidate, dict) and isinstance(candidate.get("identities"), list):
+            return candidate
+    return {}
+
+
+async def _identity_family_telegram_user(entrypoint: Any, *, user_id: str) -> Optional[Dict[str, Any]]:
+    """Connection Hub identity-edge fallback for the Telegram mapping.
+
+    A Telegram account linked through the hub (mini-app link code / identity
+    edge) IS an existing connection: when the telegram-admin mapping store has
+    no row, resolve the user's identity family and use a linked Telegram
+    identity's subject as the telegram_user_id. The admin store stays the
+    first authority; failures fall back to "no mapping" exactly as before.
+    """
+    target = str(user_id or "").strip()
+    if not target:
+        return None
+    try:
+        from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import call_bundle_operation
+
+        tenant, project = _tenant_project(entrypoint)
+        result = await call_bundle_operation(
+            bundle_id=_connection_hub_bundle_id(entrypoint),
+            operation="identity_family_resolve",
+            data={"input_user_id": target, "platform_user_id": target},
+            tenant=tenant,
+            project=project,
+            route="operations",
+        )
+    except Exception as exc:
+        logger.info("[telegram.webapp] identity-family fallback unavailable user=%s: %s", target, exc)
+        return None
+    payload_data = _identity_family_payload(result)
+    for identity in payload_data.get("identities") or []:
+        if not isinstance(identity, dict):
+            continue
+        if str(identity.get("provider") or "").strip().lower() != "telegram":
+            continue
+        subject = str(identity.get("provider_subject") or "").strip()
+        if not subject:
+            continue
+        logger.info(
+            "[telegram.webapp] telegram mapping resolved from connection-hub identity edge user=%s subject=%s",
+            target, subject,
+        )
+        return {
+            "telegram_user_id": subject,
+            "telegram_chat_id": "",
+            "telegram_username": str(identity.get("label") or ""),
+            "kdcube_user_id": target,
+            "source": "connection_hub_identity_edge",
+        }
+    return None
+
+
+async def _resolve_linked_telegram_user(entrypoint: Any, *, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Admin-mapping row first; hub identity edge as the fallback."""
+    effective = _effective_user_id(entrypoint, user_id)
+    user = _linked_telegram_user(entrypoint, user_id=effective)
+    if user:
+        return user
+    return await _identity_family_telegram_user(entrypoint, user_id=effective)
+
+
+async def _conversation_result_for_user(entrypoint: Any, *, user_id: Optional[str] = None) -> Dict[str, Any]:
     cfg = _config(entrypoint)
     admin = cfg["telegram_user_admin"]
     effective_user_id = _effective_user_id(entrypoint, user_id)
-    user = _linked_telegram_user(entrypoint, user_id=effective_user_id)
+    user = await _resolve_linked_telegram_user(entrypoint, user_id=effective_user_id)
     if not user:
         return _mapping_required(effective_user_id)
     listing = admin.storage(entrypoint).list_conversations(
@@ -236,7 +309,7 @@ async def list_conversations(
     fingerprint: Optional[str] = None,
 ) -> Dict[str, Any]:
     del fingerprint
-    return _conversation_result_for_user(entrypoint, user_id=user_id)
+    return await _conversation_result_for_user(entrypoint, user_id=user_id)
 
 
 async def create_conversation(
@@ -250,7 +323,7 @@ async def create_conversation(
     admin = cfg["telegram_user_admin"]
     del fingerprint
     effective_user_id = _effective_user_id(entrypoint, user_id)
-    user = _linked_telegram_user(entrypoint, user_id=effective_user_id)
+    user = await _resolve_linked_telegram_user(entrypoint, user_id=effective_user_id)
     if not user:
         return _mapping_required(effective_user_id)
     result = admin.storage(entrypoint).create_conversation(
@@ -278,7 +351,7 @@ async def switch_conversation(
     admin = cfg["telegram_user_admin"]
     del fingerprint
     effective_user_id = _effective_user_id(entrypoint, user_id)
-    user = _linked_telegram_user(entrypoint, user_id=effective_user_id)
+    user = await _resolve_linked_telegram_user(entrypoint, user_id=effective_user_id)
     if not user:
         return _mapping_required(effective_user_id)
     result = admin.storage(entrypoint).switch_conversation(
@@ -305,7 +378,7 @@ async def delete_conversation(
     admin = cfg["telegram_user_admin"]
     del fingerprint
     effective_user_id = _effective_user_id(entrypoint, user_id)
-    user = _linked_telegram_user(entrypoint, user_id=effective_user_id)
+    user = await _resolve_linked_telegram_user(entrypoint, user_id=effective_user_id)
     if not user:
         result = _mapping_required(effective_user_id)
         result.update({"deleted": False, "deleted_conversation_id": "", "deleted_blobs": {}})
@@ -423,7 +496,7 @@ async def payload(
         }
     else:
         data["conversations"] = _payload_conversations(
-            _conversation_result_for_user(entrypoint, user_id=user_id)
+            await _conversation_result_for_user(entrypoint, user_id=user_id)
         )
     if include_admin:
         data["telegram_admin"] = {

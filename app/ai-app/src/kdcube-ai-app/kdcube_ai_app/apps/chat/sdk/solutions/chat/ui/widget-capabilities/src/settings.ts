@@ -91,7 +91,11 @@ class Settings {
   }
 
   getBundleId(): string {
-    return isPlaceholder(this.values.bundleId) ? context.bundleId : this.values.bundleId
+    // The ROUTE names this widget's own app; a host's defaultAppBundleId is
+    // the HOST's current app (embedded scenes relay CONFIG_REQUEST to the
+    // outer host). Route first, so ops always hit the serving bundle.
+    if (context.bundleId) return context.bundleId
+    return isPlaceholder(this.values.bundleId) ? '' : this.values.bundleId
   }
 
   /** Widget-config agent: `?agent=` (scene component params) over the

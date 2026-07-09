@@ -1987,3 +1987,107 @@ async def test_telegram_activity_streamer_show_progress_false_delivers_files_onl
     assert sent[0].kind == "document"
     assert sent[0].files[0]["filename"] == "report.pdf"
     assert streamer.delivered_file_keys() == {"https://example.test/report.pdf"}
+
+
+# ── The mini-app panel sees a hub-linked Telegram identity ───────────────────
+# Surfaced live: the Connection Hub Identity tab showed a linked Telegram
+# account, while the companion's Chats tab said "No Telegram user is linked" —
+# two registries. The admin mapping store stays the first authority; a hub
+# identity EDGE (provider=telegram) is the fallback that makes an existing
+# link visible.
+
+
+class _EdgeFallbackEntrypoint:
+    class _Actor:
+        tenant_id = "demo-tenant"
+        project_id = "demo-project"
+
+    class _Comm:
+        pass
+
+    def __init__(self):
+        self.comm_context = self._Comm()
+        self.comm_context.actor = self._Actor()
+
+    def bundle_prop(self, path, default=None):
+        return default
+
+
+@pytest.mark.asyncio
+async def test_hub_identity_edge_backfills_missing_telegram_mapping(monkeypatch):
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram import webapp
+    from kdcube_ai_app.apps.chat.sdk.infra import bundle_operations
+
+    calls = []
+
+    async def _fake_call(**kwargs):
+        calls.append(kwargs)
+        return {
+            "identity_family_resolve": {
+                "ok": True,
+                "schema": "connection_hub.identity_family.v1",
+                "identities": [
+                    {"kind": "platform", "provider": "", "provider_subject": "", "user_id": "user-1"},
+                    {"kind": "integration", "provider": "telegram", "provider_subject": "434804821",
+                     "label": "elena_viter", "user_id": "telegram_434804821"},
+                ],
+            }
+        }
+
+    monkeypatch.setattr(bundle_operations, "call_bundle_operation", _fake_call)
+    # No admin-mapping row for this user.
+    monkeypatch.setattr(webapp, "_linked_telegram_user", lambda entrypoint, *, user_id=None: None)
+
+    entrypoint = _EdgeFallbackEntrypoint()
+    user = await webapp._resolve_linked_telegram_user(entrypoint, user_id="user-1")
+    assert user is not None
+    assert user["telegram_user_id"] == "434804821"
+    assert user["kdcube_user_id"] == "user-1"
+    assert user["telegram_username"] == "elena_viter"
+    assert user["source"] == "connection_hub_identity_edge"
+    # The fallback resolved through the hub bundle's operation.
+    assert calls and calls[0]["bundle_id"] == "connection-hub@1-0"
+    assert calls[0]["operation"] == "identity_family_resolve"
+
+
+@pytest.mark.asyncio
+async def test_admin_mapping_row_stays_the_first_authority(monkeypatch):
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram import webapp
+    from kdcube_ai_app.apps.chat.sdk.infra import bundle_operations
+
+    async def _explode(**kwargs):
+        raise AssertionError("the hub is never consulted when the mapping exists")
+
+    monkeypatch.setattr(bundle_operations, "call_bundle_operation", _explode)
+    row = {"telegram_user_id": "999", "kdcube_user_id": "user-1"}
+    monkeypatch.setattr(webapp, "_linked_telegram_user", lambda entrypoint, *, user_id=None: row)
+    user = await webapp._resolve_linked_telegram_user(_EdgeFallbackEntrypoint(), user_id="user-1")
+    assert user is row
+
+
+@pytest.mark.asyncio
+async def test_family_without_telegram_identity_keeps_mapping_required(monkeypatch):
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram import webapp
+    from kdcube_ai_app.apps.chat.sdk.infra import bundle_operations
+
+    async def _fake_call(**kwargs):
+        return {"identity_family_resolve": {"ok": True, "identities": [
+            {"kind": "platform", "provider": "", "provider_subject": "", "user_id": "user-1"},
+        ]}}
+
+    monkeypatch.setattr(bundle_operations, "call_bundle_operation", _fake_call)
+    monkeypatch.setattr(webapp, "_linked_telegram_user", lambda entrypoint, *, user_id=None: None)
+    assert await webapp._resolve_linked_telegram_user(_EdgeFallbackEntrypoint(), user_id="user-1") is None
+
+
+@pytest.mark.asyncio
+async def test_resolver_failure_falls_back_to_mapping_required(monkeypatch):
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram import webapp
+    from kdcube_ai_app.apps.chat.sdk.infra import bundle_operations
+
+    async def _broken(**kwargs):
+        raise RuntimeError("hub unavailable")
+
+    monkeypatch.setattr(bundle_operations, "call_bundle_operation", _broken)
+    monkeypatch.setattr(webapp, "_linked_telegram_user", lambda entrypoint, *, user_id=None: None)
+    assert await webapp._resolve_linked_telegram_user(_EdgeFallbackEntrypoint(), user_id="user-1") is None

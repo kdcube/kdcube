@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import {
   CAPABILITIES_SURFACE,
@@ -116,4 +117,24 @@ test('the widget ack echoes the command_id with ok for host diagnostics', () => 
   assert.equal(ack.command_id, 'caps_9')
   assert.equal(ack.ok, true)
   assert.equal(ack.reason, 'applied')
+})
+
+// A served widget's bundle identity comes from its ROUTE (the bundle URL it
+// is served from), never from a host's defaultAppBundleId — embedded scenes
+// relay CONFIG_REQUEST to the outer host, whose answer names the OUTER app.
+// Letting the handshake win re-pointed every hub operation at a foreign
+// bundle (the empty-hub regression). Pinned at source in both widgets that
+// carry the settings pattern.
+test('widget bundle identity: route wins over the host handshake', () => {
+  const settingsFiles = [
+    '../../../../kdcube_ai_app/apps/chat/sdk/examples/bundles/connection-hub@1-0/ui/widgets/connections/src/api/settings.ts',
+    '../../../../kdcube_ai_app/apps/chat/sdk/solutions/chat/ui/widget-capabilities/src/settings.ts',
+  ]
+  for (const file of settingsFiles) {
+    const source = readFileSync(new URL(file, import.meta.url), 'utf8')
+    const start = source.indexOf('getBundleId()')
+    assert.ok(start >= 0, `${file} has getBundleId`)
+    const block = source.slice(start, source.indexOf('}', source.indexOf('return isPlaceholder', start)))
+    assert.match(block, /if \(context\.bundleId\) return context\.bundleId/)
+  }
 })

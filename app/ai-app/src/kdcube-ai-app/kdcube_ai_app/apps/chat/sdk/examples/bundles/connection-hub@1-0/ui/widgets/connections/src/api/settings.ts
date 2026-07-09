@@ -91,7 +91,13 @@ class Settings {
   }
 
   getBundleId(): string {
-    return isPlaceholder(this.values.bundleId) ? context.bundleId : this.values.bundleId;
+    // The ROUTE names this widget's own app (it is served from its bundle
+    // URL); a host's defaultAppBundleId is the HOST's current app. In an
+    // embedded scene the CONFIG_REQUEST relays to the outer host, whose
+    // answer carries the OUTER bundle — letting it win re-points every hub
+    // operation at a foreign bundle (empty hub). Route first, always.
+    if (context.bundleId) return context.bundleId;
+    return isPlaceholder(this.values.bundleId) ? '' : this.values.bundleId;
   }
 
   getWidgetAlias(): string {
