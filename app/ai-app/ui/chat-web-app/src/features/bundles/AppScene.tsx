@@ -6,10 +6,14 @@ import {getLucideIconComponent} from "../../components/DynamicLucideIcon/utils.t
 import IconContainer from "../../components/IconContainer.tsx";
 import {useGetBundleWidgets} from "./widgetReducer.tsx";
 
-// The automatic scene: the main surface for an app WITHOUT a reactive
-// (chat) entrypoint. The app's visible widgets become summonable chips;
-// the picked widget fills the stage. Widgets stay mounted once opened so
-// switching chips keeps their state (the workspace-scene convention).
+// The automatic scene: the main surface for an app without its own main
+// view. The app's visible widgets become summonable chips; the picked
+// widget fills the stage. Widgets stay mounted once opened so switching
+// chips keeps their state (the workspace-scene convention). An app that
+// declares the default chat surface serves the SDK chat widget under the
+// reserved `chat` alias — it summons first and opens on arrival.
+
+const CHAT_WIDGET_ALIAS = "chat";
 
 function widgetTitle(alias: string): string {
     return alias
@@ -20,12 +24,18 @@ function widgetTitle(alias: string): string {
 const AppScene = () => {
     const tenant = useAppSelector(selectTenant);
     const project = useAppSelector(selectProject);
-    const {currentBundleId, currentBundleData, widgets} = useGetBundleWidgets();
+    const {currentBundleId, currentBundleData, widgets: visibleWidgets} = useGetBundleWidgets();
+
+    const widgets = useMemo(() => {
+        const chat = visibleWidgets.filter((widget) => widget.alias === CHAT_WIDGET_ALIAS);
+        const rest = visibleWidgets.filter((widget) => widget.alias !== CHAT_WIDGET_ALIAS);
+        return [...chat, ...rest];
+    }, [visibleWidgets]);
 
     const [activeAlias, setActiveAlias] = useState<string | null>(null);
     const [openedAliases, setOpenedAliases] = useState<string[]>([]);
 
-    // New app selected: reset to its first widget.
+    // New app selected: reset to its first widget (the chat, when declared).
     useEffect(() => {
         const first = widgets.length ? widgets[0].alias : null;
         setActiveAlias(first);
@@ -85,7 +95,7 @@ const AppScene = () => {
                         <div className={"text-center"}>
                             <p className={"text-[13px] text-[#3A5672] font-semibold"}>{appName}</p>
                             <p className={"text-[12.5px] text-[#7A99B0] mt-1"}>
-                                This app runs in the background — it has no chat and no widgets to open here.
+                                This app serves in the background; there is nothing to open here.
                             </p>
                         </div>
                     </div>

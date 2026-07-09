@@ -12,6 +12,12 @@ import shlex
 from typing import Any, Mapping
 
 
+# Reserved widget alias for the bundle's declared default chat surface
+# (``surfaces.as_provider.bundle.default_chat``). The SDK serves the chat
+# widget under this alias for declaring bundles; a bundle's own
+# ``ui.widgets.chat`` entry overrides the default build config.
+DEFAULT_CHAT_WIDGET_ALIAS = "chat"
+
 CHAT_WIDGET_SDK_SOURCE = "sdk://solutions/chat/ui/widget"
 DEFAULT_CHAT_WIDGET_BUILD_COMMAND = (
     "npm install --no-package-lock && "
@@ -156,11 +162,23 @@ def apply_chat_widget_engine(cfg: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
+def default_chat_widget_config() -> dict[str, Any]:
+    """Build config served for the reserved default-chat widget.
+
+    Used when a bundle declares ``surfaces.as_provider.bundle.default_chat``
+    without configuring ``ui.widgets.chat`` itself: the SDK chat widget with
+    all defaults (package engine + package UI).
+    """
+    return chat_widget_ui_config()
+
+
 __all__ = [
+    "DEFAULT_CHAT_WIDGET_ALIAS",
     "CHAT_WIDGET_SDK_SOURCE",
     "DEFAULT_CHAT_WIDGET_BUILD_COMMAND",
     "DEFAULT_CHAT_WIDGET_SHARED_SOURCES",
     "DEFAULT_CHAT_WIDGET_ENGINE",
     "chat_widget_ui_config",
     "apply_chat_widget_engine",
+    "default_chat_widget_config",
 ]

@@ -91,6 +91,7 @@ from kdcube_ai_app.infra.plugin.bundle_loader import (
     apply_bundle_overrides,
     apply_mcp_overrides,
     apply_widget_overrides,
+    bundle_default_chat,
     cache_key_for_spec,
     canonical_enabled_path,
     canonical_provider_surface_path,
@@ -106,6 +107,10 @@ from kdcube_ai_app.infra.plugin.bundle_loader import (
     resolve_bundle_mcp_endpoint,
     run_static_bundle_entrypoint_load_once,
     static_bundle_entrypoint_load_key,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.chat import (
+    DEFAULT_CHAT_WIDGET_ALIAS,
+    default_chat_widget_config,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.surface_guard import (
     authorize_delegated_mcp_request,
@@ -311,8 +316,15 @@ def is_api_enabled(props: Optional[Dict[str, Any]], spec: APIEndpointSpec) -> bo
 
 
 def is_widget_enabled(props: Optional[Dict[str, Any]], spec: UIWidgetSpec) -> bool:
-    """Resolve ``enabled.widget.<alias>`` (nested)."""
+    """Resolve ``enabled.widget.<alias>`` (nested).
+
+    The reserved default-chat widget follows the bundle's
+    ``surfaces.as_provider.bundle.default_chat`` declaration; an explicit
+    ``enabled.widget.chat`` entry still wins.
+    """
     sub = _enabled_section(props, "widget")
+    if spec.alias == DEFAULT_CHAT_WIDGET_ALIAS and (sub is None or spec.alias not in sub):
+        return bundle_default_chat(props)
     if sub is None:
         return True
     return _is_truthy_enabled(sub.get(spec.alias))
@@ -3445,13 +3457,15 @@ def _log_bundle_widget_lookup_mismatch(
 
 def _raw_static_widget_config(props: Dict[str, Any], *, widget_alias: str) -> Dict[str, Any] | None:
     ui_cfg = props.get("ui") if isinstance(props, dict) else {}
-    if not isinstance(ui_cfg, dict):
-        return None
-    raw_widgets = ui_cfg.get("widgets")
-    if not isinstance(raw_widgets, dict):
-        return None
-    cfg = raw_widgets.get(widget_alias)
-    return cfg if isinstance(cfg, dict) else None
+    raw_widgets = ui_cfg.get("widgets") if isinstance(ui_cfg, dict) else None
+    cfg = raw_widgets.get(widget_alias) if isinstance(raw_widgets, dict) else None
+    if isinstance(cfg, dict):
+        return cfg
+    # The reserved default-chat widget builds from the SDK chat widget when the
+    # descriptor declares the surface and carries no explicit config for it.
+    if widget_alias == DEFAULT_CHAT_WIDGET_ALIAS and bundle_default_chat(props):
+        return default_chat_widget_config()
+    return None
 
 
 def _static_widget_explicitly_disabled(props: Dict[str, Any], *, widget_alias: str) -> bool:

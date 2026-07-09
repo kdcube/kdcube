@@ -40,8 +40,17 @@ from kdcube_ai_app.apps.chat.sdk.runtime.local_sidecars import (
     update_local_sidecar_runtime_metadata as update_runtime_local_sidecar_runtime_metadata,
 )
 from kdcube_ai_app.apps.chat.sdk.viz.patch_platform_dashboard import patch_dashboard
-from kdcube_ai_app.apps.chat.sdk.solutions.chat import apply_chat_widget_engine
-from kdcube_ai_app.infra.plugin.bundle_loader import api, on_reactive_event, ui_widget
+from kdcube_ai_app.apps.chat.sdk.solutions.chat import (
+    DEFAULT_CHAT_WIDGET_ALIAS,
+    apply_chat_widget_engine,
+    default_chat_widget_config,
+)
+from kdcube_ai_app.infra.plugin.bundle_loader import (
+    api,
+    bundle_default_chat,
+    on_reactive_event,
+    ui_widget,
+)
 from kdcube_ai_app.infra.service_hub.inventory import (
     APP_STATE_KEYS,
     AgentLogger,
@@ -1253,6 +1262,20 @@ class BaseEntrypoint:
         source_signature = "|".join(source_signature_parts)
         return f"{kind}|{src_path}|{build_command}|{bundle_delivery_id}|{source_signature}"
 
+    def _effective_ui_widget_cfgs(self) -> Dict[str, Any]:
+        """Configured ``ui.widgets`` plus the reserved default-chat widget.
+
+        A descriptor that declares ``surfaces.as_provider.bundle.default_chat``
+        serves the SDK chat widget under the ``chat`` alias; an explicit
+        ``ui.widgets.chat`` entry wins over the default build config.
+        """
+        ui_cfg = (self.bundle_props or {}).get("ui") or {}
+        widget_cfgs = ui_cfg.get("widgets") if isinstance(ui_cfg, dict) else None
+        out: Dict[str, Any] = dict(widget_cfgs) if isinstance(widget_cfgs, dict) else {}
+        if DEFAULT_CHAT_WIDGET_ALIAS not in out and bundle_default_chat(self.bundle_props):
+            out[DEFAULT_CHAT_WIDGET_ALIAS] = default_chat_widget_config()
+        return out
+
     def compute_ui_main_view_signature(self) -> Optional[str]:
         """Public source-fingerprint accessor for the main-view UI build.
 
@@ -1275,11 +1298,7 @@ class BaseEntrypoint:
         safe_alias = str(alias or "").strip().replace("/", "_")
         if not safe_alias:
             return None
-        ui_cfg = (self.bundle_props or {}).get("ui") or {}
-        widget_cfgs = ui_cfg.get("widgets") or {}
-        if not isinstance(widget_cfgs, dict):
-            return None
-        cfg = widget_cfgs.get(safe_alias)
+        cfg = self._effective_ui_widget_cfgs().get(safe_alias)
         if not isinstance(cfg, dict) or not self._ui_config_enabled(cfg):
             return None
         return self._compute_ui_build_signature(kind=f"widget:{safe_alias}", cfg=cfg)
@@ -1593,7 +1612,7 @@ class BaseEntrypoint:
         """
         ui_cfg = (self.bundle_props or {}).get("ui") or {}
         main_view = ui_cfg.get("main_view") or {}
-        widget_cfgs = ui_cfg.get("widgets") or {}
+        widget_cfgs = self._effective_ui_widget_cfgs()
 
         storage_root = self.bundle_storage_root()
         if not storage_root:
@@ -2265,6 +2284,30 @@ class BaseEntrypoint:
     ) -> str:
         transpiler = ClientSideTSXTranspiler()
         return transpiler.tsx_to_html(content, title=title)
+
+    @ui_widget(
+        icon={
+            "tailwind": "heroicons-outline:chat-bubble-left-right",
+            "lucide": "MessagesSquare",
+        },
+        alias=DEFAULT_CHAT_WIDGET_ALIAS,
+        user_types=(),
+    )
+    def default_chat_widget(self, **kwargs):
+        """The app's declared chat surface, served as a normal bundle widget.
+
+        Available when the descriptor declares
+        ``surfaces.as_provider.bundle.default_chat``; the built SDK chat widget
+        (``sdk://solutions/chat/ui/widget``) replaces this fallback once the
+        static build completes.
+        """
+        del kwargs
+        return [
+            "<div style=\"font-family:system-ui,sans-serif;padding:16px\">"
+            "The chat widget is built from sdk://solutions/chat/ui/widget; "
+            "reload once the build completes."
+            "</div>"
+        ]
 
     @api(route="operations", user_types=("privileged",))
     @ui_widget(

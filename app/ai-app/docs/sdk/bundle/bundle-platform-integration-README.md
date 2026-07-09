@@ -222,11 +222,14 @@ Current fields relevant to access control:
   - invalid types fall back silently to the decorator default
   - editable in the Bundle Admin dashboard as a descriptor path
 - `surfaces.as_provider.bundle.default_chat`
-  - descriptor declaration that the app serves the default chat surface:
-    the control plane draws the conversation UI (chat panel, conversation
-    sidebar, header widget chips) for this app
+  - descriptor declaration that the app serves the default chat surface
   - boolean; absent means the app serves widgets/APIs/providers and the
-    control plane draws its widget scene as the main surface instead
+    control plane draws its widget scene as the main surface
+  - a declaring app serves the SDK chat widget (`sdk://solutions/chat/ui/widget`)
+    under the reserved widget alias `chat` — it lists, builds, and serves like
+    any other bundle widget, and the control plane's app scene summons it
+    first; an explicit `ui.widgets.chat` entry overrides the default build
+    config, and `enabled.widget.chat` overrides the serving gate
   - the effective value also requires a reactive entrypoint
     (`@on_reactive_event`) on the entrypoint class; the served bundle
     descriptor exposes it as `default_chat`

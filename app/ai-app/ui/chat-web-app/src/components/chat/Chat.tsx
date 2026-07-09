@@ -6,31 +6,24 @@
 // Chat.tsx
 import React, {useCallback, useEffect, useMemo, useRef, useState} from "react";
 
-import ChatInterface from "./ChatInterface/ChatInterface.tsx";
 import {useAppDispatch, useAppSelector} from "../../app/store.ts";
-import {selectChatStayConnected, selectConversationId, selectCurrentTurn,} from "../../features/chat/chatStateSlice.ts";
+import {selectChatStayConnected} from "../../features/chat/chatStateSlice.ts";
 import ChatSidePanel from "../../features/chatSidePanel/ChatSidePanel.tsx";
 import ChatHeader from "../../features/header/ChatHeader.tsx";
 import AppScene from "../../features/bundles/AppScene.tsx";
-import {useGetBundleWidgets} from "../../features/bundles/widgetReducer.tsx";
-import AnimatedExpander from "../AnimatedExpander.tsx";
-import ChatCanvas from "../../features/canvas/ChatCanvas.tsx";
-import {CanvasItemLink, ChatCanvasContext, ChatCanvasContextValue} from "../../features/canvas/canvasContext.tsx";
-import {getCanvasArtifactTypes, getCanvasItemLinkGenerator} from "../../features/extensions/canvasExtensions.ts";
 import useSharedConfigProvider from "../../features/sharedConfigProvider/sharedConfigProvider.tsx";
-import ConversationHeader from "../../features/conversationHeader/ConversationHeader.tsx";
 import {selectCurrentBundle} from "../../features/bundles/bundlesSlice.ts";
 import {selectProject, selectTenant} from "../../features/chat/chatSettingsSlice.ts";
 import {connectChat} from "../../features/chat/chatServiceMiddleware.ts";
 import SidePanelContext, {SidePanel, SidePanelContextValue} from "../../features/chatSidePanel/sidePanelContext.ts";
 
+// The app surface: an app with its own main view gets that view; every other
+// app gets the automatic scene of its widgets. An app that declares the
+// default chat surface (surfaces.as_provider.bundle.default_chat) serves the
+// SDK chat widget, which shows up on the scene like any other widget.
+
 const SingleChatApp: React.FC = () => {
-    const currentTurn = useAppSelector(selectCurrentTurn);
-    const conversationId = useAppSelector(selectConversationId);
-    const chatCanvasRef = useRef<HTMLDivElement>(null);
     const bundleIframeRef = useRef<HTMLIFrameElement>(null);
-    const [canvasItemLink, setCanvasItemLink] = useState<CanvasItemLink | null>(null);
-    const [overrideCanvasItemLink, setOverrideCanvasItemLink] = useState<boolean>(false);
     const [bundleUiAvailable, setBundleUiAvailable] = useState<boolean | null>(null);
 
     const tenant = useAppSelector(selectTenant)
@@ -58,37 +51,6 @@ const SingleChatApp: React.FC = () => {
         setBundleUiAvailable(bundleUIUrl ? null : false);
     }, [bundleUIUrl]);
 
-    const lastCanvasItem = useMemo(() => {
-        if (currentTurn == null) return null;
-        const canvasArtifactTypes = getCanvasArtifactTypes()
-        const canvasArtifacts = currentTurn.artifacts.filter(artifact => {
-            return canvasArtifactTypes.includes(artifact.artifactType);
-        })
-        return canvasArtifacts.length > 0 ? canvasArtifacts[0] : null;
-    }, [currentTurn])
-
-    useEffect(() => {
-        setCanvasItemLink(null);
-    }, [conversationId]);
-
-    useEffect(() => {
-        if (currentTurn) {
-            if (!overrideCanvasItemLink && lastCanvasItem && !lastCanvasItem.historical) {
-                setCanvasItemLink(getCanvasItemLinkGenerator(lastCanvasItem.artifactType)(lastCanvasItem))
-            }
-        } else {
-            setOverrideCanvasItemLink(false)
-        }
-
-    }, [currentTurn, lastCanvasItem, overrideCanvasItemLink]);
-
-    const showItem = useCallback((link: CanvasItemLink | null) => {
-        if (currentTurn) {
-            setOverrideCanvasItemLink(true);
-        }
-        setCanvasItemLink(link);
-    }, [currentTurn])
-
     const handleBundleIframeLoad = useCallback(() => {
         const doc = bundleIframeRef.current?.contentDocument;
         if (!doc) {
@@ -103,21 +65,7 @@ const SingleChatApp: React.FC = () => {
         setBundleUiAvailable(true);
     }, [])
 
-    const chatCanvasContextValue = useMemo<ChatCanvasContextValue>(() => {
-        return {
-            showItem,
-            itemLink: canvasItemLink
-        }
-    }, [canvasItemLink, showItem])
-
-    const {defaultChat} = useGetBundleWidgets()
-
-    const chatInterface = useMemo(() => {
-        if (!defaultChat) {
-            // The app's descriptor declares no default chat surface: the main
-            // surface is the automatic scene of its widgets.
-            return <AppScene/>
-        }
+    const appSurface = useMemo(() => {
         if (bundleUIUrl && bundleUiAvailable !== false) {
             return <div className={"flex-1 flex flex-col h-full"}>
                 <iframe
@@ -130,19 +78,8 @@ const SingleChatApp: React.FC = () => {
                 />
             </div>
         }
-
-        return <div className={`flex-1 flex flex-col h-full`}>
-            <ConversationHeader/>
-            <div className={`flex flex-row flex-1 min-h-0 min-w-0`}>
-                <ChatCanvasContext value={chatCanvasContextValue}>
-                    <ChatInterface/>
-                    <AnimatedExpander contentRef={chatCanvasRef} expanded={!!canvasItemLink}>
-                        <ChatCanvas ref={chatCanvasRef}/>
-                    </AnimatedExpander>
-                </ChatCanvasContext>
-            </div>
-        </div>
-    }, [bundleId, bundleUIUrl, bundleUiAvailable, canvasItemLink, chatCanvasContextValue, defaultChat, handleBundleIframeLoad])
+        return <AppScene/>
+    }, [bundleId, bundleUIUrl, bundleUiAvailable, handleBundleIframeLoad])
 
     const dispatch = useAppDispatch();
     const stayConnected = useAppSelector(selectChatStayConnected)
@@ -161,11 +98,11 @@ const SingleChatApp: React.FC = () => {
 
                 <div className={`flex flex-row overflow-hidden flex-1 w-full min-h-0 min-w-0`}>
                     <ChatSidePanel/>
-                    {chatInterface}
+                    {appSurface}
                 </div>
             </SidePanelContext>
         </div>
-    }, [chatInterface, sidePanelContextValue])
+    }, [appSurface, sidePanelContextValue])
 };
 
 export default SingleChatApp;
