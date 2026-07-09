@@ -4,7 +4,7 @@ title: "How To Test A Bundle"
 summary: "Testing guide for bundle authors and QA: local syntax/suite/pytest validation, runtime reload validation, widget/API/event-source checks, scheduled-job verification, and failure diagnosis in the local runtime."
 tags: ["sdk", "bundle", "testing", "pytest", "widget", "events", "runtime", "validation"]
 keywords: ["bundle testing workflow", "shared bundle suite", "local bundle tests", "widget and api validation", "event source validation", "artifact rehoster validation", "shared sdk widget source validation", "runtime reload verification", "scheduled job checks", "bundle failure diagnosis", "manual and automated test loop", "local qa for bundles", "integration qa for bundles"]
-updated_at: 2026-06-20
+updated_at: 2026-07-09
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
@@ -1021,7 +1021,10 @@ Check:
 - widget requests config from parent
 - widget accepts both `CONN_RESPONSE` and `CONFIG_RESPONSE`
 - widget builds operation URLs from runtime config
-- widget uses `defaultAppBundleId`, not a source-folder guess
+- widget resolves its bundle id route-first; `defaultAppBundleId` is the
+  fallback, never a source-folder guess. When a host scene mounts the widget
+  cross-bundle, the host's `defaultAppBundleId` must not override the route
+  bundle id
 - widget uses host-provided auth headers
 - widget unwraps the `[alias]` field from integrations responses
 - if the widget is one web app with internal routes, direct widget subpaths

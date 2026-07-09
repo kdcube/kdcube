@@ -18,9 +18,10 @@ keywords:
     "fresh consumer",
     "superseded turn",
   ]
-updated_at: 2026-06-20
+updated_at: 2026-07-09
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-journey-and-handling-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/namespaces-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/conversation-event-lane-state-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/comm/conversation-event-bus-orchestrator-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-ingress-to-react-turn-README.md
@@ -179,6 +180,32 @@ accepted lane event
 Use `react.block_production.no_timeline` when a bus event should be consumed
 or side-effected but should not produce ReAct timeline blocks.
 
+Two lane-protocol facts hold for every authored event:
+
+- The TRANSPORT kind is uniformly `external_event`; the semantic type rides
+  `payload.event.type`. An event published with its semantic type as the
+  transport kind is invisible to the fold.
+- Folding is TOTAL. A consumed event that produces zero blocks still advances
+  the handler cursor and is acked on application, so an unfoldable event can
+  never wedge a turn's completion.
+
+Owning statements:
+[Event Namespaces](../../events/namespaces-README.md) and
+[External Events Journey And Handling](../../events/external-events-journey-and-handling-README.md)
+(semantic-type recovery via `live_events.recover_semantic_event_type`).
+
+## Completion Attempts Under Live Events
+
+A reactive event landing during answer assembly does not discard the turn's
+completion silently:
+
+- A completion deferred by a pending event renders an attempt-outcome block —
+  there is no invisible attempt marker without an outcome.
+- A second equivalent completion force-accepts with a warning instead of
+  looping.
+- The final answer collapses consecutive equivalent attempts while keeping
+  distinct per-followup answers.
+
 ## Recovery Rule
 
 Use `consumer_status_at` to decide liveness.
@@ -217,6 +244,8 @@ These contracts survive implementation changes:
   ownership.
 - Do not use the processor queue as event ordering.
 - Do not use `handler_status_at` as liveness.
+- Publish authored events with transport kind `external_event` and the
+  semantic type nested in the payload.
 - Do not assume `followup_accepted` or `steer_accepted` means a new turn
   started. It means the event was admitted.
 - Before changing client continuation UX, read

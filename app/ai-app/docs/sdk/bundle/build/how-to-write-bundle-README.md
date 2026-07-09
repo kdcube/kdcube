@@ -4,7 +4,7 @@ title: "How To Write A Bundle"
 summary: "Authoring guide for bundle creators and integrators: bundle shape, lifecycle, decorators, runtime surfaces, bundle events, configuration and storage decisions, and how to turn a product idea or existing app into a deployable bundle."
 tags: ["sdk", "bundle", "authoring", "workflow", "widget", "api", "events", "testing"]
 keywords: ["bundle authoring guide", "bundle creator path", "bundle integrator path", "end to end bundle design", "decorator selection", "runtime surface selection", "widget api mcp cron on_job choices", "bundle events", "event sources", "artifact rehosters", "shared sdk widget components", "configuration and storage decisions", "bundle lifecycle design", "reference authoring patterns"]
-updated_at: 2026-06-20
+updated_at: 2026-07-09
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
@@ -1108,6 +1108,11 @@ Workflow responsibilities:
 - persist the user message
 - resolve `surfaces.as_consumer` into the active agent's tool and skill runtime
   inputs
+- apply the per-user selection with `apply_user_agent_selection(...)` (deny-list
+  narrowing + model pick, fail-open) and the delegated-claims announcement with
+  `apply_delegated_tool_claims(...)`; both ship on the SDK base — see the
+  [Chat With A ReAct Agent recipe](../../../recipes/components/chat-with-react-agent-README.md)
+  and [Per-User Agent Capabilities](../../solutions/user-settings/capabilities-README.md)
 - call `build_react(...)` with resolved tool specs, event-source specs, and
   resolved skill config
 - run `react.run(...)`
@@ -1122,6 +1127,11 @@ Descriptor and consumer-surface rules:
   tool runtime overrides, `allowed_plugins`, and
   `allowed_tool_names_by_alias`
 - expose skill prompts through `surfaces.as_consumer.agents.<agent>.skills`
+- keep provider-backed tools whose realm declares connected-account
+  requirements in the configured set; consent is demand-driven — a tool
+  ATTEMPT with unmet claims returns the consent envelope to the agent and
+  raises the scoped chat banner (see
+  [Per-User Agent Capabilities](../../solutions/user-settings/capabilities-README.md))
 - remember that skill discovery is registry-wide: core SDK skills, SDK solution
   skills, and bundle `custom_root` are all loaded before configured consumer
   filtering
@@ -1191,6 +1201,10 @@ Model routing:
   bind `bundle_call_context.role_models` around the downstream agent call
 - the temporary override follows nested SDK agents, React, in-process tools,
   and isolated tool runtimes while the context is bound
+- to let USERS pick the strong decision model per turn, declare
+  `config.react.<agent>.supported_models` (rows mirror the economics price
+  table); the composer "+" menu surfaces them — see the
+  [Chat With A ReAct Agent recipe](../../../recipes/components/chat-with-react-agent-README.md)
 
 Minimal ad hoc pattern:
 
@@ -1213,7 +1227,7 @@ with bind_current_bundle_call_context_patch({"role_models": role_models}):
 
 For the full code examples across `@api`, `@mcp`, `@cron`,
 `@on_reactive_event`, and `@on_job`, read
-[bundle-agent-integration-README.md#model-selection-for-agent-roles](../bundle-agent-integration-README.md#model-selection-for-agent-roles).
+[bundle-agent-integration-README.md#2a-model-selection-for-agent-roles](../bundle-agent-integration-README.md#2a-model-selection-for-agent-roles).
 
 Channel rule:
 

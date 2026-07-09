@@ -16,9 +16,11 @@ keywords:
     "authored external events",
     "resolver ownership",
   ]
-updated_at: 2026-06-20
+updated_at: 2026-07-09
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/recipes/components/scene-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/npm/widget-integration-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-understand-conversation-events-and-react-turns-README.md
@@ -168,6 +170,22 @@ Read:
 - [Bundle Widget Integration: source-folder widget apps](../bundle-widget-integration-README.md#source-folder-widget-apps)
 - [Bundle Widget Integration: frame origin and API base URL](../bundle-widget-integration-README.md#frame-origin-and-api-base-url)
 
+## Recipe: Served-Widget Identity Is The Route
+
+A served widget's own app identity is the ROUTE bundle id — the bundle URL it
+is served from. The host CONFIG handshake's `defaultAppBundleId` is the HOST's
+context. When a scene mounts your widget cross-bundle, letting the handshake
+value overwrite the route value points every operation at the host's app and
+the widget loads empty or errors.
+
+Fix in one line: resolve the bundle id route-first; use `defaultAppBundleId`
+only when the route yields none (standalone/main-view apps).
+
+Read:
+
+- [Scene recipe: Scene Components](../../../recipes/components/scene-README.md#scene-components)
+- [Bundle Widget Integration](../bundle-widget-integration-README.md)
+
 ## Recipe: Widget UI — Settle The Design Before You Build
 
 A recurring failure: an agent jumps straight into a monolithic `App.tsx` with
@@ -199,6 +217,21 @@ Before writing widget UI, settle these four things:
    encodes the store/slice/api/component layout and the kdcube look.
 
 Skipping this is what turns one UI task into "build it, then refactor it."
+
+## Recipe: Shared Design-System Stylesheets Are Pure CSS
+
+A stylesheet staged as a `shared_sources` entry is consumed by widget builds
+that may have no CSS toolchain. A toolchain directive in the sheet — for
+example `@import "tailwindcss"` — breaks every consuming bundle UI build that
+lacks that toolchain.
+
+Fix in one line: keep the shared sheet pure CSS; the consuming entry that has
+the toolchain imports the directive in its own entry file (for example a local
+`tailwind.css` imported before the shared sheet).
+
+Read:
+
+- [Widget Integration: shared sources](../../npm/widget-integration-README.md)
 
 ## Recipe: Widget Visibility Gates
 
@@ -333,6 +366,12 @@ If event data carries a compact owner-domain artifact URI such as `nmsp:...`,
 register an artifact namespace rehoster in a loaded tool or event module so
 `react.pull` can materialize it as a normal `conv:fi:` ref.
 
+Publish authored events with transport kind `external_event` and the semantic
+type nested in the payload. An event published with its semantic type as the
+transport kind renders zero blocks and is invisible to the fold — for the full
+lane-protocol facts see
+[Conversation Events And ReAct Turns](how-to-understand-conversation-events-and-react-turns-README.md).
+
 Read:
 
 - [Conversation Events And ReAct Turns](how-to-understand-conversation-events-and-react-turns-README.md)
@@ -392,6 +431,21 @@ Read:
 - [Event Hub Resolver And Policy Registration](../../solutions/event-hub/resolver-and-policy-registration-README.md)
 - [Canvas Pin Integration](../../solutions/canvas/pin-integration-README.md)
 
+## Recipe: Keep Sync I/O Off The Serving Event Loop
+
+Bundle code runs on the processor's serving event loop. Synchronous store
+writes, sync Redis/HTTP clients, or `asyncio.run(...)` on a shared client
+inside that loop stall every concurrent turn — the symptom is turn-wide
+latency or a wedged turn, not an exception.
+
+Fix in one line: use the async store/client variants where they exist;
+offload genuinely sync work with `asyncio.to_thread(...)`; never call
+`asyncio.run` on a client that belongs to the running loop.
+
+Read:
+
+- [Bundle Runtime](../bundle-runtime-README.md) — the async access contract
+
 ## Triage Table
 
 | Symptom | First Check |
@@ -405,3 +459,7 @@ Read:
 | UI mutation hangs or duplicates | Data Bus subject/object_ref/handler contract is incomplete. |
 | Data Bus publish gets 429 or publish-limit rejection | `gateway.data_bus.ingress.publish_limits` is too low for the widget's package rate/size, or the widget is sending too many messages instead of batching. |
 | Canvas pin cannot open/download | namespace owner resolver is not registered. |
+| Cross-bundle-mounted widget loads empty or calls the wrong app | host handshake `defaultAppBundleId` overrode the widget's route bundle id. |
+| Bundle UI build fails on a CSS import (postcss/tailwind not found) | a shared stylesheet carries a toolchain directive; move it to the consuming entry. |
+| Every turn slow or wedged at once, no exception | sync I/O or `asyncio.run` on the serving event loop; use async variants or `to_thread`. |
+| Authored event never appears in the timeline and the turn cannot complete | event published with a semantic transport kind instead of `external_event`. |

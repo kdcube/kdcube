@@ -4,7 +4,7 @@ title: "Tier 1 Bundle Pack For Build-With-KDCube Plugins"
 summary: "Short handoff note for Claude Code and Codex plugin engineers describing the Tier 1 bundle-doc pack, bundle events, the agent task facets it must support, and the minimal integration contract."
 tags: ["sdk", "bundle", "plugins", "claude-code", "codex", "handoff", "tier-1"]
 keywords: ["tier 1 bundle pack", "build with kdcube plugin", "claude code plugin", "codex plugin", "bundle docs pack", "bundle agent facets", "shared sdk widget source", "bundle events", "event sources", "artifact rehosters", "plugin doc links update"]
-updated_at: 2026-06-20
+updated_at: 2026-07-09
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
@@ -258,7 +258,9 @@ The plugin should steer agents away from these recurring mistakes:
   `ref: "tools/name.py"` and package-relative imports inside the tool module
 - do not write `/bundles/...` into a seed/source descriptor that is also used by host-side IntelliJ/proc runs; first determine whether you are editing a seed descriptor or a staged runtime descriptor
 - do not manually build `ui/main` into runtime bundle storage as the fix for stale bundle UI
-- do not use source folder names or compiled example ids when the host provides `defaultAppBundleId`
+- do not use source folder names or compiled example ids as the bundle id;
+  resolve it route-first with host `defaultAppBundleId` as the fallback, and
+  never let a cross-bundle host handshake override the route bundle id
 - do not treat `bundles.yaml` example config as enabling built-in examples; `bundles_include_examples` owns that
 - do not treat `singleton` as cross-process exclusivity or shared-storage initialization
 - do not treat bundle `user_id` as always being a KDCube account id; it is the

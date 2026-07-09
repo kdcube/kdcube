@@ -14,7 +14,7 @@ keywords:
     "which doc to read next",
     "bundle docs map",
   ]
-updated_at: 2026-06-20
+updated_at: 2026-07-09
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-index-README.md
@@ -35,6 +35,11 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-entrypoint-classes-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-economics-integration-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/workspace-reference-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/user-settings/capabilities-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/providers-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/recipes/components/scene-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-surface-commands-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/hosting/hosting-README.md
 ---
 # How To Navigate KDCube Bundle Docs
 
@@ -120,6 +125,10 @@ Conditional additions:
 | Mounting memory, canvas, tasks, Telegram, delivery, or another reusable SDK subsystem | [../bundle-subsystem-integration-README.md](../bundle-subsystem-integration-README.md) |
 | Integrating a host product or server with KDCube app surfaces, deciding iframe vs direct client vs backend-only app | [../../../how-to-integrate-with-kdcube-apps-README.md](../../../how-to-integrate-with-kdcube-apps-README.md) |
 | Exposing a namespace of objects for other bundles, or consuming another bundle's namespace (canvas pins / chat chips / agent tools) | [../../namespace-services/README.md](../../namespace-services/README.md) |
+| Declaring a realm's self-description: presentation texts (service card) and connected-account requirements | [../../namespace-services/providers-README.md](../../namespace-services/providers-README.md) |
+| Per-user agent customization: composer "+" menu, capability picker shells, selection enforcement | [../../solutions/user-settings/capabilities-README.md](../../solutions/user-settings/capabilities-README.md) |
+| One mounted widget summons and directs another (surface command contract) | [../../../recipes/components/scene-surface-command-README.md](../../../recipes/components/scene-surface-command-README.md), then [../../solutions/scene/scene-surface-commands-README.md](../../solutions/scene/scene-surface-commands-README.md) |
+| Moving file bytes in/out on turn-less transports (MCP, integrations): signed slots/URLs, staging | [../../solutions/hosting/hosting-README.md](../../solutions/hosting/hosting-README.md), [../../../recipes/resource_sharing/hosting-README.md](../../../recipes/resource_sharing/hosting-README.md) |
 | Touching bundle imports, widget assets/origins, widget visibility, live events, Data Bus, event policies, or resolver registration | [how-to-avoid-common-bundle-integration-failures-README.md](how-to-avoid-common-bundle-integration-failures-README.md) |
 | Submitting or consuming conversation `external_events[]`, followups, steers, snapshots, ReAct timeline event blocks, or event-source policies | [how-to-understand-conversation-events-and-react-turns-README.md](how-to-understand-conversation-events-and-react-turns-README.md) |
 | Agent tools, skills, MCP, file-producing tools, role models, Claude Code | [../bundle-agent-integration-README.md](../bundle-agent-integration-README.md) |
@@ -139,6 +148,8 @@ Conditional additions:
 | What recurring implementation rules should I check before editing bundle code? | [how-to-avoid-common-bundle-integration-failures-README.md](how-to-avoid-common-bundle-integration-failures-README.md) |
 | How do I mount an existing SDK subsystem correctly? | [../bundle-subsystem-integration-README.md](../bundle-subsystem-integration-README.md) |
 | How does one bundle call another bundle's objects/actions (e.g. canvas shows a `task:` pin)? | [../../namespace-services/README.md](../../namespace-services/README.md) |
+| How do users pick tools/skills/model per agent, and how is the pick enforced at runtime? | [../../solutions/user-settings/capabilities-README.md](../../solutions/user-settings/capabilities-README.md) |
+| How do I compose served widgets into one scene, or mount another app's widget? | [../../../recipes/components/scene-README.md](../../../recipes/components/scene-README.md), [../../solutions/scene/config/README.md](../../solutions/scene/config/README.md) |
 | How do I write or structure a bundle? | [how-to-write-bundle-README.md](how-to-write-bundle-README.md) |
 | Which entrypoint base or mixin should I use? | [../bundle-entrypoint-classes-README.md](../bundle-entrypoint-classes-README.md) |
 | How do I make semantic search or a background job economically enforced? | [../bundle-economics-integration-README.md](../bundle-economics-integration-README.md) |
