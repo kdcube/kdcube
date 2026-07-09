@@ -709,29 +709,41 @@ def _realm_payload_from_spec(
                 return f"via your connected {provider_label} account"
         return ""
 
+    # The card shows the realm's FULL advertised surface: entries the agent
+    # config excludes stay PRESENT with `enabled_for_agent: false` — absence
+    # becomes information (a user sees what an admin could enable via
+    # `namespaces.<ns>.allowed`). Allowed entries stay unchanged (no flag).
+    # Actions ride `object.action`, so they inherit exactly ITS exclusion
+    # (only-real granularity — config cannot exclude one action name).
+    object_action_enabled = _operation_key_allowed("object.action", allowed)
     actions_out: list[dict[str, Any]] = []
-    if _operation_key_allowed("object.action", allowed):
-        raw_actions = metadata.get("actions")
-        if isinstance(raw_actions, Mapping):
-            for name in sorted(raw_actions):
-                presented = presented_actions.get(name)
-                presented = presented if isinstance(presented, Mapping) else {}
-                entry: dict[str, Any] = {
-                    "name": str(name),
-                    "description": _first_para(
-                        str(presented.get("description") or raw_actions.get(name) or "")
-                    ),
-                }
-                label_text = _norm(presented.get("label"))
-                if label_text:
-                    entry["label"] = label_text
-                claims = by_operation_union.get(f"object.action.{name}")
-                if claims:
-                    entry["claims"] = sorted(claims)
-                    via = _via_line(entry["claims"])
-                    if via:
-                        entry["via"] = via
+    raw_actions = metadata.get("actions")
+    if isinstance(raw_actions, Mapping):
+        for name in sorted(raw_actions):
+            presented = presented_actions.get(name)
+            presented = presented if isinstance(presented, Mapping) else {}
+            entry: dict[str, Any] = {
+                "name": str(name),
+                "description": _first_para(
+                    str(presented.get("description") or raw_actions.get(name) or "")
+                ),
+            }
+            label_text = _norm(presented.get("label"))
+            if label_text:
+                entry["label"] = label_text
+            if not object_action_enabled:
+                # Excluded entries carry no claims/via decoration — they
+                # cannot be exercised, so no consent story renders on them.
+                entry["enabled_for_agent"] = False
                 actions_out.append(entry)
+                continue
+            claims = by_operation_union.get(f"object.action.{name}")
+            if claims:
+                entry["claims"] = sorted(claims)
+                via = _via_line(entry["claims"])
+                if via:
+                    entry["via"] = via
+            actions_out.append(entry)
 
     operations_out: list[dict[str, Any]] = []
     for op in allowed:
@@ -754,6 +766,30 @@ def _realm_payload_from_spec(
             via = _via_line(entry["claims"])
             if via:
                 entry["via"] = via
+        operations_out.append(entry)
+
+    # Advertised-but-excluded operations, appended after the live ones. Only
+    # entries with human text render (presented label/description or the
+    # standard catalog one-liner) — machine-plumbing operations without a
+    # user-facing description stay out of the card.
+    advertised_ops = list(getattr(spec, "operations", None) or {})
+    allowed_set = {str(op) for op in allowed}
+    for op in sorted(advertised_ops):
+        if op in allowed_set:
+            continue
+        if op == "object.action" and actions_out:
+            continue  # the (excluded) named actions expand this operation
+        presented = presented_operations.get(op)
+        presented = presented if isinstance(presented, Mapping) else {}
+        description = _first_para(
+            str(presented.get("description") or _NAMED_SERVICE_OPERATION_DESCRIPTIONS.get(op, ""))
+        )
+        label_text = _norm(presented.get("label"))
+        if not (description or label_text):
+            continue
+        entry = {"name": op, "description": description, "enabled_for_agent": False}
+        if label_text:
+            entry["label"] = label_text
         operations_out.append(entry)
 
     objects_out: list[dict[str, Any]] = []

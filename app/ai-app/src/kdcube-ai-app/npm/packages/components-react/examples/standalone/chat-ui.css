@@ -2234,6 +2234,14 @@ a { color: inherit; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* Advertised-but-excluded realm entries (enabled_for_agent: false): present
+   but greyed — no toggle, no consent chip; the subline carries the admin
+   fix ("not enabled for this agent — an app admin can enable it"). */
+.k-menu-row-excluded { opacity: 0.75; }
+.k-menu-row-excluded .k-menu-row-label,
+.k-menu-row-excluded .k-menu-row-label code { color: var(--muted); }
+.k-menu-row-excluded .k-menu-row-sub { font-style: italic; }
 .k-menu-row-state {
   margin-left: auto;
   flex: none;

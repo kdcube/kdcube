@@ -607,15 +607,68 @@ function RequirementLine({ requirement }: {
 /** A namespace's toggleable internals: allowed operations by their own token,
  *  named actions as `object.action.<name>` (denying the action blocks that
  *  action name in the grammar's dispatch). */
-function namespaceInternals(entry: { realm?: { operations?: { name: string }[]; actions?: { name: string }[] } }): {
-  item: { name: string; label?: string; description?: string; via?: string; claims?: string[] }
+type RealmEntryItem = {
+  name: string
+  label?: string
+  description?: string
+  via?: string
+  claims?: string[]
+  enabled_for_agent?: boolean
+}
+
+/** A namespace's card entries in realm order. TOGGLEABLE internals are the
+ *  entries the agent config enables; advertised-but-excluded entries
+ *  (`enabled_for_agent: false`) ride along for rendering but never
+ *  contribute toggle keys or namespace state. */
+function namespaceInternals(entry: { realm?: { operations?: RealmEntryItem[]; actions?: RealmEntryItem[] } }): {
+  item: RealmEntryItem
   key: string
+  excluded: boolean
 }[] {
   const realm = entry.realm
   return [
-    ...(realm?.operations ?? []).map((item) => ({ item, key: namespaceEntryKey('operation', item.name) })),
-    ...(realm?.actions ?? []).map((item) => ({ item, key: namespaceEntryKey('action', item.name) })),
+    ...(realm?.operations ?? []).map((item) => ({
+      item,
+      key: namespaceEntryKey('operation', item.name),
+      excluded: item.enabled_for_agent === false,
+    })),
+    ...(realm?.actions ?? []).map((item) => ({
+      item,
+      key: namespaceEntryKey('action', item.name),
+      excluded: item.enabled_for_agent === false,
+    })),
   ]
+}
+
+/** An advertised-but-excluded realm entry: present, greyed, honest. No
+ *  toggle, no consent chip — nothing clickable a user cannot act on. The
+ *  quiet line reuses the denial card's admin phrasing; the tooltip names
+ *  the exact descriptor key an admin would change. */
+function ExcludedEntryRow({ namespace, entry }: { namespace: string; entry: RealmEntryItem }) {
+  return (
+    <div
+      className="k-menu-row k-menu-row-child k-menu-row-excluded"
+      title={`An app admin can enable it under namespaces.${namespace}.allowed`}
+    >
+      <span className="k-menu-row-static">
+        <span className="k-menu-row-text">
+          <span className="k-menu-row-label">
+            {entry.label
+              ? (
+                  <>
+                    {entry.label}
+                    <code className="k-menu-entry-token">{entry.name}</code>
+                  </>
+                )
+              : <code>{entry.name}</code>}
+          </span>
+          <span className="k-menu-row-sub">
+            {[entry.description, 'not enabled for this agent — an app admin can enable it'].filter(Boolean).join(' · ')}
+          </span>
+        </span>
+      </span>
+    </div>
+  )
 }
 
 function ServicesSection({ inventory, disabled, toggle, namespaceStyles, spotlight, onConsent }: CapabilityRowsProps) {
@@ -630,7 +683,7 @@ function ServicesSection({ inventory, disabled, toggle, namespaceStyles, spotlig
       {inventory.named_services.map((entry) => {
         const realm = entry.realm
         const internals = namespaceInternals(entry)
-        const entryKeys = internals.map(({ key }) => key)
+        const entryKeys = internals.filter(({ excluded }) => !excluded).map(({ key }) => key)
         const isOpen = Boolean(expanded[entry.namespace])
         const objectsLine = (realm?.objects ?? [])
           .map((kind) => kind.name.split('.').pop() || kind.name)
@@ -673,18 +726,22 @@ function ServicesSection({ inventory, disabled, toggle, namespaceStyles, spotlig
               <ServiceCardLine text="This service hasn't described itself yet." />
             ) : null}
             {isOpen
-              ? internals.map(({ item, key }) => (
-                  <RealmEntryRow
-                    key={key}
-                    namespace={entry.namespace}
-                    entryKeys={entryKeys}
-                    entryKey={key}
-                    entry={item}
-                    disabled={disabled}
-                    toggle={toggle}
-                    consent={entry.consent}
-                    onConsent={onConsent}
-                  />
+              ? internals.map(({ item, key, excluded }) => (
+                  excluded
+                    ? <ExcludedEntryRow key={key} namespace={entry.namespace} entry={item} />
+                    : (
+                        <RealmEntryRow
+                          key={key}
+                          namespace={entry.namespace}
+                          entryKeys={entryKeys}
+                          entryKey={key}
+                          entry={item}
+                          disabled={disabled}
+                          toggle={toggle}
+                          consent={entry.consent}
+                          onConsent={onConsent}
+                        />
+                      )
                 ))
               : null}
           </div>

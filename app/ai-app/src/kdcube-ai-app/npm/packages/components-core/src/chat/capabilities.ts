@@ -70,6 +70,10 @@ export interface AgentCapabilityRealmEntry {
   /** Provider claims this entry needs — present only when the realm
    *  declared per-operation differentiation (e.g. mail read vs send). */
   claims?: string[]
+  /** `false` = the realm advertises this entry but the agent's admin config
+   *  excludes it (`namespaces.<ns>.allowed`). Rendered present-but-disabled
+   *  — absence becomes information. Absent = enabled. */
+  enabled_for_agent?: boolean
 }
 
 /** The resolved realm behind a configured namespace: what's inside and which

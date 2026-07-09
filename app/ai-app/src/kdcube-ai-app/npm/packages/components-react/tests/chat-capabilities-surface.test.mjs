@@ -249,3 +249,29 @@ test('the service card renders declared access requirements with honest affordan
   assert.match(menu, /requirement\.status === 'granted'/)
   assert.match(menu, /requirement\.surface\?\.kind === 'url'/)
 })
+
+test('advertised-but-excluded realm entries render greyed with NO toggle and NO consent chip', () => {
+  const menu = readFileSync(new URL('../src/chat/ui/features/composer/ComposerMenu.tsx', import.meta.url), 'utf8')
+  // The excluded row is a static presentation: no MenuRow/onToggle, no ConsentAside.
+  const start = menu.indexOf('function ExcludedEntryRow')
+  assert.ok(start >= 0, 'ExcludedEntryRow exists')
+  const block = menu.slice(start, menu.indexOf('\nfunction ', start + 10))
+  assert.doesNotMatch(block, /MenuRow|onToggle|ConsentAside/)
+  assert.match(block, /k-menu-row-excluded/)
+  // The quiet admin line + the exact descriptor key in the tooltip.
+  assert.match(block, /not enabled for this agent — an app admin can enable it/)
+  assert.match(block, /namespaces\.\$\{namespace\}\.allowed/)
+  // Excluded entries never contribute toggle keys / namespace state.
+  assert.match(menu, /internals\.filter\(\(\{ excluded \}\) => !excluded\)\.map\(\(\{ key \}\) => key\)/)
+})
+
+test('the greyed styling exists in both stylesheet twins', () => {
+  const sheets = [
+    '../../../../kdcube_ai_app/apps/chat/sdk/solutions/chat/ui/widget/src/index.css',
+    '../examples/standalone/chat-ui.css',
+  ]
+  for (const sheet of sheets) {
+    const css = readFileSync(new URL(sheet, import.meta.url), 'utf8')
+    assert.match(css, /\.k-menu-row-excluded \{ opacity: 0\.75; \}/, `${sheet} greys excluded rows`)
+  }
+})

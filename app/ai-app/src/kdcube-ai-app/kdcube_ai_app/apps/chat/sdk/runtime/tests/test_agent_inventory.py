@@ -602,8 +602,13 @@ async def test_realm_enrichment_scopes_mail_claims_to_allowed_operations():
     # The declared differentiation rides along so consumers can recompute
     # effective claims over a user-narrowed operation set.
     assert requirement["claims_by_operation"]["object.action.send"] == ["gmail:send"]
-    # No actions listing without object.action in the allowed set.
-    assert realm["actions"] == []
+    # Actions advertised by the realm stay VISIBLE without object.action in
+    # the allowed set — present-but-disabled (absence becomes information),
+    # with no claims/via decoration on entries the agent cannot exercise.
+    assert realm["actions"], "advertised actions render even when excluded"
+    for action in realm["actions"]:
+        assert action["enabled_for_agent"] is False
+        assert "claims" not in action and "via" not in action
     assert [op["name"] for op in realm["operations"]] == [
         "provider.about", "object.list", "object.search", "object.get",
     ]
@@ -1068,3 +1073,96 @@ async def test_realm_declared_access_requirements_ride_the_card_payload():
     admin = requirements[1]
     assert "surface" not in admin
     assert "status" not in admin
+
+
+@pytest.mark.asyncio
+async def test_realm_card_shows_advertised_but_excluded_entries_disabled():
+    """The task-experiment gap: the card renders the realm's FULL advertised
+    surface. Operations the admin config excludes are PRESENT with
+    `enabled_for_agent: false` and their human labels (task case:
+    `object.get` advertised, not allowed); allowed entries carry NO flag; a
+    fully-allowed realm has no disabled entries (mail case). Actions inherit
+    exactly object.action's exclusion; machine ops without human text stay
+    out of the card."""
+    from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import (
+        enrich_catalog_named_service_realms,
+    )
+    from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import (
+        NamedServiceProviderSpec,
+    )
+
+    task_spec = NamedServiceProviderSpec(
+        provider_id="task.issue",
+        namespace="task",
+        label="Tasks",
+        description="Issues and their attachments.",
+        operations={
+            "provider.about": {"transports": ["local"]},
+            "object.list": {"transports": ["local"]},
+            "object.search": {"transports": ["local"]},
+            "object.get": {"transports": ["local"]},
+            "object.upsert": {"transports": ["local"]},
+            "object.action": {"transports": ["local"]},
+            # Machine plumbing with no human text anywhere: must NOT render.
+            "object.resolve": {"transports": ["local"]},
+        },
+        metadata={
+            "presentation": {
+                "operations": {
+                    "object.get": {"label": "Read an issue", "description": "Read one issue with its details and attachments."},
+                },
+            },
+            "actions": {"open": "Open one issue in the issue editor."},
+        },
+    )
+    catalog = {
+        "named_services": [
+            {"namespace": "task", "alias": "named_services",
+             # The surfaced config gap: object.get and object.action absent.
+             "operations": ["provider.about", "object.list", "object.search", "object.upsert"]},
+        ]
+    }
+    out = await enrich_catalog_named_service_realms(
+        catalog, discovery=_FakeDiscovery({"task": task_spec}),
+    )
+    realm = out["named_services"][0]["realm"]
+    ops = {op["name"]: op for op in realm["operations"]}
+    # Advertised-but-excluded: present, disabled, human text intact.
+    assert ops["object.get"]["enabled_for_agent"] is False
+    assert ops["object.get"]["label"] == "Read an issue"
+    # Allowed entries carry NO flag (unchanged shape).
+    for name in ("provider.about", "object.list", "object.search", "object.upsert"):
+        assert "enabled_for_agent" not in ops[name]
+    # Machine plumbing without human text never renders.
+    assert "object.resolve" not in ops
+    # Actions inherit object.action's exclusion (only-real granularity);
+    # the generic object.action row stays hidden behind them.
+    assert [a["name"] for a in realm["actions"]] == ["open"]
+    assert realm["actions"][0]["enabled_for_agent"] is False
+    assert "object.action" not in ops
+
+    # Fully-allowed realm: nothing disabled anywhere.
+    mail_spec = NamedServiceProviderSpec(
+        provider_id="kdcube.mail",
+        namespace="mail",
+        label="Mail",
+        description="Mail over connected accounts.",
+        operations={
+            "object.list": {"transports": ["local"]},
+            "object.search": {"transports": ["local"]},
+            "object.action": {"transports": ["local"]},
+        },
+        metadata={"actions": {"send": "Send a mail message."}},
+    )
+    catalog = {
+        "named_services": [
+            {"namespace": "mail", "alias": "named_services",
+             "operations": ["object.list", "object.search", "object.action"]},
+        ]
+    }
+    out = await enrich_catalog_named_service_realms(
+        catalog, discovery=_FakeDiscovery({"mail": mail_spec}),
+    )
+    realm = out["named_services"][0]["realm"]
+    for entry in [*realm["operations"], *realm["actions"]]:
+        assert "enabled_for_agent" not in entry
