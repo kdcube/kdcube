@@ -217,8 +217,11 @@ SLACK_SCHEMA = {
     },
     "object_kinds": {
         SLACK_ACCOUNT_KIND: {
-            "description": "One Slack workspace/account connected by the current KDCube user.",
-            "fields": ["ref", "account_id", "label", "workspace", "email", "claims", "credential_status"],
+            "description": (
+                "One Slack workspace/account connected by the current KDCube user. "
+                "external_subject is that user's own Slack user id (U…)."
+            ),
+            "fields": ["ref", "account_id", "label", "workspace", "email", "external_subject", "claims", "credential_status"],
         },
         SLACK_CHANNEL_KIND: {
             "description": "One Slack conversation/channel visible to the connected account.",
@@ -249,7 +252,12 @@ SLACK_SCHEMA = {
     "search": {"filters": SLACK_SEARCH_FILTERS},
     "actions": {
         ACTION_POST_MESSAGE: {
-            "description": "Post a message to a Slack channel.",
+            "description": (
+                "Post a message to a Slack conversation. channel takes a conversation id "
+                "(C/G/D…) or a person's user id (U…) — a user id opens the direct "
+                "conversation with that person. Message the connecting user themselves "
+                "by passing their own user id (the account object's external_subject)."
+            ),
             "object_ref": "slack:<account_id>:channel:<channel_id> or omit and pass payload.channel",
             "payload": ["channel", "text", "thread_ts", "account_id"],
         },
@@ -274,7 +282,10 @@ SLACK_SCHEMA = {
             "description": (
                 "Upload a file to Slack. In chat pass a KDCube artifact file_path; "
                 "elsewhere pass staged_ref from request_upload (preferred) or tiny "
-                "inline content_base64 with a filename (10MB limit)."
+                "inline content_base64 with a filename (10MB limit). channel takes a "
+                "conversation id (C/G/D…) or a person's user id (U…) — a user id "
+                "shares into the direct conversation with that person (the connecting "
+                "user's own id is the account object's external_subject)."
             ),
             "object_ref": "slack:<account_id>:channel:<channel_id> or omit and pass payload.channel",
             "payload": ["channel", "file_path", "staged_ref", "content_base64", "title", "initial_comment", "thread_ts", "filename", "account_id"],
@@ -910,7 +921,7 @@ class SlackNamedServiceProvider(NamedServiceProvider):
             for account in accounts:
                 account_label = account.display_name or account.workspace or account.account_id
                 result = await self._slack.list_slack_channels(
-                    types=_text(filters.get("types") or "public_channel,private_channel"),
+                    types=_text(filters.get("channel_types") or filters.get("types") or "public_channel,private_channel"),
                     limit=_int(request.limit or filters.get("limit"), default=50, maximum=200),
                     cursor=_text(request.cursor or filters.get("cursor")),
                     exclude_archived=_bool(filters.get("exclude_archived"), default=True),

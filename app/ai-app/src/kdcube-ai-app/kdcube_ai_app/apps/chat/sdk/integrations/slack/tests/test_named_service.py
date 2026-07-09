@@ -264,6 +264,27 @@ async def test_object_list_channels_dispatches_to_slack_tool():
 
 
 @pytest.mark.asyncio
+async def test_object_list_honours_documented_channel_types_filter():
+    # The schema documents the filter as `channel_types`; listing must apply
+    # it (the surfaced case: filtering for DMs returned regular channels).
+    provider = _Provider([_account("acc-1", "slack:channels")])
+
+    response = await provider.object_list(
+        _ctx(),
+        NamedServiceRequest(
+            operation=OBJECT_LIST,
+            namespace=SLACK_NAMESPACE,
+            filters={"kind": "channels", "channel_types": "im"},
+        ),
+    )
+
+    assert response.ok is True
+    name, kwargs = provider._slack.calls[0]
+    assert name == "list_slack_channels"
+    assert kwargs["types"] == "im"
+
+
+@pytest.mark.asyncio
 async def test_search_without_searchable_account_returns_connect_required():
     provider = _Provider([])
 

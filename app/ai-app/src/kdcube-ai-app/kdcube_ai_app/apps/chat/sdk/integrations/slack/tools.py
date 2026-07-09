@@ -117,6 +117,40 @@ def _string_list(value: Any) -> list[str]:
     return [str(value).strip()] if str(value).strip() else []
 
 
+# Slack user ids (U... / enterprise W...) address a PERSON; conversations and
+# the file APIs want a conversation id (C/G/D...). conversations.open turns a
+# user id into that person's direct-conversation id — messaging yourself is
+# opening the conversation with your own user id.
+_SLACK_USER_ID_RE = re.compile(r"^[UW][A-Z0-9]{8,}$")
+
+
+async def _open_direct_conversation(
+    client: httpx.AsyncClient,
+    access_token: str,
+    user_id: str,
+) -> tuple[str, dict[str, Any] | None]:
+    """Resolve a Slack user id to its direct-conversation channel id (D...).
+
+    Returns ``(channel_id, None)`` on success, ``("", error_data)`` otherwise.
+    """
+    response = await client.post(
+        f"{SLACK_API}/conversations.open",
+        headers={"Authorization": f"Bearer {access_token}"},
+        data={"users": user_id},
+    )
+    try:
+        data = response.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    channel_id = str((data.get("channel") or {}).get("id") or "").strip()
+    if response.status_code >= 400 or not data.get("ok") or not channel_id:
+        data.setdefault("status_code", response.status_code)
+        return "", data
+    return channel_id, None
+
+
 def _bool_param(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -748,7 +782,21 @@ class SlackTools:
                 message="Connected Slack credential has no access token.",
                 where="slack.upload_slack_file",
             )
+        share_channel = str(channel or "").strip()
         async with httpx.AsyncClient(timeout=120.0) as client:
+            if _SLACK_USER_ID_RE.match(share_channel):
+                share_channel, open_error = await _open_direct_conversation(
+                    client, credential.access_token, share_channel
+                )
+                if open_error is not None:
+                    if _is_auth_failure(open_error, int(open_error.get("status_code") or 200)):
+                        return connected_account_auth_failure(credential, _slack_error(open_error, fallback="Slack direct conversation open failed."))
+                    return _error_result(
+                        code="slack_api_error",
+                        message=_slack_error(open_error, fallback="Slack direct conversation open failed."),
+                        where="slack.upload_slack_file",
+                        ret=open_error,
+                    )
             # files.getUploadURLExternal only reads form/query arguments; a JSON
             # body returns invalid_arguments ("missing required field: length").
             start_response = await client.post(
@@ -791,8 +839,8 @@ class SlackTools:
                     where="slack.upload_slack_file",
                 )
             complete_payload: dict[str, Any] = {"files": [{"id": file_id, "title": str(title or upload_filename).strip() or upload_filename}]}
-            if str(channel or "").strip():
-                complete_payload["channel_id"] = str(channel).strip()
+            if share_channel:
+                complete_payload["channel_id"] = share_channel
             if str(initial_comment or "").strip():
                 complete_payload["initial_comment"] = str(initial_comment).strip()
             if str(thread_ts or "").strip():
@@ -1015,10 +1063,25 @@ class SlackTools:
                 message="Connected Slack credential has no access token.",
                 where="slack.post_slack_message",
             )
-        payload: dict[str, Any] = {"channel": channel, "text": text}
+        target_channel = str(channel).strip()
+        payload: dict[str, Any] = {"text": text}
         if str(thread_ts or "").strip():
             payload["thread_ts"] = str(thread_ts).strip()
         async with httpx.AsyncClient(timeout=30.0) as client:
+            if _SLACK_USER_ID_RE.match(target_channel):
+                target_channel, open_error = await _open_direct_conversation(
+                    client, credential.access_token, target_channel
+                )
+                if open_error is not None:
+                    if _is_auth_failure(open_error, int(open_error.get("status_code") or 200)):
+                        return connected_account_auth_failure(credential, _slack_error(open_error, fallback="Slack direct conversation open failed."))
+                    return _error_result(
+                        code="slack_api_error",
+                        message=_slack_error(open_error, fallback="Slack direct conversation open failed."),
+                        where="slack.post_slack_message",
+                        ret=open_error,
+                    )
+            payload["channel"] = target_channel
             response = await client.post(
                 f"{SLACK_API}/chat.postMessage",
                 headers={"Authorization": f"Bearer {credential.access_token}"},
