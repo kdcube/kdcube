@@ -59,6 +59,9 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oau
     DEFAULT_DCR_REDIRECT_URIS,
     oauth_delegated_config,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.access_map import (
+    build_delegated_access_map,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.automation_access import (
     AutomationAccessService,
 )
@@ -1689,6 +1692,26 @@ class ConnectionHubEntrypoint(BaseEntrypoint):
             return await oauth_token(request)
 
         return JSONResponse(status_code=404, content={"error": "oauth_route_not_found", "path": path})
+
+    # ── delegated access map (admin, read-only) ────────────────────────────
+
+    @api(method="GET", alias="delegated_access_map", route="operations", **_api_visibility("delegated_access_map"))
+    async def delegated_access_map(self, **kwargs: Any) -> Dict[str, Any]:
+        """The named-services <-> grants mapping, resolved from live config:
+        grant vocabulary (`delegated_credentials.oauth.capabilities`),
+        resource exposure with per-namespace operation grants
+        (`...oauth.resources`), and the provider-backed claim vocabulary
+        (`delegated_to_kdcube.providers`). Read-only operator view — the
+        admin reviews which named services are exposed, under which
+        resources, with which grants."""
+        del kwargs
+        denied = _platform_admin_denied(self)
+        if denied:
+            return {
+                **denied,
+                "message": "The delegated access map is available to platform administrators only.",
+            }
+        return {"ok": True, **build_delegated_access_map(_connections_config(self))}
 
     # ── user-created delegated access for automation ───────────────────────
 

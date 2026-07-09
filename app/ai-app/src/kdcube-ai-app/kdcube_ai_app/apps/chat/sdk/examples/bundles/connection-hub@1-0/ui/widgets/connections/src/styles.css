@@ -1235,3 +1235,29 @@ code {
   margin: 0;
   background: transparent;
 }
+
+/* ── delegated access map (admin, read-only) ─────────────────────────────
+   Flat rows inside the standard cards: entry (label + token) on the left,
+   grant chips on the right; namespaces as quiet sub-blocks. */
+.access-map-entries { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.access-map-entry {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 6px 8px;
+  border: 1px solid var(--line-soft, #e4e9ea);
+  border-radius: 6px;
+  background: var(--surface, #fff);
+}
+.access-map-entry-op { display: inline-flex; align-items: baseline; gap: 8px; min-width: 0; flex-wrap: wrap; }
+.access-map-entry-op code { font-size: 12px; color: var(--muted, #6a7a7d); }
+.access-map-entry-detail { display: inline-flex; align-items: baseline; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.access-map-namespace {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-soft, #e4e9ea);
+  border-radius: 8px;
+}
+.grant-chips { display: inline-flex; gap: 4px; flex-wrap: wrap; }

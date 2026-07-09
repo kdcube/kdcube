@@ -340,3 +340,68 @@ export interface ConnectionsDisconnectResult {
   error?: ConnectionsError;
   message?: string;
 }
+
+// ── delegated access map (admin, read-only) ────────────────────────────────
+
+export interface AccessMapGrant {
+  grant: string;
+  label?: string;
+  description?: string;
+  admin_only?: boolean;
+  delegable_roles?: string[];
+  delegable_permissions?: string[];
+}
+
+export interface AccessMapToolRow {
+  name: string;
+  label?: string;
+  description?: string;
+  grants: string[];
+}
+
+export interface AccessMapNamespaceEntry {
+  tool: string;
+  operation: string;
+  label?: string;
+  description?: string;
+  grants: string[];
+}
+
+export interface AccessMapNamespace {
+  namespace: string;
+  label?: string;
+  description?: string;
+  authority_id?: string;
+  entries: AccessMapNamespaceEntry[];
+  grants: string[];
+}
+
+export interface AccessMapResource {
+  resource: string;
+  label?: string;
+  description?: string;
+  admin_only?: boolean;
+  grants: string[];
+  tools: AccessMapToolRow[];
+  namespaces: AccessMapNamespace[];
+  grant_union: string[];
+}
+
+export interface AccessMapProvider {
+  provider_id: string;
+  label?: string;
+  enabled?: boolean;
+  connector_apps: { id: string; label?: string; enabled?: boolean; allowed_claims: string[] }[];
+  claims: { claim: string; label?: string; description?: string }[];
+}
+
+export interface DelegatedAccessMapResult {
+  ok?: boolean;
+  error?: string;
+  message?: string;
+  enabled?: boolean;
+  grants?: AccessMapGrant[];
+  resources?: AccessMapResource[];
+  providers?: AccessMapProvider[];
+  unknown_grants?: string[];
+}

@@ -4,6 +4,7 @@ import { useAppDispatch, useAppSelector } from './app/hooks';
 import { AppShell, type ConnectionsTab } from './components/AppShell';
 import { AuthenticatorsPanel } from './features/authenticators/AuthenticatorsPanel';
 import { clearAuthenticatorsError, loadAuthenticators } from './features/authenticators/authenticatorsSlice';
+import { AccessMapPanel } from './features/accessMap/AccessMapPanel';
 import { DelegatedAccessPanel } from './features/delegatedAccess/DelegatedAccessPanel';
 import { clearDelegatedAccessError, loadDelegatedAccess } from './features/delegatedAccess/delegatedAccessSlice';
 import { ConnectionEdgesPanel } from './features/identity/ConnectionEdgesPanel';
@@ -33,6 +34,7 @@ type TelegramConnectStatus = 'idle' | 'connecting' | 'connected' | 'failed';
 function tabFromValue(raw: string): ConnectionsTab | null {
   const value = String(raw || '').trim().toLowerCase();
   if (value === 'authenticators' || value === 'identity') return value;
+  if (value === 'accessmap' || value === 'access-map' || value === 'access_map') return 'accessMap';
   if (
     value === 'accounts'
     || value === 'delegatedintegrations'
@@ -168,7 +170,7 @@ export default function App() {
 
   // A non-admin can still land on the tab via URL/stale state; send them home.
   useEffect(() => {
-    if (!authenticatorsAllowed && activeTab === 'authenticators') {
+    if (!authenticatorsAllowed && (activeTab === 'authenticators' || activeTab === 'accessMap')) {
       setActiveTab('identity');
     }
   }, [authenticatorsAllowed, activeTab]);
@@ -277,6 +279,7 @@ export default function App() {
     >
       {activeTab === 'identity' ? <ConnectionEdgesPanel telegramConnectStatus={telegramConnectStatus} /> : null}
       {activeTab === 'authenticators' && authenticatorsAllowed ? <AuthenticatorsPanel /> : null}
+      {activeTab === 'accessMap' && authenticatorsAllowed ? <AccessMapPanel /> : null}
       {activeTab === 'delegatedAccess' ? <DelegatedAccessPanel /> : null}
       {activeTab === 'delegatedToKdcube' ? <DelegatedToKdcubePanel key={delegatedSummonNonce} /> : null}
       {activeTab === 'providerConnections' ? <ProviderConnectionsPanel summon={hubSummon ?? undefined} /> : null}

@@ -1,5 +1,6 @@
 import { configureStore } from '@reduxjs/toolkit';
 import authenticatorsReducer from '../features/authenticators/authenticatorsSlice';
+import accessMapReducer from '../features/accessMap/accessMapSlice';
 import delegatedAccessReducer from '../features/delegatedAccess/delegatedAccessSlice';
 import identityReducer from '../features/identity/identitySlice';
 import delegatedToKdcubeReducer from '../features/delegatedToKdcube/delegatedToKdcubeSlice';
@@ -8,6 +9,7 @@ import providerConnectionsReducer from '../features/providerConnections/provider
 export const store = configureStore({
   reducer: {
     authenticators: authenticatorsReducer,
+    accessMap: accessMapReducer,
     delegatedAccess: delegatedAccessReducer,
     identity: identityReducer,
     delegatedToKdcube: delegatedToKdcubeReducer,

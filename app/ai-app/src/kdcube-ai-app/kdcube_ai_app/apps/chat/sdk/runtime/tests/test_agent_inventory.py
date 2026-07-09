@@ -1166,3 +1166,80 @@ async def test_realm_card_shows_advertised_but_excluded_entries_disabled():
     realm = out["named_services"][0]["realm"]
     for entry in [*realm["operations"], *realm["actions"]]:
         assert "enabled_for_agent" not in entry
+
+
+@pytest.mark.asyncio
+async def test_descriptor_requirements_merge_over_realm_declarations_by_id():
+    """The consumer DESCRIPTOR supplies/overrides access requirements per
+    namespace (`namespaces.<ns>.presentation.requirements`): a descriptor
+    entry with a code-declared id replaces it wholesale (incl. a static
+    status chip); a new id appends; widget surfaces resolve server-side the
+    same way as realm-declared ones."""
+    from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import (
+        enrich_catalog_named_service_realms,
+    )
+    from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import (
+        NamedServiceProviderSpec,
+    )
+
+    spec = NamedServiceProviderSpec(
+        provider_id="task.issue",
+        namespace="task",
+        label="Tasks",
+        description="Issues and their attachments.",
+        metadata={
+            "presentation": {
+                "requirements": [
+                    {
+                        "id": "task.board_access",
+                        "label": "Task board access",
+                        "description": "You see and change the issues you created or that were shared with you.",
+                        "actor": "provider",
+                    },
+                ],
+            },
+        },
+    )
+    catalog = {
+        "named_services": [
+            {"namespace": "task", "alias": "named_services",
+             "operations": ["object.list", "object.search"],
+             # The descriptor block, verbatim shape from bundles.yaml.
+             "requirements_config": [
+                 {   # overrides the code-declared entry by id
+                     "id": "task.board_access",
+                     "label": "Team board membership",
+                     "description": "Deployment-specific wording: ask your team lead for board membership.",
+                     "actor": "admin",
+                     "status": "missing",
+                 },
+                 {   # appends, with a widget surface resolved server-side
+                     "id": "task.vpn",
+                     "label": "Corp VPN",
+                     "description": "The tracker is reachable on the corporate network only.",
+                     "actor": "user",
+                     "surface": {"kind": "widget", "bundle_id": "task-tracker@1-0",
+                                 "widget_alias": "task_tracker_tasks", "label": "Open Tasks"},
+                 },
+                 {"id": "junk-no-description"},  # invalid: dropped
+             ]},
+        ]
+    }
+    out = await enrich_catalog_named_service_realms(
+        catalog,
+        discovery=_FakeDiscovery({"task": spec}),
+        tenant="demo-tenant",
+        project="demo-project",
+    )
+    realm = out["named_services"][0]["realm"]
+    reqs = {r["id"]: r for r in realm["requirements"]}
+    assert set(reqs) == {"task.board_access", "task.vpn"}
+    board = reqs["task.board_access"]
+    assert board["label"] == "Team board membership"
+    assert board["actor"] == "admin"
+    assert board["status"] == "missing"
+    assert "surface" not in board  # the override replaces WHOLESALE
+    vpn = reqs["task.vpn"]
+    assert vpn["surface"]["url"] == (
+        "/api/integrations/bundles/demo-tenant/demo-project/task-tracker@1-0/widgets/task_tracker_tasks"
+    )

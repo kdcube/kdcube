@@ -102,6 +102,26 @@ const GUIDES: Record<ConnectionsTab, Guide> = {
       },
     ],
   },
+  accessMap: {
+    summary:
+      'Operator surface: the read-only map of what this deployment delegates to external clients — '
+      + 'each OAuth resource, the named-service namespaces under it, per-operation grants, and the '
+      + 'provider-backed connected-account claims. Resolved from the app configuration; edit the descriptor to change it.',
+    links: [
+      {
+        label: 'Delegate KDCube services to an external client',
+        href: `${DOCS}/recipes/connections/delegate-kdcube-service-to-external-client-README.md`,
+      },
+      {
+        label: 'Create delegated automation access',
+        href: `${DOCS}/recipes/connections/create-delegated-automation-access-README.md`,
+      },
+      {
+        label: 'Named services over MCP',
+        href: `${DOCS}/recipes/kdcube_for_agents/named-services-mcp-README.md`,
+      },
+    ],
+  },
   authenticators: {
     summary:
       'Operator surface: configure the authenticator modules that prove incoming request identities. '

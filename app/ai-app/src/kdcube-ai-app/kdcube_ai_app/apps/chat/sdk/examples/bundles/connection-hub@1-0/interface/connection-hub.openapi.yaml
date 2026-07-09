@@ -276,6 +276,28 @@ paths:
         "200":
           description: Delegation edge plus canonical user ids for aggregation.
 
+  /bundles/{tenant}/{project}/{bundle_id}/operations/delegated_access_map:
+    get:
+      tags: [Delegated access]
+      summary: Read-only map of delegated resources, namespaces, and grants.
+      description: >
+        Admin route. Resolves the live connections configuration into the
+        named-services-to-grants mapping: the grant vocabulary
+        (delegated_credentials.oauth.capabilities), each OAuth resource with
+        its tools and named-service namespaces and their per-operation grants
+        (delegated_credentials.oauth.resources), and the provider-backed
+        connected-account claim vocabulary (delegated_to_kdcube.providers).
+        Secret values and secret refs are never returned.
+      operationId: delegated_access_map
+      x-kdcube-result-alias: delegated_access_map
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/BundleId"
+      responses:
+        "200":
+          description: Resolved grants, resources, namespaces, and providers.
+
   /bundles/{tenant}/{project}/{bundle_id}/operations/authenticators_list:
     get:
       tags: [Authenticators]

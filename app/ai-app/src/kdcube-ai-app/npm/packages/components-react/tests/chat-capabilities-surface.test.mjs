@@ -275,3 +275,18 @@ test('the greyed styling exists in both stylesheet twins', () => {
     assert.match(css, /\.k-menu-row-excluded \{ opacity: 0\.75; \}/, `${sheet} greys excluded rows`)
   }
 })
+
+test('the hub access-map admin view is read-only and admin-gated', () => {
+  const base = '../../../../kdcube_ai_app/apps/chat/sdk/examples/bundles/connection-hub@1-0/ui/widgets/connections/src'
+  const slice = readFileSync(new URL(`${base}/features/accessMap/accessMapSlice.ts`, import.meta.url), 'utf8')
+  // Read side only: one GET operation, no write op anywhere in the feature.
+  assert.match(slice, /getOp<DelegatedAccessMapResult>\('delegated_access_map'\)/)
+  assert.doesNotMatch(slice, /postOp/)
+  assert.match(slice, /platform_admin_required/)
+  const panel = readFileSync(new URL(`${base}/features/accessMap/AccessMapPanel.tsx`, import.meta.url), 'utf8')
+  assert.doesNotMatch(panel, /postOp|onSubmit|<form/)
+  assert.match(panel, /platform administrators only/)
+  // The tab renders only for admins (same gate as the authenticators tab).
+  const app = readFileSync(new URL(`${base}/App.tsx`, import.meta.url), 'utf8')
+  assert.match(app, /activeTab === 'accessMap' && authenticatorsAllowed/)
+})

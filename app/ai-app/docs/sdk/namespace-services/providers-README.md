@@ -492,6 +492,15 @@ and the reactive denial card — the provider's access errors should echo the
 same fix (see "Denials Declare Their Fix" below). The task realm is the
 working exemplar for both.
 
+Deployments can supply or override requirements from the CONSUMER
+descriptor, per namespace — the same block shape under
+`surfaces.as_consumer.agents.<agent>.tools[<named_service>].namespaces.<ns>.presentation.requirements`.
+Descriptor entries merge BY ID over the realm's code-declared list: a
+matching id replaces the entry wholesale, a new id appends, and a descriptor
+entry may carry a static `status: granted|missing` chip for deployments that
+want a fixed state without live resolution. `widget` surfaces resolve to the
+served-widget URL server-side exactly like realm-declared ones.
+
 ### Search Scope Filters And Relevance Tuning
 
 A search scope may declare a `filters` schema — the params a client can pass to

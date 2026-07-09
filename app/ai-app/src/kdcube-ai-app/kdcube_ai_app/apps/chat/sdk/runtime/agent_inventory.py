@@ -542,10 +542,21 @@ def agent_capabilities_catalog(
                     or namespace_cfg.get("allowed_operations")
                     or namespace_cfg.get("operations")
                 )
+                row_presentation = namespace_cfg.get("presentation")
+                row_requirements = (
+                    row_presentation.get("requirements")
+                    if isinstance(row_presentation, Mapping)
+                    else None
+                )
                 namespaces_out.append({
                     "namespace": ns,
                     "alias": ns_alias,
                     "operations": operations,
+                    **(
+                        {"requirements_config": list(row_requirements)}
+                        if isinstance(row_requirements, (list, tuple)) and row_requirements
+                        else {}
+                    ),
                     "tools": [
                         _NAMED_SERVICE_OPERATION_TO_TOOL[op]
                         for op in operations
@@ -626,12 +637,69 @@ def _realm_requirement_effective_claims(
     return sorted(set(_string_list(requirement.get("claims"))))
 
 
+def _normalize_requirement_declaration(
+    raw: Any,
+    *,
+    tenant: str = "",
+    project: str = "",
+) -> dict[str, Any] | None:
+    """One declared access requirement, sanitized for the service card.
+
+    Accepts realm-code and DESCRIPTOR declarations alike (same shape):
+    id/label/description/actor, optional static `status` (granted|missing),
+    and an honest `surface` — `widget` resolves to the concrete served-widget
+    URL here (tenant/project are known server-side), `url` passes through,
+    `capabilities` names the picker. Anything undeclared stays absent.
+    """
+    if not isinstance(raw, Mapping):
+        return None
+    req_id = _norm(raw.get("id"))
+    summary = _first_para(str(raw.get("description") or ""))
+    if not req_id or not summary:
+        return None
+    req_out: dict[str, Any] = {"id": req_id, "description": summary}
+    req_label = _norm(raw.get("label"))
+    if req_label:
+        req_out["label"] = req_label
+    actor = _norm(raw.get("actor"))
+    if actor:
+        req_out["actor"] = actor
+    status = _norm(raw.get("status")).lower()
+    if status in ("granted", "missing"):
+        req_out["status"] = status
+    surface = raw.get("surface")
+    if isinstance(surface, Mapping):
+        kind = _norm(surface.get("kind"))
+        if kind == "widget" and tenant and project:
+            bundle_id = _norm(surface.get("bundle_id"))
+            widget_alias = _norm(surface.get("widget_alias"))
+            if bundle_id and widget_alias:
+                req_out["surface"] = {
+                    "kind": "url",
+                    "url": (
+                        f"/api/integrations/bundles/{tenant}/{project}/"
+                        f"{bundle_id}/widgets/{widget_alias}"
+                    ),
+                    "label": _norm(surface.get("label")) or "Open",
+                }
+        elif kind == "url" and _norm(surface.get("url")):
+            req_out["surface"] = {
+                "kind": "url",
+                "url": _norm(surface.get("url")),
+                "label": _norm(surface.get("label")) or "Open",
+            }
+        elif kind == "capabilities":
+            req_out["surface"] = {"kind": "capabilities"}
+    return req_out
+
+
 def _realm_payload_from_spec(
     spec: Any,
     allowed_operations: Sequence[str],
     *,
     tenant: str = "",
     project: str = "",
+    requirement_overrides: Sequence[Any] = (),
 ) -> dict[str, Any] | None:
     """The picker-facing view of one realm behind a configured namespace.
 
@@ -803,49 +871,30 @@ def _realm_payload_from_spec(
 
     # Declared access requirements — ONE declaration feeds two surfaces: the
     # proactive service-card row here and the reactive denial card (the
-    # provider echoes the same fix on its errors). Only declared entries
-    # render; a `widget` surface resolves to a concrete root-relative URL
-    # server-side (tenant/project are known here, never widget-side guessed).
+    # provider echoes the same fix on its errors). Realm code declares under
+    # presentation.requirements; the CONSUMER DESCRIPTOR may supply or
+    # override per namespace (merged BY ID below — a descriptor entry with a
+    # code-declared id replaces it wholesale, new ids append). Descriptor
+    # entries may carry a static `status` (granted|missing) for deployments
+    # that want a fixed chip without live resolution.
     requirements_decl: list[dict[str, Any]] = []
     raw_reqs = presentation.get("requirements")
     if isinstance(raw_reqs, (list, tuple)):
         for raw in raw_reqs:
-            if not isinstance(raw, Mapping):
-                continue
-            req_id = _norm(raw.get("id"))
-            summary = _first_para(str(raw.get("description") or ""))
-            if not req_id or not summary:
-                continue
-            req_out: dict[str, Any] = {"id": req_id, "description": summary}
-            req_label = _norm(raw.get("label"))
-            if req_label:
-                req_out["label"] = req_label
-            actor = _norm(raw.get("actor"))
-            if actor:
-                req_out["actor"] = actor
-            surface = raw.get("surface")
-            if isinstance(surface, Mapping):
-                kind = _norm(surface.get("kind"))
-                if kind == "widget" and tenant and project:
-                    bundle_id = _norm(surface.get("bundle_id"))
-                    widget_alias = _norm(surface.get("widget_alias"))
-                    if bundle_id and widget_alias:
-                        req_out["surface"] = {
-                            "kind": "url",
-                            "url": (
-                                f"/api/integrations/bundles/{tenant}/{project}/"
-                                f"{bundle_id}/widgets/{widget_alias}"
-                            ),
-                            "label": _norm(surface.get("label")) or "Open",
-                        }
-                elif kind == "url" and _norm(surface.get("url")):
-                    req_out["surface"] = {
-                        "kind": "url",
-                        "url": _norm(surface.get("url")),
-                        "label": _norm(surface.get("label")) or "Open",
-                    }
-                elif kind == "capabilities":
-                    req_out["surface"] = {"kind": "capabilities"}
+            req_out = _normalize_requirement_declaration(raw, tenant=tenant, project=project)
+            if req_out:
+                requirements_decl.append(req_out)
+    for raw in requirement_overrides or ():
+        req_out = _normalize_requirement_declaration(raw, tenant=tenant, project=project)
+        if not req_out:
+            continue
+        replaced = False
+        for index, existing in enumerate(requirements_decl):
+            if existing.get("id") == req_out["id"]:
+                requirements_decl[index] = req_out
+                replaced = True
+                break
+        if not replaced:
             requirements_decl.append(req_out)
 
     label = _norm(getattr(spec, "label", ""))
@@ -919,11 +968,13 @@ async def enrich_catalog_named_service_realms(
                 (item.spec for item in (found or []) if getattr(item, "spec", None) is not None),
                 None,
             )
+            overrides = entry.get("requirements_config")
             realm = _realm_payload_from_spec(
                 spec,
                 _string_list(entry.get("operations")),
                 tenant=str(tenant or ""),
                 project=str(project or ""),
+                requirement_overrides=overrides if isinstance(overrides, (list, tuple)) else (),
             )
             if realm:
                 entry["realm"] = realm

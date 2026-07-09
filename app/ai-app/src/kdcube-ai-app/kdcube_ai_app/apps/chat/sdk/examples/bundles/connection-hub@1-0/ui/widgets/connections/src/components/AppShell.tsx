@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { TabGuide } from './TabGuide';
 
-export type ConnectionsTab = 'identity' | 'delegatedToKdcube' | 'providerConnections' | 'delegatedAccess' | 'authenticators';
+export type ConnectionsTab = 'identity' | 'delegatedToKdcube' | 'providerConnections' | 'delegatedAccess' | 'accessMap' | 'authenticators';
 
 export interface AppShellProps {
   errors: string[];
@@ -70,6 +70,15 @@ export function AppShell({
         >
           Delegated by KDCube
         </button>
+        {showAuthenticators ? (
+          <button
+            type="button"
+            className={`tab ${activeTab === 'accessMap' ? 'active' : ''}`}
+            onClick={() => onTabChange('accessMap')}
+          >
+            Access map
+          </button>
+        ) : null}
         {showAuthenticators ? (
           <button
             type="button"
