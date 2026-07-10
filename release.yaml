@@ -1,11 +1,17 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.7.10.1935"
+  ref: "2026.7.11.017"
   description: |
-    This release follows 2026.7.10.1730 on the same day with one fix: the
-    connect hint raises the consent banner — a named-service connect hint in a
-    tool result now surfaces the scoped connected-account consent card in chat
-    instead of remaining agent-visible only, keeping the reactive consent path
-    uniform across every way an unmet claim can appear.
+    This release follows 2026.7.10.1935 and carries public content catalogs
+    and search selectivity.
+
+    Public content apps gain browsable catalogs: content folds render with
+    site chrome and an article rail, and providers expose a search hook so
+    catalog browsing and provider search share one surface.
+
+    Search selectivity improves with all-terms-first lexical matching and
+    tier-honest catalog hints, so lexical retrieval prefers results matching
+    every query term and catalog hints state only what their tier actually
+    covers. Tier-1 doc sources that lacked updated_at stamps now carry them.
 config:
-  version: "2026.7.10.1935"
+  version: "2026.7.11.017"
