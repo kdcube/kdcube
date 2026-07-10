@@ -22,12 +22,17 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from kdcube_ai_app.apps.chat.sdk.pub.model import (
+    INDEX_SCHEMA,
     PublicContentAliasConfig,
+    PublicContentAliasIndex,
+    PublicContentCatalogConfig,
+    PublicContentIndexEntry,
     PublicContentItem,
 )
+from kdcube_ai_app.apps.chat.sdk.pub.pages import build_item_shell, render_catalog_page
 from kdcube_ai_app.apps.chat.sdk.pub.registry import PublicContentRegistry
 from kdcube_ai_app.apps.chat.sdk.pub.render import render_gone_page, render_item_page
 from kdcube_ai_app.apps.chat.sdk.pub.sitemap import render_sitemap_xml, sitemap_descriptor
@@ -174,6 +179,187 @@ def _not_found(detail: str) -> BundleBinaryResponse:
     return _binary(json.dumps({"detail": detail}), _JSON, status_code=404)
 
 
+# ------------------ catalog helpers ------------------
+
+
+def _published_under(
+    index: PublicContentAliasIndex, catalog: PublicContentCatalogConfig
+) -> List[PublicContentIndexEntry]:
+    """Published entries of one catalog, newest first."""
+    covered = [
+        e for e in index.entries if e.state == "published" and catalog.covers(e.slug)
+    ]
+    covered.sort(key=lambda e: (e.published_at or "", e.slug), reverse=True)
+    return covered
+
+
+def _catalog_counts(
+    index: PublicContentAliasIndex, config: PublicContentAliasConfig
+) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for catalog in config.catalogs:
+        counts[catalog.prefix] = sum(
+            1
+            for e in index.entries
+            if e.state == "published" and catalog.covers(e.slug)
+        )
+    return counts
+
+
+def _lexical_search(
+    entries: List[PublicContentIndexEntry], query: str
+) -> List[PublicContentIndexEntry]:
+    """Rank entries by naive token overlap over title/tags/summary — the
+    degrade path when the app declares no search hook (or it fails)."""
+    tokens = [t for t in str(query or "").lower().split() if t]
+    if not tokens:
+        return []
+    scored: List[tuple] = []
+    for entry in entries:
+        title = (entry.title or "").lower()
+        summary = (entry.summary or "").lower()
+        tags = " ".join(entry.tags).lower()
+        score = 0
+        for token in tokens:
+            if token in title:
+                score += 3
+            if token in tags:
+                score += 2
+            if token in summary:
+                score += 1
+        if score > 0:
+            scored.append((score, entry.published_at or "", entry))
+    # best score first; newest first among equals
+    scored.sort(key=lambda row: (row[0], row[1]), reverse=True)
+    return [row[2] for row in scored]
+
+
+async def _search_hook_slugs(
+    *,
+    workflow: Any,
+    bundle_id: str,
+    alias: str,
+    query: str,
+    prefix: str,
+    limit: int,
+) -> Optional[List[str]]:
+    """Run the app's declared search hook; None means degrade to lexical."""
+    from kdcube_ai_app.infra.plugin.bundle_loader import discover_bundle_interface_manifest
+
+    manifest = discover_bundle_interface_manifest(workflow, bundle_id=bundle_id)
+    spec = next(
+        (
+            s
+            for s in getattr(manifest, "public_content_search", ()) or ()
+            if s.alias == alias
+        ),
+        None,
+    )
+    if spec is None:
+        return None
+    method = getattr(workflow, spec.method_name, None)
+    if not callable(method):
+        return None
+    try:
+        raw = await method(query, prefix=prefix, limit=limit)
+    except Exception:
+        _log.warning(
+            "[pub.service] search hook failed alias=%s prefix=%s (degrading to lexical)",
+            alias, prefix, exc_info=True,
+        )
+        return None
+    slugs: List[str] = []
+    for row in raw or []:
+        if isinstance(row, str):
+            slugs.append(row.strip().strip("/"))
+        elif isinstance(row, Mapping):
+            slug = str(row.get("slug") or "").strip().strip("/")
+            if slug:
+                slugs.append(slug)
+    return slugs
+
+
+async def _current_index(registry: PublicContentRegistry) -> Optional[PublicContentAliasIndex]:
+    """The hot index, rebuilding when missing or written by an older entry
+    schema (the signature carries the schema, so ensure rebuilds once)."""
+    index = await registry.read_index()
+    if index is None or index.index_schema < INDEX_SCHEMA:
+        await registry.ensure_hot_index()
+        index = await registry.read_index()
+    return index
+
+
+def _as_offset(value: Any) -> int:
+    try:
+        return max(0, int(value))
+    except Exception:
+        return 0
+
+
+async def _serve_catalog_page(
+    *,
+    workflow: Any,
+    bundle_id: str,
+    config: PublicContentAliasConfig,
+    catalog: PublicContentCatalogConfig,
+    registry: PublicContentRegistry,
+    alias_base: str,
+    query_params: Mapping[str, Any],
+) -> BundleBinaryResponse:
+    index = await _current_index(registry)
+    if index is None:
+        return _not_found(f"No content index for alias {config.alias}")
+
+    def _url_for_slug(slug: str) -> str:
+        return config.canonical_url(slug) or (f"{alias_base}/{slug}" if alias_base else f"/{slug}")
+
+    def _url_for_catalog(entry: PublicContentCatalogConfig) -> str:
+        return _url_for_slug(entry.prefix)
+
+    all_entries = _published_under(index, catalog)
+    counts = _catalog_counts(index, config)
+    query = str(query_params.get("q") or "").strip()
+    offset = _as_offset(query_params.get("offset"))
+    page_size = catalog.page_size
+
+    if query:
+        slugs = await _search_hook_slugs(
+            workflow=workflow,
+            bundle_id=bundle_id,
+            alias=config.alias,
+            query=query,
+            prefix=catalog.prefix,
+            limit=max(50, page_size * 5),
+        )
+        if slugs is None:
+            results = _lexical_search(all_entries, query)
+        else:
+            by_slug = {e.slug: e for e in all_entries}
+            results = [by_slug[s] for s in slugs if s in by_slug]
+        total = len(results)
+        window = results[offset:offset + page_size]
+        searched = True
+    else:
+        total = len(all_entries)
+        window = all_entries[offset:offset + page_size]
+        searched = False
+
+    page = render_catalog_page(
+        config=config,
+        catalog=catalog,
+        entries=window,
+        counts=counts,
+        offset=offset,
+        query=query,
+        catalog_url=_url_for_catalog(catalog),
+        catalog_url_for=_url_for_catalog,
+        item_url_for=_url_for_slug,
+        total_in_catalog=total,
+        searched=searched,
+    )
+    return _binary(page, _HTML)
+
+
 async def serve_public_content(
     *,
     workflow: Any,
@@ -184,6 +370,7 @@ async def serve_public_content(
     hot_root: Any,
     path_tail: str,
     serving_base_url: str,
+    query_params: Optional[Mapping[str, Any]] = None,
     logger: Optional[Any] = None,
 ) -> BundleBinaryResponse:
     """Serve the reserved ``public/__content__/…`` route for one app.
@@ -193,7 +380,10 @@ async def serve_public_content(
     - ``""`` — machine-readable descriptor list of all enabled alias sitemaps
       (what a host reads to build its top-level sitemap index);
     - ``<alias>/sitemap.xml`` — the per-alias sitemap;
-    - ``<alias>/<slug…>`` — the crawlable item page (410 when retracted).
+    - ``<alias>/<catalog-prefix>`` — a configured catalog: the server-rendered,
+      paginated (``?offset=``), searchable (``?q=``) listing page;
+    - ``<alias>/<slug…>`` — the crawlable item page (410 when retracted);
+      wrapped in chrome + catalog rail when a configured catalog covers it.
 
     ``serving_base_url`` is the absolute URL of the ``__content__`` route
     root; it is the canonical fallback when the alias does not configure
@@ -260,6 +450,19 @@ async def serve_public_content(
     if not rest:
         return _not_found("Missing content slug")
 
+    # A configured catalog prefix serves the listing page, not an item.
+    catalog = config.catalog(rest)
+    if catalog is not None:
+        return await _serve_catalog_page(
+            workflow=workflow,
+            bundle_id=bundle_id,
+            config=config,
+            catalog=catalog,
+            registry=registry,
+            alias_base=_alias_base(alias),
+            query_params=query_params or {},
+        )
+
     try:
         item = await registry.get_item(rest)
     except ValueError:
@@ -268,9 +471,41 @@ async def serve_public_content(
         return _not_found(f"No content at {rest}")
     if item.state == "retracted":
         return _binary(render_gone_page(item.slug), _HTML, status_code=410)
+
+    # Items under a configured catalog get the site chrome + the collapsible
+    # catalog rail; the crawlable document (canonical, JSON-LD, article body)
+    # is unchanged. Shell failures degrade to the plain page — an article must
+    # never 500 because the index is momentarily unavailable.
+    head_extra = body_class = body_prefix = body_suffix = ""
+    item_catalog = config.catalog_for_slug(item.slug)
+    if item_catalog is not None:
+        try:
+            index = await _current_index(registry)
+        except Exception:
+            index = None
+        if index is not None:
+            def _url_for_slug(slug: str) -> str:
+                return config.canonical_url(slug) or f"{_alias_base(alias)}/{slug}"
+
+            head_extra, body_prefix, body_suffix = build_item_shell(
+                config=config,
+                catalog=item_catalog,
+                entries=_published_under(index, item_catalog),
+                active_slug=item.slug,
+                counts=_catalog_counts(index, config),
+                catalog_url=_url_for_slug(item_catalog.prefix),
+                catalog_url_for=lambda c: _url_for_slug(c.prefix),
+                item_url_for=_url_for_slug,
+            )
+            body_class = "kdcpub-body"
+
     page = render_item_page(
         item,
         config=config,
         fallback_canonical_url=f"{_alias_base(alias)}/{item.slug}",
+        head_extra=head_extra,
+        body_class=body_class,
+        body_prefix=body_prefix,
+        body_suffix=body_suffix,
     )
     return _binary(page, _HTML)

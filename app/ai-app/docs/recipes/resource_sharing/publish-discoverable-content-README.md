@@ -1,10 +1,10 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/recipes/resource_sharing/publish-discoverable-content-README.md
 title: "Publish Discoverable Content From An App"
-summary: "Step-by-step recipe for making an app a public content provider: declare @public_content, adapt your domain objects to PublicContentItem, wire publish/retract hooks and a Publish-to-Web seed, configure the public_content block (singleton, canonical_base), verify with curl, map clean canonical URLs, and federate into the site's robots.txt and sitemap index."
+summary: "Step-by-step recipe for making an app a public content provider: declare @public_content, adapt your domain objects to PublicContentItem, wire publish/retract hooks and a Publish-to-Web seed, configure the public_content block (singleton, canonical_base), verify with curl, map clean canonical URLs, federate into the site's robots.txt and sitemap index, and give the set a browsable face — config-declared catalogs with search/pagination/site chrome and the @public_content_search hook."
 status: active
-tags: ["recipes", "resource-sharing", "public-content", "seo", "sitemap", "jsonld", "crawlable", "cdn", "bundle"]
-updated_at: 2026-07-03
+tags: ["recipes", "resource-sharing", "public-content", "seo", "sitemap", "jsonld", "crawlable", "cdn", "bundle", "catalogs", "search"]
+updated_at: 2026-07-10
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/public-content-provider-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/cdn-pub/public-content-solution-README.md
@@ -262,6 +262,55 @@ machine-readable source a site build can read to generate these entries.
 Done. A crawler now walks: `robots.txt` → site sitemap index → your
 runtime-generated sitemap (fresh `lastmod` on every publish) → clean item
 URLs, each canonical to itself.
+
+## Step 8 (optional) — Give the set a browsable face: catalogs
+
+Item pages make content findable; **catalogs** make it browsable by humans.
+Declare a catalog per slug prefix and the platform serves a listing page at
+that prefix — hero, cards (date, kicker badge, title, summary, tag chips),
+plain-GET search, server-side pagination — plus a sticky site-chrome header
+and a collapsible article-list rail on every item page under the prefix. All
+config, no code:
+
+```yaml
+public_content:
+  articles:
+    enabled: true
+    canonical_base: https://example.com/articles
+    catalogs:
+      guides: { title: "Guides",  accent: "#01BEB2", background: "#F6FAFA" }
+      blog:   { title: "Blog",    accent: "#0969DA", background: "#F4F9FF" }
+    chrome:
+      brand_label: "My Product"
+      brand_href: https://example.com/
+      links:
+        - { label: Home,   href: 'https://example.com/' }
+        - { label: Guides, href: 'https://example.com/articles/guides' }
+        - { label: Blog,   href: 'https://example.com/articles/blog' }
+```
+
+`https://example.com/articles/blog` now answers the catalog page (it also
+joins the sitemap); every `articles/blog/...` item page gets the chrome and
+the rail; per-fold accent/background give each catalog its own color world.
+The authored item body renders byte-exact — the shell is namespaced around
+it.
+
+Search defaults to a lexical match over the index. If your app owns a better
+engine, declare the hook — the platform calls it in-process and renders the
+results server-side on the same page:
+
+```python
+from kdcube_ai_app.infra.plugin.bundle_loader import public_content_search
+
+@public_content_search(alias="articles")
+async def articles_search(self, query: str, *, prefix: str = "", limit: int = 50) -> list[str]:
+    hits = await self._my_search_engine(query, section=prefix, limit=limit)
+    return [f"{prefix}/{h.slug}" for h in hits]     # ordered slugs; platform
+                                                    # intersects with the index
+```
+
+Full semantics (theming, pagination, degrade paths, the rail):
+[Public Content Solution → Catalogs](../../sdk/solutions/cdn-pub/public-content-solution-README.md#catalogs-browsable-folds-with-search-pagination-and-site-chrome).
 
 ## What not to do
 

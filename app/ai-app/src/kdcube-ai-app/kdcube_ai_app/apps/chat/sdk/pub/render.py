@@ -108,12 +108,21 @@ def render_item_page(
     *,
     config: PublicContentAliasConfig,
     fallback_canonical_url: str = "",
+    head_extra: str = "",
+    body_class: str = "",
+    body_prefix: str = "",
+    body_suffix: str = "",
 ) -> str:
     """Render a published item to a complete crawlable HTML document.
 
     ``fallback_canonical_url`` is the serving-route URL, used when the alias
     does not configure a ``canonical_base``; when both exist, the configured
     canonical wins so shared-link equity consolidates on the clean URL.
+
+    ``head_extra`` / ``body_class`` / ``body_prefix`` / ``body_suffix`` are
+    page-shell hooks (site chrome, catalog rail — see ``pages.build_item_shell``):
+    the prefix/suffix wrap the ``<article>`` while the crawlable document
+    metadata (title, canonical, JSON-LD) stays untouched.
     """
     canonical_url = config.canonical_url(item.slug) or (fallback_canonical_url or "")
     alias_base_url = (config.canonical_base or "").rstrip("/")
@@ -166,6 +175,8 @@ def render_item_page(
         payload = json.dumps(doc, ensure_ascii=False).replace("</", "<\\/")
         head_parts.append(f'<script type="application/ld+json">{payload}</script>')
 
+    if head_extra:
+        head_parts.append(head_extra)
     head = "\n".join(part for part in head_parts if part)
     lang = _esc(item.language or "en")
     # The generated <h1>/summary exist for bare body fragments. An authored
@@ -177,15 +188,18 @@ def render_item_page(
     else:
         summary_html = f"<p>{_esc(item.summary)}</p>\n" if item.summary else ""
         header_html = f"<h1>{_esc(item.title)}</h1>\n{summary_html}"
+    body_open = f'<body class="{_esc(body_class)}">' if body_class else "<body>"
     return (
         "<!doctype html>\n"
         f'<html lang="{lang}">\n'
         f"<head>\n{head}\n</head>\n"
-        "<body>\n"
+        f"{body_open}\n"
+        f"{body_prefix}"
         "<article>\n"
         f"{header_html}"
         f"{item.body_html or ''}\n"
         "</article>\n"
+        f"{body_suffix}"
         "</body>\n"
         "</html>\n"
     )

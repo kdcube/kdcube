@@ -47,12 +47,29 @@ import time
 from typing import Any, Awaitable, Callable, List, Optional
 
 from kdcube_ai_app.apps.chat.sdk.pub.model import (
+    INDEX_SCHEMA,
     PublicContentAliasIndex,
     PublicContentIndexEntry,
     PublicContentItem,
     normalize_slug_path,
     utc_now_iso,
 )
+
+
+def index_entry_for_item(item: PublicContentItem) -> PublicContentIndexEntry:
+    """The bounded hot-index record for one item — the single place that
+    decides what the serving/catalog hot path knows about an item."""
+    return PublicContentIndexEntry(
+        slug=item.slug,
+        title=item.title,
+        summary=item.summary,
+        tags=list(item.tags or []),
+        section=item.section,
+        kicker=item.kicker,
+        lastmod=item.lastmod,
+        published_at=item.published_at,
+        state=item.state,
+    )
 from kdcube_ai_app.apps.chat.sdk.storage.bundle_artifact_storage import BundleArtifactStorage
 from kdcube_ai_app.infra.plugin.bundle_once import run_once_for_shared_bundle_storage
 from kdcube_ai_app.storage.observed_file_locks import observed_file_lock_async
@@ -221,10 +238,20 @@ class PublicContentRegistry:
     def _hot_write_item_sync(self, item: PublicContentItem) -> None:
         _atomic_write_text(self._hot_item_path(item.slug), item.model_dump_json())
 
+    @staticmethod
+    def index_signature(generation: int) -> str:
+        """Signature of a current hot tier: durable generation + entry schema.
+
+        The schema component forces exactly one fleet-guarded rebuild when a
+        release grows the index entries (older tiers signed gen-only or with
+        a lower schema no longer match).
+        """
+        return f"gen:{int(generation)}:s{INDEX_SCHEMA}"
+
     def _hot_write_signature_sync(self, generation: int) -> None:
         # Same "<content>\n" shape bundle_once._write_signature produces, so
         # Moment-A checks and Moment-B updates agree on the format.
-        _atomic_write_text(self._signature_path, f"gen:{int(generation)}\n")
+        _atomic_write_text(self._signature_path, f"{self.index_signature(generation)}\n")
 
     # ------------------ reads (lock-free) ------------------
 
@@ -298,16 +325,9 @@ class PublicContentRegistry:
                 index = self._hot_read_index_sync() or PublicContentAliasIndex(alias=self.alias)
                 for item in published:
                     self._hot_write_item_sync(item)
-                    index.upsert(
-                        PublicContentIndexEntry(
-                            slug=item.slug,
-                            title=item.title,
-                            lastmod=item.lastmod,
-                            published_at=item.published_at,
-                            state=item.state,
-                        )
-                    )
+                    index.upsert(index_entry_for_item(item))
                 index.generation = generation
+                index.index_schema = INDEX_SCHEMA
                 self._hot_write_index_sync(index)
                 self._hot_write_signature_sync(generation)
                 return generation
@@ -358,16 +378,9 @@ class PublicContentRegistry:
                 self._durable_write_generation_sync(generation)
                 self._hot_write_item_sync(item)
                 index = self._hot_read_index_sync() or PublicContentAliasIndex(alias=self.alias)
-                index.upsert(
-                    PublicContentIndexEntry(
-                        slug=item.slug,
-                        title=item.title,
-                        lastmod=item.lastmod,
-                        published_at=item.published_at,
-                        state=item.state,
-                    )
-                )
+                index.upsert(index_entry_for_item(item))
                 index.generation = generation
+                index.index_schema = INDEX_SCHEMA
                 self._hot_write_index_sync(index)
                 self._hot_write_signature_sync(generation)
                 return generation
@@ -395,25 +408,19 @@ class PublicContentRegistry:
         tier this costs one durable generation read and one file read.
         """
         generation = await asyncio.to_thread(self._durable_read_generation_sync)
-        signature = f"gen:{int(generation)}"
+        signature = self.index_signature(generation)
 
         async def _rebuild() -> None:
             def _rebuild_sync() -> None:
-                index = PublicContentAliasIndex(alias=self.alias, generation=generation)
+                index = PublicContentAliasIndex(
+                    alias=self.alias, generation=generation, index_schema=INDEX_SCHEMA,
+                )
                 for slug in self._durable_list_slugs_sync():
                     record = self._durable_read_item_sync(slug)
                     if record is None:
                         continue
                     self._hot_write_item_sync(record)
-                    index.upsert(
-                        PublicContentIndexEntry(
-                            slug=record.slug,
-                            title=record.title,
-                            lastmod=record.lastmod,
-                            published_at=record.published_at,
-                            state=record.state,
-                        )
-                    )
+                    index.upsert(index_entry_for_item(record))
                 self._hot_write_index_sync(index)
 
             await asyncio.to_thread(_rebuild_sync)

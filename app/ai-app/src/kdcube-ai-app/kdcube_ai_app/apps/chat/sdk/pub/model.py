@@ -19,7 +19,12 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+# Hot-index entry schema. Bumped when PublicContentIndexEntry gains fields the
+# serving layer depends on; ride the rebuild signature so a fleet upgrades its
+# hot tier once (see PublicContentRegistry.index_signature).
+INDEX_SCHEMA = 2
 
 PublicationState = Literal["published", "retracted"]
 
@@ -78,6 +83,13 @@ class PublicContentItem(BaseModel):
         ),
     )
     language: str = "en"
+    kicker: str = Field(
+        default="",
+        description=(
+            "Short editorial badge shown on catalog/list cards next to the "
+            "date (e.g. 'Deep', 'Shorts'). Presentation-only."
+        ),
+    )
     schema_type: str = Field(
         default="Article",
         description="JSON-LD @type: Article | BlogPosting | Product | FAQPage | ...",
@@ -111,12 +123,18 @@ class PublicContentItem(BaseModel):
 class PublicContentIndexEntry(BaseModel):
     """The bounded per-item record kept in the hot alias index.
 
-    This is what the sitemap and the serving route read on the hot path; the
-    full item record stays in the durable store.
+    This is what the sitemap, the serving route, AND the catalog/list pages
+    read on the hot path; the full item record stays in the durable store.
+    Card presentation fields (summary, tags, section, kicker) are bounded
+    copies so a catalog render never touches the durable backend.
     """
 
     slug: str
     title: str = ""
+    summary: str = ""
+    tags: List[str] = Field(default_factory=list)
+    section: str = ""
+    kicker: str = ""
     lastmod: str = ""
     published_at: str = ""
     state: PublicationState = "published"
@@ -127,6 +145,9 @@ class PublicContentAliasIndex(BaseModel):
 
     alias: str
     generation: int = 0
+    # Entry schema this index was written with. Old index files (no field)
+    # read as 1; the serving layer treats < INDEX_SCHEMA as rebuild-worthy.
+    index_schema: int = 1
     updated_at: str = Field(default_factory=utc_now_iso)
     entries: List[PublicContentIndexEntry] = Field(default_factory=list)
 
@@ -152,6 +173,67 @@ class OpenGraphDefaults(BaseModel):
     twitter_site: str = ""
 
 
+class PublicContentCatalogConfig(BaseModel):
+    """One browsable catalog (fold) of an alias: a slug prefix served as a
+    server-rendered, paginated, searchable listing page, and the same data
+    rendered as the article-page side rail.
+
+    Declared under ``public_content.<alias>.catalogs`` keyed by prefix::
+
+        catalogs:
+          kdcube/blogs:   { title: "Engineering blog", accent: "#01BEB2" }
+          kdcube/journal: { title: "Our Journal",      accent: "#0969DA" }
+    """
+
+    prefix: str = Field(description="Slug prefix this catalog lists (e.g. kdcube/blogs).")
+    title: str = ""
+    nav_label: str = Field(
+        default="",
+        description="Short label for fold pills / nav (defaults to title).",
+    )
+    eyebrow: str = ""
+    subtitle: str = ""
+    accent: str = Field(
+        default="",
+        description="Accent color (hex) — selection tints, buttons, links.",
+    )
+    background: str = Field(default="", description="Page background tint (hex).")
+    border: str = Field(default="", description="Card/hairline border color (hex).")
+    page_size: int = Field(default=10, ge=1, le=100)
+    search_placeholder: str = ""
+
+    @field_validator("prefix")
+    @classmethod
+    def _validate_prefix(cls, value: str) -> str:
+        return normalize_slug_path(value)
+
+    @property
+    def label(self) -> str:
+        return self.nav_label or self.title or self.prefix
+
+    def covers(self, slug: str) -> bool:
+        clean = str(slug or "").strip("/")
+        return clean == self.prefix or clean.startswith(self.prefix + "/")
+
+
+class PublicContentChromeLink(BaseModel):
+    """One navigation link in the chrome header."""
+
+    label: str
+    href: str
+
+
+class PublicContentChromeConfig(BaseModel):
+    """Site chrome rendered above catalog pages and item pages: a slim sticky
+    header with brand + navigation. Styles are namespaced so authored article
+    CSS and the chrome cannot bleed into each other."""
+
+    brand_label: str = ""
+    brand_href: str = ""
+    logo_url: str = ""
+    links: List[PublicContentChromeLink] = Field(default_factory=list)
+
+
 class PublicContentAliasConfig(BaseModel):
     """Operator/app configuration for one public content alias.
 
@@ -175,6 +257,23 @@ class PublicContentAliasConfig(BaseModel):
     )
     sitemap: bool = True
     og_defaults: OpenGraphDefaults = Field(default_factory=OpenGraphDefaults)
+    catalogs: List[PublicContentCatalogConfig] = Field(default_factory=list)
+    chrome: Optional[PublicContentChromeConfig] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _catalogs_mapping_form(cls, data: Any) -> Any:
+        """Accept the natural YAML mapping form ``catalogs: {<prefix>: {…}}``
+        alongside the list form; the key becomes the prefix."""
+        if isinstance(data, dict):
+            raw = data.get("catalogs")
+            if isinstance(raw, dict):
+                data = dict(data)
+                data["catalogs"] = [
+                    {**(value if isinstance(value, dict) else {}), "prefix": key}
+                    for key, value in raw.items()
+                ]
+        return data
 
     @field_validator("alias")
     @classmethod
@@ -189,3 +288,19 @@ class PublicContentAliasConfig(BaseModel):
         if not base:
             return ""
         return f"{base}/{slug}"
+
+    def catalog(self, prefix: str) -> Optional[PublicContentCatalogConfig]:
+        """The catalog configured for exactly this prefix, if any."""
+        clean = str(prefix or "").strip("/")
+        for entry in self.catalogs:
+            if entry.prefix == clean:
+                return entry
+        return None
+
+    def catalog_for_slug(self, slug: str) -> Optional[PublicContentCatalogConfig]:
+        """The catalog whose prefix covers this item slug, if any (longest wins)."""
+        best: Optional[PublicContentCatalogConfig] = None
+        for entry in self.catalogs:
+            if entry.covers(slug) and (best is None or len(entry.prefix) > len(best.prefix)):
+                best = entry
+        return best

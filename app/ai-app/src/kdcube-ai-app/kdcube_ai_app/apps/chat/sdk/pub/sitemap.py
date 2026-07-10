@@ -42,6 +42,19 @@ def render_sitemap_xml(
         '<?xml version="1.0" encoding="UTF-8"?>',
         '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
     ]
+    published = [e for e in index.entries if e.state == "published"]
+    # Catalog (fold) pages are canonical browsable URLs of their own; their
+    # lastmod is the newest published item under the prefix.
+    for catalog in config.catalogs:
+        if not base:
+            continue
+        covered = [e for e in published if catalog.covers(e.slug)]
+        lastmod = max((e.lastmod for e in covered if e.lastmod), default="")
+        lines.append("  <url>")
+        lines.append(f"    <loc>{_esc(f'{base}/{catalog.prefix}')}</loc>")
+        if lastmod:
+            lines.append(f"    <lastmod>{_esc(lastmod)}</lastmod>")
+        lines.append("  </url>")
     for entry in index.entries:
         if entry.state != "published":
             continue

@@ -4661,6 +4661,8 @@ async def _serve_public_content_route(
         hot_root=hot_root,
         path_tail=str(path_tail or ""),
         serving_base_url=serving_base_url,
+        # Catalog pages read ?q= / ?offset= (search + pagination).
+        query_params=dict(request.query_params),
         logger=getattr(workflow, "logger", None),
     )
     return _coerce_bundle_http_response(result)

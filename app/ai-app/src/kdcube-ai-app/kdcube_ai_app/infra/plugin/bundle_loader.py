@@ -66,6 +66,7 @@ CRON_JOB_ATTR = "__bundle_cron_job__"
 DATA_BUS_HANDLER_ATTR = "__bundle_data_bus_handler__"
 AUTHORITY_PROVIDER_ATTR = "__bundle_authority_provider__"
 PUBLIC_CONTENT_ATTR = "__bundle_public_content__"
+PUBLIC_CONTENT_SEARCH_ATTR = "__bundle_public_content_search__"
 BUNDLE_VENV_ATTR = "__bundle_venv__"
 _BUNDLE_VENV_EXEC_ENV = "KDCUBE_BUNDLE_VENV_EXEC"
 _BUNDLE_VENV_STAMP_FILE = ".kdcube_venv_stamp.json"
@@ -113,6 +114,22 @@ class PublicContentSpec:
     method_name: str
     alias: str
     schema_type: str = "Article"
+
+
+@dataclass(frozen=True)
+class PublicContentSearchSpec:
+    """Declares the search hook for one public content alias.
+
+    The decorated async method receives ``query`` (the visitor's search text),
+    ``prefix`` (the catalog slug prefix being searched, empty for alias-wide),
+    and ``limit``, and returns an ordered list of result slugs (strings, or
+    dicts carrying a ``slug`` key). The platform maps the slugs onto the hot
+    alias index — only published items the index knows are served — and
+    renders the catalog result page from those bounded records.
+    """
+
+    method_name: str
+    alias: str
 
 
 @dataclass(frozen=True)
@@ -200,6 +217,7 @@ class BundleInterfaceManifest:
     data_bus_handlers: tuple[DataBusHandlerSpec, ...] = ()
     authority_providers: tuple[AuthorityProviderDeclarationSpec, ...] = ()
     public_content: tuple[PublicContentSpec, ...] = ()
+    public_content_search: tuple[PublicContentSearchSpec, ...] = ()
 
 
 _VALID_ENABLED_KINDS: frozenset = frozenset({"bundle", "api", "mcp", "widget", "cron"})
@@ -878,6 +896,42 @@ def public_content(
                 method_name=method_name,
                 alias=resolved_alias,
                 schema_type=str(schema_type or "Article").strip() or "Article",
+            ),
+        )
+        return fn
+
+    return _wrap
+
+
+def public_content_search(
+        *,
+        alias: str | None = None,
+):
+    """Declare the public content search hook for an alias.
+
+    The decorated async method powers the ``?q=`` search on the alias's
+    catalog pages. Signature contract::
+
+        async def search(self, query: str, *, prefix: str = "", limit: int = 50)
+            -> list[str] | list[dict]
+
+    ``prefix`` is the catalog slug prefix being searched (e.g.
+    ``kdcube/blogs``); the return value is an ordered list of item slugs
+    (strings, or dicts with a ``slug`` key). The platform intersects the
+    slugs with the hot alias index, so only published, indexed items render.
+    When no hook is declared (or it raises) the catalog search degrades to a
+    lexical match over the index entries.
+    """
+
+    def _wrap(fn):
+        method_name = getattr(fn, "__name__", "public_content_search")
+        resolved_alias = _clean_alias(alias, method_name)
+        setattr(
+            fn,
+            PUBLIC_CONTENT_SEARCH_ATTR,
+            PublicContentSearchSpec(
+                method_name=method_name,
+                alias=resolved_alias,
             ),
         )
         return fn
@@ -2563,12 +2617,14 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
     data_bus_handlers: list[DataBusHandlerSpec] = []
     authority_providers: list[AuthorityProviderDeclarationSpec] = []
     public_content_specs: list[PublicContentSpec] = []
+    public_content_search_specs: list[PublicContentSearchSpec] = []
     seen_api: set[tuple[str, str]] = set()
     seen_mcp: set[tuple[str, str]] = set()
     seen_widgets: set[str] = set()
     seen_data_bus_subjects: set[str] = set()
     seen_authority_providers: set[tuple[str, str]] = set()
     seen_public_content: set[str] = set()
+    seen_public_content_search: set[str] = set()
 
     for member_name, fn in _iter_bundle_callable_members(target):
         api_spec = getattr(fn, API_METHOD_ATTR, None)
@@ -2752,6 +2808,23 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
                 schema_type=str(getattr(public_content_spec, "schema_type", "Article") or "Article"),
             ))
 
+        public_content_search_spec = getattr(fn, PUBLIC_CONTENT_SEARCH_ATTR, None)
+        if _is_equivalent_decorator_spec(
+            public_content_search_spec,
+            PublicContentSearchSpec,
+            ("method_name", "alias"),
+        ):
+            resolved_pcs_alias = str(getattr(public_content_search_spec, "alias", "") or "").strip()
+            if resolved_pcs_alias in seen_public_content_search:
+                raise ValueError(
+                    f"Duplicate public content search alias detected: {resolved_pcs_alias}"
+                )
+            seen_public_content_search.add(resolved_pcs_alias)
+            public_content_search_specs.append(PublicContentSearchSpec(
+                method_name=member_name,
+                alias=resolved_pcs_alias,
+            ))
+
     meta = _get_bundle_entrypoint_meta(cls)
     allowed_roles: tuple[str, ...] = _tuple_str(meta.get("allowed_roles"))
     allowed_roles_config: str | None = meta.get("allowed_roles_config") or None
@@ -2763,6 +2836,7 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
     data_bus_handlers.sort(key=lambda item: (item.subject, item.method_name))
     authority_providers.sort(key=lambda item: (item.authority_id, item.authenticator_id, item.method_name))
     public_content_specs.sort(key=lambda item: (item.alias, item.method_name))
+    public_content_search_specs.sort(key=lambda item: (item.alias, item.method_name))
     return BundleInterfaceManifest(
         bundle_id=resolved_bundle_id,
         allowed_roles=allowed_roles,
@@ -2778,6 +2852,7 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
         data_bus_handlers=tuple(data_bus_handlers),
         authority_providers=tuple(authority_providers),
         public_content=tuple(public_content_specs),
+        public_content_search=tuple(public_content_search_specs),
     )
 
 
