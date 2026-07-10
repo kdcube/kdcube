@@ -1,92 +1,49 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.7.5.530"
+  ref: "2026.7.10.1445"
   description: |
-    This release follows 2026.7.4.310 and makes delegated automation access a
-    first-class Connection Hub capability while carrying forward the ReAct realm
-    refactoring, component source materialization, and economics storage
-    cleanups that landed after the previous platform release.
+    This release follows 2026.7.5.530 and rebuilds connected-account consent
+    around a demand-driven model while making agent capabilities a first-class,
+    user-comprehensible surface.
 
-    The main feature is user-created delegated automation access. A signed-in
-    KDCube user can mint a short-lived bearer credential for an automation,
-    script, or agent. The credential is backed by server-side resource grants
-    rather than by claims embedded in the token: each grant record maps a
-    resource pattern to the roles/permissions/grants that can be exercised
-    there, and managed guards enforce the grant entry that matched the current
-    request. Admin users can intentionally create all-surface automation
-    credentials, while non-admin credentials remain bounded to configured
-    resources.
+    Consent: the attempt is the ask. Turn-start no longer sweeps configured
+    tools or demands claim unions; a tool or named-service attempt with unmet
+    claims returns the structured consent contract (scoped to exactly that
+    tool's claims, with an absolute Connection Hub deep link and agent-facing
+    instructions — one contract across chat and MCP), raises one deduplicated
+    banner with two honest exits (approve the claims, or turn off the tools
+    that need them), and the approval itself becomes a conversation-lane event
+    that folds into the live turn so the agent circles back without a nudge.
+    Claim tiers give per-provider consent granularity (Slack read/write/files,
+    Gmail read/send); the consent plan lets users untick individual claims;
+    credentials read through the process secret cache so approvals are visible
+    immediately.
 
-    Connection Hub now exposes that capability through its connections widget
-    and through SDK-owned delegated credential services. The UI gained a
-    Delegated Access panel with resource-grant selection, and the backend gained
-    automation-access issuance/revocation/listing plus managed REST admission
-    support. Managed MCP and managed REST now share the same Connection Hub
-    resource-grant model, which keeps delegated access orthogonal to whether the
-    target surface is MCP, REST, a platform API, or an application API.
+    Capabilities: one picker body serves three shells — the composer popover,
+    an expanded in-chat modal, and a served capabilities widget mounted on
+    scenes — showing per-agent capability groups in the grant vocabulary
+    (Read / Create & update / Actions), per-operation and per-named-action
+    narrowing enforced at dispatch, admin-excluded operations rendered as
+    information, and intentional exclusions that declare their alternative
+    path to the agent. Named-service realms carry a presentation layer
+    (purpose, works-with, object kinds, human labels, claim labels) so one
+    self-description serves two readers: the agent works the schema, the user
+    reads the service card. The Connection Hub gains an admin Access map of
+    resources, namespaces, and grants, plus tab-strip and frame-height fixes
+    for embedded hosts.
 
-    The release also includes ReAct workspace and realm-reference cleanup. ReAct
-    docs and runtime code now use explicit realm refs and workspace paths, the
-    chat/event resolver path distinguishes conversation references from file
-    drops more reliably, component shared sources are materialized for UI builds,
-    and namespace presentation helpers were moved into shared component code.
+    Files travel by ref. The mail and slack schemas speak per surface — the
+    in-chat contract teaches ref-based attachments and never offers inline
+    base64; react.pull teaches the share/onward-ref decision rule and reports
+    its user delivery; encoded-blob scrubbing at the tool-block and render
+    paths keeps base64 out of model context; reads ride react.pull everywhere
+    (get_object left the ReAct roster) with the full consent contract on the
+    pull path.
 
-    Finally, the economics subsystem moves user wallet accounting to a USD/cents
-    model and replaces the older wallet token column language with
-    user-credit-reservation terminology. The release includes the SQL migration,
-    funding-flow updates, and related dashboard/control-plane adjustments.
-
-    Highlights
-
-    - Adds Connection Hub delegated automation access for user-created bearer
-      credentials.
-    - Adds SDK-backed automation access issuance, listing, revocation, and
-      resource-grant storage.
-    - Adds managed REST guard support alongside the existing managed MCP guard.
-    - Adds the Connection Hub Delegated Access widget panel and resource-grant
-      UI.
-    - Enforces resource-specific grants instead of a global union of grants.
-    - Supports wildcard resource grants for explicit admin all-surface
-      automation.
-    - Adds recipes for delegated automation access and managed REST protection.
-    - Cleans up ReAct realm refs, workspace path handling, and source
-      materialization.
-    - Distinguishes conversation refs from conversation file drops in chat UI
-      and event handling.
-    - Moves namespace presentation helpers into shared component code.
-    - Converts economics wallet accounting to USD/cents and user credit
-      reservations.
-
-    Operational impact
-
-    - Connection Hub descriptors can now define delegated resources that are
-      usable by automation tokens as well as by OAuth/MCP delegated clients.
-    - Operators should model automation access as resource-grant entries, not as
-      unscoped long-lived shared tokens.
-    - Managed REST-protected endpoints can admit delegated automation callers
-      using the same server-side grant store as managed MCP.
-    - Admin all-surface automation is explicit: it should use the wildcard
-      resource grant and an admin platform role such as
-      kdcube:role:super-admin.
-    - Deployments with existing economics data need the wallet USD-native SQL
-      migration applied with the platform migration flow.
-    - ReAct configuration and documentation should use the new realm-ref and
-      workspace-path vocabulary.
-
-    Changelog
-
-    - Added delegated credential automation access services and tests under
-      sdk/solutions/connections/delegated_credentials.
-    - Extended Connection Hub entrypoint and widget UI for Delegated Access.
-    - Added managed REST surface authentication helpers and guard tests.
-    - Updated managed MCP/OAuth grant config tests for resource-grant handling.
-    - Added Connection Hub docs and recipes for automation tokens and managed
-      REST.
-    - Updated ReAct docs, runtime, tools, workspace, and event-source code for
-      realm refs and source materialization.
-    - Updated chat/conversation presentation and drop handling around
-      conversation refs and files.
-    - Updated economics funding flow, wallet/user-budget code, SQL migrations,
-      and UI dashboards for USD-native user credits.
+    ReAct hardening: external-event folding is total (a consumed no-block
+    event advances the handler cursor — the completion livelock is fixed and
+    pinned), deferred completions render their outcome, equivalent completes
+    force-accept, answers collapse duplicates, and turn-start bookkeeping runs
+    under fail-open budgets with sync I/O off the serving event loop.
 config:
-  version: "2026.7.5.530"
+  version: "2026.7.10.1445"
