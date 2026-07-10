@@ -36,15 +36,28 @@ async def raise_named_service_consent_demand(
     its clients render consent from the response itself. Best-effort.
     """
     try:
-        if not isinstance(payload, Mapping) or payload.get("ok") is not False:
+        if not isinstance(payload, Mapping):
             return
         error = payload.get("error") if isinstance(payload.get("error"), Mapping) else {}
-        if str(error.get("code") or "") != "needs_connected_account_consent":
-            return
         details = error.get("details") if isinstance(error.get("details"), Mapping) else {}
-        consent = details.get("consent") if isinstance(details.get("consent"), Mapping) else {}
-        if not consent:
-            consent = payload.get("consent") if isinstance(payload.get("consent"), Mapping) else {}
+        consent: Mapping[str, Any] = {}
+        if payload.get("ok") is False:
+            if str(error.get("code") or "") != "needs_connected_account_consent":
+                return
+            consent = details.get("consent") if isinstance(details.get("consent"), Mapping) else {}
+            if not consent:
+                consent = payload.get("consent") if isinstance(payload.get("consent"), Mapping) else {}
+        else:
+            # A successful listing with ZERO connected accounts ships a
+            # connect hint instead of an error (an empty list is not a
+            # failure). The user still needs the actionable card — without it
+            # the model can only hand-write a link. Same demand, same banner.
+            ret = payload.get("ret") if isinstance(payload.get("ret"), Mapping) else {}
+            extra = ret.get("extra") if isinstance(ret.get("extra"), Mapping) else {}
+            hint = extra.get("consent") if isinstance(extra.get("consent"), Mapping) else {}
+            if str(hint.get("reason") or "") != "connect_required":
+                return
+            consent = hint
         provider_id = str(consent.get("provider_id") or details.get("provider_id") or "").strip()
         if not provider_id:
             return
@@ -58,7 +71,11 @@ async def raise_named_service_consent_demand(
             "ok": False,
             "error": {
                 "code": "needs_connected_account_consent",
-                "message": str(error.get("message") or ""),
+                "message": str(
+                    error.get("message")
+                    or consent.get("message")
+                    or f"Connect a {provider_id} account in Connection Hub to continue."
+                ),
             },
             "consent": {
                 **dict(consent),

@@ -1,23 +1,11 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.7.10.1730"
+  ref: "2026.7.10.1935"
   description: |
-    This release follows 2026.7.10.1445 on the same day and carries the ReAct
-    doneness semantics and the named-service relay for isolated runtimes.
-
-    The DONE rule is set in stone: an action is done only when its own visible
-    successful result record says so — doneness evidence is the action's result,
-    never a matching permission, a prerequisite that succeeded, or a nearby
-    message. Re-execution requires a current request; ANNOUNCE is specified as a
-    snapshot of what holds rather than news, and the rule is distilled to five
-    lines in the agent's instructions.
-
-    Isolated runtimes gain a named-service relay: exec-brokered code reaches
-    named-service providers over the Data Bus instead of holding direct clients.
-    The cross-runtime context documentation adds named-service client policy to
-    the portable room, and tier-1 builder docs gain the delegated-to-KDCube
-    building block plus a base-dependencies check before @venv use.
-
-    The Connection Hub account row now leads with what was granted.
+    This release follows 2026.7.10.1730 on the same day with one fix: the
+    connect hint raises the consent banner — a named-service connect hint in a
+    tool result now surfaces the scoped connected-account consent card in chat
+    instead of remaining agent-visible only, keeping the reactive consent path
+    uniform across every way an unmet claim can appear.
 config:
-  version: "2026.7.10.1730"
+  version: "2026.7.10.1935"
