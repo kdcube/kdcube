@@ -40,14 +40,16 @@ class SlackConnection(ConnectionProvider):
         {
             "id": "write",
             "label": "Post as you",
-            "description": "Send messages on your behalf.",
-            "scopes": ["chat:write"],
+            "description": "Send messages on your behalf, including direct messages.",
+            # im:write lets the tool open a direct conversation when the
+            # destination is a person (a U... user id) rather than a channel.
+            "scopes": ["chat:write", "im:write"],
         },
         {
             "id": "files",
             "label": "Move files",
             "description": "Upload files as you and download files shared with you.",
-            "scopes": ["files:read", "files:write"],
+            "scopes": ["files:read", "files:write", "im:write"],
         },
     ]
 

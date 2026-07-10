@@ -536,6 +536,7 @@ bundles:
                 description: "Post messages into Slack destinations allowed by the approving user."
                 provider_scopes:
                 - "chat:write"
+                - "im:write"
               slack:channels:
                 label: "List Slack channels"
                 description: "List Slack conversations visible to the approving user."
@@ -562,6 +563,7 @@ bundles:
                 description: "Upload files to Slack destinations allowed by the approving user."
                 provider_scopes:
                 - "files:write"
+                - "im:write"
               slack:assistant:search:
                 label: "Use Slack assistant search"
                 description: "Use Slack AI semantic search across messages, files, channels, and users where available."

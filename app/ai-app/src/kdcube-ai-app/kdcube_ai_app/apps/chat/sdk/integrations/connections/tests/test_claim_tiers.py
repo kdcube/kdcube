@@ -22,11 +22,11 @@ def test_slack_tiers_resolve_to_scope_union_in_order():
     prov = resolve("slack")
     assert prov.scopes_for_tiers(["read"]) == ["search:read", "channels:history", "groups:history"]
     assert prov.scopes_for_tiers(["read", "write"]) == [
-        "search:read", "channels:history", "groups:history", "chat:write",
+        "search:read", "channels:history", "groups:history", "chat:write", "im:write",
     ]
     # duplicates collapse, order follows the picked tiers
     assert prov.scopes_for_tiers(["write", "write", "files"]) == [
-        "chat:write", "files:read", "files:write",
+        "chat:write", "im:write", "files:read", "files:write",
     ]
 
 
@@ -38,9 +38,11 @@ def test_unknown_tier_raises_instead_of_widening():
 
 def test_tier_coverage_reflects_granted_scopes():
     prov = resolve("slack")
-    granted = ["search:read", "channels:history", "groups:history", "chat:write"]
+    granted = ["search:read", "channels:history", "groups:history", "chat:write", "im:write"]
     coverage = prov.tier_coverage(granted)
     assert coverage == {"read": True, "write": True, "files": False}
+    # A token predating im:write covers the write tier only partially.
+    assert prov.tier_coverage(granted[:-1])["write"] is False
     assert prov.tier_coverage([]) == {"read": False, "write": False, "files": False}
 
 
@@ -85,5 +87,5 @@ async def test_start_oauth_maps_tiers_to_scopes(monkeypatch, tmp_path):
     )
     assert result["ok"] is True
     assert captured["scopes"] == [
-        "search:read", "channels:history", "groups:history", "files:read", "files:write",
+        "search:read", "channels:history", "groups:history", "files:read", "files:write", "im:write",
     ]
