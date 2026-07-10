@@ -55,6 +55,11 @@ class PortableSpec:
     env_passthrough: Dict[str, str] = field(default_factory=dict)  # minimal set of env you want copied
     contextvars: Optional[dict] = None  # snapshot of other contextvars you want restored
     accounting_storage: Optional[Dict[str, Any]] = None
+    # Named-service client policy context for tools running in the child
+    # process: {"client_id": ..., "bundle_props": {"surfaces": {"as_consumer":
+    # ...}}}. Without it the child's policy collapses to the read-only
+    # defaults and mutating named-service calls fail from exec code.
+    named_services_context: Optional[Dict[str, Any]] = None
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False)

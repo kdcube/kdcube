@@ -179,7 +179,13 @@ def _config_to_model_config_spec(cfg: Config) -> ModelConfigSpec:
         project=cfg.project or None,
     )
 
-def build_portable_spec(*, svc: ModelServiceBase, chat_comm: ChatCommunicator, integrations: dict | None = None) -> PortableSpec:
+def build_portable_spec(
+    *,
+    svc: ModelServiceBase,
+    chat_comm: ChatCommunicator,
+    integrations: dict | None = None,
+    named_services_context: Dict[str, Any] | None = None,
+) -> PortableSpec:
     comm_spec = None
     if chat_comm:
         c = chat_comm._export_comm_spec_for_runtime()
@@ -247,6 +253,7 @@ def build_portable_spec(*, svc: ModelServiceBase, chat_comm: ChatCommunicator, i
         cv_snapshot=cv_snapshot,
         env_passthrough=env_passthrough,
         contextvars=contextvars,
-        accounting_storage=accounting_storage
+        accounting_storage=accounting_storage,
+        named_services_context=named_services_context,
     )
     return spec

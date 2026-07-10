@@ -278,7 +278,34 @@ class ToolSubsystem:
         from kdcube_ai_app.apps.chat.sdk.runtime.snapshot import build_portable_spec
 
         with self.bind_portable_runtime_context():
-            return build_portable_spec(svc=self.svc, chat_comm=self.comm)
+            return build_portable_spec(
+                svc=self.svc,
+                chat_comm=self.comm,
+                named_services_context=self._named_services_context_for_runtime(),
+            )
+
+    def _named_services_context_for_runtime(self) -> dict | None:
+        """Named-service client policy for tools running in the exec child.
+
+        Ships the `surfaces.as_consumer` props subtree (what the client policy
+        reads) and the acting client id, so a named-service call made from
+        generated code carries the same allowances as a direct call.
+        """
+        registry = self.registry if isinstance(self.registry, Mapping) else {}
+        client_id = str(registry.get("client_id") or "")
+        bundle_props = registry.get("bundle_props")
+        props_subset: dict = {}
+        if isinstance(bundle_props, Mapping):
+            surfaces = bundle_props.get("surfaces")
+            as_consumer = surfaces.get("as_consumer") if isinstance(surfaces, Mapping) else None
+            if isinstance(as_consumer, Mapping):
+                props_subset["surfaces"] = {"as_consumer": as_consumer}
+            legacy = bundle_props.get("named_services")
+            if isinstance(legacy, Mapping):
+                props_subset["named_services"] = legacy
+        if not props_subset and not client_id:
+            return None
+        return {"client_id": client_id, "bundle_props": props_subset}
 
     # ---------- public surface used by manager + react solver ----------
     @staticmethod

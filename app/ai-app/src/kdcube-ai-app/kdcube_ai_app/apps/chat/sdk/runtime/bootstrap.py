@@ -184,6 +184,18 @@ def make_registry(spec: PortableSpec) -> Dict[str, Any]:
         reg["kb_client"] = KBClient(pool=None)  # lazy-init pool later
     except Exception:
         pass
+    # Named-service client policy: without these, tools running in this child
+    # see an empty config and collapse to the read-only defaults — a send/
+    # upsert made from generated code would be denied while the same direct
+    # call passes.
+    ns_context = getattr(spec, "named_services_context", None)
+    if isinstance(ns_context, dict):
+        props = ns_context.get("bundle_props")
+        if isinstance(props, dict) and props:
+            reg["bundle_props"] = props
+        client_id = str(ns_context.get("client_id") or "")
+        if client_id:
+            reg["client_id"] = client_id
     return reg
 
 
