@@ -276,9 +276,12 @@ MAIL_SCHEMA = {
         },
         ACTION_SEND: {
             "description": (
-                "Send a new email from a connected mail account. Attach files via "
-                "attachments=[{staged_ref}] after request_upload (preferred); tiny "
-                "files may ride inline as {filename, content_base64} (10MB/file, 25MB total)."
+                "Send a new email from a connected mail account. Files already in the "
+                "chat workspace ride attachment_paths=[<KDCube file path>] — pass the "
+                "logical or physical path and the service reads the bytes itself. "
+                "Elsewhere attach via attachments=[{staged_ref}] after request_upload; "
+                "tiny generated files may ride inline as {filename, content_base64} "
+                "(10MB/file, 25MB total)."
             ),
             "object_ref": "mail:<provider>:<account_id> or omit account_id in payload when only one account can send",
             "payload": ["to", "subject", "body_markdown", "cc", "bcc", "body_html", "attachments", "attachment_paths", "account_id"],
@@ -286,7 +289,8 @@ MAIL_SCHEMA = {
         ACTION_FORWARD: {
             "description": (
                 "Forward an existing message. include_original_attachments=true carries "
-                "the original files on any transport; extra files ride via "
+                "the original files on any transport. Extra workspace files ride "
+                "attachment_paths=[<KDCube file path>] in chat; elsewhere "
                 "attachments=[{staged_ref}] (after request_upload) or tiny inline entries."
             ),
             "object_ref": "mail:<provider>:<account_id>:message:<message_id>",
@@ -628,18 +632,24 @@ class MailNamedServiceProvider(NamedServiceProvider):
         attachments than the caller asked for must never go out as a success.
         """
         raw = [item for item in _as_list(payload.get("attachments")) if item is not None]
-        entries = [item for item in raw if isinstance(item, Mapping)]
+        entries = [
+            item
+            for item in raw
+            if isinstance(item, Mapping)
+            and (_text(item.get("staged_ref")) or _text(item.get("content_base64")))
+        ]
         if len(entries) == len(raw):
             return entries, None
         return [], NamedServiceResponse.error_response(
             code="mail_attachment_entry_invalid",
             message=(
-                "Every attachments entry must be an object. Accepted forms: "
-                '{"staged_ref": ...} from a prior request_upload action (PUT the bytes '
-                'to the signed upload URL first), or a tiny inline {"filename": ..., '
-                '"content_base64": ...}. File refs or path strings are not accepted in '
-                "attachments; files already in your working directory go in "
-                "attachment_paths as a list of paths."
+                "Every attachments entry must be an object carrying the bytes source. "
+                'Accepted forms: {"staged_ref": ...} from a prior request_upload action '
+                '(PUT the bytes to the signed upload URL first), or a tiny inline '
+                '{"filename": ..., "content_base64": ...}. File refs or path strings '
+                "are not accepted in attachments; files already in your workspace go "
+                "in attachment_paths as a list of KDCube file paths — the service "
+                "reads the bytes itself."
             ),
             status=400,
             provider=self._provider_identity(),

@@ -338,9 +338,51 @@ def _allowed_values(raw: Any, defaults: frozenset[str]) -> frozenset[str]:
     return frozenset(normalized)
 
 
+def _provider_declared_operations(namespace: str) -> set[str] | None:
+    """Operations the discovered provider(s) declare for this namespace.
+
+    ``None`` means no provider declaration is visible, so nothing restricts.
+    Used to keep the tool catalog honest: a tool must never list a namespace
+    whose provider does not serve that operation (the call would 404).
+    """
+    ns = _base_namespace(namespace)
+    if not ns:
+        return None
+    declared: set[str] = set()
+    found = False
+    for entry in list(REGISTRY.get("named_service_discovery_entries") or ()):
+        spec = getattr(entry, "spec", None)
+        if spec is None and isinstance(entry, Mapping):
+            spec = entry.get("spec") or entry
+        if spec is None:
+            continue
+        if isinstance(spec, Mapping):
+            spec_namespace = str(spec.get("namespace") or "")
+            spec_namespaces = spec.get("namespaces") or ([spec_namespace] if spec_namespace else [])
+            operations = spec.get("operations")
+        else:
+            spec_namespace = str(getattr(spec, "namespace", "") or "")
+            spec_namespaces = getattr(spec, "namespaces", None) or ([spec_namespace] if spec_namespace else [])
+            operations = getattr(spec, "operations", None)
+        if ns not in {_base_namespace(str(item)) for item in (spec_namespaces or ())}:
+            continue
+        if isinstance(operations, Mapping):
+            found = True
+            declared.update(str(op) for op in operations.keys())
+        elif operations:
+            found = True
+            declared.update(str(op) for op in operations)
+    return declared if found else None
+
+
 def _operation_allowed(namespace: str, operation: str) -> bool:
     # Per-user selection: a denied operation is uncallable this turn.
     if operation in denied_named_service_entries(namespace):
+        return False
+    # The provider's own declaration bounds everything: an operation it does
+    # not serve stays out of the catalog regardless of client policy.
+    declared = _provider_declared_operations(namespace)
+    if declared is not None and operation not in declared:
         return False
     policy = _client_namespace_policy(namespace)
     allowed = _allowed_values(policy.get("allowed_operations"), _DEFAULT_READ_OPERATIONS)
