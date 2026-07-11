@@ -64,7 +64,7 @@ TOOL_SPEC = {
         "then use the returned conv:fi: logical_path or physical_path with react.read, react.rg, or exec/code. "
         "For an event/object that shows object_ref, use react.pull on that object_ref when exact external content is needed; then read the returned path. "
         "For event payload bytes or snapshot bodies carried through another field, read a visible conv:fi: path or first use react.pull on that referenced artifact ref. "
-        "For old-turn recovery, conv:ar:turn_<id>.react.turn.index reconstructs a compact semantic inventory; "
+        "For old-turn recovery, conv:ar:conv_<conversation_id>.turn_<id>.react.turn.index reconstructs a compact semantic inventory; "
         "use it with react.memsearch hits when the summary does not name enough refs. "
         "Batch multiple known paths in one read call. "
         "react.rg read_items are directly readable here via params.items. "
@@ -72,9 +72,8 @@ TOOL_SPEC = {
         "A read result is visible only after the current response is rendered; do not emit a downstream action in the same response when it depends on newly read content. "
         "Skill reads may be combined with independent actions such as web search when those actions do not rely on the unread skill text. "
         "For conv:fi: files, normal readable content is text, plus multimodal PDF/image payloads. "
-        "For conv:so:sources_pool[...] paths, react.read returns JSON source rows; web rows use content for full fetched text "
+        "For conv:so:conv_<conversation_id>.sources_pool[...] paths, react.read returns JSON source rows; web rows use content for full fetched text "
         "when available and text for the search preview/snippet. Source rows are materialized in full by default. "
-        "Use conv:so:conv_<conversation_id>.sources_pool[...] for source rows from another conversation's persisted source pool. "
         "⚠️ BINARY FILE RESTRICTION (HARD): Other binary files such as xlsx/xls/pptx/docx/zip are not decoded into usable content by react.read; "
         "calling react.read on unsupported binary files returns only metadata, NOT content."
         "Inspect those with code and exec tool against their physical OUTPUT_DIR path. "
@@ -89,15 +88,14 @@ TOOL_SPEC = {
     "args": {
         "paths": (
             "list[str] logical refs to read. Built-in examples: "
-            "turn indexes via conv:ar:turn_<id>.react.turn.index, "
-            "files via conv:fi:turn_<id>.files/<filepath>, "
-            "event blocks via conv:ev:turn_<id>.events/<event_path>, "
-            "sources via conv:so:sources_pool[...] or conv:so:conv_<conversation_id>.sources_pool[...], "
+            "turn indexes via conv:ar:conv_<conversation_id>.turn_<id>.react.turn.index, "
+            "files via conv:fi:conv_<conversation_id>.turn_<id>.files/<filepath>, "
+            "event blocks via conv:ev:conv_<conversation_id>.turn_<id>.events/<event_path>, "
+            "sources via conv:so:conv_<conversation_id>.sources_pool[...], "
             "skills via sk:<skill_id or num>. "
             "External namespace refs such as mem:, cnv:, or task: must be pulled first; after pull, read the returned conv:fi: logical_path. "
             "conv:fi: normally yields full text for text files and multimodal/base64 payloads for PDF/images only. "
-            "A conv:fi:conv_<conversation_id>.turn_<id>... path belongs to another conversation and is resolved in that conversation. "
-            "A conv:ev:conv_<conversation_id>.turn_<id>... path identifies an event object from another conversation when that event block is present in visible or recovered timeline state."
+            "The conv_<conversation_id> segment names the conversation the ref lives in; use refs exactly as supplied."
         ),
         "items": (
             "optional list of read specs, each with path plus optional line_start/line_count or "
@@ -112,7 +110,7 @@ TOOL_SPEC = {
             "optional int; for text payloads, materialize at most this many visible characters/symbols per path. "
             "Use when a large file/result needs a smaller explicit in-context preview than the configured default. "
             "This is a request, not a guarantee: the runtime clamps it to the configured ai.react.read_visible_max_text_symbols, token budget, and context caps. "
-            "For conv:so:sources_pool[...] this is an explicit structured cap for large text fields only; without it, source rows are read in full."
+            "For conv:so:conv_<conversation_id>.sources_pool[...] this is an explicit structured cap for large text fields only; without it, source rows are read in full."
         ),
         "stats_only": (
             "optional bool, default false. When true, resolve each path and return size/mime/token metadata in "
@@ -124,7 +122,7 @@ TOOL_SPEC = {
         "PDF payloads are attached as multimodal content only when under the configured byte cap. "
         "Image payloads are attached when under the byte cap; oversized images are downscaled into a bounded multimodal preview when possible, with image_view metadata. "
         "For unsupported binary files react.read may only surface metadata/path presence. "
-        "conv:so:sources_pool[...] returns application/json source rows and item stats; source content is full unless max_text_symbols was explicitly supplied. "
+        "conv:so:conv_<conversation_id>.sources_pool[...] returns application/json source rows and item stats; source content is full unless max_text_symbols was explicitly supplied. "
         "Ranged item reads return exact labeled chunks when they fit configured visible caps. "
         "Oversized non-source text payloads return status=truncated_for_visible_context with a bounded preview. "
         "Oversized PDFs and images that cannot be downscaled return status=too_large_for_visible_context_bytes. "
@@ -1563,18 +1561,29 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
 
     def _conversation_id_for_path(ctx_path: str, item_req: Optional[Dict[str, Any]] = None) -> Optional[str]:
         item_req = item_req or {}
+        current_conversation_id = str(
+            getattr(getattr(ctx_browser, "runtime_ctx", None), "conversation_id", "") or ""
+        ).strip()
+
+        def _localized(conversation_id: str) -> Optional[str]:
+            # A ref qualified with the current conversation's scope segment
+            # resolves exactly like its local form.
+            if conversation_id and current_conversation_id and conversation_id == current_conversation_id:
+                return None
+            return conversation_id or None
+
         # Try the conv:fi:-specific splitter first because it understands special
         # shapes (external attachments, user attachments) that the generic
         # peeler does not.
         embedded_conversation_id, _, _, _ = split_logical_artifact_ref(ctx_path)
         conversation_id = str(embedded_conversation_id or "").strip()
         if conversation_id:
-            return conversation_id
+            return _localized(conversation_id)
         # Fall back to the generic peeler so cross-conv `conv:ar:`, `conv:ws:`,
         # `conv:ev:`, `conv:tc:`, and `conv:so:` paths resolve their
         # source conversation too.
         _, peeled_conv, _ = peel_conversation_prefix(ctx_path)
-        return peeled_conv or None
+        return _localized(str(peeled_conv or "").strip())
 
     async def _emit_fi_path(ctx_path: str, item_req: Optional[Dict[str, Any]] = None) -> None:
         nonlocal total_tokens
@@ -2106,6 +2115,17 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
 
         if isinstance(raw_path, str) and raw_path.startswith("conv:so:"):
             source_conversation_id, selector = parse_sources_pool_ref(raw_path)
+            current_conversation_id = str(
+                getattr(getattr(ctx_browser, "runtime_ctx", None), "conversation_id", "") or ""
+            ).strip()
+            if (
+                source_conversation_id
+                and current_conversation_id
+                and source_conversation_id == current_conversation_id
+            ):
+                # A selector qualified with the current conversation's scope
+                # segment resolves via the local timeline.
+                source_conversation_id = None
             if selector:
                 resolver_status = ""
                 try:

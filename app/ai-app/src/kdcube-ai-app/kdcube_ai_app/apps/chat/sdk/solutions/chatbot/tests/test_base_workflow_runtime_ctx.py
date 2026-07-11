@@ -1648,3 +1648,26 @@ async def test_subclass_can_override_named_service_react_instructions():
     wf.logger = SimpleNamespace(log=lambda *args, **kwargs: None)
 
     assert await wf.named_service_react_instructions() == "CUSTOM ROSTER BLOCK"
+
+
+def test_produced_file_count_counts_conversation_qualified_refs():
+    blocks = [
+        # Conversation-qualified refs count for the current turn.
+        {"path": "conv:fi:conv_c1.turn_7.files/report.md"},
+        {"path": "conv:fi:conv_c1.turn_7.git/projects/app/main.py"},
+        # The same file surfacing in its conversation-local spelling dedupes.
+        {"path": "conv:fi:turn_7.files/report.md"},
+        # Attachments are never counted as produced files.
+        {"path": "conv:fi:conv_c1.turn_7.user.attachments/input.pdf"},
+        # Files from other turns are out of scope.
+        {"path": "conv:fi:conv_c1.turn_9.files/other.md"},
+    ]
+    assert workflow_mod._produced_file_count(blocks, "turn_7") == 2
+
+
+def test_produced_file_count_scans_nested_payloads_with_qualified_refs():
+    blocks = [
+        {"meta": {"artifact_path": "conv:fi:conv_c1.turn_7.files/chart.png"}},
+        {"text": json.dumps({"artifact_path": "conv:fi:conv_c1.turn_7.files/data.csv"})},
+    ]
+    assert workflow_mod._produced_file_count(blocks, "turn_7") == 2

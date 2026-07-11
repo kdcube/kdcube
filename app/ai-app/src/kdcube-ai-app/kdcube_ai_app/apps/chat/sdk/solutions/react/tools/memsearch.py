@@ -50,10 +50,9 @@ TOOL_SPEC = {
         "(\"last week we talked about ...\", \"yesterday you helped me with ...\", a topic "
         "the user clearly worked on before but not in this conversation), pass `scope=\"user\"`. "
         "Recovery path: memsearch -> read returned refs; if refs are incomplete, "
-        "read conv:ar:turn_<id>.react.turn.index, then batch-read/pull exact conv:ar:/conv:tc:/conv:fi:/conv:so: refs. "
-        "If a returned `conv:fi:` path starts `conv:fi:conv_<conversation_id>.turn_<id>...`, the `conv_` segment is the "
-        "conversation scope and the artifact belongs to that other conversation; pass that exact path to "
-        "react.read/react.pull/react.checkout/react.rg."
+        "read conv:ar:conv_<conversation_id>.turn_<id>.react.turn.index, then batch-read/pull exact conv:ar:/conv:tc:/conv:fi:/conv:so: refs. "
+        "The `conv_<conversation_id>` segment in a returned path names the conversation the ref lives in; "
+        "pass returned paths exactly as supplied to react.read/react.pull/react.checkout/react.rg."
     ),
     "args": {
         "query": "str (FIRST FIELD). Natural-language query. Required for topic search. Omit when you only want a catalog lookup (ordinal/date-window/overview).",
@@ -104,9 +103,13 @@ def _clip(text: Any, limit: int = 4000) -> str:
     return s[: max(0, limit - 1)].rstrip() + "…"
 
 
-# Namespaces whose logical paths can carry a `conv_<id>.` segment after the
-# `conv:<namespace>:` prefix.
-_CROSS_CONV_NAMESPACE_PREFIXES = ("conv:ev:", "conv:ws:", "conv:ar:", "conv:tc:", "conv:so:")
+# Namespaces whose logical paths carry a `conv_<id>.` segment after the
+# namespace prefix. Turn logs may store either the full `conv:<ns>:` dialect or
+# the short `<ns>:` dialect; both are scoped the same way.
+_CROSS_CONV_NAMESPACE_PREFIXES = (
+    "conv:ev:", "conv:ws:", "conv:ar:", "conv:tc:", "conv:so:",
+    "ev:", "ws:", "ar:", "tc:", "so:", "fi:",
+)
 
 
 def _scope_path_for_conversation(*, path: Any, source_conversation_id: str, current_conversation_id: str) -> str:
@@ -140,8 +143,6 @@ def _scope_path_for_conversation(*, path: Any, source_conversation_id: str, curr
         )
         return scoped or raw
     for prefix in _CROSS_CONV_NAMESPACE_PREFIXES:
-        if prefix == "conv:fi:":
-            continue
         if not raw.startswith(prefix):
             continue
         body = raw[len(prefix):]

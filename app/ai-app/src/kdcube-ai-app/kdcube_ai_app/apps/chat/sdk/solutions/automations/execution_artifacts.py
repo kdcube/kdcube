@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Iterable
 from urllib.parse import quote, unquote, urlparse
 
+from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import qualify_conversation_ref
+
 
 def execution_completed_at(execution: Dict[str, Any]) -> str:
     return str(
@@ -438,7 +440,10 @@ async def materialize_execution_artifact_for_current_turn(
     target = pathlib.Path(outdir_raw) / physical_path
     await asyncio.to_thread(target.parent.mkdir, parents=True, exist_ok=True)
     await asyncio.to_thread(target.write_bytes, data)
-    logical = f"conv:fi:{turn_id}.files/{rel.as_posix()}"
+    logical = qualify_conversation_ref(
+        f"conv:fi:{turn_id}.files/{rel.as_posix()}",
+        str(sc.get("conversation_id") or "").strip(),
+    )
     mime_type = str(selected.get("mime_type") or selected.get("mime") or mimetypes.guess_type(target_name)[0] or "").strip()
     return {
         "execution_id": execution.get("id"),

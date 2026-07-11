@@ -17,6 +17,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
     ARTIFACT_NAMESPACE_ATTACHMENTS,
     build_physical_artifact_path,
     physical_path_to_logical_path,
+    qualify_conversation_ref,
 )
 
 from .client_tools import named_service_namespace_provider_configs_from_config
@@ -164,6 +165,7 @@ class NamedServiceArtifactNamespaceRehoster:
     ) -> dict[str, Any]:
         runtime = getattr(ctx_browser, "runtime_ctx", None)
         turn_id = _runtime_value(runtime, "turn_id")
+        conversation_id = _runtime_value(runtime, "conversation_id")
         endpoint = self._endpoint(runtime)
         if not turn_id:
             return {"missing": [{"object_ref": ref, "reason": "missing_turn_id"}]}
@@ -226,6 +228,7 @@ class NamedServiceArtifactNamespaceRehoster:
                 outdir=outdir,
                 turn_id=turn_id,
                 endpoint=endpoint,
+                conversation_id=conversation_id,
             )
         if not response.ok:
             LOGGER.warning(
@@ -306,7 +309,9 @@ class NamedServiceArtifactNamespaceRehoster:
                     "response": response.to_dict(),
                 }]
             }
-        logical_path = physical_path_to_logical_path(physical_path)
+        logical_path = qualify_conversation_ref(
+            physical_path_to_logical_path(physical_path), conversation_id
+        )
         LOGGER.info(
             "Named-service artifact rehost complete: namespace=%s operation=%s provider=%s bundle=%s object_ref=%s logical_path=%s bytes=%s",
             self.namespace,
@@ -340,6 +345,7 @@ class NamedServiceArtifactNamespaceRehoster:
         outdir: pathlib.Path,
         turn_id: str,
         endpoint: NamedServiceEndpoint,
+        conversation_id: str = "",
     ) -> dict[str, Any]:
         filename = _json_response_filename(ref, key, payload)
         mime = "application/json"
@@ -355,7 +361,9 @@ class NamedServiceArtifactNamespaceRehoster:
         artifact_payload = _json_artifact_payload(payload)
         body = json.dumps(artifact_payload, ensure_ascii=False, indent=2).encode("utf-8")
         await asyncio.to_thread(target.write_bytes, body)
-        logical_path = physical_path_to_logical_path(physical_path)
+        logical_path = qualify_conversation_ref(
+            physical_path_to_logical_path(physical_path), conversation_id
+        )
         LOGGER.info(
             "Named-service artifact rehost JSON materialized: namespace=%s operation=%s provider=%s bundle=%s object_ref=%s logical_path=%s bytes=%s",
             self.namespace,

@@ -8,10 +8,11 @@ blocks (what the parent is amid) plus the parent conversation's WORKING
 SUMMARIES (the compaction machinery's durable per-turn digests, including the
 range summary when the parent has compacted) become the child conversation's
 pre-existing history. Copied blocks keep their text, authorship, turn ids and
-timestamps; the one mechanical rewrite is conversation-qualifying ``conv:fi:``
-paths (bare file refs are turn-qualified and resolve in the CURRENT
-conversation — the ``conv_<parent id>.`` scope segment keeps them resolvable
-from the child).
+timestamps; the one mechanical rewrite is conversation-qualifying their refs.
+Refs minted after qualification-at-birth already carry their home
+``conv_<parent id>.`` scope segment (the rewrite is idempotent); the rewrite
+pins any legacy conversation-local ref persisted before that, so every ref in
+the copy names the parent conversation and resolves from the child.
 """
 
 from __future__ import annotations
@@ -20,13 +21,16 @@ import copy
 import time
 from typing import Any, Dict, List, Optional
 
+from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
+    qualify_conversation_ref,
+    qualify_conversation_refs_in_text,
+)
+
 FORK_HEADER_BLOCK_TYPE = "subagent.fork.header"
 FORK_MARKER_BLOCK_TYPE = "react.subagent.fork"
 
 WORKING_SUMMARY_BLOCK_TYPE = "conv.working.summary"
 RANGE_SUMMARY_BLOCK_TYPE = "conv.range.summary"
-
-_FILE_REF_PREFIX = "conv:fi:"
 
 
 def _now_iso() -> str:
@@ -34,17 +38,18 @@ def _now_iso() -> str:
 
 
 def qualify_file_refs(block: Dict[str, Any], *, conversation_id: str) -> Dict[str, Any]:
-    """Return a copy of ``block`` whose ``conv:fi:`` path/refs carry the
-    ``conv_<conversation_id>.`` scope segment (idempotent)."""
+    """Return a copy of ``block`` whose conversation-scoped refs carry the
+    ``conv_<conversation_id>.`` scope segment (idempotent).
+
+    Structured fields (``path``, ``refs``, ``meta.path``) and refs embedded in
+    the block text are qualified with the block's home conversation, so a
+    fork-copied block stays self-describing wherever it is rendered.
+    """
 
     def _qualify(ref: Any) -> Any:
-        text = str(ref or "")
-        if not text.startswith(_FILE_REF_PREFIX):
+        if not isinstance(ref, str):
             return ref
-        tail = text[len(_FILE_REF_PREFIX):]
-        if tail.startswith("conv_"):
-            return ref
-        return f"{_FILE_REF_PREFIX}conv_{conversation_id}.{tail}"
+        return qualify_conversation_ref(ref, conversation_id)
 
     out = copy.deepcopy(block)
     if out.get("path"):
@@ -54,6 +59,8 @@ def qualify_file_refs(block: Dict[str, Any], *, conversation_id: str) -> Dict[st
     meta = out.get("meta")
     if isinstance(meta, dict) and meta.get("path"):
         meta["path"] = _qualify(meta.get("path"))
+    if isinstance(out.get("text"), str) and out.get("text"):
+        out["text"] = qualify_conversation_refs_in_text(out["text"], conversation_id)
     return out
 
 
@@ -89,11 +96,9 @@ def build_fork_projection(
                 "saw: the conversation's working summaries, then its in-progress "
                 "turn. They are context. The assignment arrives as the "
                 "[SUBAGENT CHARTER] event after them.\n"
-                f"File refs from this fork resolve in the parent conversation: a "
-                f"path of the form conv:fi:conv_{parent_conversation_id}.turn_... "
-                "is pullable with react.pull as written; a bare conv:fi:turn_... "
-                "ref mentioned inside copied text gains the same "
-                f"conv_{parent_conversation_id}. segment before pulling."
+                f"Refs in these blocks carry their home conversation segment "
+                f"(conv_{parent_conversation_id}.) and resolve as written — "
+                "file refs are pullable with react.pull exactly as they appear."
             ),
             "meta": {
                 "fork_of_conversation_id": parent_conversation_id,

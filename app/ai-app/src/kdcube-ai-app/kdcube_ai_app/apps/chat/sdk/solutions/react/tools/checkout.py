@@ -8,6 +8,9 @@ from typing import Any, Dict
 
 import json
 
+from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
+    localize_conversation_ref,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.common import (
     add_block,
     notice_block,
@@ -26,7 +29,7 @@ TOOL_SPEC = {
     "id": "react.checkout",
     "purpose": (
         "Define the active current-turn project workspace by copying selected materialized "
-        "conv:fi:turn_<id>.git/projects refs into turn_<current>/git/projects in order. "
+        "conv:fi:conv_<conversation_id>.turn_<id>.git/projects refs into turn_<current>/git/projects in order. "
         "Use this when the current workspace itself must contain a runnable/searchable project snapshot, "
         "rather than only materializing historical side views with react.pull. "
         "For older refs that may not be local on this worker, call react.pull(paths=[...]) first. "
@@ -39,8 +42,8 @@ TOOL_SPEC = {
             "overlay keeps existing current-turn git/projects/ and overwrites only the selected files."
         ),
         "paths": (
-            "ordered list[str] of conv:fi:turn_<id>.git/projects refs to apply into the current-turn workspace. "
-            "A conv:fi:conv_<conversation_id>.turn_<id>... ref belongs to another conversation and is resolved with that scope. "
+            "ordered list[str] of conv:fi:conv_<conversation_id>.turn_<id>.git/projects refs to apply into the current-turn workspace. "
+            "The conv_<conversation_id> segment names the conversation the ref lives in; use refs exactly as supplied. "
             "Later entries override earlier ones if they overlap."
         ),
     },
@@ -65,6 +68,22 @@ async def handle_react_checkout(*, ctx_browser: Any, state: Dict[str, Any], tool
         raw_paths = raw_params
     raw_mode = str(params.get("mode") or "").strip().lower()
     turn_id = str(getattr(getattr(ctx_browser, "runtime_ctx", None), "turn_id", "") or "").strip()
+    conversation_id = str(getattr(getattr(ctx_browser, "runtime_ctx", None), "conversation_id", "") or "").strip()
+    if isinstance(raw_paths, list):
+        # A ref qualified with the current conversation's scope segment resolves
+        # exactly like its local form; refs scoped to another conversation keep
+        # their segment and cross-conversation resolution.
+        localized_paths = []
+        for raw_path in raw_paths:
+            if isinstance(raw_path, dict):
+                localized = dict(raw_path)
+                localized["path"] = localize_conversation_ref(str(raw_path.get("path") or "").strip(), conversation_id)
+                localized_paths.append(localized)
+            elif isinstance(raw_path, str):
+                localized_paths.append(localize_conversation_ref(raw_path.strip(), conversation_id))
+            else:
+                localized_paths.append(raw_path)
+        raw_paths = localized_paths
 
     tool_call_block(
         ctx_browser=ctx_browser,
@@ -123,14 +142,14 @@ async def handle_react_checkout(*, ctx_browser: Any, state: Dict[str, Any], tool
     if invalid:
         return _fail(
             "protocol_violation.checkout_invalid_paths",
-            "react.checkout requires conv:fi:turn_<id>.git/projects refs in params.paths.",
+            "react.checkout requires conv:fi:conv_<conversation_id>.turn_<id>.git/projects refs in params.paths.",
             extra={"invalid": invalid},
         )
 
     if not requests:
         return _fail(
             "protocol_violation.checkout_missing_paths",
-            "react.checkout requires params.paths with conv:fi:turn_<id>.git/projects refs.",
+            "react.checkout requires params.paths with conv:fi:conv_<conversation_id>.turn_<id>.git/projects refs.",
         )
 
     result = await checkout_workspace_paths(

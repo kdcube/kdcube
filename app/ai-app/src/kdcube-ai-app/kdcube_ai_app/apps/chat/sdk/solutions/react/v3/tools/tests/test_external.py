@@ -1646,7 +1646,7 @@ async def test_integration_ret_envelope_declared_files_are_hosted_and_emitted(mo
     assert len(hosting.emit_calls) == 1
     assert any(
         b.get("type") == "react.tool.result"
-        and b.get("path") == "conv:fi:turn_exec.files/gmail-attachments/acct/m1/invoice.pdf"
+        and b.get("path") == "conv:fi:conv_conv1.turn_exec.files/gmail-attachments/acct/m1/invoice.pdf"
         and (b.get("meta") or {}).get("visibility") == "external"
         for b in ctx.timeline.blocks
     )

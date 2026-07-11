@@ -234,17 +234,53 @@ def test_fork_projection_copies_summaries_then_current_turn_with_qualified_file_
 
     by_type = {b["type"]: b for b in seed}
     copied_file = next(b for b in seed if b["type"] == "react.tool.result")
-    # conv:fi: refs are conversation-qualified for cross-conversation pull...
+    # every conversation-scoped ref in the copy names its home conversation...
     assert copied_file["path"] == "conv:fi:conv_parentconv.turn_3.files/report.md"
     assert copied_file["refs"] == ["conv:fi:conv_parentconv.turn_3.files/report.md"]
-    # ...while the block text is carried as-is
-    assert copied_file["text"] == file_result["text"]
-    # conv:ar: paths stay untouched (they resolve inside the copied timeline)
-    assert by_type["react.notes"]["path"] == "conv:ar:turn_3.react.notes.1"
+    # ...including legacy conversation-local refs inside the copied text,
+    # which get pinned to the parent at copy time
+    assert copied_file["text"] == "report body mentioning conv:fi:conv_parentconv.turn_3.files/report.md"
+    # conv:ar: paths carry their home conversation segment too (they resolve
+    # inside the copied timeline; the segment records provenance)
+    assert by_type["react.notes"]["path"] == "conv:ar:conv_parentconv.turn_3.react.notes.1"
     # source blocks are not mutated
     assert file_result["path"] == "conv:fi:turn_3.files/report.md"
+    assert file_result["text"] == "report body mentioning conv:fi:turn_3.files/report.md"
     header = by_type[FORK_HEADER_BLOCK_TYPE]
     assert "conv_parentconv" in header["text"]
+
+
+def test_fork_projection_is_idempotent_for_qualified_refs():
+    """Blocks whose refs are already conversation-qualified (qualified at
+    birth, or copied from an earlier fork) are carried verbatim."""
+    foreign = {
+        "type": "react.tool.result",
+        "turn_id": "turn_9",
+        "path": "conv:fi:conv_grandparent.turn_9.files/spec.md",
+        "text": "spec at conv:fi:conv_grandparent.turn_9.files/spec.md",
+        "refs": ["conv:fi:conv_grandparent.turn_9.files/spec.md"],
+    }
+    own_qualified = {
+        "type": "react.tool.result",
+        "turn_id": "turn_3",
+        "path": "conv:fi:conv_parentconv.turn_3.files/report.md",
+        "text": "see conv:fi:conv_parentconv.turn_3.files/report.md",
+        "refs": ["conv:fi:conv_parentconv.turn_3.files/report.md"],
+    }
+    seed = build_fork_projection(
+        parent_blocks=[],
+        parent_current_turn_blocks=[foreign, own_qualified],
+        parent_conversation_id="parentconv",
+        parent_turn_id="turn_3",
+        child_conversation_id="childconv",
+    )
+    copied = [b for b in seed if b["type"] == "react.tool.result"]
+    assert copied[0]["path"] == foreign["path"]
+    assert copied[0]["refs"] == foreign["refs"]
+    assert copied[0]["text"] == foreign["text"]
+    assert copied[1]["path"] == own_qualified["path"]
+    assert copied[1]["refs"] == own_qualified["refs"]
+    assert copied[1]["text"] == own_qualified["text"]
 
 
 def test_fork_marker_block_names_child_and_charter():

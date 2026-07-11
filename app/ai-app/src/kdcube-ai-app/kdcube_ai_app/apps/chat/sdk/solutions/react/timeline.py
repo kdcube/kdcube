@@ -46,8 +46,13 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.plan import (
 from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
     ARTIFACT_NAMESPACE_FILES,
     REACT_FILE_REF_PREFIX,
+    localize_conversation_ref,
+    peel_conversation_prefix,
     physical_path_to_logical_path,
+    qualify_conversation_ref,
+    qualify_conversation_refs_in_text,
     split_physical_artifact_path,
+    unscoped_logical_artifact_path,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.compaction_memory import (
     build_internal_note_compaction_result,
@@ -1495,23 +1500,58 @@ def ensure_sources_in_pool(pool: List[Dict[str, Any]], sources: Any) -> tuple[Li
     return merged, extract_source_sids(merged)
 
 
-def resolve_artifact_from_timeline(timeline: Dict[str, Any], path: str) -> Optional[Dict[str, Any]]:
+def resolve_artifact_from_timeline(
+    timeline: Dict[str, Any],
+    path: str,
+    *,
+    current_conversation_id: str = "",
+) -> Optional[Dict[str, Any]]:
     """
     Build a canonical artifact dict from timeline blocks.
     Returns None if no matching blocks found.
+
+    Dual-dialect: refs qualified with `current_conversation_id`'s scope
+    segment resolve exactly like their conversation-local form, and stored
+    paths are matched by both their stored and unscoped shapes (blocks and
+    payload records may carry either dialect).
     """
     if not isinstance(path, str) or not path.strip():
         return None
-    p = path.strip()
+    p = localize_conversation_ref(path.strip(), current_conversation_id)
     source_conversation_id, source_selector = parse_sources_pool_ref(p)
     if source_selector:
         if source_conversation_id:
-            return None
+            if not current_conversation_id or source_conversation_id != current_conversation_id:
+                return None
         return {"kind": "sources_pool", "items": resolve_sources_pool_selector(timeline, source_selector)}
-    lookup_paths = {p}
+    def _unscoped_forms(value: str) -> set[str]:
+        forms = {value}
+        _, _, peeled = peel_conversation_prefix(value)
+        if peeled:
+            forms.add(peeled)
+        unscoped_fi = unscoped_logical_artifact_path(value)
+        if unscoped_fi:
+            forms.add(unscoped_fi)
+        return forms
+
+    _, p_embedded_conv, _ = peel_conversation_prefix(p)
+    if p_embedded_conv and current_conversation_id and p_embedded_conv != current_conversation_id:
+        # The ref names another conversation: match only its exact stored form
+        # (fork-copied blocks keep their origin-qualified paths); never fold it
+        # onto a same-body block owned by this conversation.
+        lookup_paths = {p}
+    else:
+        lookup_paths = _unscoped_forms(p)
     logical_from_physical = physical_path_to_logical_path(p)
     if logical_from_physical:
         lookup_paths.add(logical_from_physical)
+
+    def _in_lookup(candidate: Any) -> bool:
+        if not isinstance(candidate, str) or not candidate:
+            return False
+        if candidate in lookup_paths:
+            return True
+        return not lookup_paths.isdisjoint(_unscoped_forms(candidate))
 
     blocks = _collect_blocks(timeline)
     working_summary_suffix = ".conv.working.summary"
@@ -1587,14 +1627,14 @@ def resolve_artifact_from_timeline(timeline: Dict[str, Any], path: str) -> Optio
         if not isinstance(txt, str):
             continue
         meta_obj = _parse_meta_json(txt)
-        if meta_obj.get("artifact_path") in lookup_paths or meta_obj.get("physical_path") in lookup_paths:
+        if _in_lookup(meta_obj.get("artifact_path")) or _in_lookup(meta_obj.get("physical_path")):
             meta = meta_obj
             bmeta = b.get("meta")
             if isinstance(bmeta, dict) and bmeta:
                 meta_block_meta = dict(bmeta)
             break
 
-    matching = [b for b in blocks if (b.get("path") or "") in lookup_paths]
+    matching = [b for b in blocks if _in_lookup(b.get("path") or "")]
     if not matching and not meta:
         return None
 
@@ -1916,10 +1956,18 @@ class Timeline:
 
     def resolve_artifact(self, path: str) -> Optional[Dict[str, Any]]:
         return resolve_artifact_from_timeline(
-            {"blocks": self.blocks, "sources_pool": self.sources_pool}, path
+            {"blocks": self.blocks, "sources_pool": self.sources_pool},
+            path,
+            current_conversation_id=str(getattr(self.runtime, "conversation_id", "") or "").strip(),
         )
 
     def resolve_sources_pool(self, selector: str) -> List[Dict[str, Any]]:
+        current_conversation_id = str(getattr(self.runtime, "conversation_id", "") or "").strip()
+        source_conversation_id, parsed_selector = parse_sources_pool_ref(selector)
+        if parsed_selector:
+            if source_conversation_id and source_conversation_id != current_conversation_id:
+                return []
+            selector = parsed_selector
         return resolve_sources_pool_selector(
             {"blocks": self.blocks, "sources_pool": self.sources_pool}, selector
         )
@@ -2312,6 +2360,7 @@ class Timeline:
         self._feedback_updates_integrated = bool(integrated)
     def visible_paths(self) -> set[str]:
         paths: set[str] = set()
+        conversation_id = str(getattr(self.runtime, "conversation_id", "") or "").strip()
         blocks = self._apply_hidden_replacements(self._collect_blocks())
         for blk in blocks:
             if not isinstance(blk, dict):
@@ -2320,6 +2369,15 @@ class Timeline:
             if not p:
                 continue
             paths.add(p)
+            # Both dialects are visible identities of the same block: the
+            # conversation-qualified form (what the renderer shows and the
+            # model echoes) and the conversation-local stored form.
+            qualified = qualify_conversation_ref(p, conversation_id)
+            if qualified != p:
+                paths.add(qualified)
+            localized = localize_conversation_ref(p, conversation_id)
+            if localized != p:
+                paths.add(localized)
             if p.startswith(CONV_SO_PREFIX):
                 paths.add(p[len(CONV_SO_PREFIX):])
         return paths
@@ -2448,6 +2506,10 @@ class Timeline:
                 logical_ref = physical_path_to_logical_path(original_ref)
                 if not logical_ref and original_ref and not original_ref.startswith((*CONV_NAMESPACE_PREFIXES, "ks:", "sk:", "sources_pool[")):
                     logical_ref = f"{REACT_FILE_REF_PREFIX}{original_ref.lstrip('/')}"
+                logical_ref = qualify_conversation_ref(
+                    logical_ref,
+                    str(getattr(self.runtime, "conversation_id", "") or "").strip(),
+                ) if logical_ref else logical_ref
                 if visibility == "internal":
                     violations.append({
                         "code": "ref_internal_not_visible",
@@ -2467,7 +2529,7 @@ class Timeline:
                         "path": original_ref,
                         "param": param_name,
                         **({"suggested_ref": logical_ref} if logical_ref else {}),
-                        **({"message": "ref: bindings use logical artifact paths such as conv:fi:<turn>.files/<file>, not physical turn/<namespace>/<file> paths."} if logical_ref else {}),
+                        **({"message": "ref: bindings use logical artifact paths such as conv:fi:conv_<conversation_id>.turn_<id>.files/<file>, not physical turn/<namespace>/<file> paths."} if logical_ref else {}),
                     })
                 return None
             if param_name == "sources_list" and not (ref.startswith(CONV_SO_PREFIX) or ref.startswith("sources_pool[")):
@@ -7516,7 +7578,33 @@ class Timeline:
             if current_round_id and _is_round_terminal_block(b):
                 current_round_accepts_external = False
         _close_current_round()
-        return _scrub_encoded_blobs_in_message_blocks(out)
+        return self._qualify_message_block_refs(
+            _scrub_encoded_blobs_in_message_blocks(out)
+        )
+
+    def _qualify_message_block_refs(
+        self, msg_blocks: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Render-side enforcement point: every conversation-scoped ref the
+        model sees carries its `conv_<conversation_id>.` scope segment.
+
+        Applied to the final rendered text blocks so refs are qualified
+        regardless of which producer wrote them (including blocks persisted
+        before qualification-at-birth). Deterministic for a given stored
+        text + conversation id, so cache prefixes stay stable across rounds.
+        """
+        conversation_id = str(getattr(self.runtime, "conversation_id", "") or "").strip()
+        if not conversation_id:
+            return msg_blocks
+        for blk in msg_blocks or []:
+            if not isinstance(blk, dict):
+                continue
+            text = blk.get("text")
+            if isinstance(text, str) and text and "conv:" in text:
+                qualified = qualify_conversation_refs_in_text(text, conversation_id)
+                if qualified != text:
+                    blk["text"] = qualified
+        return msg_blocks
 
     def _format_message_blocks_debug(self, msg_blocks: List[Dict[str, Any]]) -> str:
         """

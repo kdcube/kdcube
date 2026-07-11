@@ -15,6 +15,7 @@ from typing import Any
 from kdcube_ai_app.apps.chat.sdk.solutions.conversation.instructions import (
     CONVERSATION_NAMED_SERVICE_NAMESPACE,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import qualify_conversation_ref
 
 NAMESPACE = CONVERSATION_NAMED_SERVICE_NAMESPACE  # "conv"
 
@@ -51,29 +52,22 @@ def conversation_id_from_ref(value: Any) -> str:
     return ""
 
 
-def _scope_conv_file_to_conversation(file_ref: str, conversation_id: str) -> str:
-    """Ensure a `conv:fi:` path self-describes its conversation.
-
-    External clients have no ambient conversation, so every emitted file ref must
-    carry the conversation scope for the read side to resolve the turn.
-    """
-    raw = _text(file_ref)
-    conv = _text(conversation_id)
-    if not conv or not raw.startswith(CONV_FILE_REF_PREFIX):
-        return raw
-    body = raw[len(CONV_FILE_REF_PREFIX):]
-    if body.startswith("conv_"):  # already scoped
-        return raw
-    return f"{CONV_FILE_REF_PREFIX}conv_{conv}.{body}"
-
-
 def conv_file_ref(fi_path: Any, conversation_id: str = "") -> str:
     """Round-trippable conv-namespaced handle for a file artifact path.
 
-    `conv:fi:[conv_<id>.]<body>` is scoped to its conversation when known so an
-    external client can resolve it. Non-file handles pass through unchanged.
+    Emitted refs self-describe their conversation: external clients have no
+    ambient conversation, so a `conv:fi:conv_<id>.<body>` ref carries the scope
+    the read side needs to resolve the turn. Accepts the file realm's bare
+    `fi:<body>` spelling (as stored in older artifact rows) and returns the
+    canonical conv-namespaced handle. Delegates to the canonical
+    :func:`qualify_conversation_ref` (idempotent; refs already scoped to a
+    conversation keep their scope; non-conversation handles pass through
+    unchanged).
     """
-    return _scope_conv_file_to_conversation(_text(fi_path), conversation_id)
+    raw = _text(fi_path)
+    if raw.startswith("fi:"):
+        raw = f"conv:{raw}"
+    return qualify_conversation_ref(raw, _text(conversation_id))
 
 
 def is_conv_file_ref(value: Any) -> bool:
@@ -126,7 +120,7 @@ def turn_hit_to_object(hit: dict[str, Any], *, namespace: str = NAMESPACE) -> di
     body = _compact({
         "conversation_id": conversation_id,
         "turn_id": turn_id,
-        "turn_index_path": hit.get("turn_index_path"),
+        "turn_index_path": qualify_conversation_ref(_text(hit.get("turn_index_path")), conversation_id),
         "snippets": [_present_snippet(sn, conversation_id) for sn in snippets],
         "ordinal": hit.get("ordinal"),
         "total_turns": hit.get("total_turns"),
@@ -255,7 +249,7 @@ def conversation_schema_payload(
             },
             TURN_OBJECT_KIND: {"mime": TURN_MIME, "note": "conversation turn search hit (object.search)"},
             CONVERSATION_FILE_OBJECT_KIND: {
-                "canonical_ref": "conv:fi:<path>",
+                "canonical_ref": "conv:fi:conv_<conversation_id>.<path>",
                 "note": (
                     "A file artifact referenced by a turn — an uploaded attachment, a produced "
                     "output (e.g. a summary.md), a snapshot, or a pulled external attachment."
@@ -268,12 +262,12 @@ def conversation_schema_payload(
         },
         "files": {
             "operation": "object.get",
-            "ref": "conv:fi:<path>",
+            "ref": "conv:fi:conv_<conversation_id>.<path>",
             "purpose": (
                 "Turns reference files — uploaded attachments, produced outputs, snapshots, pulled "
-                "external attachments. Search results present these as conv:fi:<path> handles, and "
-                "conv:fi:<path> refs may also appear inside turn text (e.g. working summaries). To read a "
-                "referenced file, call object.get with its conv:fi:<path> ref."
+                "external attachments. Search results present these as conv:fi:conv_<conversation_id>.<path> "
+                "handles, and such refs may also appear inside turn text (e.g. working summaries). To read a "
+                "referenced file, call object.get with its conv:fi:conv_<conversation_id>.<path> ref."
             ),
             "returns": (
                 "the file: {ref, filename, mime, size, encoding, ...}. encoding=text -> content is "
@@ -307,7 +301,7 @@ def conversation_schema_payload(
                 "turn_index_path, snippets[{role,path,text,ts}]}, score."
             ),
             "recovery": (
-                "read the returned snippet paths, or turn_index_path (conv:ar:turn_<id>.react.turn.index), "
+                "read the returned snippet paths, or turn_index_path (conv:ar:conv_<conversation_id>.turn_<id>.react.turn.index), "
                 "to recover full turn content."
             ),
         },

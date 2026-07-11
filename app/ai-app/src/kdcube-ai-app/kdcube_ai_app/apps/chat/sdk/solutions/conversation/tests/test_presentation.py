@@ -20,18 +20,22 @@ from kdcube_ai_app.apps.chat.sdk.solutions.conversation.presentation import (
 
 
 def test_conv_file_ref_grammar_roundtrips():
-    # fi: path -> conv:fi: handle (round-trippable), idempotent, non-fi passthrough.
-    assert conv_file_ref("fi:turn_1.outputs/summary.md") == "conv:fi:turn_1.outputs/summary.md"
-    assert conv_file_ref("conv:fi:turn_1.files/x") == "conv:fi:turn_1.files/x"
-    assert conv_file_ref("ar:turn_1.react.turn.index") == "ar:turn_1.react.turn.index"
-    # With a conversation id, the ref is scoped so an external client can resolve it.
+    # With the presented conversation's id, every emitted ref carries its scope.
+    assert conv_file_ref("conv:fi:turn_1.outputs/summary.md", "c9") == "conv:fi:conv_c9.turn_1.outputs/summary.md"
+    # Stored rows may carry the file realm's bare fi: spelling; the emitted
+    # handle is the canonical conv-namespaced, conversation-scoped form.
     assert conv_file_ref("fi:turn_1.outputs/summary.md", "c9") == "conv:fi:conv_c9.turn_1.outputs/summary.md"
     assert conv_file_ref("fi:conv_c9.turn_1.outputs/summary.md", "c9") == "conv:fi:conv_c9.turn_1.outputs/summary.md"
+    # Idempotent: a ref already carrying its scope keeps it.
+    assert conv_file_ref("conv:fi:conv_c9.turn_1.outputs/summary.md", "c9") == "conv:fi:conv_c9.turn_1.outputs/summary.md"
+    # A ref scoped to another conversation keeps its own scope (copies keep origin).
+    assert conv_file_ref("conv:fi:conv_other.turn_1.files/x", "c9") == "conv:fi:conv_other.turn_1.files/x"
+    # Handles outside the conversation namespace pass through unchanged.
+    assert conv_file_ref("ar:turn_1.react.turn.index", "c9") == "ar:turn_1.react.turn.index"
     assert is_conv_file_ref("conv:fi:turn_1.outputs/summary.md")
     assert not is_conv_file_ref("conv:conversation:c1")
-    # conv:fi: -> fi:, tolerating a bare fi: ref; anything else -> "".
-    assert fi_path_from_conv_ref("conv:fi:turn_1.outputs/summary.md") == "fi:turn_1.outputs/summary.md"
-    assert fi_path_from_conv_ref("fi:turn_1.files/x") == "fi:turn_1.files/x"
+    # The canonical file ref round-trips as-is; anything else -> "".
+    assert fi_path_from_conv_ref("conv:fi:conv_c9.turn_1.outputs/summary.md") == "conv:fi:conv_c9.turn_1.outputs/summary.md"
     assert fi_path_from_conv_ref("conv:conversation:c1") == ""
     # conversation_id_from_ref must NOT mistake a conv:fi: file ref for a conversation.
     assert conversation_id_from_ref("conv:fi:turn_1.outputs/summary.md") == ""
@@ -40,12 +44,26 @@ def test_conv_file_ref_grammar_roundtrips():
 def test_turn_hit_snippet_path_presented_as_conv_fi():
     hit = {
         "turn_id": "t1", "conversation_id": "c1", "score": 0.3,
-        "snippets": [{"role": "attachment", "path": "fi:turn_t1.user.attachments/summary.md", "text": "hello"}],
+        "snippets": [{"role": "attachment", "path": "conv:fi:turn_t1.user.attachments/summary.md", "text": "hello"}],
     }
     obj = turn_hit_to_object(hit)
     # Scoped to the hit's conversation so an external client can pass it back.
     assert obj["body"]["snippets"][0]["path"] == "conv:fi:conv_c1.turn_t1.user.attachments/summary.md"
     assert obj["body"]["snippets"][0]["text"] == "hello"
+
+
+def test_turn_hit_turn_index_path_carries_conversation_scope():
+    hit = {
+        "turn_id": "t1", "conversation_id": "c1", "score": 0.3,
+        "turn_index_path": "conv:ar:turn_t1.react.turn.index",
+        "snippets": [{"role": "assistant", "text": "hello"}],
+    }
+    obj = turn_hit_to_object(hit)
+    assert obj["body"]["turn_index_path"] == "conv:ar:conv_c1.turn_t1.react.turn.index"
+    # Idempotent for hits whose index path already carries its scope.
+    hit["turn_index_path"] = "conv:ar:conv_c1.turn_t1.react.turn.index"
+    obj = turn_hit_to_object(hit)
+    assert obj["body"]["turn_index_path"] == "conv:ar:conv_c1.turn_t1.react.turn.index"
 
 
 def test_conversation_ref_roundtrip():

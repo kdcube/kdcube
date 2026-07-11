@@ -88,11 +88,13 @@ async def test_hybrid_search_uses_explicit_context_no_ambient_state():
 
     result = await run_conversation_search(context=context, params=params, search_backend=backend)
 
-    # The explicit identity flowed into the backend call.
+    # The explicit identity flowed into the backend call. The summary target is
+    # its own arm (the retriever scopes it to working-summary rows), not an
+    # alias of the assistant arm.
     assert backend.search_kwargs["user"] == "user_explicit"
     assert backend.search_kwargs["conv"] == "conv_explicit"
     assert backend.search_kwargs["scope"] == "conversation"
-    assert backend.search_kwargs["targets"] == [{"where": "assistant", "query": "invoice"}]
+    assert backend.search_kwargs["targets"] == [{"where": "summary", "query": "invoice"}]
 
     assert not result.missing_query
     assert result.effective_mode == "hybrid"

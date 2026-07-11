@@ -1289,3 +1289,65 @@ async def test_email_attachment_materializer_uses_exact_selection_when_message_m
     assert result["warnings"][0]["code"] == "email_attachment_metadata_mismatch"
     assert result["warnings"][0]["message_id"] == "m-1"
     assert result["warnings"][0]["attachment_id"] == "att-1"
+
+
+@pytest.mark.asyncio
+async def test_email_attachment_materializer_emits_conversation_scoped_logical_path(tmp_path, monkeypatch):
+    email_mod = email_attachments
+    store = email_mod.EmailAccountStore(tmp_path, user_id="user-a", bundle_id="task-and-memo-app@1-0")
+    store.upsert_account({"provider": "google", "email": "user@example.test"})
+
+    async def fake_fetch_email_message(**kwargs):
+        return {
+            "ok": True,
+            "message": {
+                "message_id": "m-1",
+                "subject": "Invoice",
+                "from": "billing@example.test",
+                "attachments": [
+                    {
+                        "attachment_id": "att-1",
+                        "filename": "invoice.pdf",
+                        "mime_type": "application/pdf",
+                        "size_bytes": 9,
+                    }
+                ],
+            },
+        }
+
+    async def fake_fetch_email_attachment(**kwargs):
+        return {
+            "ok": True,
+            "message_id": "m-1",
+            "filename": "invoice.pdf",
+            "mime_type": "application/pdf",
+            "base64": "cGRmLWJ5dGVz",
+        }
+
+    monkeypatch.setattr(email_mod, "fetch_email_message", fake_fetch_email_message)
+    monkeypatch.setattr(email_mod, "fetch_email_attachment", fake_fetch_email_attachment)
+
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+    result = await email_mod.materialize_email_attachments_for_current_turn(
+        entrypoint=SimpleNamespace(),
+        storage_root=tmp_path,
+        outdir=outdir,
+        turn_id="turn-1",
+        user_id="user-a",
+        bundle_id="task-and-memo-app@1-0",
+        account="user@example.test",
+        message_ids_json=json.dumps(["m-1"]),
+        visibility="external",
+        conversation_id="conv-a",
+    )
+
+    assert result["ok"] is True
+    assert result["file_count"] == 1
+    row = result["files"][0]
+    # Emitted logical refs carry the home conversation's scope segment.
+    assert row["logical_path"] == (
+        "conv:fi:conv_conv-a.turn-1.files/email-attachments/user@example.test/m-1/invoice.pdf"
+    )
+    assert row["artifact_path"] == row["logical_path"]
+    assert (outdir / row["physical_path"]).read_bytes() == b"pdf-bytes"

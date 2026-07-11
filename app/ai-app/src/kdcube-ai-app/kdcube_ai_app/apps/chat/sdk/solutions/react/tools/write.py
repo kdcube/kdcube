@@ -19,6 +19,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
     normalize_physical_path,
     infer_artifact_namespace,
     physical_path_to_logical_path,
+    qualify_conversation_ref,
 )
 from kdcube_ai_app.apps.chat.sdk.tools.citations import extract_citation_sids_any
 from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.common import (
@@ -196,9 +197,13 @@ async def handle_react_write(*, react: Any, ctx_browser: Any, state: Dict[str, A
             text = str(generated_data)
 
     turn_id = (ctx_browser.runtime_ctx.turn_id or "")
+    conversation_id = str(getattr(getattr(ctx_browser, "runtime_ctx", None), "conversation_id", "") or "").strip()
     artifact_rel = (rel_path or "").strip()
     artifact_path = (
-        build_logical_artifact_path(turn_id=turn_id, namespace=artifact_namespace, relpath=artifact_rel)
+        qualify_conversation_ref(
+            build_logical_artifact_path(turn_id=turn_id, namespace=artifact_namespace, relpath=artifact_rel),
+            conversation_id,
+        )
         if (turn_id and artifact_rel)
         else ""
     )
@@ -315,7 +320,7 @@ async def handle_react_write(*, react: Any, ctx_browser: Any, state: Dict[str, A
         outdir=pathlib.Path(state["outdir"]),
         physical_path=artifact_name,
     )
-    artifact_path = physical_path_to_logical_path(artifact_name)
+    artifact_path = qualify_conversation_ref(physical_path_to_logical_path(artifact_name), conversation_id)
     physical_path = artifact_name
     meta_block = await deliver_file_artifact(
         react=react,

@@ -18,6 +18,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
     error_block_details,
     normalize_physical_path,
     physical_path_to_logical_path,
+    qualify_conversation_ref,
     detect_edit,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.artifact_analysis import (
@@ -60,7 +61,7 @@ from kdcube_ai_app.apps.chat.sdk.util import normalize_artifact_visibility
 def _should_attach_binary_to_prompt(*, runtime_ctx: Any, abs_path: pathlib.Path) -> tuple[bool, Dict[str, Any]]:
     return should_attach_binary_to_prompt(runtime_ctx=runtime_ctx, abs_path=abs_path)
 
-def _format_sources_pool_path(sids: List[int]) -> str:
+def _format_sources_pool_path(sids: List[int], *, conversation_id: str = "") -> str:
     sids = sorted({int(s) for s in (sids or []) if isinstance(s, int) and s > 0})
     if not sids:
         return ""
@@ -74,7 +75,10 @@ def _format_sources_pool_path(sids: List[int]) -> str:
         start = prev = sid
     ranges.append((start, prev))
     parts = [str(a) if a == b else f"{a}-{b}" for a, b in ranges]
-    return f"conv:so:sources_pool[{', '.join(parts)}]"
+    return qualify_conversation_ref(
+        f"conv:so:sources_pool[{', '.join(parts)}]",
+        conversation_id,
+    )
 
 
 def _shape_of(value: Any, *, depth: int = 0, max_depth: int = 3) -> Any:
@@ -1209,7 +1213,10 @@ async def _handle_external_tool_legacy(*,
                 "call_id": tool_call_id,
                 "tool_id": tool_id,
                 "mime": mime,
-                "path": f"conv:fi:{turn_id}.code.{tool_call_id}" if turn_id else "",
+                "path": qualify_conversation_ref(
+                f"conv:fi:{turn_id}.code.{tool_call_id}",
+                str(getattr(getattr(ctx_browser, "runtime_ctx", None), "conversation_id", "") or "").strip(),
+            ) if turn_id else "",
                 "text": code_txt,
                 "ts": ts,
                 "meta": {
@@ -1247,7 +1254,11 @@ async def _handle_external_tool_legacy(*,
             outdir = pathlib.Path(state["outdir"])
             missing_local = [p for p in paths if not resolve_artifact_path(outdir, p).exists()]
             if missing_local:
-                logical_missing = [physical_path_to_logical_path(p) or p for p in missing_local]
+                _conv_id = str(getattr(getattr(ctx_browser, "runtime_ctx", None), "conversation_id", "") or "").strip()
+                logical_missing = [
+                    qualify_conversation_ref(physical_path_to_logical_path(p), _conv_id) or p
+                    for p in missing_local
+                ]
                 pull_hint = f"react.pull(paths={json.dumps(logical_missing, ensure_ascii=False)})"
                 # Use a single visible recovery surface for this preflight error.
                 # The tool-result block already carries the pull hint and retry reason.
@@ -1680,10 +1691,12 @@ async def _handle_external_tool_legacy(*,
                             extra={"original": original_path, "normalized": phys_path},
                         )
         expose_internal_file = bool(visibility == "internal" and phys_path)
-        artifact_path = (
+        _conv_id = str(getattr(getattr(ctx_browser, "runtime_ctx", None), "conversation_id", "") or "").strip()
+        artifact_path = qualify_conversation_ref(
             physical_path_to_logical_path(phys_path)
             if (phys_path and (visibility == "external" or expose_internal_file))
-            else tc_result_path(turn_id=turn_id, call_id=tool_call_id)
+            else tc_result_path(turn_id=turn_id, call_id=tool_call_id),
+            _conv_id,
         )
         physical_path = phys_path if (phys_path and (visibility == "external" or expose_internal_file)) else ""
         if tools_insights.is_search_tool(tool_id) or tools_insights.is_fetch_uri_content_tool(tool_id):
@@ -1697,7 +1710,7 @@ async def _handle_external_tool_legacy(*,
                         sids = [int(r.get("sid") or 0) for r in data if isinstance(r, dict) and r.get("sid") is not None]
                         sids = [s for s in sids if s > 0]
                 if sids:
-                    artifact_path = _format_sources_pool_path(sids)
+                    artifact_path = _format_sources_pool_path(sids, conversation_id=_conv_id)
             except Exception:
                 pass
         edited = detect_edit(
@@ -1975,10 +1988,11 @@ async def _handle_external_tool_legacy(*,
                         extra={"original": original_path, "normalized": phys_path},
                     )
             expose_file_path = bool(phys_path and visibility in {"external", "internal"})
-            artifact_path = (
+            artifact_path = qualify_conversation_ref(
                 physical_path_to_logical_path(phys_path)
                 if expose_file_path
-                else tc_result_path(turn_id=turn_id, call_id=tool_call_id)
+                else tc_result_path(turn_id=turn_id, call_id=tool_call_id),
+                str(getattr(getattr(ctx_browser, "runtime_ctx", None), "conversation_id", "") or "").strip(),
             )
             physical_path = phys_path if expose_file_path else ""
         edited = detect_edit(

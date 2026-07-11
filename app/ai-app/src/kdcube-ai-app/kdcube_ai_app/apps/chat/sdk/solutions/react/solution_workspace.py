@@ -27,6 +27,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
     ARTIFACT_NAMESPACE_SNAPSHOTS,
     REACT_FILE_REF_PREFIX,
     build_logical_artifact_path,
+    localize_conversation_ref,
     build_physical_artifact_path,
     split_logical_artifact_ref,
     split_logical_artifact_path,
@@ -218,8 +219,13 @@ async def read_artifact_for_react(
     if embedded_conversation_id:
         conversation_id = embedded_conversation_id
     unscoped_path = unscoped_logical_artifact_path(raw_path)
-    inferred_physical = _infer_physical_from_fi(raw_path)
     current_conversation_id = str(getattr(getattr(ctx_browser, "runtime_ctx", None), "conversation_id", "") or "").strip()
+    # A ref qualified with the current conversation's scope segment maps to the
+    # LOCAL physical layout (turn_<id>/...), exactly like its local form; only
+    # refs from other conversations materialize under conv_<id>/turn_<id>/...
+    inferred_physical = _infer_physical_from_fi(
+        localize_conversation_ref(raw_path, current_conversation_id)
+    )
     use_current_timeline = not conversation_id or conversation_id == current_conversation_id
 
     artifact: Optional[Dict[str, Any]] = None
@@ -239,7 +245,11 @@ async def read_artifact_for_react(
                 turn_log = {}
             contrib_log = (turn_log.get("blocks") or []) if isinstance(turn_log, dict) else []
             if contrib_log:
-                artifact = resolve_artifact_from_timeline({"blocks": contrib_log, "sources_pool": []}, unscoped_path)
+                artifact = resolve_artifact_from_timeline(
+                    {"blocks": contrib_log, "sources_pool": []},
+                    unscoped_path,
+                    current_conversation_id=(conversation_id or current_conversation_id),
+                )
 
     if not isinstance(artifact, dict):
         if not inferred_physical:
@@ -391,7 +401,11 @@ async def resolve_logical_artifact(
     contrib_log = (turn_log.get("blocks") or []) if isinstance(turn_log, dict) else []
     if not contrib_log:
         return None
-    artifact = resolve_artifact_from_timeline({"blocks": contrib_log, "sources_pool": []}, unscoped_path)
+    artifact = resolve_artifact_from_timeline(
+        {"blocks": contrib_log, "sources_pool": []},
+        unscoped_path,
+        current_conversation_id=(conversation_id or current_conversation_id),
+    )
     return artifact if isinstance(artifact, dict) else None
 
 async def rehost_files_from_timeline(
@@ -669,7 +683,11 @@ async def rehost_files_from_timeline(
                 pass
         # 2) Fall back to persisted turn log.
         contrib_log = await _turn_blocks(turn_id)
-        return resolve_artifact_from_timeline({"blocks": contrib_log, "sources_pool": []}, artifact_path)
+        return resolve_artifact_from_timeline(
+            {"blocks": contrib_log, "sources_pool": []},
+            artifact_path,
+            current_conversation_id=(conversation_id or current_conversation_id),
+        )
 
     def _hosted_blob_ref(artifact: Dict[str, Any]) -> str:
         if not isinstance(artifact, dict):

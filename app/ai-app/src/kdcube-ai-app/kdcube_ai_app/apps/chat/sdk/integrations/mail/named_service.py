@@ -317,7 +317,7 @@ _MAIL_ACTION_DESCRIPTIONS_IN_CHAT: dict[str, str] = {
     ACTION_SEND: (
         "Send a new email from a connected mail account. Attach workspace files "
         "by ref: attachment_paths=[<KDCube file path>] — pass the logical "
-        "(conv:fi:...) or physical path a pull/exec returned and the service "
+        "(conv:fi:conv_<conversation_id>.<...>) or physical path a pull/exec returned and the service "
         "reads the bytes itself. attachments=[{staged_ref}] carries files "
         "staged earlier via request_upload."
     ),

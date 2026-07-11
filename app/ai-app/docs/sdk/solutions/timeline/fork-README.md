@@ -49,23 +49,25 @@ load mode exists.
 
 ## Ref Semantics
 
-Block paths in a timeline are turn-qualified (`conv:fi:turn_x.files/a.md`,
-`conv:ar:turn_x...`), and resolvers read a bare ref as belonging to the
-current conversation. Two rules keep copied refs live in the fork:
+Every conversation-scoped ref the runtime emits is conversation-qualified at
+birth (`conv:fi:conv_<id>.turn_x.files/a.md`, `conv:ar:conv_<id>.turn_x...`),
+so refs are absolute identities and a fork copy needs no re-interpretation.
+The copy step applies one idempotent rewrite, `qualify_file_refs`: refs in the
+block's `path`, `refs`, and `meta.path` fields AND refs mentioned inside the
+block's text gain the SOURCE conversation's scope segment when they lack one
+(blocks persisted before qualification-at-birth). Refs that already carry a
+segment — the source's own, or an earlier fork's — are untouched, so
+provenance survives chained forks.
 
-- `conv:fi:` paths (workspace files, resolved from storage) are rewritten
-  with the source conversation's scope segment:
-  `conv:fi:conv_<source id>.turn_x.files/a.md`. That is the standard
-  cross-conversation form `react.pull` already resolves; the rewrite touches
-  the block's `path`, `refs`, and `meta.path` fields only.
-- `conv:ar:` / `conv:tc:` / `conv:ws:` / `conv:su:` paths stay bare: those
-  blocks are copied INTO the new timeline, so timeline-resident resolution
-  (`react.read`, `react.hide`) finds them by exact path match right there.
+Resolution in the child:
 
-Block TEXT is never rewritten. A bare `conv:fi:turn_...` ref mentioned
-inside copied prose therefore needs the `conv_<source id>.` segment added
-before pulling -- the fork header states this to the model, with the source
-conversation id spelled out.
+- `conv:fi:` refs name workspace files in the source conversation; that is
+  the standard cross-conversation form `react.pull` resolves from the child.
+- `conv:ar:` / `conv:tc:` / `conv:ws:` / `conv:su:` refs are
+  timeline-resident: the qualified path resolves within the timeline that
+  holds the block — here, the child's own copy. The segment records where the
+  block came from; cross-conversation resolution for these kinds is a
+  possible follow-up, not a current capability.
 
 ## The Charter As First Event
 

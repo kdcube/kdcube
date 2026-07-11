@@ -9,6 +9,9 @@ import pathlib
 import re
 from typing import Any, Dict, Iterable, Mapping
 
+from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import get_current_user_identity
+from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import qualify_conversation_ref
+
 from .accounts import (
     EmailAccountStore,
     fetch_email_attachment,
@@ -179,8 +182,15 @@ async def materialize_email_attachments_for_current_turn(
     max_attachments: int = MAX_ATTACHMENTS,
     max_bytes_per_attachment: int = MAX_BYTES_PER_ATTACHMENT,
     visibility: str = "external",
+    conversation_id: str = "",
 ) -> Dict[str, Any]:
     turn = str(turn_id or "").strip()
+    conv_id = str(conversation_id or "").strip()
+    if not conv_id:
+        try:
+            conv_id = str((get_current_user_identity() or {}).get("conversation_id") or "").strip()
+        except Exception:
+            conv_id = ""
     outdir_path = pathlib.Path(str(outdir or "")).resolve() if str(outdir or "").strip() else None
     if not turn or outdir_path is None:
         return {
@@ -446,7 +456,7 @@ async def materialize_email_attachments_for_current_turn(
                 target = outdir_path / target_rel
             await asyncio.to_thread(target.parent.mkdir, parents=True, exist_ok=True)
             await asyncio.to_thread(target.write_bytes, data)
-            logical = f"conv:fi:{turn}.files/{rel.as_posix()}"
+            logical = qualify_conversation_ref(f"conv:fi:{turn}.files/{rel.as_posix()}", conv_id)
             physical = target_rel.as_posix()
             mime_type = str(fetched.get("mime_type") or attachment.get("mime_type") or mimetypes.guess_type(filename)[0] or "application/octet-stream")
             files.append(

@@ -25,7 +25,9 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
     ARTIFACT_NAMESPACE_SNAPSHOTS,
     REACT_FILE_REF_PREFIX,
     build_physical_artifact_path,
+    localize_conversation_ref,
     physical_path_to_logical_path,
+    qualify_conversation_ref,
     split_logical_artifact_ref,
     split_physical_artifact_path,
 )
@@ -51,9 +53,9 @@ TOOL_SPEC = {
         "root": (
             "optional root selector. Omit to search the full materialized artifact workspace. "
             "Use canonical turn_<id>/git/projects/<path>, turn_<id>/files/<path>, "
-            "turn_<id>/attachments/<path>, or supported conv:fi:turn_<id>.* artifact paths "
-            "to search a file or subtree. A conv:fi:conv_<conversation_id>.turn_<id>... root belongs to another "
-            "conversation and is resolved with that scope after the file has been pulled locally. "
+            "turn_<id>/attachments/<path>, or supported conv:fi:conv_<conversation_id>.turn_<id>.* artifact paths "
+            "to search a file or subtree. The conv_<conversation_id> segment names the conversation the ref "
+            "lives in; pass refs exactly as supplied (files must be pulled locally first). "
             "Legacy outdir/<path> is accepted but should not be used in new calls."
         ),
         "name_regex": "optional Python regex matched against the basename only, not the full path",
@@ -183,6 +185,11 @@ def _resolve_root(
     if not root_sel:
         return artifact_outdir, root_kind, normalized_root, root_virtual_prefix
 
+    conversation_id = str(getattr(getattr(ctx_browser, "runtime_ctx", None), "conversation_id", "") or "").strip()
+    # A root qualified with the current conversation's scope segment maps to the
+    # local physical layout; roots scoped to other conversations keep their
+    # conv_<id>/ physical layout.
+    root_sel = localize_conversation_ref(root_sel, conversation_id)
     turn_id = str(getattr(getattr(ctx_browser, "runtime_ctx", None), "turn_id", "") or "").strip()
     root_sel_lc = root_sel.lower()
     rel = ""
@@ -208,7 +215,7 @@ def _resolve_root(
         else:
             code = "rg_invalid_root"
             message = (
-                "invalid conv:fi: root selector. Use a supported conv:fi:turn_<id>.<namespace>/<path> "
+                "invalid conv:fi: root selector. Use a supported conv:fi:conv_<conversation_id>.turn_<id>.<namespace>/<path> "
                 "artifact path such as git/projects, files, git/snapshots, or attachments."
             )
             rel = ""
@@ -246,7 +253,7 @@ def _resolve_root(
         else:
             code = "rg_invalid_root"
             message = (
-                "invalid root selector. Omit root, or use canonical turn_<id>/git/projects, turn_<id>/files, turn_<id>/attachments paths or a supported conv:fi:turn_<id>.* artifact path."
+                "invalid root selector. Omit root, or use canonical turn_<id>/git/projects, turn_<id>/files, turn_<id>/attachments paths or a supported conv:fi:conv_<conversation_id>.turn_<id>.* artifact path."
             )
 
     if rel:
@@ -279,6 +286,7 @@ async def handle_react_rg(*, ctx_browser: Any, state: Dict[str, Any], tool_call_
     max_bytes = _positive_int(params.get("max_bytes"), 0) or None
 
     turn_id = (ctx_browser.runtime_ctx.turn_id or "")
+    conversation_id = str(getattr(getattr(ctx_browser, "runtime_ctx", None), "conversation_id", "") or "").strip()
     tool_call_block(
         ctx_browser=ctx_browser,
         tool_call_id=tool_call_id,
@@ -341,7 +349,11 @@ async def handle_react_rg(*, ctx_browser: Any, state: Dict[str, Any], tool_call_
             full_path = root_virtual_prefix
         elif root_virtual_prefix:
             full_path = pathlib.PurePosixPath(root_virtual_prefix, rel_path).as_posix()
-        logical_path = physical_path_to_logical_path(full_path) if root_kind == "outdir" else ""
+        logical_path = (
+            qualify_conversation_ref(physical_path_to_logical_path(full_path), conversation_id)
+            if root_kind == "outdir"
+            else ""
+        )
 
         hit: Dict[str, Any] = {
             "path": rel_path,

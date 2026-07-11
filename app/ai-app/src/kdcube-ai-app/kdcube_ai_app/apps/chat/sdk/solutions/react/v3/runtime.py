@@ -2094,7 +2094,7 @@ class ReactSolverV2:
 
         Accepts:
           - physical path: 'turn_<id>/files/foo.md', 'turn_<id>/git/projects/foo.md'
-          - logical ref:   'conv:fi:turn_<id>.files/foo.md', 'conv:fi:turn_<id>.git/projects/foo.md'
+          - logical ref:   'conv:fi:conv_<conversation_id>.turn_<id>.files/foo.md', 'conv:fi:conv_<conversation_id>.turn_<id>.git/projects/foo.md'
           - param ref:     'ref:<either form>'
         Returns lowercase canonical 'turn_<id>/<namespace>/<rel>' string, or '' if not recognizable.
         """

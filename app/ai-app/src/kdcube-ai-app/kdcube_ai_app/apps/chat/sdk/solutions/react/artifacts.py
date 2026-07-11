@@ -144,6 +144,90 @@ def peel_conversation_prefix(path: str) -> tuple[str, str, str]:
     return ns, conv_id, f"{ns}{rest}"
 
 
+def qualify_conversation_ref(ref: str, conversation_id: str) -> str:
+    """Return `ref` carrying its `conv_<conversation_id>.` scope segment.
+
+    The canonical emission-side helper: every runtime site that mints or
+    renders a conversation-owned ref (`conv:fi:`, `conv:ar:`, `conv:ws:`,
+    `conv:tc:`, `conv:so:`, ...) passes it through here so refs leave the
+    platform as absolute, location-independent identities.
+
+    Idempotent: a ref that already carries a scope segment (this or another
+    conversation's) is returned unchanged, so copies keep their origin.
+    Non-conversation refs, empty refs, and calls without a conversation id
+    pass through untouched.
+    """
+    raw = str(ref or "").strip()
+    conv_id = str(conversation_id or "").strip()
+    if not raw or not conv_id:
+        return ref
+    if not _conversation_segment(conv_id):
+        return ref
+    ns, existing_conv, _ = peel_conversation_prefix(raw)
+    if not ns or existing_conv:
+        return ref
+    body = raw[len(ns):]
+    if not body:
+        return ref
+    return f"{ns}{ARTIFACT_CONVERSATION_PREFIX}{conv_id}.{body}"
+
+
+def localize_conversation_ref(ref: str, current_conversation_id: str) -> str:
+    """Return `ref` without its scope segment when that segment names
+    `current_conversation_id` — the read-side twin of
+    :func:`qualify_conversation_ref`.
+
+    Resolvers and physical-path mappers operate on conversation-local refs;
+    this peels the current conversation's own scope segment so a qualified
+    ref resolves exactly like its local form. Refs scoped to another
+    conversation keep their segment (they are routed to that conversation's
+    store). Idempotent; non-conversation refs pass through untouched.
+    """
+    raw = str(ref or "").strip()
+    current = str(current_conversation_id or "").strip()
+    if not raw or not current:
+        return ref
+    ns, embedded_conv, unscoped = peel_conversation_prefix(raw)
+    if not ns or not embedded_conv:
+        return ref
+    if embedded_conv != current:
+        return ref
+    return unscoped
+
+
+_CONV_REF_BODY_STARTS = (
+    r"(?:telegram_)?turn_",          # turn-scoped bodies (files, blocks, tc, ws, ev)
+    r"\d{4}-\d{2}-\d{2}-\d{2}-\d{2}",  # timestamp-style turn ids
+    r"sources_pool\[",               # conv:so: selectors
+    r"plan\.latest:",                # conv:ar:plan.latest:<plan_id>
+)
+
+_CONV_REF_QUALIFY_RE = re.compile(
+    r"\bconv:([a-z]{2}):(?=(?:" + "|".join(_CONV_REF_BODY_STARTS) + r"))"
+)
+
+
+def qualify_conversation_refs_in_text(text: str, conversation_id: str) -> str:
+    """Qualify every conversation-scoped ref inside free text with the
+    `conv_<conversation_id>.` scope segment.
+
+    The render-side enforcement point: text leaving the runtime for the model
+    passes through here so each `conv:<ns>:` ref carries its home conversation.
+    Refs that already carry a scope segment (this or another conversation's)
+    are untouched (the lookahead only matches recognized unscoped body
+    shapes), and namespace mentions without a body are left as-is.
+    """
+    raw = str(text or "")
+    conv_id = str(conversation_id or "").strip()
+    if not raw or not conv_id or "conv:" not in raw:
+        return text
+    if not _conversation_segment(conv_id):
+        return text
+    return _CONV_REF_QUALIFY_RE.sub(
+        f"conv:\\1:{ARTIFACT_CONVERSATION_PREFIX}{conv_id}.", raw
+    )
+
+
 def _split_physical_conversation_prefix(raw_value: str) -> tuple[str, str]:
     raw = str(raw_value or "").strip().lstrip("/")
     if not raw.startswith(ARTIFACT_CONVERSATION_PREFIX):

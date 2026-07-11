@@ -45,6 +45,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
     build_tool_result_error_block,
     error_block_details,
     physical_path_to_logical_path,
+    qualify_conversation_ref,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.events import (
     block_production_policy,
@@ -966,7 +967,17 @@ def exec_tool_call_validation_policy(
         outdir = pathlib.Path(str(target.get("outdir") or ""))
         missing_local = [p for p in paths if not resolve_artifact_path(outdir, p).exists()]
         if missing_local:
-            logical_missing = [physical_path_to_logical_path(p) or p for p in missing_local]
+            conv_id = ""
+            try:
+                from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import get_current_user_identity
+
+                conv_id = str((get_current_user_identity() or {}).get("conversation_id") or "").strip()
+            except Exception:
+                conv_id = ""
+            logical_missing = [
+                qualify_conversation_ref(physical_path_to_logical_path(p) or p, conv_id)
+                for p in missing_local
+            ]
             pull_hint = f"react.pull(paths={json.dumps(logical_missing, ensure_ascii=False)})"
             _stop_exec_validation(
                 target,
@@ -1209,7 +1220,7 @@ class ExecTools:
             "- WHERE YOU WRITE DECIDES HOW A FILE PERSISTS. There are TWO independent paths:\n"
             "    (1) `turn_<current>/git/projects/...` -> GIT: versioned PROJECT state. The whole git/projects/ tree is committed as\n"
             "        this turn's SNAPSHOT and carried across turns; next turn starts EMPTY but you re-materialize it\n"
-            "        by pulling/checking out its `conv:fi:turn_<id>.git/projects/...` ref. You do NOT contract project files —\n"
+            "        by pulling/checking out its `conv:fi:conv_<conversation_id>.turn_<id>.git/projects/...` ref. You do NOT contract project files —\n"
             "        git saves the tree wholesale (a turn editing many project files is captured by the snapshot).\n"
             "    (2) the `contract` -> HOSTING: each listed file is copied to the resource host (S3/local FS) with\n"
             "        its OWN durable, downloadable/pullable handle, INDEPENDENT of git. A produced file reaches\n"
@@ -1256,7 +1267,7 @@ class ExecTools:
             "  import json\n"
             "  resp = await agent_io_tools.tool_call(\n"
             "      fn=ctx_tools.fetch_ctx,\n"
-            "      params={\"path\": \"conv:ar:turn_<id>.user.prompt\"},\n"
+            "      params={\"path\": \"conv:ar:conv_<conversation_id>.turn_<id>.user.prompt\"},\n"
             "      call_reason=\"Load user message for turn_<id>\",\n"
             "      tool_id=\"ctx_tools.fetch_ctx\"\n"
             "  )\n"

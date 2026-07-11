@@ -69,7 +69,7 @@ def _tool_call_omission_marker(*, value: str, key_path: str, call_path: str) -> 
         )
     else:
         recover_with = (
-            "react.read on the matching conv:tc:<turn>.<call>.call path to load the saved full tool-call payload; "
+            "react.read on the matching conv:tc:conv_<conversation_id>.<turn>.<call>.call path to load the saved full tool-call payload; "
             f"then inspect field {key_path!r}. Use stats_only/ranged read items only if that artifact is still capped."
         )
     return {
@@ -79,7 +79,7 @@ def _tool_call_omission_marker(*, value: str, key_path: str, call_path: str) -> 
         "text_symbols": len(value),
         "size_bytes": len(value.encode("utf-8", errors="ignore")),
         "sha1": _hash_text(value),
-        "full_value_ref": call_path or "conv:tc:<turn>.<call>.call",
+        "full_value_ref": call_path or "conv:tc:conv_<conversation_id>.<turn>.<call>.call",
         "full_value_field": key_path,
         "recovery_hint": "This is only a shortened preview. The saved tool-call artifact preserves the complete value.",
         "recover_with": recover_with,

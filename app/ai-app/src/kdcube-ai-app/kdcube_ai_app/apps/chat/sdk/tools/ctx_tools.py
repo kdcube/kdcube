@@ -174,6 +174,32 @@ class SourcesUsedStore:
                 return entry.get("sids") or []
         return []
 
+def _current_conversation_id() -> str:
+    """Best-effort current conversation id for ref localization.
+
+    Conversation-scoped refs carry a `conv_<conversation_id>.` segment naming
+    the conversation they live in; resolvers peel the current conversation's
+    own segment so those refs resolve exactly like their local form.
+    """
+    try:
+        from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import get_current_user_identity
+        conv = str((get_current_user_identity() or {}).get("conversation_id") or "").strip()
+        if conv:
+            return conv
+    except Exception:
+        pass
+    try:
+        from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import get_comm
+        comm = get_comm()
+        svc = getattr(comm, "service", None)
+        if isinstance(svc, dict):
+            conv = str(svc.get("conversation_id") or "").strip()
+            if conv:
+                return conv
+    except Exception:
+        pass
+    return ""
+
 def _read_timeline() -> Dict[str, Any]:
     candidates: List[pathlib.Path] = []
     try:
@@ -525,14 +551,15 @@ class ContextTools:
             "- Do NOT call this tool directly from planning/decision roles unless you are authoring code.\n"
             "\n"
             "SUPPORTED PATHS (same as react.read)\n"
-            "• conv:so:sources_pool[<sid>,<sid>] or sources_pool[<sid>,<sid>]\n"
-            "• conv:ar:turn_<id>.user.prompt\n"
-            "• conv:ar:turn_<id>.assistant.completion or conv:ar:turn_<id>.assistant.completion.<n>\n"
-            "• conv:tc:turn_<id>.<tool_call_id>.call\n"
-            "• conv:tc:turn_<id>.<tool_call_id>.result\n"
+            "• conv:so:conv_<conversation_id>.sources_pool[<sid>,<sid>] or sources_pool[<sid>,<sid>]\n"
+            "• conv:ar:conv_<conversation_id>.turn_<id>.user.prompt\n"
+            "• conv:ar:conv_<conversation_id>.turn_<id>.assistant.completion or conv:ar:conv_<conversation_id>.turn_<id>.assistant.completion.<n>\n"
+            "• conv:tc:conv_<conversation_id>.turn_<id>.<tool_call_id>.call\n"
+            "• conv:tc:conv_<conversation_id>.turn_<id>.<tool_call_id>.result\n"
+            "The conv_<conversation_id> segment names the conversation the ref lives in; use refs exactly as supplied.\n"
             "\n"
             "NOT SUPPORTED in fetch_ctx (use physical paths instead):\n"
-            "• conv:fi:turn_<id>.* (attachments/files) — use canonical OUT_DIR/turn_<id>/attachments/... or OUT_DIR/turn_<id>/files/... physical paths\n"
+            "• conv:fi: refs (attachments/files) — use canonical OUT_DIR/turn_<id>/attachments/... or OUT_DIR/turn_<id>/files/... physical paths\n"
             "• sk:<skill id> — skills cannot be read from code. Only with react.read (NOT FROM EXEC)\n"
             "\n"
             "RETURN VALUE FOR ARTIFACT PATHS\n"
@@ -540,7 +567,7 @@ class ContextTools:
             "For JSON mime, payload is parsed JSON. For text/base64 mime, payload is the body.\n"
             "Compatibility fields text/base64 may also be present.\n"
             "\n"
-            "NOTE: For conv:so:sources_pool[...] fetch_ctx returns the raw list of source rows (not the\n"
+            "NOTE: For conv:so:conv_<conversation_id>.sources_pool[...] fetch_ctx returns the raw list of source rows (not the\n"
             "canonical artifact shape). If a row includes base64, it will be returned as-is.\n"
             "File/attachment rows use physical_path (OUT_DIR-relative) for file access.\n"
             "Common row fields: sid, source_type, title, text, content, url, mime, size_bytes,\n"
@@ -594,6 +621,12 @@ class ContextTools:
                 return {"ret": None, "err": _err("invalid_path_skill", "fetch_ctx does not support sk: paths. Use react.read for skills before exec.")}
 
             from kdcube_ai_app.apps.chat.sdk.solutions.react.timeline import resolve_artifact_from_timeline
+            from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import localize_conversation_ref
+
+            # A ref qualified with the current conversation's scope segment
+            # resolves exactly like its local form.
+            current_conversation_id = _current_conversation_id()
+            p = localize_conversation_ref(p, current_conversation_id)
 
             timeline = _read_timeline() or {}
             # Strict path gating for exec use: only allow user/assistant or sources_pool or conv:tc: call/result.
@@ -603,16 +636,16 @@ class ContextTools:
                     or p.endswith(".assistant.completion")
                     or ".assistant.completion." in p
                 ):
-                    return {"ret": None, "err": _err("invalid_path_ar", "fetch_ctx supports only conv:ar:turn_<id>.user.prompt or conv:ar:turn_<id>.assistant.completion[.<n>]")}
+                    return {"ret": None, "err": _err("invalid_path_ar", "fetch_ctx supports only conv:ar:conv_<conversation_id>.turn_<id>.user.prompt or conv:ar:conv_<conversation_id>.turn_<id>.assistant.completion[.<n>]")}
             elif p.startswith("conv:tc:"):
                 if not (p.endswith(".call") or p.endswith(".result")):
-                    return {"ret": None, "err": _err("invalid_path_tc", "fetch_ctx supports only conv:tc:turn_<id>.<call>.call or conv:tc:turn_<id>.<call>.result")}
+                    return {"ret": None, "err": _err("invalid_path_tc", "fetch_ctx supports only conv:tc:conv_<conversation_id>.turn_<id>.<call>.call or conv:tc:conv_<conversation_id>.turn_<id>.<call>.result")}
             elif p.startswith("conv:so:") or p.startswith("sources_pool["):
                 pass
             else:
                 return {"ret": None, "err": _err("invalid_path_kind", "fetch_ctx supports only conv:ar: user/assistant, conv:so:sources_pool, or conv:tc: call/result")}
 
-            art = resolve_artifact_from_timeline(timeline, p)
+            art = resolve_artifact_from_timeline(timeline, p, current_conversation_id=current_conversation_id)
             if art is None:
                 return {"ret": None, "err": _err("not_found", "Path not found", {"path": p})}
             # sources_pool selector returns {kind: sources_pool, items: [...]}

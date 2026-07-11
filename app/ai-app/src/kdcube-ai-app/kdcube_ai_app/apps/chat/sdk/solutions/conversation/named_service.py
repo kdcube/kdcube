@@ -573,14 +573,14 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
         if self._search_backend_factory is None:
             return NamedServiceResponse.error_response(
                 code="conversation_file_not_configured",
-                message="This conversation provider has no materialization backend; conv:fi: retrieval is unavailable.",
+                message="This conversation provider has no materialization backend; conv:fi:conv_<conversation_id>.<path> retrieval is unavailable.",
                 status=501, provider=self.provider_identity(), namespace=request.namespace or NAMESPACE,
             )
         fi_ref = fi_path_from_conv_ref(ref)
         if not fi_ref:
             return NamedServiceResponse.error_response(
                 code="conversation_file_ref_invalid",
-                message="Expected a conv:fi:<path> file ref.",
+                message="Expected a conv:fi:conv_<conversation_id>.<path> file ref.",
                 status=400, provider=self.provider_identity(), namespace=request.namespace or NAMESPACE,
             )
         backend = self._search_backend_factory(ctx)

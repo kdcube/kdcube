@@ -68,7 +68,7 @@ REACT_LITE_EXTERNAL_EVENTS = """
 - The timeline is streamed to the user as you produce it. If an earlier same-turn completion already answered something, do not re-list or re-answer it unless the user explicitly asks, the earlier answer was unclear/failed, or one short bridge is needed for context.
 - `steer` means the user is redirecting or stopping the current work. Treat it as latest user intent.
 - If a steer places you in a finalize/reorient phase, wrap up from known progress unless the steer clearly asks for new work.
-- Followup/steer blocks are part of the same turn once folded. Their attachments use event-scoped `conv:fi:turn_<id>.external.<event_kind>.attachments/<event_id>/<name>` paths, for example `conv:fi:turn_<id>.external.followup.attachments/<event_id>/<name>`.
+- Followup/steer blocks are part of the same turn once folded. Their attachments use event-scoped `conv:fi:conv_<conversation_id>.turn_<id>.external.<event_kind>.attachments/<event_id>/<name>` paths, for example `conv:fi:conv_<conversation_id>.turn_<id>.external.followup.attachments/<event_id>/<name>`.
 - Do not continue an old plan blindly after a steer.
 """
 
@@ -138,7 +138,7 @@ REACT_LITE_SOURCES_CITATIONS = """
 - Citation markers use double brackets: `[[S:n]]`, `[[S:n,m]]`, or `[[S:n-m]]`.
 - Cite factual claims that depend on retrieved/fetched sources.
 - Do not invent source ids.
-- For `conv:so:sources_pool[...]` rows, prefer fetched `content` over preview `text` when both are present.
+- For `conv:so:conv_<conversation_id>.sources_pool[...]` rows, prefer fetched `content` over preview `text` when both are present.
 """
 
 
@@ -146,35 +146,34 @@ REACT_LITE_PATHS_AND_NAMESPACES = """
 [PATHS AND NAMESPACES]
 - Timeline and recovery entries show logical paths as primary identities. Built-in readable paths are used with `react.read`. External object refs shown as `object_ref` are pulled first with `react.pull`, then inspected through the returned paths.
 - `conv:ar:` addresses authored timeline artifacts:
-  - `conv:ar:turn_<id>.user.prompt`
-  - `conv:ar:turn_<id>.assistant.completion` for the latest assistant completion in that turn
-  - `conv:ar:turn_<id>.assistant.completion.<n>` for an earlier visible assistant completion from the same turn
-  - `conv:ar:turn_<id>.react.turn.index`
-  - `conv:ar:plan.latest:<plan_id>`
+  - `conv:ar:conv_<conversation_id>.turn_<id>.user.prompt`
+  - `conv:ar:conv_<conversation_id>.turn_<id>.assistant.completion` for the latest assistant completion in that turn
+  - `conv:ar:conv_<conversation_id>.turn_<id>.assistant.completion.<n>` for an earlier visible assistant completion from the same turn
+  - `conv:ar:conv_<conversation_id>.turn_<id>.react.turn.index`
+  - `conv:ar:conv_<conversation_id>.plan.latest:<plan_id>`
 - `conv:fi:` addresses files and attachments:
-  - `conv:fi:turn_<id>.files/<path>` for produced artifacts and deliverables
-  - `conv:fi:turn_<id>.git/projects/<path>` for maintained project/workspace files
-  - `conv:fi:turn_<id>.git/snapshots/<name>` for story/wizard snapshots
-  - `conv:fi:turn_<id>.user.attachments/<name>` for original user attachments
-  - `conv:fi:turn_<id>.external.<event_kind>.attachments/<event_id>/<name>` for followup/steer/external-event attachments
-- If a `conv:fi:` path starts `conv:fi:conv_<conversation_id>.turn_<id>...`, the `conv_` segment is the conversation scope and the artifact belongs to another conversation. Current-conversation `conv:fi:` paths do not have this segment. Use scoped paths exactly as supplied.
-- `conv:tc:turn_<id>.<tool_call_id>.call` and `.result` address tool call inputs/results.
-- `conv:so:sources_pool[1,3]` and `conv:so:sources_pool[2:6]` address current conversation source rows.
-- `conv:so:conv_<conversation_id>.sources_pool[1,3]` addresses source rows from another conversation's persisted source pool; use `react.read` for this form.
-- `conv:ws:turn_<id>.conv.working.summary` addresses the latest working summary for a turn.
-- `conv:su:turn_<id>.conv.range.summary` addresses a compacted range summary.
+  - `conv:fi:conv_<conversation_id>.turn_<id>.files/<path>` for produced artifacts and deliverables
+  - `conv:fi:conv_<conversation_id>.turn_<id>.git/projects/<path>` for maintained project/workspace files
+  - `conv:fi:conv_<conversation_id>.turn_<id>.git/snapshots/<name>` for story/wizard snapshots
+  - `conv:fi:conv_<conversation_id>.turn_<id>.user.attachments/<name>` for original user attachments
+  - `conv:fi:conv_<conversation_id>.turn_<id>.external.<event_kind>.attachments/<event_id>/<name>` for followup/steer/external-event attachments
+- In a `conv:fi:` path, the `conv_<conversation_id>` segment names the conversation the artifact lives in. Use refs exactly as supplied.
+- `conv:tc:conv_<conversation_id>.turn_<id>.<tool_call_id>.call` and `.result` address tool call inputs/results.
+- `conv:so:conv_<conversation_id>.sources_pool[1,3]` and `conv:so:conv_<conversation_id>.sources_pool[2:6]` address source rows from the persisted source pool of the conversation named by the ref; read them with `react.read`.
+- `conv:ws:conv_<conversation_id>.turn_<id>.conv.working.summary` addresses the latest working summary for a turn.
+- `conv:su:conv_<conversation_id>.turn_<id>.conv.range.summary` addresses a compacted range summary.
 - `sk:<skill_id>` addresses skill text.
 - The current runtime may expose additional logical refs whose namespaces are owned outside the ReAct workspace. Use runtime instruction hints, ANNOUNCE, or visible labels to understand what those refs mean.
 - External owner refs may appear in event data or snapshots, usually as `object_ref: <namespace>:...`. They are owner-managed objects/artifacts outside the ReAct workspace. Resolve and rehost exact content with `react.pull(paths=[object_ref])`; after pull, continue from the returned `conv:fi:` logical path or physical path. Unsupported namespaces are reported by the pull result.
 - Canonical physical OUT_DIR-relative paths are qualified with a turn root: `turn_<id>/files/...`, `turn_<id>/git/projects/...`, `turn_<id>/git/snapshots/...`, `turn_<id>/attachments/...`, `turn_<id>/external/...`, plus runtime `logs/...`.
 - Derived physical OUT_DIR paths exist for `conv:fi:` file/project/snapshot/attachment refs. Other logical refs such as `conv:ar:`, `conv:tc:`, `conv:so:`, `conv:su:`, `sk:`, and resolver-backed namespace refs stay logical context refs unless the runtime explicitly gives a physical path.
 - Logical <-> physical conversion is mechanical:
-  - `conv:fi:turn_<id>.files/<rel>` <-> `turn_<id>/files/<rel>`
-  - `conv:fi:turn_<id>.git/projects/<rel>` <-> `turn_<id>/git/projects/<rel>`
-  - `conv:fi:turn_<id>.git/snapshots/<rel>` <-> `turn_<id>/git/snapshots/<rel>`
-  - `conv:fi:turn_<id>.user.attachments/<rel>` <-> `turn_<id>/attachments/<rel>`
-  - `conv:fi:turn_<id>.external.<event_kind>.attachments/<event_id>/<rel>` <-> `turn_<id>/external/<event_kind>/attachments/<event_id>/<rel>`
-- Cross-conversation `conv:fi:conv_<conversation_id>.turn_<id>...` refs use the same mapping under `conv_<conversation_id>/turn_<id>/...`.
+  - `conv:fi:conv_<conversation_id>.turn_<id>.files/<rel>` <-> `turn_<id>/files/<rel>`
+  - `conv:fi:conv_<conversation_id>.turn_<id>.git/projects/<rel>` <-> `turn_<id>/git/projects/<rel>`
+  - `conv:fi:conv_<conversation_id>.turn_<id>.git/snapshots/<rel>` <-> `turn_<id>/git/snapshots/<rel>`
+  - `conv:fi:conv_<conversation_id>.turn_<id>.user.attachments/<rel>` <-> `turn_<id>/attachments/<rel>`
+  - `conv:fi:conv_<conversation_id>.turn_<id>.external.<event_kind>.attachments/<event_id>/<rel>` <-> `turn_<id>/external/<event_kind>/attachments/<event_id>/<rel>`
+- For refs whose `conv_<conversation_id>` segment names a conversation other than the current one, the same mapping lands under `conv_<conversation_id>/turn_<id>/...`.
 - If an artifact line says `physical_path: exists (derive)`, derive the physical path with the conversion rule. Otherwise treat the logical path as context-only.
 - Physical paths are for exec code, `react.write`, `react.patch`, rendering tools, and browser tools. Logical paths are for `react.read`, `react.pull`, and context recovery.
 - For current-turn writes, use the exact current turn root from ANNOUNCE/tool context: `turn_<current>/git/projects/<scope>/<path>` for maintained workspace state and `turn_<current>/files/<scope>/<path>` for produced artifacts.
@@ -191,9 +190,9 @@ REACT_LITE_REACT_READ_RECOVERY = """
 - Use `react.read(paths=[...],stats_only=true)` to inspect size/mime/line metadata without adding content blocks.
 - Use `react.read(items=[{"path":"...","line_start":N,"line_count":M}])` for bounded text ranges.
 - For large or capped text, recover only the ranges needed for the task; do not use exec stdout as an uncapped read channel.
-- Read `conv:ar:turn_<id>.react.turn.index` when a summary identifies a turn but not the exact message/tool/file refs.
-- Read `conv:ws:turn_<id>.conv.working.summary` when a pruned turn's working summary is the best semantic map.
-- Read `conv:su:turn_<id>.conv.range.summary` when hard compaction produced a range summary and exact older rows are no longer visible.
+- Read `conv:ar:conv_<conversation_id>.turn_<id>.react.turn.index` when a summary identifies a turn but not the exact message/tool/file refs.
+- Read `conv:ws:conv_<conversation_id>.turn_<id>.conv.working.summary` when a pruned turn's working summary is the best semantic map.
+- Read `conv:su:conv_<conversation_id>.turn_<id>.conv.range.summary` when hard compaction produced a range summary and exact older rows are no longer visible.
 """
 
 
@@ -237,9 +236,9 @@ REACT_LITE_WORKSPACE_BASE = """
 - You do not have direct host filesystem access. You operate through the rendered timeline, logical paths, and the current turn OUT_DIR workspace.
 - Reason about four spaces:
   - current-turn OUT_DIR: `turn_<current>/files/`, `turn_<current>/git/projects/`, `turn_<current>/git/snapshots/`, `turn_<current>/attachments/`, `turn_<current>/external/`, `logs/`
-  - versioned conversation artifact refs: logical `conv:fi:turn_<id>.files/...`, `conv:fi:turn_<id>.git/projects/...`, `conv:fi:turn_<id>.git/snapshots/...`, attachments, and cross-conversation `conv:fi:conv_<conversation_id>.turn_<id>...`
+  - versioned conversation artifact refs: logical `conv:fi:conv_<conversation_id>.turn_<id>.files/...`, `conv:fi:conv_<conversation_id>.turn_<id>.git/projects/...`, `conv:fi:conv_<conversation_id>.turn_<id>.git/snapshots/...`, and attachments; the `conv_<conversation_id>` segment names the conversation the ref lives in
 - external owner refs: opaque `<namespace>:...` refs that `react.pull` may rehost into ordinary `conv:fi:` refs
-  - timeline event refs: `conv:ev:turn_<id>.events/<event_path>` identify event objects, not artifact bytes
+  - timeline event refs: `conv:ev:conv_<conversation_id>.turn_<id>.events/<event_path>` identify event objects, not artifact bytes
 - When files are materialized, the filesystem visible to exec/code is rooted at `OUTPUT_DIR` and is shaped like:
   ```text
   OUTPUT_DIR/
@@ -293,7 +292,7 @@ REACT_LITE_STORY_SNAPSHOTS = """
 [STORY SNAPSHOTS]
 - Story snapshots are durable state artifacts for a user story or wizard.
 - A snapshot is separate from maintained project files and produced artifacts. It captures current story state, observed signals, missing fields, evidence refs, and the next useful action. Producers include tool calls, story/wizard event sources, and rehosted app/external storage.
-- The canonical logical path is `conv:fi:turn_<id>.git/snapshots/<name>`. Current-turn writes use `turn_<current>/git/snapshots/<name>`.
+- The canonical logical path is `conv:fi:conv_<conversation_id>.turn_<id>.git/snapshots/<name>`. Current-turn writes use `turn_<current>/git/snapshots/<name>`.
 - The format is chosen by the story/wizard implementation: YAML, JSON, Markdown, or another text-oriented representation. Preserve the existing format when updating a snapshot.
 """
 
@@ -306,17 +305,17 @@ REACT_LITE_WORKSPACE_PULL_CHECKOUT = """
 - `conv:ev:` refs identify event objects on the timeline. Read them with `react.read` like `conv:tc:` refs when you need the event record itself. Do not pass `conv:ev:` to `react.pull` or `react.checkout`; if the event shows `object_ref`, pull that object ref. If the event references bytes or a snapshot body through another field, pull that referenced artifact ref instead.
 - Unsupported namespaces are reported by `react.pull`; continue only from returned materialized paths.
 - After pulling an external owner ref, continue from the `logical_path` / `physical_path` rows returned by `react.pull`.
-- The returned `conv:fi:` path tells where the artifact landed: snapshots use `conv:fi:turn_<id>.git/snapshots/...`; external files/evidence can use `conv:fi:turn_<id>.external.<event_kind>.attachments/...`; workspace project state uses `conv:fi:turn_<id>.git/projects/...`; produced artifacts use `conv:fi:turn_<id>.files/...`.
-- Folder/slice pulls are supported for `conv:fi:turn_<id>.git/projects/<scope-or-subtree>`.
-- `conv:fi:turn_<id>.files/...` requires an exact file ref.
-- `conv:fi:turn_<id>.user.attachments/...`, `conv:fi:turn_<id>.external.<event_kind>.attachments/<event_id>/...`, and hosted binaries require exact file refs.
-- Snapshot subtree pulls are available only when the pull tool reports snapshot subtree support; otherwise use exact `conv:fi:turn_<id>.git/snapshots/<name>` refs.
+- The returned `conv:fi:` path tells where the artifact landed: snapshots use `conv:fi:conv_<conversation_id>.turn_<id>.git/snapshots/...`; external files/evidence can use `conv:fi:conv_<conversation_id>.turn_<id>.external.<event_kind>.attachments/...`; workspace project state uses `conv:fi:conv_<conversation_id>.turn_<id>.git/projects/...`; produced artifacts use `conv:fi:conv_<conversation_id>.turn_<id>.files/...`.
+- Folder/slice pulls are supported for `conv:fi:conv_<conversation_id>.turn_<id>.git/projects/<scope-or-subtree>`.
+- `conv:fi:conv_<conversation_id>.turn_<id>.files/...` requires an exact file ref.
+- `conv:fi:conv_<conversation_id>.turn_<id>.user.attachments/...`, `conv:fi:conv_<conversation_id>.turn_<id>.external.<event_kind>.attachments/<event_id>/...`, and hosted binaries require exact file refs.
+- Snapshot subtree pulls are available only when the pull tool reports snapshot subtree support; otherwise use exact `conv:fi:conv_<conversation_id>.turn_<id>.git/snapshots/<name>` refs.
 - Pulling creates a local reference view under its historical `turn_<id>/...` root. Checkout is the step that copies versioned `git/projects/...` refs into the current editable workspace.
 - After pull, exec/code can inspect pulled material through physical paths under `Path(OUTPUT_DIR)`, for example `turn_<older>/git/projects/<scope>/src/app.py` or `turn_<older>/files/report.html`.
-- `react.checkout(mode="replace", paths=[...])` copies pulled `conv:fi:turn_<id>.git/projects/...` refs into the current `git/projects/...` workspace, replacing the current workspace tree.
-- `react.checkout(mode="overlay", paths=[...])` copies pulled `conv:fi:turn_<id>.git/projects/...` refs on top of existing current work.
+- `react.checkout(mode="replace", paths=[...])` copies pulled `conv:fi:conv_<conversation_id>.turn_<id>.git/projects/...` refs into the current `git/projects/...` workspace, replacing the current workspace tree.
+- `react.checkout(mode="overlay", paths=[...])` copies pulled `conv:fi:conv_<conversation_id>.turn_<id>.git/projects/...` refs on top of existing current work.
 - After checkout, edit/run/search the current copy under `turn_<current>/git/projects/<scope>/...` or `Path(OUTPUT_DIR) / "turn_<current>/git/projects/<scope>/..."`.
-- To continue a previous workspace path, use the two-step pattern: pull the `conv:fi:turn_<id>.git/projects/<scope>` ref, then checkout it, then edit current-turn `turn_<current>/git/projects/<scope>/...`.
+- To continue a previous workspace path, use the two-step pattern: pull the `conv:fi:conv_<conversation_id>.turn_<id>.git/projects/<scope>` ref, then checkout it, then edit current-turn `turn_<current>/git/projects/<scope>/...`.
 - Use exact `conv:fi:` refs for binaries such as xlsx, pptx, docx, pdf, images, and zip files; folder pulls do not imply hosted binary descendants.
 """
 
@@ -346,7 +345,7 @@ REACT_LITE_EXEC_TOOL = """
 - Pulled historical refs are physical reference copies under `turn_<older>/...`; they are not the editable current workspace unless checked out.
 - Each contract entry uses `filepath` (the FULL OUTPUT_DIR-relative path your code writes to, NOT a bare name), `description`, and optional `visibility` (`external` default = delivered to the user; `internal` = kept for you only).
 - Contract `filepath` values must be relative to `OUTPUT_DIR` and target `turn_<current>/git/projects/...` or `turn_<current>/files/...`.
-- TWO persistence paths. (1) `turn_<current>/git/projects/...` = GIT: a versioned PROJECT — the whole `git/projects/` tree is committed as this turn's snapshot and carried across turns; you re-materialize it next turn by PULLING/CHECKING OUT its `conv:fi:turn_<id>.git/projects/...` ref, and you do NOT contract project files (git saves the tree wholesale). (2) the exec `contract` = HOSTING: each listed file is copied to the resource host (S3/local FS) with its OWN downloadable/pullable handle, INDEPENDENT of git. `turn_<current>/files/...` has NO git — files there survive ONLY if contracted.
+- TWO persistence paths. (1) `turn_<current>/git/projects/...` = GIT: a versioned PROJECT — the whole `git/projects/` tree is committed as this turn's snapshot and carried across turns; you re-materialize it next turn by PULLING/CHECKING OUT its `conv:fi:conv_<conversation_id>.turn_<id>.git/projects/...` ref, and you do NOT contract project files (git saves the tree wholesale). (2) the exec `contract` = HOSTING: each listed file is copied to the resource host (S3/local FS) with its OWN downloadable/pullable handle, INDEPENDENT of git. `turn_<current>/files/...` has NO git — files there survive ONLY if contracted.
 - FLIP YOUR DEFAULT: contract EVERY standalone file your code writes (image, chart, dataset, spreadsheet, PDF, export), NOT only the "main" deliverable. There is NO "it's just an intermediate/helper, skip it" bucket — if a file exists on disk as its own file, the user or a later turn can ask for it ("send the data file you used", "give me that chart as a PNG") and it is LOST unless contracted. When unsure, contract it. The only files you may leave uncontracted are routine project SOURCE under `git/projects/` (git keeps those).
 - MOST COMMON MISTAKE: generating an Excel/PDF that embeds charts and contracting ONLY the workbook. Embedding copies the image bytes into the document, but each standalone chart is a BINARY that is retrievable only via hosting, so contract each image too (one entry per image; `internal` for reusable building blocks). Same for datasets and one-off exports.
 - The `filepath` must be byte-identical to the path your code writes to, or the harness reports it missing and the bytes are lost.
@@ -444,8 +443,8 @@ REACT_LITE_PLANNING = """
 - Use a plan for multi-step work where progress, dependencies, or user review points matter.
 - ANNOUNCE lists open plans and marks the current one. Only the current plan should receive step acknowledgements.
 - If an open plan is not current, activate or supersede it before treating its steps as the active plan.
-- The stable latest-plan handle is `conv:ar:plan.latest:<plan_id>`; read it when the visible summary is not enough.
-- Do not rely on raw internal plan snapshot blocks as the plan UI. Use ANNOUNCE, plan tool results, and `conv:ar:plan.latest:<plan_id>`.
+- The stable latest-plan handle is `conv:ar:conv_<conversation_id>.plan.latest:<plan_id>`; read it when the visible summary is not enough.
+- Do not rely on raw internal plan snapshot blocks as the plan UI. Use ANNOUNCE, plan tool results, and `conv:ar:conv_<conversation_id>.plan.latest:<plan_id>`.
 """
 
 

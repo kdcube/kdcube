@@ -15,6 +15,8 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.solution_workspace import (
 from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
     ARTIFACT_NAMESPACE_SNAPSHOTS,
     REACT_FILE_REF_PREFIX,
+    localize_conversation_ref,
+    qualify_conversation_ref,
     split_logical_artifact_ref,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.workspace import (
@@ -55,11 +57,10 @@ TOOL_SPEC = {
         "Use those returned paths with react.read, react.rg, exec/code, or later artifact operations. "
         "Use this for versioned files/folders you need locally as historical reference material. "
         "Pulled content stays under its historical turn root as reference material; checkout copies versioned files into the editable current-turn workspace. "
-        "Folder/slice pulls are supported for conv:fi:turn_<id>.git/projects/<scope-or-subtree>. "
+        "Folder/slice pulls are supported for conv:fi:conv_<conversation_id>.turn_<id>.git/projects/<scope-or-subtree>. "
         "Snapshot subtree pulls are available when the backing implementation reports snapshot subtree support. "
         "Produced files, user attachments, external-event attachments, and hosted binaries require exact refs. "
-        "A conv:fi:conv_<conversation_id>.turn_<id>... path belongs to another conversation and is resolved in that conversation. "
-        "Current-conversation conv:fi: paths use conv:fi:turn_<id>... without a conv_ scope segment. "
+        "The conv_<conversation_id> segment names the conversation the ref lives in; use refs exactly as supplied. "
         "Choose share by where the pulled file goes next. "
         "You read/analyze/edit the content yourself (react.read, react.rg, exec/code, rendering) -> share=false (default); the pull is local reference material and the user sees no file from it. "
         "The USER should receive the file itself as a download (they asked for the file, or the deliverable IS this binary) -> share=true; the file is hosted and delivered to the user (Files tab). "
@@ -77,12 +78,12 @@ TOOL_SPEC = {
         ),
         "paths": (
             "list[str] of artifact refs to materialize locally. Each item is either a normal conv:fi: ref or an externally owned ref shown by the runtime. "
-            "Allowed conv:fi: refs include conv:fi:turn_<id>.git/projects/<path> (exact file or subtree), "
-            "conv:fi:turn_<id>.git/snapshots/<path> (exact text snapshot or subtree when git-backed), "
-            "conv:fi:turn_<id>.files/<file> (exact produced file), "
-            "conv:fi:turn_<id>.user.attachments/<file> (exact file only), "
-            "conv:fi:turn_<id>.external.<event_kind>.attachments/<event_id>/<file> (exact file only), "
-            "and cross-conversation conv:fi:conv_<conversation_id>.turn_<id>... refs. "
+            "Allowed conv:fi: refs include conv:fi:conv_<conversation_id>.turn_<id>.git/projects/<path> (exact file or subtree), "
+            "conv:fi:conv_<conversation_id>.turn_<id>.git/snapshots/<path> (exact text snapshot or subtree when git-backed), "
+            "conv:fi:conv_<conversation_id>.turn_<id>.files/<file> (exact produced file), "
+            "conv:fi:conv_<conversation_id>.turn_<id>.user.attachments/<file> (exact file only), "
+            "and conv:fi:conv_<conversation_id>.turn_<id>.external.<event_kind>.attachments/<event_id>/<file> (exact file only). "
+            "The conv_<conversation_id> segment names the conversation the ref lives in; pass refs exactly as supplied. "
             "External namespaces such as cnv:, mem:, or task: are accepted only when a namespace rehoster is registered. "
             "conv:ev: timeline event refs are not artifact refs."
         ),
@@ -258,8 +259,12 @@ async def handle_react_pull(*, react: Any = None, ctx_browser: Any, state: Dict[
     seen_physical: set[tuple[str, str]] = set()
     workspace_impl = get_workspace_implementation(getattr(ctx_browser, "runtime_ctx", None))
     event_sources = getattr(getattr(ctx_browser, "runtime_ctx", None), "event_sources", None)
+    current_conversation_id = str(getattr(getattr(ctx_browser, "runtime_ctx", None), "conversation_id", "") or "").strip()
     for req in requested:
-        raw = req["path"]
+        # A ref qualified with the current conversation's scope segment maps to
+        # the local physical layout (turn_<id>/...); refs scoped to another
+        # conversation keep their conv_<id>/ physical layout.
+        raw = localize_conversation_ref(req["path"], current_conversation_id)
         embedded_conversation_id, _, _, _ = split_logical_artifact_ref(raw)
         source_conversation_id = str(embedded_conversation_id or "").strip()
         if not raw.startswith(REACT_FILE_REF_PREFIX):
@@ -403,6 +408,23 @@ async def handle_react_pull(*, react: Any = None, ctx_browser: Any, state: Dict[
             requested_roots=namespace_rehosted,
         )
     pulled = namespace_materialized + namespace_fallback_pulled + hydrated_pulled
+
+    def _qualify_row_refs(rows: List[Any]) -> None:
+        """Conversation-qualify the logical refs a row reports back to the model."""
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            for key in ("logical_path", "logical_root"):
+                val = str(row.get(key) or "").strip()
+                if val:
+                    row[key] = qualify_conversation_ref(val, current_conversation_id)
+            rule = row.get("path_rule")
+            if isinstance(rule, dict):
+                rule_logical = str(rule.get("logical") or "").strip()
+                if rule_logical:
+                    rule["logical"] = qualify_conversation_ref(rule_logical, current_conversation_id)
+
+    _qualify_row_refs(pulled)
     pulled_object_refs = state.setdefault("pulled_object_refs", {})
     if not isinstance(pulled_object_refs, dict):
         pulled_object_refs = {}
@@ -437,6 +459,7 @@ async def handle_react_pull(*, react: Any = None, ctx_browser: Any, state: Dict[
         requested_roots=accepted_physical,
     )
     missing = namespace_missing + hydrated_missing
+    _qualify_row_refs(missing)
 
     shared: List[str] = []
     if share_requested:

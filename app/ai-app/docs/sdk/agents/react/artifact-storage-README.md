@@ -48,15 +48,34 @@ The agent should not know or mention host/runtime absolute prefixes. In local
 runtime storage these paths live under the artifact root, for example
 `out/workdir/`.
 
-Logical refs use the `conv:fi:` family:
+Logical refs use the `conv:fi:` family. Every ref the runtime emits is
+conversation-qualified at birth: the `conv_<conversation_id>.` scope segment
+right after the namespace names the conversation the ref lives in, so refs are
+absolute identities — fork-safe, pin-safe, and location-independent:
 
 ```text
-conv:fi:turn_<id>.git/projects/<project_scope>/<path>
-conv:fi:turn_<id>.files/<artifact_scope>/<path>
-conv:fi:turn_<id>.git/snapshots/<snapshot_scope>/<path>
-conv:fi:turn_<id>.user.attachments/<filename>
-conv:fi:turn_<id>.external.<kind>.attachments/<event_id>/<filename>
+conv:fi:conv_<conversation_id>.turn_<id>.git/projects/<project_scope>/<path>
+conv:fi:conv_<conversation_id>.turn_<id>.files/<artifact_scope>/<path>
+conv:fi:conv_<conversation_id>.turn_<id>.git/snapshots/<snapshot_scope>/<path>
+conv:fi:conv_<conversation_id>.turn_<id>.user.attachments/<filename>
+conv:fi:conv_<conversation_id>.turn_<id>.external.<kind>.attachments/<event_id>/<filename>
 ```
+
+The same scope segment applies to every conversation-scoped ref kind
+(`conv:ar:`, `conv:so:`, `conv:tc:`, `conv:ws:`, `conv:su:`, `conv:ev:`).
+Resolution notes:
+
+- Resolvers accept conversation-local legacy refs (persisted before
+  qualification-at-birth) forever; they resolve relative to the conversation
+  that owns the timeline.
+- A qualified ref whose segment names the current conversation resolves to the
+  local physical layout (`turn_<id>/...`); refs from other conversations
+  materialize under `conv_<conversation_id>/turn_<id>/...`.
+- `conv:ar:`/`conv:tc:`/`conv:ws:` refs are timeline-resident: a qualified ref
+  resolves within its home timeline (including fork-copied blocks carried into
+  a child conversation). The segment records identity and provenance;
+  cross-conversation resolution for these kinds is a possible follow-up, not a
+  current capability.
 
 Artifacts never use `current_turn` in stored paths. Always use the concrete
 `turn_id`.

@@ -9,8 +9,9 @@ time-ordered timeline for external clients: user messages, assistant thinking,
 assistant responses, user attachments, assistant-produced files, produced
 artifacts, and the sources/links used — interleaved in the order they happened.
 
-Files (uploaded attachments and assistant outputs) are surfaced as `conv:fi:<path>`
-refs, so the client can materialize their bytes with `object.get conv:fi:<path>`.
+Files (uploaded attachments and assistant outputs) are surfaced as
+`conv:fi:conv_<conversation_id>.<path>` refs, so the client can materialize their
+bytes with `object.get`.
 Heavy bodies (base64, raw HTML views, embeddings, full code/exec payloads) are
 dropped; only handles + light metadata are kept.
 """

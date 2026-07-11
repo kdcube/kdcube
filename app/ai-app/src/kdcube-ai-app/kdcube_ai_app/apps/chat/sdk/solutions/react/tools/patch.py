@@ -16,7 +16,9 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
     build_physical_artifact_path,
     build_artifact_meta_block,
     build_artifact_view,
+    localize_conversation_ref,
     physical_path_to_logical_path,
+    qualify_conversation_ref,
     split_logical_artifact_path,
     split_physical_artifact_path,
     detect_edit,
@@ -207,11 +209,12 @@ async def handle_react_patch(*, react: Any, ctx_browser: Any, state: Dict[str, A
     tool_call = last_decision.get("tool_call") or {}
     tool_id = "react.patch"
     params = tool_call.get("params") or {}
-    artifact_name = str(params.get("path") or "").strip()
+    turn_id = (ctx_browser.runtime_ctx.turn_id or "")
+    conversation_id = str(getattr(getattr(ctx_browser, "runtime_ctx", None), "conversation_id", "") or "").strip()
+    artifact_name = localize_conversation_ref(str(params.get("path") or "").strip(), conversation_id)
     patch_text = params.get("patch")
     channel = str(params.get("channel") or "canvas").strip().lower()
     kind = str(params.get("kind") or "display").strip().lower()
-    turn_id = (ctx_browser.runtime_ctx.turn_id or "")
 
     tool_call_block(
         ctx_browser=ctx_browser,
@@ -433,7 +436,7 @@ async def handle_react_patch(*, react: Any, ctx_browser: Any, state: Dict[str, A
                 rel="result",
             )
     artifact_rel = (rel_path or "").strip()
-    artifact_path = physical_path_to_logical_path(artifact_name)
+    artifact_path = qualify_conversation_ref(physical_path_to_logical_path(artifact_name), conversation_id)
     physical_path = artifact_name
     edited = detect_edit(
         timeline=getattr(ctx_browser, "timeline", None),

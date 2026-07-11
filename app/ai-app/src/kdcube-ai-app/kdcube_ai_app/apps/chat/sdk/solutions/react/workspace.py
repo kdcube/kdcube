@@ -650,7 +650,7 @@ def normalize_checkout_requests(
             if not parsed:
                 invalid.append({
                     "path": raw,
-                    "reason": "react.checkout accepts conv:fi:turn_<id>.git/projects/<scope-or-path> refs only",
+                    "reason": "react.checkout accepts conv:fi:conv_<conversation_id>.turn_<id>.git/projects/<scope-or-path> refs only",
                 })
                 continue
             if current_turn_id and parsed["turn_id"] == current_turn_id:

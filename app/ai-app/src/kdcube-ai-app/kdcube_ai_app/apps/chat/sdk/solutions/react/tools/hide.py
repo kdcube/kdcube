@@ -7,6 +7,7 @@ from typing import Any, Dict
 
 import json
 
+from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import localize_conversation_ref
 from kdcube_ai_app.apps.chat.sdk.solutions.react.caching import is_before_pre_tail_cache
 from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.common import (
     tool_call_block,
@@ -54,6 +55,10 @@ async def handle_react_hide(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
         replacement = replacement.rstrip() + "\n\n(retrieve back with react.read(paths=[path]))"
 
     turn_id = ctx_browser.runtime_ctx.turn_id
+    conversation_id = str(getattr(getattr(ctx_browser, "runtime_ctx", None), "conversation_id", "") or "").strip()
+    # Timeline blocks may store either dialect of the same ref (with or without
+    # the current conversation's scope segment); match both.
+    path_candidates = list(dict.fromkeys([path, localize_conversation_ref(path, conversation_id)]))
     tool_call_block(
         ctx_browser=ctx_browser,
         tool_call_id=tool_call_id,
@@ -92,7 +97,11 @@ async def handle_react_hide(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                 offset = int(getattr(cache_cfg, "cache_point_offset_rounds", 2) or 2)
             except Exception:
                 offset = 2
-        before_cache = is_before_pre_tail_cache(blocks, path, min_rounds=min_rounds, offset=offset)
+        before_cache = None
+        for candidate in path_candidates:
+            before_cache = is_before_pre_tail_cache(blocks, candidate, min_rounds=min_rounds, offset=offset)
+            if before_cache is not None:
+                break
     except Exception:
         before_cache = None
     if before_cache:
@@ -132,7 +141,11 @@ async def handle_react_hide(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
         return state
     if tail_limit is not None:
         try:
-            tail_tokens = ctx_browser.timeline.tail_tokens_from_path(path)
+            tail_tokens = None
+            for candidate in path_candidates:
+                tail_tokens = ctx_browser.timeline.tail_tokens_from_path(candidate)
+                if tail_tokens is not None:
+                    break
         except Exception:
             tail_tokens = None
         if tail_tokens is not None and tail_tokens > tail_limit:
@@ -171,7 +184,7 @@ async def handle_react_hide(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             return state
     try:
         res = ctx_browser.hide_paths(
-            paths=[path],
+            paths=path_candidates,
             replacement=replacement,
         )
         if isinstance(res, dict):

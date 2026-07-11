@@ -68,6 +68,10 @@ from kdcube_ai_app.apps.chat.sdk.runtime.user_inputs import (
     ingest_user_attachments,
     iter_turn_user_input_entries,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
+    peel_conversation_prefix,
+    qualify_conversation_ref,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.react.compaction_memory import extract_note_tags
 
 # ---------- small utilities ----------
@@ -200,15 +204,18 @@ def _produced_file_count(blocks: Any, turn_id: str) -> int:
             return
         if "/attachments/" in path or ".attachments/" in path:
             return
+        # Refs may carry a `conv_<id>.` scope segment right after the
+        # namespace; peel it so the turn-prefix checks see the local body.
+        _, _, local = peel_conversation_prefix(path)
         if turn_text:
-            if path.startswith(f"conv:fi:{turn_text}.files/") or path.startswith(f"conv:fi:{turn_text}.git/projects/"):
-                produced.add(path)
+            if local.startswith(f"conv:fi:{turn_text}.files/") or local.startswith(f"conv:fi:{turn_text}.git/projects/"):
+                produced.add(local)
                 return
             if path.startswith(f"{turn_text}/files/") or path.startswith(f"{turn_text}/git/projects/"):
                 produced.add(path)
                 return
-        if path.startswith("conv:fi:files/") or path.startswith("conv:fi:git/projects/"):
-            produced.add(path)
+        if local.startswith("conv:fi:files/") or local.startswith("conv:fi:git/projects/"):
+            produced.add(local)
 
     def _scan_mapping(mapping: Mapping[str, Any]) -> None:
         for key in ("path", "artifact_path", "logical_path", "physical_path", "resolved_ref"):
@@ -3540,7 +3547,10 @@ class BaseWorkflow():
                             "mime": (att.get("mime") or att.get("mime_type") or "").strip(),
                             "size_bytes": att.get("size") or att.get("size_bytes"),
                             "physical_path": physical_path,
-                            "artifact_path": f"conv:fi:{turn_id}.user.attachments/{filename}",
+                            "artifact_path": qualify_conversation_ref(
+                                f"conv:fi:{turn_id}.user.attachments/{filename}",
+                                conversation_id,
+                            ),
                             "turn_id": turn_id,
                         }
                         if hosted_uri:
