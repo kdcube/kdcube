@@ -13,6 +13,11 @@
  * (`enabled: false` removes an entry; unknown aliases add new components).
  */
 
+import {
+  normalizeSceneContextDropOpenRoute,
+  type SceneContextDropOpenRoute,
+} from '@kdcube/components-core/scene'
+
 export interface SceneDropAccepts {
   effect: 'attach' | 'pin' | 'open'
   patterns: string[]
@@ -22,6 +27,14 @@ export interface SceneDropAccepts {
    * editor component's surface).
    */
   targetSurface?: string
+  /**
+   * Kind-aware exception route (see `SceneContextDropOpenRoute`): refs that
+   * match it resolve through the provider `open` pipeline toward its
+   * `targetSurface` instead of this target's blanket `effect` — e.g. a
+   * conversation pin dropped on chat opens that conversation while every
+   * other kind keeps attach-as-context.
+   */
+  open?: SceneContextDropOpenRoute
 }
 
 export interface SceneComponentSpec {
@@ -138,10 +151,12 @@ export function normalizeDropAccepts(value: unknown): SceneDropAccepts | undefin
     ? record.patterns.map(asString).filter(Boolean)
     : []
   const targetSurface = asString(record.target_surface) || asString(record.targetSurface)
+  const openRoute = normalizeSceneContextDropOpenRoute(record.open)
   return {
     effect,
     patterns: patterns.length ? patterns : ['*'],
     ...(targetSurface ? { targetSurface } : {}),
+    ...(openRoute ? { open: openRoute } : {}),
   }
 }
 

@@ -33,23 +33,13 @@ import {
   CHAT_CONTEXT_REMOVE_MESSAGE,
   settings,
 } from '../settings.ts'
+import {
+  conversationIdFromContextItem,
+  conversationIdFromConversationRef,
+  conversationIdFromSurfaceCommand,
+} from '../features/context/conversationCommands.ts'
 
 const SURFACE_COMMAND_MESSAGE_TYPE = 'kdcube.surface.command'
-const CHAT_CONVERSATION_SURFACES = new Set(['sdk.chat.conversation', 'sdk.chat.viewer'])
-
-function conversationIdFromConversationRef(ref: string): string {
-  const value = String(ref || '').trim()
-  if (!value.startsWith('conv:')) return ''
-  const id = value.slice('conv:'.length).trim()
-  if (!id) return ''
-  if (/[/:\\?#.]/.test(id)) return ''
-  return id
-}
-
-function isConversationKind(value: unknown): boolean {
-  const text = String(value || '').trim().toLowerCase()
-  return text === 'conversation' || text === 'chat.conversation'
-}
 
 function buildEngineConfig(): EngineConfig {
   return {
@@ -75,22 +65,6 @@ function buildEngineConfig(): EngineConfig {
       idTokenHeader: settings.getIdTokenHeader(),
     },
   }
-}
-
-function conversationIdFromSurfaceCommand(data: Record<string, unknown>): string {
-  const target = String(data.target_surface || '').trim().toLowerCase()
-  const action = String(data.action || '').trim().toLowerCase()
-  if (
-    data.type !== SURFACE_COMMAND_MESSAGE_TYPE ||
-    !CHAT_CONVERSATION_SURFACES.has(target) ||
-    (action !== 'open' && action !== 'attach' && action !== 'focus')
-  ) return ''
-  const context = data.context && typeof data.context === 'object' ? data.context as Record<string, unknown> : {}
-  const contextData = context.data && typeof context.data === 'object' ? context.data as Record<string, unknown> : {}
-  const direct = String(data.conversation_id || contextData.conversation_id || context.conversation_id || '').trim()
-  if (direct) return direct
-  const ref = String(data.object_ref || context.object_ref || context.ref || context.logical_path || '').trim()
-  return conversationIdFromConversationRef(ref)
 }
 
 /**
@@ -259,18 +233,8 @@ function PackageEngineHost({ children }: { children: ReactNode }) {
           const parsed = JSON.parse(raw)
           const items = Array.isArray(parsed?.contexts) ? parsed.contexts : [parsed]
           for (const item of items) {
-            if (!item || typeof item !== 'object') continue
-            const record = item as Record<string, unknown>
-            const data = record.data && typeof record.data === 'object'
-              ? record.data as Record<string, unknown>
-              : {}
-            const kind = record.kind || record.object_kind || record.objectKind || data.object_kind || data.objectKind
-            const ref = String(record.ref || record.object_ref || record.logical_path || record.id || data.object_ref || data.ref || data.logical_path || '')
-            const fromRef = idFromConvRef(ref)
-            if (isConversationKind(kind) || fromRef) {
-              const fromData = String(data.conversation_id || record.conversation_id || '')
-              return fromData || fromRef
-            }
+            const id = conversationIdFromContextItem(item)
+            if (id) return id
           }
         } catch { /* not JSON */ }
         return ''

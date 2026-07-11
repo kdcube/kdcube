@@ -141,7 +141,16 @@ export function defaultComponentSpecs(): SceneComponentSpec[] {
       views: true,
       size: { w: 460, h: 680 },
       targetSurfaces: ['sdk.chat.context', 'sdk.chat.conversation', 'sdk.chat.viewer'],
-      drop: { effect: 'attach', patterns: ['*'] },
+      // Kind-aware drop mapping: a conversation pin (`conv:*`, minus the
+      // `conv:fi:*` file refs) OPENS that conversation in chat via the
+      // provider open pipeline; every other kind attaches as context. The
+      // same mapping the website host declares as the chat drop target's
+      // `providerOpen`.
+      drop: {
+        effect: 'attach',
+        patterns: ['*'],
+        open: { patterns: ['conv:*'], exclude: ['conv:fi:*'], targetSurface: 'sdk.chat.viewer' },
+      },
       placement: 'docked',
       rail: true,
       defaultOpen: false,

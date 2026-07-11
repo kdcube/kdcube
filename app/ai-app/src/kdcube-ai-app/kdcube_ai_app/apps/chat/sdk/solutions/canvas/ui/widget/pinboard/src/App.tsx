@@ -44,6 +44,11 @@ import {
 } from '@kdcube/components-react/canvas'
 import { settings } from './api/settings'
 import { createCanvasHost, type CanvasHost, type RouteContext } from './api/canvasHost'
+import {
+  awaitSurfaceCommandAck,
+  buildOpenSurfaceCommand,
+  newOpenCommandId,
+} from './api/openRouting'
 
 // postMessage vocabulary for the host broker (Option B). Cross-surface
 // object commands use the scene-wide generic command envelope.
@@ -410,16 +415,24 @@ export default function App() {
     const response = await host.objectAction(card, action, activeCanvasRef.current)
     // An `open` that resolves to another surface (memory / chat) is routed
     // by the host page; the board itself only previews/describes inline.
+    // The command carries a command_id and waits for the host's ack (the
+    // connections.hub.open idiom) — when nothing routes it (no broker, no
+    // surface for that contract), the board says so instead of doing nothing.
     const uiEvent = response.ui_event as Record<string, unknown> | undefined
     const targetSurface = uiEvent ? String(uiEvent.target_surface || '').trim() : ''
-    if (action === 'open' && targetSurface) {
-      postToHost({
-        type: SURFACE_COMMAND_MESSAGE_TYPE,
-        target_surface: targetSurface,
-        action: String(uiEvent?.action || 'open'),
-        ui_event: uiEvent,
-        object_ref: String(uiEvent?.object_ref || card.ref || '').trim(),
-        card_ref: card.ref,
+    if (action === 'open' && targetSurface && uiEvent) {
+      const commandId = newOpenCommandId()
+      postToHost(buildOpenSurfaceCommand({
+        targetSurface,
+        uiEvent,
+        cardRef: card.ref,
+        fallbackObjectRef: card.ref,
+        commandId,
+      }))
+      void awaitSurfaceCommandAck(commandId).then((acked) => {
+        if (acked) return
+        const title = String(response.title || card.title || card.ref || 'this pin')
+        setNotice(`No surface in this workspace accepted opening “${title}” (${targetSurface}). Summon the target widget and try again.`)
       })
     }
     return response

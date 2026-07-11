@@ -5,7 +5,63 @@ import {
   type SceneContextDropTargetIssue,
   type SceneRecord,
 } from './types'
-import { asSceneRecord, asSceneString, isSceneRecord } from './runtime'
+import {
+  asSceneRecord,
+  asSceneString,
+  isSceneRecord,
+  sceneListValues,
+  sceneMatchesAnySelector,
+} from './runtime'
+
+/**
+ * Kind-aware exception route on a drop target whose blanket effect is NOT
+ * `open` (attach / pin): objects whose canonical ref matches `patterns`
+ * (minus `exclude`) resolve through the provider `open` pipeline toward
+ * `targetSurface` instead of the target's default effect.
+ *
+ * The motivating mapping: a conversation pin (`conv:*`, excluding the
+ * `conv:fi:*` file refs) dropped on chat OPENS that conversation in the chat
+ * surface, while every other pin kind keeps attach-as-context. The shape is a
+ * routing seam — additional per-kind routes (or an explicit user choice such
+ * as "attach this conversation as context instead") layer on top of it later
+ * without changing the drop-target contract.
+ */
+export interface SceneContextDropOpenRoute {
+  patterns: string[]
+  exclude?: string[]
+  targetSurface: string
+}
+
+export function normalizeSceneContextDropOpenRoute(value: unknown): SceneContextDropOpenRoute | null {
+  if (!isSceneRecord(value)) return null
+  const record = value as SceneRecord
+  const targetSurface = asSceneString(record.targetSurface) || asSceneString(record.target_surface)
+  const patterns = sceneListValues(record.patterns)
+  if (!targetSurface || !patterns.length) return null
+  const exclude = sceneListValues(record.exclude)
+  return {
+    patterns,
+    ...(exclude.length ? { exclude } : {}),
+    targetSurface,
+  }
+}
+
+/**
+ * Resolve the kind-aware open route for a dropped object ref: returns the
+ * route when the ref matches its patterns (and none of its exclusions),
+ * otherwise null — the caller then applies the drop target's default effect.
+ */
+export function resolveSceneContextDropOpenRoute(
+  ref: unknown,
+  route: SceneContextDropOpenRoute | null | undefined,
+): SceneContextDropOpenRoute | null {
+  if (!route) return null
+  const value = asSceneString(ref)
+  if (!value) return null
+  if (!sceneMatchesAnySelector(value, route.patterns)) return null
+  if (route.exclude?.length && sceneMatchesAnySelector(value, route.exclude)) return null
+  return route
+}
 
 export interface NormalizeSceneContextDropTargetOptions {
   knownDeliveries?: Iterable<string>

@@ -11,11 +11,10 @@
     "outDir": "/private/tmp/kdcube-chat-widget-tests"
   },
   "include": [
-    "src/features/context/eventBatch.ts",
-    "src/features/context/eventBatch.test.ts",
-    "src/features/chat/contextChips.ts",
-    "src/features/chat/contextChips.test.ts",
-    "src/features/chat/historicalRefs.ts",
-    "src/features/chat/historicalRefs.test.ts"
+    "src/features/context/nodeTestShims.d.ts",
+    "src/features/context/contextMessages.ts",
+    "src/features/context/contextMessages.test.ts",
+    "src/features/context/conversationCommands.ts",
+    "src/features/context/conversationCommands.test.ts"
   ]
 }

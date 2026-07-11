@@ -21,6 +21,7 @@ import {
   createSceneEventBus,
   createSceneRuntime,
   providerSurfaceCommandFromOpen,
+  resolveSceneContextDropOpenRoute,
   normalizeSceneContext,
   type SceneContextItem,
   type SceneDropTarget,
@@ -623,25 +624,58 @@ function App() {
       finish()
       return
     }
-    if (spec.drop?.effect === 'attach') {
-      const result = sceneRuntime.queueSurfaceCommand(target.targetSurface ?? '', {
-        action: 'attach',
-        context: drag.context,
-      })
-      setNotice(result.message)
-      finish()
+    const applyDefaultEffect = (): void | Promise<void> => {
+      if (spec.drop?.effect === 'attach') {
+        const result = sceneRuntime.queueSurfaceCommand(target.targetSurface ?? '', {
+          action: 'attach',
+          context: drag.context,
+        })
+        setNotice(result.message)
+        return
+      }
+      if (spec.drop?.effect === 'pin') {
+        const frame = frameRefs.current[alias]
+        const rect = frame?.getBoundingClientRect()
+        const result = sceneRuntime.queueSurfaceCommand(target.targetSurface ?? '', {
+          action: 'pin',
+          context: drag.context,
+          x: rect ? Math.max(16, event.clientX - rect.left) : 64,
+          y: rect ? Math.max(16, event.clientY - rect.top) : 64,
+        })
+        setNotice(result.message)
+        return
+      }
+      return contextDragBroker.dropOnTarget(target).then((result) => setNotice(result.message))
+    }
+    // Kind-aware exception before the blanket effect: refs matching the drop's
+    // `open` route (conversation pins on chat) resolve through the provider
+    // open pipeline toward the route's surface; a failed open falls back to
+    // the target's default effect so the drop never lands nowhere.
+    const openRoute = resolveSceneContextDropOpenRoute(drag.context.ref, spec.drop?.open ?? null)
+    if (openRoute) {
+      void contextDragBroker.dropOnTarget({
+        surfaceRef: `workspace.${spec.alias}`,
+        targetSurface: openRoute.targetSurface,
+        dropEffect: 'open',
+        accepts: { open: openRoute.patterns },
+        label: spec.title,
+      }).then((result) => {
+        if (result.ok) {
+          setNotice(result.message)
+          return
+        }
+        console.info('[kdc-scene:drag] open route rejected; applying default drop effect', {
+          alias,
+          ref: drag.context.ref || '',
+          target_surface: openRoute.targetSurface,
+          code: result.code,
+        })
+        return applyDefaultEffect()
+      }).finally(finish)
       return
     }
-    if (spec.drop?.effect === 'pin') {
-      const frame = frameRefs.current[alias]
-      const rect = frame?.getBoundingClientRect()
-      const result = sceneRuntime.queueSurfaceCommand(target.targetSurface ?? '', {
-        action: 'pin',
-        context: drag.context,
-        x: rect ? Math.max(16, event.clientX - rect.left) : 64,
-        y: rect ? Math.max(16, event.clientY - rect.top) : 64,
-      })
-      setNotice(result.message)
+    if (spec.drop?.effect === 'attach' || spec.drop?.effect === 'pin') {
+      applyDefaultEffect()
       finish()
       return
     }
@@ -658,11 +692,17 @@ function App() {
       const spec = specByAlias.get(alias)
       const target = spec ? dropTargetForSpec(spec) : null
       if (!spec || !target || !contextDragBroker.accepts(target, activeDrag.context)) return null
-      label = spec.drop?.effect === 'attach'
-        ? 'Attach to chat'
-        : spec.drop?.effect === 'pin'
-          ? 'Pin to board'
-          : `Open in ${spec.title}`
+      // The label reflects what the drop will DO for this ref: a kind-aware
+      // open route (conversation pin over chat) reads "Open in ...", not the
+      // target's blanket effect.
+      const openRoute = resolveSceneContextDropOpenRoute(activeDrag.context.ref, spec.drop?.open ?? null)
+      label = openRoute
+        ? `Open in ${spec.title}`
+        : spec.drop?.effect === 'attach'
+          ? 'Attach to chat'
+          : spec.drop?.effect === 'pin'
+            ? 'Pin to board'
+            : `Open in ${spec.title}`
     }
     return (
       <div
