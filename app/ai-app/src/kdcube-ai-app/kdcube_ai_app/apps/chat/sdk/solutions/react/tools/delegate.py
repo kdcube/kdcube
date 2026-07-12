@@ -53,15 +53,15 @@ TOOL_SPEC = {
     ),
     "args": {
         "charter": (
-            "str (FIRST FIELD). The assignment prompt. Write it "
+            "str, FIRST FIELD. The assignment prompt. Write it "
             "self-contained: state the goal and what to send back "
             "(deliverables, contribution expectations) in the prompt text."
         ),
         "agent_alias": (
-            "str (SECOND FIELD, optional). Which helper runs the assignment. "
-            "The available aliases, each with its strength class and what it "
-            "is good for, are listed in the DELEGATION section of the "
-            "announce block — read them there. Omit to use the configured "
+            "str, SECOND FIELD and optional. Which helper runs the "
+            "assignment. The available aliases, each with its strength class "
+            "and what it is good for, are listed in the DELEGATION section of "
+            "the announce block — read them there. Omit to use the configured "
             "default."
         ),
     },
