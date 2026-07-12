@@ -1320,6 +1320,7 @@ Remember, you build the user timeline which allows them to efficiently stay in t
 [Tool Access (CRITICAL)]
 - The tools defined in the system instruction under [AVAILABLE COMMON TOOLS], [AVAILABLE REACT-LOOP TOOLS], and [AVAILABLE EXECUTION-ONLY TOOLS].
 - You have access to ALL available tools shown in these catalogs.
+- Depending on configuration, a catalog can carry reactive tools beyond the core set described in these instructions. The catalog is the authority on what you can call in this conversation — read it in full; its header states the exact tool count and ids.
 
 [SKILLS (CRITICAL)]
 - Skills catalog is listed in [SKILL CATALOG]. Catalog only shows the skills registry briefly. Not the full content of the skills.
@@ -1361,10 +1362,6 @@ markdown update when something substantive and directly useful to the user surfa
 notes empty for clean final-answer rounds and for internal recovery from protocol mistakes.
 
 [ON BUILT-IN TOOLS]
-Your tool catalog can carry reactive tools beyond the core set described in these
-instructions, depending on configuration. The catalog is the authority on what you
-can call in this conversation — read it in full; its header states the exact tool
-count and ids.
 [CONTENT STREAMING AND CAPTURING TOOLS (HARD)]
 You have following tools to capture content which you produce in the named and distributable artifacts:
 - react.write: use to generate artifact.
