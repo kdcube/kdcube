@@ -291,14 +291,15 @@ class DelegatedToKdcubeBroker:
         if provider is None or not provider.adapter:
             return None if force else credential
         try:
-            adapter = resolve_adapter(provider.adapter)
+            resolved = resolve_adapter(provider.adapter)
         except Exception:
             return None if force else credential
+        connector_app = provider.connector_apps.get(connector_app_id)
+        adapter = resolved.bind(provider=provider, connector_app=connector_app)
         if not force and not adapter.credential_refresh_needed(credential, skew_seconds=self.refresh_skew_seconds):
             return credential
         if not adapter.credential_refreshable(credential):
             return None
-        connector_app = provider.connector_apps.get(connector_app_id)
         if connector_app is None:
             return None
         client_secret = await self._resolve_client_secret(

@@ -27,6 +27,16 @@ class DelegatedToKdcubeAdapter(ABC):
     def oauth_enabled(self) -> bool:
         return bool(self.authorize_url and self.token_url)
 
+    def bind(self, *, provider: Any = None, connector_app: Any = None) -> "DelegatedToKdcubeAdapter":
+        """Return an adapter configured for one provider/connector app.
+
+        Built-in fixed providers return ``self``. Config-driven providers
+        override this to read endpoints and profile mapping from Connection Hub
+        provider config without leaking that config into operation code.
+        """
+        del provider, connector_app
+        return self
+
     def provider_scopes_for_claims(self, claims: list[str], claim_map: dict[str, Any]) -> list[str]:
         scopes: list[str] = []
         seen: set[str] = set()

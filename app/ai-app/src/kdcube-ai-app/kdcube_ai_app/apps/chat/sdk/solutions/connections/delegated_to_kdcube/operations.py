@@ -163,7 +163,9 @@ class DelegatedToKdcubeOperations:
         adapter = None
         if provider and provider.adapter:
             try:
-                adapter = resolve_adapter(provider.adapter)
+                resolved = resolve_adapter(provider.adapter)
+                connector_app = provider.connector_apps.get(account.connector_app_id)
+                adapter = resolved.bind(provider=provider, connector_app=connector_app)
             except Exception:
                 adapter = None
         oauth = bool(credential.get("oauth") or credential.get("access_token"))
@@ -340,7 +342,7 @@ class DelegatedToKdcubeOperations:
             raise ValueError(f"connector app is not enabled: {connector_app_id}")
         if not connector_app.client_id:
             raise ValueError(f"OAuth client id is not configured for connector app: {connector_app_id}")
-        adapter = resolve_adapter(provider.adapter)
+        adapter = resolve_adapter(provider.adapter).bind(provider=provider, connector_app=connector_app)
         if not adapter.oauth_enabled:
             raise ValueError(f"provider adapter does not support OAuth: {provider.adapter}")
         claims = _clean_claims(provider, connector_app_id, payload.get("claims"))
@@ -426,7 +428,7 @@ class DelegatedToKdcubeOperations:
         connector_app = provider.connector_apps.get(connector_app_id)
         if connector_app is None or not connector_app.enabled:
             raise ValueError(f"connector app is not enabled: {connector_app_id}")
-        adapter = resolve_adapter(provider.adapter)
+        adapter = resolve_adapter(provider.adapter).bind(provider=provider, connector_app=connector_app)
         client_secret = await _resolve_client_secret(
             client_secret_resolver,
             provider_id=provider_id,

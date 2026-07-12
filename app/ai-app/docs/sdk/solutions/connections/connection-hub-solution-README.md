@@ -4,7 +4,7 @@ title: "Connection Hub Solution"
 summary: "Canonical map of Connection Hub roles: connection edges, identity-family resolution, request authenticators, authority projection, delegated connections, link flows, and widget auth-context transport."
 status: active
 tags: ["sdk", "solutions", "connections", "connection-hub", "identity", "auth", "authority", "delegated-connections"]
-updated_at: 2026-07-06
+updated_at: 2026-07-12
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-edges/connection-edges-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/identity-family-resolver/identity-family-resolver-README.md
@@ -15,6 +15,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/authority-providers/credential-envelope-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/authority-projection/authority-projection-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-accounts/delegated-accounts-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-accounts/custom-oauth-oidc-service-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-connections/delegated-connections-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-credentials/delegation-edges-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/widget-auth-context/widget-auth-context-README.md
@@ -476,6 +477,7 @@ grantor's full platform session.
 | Understand delegated representatives and grants | [Delegated Connections](delegated-connections/delegated-connections-README.md) |
 | See and revoke access a user granted to automations and external clients | [Delegated Connections](delegated-connections/delegated-connections-README.md) |
 | Connect Gmail/Slack/iCloud as delegated provider accounts | [Delegated Accounts](delegated-accounts/delegated-accounts-README.md) |
+| Connect a custom OAuth/OIDC service so KDCube tools can use the user's provider token | [Custom OAuth/OIDC Provider Accounts](delegated-accounts/custom-oauth-oidc-service-README.md) |
 | Turn credential failures into user actions (reconnect, approve claim, choose account) | [Delegated Accounts](delegated-accounts/delegated-accounts-README.md) |
 | Host Connection Hub or another widget in an iframe | [Widget Auth Context](widget-auth-context/widget-auth-context-README.md) |
 | Know where data/secrets live | [Storage Model](storage-model/storage-model-README.md) |

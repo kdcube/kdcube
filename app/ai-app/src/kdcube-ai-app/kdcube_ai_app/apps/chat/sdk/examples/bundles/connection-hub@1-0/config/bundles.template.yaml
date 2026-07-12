@@ -574,6 +574,45 @@ bundles:
                 - "search:read.mpim"
                 - "search:read.files"
                 - "search:read.users"
+          s1:
+            label: "S1"
+            adapter: "oidc.generic"
+            enabled: false
+            oauth:
+              authorize_url: "https://s1.example.com/oauth2/authorize"
+              token_url: "https://s1.example.com/oauth2/token"
+              userinfo_url: "https://s1.example.com/oauth2/userInfo"
+              default_scopes:
+              - "openid"
+              - "email"
+              - "profile"
+              authorize_params:
+                audience: "s1-api"
+              profile:
+                subject: "sub"
+                email: "email"
+                display_name: "name"
+                workspace: "custom.tenant"
+            connector_apps:
+              default:
+                label: "S1 connector"
+                enabled: true
+                client_id: "<S1_OIDC_CLIENT_ID>"
+                client_secret_ref: "connections.delegated_to_kdcube.providers.s1.connector_apps.default.client_secret"
+                allowed_claims:
+                - "s1:read"
+                - "s1:write"
+            claims:
+              s1:read:
+                label: "Read S1"
+                description: "Read S1 data for the approving user."
+                provider_scopes:
+                - "s1.read"
+              s1:write:
+                label: "Write S1"
+                description: "Write S1 data for the approving user."
+                provider_scopes:
+                - "s1.write"
           icloud_mail:
             label: "iCloud Mail"
             adapter: "email.imap_smtp_app_password"

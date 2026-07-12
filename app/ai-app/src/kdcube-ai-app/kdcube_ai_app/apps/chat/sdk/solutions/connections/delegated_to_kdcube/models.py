@@ -191,6 +191,8 @@ class IntegrationProvider:
     label: str = ""
     adapter: str = ""
     enabled: bool = True
+    oauth: dict[str, Any] = field(default_factory=dict)
+    adapter_config: dict[str, Any] = field(default_factory=dict)
     claims: dict[str, ProviderClaim] = field(default_factory=dict)
     connector_apps: dict[str, ConnectorApp] = field(default_factory=dict)
 
@@ -200,6 +202,7 @@ class IntegrationProvider:
             "label": self.label,
             "adapter": self.adapter,
             "enabled": self.enabled,
+            "oauth": dict(self.oauth or {}),
             "claims": {
                 key: value.to_dict() for key, value in sorted(self.claims.items())
             },
@@ -227,6 +230,8 @@ class IntegrationProvider:
             label=as_str(data.get("label")),
             adapter=as_str(data.get("adapter") or data.get("adapter_id")),
             enabled=as_bool(data.get("enabled"), default=True),
+            oauth=as_dict(data.get("oauth")),
+            adapter_config=as_dict(data.get("adapter_config") or data.get("adapter_settings") or data.get("settings")),
             claims=claims,
             connector_apps=apps,
         )

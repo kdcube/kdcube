@@ -4,11 +4,13 @@ title: "Delegated Provider Accounts"
 summary: "Delegated Connections subtype where KDCube stores user-granted external provider claims such as Gmail, Slack, and iCloud for automation and app actions."
 status: active
 tags: ["sdk", "connections", "connection-hub", "delegated-connections", "delegated-accounts", "oauth", "gmail", "slack", "icloud"]
-updated_at: 2026-07-06
+updated_at: 2026-07-12
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-connections/delegated-connections-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-edges/connection-edges-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-accounts/custom-oauth-oidc-service-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/integrations/custom-oauth-oidc-service-README.md
 ---
 # Delegated Provider Accounts
 
@@ -112,6 +114,10 @@ Slack
   generic connections framework
   OAuth through shared Connection Hub callback
 
+Generic OAuth/OIDC
+  generic connections framework
+  endpoints and profile mapping configured in Connection Hub
+
 iCloud
   email integration
   app-specific password, no OAuth
@@ -119,6 +125,50 @@ iCloud
 
 Gmail should not be documented as an `email_*` app-password integration. Gmail
 rides the generic delegated account framework.
+
+For a standard service such as `S1`, prefer `adapter: oauth2.generic` or
+`adapter: oidc.generic` before adding provider-specific code. The provider row
+supplies the external authorization URL, token URL, optional userinfo URL,
+default scopes, authorize parameters, and profile mapping. The connector app
+still supplies the OAuth client id and secret reference.
+
+See [Custom OAuth/OIDC Provider Accounts](custom-oauth-oidc-service-README.md)
+for the full configuration, runtime resolver pattern, named-service pattern, and
+custom-service verification checklist.
+
+```yaml
+connections:
+  delegated_to_kdcube:
+    providers:
+      s1:
+        label: S1
+        adapter: oidc.generic
+        oauth:
+          authorize_url: https://s1.example.com/oauth2/authorize
+          token_url: https://s1.example.com/oauth2/token
+          userinfo_url: https://s1.example.com/oauth2/userInfo
+          default_scopes: [openid, email, profile]
+          authorize_params:
+            audience: s1-api
+          profile:
+            subject: sub
+            email: email
+            display_name: name
+            workspace: custom.tenant
+        connector_apps:
+          default:
+            label: S1 connector
+            client_id: <S1_CLIENT_ID>
+            client_secret_ref: connections.delegated_to_kdcube.providers.s1.connector_apps.default.client_secret
+            allowed_claims: [s1:read, s1:write]
+        claims:
+          s1:read:
+            label: Read S1
+            provider_scopes: [s1.read]
+          s1:write:
+            label: Write S1
+            provider_scopes: [s1.write]
+```
 
 ## Runtime Use
 

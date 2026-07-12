@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import base64
+import json
 from typing import Any
 
 import pytest
@@ -178,19 +180,112 @@ def _install_fake_storage(monkeypatch):
 
 def test_config_parses_provider_claims_and_connector_apps():
     config = _sample_config()
-
     provider = config.provider("google")
     assert config.enabled is True
     assert provider is not None
     assert provider.adapter == "google.oauth"
-    assert provider.claims["gmail:read"].provider_scopes == (
-        "https://www.googleapis.com/auth/gmail.readonly",
-    )
     assert provider.connector_apps["gmail"].client_id == "client-id"
+    assert provider.claims["gmail:read"].provider_scopes == ("https://www.googleapis.com/auth/gmail.readonly",)
     assert provider.connector_apps["gmail"].allowed_claims == ("gmail:read", "gmail:send")
     public = config.to_dict(include_client_ids=True)
     assert public["providers"]["google"]["connector_apps"]["gmail"]["client_id"] == "client-id"
     assert "client_secret_ref" not in public["providers"]["google"]["connector_apps"]["gmail"]
+
+
+def _jwt_payload(payload: dict[str, Any]) -> str:
+    raw = json.dumps(payload).encode("utf-8")
+    encoded = base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
+    return f"header.{encoded}.signature"
+
+
+def _generic_oauth_config():
+    return delegated_to_kdcube_config(
+        {
+            "enabled": True,
+            "providers": {
+                "s1": {
+                    "label": "S1",
+                    "adapter": "oidc.generic",
+                    "oauth": {
+                        "authorize_url": "https://s1.example.test/oauth2/authorize",
+                        "token_url": "https://s1.example.test/oauth2/token",
+                        "userinfo_url": "https://s1.example.test/oauth2/userInfo",
+                        "default_scopes": ["openid", "email", "profile"],
+                        "authorize_params": {"audience": "s1-api"},
+                        "profile": {
+                            "subject": "sub",
+                            "email": "email",
+                            "display_name": "name",
+                            "workspace": "custom.tenant",
+                        },
+                    },
+                    "claims": {
+                        "s1:read": {"label": "Read S1", "provider_scopes": ["s1.read"]},
+                        "s1:write": {"label": "Write S1", "provider_scopes": ["s1.write"]},
+                    },
+                    "connector_apps": {
+                        "default": {
+                            "label": "S1 connector",
+                            "client_id": "s1-client",
+                            "client_secret_ref": "connections.delegated_to_kdcube.providers.s1.connector_apps.default.client_secret",
+                            "allowed_claims": ["s1:read", "s1:write"],
+                        }
+                    },
+                }
+            },
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_generic_oauth_adapter_uses_provider_config_for_authorize_url(monkeypatch):
+    _install_fake_storage(monkeypatch)
+    ops = operations_for_user(user_id="user-1", config=_generic_oauth_config())
+
+    started = await ops.start_oauth(
+        {
+            "provider_id": "s1",
+            "connector_app_id": "default",
+            "claims": ["s1:read"],
+        },
+        user_id="user-1",
+        callback_url="https://kdcube.example.test/oauth/callback",
+        state_store=MemoryOAuthStateStore(),
+        state_secret="state-secret",
+    )
+
+    assert started["ok"] is True
+    assert started["provider_scopes"] == ["s1.read"]
+    assert started["authorize_url"].startswith("https://s1.example.test/oauth2/authorize?")
+    assert "client_id=s1-client" in started["authorize_url"]
+    assert "scope=s1.read" in started["authorize_url"]
+    assert "audience=s1-api" in started["authorize_url"]
+
+
+@pytest.mark.asyncio
+async def test_generic_oidc_adapter_can_normalize_profile_from_id_token():
+    provider = _generic_oauth_config().provider("s1")
+    assert provider is not None
+    adapter = resolve_adapter("oidc.generic").bind(provider=provider, connector_app=provider.connector_apps["default"])
+    profile = await adapter.normalize_profile(
+        {
+            "id_token": _jwt_payload(
+                {
+                    "sub": "subject-1",
+                    "email": "user@s1.example.test",
+                    "name": "S1 User",
+                    "custom": {"tenant": "tenant-a"},
+                }
+            )
+        }
+    )
+
+    assert profile == {
+        "external_subject": "subject-1",
+        "email": "user@s1.example.test",
+        "display_name": "S1 User",
+        "workspace": "tenant-a",
+    }
 
 
 def test_connections_lazy_surface_exposes_delegated_to_kdcube():

@@ -4,8 +4,10 @@ title: "Connection Recipes"
 summary: "Short recipes for Connection Hub flows such as creating connection edges from external channels, hosting bundle-backed platform login, using connected identities safely in app features, and delegating KDCube services to external clients."
 status: active
 tags: ["recipes", "connections", "connection-hub", "connection-edges", "external-channel", "delegated-credentials"]
-updated_at: 2026-07-05
+updated_at: 2026-07-12
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/integrations/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/integrations/custom-oauth-oidc-service-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/integrations/google-gmail-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/integrations/mail-named-service-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/integrations/slack-README.md
@@ -29,6 +31,8 @@ are intentionally shorter and more task-oriented than the SDK architecture docs.
 
 | Recipe | Use when |
 | --- | --- |
+| [Integration Recipes](integrations/README.md) | You need the entry point for delegated-to-KDCube connected account recipes. |
+| [Custom OAuth/OIDC Service Integration](integrations/custom-oauth-oidc-service-README.md) | A custom service exposes OAuth/OIDC, and KDCube tools need that user's service token. |
 | [Google Gmail Integration](integrations/google-gmail-README.md) | Users should connect their own Gmail accounts to KDCube, and KDCube tools should search or send Gmail with connected-account claims. |
 | [Mail Named Service Over MCP](integrations/mail-named-service-README.md) | Connected Gmail/iCloud/Yahoo-style accounts should appear to external agents as one provider-neutral `mail` namespace through the generic named-services MCP surface. |
 | [Slack Integration](integrations/slack-README.md) | Users should connect their own Slack accounts or workspaces to KDCube, and KDCube tools should search or post through Slack with connected-account claims. |

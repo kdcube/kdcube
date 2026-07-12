@@ -1,7 +1,7 @@
 ---
 id: connection-hub@1-0/integrations/README
 title: "Connection Hub — Integrations Setup (overview)"
-summary: "Common setup shared by every connection-hub provider — the single OAuth callback URL, the hub-level state secret, and the apply/refresh step — plus links to the per-provider setup articles (Google, Slack, iCloud)."
+summary: "Common setup shared by every connection-hub provider — the single OAuth callback URL, the hub-level state secret, and the apply/refresh step — plus links to the per-provider setup articles (Google, Slack, iCloud, and generic OAuth/OIDC)."
 status: "active"
 tags: ["integration", "connections", "oauth", "admin", "operator-setup", "prerequisites"]
 keywords: ["connection hub setup", "delegated_to_kdcube_oauth_callback", "oauth_state_secret", "connector app", "provider setup"]
@@ -9,6 +9,8 @@ see_also:
   - ./google.md
   - ./slack.md
   - ./icloud.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-accounts/custom-oauth-oidc-service-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/integrations/custom-oauth-oidc-service-README.md
   - ../../interface/README.md
   - ../../config/bundles.template.yaml
   - ../../config/bundles.secrets.template.yaml
@@ -31,6 +33,7 @@ Per-provider steps:
 | Google (Gmail) | OAuth connector app | [google.md](./google.md) |
 | Slack | OAuth connector app | [slack.md](./slack.md) |
 | iCloud | App-specific password (no OAuth) | [icloud.md](./icloud.md) |
+| Standard OAuth/OIDC service | `oauth2.generic` or `oidc.generic` connector app | See `repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-accounts/custom-oauth-oidc-service-README.md` and `repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/integrations/custom-oauth-oidc-service-README.md`. |
 
 Set these once for the commands in the per-provider articles:
 
@@ -81,6 +84,66 @@ This section configures connector apps only. Application tools that need Gmail,
 Slack, iCloud, or another provider declare their required provider claims in the
 application bundle/tool config, under that tool's
 `connections.delegated_to_kdcube.connected_accounts` block.
+
+## Standard OAuth/OIDC provider
+
+If the provider follows ordinary OAuth 2.0 or OIDC mechanics, register it with
+the generic adapter instead of writing provider-specific SDK code. The
+canonical SDK guide is
+repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-accounts/custom-oauth-oidc-service-README.md,
+and the task recipe is
+repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/integrations/custom-oauth-oidc-service-README.md.
+This is the shape for an `S1` service whose authority may be Cognito, Auth0,
+Okta, or any service-owned OAuth/OIDC server:
+
+```yaml
+connections:
+  delegated_to_kdcube:
+    providers:
+      s1:
+        label: S1
+        adapter: oidc.generic
+        enabled: true
+        oauth:
+          authorize_url: https://s1.example.com/oauth2/authorize
+          token_url: https://s1.example.com/oauth2/token
+          userinfo_url: https://s1.example.com/oauth2/userInfo
+          default_scopes:
+            - openid
+            - email
+            - profile
+          authorize_params:
+            audience: s1-api
+          profile:
+            subject: sub
+            email: email
+            display_name: name
+            workspace: custom.tenant
+        connector_apps:
+          default:
+            label: S1 connector
+            enabled: true
+            client_id: <S1_CLIENT_ID>
+            client_secret_ref: connections.delegated_to_kdcube.providers.s1.connector_apps.default.client_secret
+            allowed_claims:
+              - s1:read
+              - s1:write
+        claims:
+          s1:read:
+            label: Read S1
+            description: Read S1 data for the approving user.
+            provider_scopes:
+              - s1.read
+          s1:write:
+            label: Write S1
+            description: Write S1 data for the approving user.
+            provider_scopes:
+              - s1.write
+```
+
+The provider's OAuth app must register the shared callback URL shown above.
+The secret value goes in `bundles.secrets.yaml` at the configured
+`client_secret_ref`.
 
 The reference SDK includes first provider-backed tool modules:
 

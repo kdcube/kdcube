@@ -5,6 +5,10 @@
 
 from __future__ import annotations
 
+# Import built-in providers for adapter registration. Keep this before public
+# adapter helpers so resolve_adapter("google.oauth" / "oidc.generic") works
+# from configuration-only call sites.
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube import providers as _providers
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.adapters import (
     DelegatedToKdcubeAdapter,
     adapter,
