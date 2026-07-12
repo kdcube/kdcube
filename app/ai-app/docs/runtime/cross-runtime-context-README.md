@@ -17,7 +17,7 @@ keywords:
 updated_at: 2026-06-26
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/runtime/README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/subagents/subagents-runtime-bootstrap-and-reduce-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/fenced-runtime-bootstrap-and-reduce-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-runtime-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/exec/runtime-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/exec/README-iso-runtime.md

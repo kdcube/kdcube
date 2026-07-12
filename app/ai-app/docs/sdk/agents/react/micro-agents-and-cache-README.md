@@ -1,19 +1,19 @@
 ---
-id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/micro-agents-and-subagents-README.md
-title: "Micro-Agents And Subagents"
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/micro-agents-and-cache-README.md
+title: "Micro-Agents And Agent-Call Cache"
 summary: "How separate agent calls affect rendered context, prompt caching, and data handoff cost."
-tags: ["sdk", "agents", "react", "context", "caching", "subagents"]
+tags: ["sdk", "agents", "react", "context", "caching", "micro-agents", "fan-out"]
 keywords: ["subagent", "micro-agent", "prompt cache", "system instruction", "handoff", "announce"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/work-with-subagents-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/subagents/subagents-runtime-bootstrap-and-reduce-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/fenced-runtime-bootstrap-and-reduce-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-caching-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-layout.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-progression.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/system-instruction-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-announce-README.md
 ---
-# Micro-Agents And Subagents
+# Micro-Agents And Agent-Call Cache
 
 A micro-agent or subagent is a separate model call. It may be launched from a
 main ReAct turn, but it does not inherit the main agent's prompt cache for free.

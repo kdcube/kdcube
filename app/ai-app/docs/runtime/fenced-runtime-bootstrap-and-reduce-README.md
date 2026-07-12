@@ -1,9 +1,9 @@
 ---
-id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/subagents/subagents-runtime-bootstrap-and-reduce-README.md
-title: "Subagents Runtime Bootstrap And Reduce"
-summary: "Concrete runtime contract for launching subagents with a scoped serializable runtime spec, isolated workspace, comm recording, and host-side reduction."
+id: repo:kdcube-ai-app/app/ai-app/docs/runtime/fenced-runtime-bootstrap-and-reduce-README.md
+title: "Fenced Runtime Bootstrap And Reduce"
+summary: "Runtime-isolation contract for launching a scoped/fenced agent execution from a serializable runtime spec, in its own workspace, with comm recording and host-side reduction. This is the fence mechanism (async task, thread, subprocess, Docker) — not the chartered subagent."
 status: draft
-tags: ["sdk", "agents", "subagents", "runtime", "portable-spec", "comm", "recording", "workspace"]
+tags: ["runtime", "isolation", "fence", "portable-spec", "comm", "recording", "workspace", "reduce"]
 updated_at: 2026-06-20
 keywords:
   [
@@ -21,13 +21,24 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/runtime/README.md
   - repo:kdcube-ai-app/app/ai-app/docs/runtime/cross-runtime-context-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/comm/comm-recording-event-sinks-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/micro-agents-and-subagents-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/micro-agents-and-cache-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/exec/README-iso-runtime.md
 ---
-# Subagents Runtime Bootstrap And Reduce
+# Fenced Runtime Bootstrap And Reduce
 
-This document describes the runtime contract for subagents. The same contract
-applies whether the subagent runs in the same process, an `asyncio` task, a
+> **Scope.** This is the *runtime-isolation* contract: how a scoped agent
+> execution bootstraps inside a **fence** (async task, thread, subprocess,
+> Docker/Fargate) from a serializable spec, and how its side files reduce back
+> into the coordinator. It is the mechanism isolated exec and cross-runtime
+> context use. The **chartered subagent** — the `react.delegate` child
+> conversation — does NOT use this contract: it runs as a fair-scheduled turn
+> and reports through lane events. See
+> [Work With Subagents](../sdk/agents/react/work-with-subagents-README.md).
+> Below, "subagent" means a fenced, scoped agent execution in the runtime
+> sense, not the chartered conversational subagent.
+
+This document describes the runtime contract for a fenced agent execution. The
+same contract applies whether it runs in the same process, an `asyncio` task, a
 worker thread, a local subprocess, or an isolated/external runtime.
 
 The core rule is:

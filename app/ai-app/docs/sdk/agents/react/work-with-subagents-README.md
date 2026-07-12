@@ -6,7 +6,7 @@ tags: ["sdk", "agents", "react", "subagents", "delegation"]
 keywords: ["react.delegate", "react.contribute", "charter", "agent_alias", "helper alias", "strength class", "subagent.contribution", "subagent.converged", "subagent.failed", "fork", "child conversation", "visibility", "subagent thread"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/timeline/fork-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/micro-agents-and-subagents-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/micro-agents-and-cache-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/shared-timeline-event-bus-steer-followup-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-tools-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/compaction-README.md
@@ -331,7 +331,7 @@ on whatever worker claims its turn.
 Every subagent round is a full decision-model call billed like the parent's
 own rounds, and the child starts with a cold prompt cache (the fork copies
 context bytes; it cannot copy cache state -- see
-[micro-agents-and-subagents-README.md](micro-agents-and-subagents-README.md)
+[micro-agents-and-cache-README.md](micro-agents-and-cache-README.md)
 for why any separate agent call has its own cache story). Child spend is
 accounted under the CHILD conversation for the same user and app, tagged
 with accounting agent/component `react.subagent` and a `subagent` metadata
@@ -351,7 +351,7 @@ Three delegation instruments, ordered by weight:
 2. In-turn micro-agent calls -- separate model calls launched from within a
    turn whose results fold back into the same timeline. Their prompt-shape
    and cache economics are the subject of
-   [micro-agents-and-subagents-README.md](micro-agents-and-subagents-README.md);
+   [micro-agents-and-cache-README.md](micro-agents-and-cache-README.md);
    everything that doc says about envelopes, handoff cost, and cache
    prefixes applies to every instrument on this list.
 3. `react.delegate` -- this document: a chartered child CONVERSATION with its
