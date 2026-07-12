@@ -74,12 +74,13 @@ export interface ChatViewModel {
     clearPreview: ChatEngine['clearDryRunPreview']
   }
 
-  /** Per-user agent capabilities (the composer "+" menu): the state branch plus
-   *  the engine's lazy load + optimistic/debounced toggle. Registered users
+  /** Per-conversation agent capabilities (the composer "+" menu): the state
+   *  branch plus the engine's lazy load + explicit-save draft. Registered users
    *  only — the menu hides when `authed` is false. */
   capabilities: AgentCapabilitiesState & {
     load: ChatEngine['loadAgentCapabilities']
     toggle: ChatEngine['updateAgentSelection']
+    save: ChatEngine['saveAgentSelectionChanges']
     /** One explicit cold-cache decision (the confirm picker). */
     decide: ChatEngine['submitAgentSelectionDecision']
   }

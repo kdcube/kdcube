@@ -35,7 +35,12 @@ function fakeWindow({ embedded = true } = {}) {
 test('emit carries the contract shape and resolves on a positive ack', async () => {
   const win = fakeWindow()
   const pending = openCapabilitiesOnHost(
-    { agent_id: 'main', spotlight_tools: ['slack', ''], section: 'services' },
+    {
+      agent_id: 'main',
+      conversation_id: 'conv-42',
+      spotlight_tools: ['slack', ''],
+      section: 'services',
+    },
     { source: 'composer-expand', widget: 'workspace_chat', win },
   )
   assert.equal(win.posted.length, 1)
@@ -48,6 +53,7 @@ test('emit carries the contract shape and resolves on a positive ack', async () 
   assert.ok(String(command.command_id).startsWith('caps_'))
   assert.deepEqual(command.ui_event, {
     agent_id: 'main',
+    conversation_id: 'conv-42',
     spotlight_tools: ['slack'],
     section: 'services',
   })
@@ -94,12 +100,19 @@ test('the widget parses only its own routed command', () => {
     target_surface: 'SDK.Agent.Capabilities',
     action: 'open',
     command_id: 'caps_1',
-    ui_event: { agent_id: 'main', spotlight_tools: ['mail', 42, ''], section: 'services', noise: 'x' },
+    ui_event: {
+      agent_id: 'main',
+      conversation_id: 'conv-42',
+      spotlight_tools: ['mail', 42, ''],
+      section: 'services',
+      noise: 'x',
+    },
   })
   assert.ok(parsed)
   assert.equal(parsed.commandId, 'caps_1')
   assert.deepEqual(parsed.payload, {
     agent_id: 'main',
+    conversation_id: 'conv-42',
     spotlight_tools: ['mail', '42'],
     section: 'services',
   })
@@ -203,6 +216,23 @@ test('the served widget opens the hub host-first with the deep-link fallback', (
   assert.match(source, /window\.open\(connectionsDeepLink\(consent\), '_blank', 'noopener'\)/)
 })
 
+test('chat-originated capability windows keep the active conversation scope', () => {
+  const composerSource = readFileSync(
+    new URL('../src/chat/ui/features/composer/ComposerMenu.tsx', import.meta.url),
+    'utf8',
+  )
+  const widgetSource = readFileSync(
+    new URL(
+      '../../../../kdcube_ai_app/apps/chat/sdk/solutions/chat/ui/widget-capabilities/src/App.tsx',
+      import.meta.url,
+    ),
+    'utf8',
+  )
+  assert.match(composerSource, /conversation_id:\s*vm\.state\.conversationId/)
+  assert.match(widgetSource, /conversation_id:\s*conversationRef\.current/)
+  assert.match(widgetSource, /Choose what the \$\{agentId\} agent may use in this conversation/)
+})
+
 // ---------------------------------------------------------------------------
 // The full-page shell owns its scrolling: host embeddings (scene windows,
 // the side-panel widget wrapper) size or clip the frame, so document-level
@@ -232,6 +262,17 @@ test('the surface titles say Capabilities (holds more than tools or skills)', ()
   assert.match(app, /title="Capabilities"/)
   const scene = readFileSync(new URL('../../../../kdcube_ai_app/apps/chat/sdk/examples/bundles/workspace@2026-03-31-13-36/ui/scene/src/sceneConfig.ts', import.meta.url), 'utf8')
   assert.match(scene, /title: 'Capabilities',/)
+})
+
+test('the picker keeps a draft behind an explicit Save changes command', () => {
+  const menu = readFileSync(new URL('../src/chat/ui/features/composer/ComposerMenu.tsx', import.meta.url), 'utf8')
+  assert.match(menu, /capabilities\.saving \? 'Saving…' : 'Save changes'/)
+  assert.match(menu, /disabled=\{!capabilities\.dirty/)
+  assert.match(menu, /capabilities\.save\(\)/)
+
+  const standalone = readFileSync(new URL('../src/chat/ui/features/composer/CapabilityPickerStandalone.tsx', import.meta.url), 'utf8')
+  assert.match(standalone, /setDirty\(true\)/)
+  assert.doesNotMatch(standalone, /SAVE_DEBOUNCE_MS/)
 })
 
 test('capabilities has NO scene rail chip (per-agent surface, summon-only)', () => {

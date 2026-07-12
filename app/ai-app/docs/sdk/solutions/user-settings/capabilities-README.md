@@ -1,7 +1,7 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/user-settings/capabilities-README.md
-title: "Per-User Agent Capabilities"
-summary: "How users control what an agent may use for them: the admin inventory as the ceiling, per-user selection that narrows within it, runtime narrowing that makes denied capabilities uncallable, the capability picker's three shells (composer popover, expanded modal, served `capabilities` widget), and the service cards realms self-describe into."
+title: "Conversation-Scoped Agent Capabilities"
+summary: "How users control what an agent may use in each conversation: the admin inventory as ceiling, an optional user baseline for future conversations, conversation-scoped selections, explicit Save changes, runtime narrowing, and realm-described service cards."
 status: current
 tags: ["sdk", "solutions", "user-settings", "capabilities", "agent-selection", "named-services", "picker", "widget"]
 updated_at: 2026-07-12
@@ -12,6 +12,8 @@ keywords:
     "capability picker",
     "capabilities widget",
     "per-user tools",
+    "conversation-scoped agent settings",
+    "Save changes",
     "namespace narrowing",
     "object.action",
     "service card",
@@ -27,14 +29,14 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-caching-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/work-with-subagents-README.md
 ---
-# Per-User Agent Capabilities
+# Conversation-Scoped Agent Capabilities
 
 An agent's configuration grants it tools, skills, services, and models. Each
-user then decides which of those the agent may use **for them** — from the
-chat composer or from a dedicated widget — and the runtime enforces that
-choice on every turn. This doc owns that surface end to end: the model, the
-selection granularity, the picker's three presentations, and the service
-cards realms describe themselves into.
+user then decides which of those the agent may use in **this conversation**.
+The composer picker edits a local draft and persists it only when the user
+presses **Save changes**; the runtime enforces that exact conversation row on
+every turn. A dedicated widget manages the user baseline from which new
+conversations start. This doc owns that surface end to end.
 
 ## The model: ceiling → pick → enforcement
 
@@ -44,10 +46,12 @@ ADMIN INVENTORY (bundles.yaml)          the ceiling
   supported_models                      the model list users may pick from
         |
         v  agent_capabilities (read: inventory + saved selection + coverage)
-USER SELECTION (deny-list)              narrows, never widens
-  picker toggles -> optimistic flip -> debounced agent_selection_update
+CONVERSATION SELECTION (deny-list)      narrows, never widens
+  user baseline (or application fallback) -> materialized once
+  picker toggles -> local draft -> explicit Save changes
+  -> agent_selection_update(conversation_id)
   clamped on write to the live inventory; system tools stay locked on
-  persisted per (user, app, agent) in user_bundle_props
+  persisted per (user, app, conversation, agent) in user_bundle_props
         |
         v  applied at turn start (apply_user_agent_selection)
 RUNTIME NARROWING                       denied = uncallable
@@ -58,9 +62,10 @@ RUNTIME NARROWING                       denied = uncallable
 ```
 
 Two operations carry the whole flow, both on the agent's app:
-`agent_capabilities` (POST, read: the pickable inventory, the caller's saved
-selection, consent coverage) and `agent_selection_update` (POST, merge-write
-of partial toggles). Storage shape, merge/clamp semantics, and the pending
+`agent_capabilities` (POST, read: the pickable inventory, the conversation's
+saved selection, consent coverage) and `agent_selection_update` (POST,
+explicit merge-write of the draft). In chat, both carry `conversation_id`.
+Storage shape, default/materialization rules, merge/clamp semantics, and the pending
 cache-policy delta are owned by the
 [User Settings Solution](user-settings-solution-README.md); the inventory's
 config source is owned by
@@ -106,9 +111,15 @@ picker) lives above the shells, so switching mid-interaction keeps it.
 
 | Shell | Where | When it is the right form |
 | --- | --- | --- |
-| Composer popover | The chat composer's "+" button | Quick toggles while writing a message. |
-| Expanded modal | The popover's expand affordance (canvas-modal shell, Esc/backdrop/collapse) | Reading service cards: descriptions wrap instead of ellipsizing. A consent-banner spotlight that targets a namespace or a long tool list opens this form directly. |
-| `capabilities` widget | Served full-page by the agent's app; mountable on any scene | Managing capabilities as its own task, outside a conversation. |
+| Composer popover | The chat composer's "+" button | Draft and save the current conversation's model and capabilities. |
+| Expanded modal | The popover's expand affordance (canvas-modal shell, Esc/backdrop/collapse) | The same current-conversation draft with room for service-card descriptions. |
+| `capabilities` widget | Served full-page by the agent's app; mountable on any scene | Uses the `conversation_id` supplied by a chat-originated `capabilities.open`; when independently mounted with no id, manages the user baseline for future conversations. |
+
+The two chat shells share one draft. Closing and reopening the picker in the
+same conversation keeps it; switching conversations drops unsaved edits.
+**Save changes** sends one partial patch bound to the current conversation id.
+A save already in flight is reconciled only if that conversation is still
+open, so a late response cannot overwrite another conversation's picker.
 
 The served widget follows the standard widget contract (auth + CONFIG
 handshake; see
@@ -116,7 +127,16 @@ handshake; see
 registers as `@ui_widget(alias="capabilities")` with its build mapping under
 `config.ui.widgets.capabilities`, and takes the agent from widget config
 (`?agent=` scene param or the handshake's `agentId`), defaulting to the
-app's default agent.
+app's default agent. A `capabilities.open` command may also supply the active
+`conversation_id`; the widget forwards it on both read and update operations.
+
+That is how the baseline row is populated: only an independently mounted,
+unscoped capabilities read or update reaches `agent_selection:<agent_id>`.
+Chat-originated windows carry the conversation id and never write it. If the
+row has never been written, a new conversation starts from the application's
+configured inventory and configured model. Hosts must present the unscoped
+widget as **defaults for future conversations**; opening it as though it were
+the current conversation editor would silently change scope.
 
 ## Service cards: realms describe themselves
 

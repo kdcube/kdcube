@@ -1,10 +1,10 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/chat/chat-widget-solution-README.md
 title: "Chat Widget Solution"
-summary: "How to mount the reusable SDK chat widget in an app, configure its event-source profile, and reuse its headless engine (useChatEngine + ChatStoreProvider) to skin the chat with a custom UI or drive the backend from an external client."
+summary: "How to mount the reusable SDK chat widget in an app, configure its event-source profile and conversation-scoped capabilities picker, and reuse its headless engine to skin the chat or drive the backend from an external client."
 status: draft
 tags: ["sdk", "solutions", "chat", "widget", "bundle", "react", "external-events", "headless", "useChatEngine"]
-updated_at: 2026-06-23
+updated_at: 2026-07-12
 keywords:
   [
     "sdk chat widget",
@@ -20,6 +20,8 @@ keywords:
     "headless chat engine",
     "custom chat UI",
     "reuse chat backend",
+    "Save changes",
+    "conversation scoped agent settings",
   ]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/ecosystem-component/components-ecosystem-README.md
@@ -95,14 +97,18 @@ drop targets. See
   error: the composer shows no profile-fetch error banner. Identity-gated host
   affordances stay hidden until a signed-in profile is confirmed.
 
-## The composer "+" menu (per-user agent customization)
+## The composer "+" menu (conversation agent customization)
 
-The composer bar's "+" button opens a per-user, per-agent menu for signed-in
-users: pick the model (when the app declares `supported_models`), and toggle
+The composer bar's "+" button opens a per-user, per-conversation, per-agent
+menu for signed-in users: pick the model (when the app declares
+`supported_models`), and toggle
 the agent's skills, tool groups (with per-tool rows), MCP servers, and
 named-service namespaces — always a subset of what the app config grants, with
-system tool groups locked on. Toggles save optimistically and apply from the
-next message; cache-costly changes (a model switch, tool/skill toggles) show
+system tool groups locked on. Toggles form a local draft; **Save changes**
+persists one patch for the current conversation and the saved selection applies
+from its next message. Switching conversations drops unsaved changes and loads
+the selected conversation's settings. Cache-costly changes (a model switch,
+tool/skill toggles) show
 an inline cost notice inside the menu, and under the user's `confirm` policy
 the notice becomes an inline choice (apply now / from next conversation / when
 the cache is cold, with "remember my choice"). The full model — inventory, deny-list

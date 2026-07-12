@@ -408,7 +408,12 @@ class BaseEntrypoint:
             bundle_root=self._bundle_root(),
         )
 
-    async def _agent_capabilities_catalog_enriched(self, agent_id: str) -> Dict[str, Any]:
+    async def _agent_capabilities_catalog_enriched(
+        self,
+        agent_id: str,
+        *,
+        conversation_id: str = "",
+    ) -> Dict[str, Any]:
         """The catalog plus best-effort per-tool MCP listings.
 
         Wildcard MCP servers get `tool_entries` from the runtime MCP
@@ -429,7 +434,11 @@ class BaseEntrypoint:
             timeout_seconds=timeout,
         )
         catalog = await self._attach_named_service_realms(catalog)
-        return await self._attach_claim_coverage(catalog, agent_id)
+        return await self._attach_claim_coverage(
+            catalog,
+            agent_id,
+            conversation_id=conversation_id,
+        )
 
     # Realm resolution rides the same fail-open discipline as coverage: the
     # menu renders with plain namespace rows on any miss.
@@ -478,7 +487,13 @@ class BaseEntrypoint:
     # miss (fail-open, warning logged).
     CLAIM_COVERAGE_BUDGET_SECONDS = 2.5
 
-    async def _attach_claim_coverage(self, catalog: Dict[str, Any], agent_id: str) -> Dict[str, Any]:
+    async def _attach_claim_coverage(
+        self,
+        catalog: Dict[str, Any],
+        agent_id: str,
+        *,
+        conversation_id: str = "",
+    ) -> Dict[str, Any]:
         """Per-entry connected-account consent state for the picker UI.
 
         READ-ONLY (a menu render asks nothing): the tool descriptors' declared
@@ -523,6 +538,7 @@ class BaseEntrypoint:
                         user_id=user_id,
                         bundle_id=str(identity.get("bundle_id") or ""),
                         agent_id=agent_id,
+                        conversation_id=conversation_id,
                     )
                     raw_disabled = (selection or {}).get("disabled")
                     if isinstance(raw_disabled, Mapping):
@@ -577,14 +593,20 @@ class BaseEntrypoint:
     async def agent_capabilities(self, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Dict[str, Any]:
         """The pickable inventory of one agent + the caller's current selection.
 
-        Body: ``{"data": {"agent": "main"}}`` (agent optional; defaults to the
-        configured ``surfaces.as_consumer.default_agent``).
+        Body: ``{"data": {"agent": "main", "conversation_id": "..."}}``
+        (agent optional; defaults to the configured
+        ``surfaces.as_consumer.default_agent``). With a conversation id, the
+        response resolves and materializes that conversation's selection.
         """
         payload = self._agent_selection_payload(data, kwargs)
         agent_id = self._agent_selection_agent_id(payload)
+        conversation_id = str(payload.get("conversation_id") or "").strip()
         started_at = time.monotonic()
         try:
-            catalog = await self._agent_capabilities_catalog_enriched(agent_id)
+            catalog = await self._agent_capabilities_catalog_enriched(
+                agent_id,
+                conversation_id=conversation_id,
+            )
         except Exception as exc:
             self.logger.log(f"[agent_capabilities] catalog failed: {traceback.format_exc()}", "ERROR")
             return {"ok": False, "error": str(exc), "status": 500}
@@ -601,6 +623,8 @@ class BaseEntrypoint:
                     user_id=identity["user_id"],
                     bundle_id=identity["bundle_id"],
                     agent_id=agent_id,
+                    conversation_id=conversation_id,
+                    materialize=bool(conversation_id),
                 )
         except Exception:
             # Selection read is best-effort; the inventory is still useful and
@@ -654,12 +678,14 @@ class BaseEntrypoint:
         Cold-cache choices ride the same body too: ``"apply": "now" |
         "next_conversation" | "when_cold"`` (deferred choices park the change
         as a pending delta the runtime promotes on its trigger;
-        ``conversation_id`` anchors the next-conversation trigger) and
+        ``conversation_id`` selects the active conversation and anchors the
+        next-conversation trigger) and
         ``"cache_policy": {"model_switch": …, "capability_toggle": …}``
         persists the user's standing policy (clamped to the admin-allowed set).
         """
         payload = self._agent_selection_payload(data, kwargs)
         agent_id = self._agent_selection_agent_id(payload)
+        conversation_id = str(payload.get("conversation_id") or "").strip()
         patch = payload.get("disabled")
         has_model = "model" in payload
         raw_cache_policy = payload.get("cache_policy")
@@ -677,7 +703,10 @@ class BaseEntrypoint:
 
             # Enriched so per-tool MCP denials clamp against the same listing
             # the picker showed.
-            catalog = await self._agent_capabilities_catalog_enriched(agent_id)
+            catalog = await self._agent_capabilities_catalog_enriched(
+                agent_id,
+                conversation_id=conversation_id,
+            )
             store = self._agent_selection_store(identity)
             await store.ensure_schema()
             selection = await store.set_selection(
@@ -688,7 +717,7 @@ class BaseEntrypoint:
                 catalog=catalog,
                 replace=bool(payload.get("replace")),
                 apply=str(payload.get("apply") or "now"),
-                conversation_id=str(payload.get("conversation_id") or ""),
+                conversation_id=conversation_id,
                 cache_policy=(
                     clamp_cache_policy(raw_cache_policy, self.bundle_props, agent_id)
                     if isinstance(raw_cache_policy, Mapping)

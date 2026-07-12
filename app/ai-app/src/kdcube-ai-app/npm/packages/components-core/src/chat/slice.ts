@@ -56,7 +56,7 @@ import {
   subagentThreadsFromConversation,
 } from './subagents.ts'
 import type { SubagentStreamKind } from './subagents.ts'
-import { applySelectionPatch } from './capabilities.ts'
+import { applySelectionPatch, initialCapabilitiesState } from './capabilities.ts'
 import type {
   AgentCachePolicy,
   AgentCapabilitiesInventory,
@@ -387,19 +387,23 @@ const slice = createSlice({
       state.capabilities.model = action.payload.model ?? null
       state.capabilities.cachePolicy = action.payload.cachePolicy ?? null
       state.capabilities.pending = action.payload.pending ?? null
+      state.capabilities.dirty = false
     },
     capabilitiesLoadError(state, action: PayloadAction<string>) {
       state.capabilities.status = 'error'
       state.capabilities.error = action.payload
     },
-    /** Optimistic: apply a toggle patch to the local deny-list (and the model
-     *  pick) immediately; the engine debounces the matching
-     *  `agent_selection_update` merge-write. */
+    capabilitiesReset(state) {
+      state.capabilities = { ...initialCapabilitiesState, disabled: {} }
+    },
+    /** Apply a toggle patch to the local deny-list/model draft; the explicit
+     *  Save changes command sends the matching merge-write. */
     capabilitiesPatchApplied(state, action: PayloadAction<AgentSelectionPatch>) {
       state.capabilities.disabled = applySelectionPatch(state.capabilities.disabled, action.payload)
       if (action.payload.model !== undefined) {
         state.capabilities.model = action.payload.model
       }
+      state.capabilities.dirty = true
       state.capabilities.saveError = null
     },
     capabilitiesSaving(state, action: PayloadAction<boolean>) {
@@ -419,6 +423,7 @@ const slice = createSlice({
       if (action.payload.pending !== undefined) {
         state.capabilities.pending = action.payload.pending
       }
+      state.capabilities.dirty = false
       state.capabilities.saving = false
       state.capabilities.saveError = null
     },

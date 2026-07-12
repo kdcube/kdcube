@@ -1,10 +1,10 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/recipes/components/chat-with-react-agent-README.md
 title: "Recipe: Chat With A ReAct Agent"
-summary: "End-to-end steps: declare a ReAct agent with per-agent config (tools/skills inventory, instructions, supported_models), wire the chat component to it, and let users customize the agent through the composer menu."
+summary: "End-to-end steps: declare a ReAct agent with per-agent config, wire the chat component to it, and let users explicitly save model/capability choices for each conversation."
 status: current
 tags: ["recipes", "components", "chat", "react", "agent", "supported-models", "composer-menu"]
-updated_at: 2026-07-09
+updated_at: 2026-07-12
 keywords:
   [
     "chat with react agent",
@@ -12,7 +12,8 @@ keywords:
     "supported_models recipe",
     "composer plus menu",
     "agent_capabilities",
-    "per-user selection",
+    "conversation-scoped selection",
+    "Save changes",
   ]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/how/how-to-construct-react-agent-README.md
@@ -153,9 +154,13 @@ chat widget) renders the composer "+" menu automatically for signed-in users.
   expanded in-chat modal, and a served full-page `capabilities` widget a
   scene can mount and summon (`capabilities.open`). Model, granularity, and
   enforcement:
-  [Per-User Agent Capabilities](../../sdk/solutions/user-settings/capabilities-README.md).
-- Toggles and the model pick save as the user clicks and apply from the next
-  message.
-- Verify end to end: toggle a tool group off, send a message, and confirm the
+  [Conversation-Scoped Agent Capabilities](../../sdk/solutions/user-settings/capabilities-README.md).
+- The two chat shells edit a local draft for the active conversation. The user
+  presses **Save changes** once; the saved model/capabilities apply from that
+  conversation's next message. A chat-originated full-page widget receives
+  that conversation id; an independently mounted widget has no id and manages
+  the baseline for future conversations.
+- Verify end to end: toggle a tool group off, press **Save changes**, send a
+  message, and confirm the
   agent's tool catalog for that turn excludes the group (the selection is also
   logged as `[agent_selection.applied]` in the app logs).

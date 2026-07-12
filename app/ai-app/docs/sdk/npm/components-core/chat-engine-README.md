@@ -1,10 +1,10 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/npm/components-core/chat-engine-README.md
 title: "Chat Engine"
-summary: "The framework-agnostic chat controller from @kdcube/components-core/chat: state, transport, conversation lifecycle, context chips, and host events without React or iframe coupling."
+summary: "The framework-agnostic chat controller from @kdcube/components-core/chat: state, transport, conversation lifecycle, scoped capability drafts with explicit save, context chips, and host events without React or iframe coupling."
 status: implementation
 tags: ["sdk", "npm", "components-core", "chat", "createChatEngine", "controller", "headless"]
-updated_at: 2026-06-23
+updated_at: 2026-07-12
 keywords:
   [
     "createChatEngine",
@@ -13,6 +13,8 @@ keywords:
     "send steer loadConversation",
     "host event bus",
     "chat state machine",
+    "conversation scoped capabilities",
+    "saveAgentSelectionChanges",
   ]
 ---
 
@@ -78,6 +80,7 @@ interface ChatEngine {
 
   loadAgentCapabilities(opts?): void
   updateAgentSelection(patch): void
+  saveAgentSelectionChanges(): void
   submitAgentSelectionDecision(patch, options?): void
   openConnections(source?): void
   hasHostHandler(event): boolean
@@ -86,30 +89,38 @@ interface ChatEngine {
 }
 ```
 
-## Per-User Agent Capabilities
+## Conversation-Scoped Agent Capabilities
 
-The engine owns the client side of the per-user selection layer (semantics and
+The engine owns the client side of the conversation selection layer (semantics and
 config live in
 [How To Construct A ReAct Agent](../../agents/react/how/how-to-construct-react-agent-README.md)):
 
 - `state.capabilities` is a Redux branch: `status` (lazy: `idle` until the
   first `loadAgentCapabilities()` call), the loaded `inventory`
   (tool groups, MCP servers, namespaces, skills, `supported_models` +
-  `default_model`), the user's `disabled` deny-list and `model` pick, plus
-  `saving`/`saveError`.
-- `updateAgentSelection(patch)` applies the toggle optimistically, coalesces
-  pending patches, and saves through ONE debounced (600 ms)
-  `agent_selection_update` merge-write carrying only what changed. The server's
+  `default_model`), the conversation's `disabled` deny-list and `model` pick,
+  plus `dirty`, `saving`, and `saveError`.
+- Opening the picker mints a conversation id when a new chat does not yet have
+  one. Reads and writes carry that id.
+- `updateAgentSelection(patch)` applies the toggle to a local draft and
+  coalesces pending patches. It does not persist anything.
+- `saveAgentSelectionChanges()` sends one explicit
+  `agent_selection_update(conversation_id, patch)` merge-write. The server's
   clamped record reconciles the state on response.
-- A pending patch still inside the debounce window is flushed when `send()`
-  runs and on `dispose()`, so a toggle reaches the server before the turn it is
-  meant to shape.
+- Switching conversations discards an unsaved draft and loads the target
+  conversation's selection. Late load/save responses are ignored if their
+  conversation is no longer active.
+- `capabilities.open` carries the active conversation id when chat asks a
+  scene host to open the full-page picker, preserving the same persistence
+  scope across the presentation change.
 - `submitAgentSelectionDecision(patch, {apply, cachePolicy})` is the confirm
-  picker's write: immediate (no debounce), `apply` = `now` |
+  picker's explicit cache-cost decision, `apply` = `now` |
   `next_conversation` | `when_cold` (deferred modes park the change as
   `state.capabilities.pending`), `cachePolicy` persists the user's standing
   per-class cold-cache policy. `state.capabilities.cachePolicy` carries the
   effective policy + admin bounds.
+- `send()` never saves a capabilities draft implicitly. Only **Save changes**
+  or an explicit cache-policy decision writes it.
 - `openConnections()` emits the `open-connections` host event;
   `hasHostHandler('open-connections')` tells UI whether the host wired it —
   the composer menu hides its connections row otherwise.
@@ -153,4 +164,3 @@ to decide what the object can do.
 
 Each `createChatEngine` call creates its own store and transport state. A page can
 host multiple chat engines when it deliberately wants independent chat instances.
-

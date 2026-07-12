@@ -384,8 +384,9 @@ export interface ChatState {
   conversationsError: string | null
   conversationLoadingId: string | null
   conversationDeletingId: string | null
-  /** Per-user agent capability inventory + selection (the composer "+" menu).
-   *  Lazy: loaded on first menu open; `disabled` is the user's deny-list. */
+  /** Current conversation's agent capability inventory + selection (the
+   *  composer "+" menu). Lazy: loaded on first open; `disabled` is the local
+   *  draft/effective deny-list. */
   capabilities: AgentCapabilitiesState
   /** Subagent threads of the OPEN conversation, keyed by child conversation
    *  id. Fed live by stamped emissions and on reload by the parent turns'

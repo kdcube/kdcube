@@ -1,10 +1,10 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/recipes/constructs/user-settings-README.md
 title: "Recipe: App User Settings"
-summary: "Steps to give an app its own durable per-user settings over user_bundle_props: record shape + defaults, a thin store, clamp/merge on write, entrypoint ops with explicit visibility, the UI round-trip, and the per-turn application point."
+summary: "Steps to give an app durable user settings over user_bundle_props: choose the setting scope, define its typed key and record, clamp/merge on write, expose explicit operations, save deliberate UI drafts, and apply the setting at runtime."
 status: current
 tags: ["recipes", "constructs", "user-settings", "user_bundle_props", "store", "operations"]
-updated_at: 2026-07-06
+updated_at: 2026-07-12
 keywords:
   [
     "app user settings recipe",
@@ -12,7 +12,8 @@ keywords:
     "subsystem key convention",
     "merge-write clamp",
     "settings ops visibility",
-    "debounced settings writes",
+    "explicit settings save",
+    "conversation scoped settings",
   ]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/user-settings/user-settings-solution-README.md
@@ -20,23 +21,26 @@ see_also:
 ---
 # Recipe: App User Settings
 
-Steps to add an app's OWN durable per-user settings. The construct, its
+Steps to add an app's OWN durable user settings. The construct, its
 semantics, and the two shipped exemplars referenced below are owned by the
 [User Settings Solution](../../sdk/solutions/user-settings/user-settings-solution-README.md);
 this recipe is the wiring.
 
 ## 1. Define the record + the defaults
 
-One JSON record per (user, app, key): a `schema_version`, the user's choices,
-nothing else. Defaults live in CONFIG, never in storage — an absent row or
-field always means "the configured default".
+One JSON record per (user, app, typed key): a `schema_version`, the user's
+choices, nothing else. First decide whether the choice is user-wide,
+app-wide, per entity, or durable for one conversation. Configuration remains
+the ceiling and fallback when the scoped row or field is absent.
 
 ```json
 {"schema_version": 1, "digest_enabled": true, "digest_hour": 8}
 ```
 
-Keep out: secrets (user secret store), per-conversation state (conversation/
-timeline state).
+Keep out: secrets (user secret store) and conversation **execution state**
+(turns, timeline payloads, cache warmness, summaries, artifacts). A durable
+choice whose intended scope is one conversation belongs here and uses an
+exact conversation key.
 
 ## 2. Pick the subsystem/key convention
 
@@ -44,8 +48,9 @@ timeline state).
   `memory`, `agents`).
 - `bundle_id`: your real app id for app-scoped settings; the memory-preferences
   store shows the `bundle_id='*'` convention for a platform-wide record.
-- `key`: constant for a singleton record (`preferences`), or parameterized for
-  a per-entity family (`agent_selection:<agent_id>`).
+- `key`: constant for a singleton record (`preferences`), parameterized for a
+  per-entity family (`agent_selection:<agent_id>`), or an exact typed scope
+  (`conversation:<conversation_id>:agent_selection:<agent_id>`).
 
 ## 3. A thin store over `user_bundle_props`
 
@@ -77,10 +82,13 @@ The complete shipped exemplar is `UserAgentSelectionStore`
 a structured record with its own deep merge, clamped against the live
 inventory on write.
 
-The two invariants to copy exactly: **merge-writes** (a write carries only what
-changed and never clobbers sibling fields — this is also the concurrency
-model) and **clamp-on-write** (a choice outside what config grants is stripped
-or ignored; reads additionally recompute effective = configured ∩ chosen).
+The two invariants to copy exactly: **merge-writes** (one write carries only
+what changed and preserves sibling fields from its read snapshot) and
+**clamp-on-write** (a choice outside what config grants is stripped or
+ignored; reads additionally recompute effective = configured ∩ chosen).
+Concurrent writes to the same exact key are last-writer-wins; serialize them
+when stronger ordering is required. Use insert-if-absent when materializing an
+inherited scoped value so a first read cannot replace a simultaneous write.
 
 ## 4. Ops on the entrypoint — declare visibility
 
@@ -105,17 +113,24 @@ is open to ALL callers. Shipped exemplars:
 
 ## 5. UI round-trip
 
-Read once (lazy, on surface open); apply user changes optimistically; save
-through **debounced merge-writes carrying only the changed fields**; reconcile
-from the returned clamped record. The composer "+" menu and the memories
-widget are the two shipped round-trips; the chat engine's capabilities branch
-(`loadAgentCapabilities` / `updateAgentSelection`) is the client-side pattern
-to copy.
+Read once (lazy, on surface open); keep edits as a local draft; save only on an
+explicit user command; send the exact scope plus only the changed fields; then
+reconcile from the returned clamped record. The chat composer uses
+`conversation_id` and exposes **Save changes**. A chat-originated
+`capabilities.open` command carries that same id into the served widget. An
+independently mounted Capabilities widget omits it and therefore edits the
+user baseline from which future conversations start. Never switch those
+scopes silently in a host UI.
+
+The composer "+" menu and the memories widget are the two shipped
+round-trips; the chat engine's capabilities branch
+(`loadAgentCapabilities` / `updateAgentSelection` /
+`saveAgentSelectionChanges`) is the client-side pattern to copy.
 
 ## 6. Apply per turn, fail open
 
-Read the record fresh at the turn's application point and treat every failure
-as "use the configured behavior":
+Read the exact scoped record fresh at the runtime application point and treat
+every failure as "use the configured behavior":
 
 ```python
 try:

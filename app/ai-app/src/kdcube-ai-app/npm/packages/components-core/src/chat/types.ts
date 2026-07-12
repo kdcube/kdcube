@@ -107,10 +107,10 @@ export interface ChatEngine extends Pick<HostEventEmitter, 'on'> {
    *  `state.capabilities`. Lazy: call on first menu open; no-op when already
    *  loaded unless `force`. */
   loadAgentCapabilities(opts?: { force?: boolean }): void
-  /** Apply a selection toggle patch optimistically and queue the debounced
-   *  `agent_selection_update` merge-write (only the changed toggles are sent).
-   *  Takes effect from the next message. */
+  /** Apply a selection toggle to the current conversation's local draft. */
   updateAgentSelection(patch: AgentSelectionPatch): void
+  /** Persist the current conversation's capability draft. */
+  saveAgentSelectionChanges(): void
   /** One explicit cold-cache decision (the confirm picker): immediate write
    *  with `apply` = now | next_conversation | when_cold and an optional
    *  standing `cachePolicy` ("remember my choice"). */

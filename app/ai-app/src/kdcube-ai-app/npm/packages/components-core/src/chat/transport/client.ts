@@ -444,7 +444,8 @@ export interface AgentSelectionWriteOptions {
   /** Cold-cache choice for this write. Default 'now'; deferred modes park the
    *  change as a pending delta the runtime promotes on its trigger. */
   apply?: AgentSelectionApplyMode
-  /** Anchors the next-conversation trigger. */
+  /** Selects the conversation-scoped record and anchors a
+   *  next-conversation trigger. */
   conversationId?: string | null
   /** Persist the user's standing per-class policy alongside. */
   cachePolicy?: Record<string, string>
@@ -454,13 +455,19 @@ export interface AgentSelectionWriteOptions {
 export async function fetchAgentCapabilities(
   runtime: EngineRuntime,
   agentId: string,
+  conversationId?: string | null,
 ): Promise<AgentCapabilitiesResponse> {
   const { tenant, project } = requireScope(runtime)
   const response = await fetch(operationsUrl(runtime, 'agent_capabilities', runtime.bundleId, tenant, project), {
     method: 'POST',
     credentials: runtime.credentials,
     headers: await buildRequestHeaders(runtime, { 'Content-Type': 'application/json', Accept: 'application/json' }),
-    body: JSON.stringify({ data: { agent: agentId } }),
+    body: JSON.stringify({
+      data: {
+        agent: agentId,
+        ...(conversationId ? { conversation_id: conversationId } : {}),
+      },
+    }),
   })
   const payload = await response.json().catch(() => null)
   const body = unwrapOperationBody(payload, 'agent_capabilities') as AgentCapabilitiesResponse | null
@@ -494,7 +501,8 @@ export async function submitAgentSelectionUpdate(
         agent: agentId,
         disabled,
         ...(model !== undefined ? { model } : {}),
-        ...(apply ? { apply, conversation_id: options.conversationId || '' } : {}),
+        ...(apply ? { apply } : {}),
+        ...(options.conversationId ? { conversation_id: options.conversationId } : {}),
         ...(options.cachePolicy ? { cache_policy: options.cachePolicy } : {}),
       },
     }),

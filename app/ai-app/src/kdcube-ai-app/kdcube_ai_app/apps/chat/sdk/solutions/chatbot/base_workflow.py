@@ -2750,8 +2750,9 @@ class BaseWorkflow():
         """Narrow the configured tool/skill configs to this user's saved selection.
 
         The user's per-agent selection (a deny-list stored per user / bundle /
-        agent in ``user_bundle_props``) can only remove entries from what the
-        bundle config grants; system tool groups stay locked on. FAILS OPEN:
+        conversation / agent in ``user_bundle_props``, seeded from a user
+        default) can only remove entries from what the bundle config grants;
+        system tool groups stay locked on. FAILS OPEN:
         no row, missing pool, store error — anything — returns the configs
         unchanged. Also installs the per-turn named-service namespace deny-set
         so denied namespaces vanish from the roster and from dispatch, and
@@ -2774,6 +2775,7 @@ class BaseWorkflow():
             user_id = str(getattr(runtime_ctx, "user_id", "") or "").strip()
             bundle_id = str(getattr(runtime_ctx, "bundle_id", "") or "").strip()
             agent_id = str(getattr(runtime_ctx, "agent_id", "") or "").strip()
+            conversation_id = str(getattr(runtime_ctx, "conversation_id", "") or "").strip()
             tenant = str(getattr(runtime_ctx, "tenant", "") or "").strip()
             project = str(getattr(runtime_ctx, "project", "") or "").strip()
             if not user_id or not bundle_id or self.pg_pool is None:
@@ -2805,6 +2807,7 @@ class BaseWorkflow():
                 user_id=user_id,
                 bundle_id=bundle_id,
                 agent_id=agent_id,
+                conversation_id=conversation_id,
             )
             bundle_props = self.bundle_props if isinstance(self.bundle_props, Mapping) else {}
             if runtime_ctx is not None:
@@ -2823,7 +2826,6 @@ class BaseWorkflow():
             except Exception:
                 timeline = None
             warm = self._conversation_cache_is_warm(timeline)
-            conversation_id = str(getattr(runtime_ctx, "conversation_id", "") or "").strip()
             promoted_policy = ""
             pending = (selection or {}).get("pending")
             if isinstance(pending, Mapping) and pending:
@@ -2839,6 +2841,11 @@ class BaseWorkflow():
                             user_id=user_id,
                             bundle_id=bundle_id,
                             agent_id=agent_id,
+                            conversation_id=(
+                                conversation_id
+                                if selection.get("pending_scope") == "conversation"
+                                else ""
+                            ),
                         )
                         promoted_policy = apply_mode
                     except Exception:
@@ -2847,6 +2854,18 @@ class BaseWorkflow():
                             + traceback.format_exc(),
                             level="WARNING",
                         )
+
+            # Freeze the inherited default only after a due default-level
+            # pending delta has had a chance to promote. From this point the
+            # conversation owns its model/capability selection.
+            if conversation_id:
+                selection = await store.get_selection(
+                    user_id=user_id,
+                    bundle_id=bundle_id,
+                    agent_id=agent_id,
+                    conversation_id=conversation_id,
+                    materialize=True,
+                )
 
             disabled = (selection or {}).get("disabled") or {}
             supported = react_supported_models(bundle_props, agent_id)

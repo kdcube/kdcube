@@ -164,6 +164,14 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
   const bundleId = runtime.bundleId
   const getChat = () => store.getState().chat
 
+  function ensureConversationId(): string {
+    const current = getChat().conversationId
+    if (current) return current
+    const created = runtime.createLocalId('conversation')
+    dispatch(chatActions.setConversationId(created))
+    return created
+  }
+
   // --- Engine-level (non-Redux) status ---
   let status: ChatEngineStatus = {
     ready: false,
@@ -200,6 +208,9 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
   let streamId: string | null = null
   let sendQueue: Promise<void> = Promise.resolve()
   let disposed = false
+  let loadAgentCapabilities: (opts?: { force?: boolean }) => Promise<void>
+  let flushAgentSelection: () => Promise<void>
+  let discardAgentSelectionDraft: () => void
 
   function applyAuthed(next: boolean) {
     authedRef = next
@@ -247,11 +258,14 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
   }
 
   const loadConversation = async (conversationId: string) => {
+    const capabilitiesWereLoaded = getChat().capabilities.status !== 'idle'
     dispatch(chatActions.setConversationLoadingId(conversationId))
     dispatch(chatActions.unlockInput())
     try {
       const conversation = await fetchConversationById(runtime, conversationId)
+      discardAgentSelectionDraft()
       dispatch(chatActions.hydrateConversation({ conversation }))
+      dispatch(chatActions.capabilitiesReset())
       dispatch(chatActions.clearComposer())
       dispatch(chatActions.setConversationLoadingId(null))
       void fetchTurnFeedbacks(runtime, conversation.conversation_id)
@@ -260,6 +274,7 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
       if (getChat().connection === 'connected') {
         void requestConversationStatusForCurrentStream(conversation.conversation_id)
       }
+      if (capabilitiesWereLoaded) void loadAgentCapabilities({ force: true })
     } catch (error) {
       const message = messageForError(error)
       dispatch(chatActions.setConversationLoadingId(null))
@@ -268,10 +283,15 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
   }
 
   const startNewChat = () => {
+    const capabilitiesWereLoaded = getChat().capabilities.status !== 'idle'
+    discardAgentSelectionDraft()
     dispatch(chatActions.startNewConversation())
+    dispatch(chatActions.setConversationId(runtime.createLocalId('conversation')))
+    dispatch(chatActions.capabilitiesReset())
     dispatch(chatActions.clearComposer())
     dispatch(chatActions.unlockInput())
     dispatch(chatActions.setConversationLoadingId(null))
+    if (capabilitiesWereLoaded) void loadAgentCapabilities({ force: true })
   }
 
   /* Expand a reconstructed thread stub: the child conversation fetches
@@ -528,10 +548,6 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
       promptLogin()
       return
     }
-    /* A capability toggle still sitting in the debounce window should reach the
-     * server before the turn it is meant to apply to — flush it now (not
-     * awaited; the backend reads the selection when the turn's agent builds). */
-    void flushAgentSelection()
     const previousTail = sendQueue
     let resolveOurs!: () => void
     const ours = new Promise<void>((res) => { resolveOurs = res })
@@ -686,22 +702,28 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
     }
   }
 
-  // --- Per-user agent capabilities (composer "+" menu) ---
-  // Lazy-loaded on first menu open; toggles apply optimistically and save via a
-  // debounced agent_selection_update merge-write carrying only what changed.
+  // --- Conversation-scoped agent capabilities (composer "+" menu) ---
+  // Lazy-loaded on first menu open; toggles build a local draft and the user
+  // persists it with the picker's explicit Save changes command.
   // Toggles take effect from the NEXT message (the backend reads per turn).
-  const SELECTION_SAVE_DEBOUNCE_MS = 600
-  let selectionSaveTimer: number | null = null
   let pendingSelectionPatch: AgentSelectionPatch | null = null
+  let pendingSelectionConversationId: string | null = null
 
-  const loadAgentCapabilities = async (opts?: { force?: boolean }) => {
+  discardAgentSelectionDraft = () => {
+    pendingSelectionPatch = null
+    pendingSelectionConversationId = null
+  }
+
+  loadAgentCapabilities = async (opts?: { force?: boolean }) => {
     if (!authedRef) return
+    const conversationId = ensureConversationId()
     const current = getChat().capabilities
     if (current.status === 'loading') return
     if (current.status === 'ready' && !opts?.force) return
     dispatch(chatActions.capabilitiesLoading())
     try {
-      const response = await fetchAgentCapabilities(runtime, runtime.agentId)
+      const response = await fetchAgentCapabilities(runtime, runtime.agentId, conversationId)
+      if (getChat().conversationId !== conversationId) return
       dispatch(chatActions.capabilitiesLoaded({
         agent: response.agent || runtime.agentId,
         inventory: response.capabilities,
@@ -711,38 +733,47 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
         pending: response.selection?.pending ?? null,
       }))
     } catch (error) {
+      if (getChat().conversationId !== conversationId) return
       dispatch(chatActions.capabilitiesLoadError(messageForError(error)))
     }
   }
 
-  const flushAgentSelection = async () => {
-    if (selectionSaveTimer !== null) {
-      clearTimeout(selectionSaveTimer)
-      selectionSaveTimer = null
-    }
+  flushAgentSelection = async () => {
     const patch = pendingSelectionPatch
+    const conversationId = pendingSelectionConversationId
     pendingSelectionPatch = null
+    pendingSelectionConversationId = null
     if (!patch || !authedRef) return
     dispatch(chatActions.capabilitiesSaving(true))
     try {
-      const response = await submitAgentSelectionUpdate(runtime, runtime.agentId, patch)
-      dispatch(chatActions.capabilitiesSelectionSaved({
-        disabled: response.selection?.disabled ?? {},
-        model: response.selection?.model ?? null,
-        pending: response.selection?.pending ?? null,
-      }))
+      const response = await submitAgentSelectionUpdate(runtime, runtime.agentId, patch, {
+        conversationId,
+      })
+      if (getChat().conversationId === conversationId) {
+        dispatch(chatActions.capabilitiesSelectionSaved({
+          disabled: response.selection?.disabled ?? {},
+          model: response.selection?.model ?? null,
+          pending: response.selection?.pending ?? null,
+        }))
+      }
       /* Toggles queued while this save was in flight stay optimistic on top of
        * the server's clamped record; their own flush reconciles them. */
-      if (pendingSelectionPatch) {
+      if (pendingSelectionPatch && getChat().conversationId === pendingSelectionConversationId) {
         dispatch(chatActions.capabilitiesPatchApplied(pendingSelectionPatch))
       }
     } catch (error) {
-      dispatch(chatActions.capabilitiesSaveError(messageForError(error)))
+      if (getChat().conversationId === conversationId) {
+        if (!pendingSelectionPatch || pendingSelectionConversationId === conversationId) {
+          pendingSelectionPatch = mergeSelectionPatches(patch, pendingSelectionPatch ?? {})
+          pendingSelectionConversationId = conversationId
+        }
+        dispatch(chatActions.capabilitiesSaveError(messageForError(error)))
+      }
     }
   }
 
   /** One explicit cold-cache decision from the confirm picker: an immediate
-   *  write (no debounce) carrying the apply mode + optional standing policy.
+   *  write carrying the apply mode + optional standing policy.
    *  Deferred modes park the change server-side; the state reconciles from
    *  the response (pending set, active unchanged). */
   const submitAgentSelectionDecision = async (
@@ -750,37 +781,51 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
     options: { apply?: 'now' | 'next_conversation' | 'when_cold'; cachePolicy?: Record<string, string> } = {},
   ) => {
     if (!authedRef) return
+    const conversationId = ensureConversationId()
     const apply = options.apply ?? 'now'
+    const submittedPatch = mergeSelectionPatches(pendingSelectionPatch ?? {}, patch)
+    discardAgentSelectionDraft()
     if (apply === 'now') {
       // Optimistic like a plain toggle; the standing policy rides the flush.
       dispatch(chatActions.capabilitiesPatchApplied(patch))
     }
     dispatch(chatActions.capabilitiesSaving(true))
     try {
-      const response = await submitAgentSelectionUpdate(runtime, runtime.agentId, patch, {
+      const response = await submitAgentSelectionUpdate(runtime, runtime.agentId, submittedPatch, {
         apply,
-        conversationId: getChat().conversationId,
+        conversationId,
         cachePolicy: options.cachePolicy,
       })
-      dispatch(chatActions.capabilitiesSelectionSaved({
-        disabled: response.selection?.disabled ?? {},
-        model: response.selection?.model ?? null,
-        pending: response.selection?.pending ?? null,
-      }))
+      if (getChat().conversationId === conversationId) {
+        dispatch(chatActions.capabilitiesSelectionSaved({
+          disabled: response.selection?.disabled ?? {},
+          model: response.selection?.model ?? null,
+          pending: response.selection?.pending ?? null,
+        }))
+        if (pendingSelectionPatch) {
+          dispatch(chatActions.capabilitiesPatchApplied(pendingSelectionPatch))
+        }
+      }
     } catch (error) {
-      dispatch(chatActions.capabilitiesSaveError(messageForError(error)))
+      if (getChat().conversationId === conversationId) {
+        if (!pendingSelectionPatch || pendingSelectionConversationId === conversationId) {
+          pendingSelectionPatch = mergeSelectionPatches(submittedPatch, pendingSelectionPatch ?? {})
+          pendingSelectionConversationId = conversationId
+        }
+        dispatch(chatActions.capabilitiesSaveError(messageForError(error)))
+      }
     }
   }
 
   const updateAgentSelection = (patch: AgentSelectionPatch) => {
     if (!authedRef) return
+    const conversationId = ensureConversationId()
     dispatch(chatActions.capabilitiesPatchApplied(patch))
+    if (pendingSelectionPatch && pendingSelectionConversationId !== conversationId) {
+      discardAgentSelectionDraft()
+    }
     pendingSelectionPatch = mergeSelectionPatches(pendingSelectionPatch ?? {}, patch)
-    if (selectionSaveTimer !== null) clearTimeout(selectionSaveTimer)
-    selectionSaveTimer = setTimeout(() => {
-      selectionSaveTimer = null
-      void flushAgentSelection()
-    }, SELECTION_SAVE_DEBOUNCE_MS) as unknown as number
+    pendingSelectionConversationId = conversationId
   }
 
   const handleReconnect = async () => {
@@ -963,6 +1008,9 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
       void loadAgentCapabilities(opts)
     },
     updateAgentSelection,
+    saveAgentSelectionChanges() {
+      void flushAgentSelection()
+    },
     submitAgentSelectionDecision(patch, options) {
       void submitAgentSelectionDecision(patch, options)
     },
@@ -975,8 +1023,7 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
     dispose() {
       disposed = true
       resetTransport()
-      /* Push any toggle still in the debounce window before tearing down. */
-      void flushAgentSelection()
+      discardAgentSelectionDraft()
       statusListeners.clear()
     },
   }

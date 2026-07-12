@@ -1,5 +1,6 @@
 /**
- * Per-user agent capabilities — the composer-menu read model + selection logic.
+ * Conversation-scoped agent capabilities — the composer-menu read model and
+ * explicit-save draft logic.
  *
  * The server owns the truth: `agent_capabilities` returns the agent's configured
  * inventory (python tool groups with per-tool docs, MCP servers, named-service
@@ -258,6 +259,8 @@ export interface AgentCapabilitiesState {
   cachePolicy: AgentCachePolicy | null
   /** A deferred change awaiting its trigger (badged in the menu). */
   pending: AgentSelectionPending | null
+  /** Local selection differs from the persisted conversation record. */
+  dirty: boolean
   saving: boolean
   saveError: string | null
 }
@@ -271,6 +274,7 @@ export const initialCapabilitiesState: AgentCapabilitiesState = {
   model: null,
   cachePolicy: null,
   pending: null,
+  dirty: false,
   saving: false,
   saveError: null,
 }
@@ -280,7 +284,7 @@ export const initialCapabilitiesState: AgentCapabilitiesState = {
 const DICT_CATEGORIES = ['tools', 'mcp', 'named_services'] as const
 
 /** Apply a toggle patch to a deny-list — the client mirror of the server's
- *  merge-write, used for optimistic updates while the debounced save is queued. */
+ *  merge-write, used for the explicit-save draft. */
 export function applySelectionPatch(
   disabled: AgentSelectionDisabled,
   patch: AgentSelectionPatch,
@@ -325,7 +329,7 @@ export function applySelectionPatch(
   return out
 }
 
-/** Merge two toggle patches (later wins per key) so debounced saves send one
+/** Merge two toggle patches (later wins per key) so explicit save sends one
  *  request carrying only what changed. */
 export function mergeSelectionPatches(
   base: AgentSelectionPatch,

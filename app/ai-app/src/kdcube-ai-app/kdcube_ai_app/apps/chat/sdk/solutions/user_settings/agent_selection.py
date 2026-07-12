@@ -1,11 +1,15 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Elena Viter
 
-"""The per-user agent-selection settings record — a concrete store on the
+"""The per-user agent-selection settings records — a concrete store on the
 generic user-settings core (``store.UserSettingsStore``).
 
-One record per (user, REAL bundle_id, agent): ``subsystem='agents'``,
-``key='agent_selection:<agent_id>'``. The value is a deny-list record:
+The user-default record is keyed ``agent_selection:<agent_id>``. A
+conversation's effective selection is keyed
+``conversation:<conversation_id>:agent_selection:<agent_id>`` in the same
+``user_bundle_props`` table. Conversation rows own the capability/model pick;
+the user-default row supplies their initial value and owns the standing cache
+policy. The value is a deny-list record:
 
     {
       "schema_version": 1,
@@ -52,6 +56,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.user_settings.store import (
 
 AGENT_SELECTION_SUBSYSTEM = "agents"
 AGENT_SELECTION_KEY_PREFIX = "agent_selection:"
+AGENT_SELECTION_CONVERSATION_KEY_PREFIX = "conversation:"
 
 # set_selection sentinel: "model not in this patch" (None means CLEAR the pick).
 _MODEL_UNSET = object()
@@ -59,8 +64,12 @@ _MODEL_UNSET = object()
 _DICT_CATEGORIES = ("tools", "mcp", "named_services")
 
 
-def agent_selection_key(agent_id: str) -> str:
-    return f"{AGENT_SELECTION_KEY_PREFIX}{str(agent_id or '').strip() or 'main'}"
+def agent_selection_key(agent_id: str, *, conversation_id: str = "") -> str:
+    base = f"{AGENT_SELECTION_KEY_PREFIX}{str(agent_id or '').strip() or 'main'}"
+    conversation = str(conversation_id or "").strip()
+    if not conversation:
+        return base
+    return f"{AGENT_SELECTION_CONVERSATION_KEY_PREFIX}{conversation}:{base}"
 
 
 def merge_selection_patch(
@@ -179,182 +188,76 @@ def _merge_patch_over_patch(
 
 
 class UserAgentSelectionStore(UserSettingsStore):
-    """Postgres-backed per-user agent selection (deny-list) store.
+    """Postgres-backed user-default and per-conversation agent selections."""
 
-    Rides the ``user_bundle_props`` table via the generic user-settings core;
-    this class owns the agent-selection record semantics (merge, clamp,
-    pending deltas)."""
+    @staticmethod
+    def _empty_selection() -> dict[str, Any]:
+        now = utc_now_iso()
+        return {
+            "schema_version": 1,
+            "disabled": {},
+            "model": None,
+            "cache_policy": {},
+            "pending": None,
+            "created_at": now,
+            "updated_at": now,
+        }
 
-    async def get_selection(
-        self,
-        *,
-        user_id: str,
-        bundle_id: str,
-        agent_id: str,
-    ) -> dict[str, Any]:
-        """The stored selection record; ``{}`` disabled when no row exists."""
-        record = await self.get_record(
-            user_id=user_id,
-            bundle_id=bundle_id,
-            subsystem=AGENT_SELECTION_SUBSYSTEM,
-            key=agent_selection_key(agent_id),
-        )
+    @classmethod
+    def _selection_from_record(cls, record: Optional[Mapping[str, Any]]) -> Optional[dict[str, Any]]:
         if record is None:
-            now = utc_now_iso()
-            return {
-                "schema_version": 1,
-                "disabled": {},
-                "model": None,
-                "cache_policy": {},
-                "pending": None,
-                "created_at": now,
-                "updated_at": now,
-            }
-        value = record["value"]
+            return None
+        value = record.get("value")
+        value = value if isinstance(value, Mapping) else {}
         disabled = value.get("disabled")
-        model = value.get("model")
         cache_policy = value.get("cache_policy")
         pending = value.get("pending")
         return {
             "schema_version": 1,
             "disabled": dict(disabled) if isinstance(disabled, Mapping) else {},
-            # Single PICK (absent/None = the configured default model), riding
-            # the same record as the deny-list toggles.
-            "model": normalize_model_pick(model),
-            # The user's standing selection-change policy per delta class.
+            "model": normalize_model_pick(value.get("model")),
             "cache_policy": dict(cache_policy) if isinstance(cache_policy, Mapping) else {},
-            # A deferred selection change awaiting its trigger.
             "pending": dict(pending) if isinstance(pending, Mapping) else None,
-            "created_at": record["created_at"],
-            "updated_at": record["updated_at"],
+            "created_at": str(record.get("created_at") or ""),
+            "updated_at": str(record.get("updated_at") or ""),
         }
 
-    async def set_selection(
+    @staticmethod
+    def _value_from_selection(
+        selection: Mapping[str, Any],
+        *,
+        include_cache_policy: bool,
+    ) -> dict[str, Any]:
+        value: dict[str, Any] = {
+            "schema_version": 1,
+            "disabled": dict(selection.get("disabled") or {}),
+            "updated_at": utc_now_iso(),
+        }
+        model = normalize_model_pick(selection.get("model"))
+        if model:
+            value["model"] = model
+        if include_cache_policy and selection.get("cache_policy"):
+            value["cache_policy"] = dict(selection.get("cache_policy") or {})
+        pending = selection.get("pending")
+        if isinstance(pending, Mapping) and pending:
+            value["pending"] = dict(pending)
+        return value
+
+    async def _get_exact_selection(
         self,
         *,
         user_id: str,
         bundle_id: str,
         agent_id: str,
-        patch: Mapping[str, Any] | None,
-        model: Any = _MODEL_UNSET,
-        cache_policy: Optional[Mapping[str, Any]] = None,
-        apply: str = "now",
         conversation_id: str = "",
-        catalog: Optional[Mapping[str, Any]] = None,
-        replace: bool = False,
-    ) -> dict[str, Any]:
-        """Merge-write a partial toggle patch (or replace the whole record).
-
-        When ``catalog`` (the live inventory) is provided the merged result is
-        clamped against it: anything outside the inventory is stripped, and
-        system tool aliases are always stripped (locked on).
-
-        ``model`` is the single model pick: omitted keeps the stored pick,
-        ``None`` clears it (back to the configured default), a ``{provider,
-        model}`` mapping sets it — clamped against the catalog's
-        ``supported_models`` when the catalog is provided (an out-of-list pick
-        keeps the stored value).
-
-        ``apply`` is the user's cold-cache choice for THIS change: ``now``
-        merges into the active selection (the default); ``next_conversation``
-        or ``when_cold`` stores the change as a PENDING delta (active selection
-        untouched) that the runtime promotes when its trigger fires.
-        ``cache_policy`` merges the user's standing per-class policy (callers
-        clamp it against the admin-allowed set first).
-        """
-        current: Mapping[str, Any] = {}
-        current_model: Any = None
-        current_policy: dict[str, Any] = {}
-        current_pending: Optional[dict[str, Any]] = None
-        if not replace:
-            stored = await self.get_selection(
-                user_id=user_id,
-                bundle_id=bundle_id,
-                agent_id=agent_id,
-            )
-            current = stored.get("disabled") or {}
-            current_model = stored.get("model")
-            current_policy = dict(stored.get("cache_policy") or {})
-            current_pending = stored.get("pending")
-
-        merged_policy = dict(current_policy)
-        if isinstance(cache_policy, Mapping):
-            for klass, value_ in cache_policy.items():
-                text = str(value_ or "").strip()
-                if text:
-                    merged_policy[str(klass)] = text
-
-        apply_mode = str(apply or "now").strip().lower()
-        if apply_mode in ("next_conversation", "when_cold"):
-            # Deferred change: the active selection stays; the delta parks in
-            # `pending` until the runtime sees its trigger.
-            pending: dict[str, Any] = dict(current_pending or {})
-            pending_patch = _merge_patch_over_patch(pending.get("disabled"), patch)
-            if pending_patch:
-                pending["disabled"] = pending_patch
-            elif "disabled" in pending and not pending_patch:
-                pending.pop("disabled", None)
-            if model is not _MODEL_UNSET:
-                candidate = normalize_model_pick(model) if model is not None else None
-                if model is None:
-                    pending["model"] = None
-                elif candidate is not None:
-                    if catalog is not None:
-                        candidate = match_supported_model(candidate, catalog.get("supported_models"))
-                    if candidate:
-                        pending["model"] = candidate
-            pending["apply"] = apply_mode
-            pending["since_conversation_id"] = str(conversation_id or "")
-            pending.setdefault("created_at", utc_now_iso())
-            now = utc_now_iso()
-            value: dict[str, Any] = {"schema_version": 1, "disabled": dict(current), "updated_at": now}
-            if normalize_model_pick(current_model):
-                value["model"] = normalize_model_pick(current_model)
-            if merged_policy:
-                value["cache_policy"] = merged_policy
-            if "disabled" in pending or "model" in pending:
-                value["pending"] = pending
-            await self._write_value(user_id=user_id, bundle_id=bundle_id, agent_id=agent_id, value=value)
-            return {
-                "schema_version": 1,
-                "disabled": dict(current),
-                "model": normalize_model_pick(current_model),
-                "cache_policy": merged_policy,
-                "pending": value.get("pending"),
-                "updated_at": now,
-            }
-
-        merged = merge_selection_patch(current, patch)
-        if catalog is not None:
-            merged = clamp_selection(merged, catalog)
-
-        merged_model = normalize_model_pick(current_model)
-        if model is None:
-            merged_model = None
-        elif model is not _MODEL_UNSET:
-            candidate = normalize_model_pick(model)
-            if catalog is not None:
-                candidate = match_supported_model(candidate, catalog.get("supported_models"))
-            if candidate:
-                merged_model = candidate
-
-        now = utc_now_iso()
-        value: dict[str, Any] = {"schema_version": 1, "disabled": merged, "updated_at": now}
-        if merged_model:
-            value["model"] = merged_model
-        if merged_policy:
-            value["cache_policy"] = merged_policy
-        if isinstance(current_pending, Mapping) and current_pending:
-            value["pending"] = dict(current_pending)
-        await self._write_value(user_id=user_id, bundle_id=bundle_id, agent_id=agent_id, value=value)
-        return {
-            "schema_version": 1,
-            "disabled": merged,
-            "model": merged_model,
-            "cache_policy": merged_policy,
-            "pending": value.get("pending"),
-            "updated_at": now,
-        }
+    ) -> Optional[dict[str, Any]]:
+        record = await self.get_record(
+            user_id=user_id,
+            bundle_id=bundle_id,
+            subsystem=AGENT_SELECTION_SUBSYSTEM,
+            key=agent_selection_key(agent_id, conversation_id=conversation_id),
+        )
+        return self._selection_from_record(record)
 
     async def _write_value(
         self,
@@ -363,29 +266,101 @@ class UserAgentSelectionStore(UserSettingsStore):
         bundle_id: str,
         agent_id: str,
         value: Mapping[str, Any],
+        conversation_id: str = "",
     ) -> None:
         await self.put_record(
             user_id=user_id,
             bundle_id=bundle_id,
             subsystem=AGENT_SELECTION_SUBSYSTEM,
-            key=agent_selection_key(agent_id),
+            key=agent_selection_key(agent_id, conversation_id=conversation_id),
             value=value,
         )
 
-    async def promote_pending(
+    async def _ensure_conversation_selection(
         self,
         *,
         user_id: str,
         bundle_id: str,
         agent_id: str,
-        catalog: Optional[Mapping[str, Any]] = None,
+        conversation_id: str,
+        default: Mapping[str, Any],
     ) -> dict[str, Any]:
-        """Merge the pending delta into the active selection and clear it.
+        seed = {
+            "schema_version": 1,
+            "disabled": dict(default.get("disabled") or {}),
+            "updated_at": utc_now_iso(),
+        }
+        model = normalize_model_pick(default.get("model"))
+        if model:
+            seed["model"] = model
+        await self.put_record_if_absent(
+            user_id=user_id,
+            bundle_id=bundle_id,
+            subsystem=AGENT_SELECTION_SUBSYSTEM,
+            key=agent_selection_key(agent_id, conversation_id=conversation_id),
+            value=seed,
+        )
+        stored = await self._get_exact_selection(
+            user_id=user_id,
+            bundle_id=bundle_id,
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+        )
+        return stored or {**self._empty_selection(), "disabled": dict(default.get("disabled") or {}), "model": model}
 
-        Called by the runtime when the pending trigger fires (new conversation
-        / cold cache). Returns the updated record.
-        """
-        stored = await self.get_selection(user_id=user_id, bundle_id=bundle_id, agent_id=agent_id)
+    @staticmethod
+    def _compose_effective_selection(
+        default: Mapping[str, Any],
+        scoped: Optional[Mapping[str, Any]],
+        *,
+        conversation_id: str,
+    ) -> dict[str, Any]:
+        active = scoped or default
+        scoped_pending = scoped.get("pending") if isinstance(scoped, Mapping) else None
+        default_pending = default.get("pending")
+        if isinstance(scoped_pending, Mapping) and scoped_pending:
+            pending = dict(scoped_pending)
+            pending_scope = "conversation"
+        elif isinstance(default_pending, Mapping) and default_pending:
+            pending = dict(default_pending)
+            pending_scope = "user_default"
+        else:
+            pending = None
+            pending_scope = None
+        conversation = str(conversation_id or "").strip()
+        return {
+            "schema_version": 1,
+            "disabled": dict(active.get("disabled") or {}),
+            "model": normalize_model_pick(active.get("model")),
+            "cache_policy": dict(default.get("cache_policy") or {}),
+            "pending": pending,
+            "pending_scope": pending_scope,
+            "scope": {
+                "kind": "conversation" if conversation else "user_default",
+                "conversation_id": conversation,
+                "inherited": bool(conversation and scoped is None),
+            },
+            "created_at": str(active.get("created_at") or ""),
+            "updated_at": str(active.get("updated_at") or ""),
+        }
+
+    async def _promote_exact_pending(
+        self,
+        *,
+        user_id: str,
+        bundle_id: str,
+        agent_id: str,
+        conversation_id: str,
+        catalog: Optional[Mapping[str, Any]],
+    ) -> Optional[dict[str, Any]]:
+        stored = await self._get_exact_selection(
+            user_id=user_id,
+            bundle_id=bundle_id,
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+        )
+        if stored is None:
+            return None
         pending = stored.get("pending")
         if not isinstance(pending, Mapping) or not pending:
             return stored
@@ -402,24 +377,257 @@ class UserAgentSelectionStore(UserSettingsStore):
                     candidate = match_supported_model(candidate, catalog.get("supported_models"))
                 if candidate:
                     merged_model = candidate
-        now = utc_now_iso()
-        value: dict[str, Any] = {"schema_version": 1, "disabled": merged, "updated_at": now}
-        if merged_model:
-            value["model"] = merged_model
-        if stored.get("cache_policy"):
-            value["cache_policy"] = dict(stored["cache_policy"])
-        await self._write_value(user_id=user_id, bundle_id=bundle_id, agent_id=agent_id, value=value)
-        return {
-            "schema_version": 1,
+        promoted = {
+            **stored,
             "disabled": merged,
             "model": merged_model,
-            "cache_policy": dict(stored.get("cache_policy") or {}),
             "pending": None,
-            "updated_at": now,
         }
+        await self._write_value(
+            user_id=user_id,
+            bundle_id=bundle_id,
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            value=self._value_from_selection(promoted, include_cache_policy=not conversation_id),
+        )
+        return promoted
+
+    async def get_selection(
+        self,
+        *,
+        user_id: str,
+        bundle_id: str,
+        agent_id: str,
+        conversation_id: str = "",
+        materialize: bool = False,
+    ) -> dict[str, Any]:
+        """Resolve the selection for a conversation or the user default.
+
+        A missing conversation row inherits the user default. ``materialize``
+        freezes that inherited model/capability selection for the conversation
+        with an insert-if-absent; standing cache policy remains on the default
+        row. A due ``next_conversation`` default is promoted before seeding.
+        """
+        conversation = str(conversation_id or "").strip()
+        default = await self._get_exact_selection(
+            user_id=user_id,
+            bundle_id=bundle_id,
+            agent_id=agent_id,
+        ) or self._empty_selection()
+
+        pending = default.get("pending")
+        if conversation and isinstance(pending, Mapping):
+            if (
+                str(pending.get("apply") or "").strip().lower() == "next_conversation"
+                and conversation != str(pending.get("since_conversation_id") or "").strip()
+            ):
+                default = await self._promote_exact_pending(
+                    user_id=user_id,
+                    bundle_id=bundle_id,
+                    agent_id=agent_id,
+                    conversation_id="",
+                    catalog=None,
+                ) or default
+
+        if not conversation:
+            return self._compose_effective_selection(default, None, conversation_id="")
+
+        scoped = await self._get_exact_selection(
+            user_id=user_id,
+            bundle_id=bundle_id,
+            agent_id=agent_id,
+            conversation_id=conversation,
+        )
+        if scoped is None and materialize:
+            scoped = await self._ensure_conversation_selection(
+                user_id=user_id,
+                bundle_id=bundle_id,
+                agent_id=agent_id,
+                conversation_id=conversation,
+                default=default,
+            )
+        return self._compose_effective_selection(default, scoped, conversation_id=conversation)
+
+    async def set_selection(
+        self,
+        *,
+        user_id: str,
+        bundle_id: str,
+        agent_id: str,
+        patch: Mapping[str, Any] | None,
+        model: Any = _MODEL_UNSET,
+        cache_policy: Optional[Mapping[str, Any]] = None,
+        apply: str = "now",
+        conversation_id: str = "",
+        catalog: Optional[Mapping[str, Any]] = None,
+        replace: bool = False,
+    ) -> dict[str, Any]:
+        """Merge one selection change into its explicit scope.
+
+        ``now`` and ``when_cold`` target the supplied conversation (or the
+        user default when no conversation is supplied). ``next_conversation``
+        parks a delta on the user default, anchored to ``conversation_id``.
+        ``cache_policy`` always merges into the user default.
+        """
+        conversation = str(conversation_id or "").strip()
+        apply_mode = str(apply or "now").strip().lower()
+        if apply_mode not in ("now", "next_conversation", "when_cold"):
+            apply_mode = "now"
+
+        default = await self._get_exact_selection(
+            user_id=user_id,
+            bundle_id=bundle_id,
+            agent_id=agent_id,
+        ) or self._empty_selection()
+        pending = default.get("pending")
+        if conversation and isinstance(pending, Mapping):
+            if (
+                str(pending.get("apply") or "").strip().lower() == "next_conversation"
+                and conversation != str(pending.get("since_conversation_id") or "").strip()
+            ):
+                default = await self._promote_exact_pending(
+                    user_id=user_id,
+                    bundle_id=bundle_id,
+                    agent_id=agent_id,
+                    conversation_id="",
+                    catalog=catalog,
+                ) or default
+
+        merged_policy = dict(default.get("cache_policy") or {})
+        if isinstance(cache_policy, Mapping):
+            for klass, value_ in cache_policy.items():
+                text = str(value_ or "").strip()
+                if text:
+                    merged_policy[str(klass)] = text
+        default = {**default, "cache_policy": merged_policy}
+
+        target_conversation = "" if apply_mode == "next_conversation" else conversation
+        if target_conversation:
+            current = await self._get_exact_selection(
+                user_id=user_id,
+                bundle_id=bundle_id,
+                agent_id=agent_id,
+                conversation_id=target_conversation,
+            )
+            if current is None:
+                current = await self._ensure_conversation_selection(
+                    user_id=user_id,
+                    bundle_id=bundle_id,
+                    agent_id=agent_id,
+                    conversation_id=target_conversation,
+                    default=default,
+                )
+        else:
+            current = default
+
+        if replace:
+            current_disabled: Mapping[str, Any] = {}
+            current_model: Any = None
+            current_pending: Optional[dict[str, Any]] = None
+        else:
+            current_disabled = current.get("disabled") or {}
+            current_model = current.get("model")
+            current_pending = current.get("pending")
+
+        if apply_mode in ("next_conversation", "when_cold"):
+            deferred: dict[str, Any] = dict(current_pending or {})
+            pending_patch = _merge_patch_over_patch(deferred.get("disabled"), patch)
+            if pending_patch:
+                deferred["disabled"] = pending_patch
+            else:
+                deferred.pop("disabled", None)
+            if model is not _MODEL_UNSET:
+                candidate = normalize_model_pick(model) if model is not None else None
+                if model is None:
+                    deferred["model"] = None
+                elif candidate is not None:
+                    if catalog is not None:
+                        candidate = match_supported_model(candidate, catalog.get("supported_models"))
+                    if candidate:
+                        deferred["model"] = candidate
+            deferred["apply"] = apply_mode
+            deferred["since_conversation_id"] = conversation
+            deferred.setdefault("created_at", utc_now_iso())
+            changed = {
+                **current,
+                "disabled": dict(current_disabled),
+                "model": normalize_model_pick(current_model),
+                "pending": deferred if "disabled" in deferred or "model" in deferred else None,
+            }
+        else:
+            merged = merge_selection_patch(current_disabled, patch)
+            if catalog is not None:
+                merged = clamp_selection(merged, catalog)
+            merged_model = normalize_model_pick(current_model)
+            if model is None:
+                merged_model = None
+            elif model is not _MODEL_UNSET:
+                candidate = normalize_model_pick(model)
+                if catalog is not None:
+                    candidate = match_supported_model(candidate, catalog.get("supported_models"))
+                if candidate:
+                    merged_model = candidate
+            changed = {
+                **current,
+                "disabled": merged,
+                "model": merged_model,
+                "pending": current_pending,
+            }
+
+        if not target_conversation:
+            changed["cache_policy"] = merged_policy
+        await self._write_value(
+            user_id=user_id,
+            bundle_id=bundle_id,
+            agent_id=agent_id,
+            conversation_id=target_conversation,
+            value=self._value_from_selection(changed, include_cache_policy=not target_conversation),
+        )
+
+        if target_conversation and isinstance(cache_policy, Mapping):
+            await self._write_value(
+                user_id=user_id,
+                bundle_id=bundle_id,
+                agent_id=agent_id,
+                value=self._value_from_selection(default, include_cache_policy=True),
+            )
+
+        return await self.get_selection(
+            user_id=user_id,
+            bundle_id=bundle_id,
+            agent_id=agent_id,
+            conversation_id=conversation,
+            materialize=bool(conversation),
+        )
+
+    async def promote_pending(
+        self,
+        *,
+        user_id: str,
+        bundle_id: str,
+        agent_id: str,
+        conversation_id: str = "",
+        catalog: Optional[Mapping[str, Any]] = None,
+    ) -> dict[str, Any]:
+        """Promote the pending delta in the requested exact scope."""
+        await self._promote_exact_pending(
+            user_id=user_id,
+            bundle_id=bundle_id,
+            agent_id=agent_id,
+            conversation_id=str(conversation_id or "").strip(),
+            catalog=catalog,
+        )
+        return await self.get_selection(
+            user_id=user_id,
+            bundle_id=bundle_id,
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            materialize=bool(str(conversation_id or "").strip()),
+        )
 
 
 __all__ = [
+    "AGENT_SELECTION_CONVERSATION_KEY_PREFIX",
     "AGENT_SELECTION_KEY_PREFIX",
     "AGENT_SELECTION_SUBSYSTEM",
     "UserAgentSelectionStore",

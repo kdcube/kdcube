@@ -86,19 +86,24 @@ function openConnections(consent?: ConnectionsConsentOpen): void {
 
 function PickerApp() {
   // Scene hosts summon this widget with a `capabilities.open` surface
-  // command: {agent_id?, spotlight_tools?, section?} in ui_event applies at
-  // runtime — agent switch reloads the inventory, spotlight reuses the
-  // picker's existing highlight+scroll mechanics, section scrolls its
-  // anchor into view. The widget acks for host diagnostics (the scene acks
-  // the emitting frame itself).
+  // command: {agent_id?, conversation_id?, spotlight_tools?, section?} in
+  // ui_event applies at runtime. Chat-originated commands carry the current
+  // conversation; an independently mounted widget has no conversation and
+  // edits the baseline for future conversations.
   const [agentId, setAgentId] = useState(settings.getAgentId())
+  const [conversationId, setConversationId] = useState('')
   const [spotlight, setSpotlight] = useState<{ tools: string[]; nonce: number } | null>(null)
   const agentRef = useRef(agentId)
+  const conversationRef = useRef(conversationId)
   agentRef.current = agentId
+  conversationRef.current = conversationId
 
   const vm = useStandaloneCapabilitiesVm({
     agentId,
-    fetchCapabilities: () => callOperation('agent_capabilities', { agent: agentRef.current }),
+    fetchCapabilities: () => callOperation('agent_capabilities', {
+      agent: agentRef.current,
+      ...(conversationRef.current ? { conversation_id: conversationRef.current } : {}),
+    }),
     submitUpdate: (patch: AgentSelectionPatch, options?: StandaloneSelectionWriteOptions) => {
       const { model, ...disabled } = patch
       const apply = options?.apply && options.apply !== 'now' ? options.apply : undefined
@@ -108,6 +113,7 @@ function PickerApp() {
         ...(model !== undefined ? { model } : {}),
         ...(apply ? { apply } : {}),
         ...(options?.cachePolicy ? { cache_policy: options.cachePolicy } : {}),
+        ...(conversationRef.current ? { conversation_id: conversationRef.current } : {}),
       })
     },
     openConnections,
@@ -120,9 +126,17 @@ function PickerApp() {
       const command = parseCapabilitiesOpen(event.data)
       if (!command) return
       const payload = command.payload
+      let reload = false
       if (payload.agent_id && payload.agent_id !== agentRef.current) {
+        agentRef.current = payload.agent_id
         setAgentId(payload.agent_id)
-        window.setTimeout(() => void loadRef.current({ force: true }), 0)
+        reload = true
+      }
+      const nextConversationId = payload.conversation_id ?? ''
+      if (nextConversationId !== conversationRef.current) {
+        conversationRef.current = nextConversationId
+        setConversationId(nextConversationId)
+        reload = true
       }
       if (payload.spotlight_tools?.length) {
         setSpotlight({ tools: payload.spotlight_tools, nonce: Date.now() })
@@ -133,6 +147,7 @@ function PickerApp() {
           document.querySelector(anchor)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
         }, 120)
       }
+      if (reload) window.setTimeout(() => void loadRef.current({ force: true }), 0)
       ackCapabilitiesOpen(command, 'applied')
     }
     window.addEventListener('message', onSurfaceCommand)
@@ -143,7 +158,9 @@ function PickerApp() {
     <CapabilityPickerPage
       vm={vm}
       title="Capabilities"
-      subtitle={`Everything the ${agentId} agent may use for you — narrow it here.`}
+      subtitle={conversationId
+        ? `Choose what the ${agentId} agent may use in this conversation.`
+        : `Choose what new conversations with the ${agentId} agent start with.`}
     />
   )
 }

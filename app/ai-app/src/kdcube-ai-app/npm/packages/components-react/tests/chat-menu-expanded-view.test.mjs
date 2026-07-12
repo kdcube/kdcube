@@ -52,9 +52,10 @@ test('one body renders into every shell (shared interaction state)', () => {
 })
 
 test('expand and collapse affordances are present', () => {
-  // Expand asks the HOST first (`capabilities.open` ack-wait); the in-chat
-  // modal is the honest fallback.
+  // Expand asks the HOST first (`capabilities.open` ack-wait), preserving the
+  // active conversation; the in-chat modal is the honest fallback.
   assert.match(SOURCE, /CanvasExpandButton\n?[\s\S]{0,400}openCapabilitiesOnHost/)
+  assert.match(SOURCE, /conversation_id:\s*vm\.state\.conversationId/)
   assert.match(SOURCE, /if \(acked\) setOpen\(false\)\n\s*else setView\('modal'\)/)
   assert.match(SOURCE, /aria-label="Collapse to menu"/)
   assert.match(SOURCE, /aria-label="Close \(Esc\)"/)

@@ -9,6 +9,7 @@ build on it — ``agent_selection`` carries the per-agent selection record
 """
 
 from kdcube_ai_app.apps.chat.sdk.solutions.user_settings.agent_selection import (
+    AGENT_SELECTION_CONVERSATION_KEY_PREFIX,
     AGENT_SELECTION_KEY_PREFIX,
     AGENT_SELECTION_SUBSYSTEM,
     UserAgentSelectionStore,
@@ -24,6 +25,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.user_settings.store import (
 )
 
 __all__ = [
+    "AGENT_SELECTION_CONVERSATION_KEY_PREFIX",
     "AGENT_SELECTION_KEY_PREFIX",
     "AGENT_SELECTION_SUBSYSTEM",
     "PLATFORM_WIDE_BUNDLE_ID",

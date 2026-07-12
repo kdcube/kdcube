@@ -101,6 +101,7 @@ test('capabilities slice: load, optimistic patch, save reconcile', () => {
     model: null,
     cachePolicy: null,
     pending: null,
+    dirty: false,
     saving: false,
     saveError: null,
   })
@@ -120,10 +121,12 @@ test('capabilities slice: load, optimistic patch, save reconcile', () => {
 
   state = chatReducer(state, chatActions.capabilitiesPatchApplied({ tools: { web_tools: true } }))
   assert.deepEqual(state.capabilities.disabled, { mcp: { knowledge: true }, tools: { web_tools: true } })
+  assert.equal(state.capabilities.dirty, true)
 
   // Server reconcile wins (e.g. clamped record).
   state = chatReducer(state, chatActions.capabilitiesSelectionSaved({ disabled: { tools: { web_tools: true } } }))
   assert.deepEqual(state.capabilities.disabled, { tools: { web_tools: true } })
+  assert.equal(state.capabilities.dirty, false)
   assert.equal(state.capabilities.saving, false)
 
   state = chatReducer(state, chatActions.capabilitiesSaveError('offline'))
@@ -131,6 +134,9 @@ test('capabilities slice: load, optimistic patch, save reconcile', () => {
   // The next optimistic toggle clears the stale save error.
   state = chatReducer(state, chatActions.capabilitiesPatchApplied({ tools: { web_tools: false } }))
   assert.equal(state.capabilities.saveError, null)
+
+  state = chatReducer(state, chatActions.capabilitiesReset())
+  assert.deepEqual(state.capabilities, initialState.capabilities)
 })
 
 test('capabilities load error is quiet state, not a throw', () => {

@@ -17,8 +17,10 @@ Conventions:
   ``PLATFORM_WIDE_BUNDLE_ID`` (``'*'``) marks a record that governs the user
   across every app (the memory-preferences convention).
 - ``subsystem`` is one stable name per store (``memory``, ``agents``, …).
-- ``key`` is constant for a singleton record (``preferences``) or
-  parameterized for a per-entity family (``agent_selection:<agent_id>``).
+- ``key`` is constant for a singleton record (``preferences``), parameterized
+  for a per-entity family (``agent_selection:<agent_id>``), or carries an
+  exact typed scope
+  (``conversation:<conversation_id>:agent_selection:<agent_id>``).
 - Records are versioned via ``schema_version`` inside ``value_json``; defaults
   flow from config, never from storage (absent row = configured default).
 
@@ -173,6 +175,38 @@ class UserSettingsStore:
                 str(subsystem or "bundle").strip(),
             )
 
+    async def put_record_if_absent(
+        self,
+        *,
+        user_id: str,
+        bundle_id: str,
+        subsystem: str,
+        key: str,
+        value: Mapping[str, Any],
+    ) -> bool:
+        """Insert one record without replacing a concurrent writer.
+
+        Returns ``True`` when this call inserted the row. Concrete stores use
+        this when materializing an inherited scoped value: two simultaneous
+        first reads may race, but neither may overwrite a user's first write.
+        """
+        pool = self._require_pool()
+        async with pool.acquire() as con:
+            result = await con.execute(
+                f"""
+                INSERT INTO {self.schema}.{USER_SETTINGS_TABLE}
+                    (user_id, bundle_id, key, value_json, created_at, updated_at, subsystem)
+                VALUES ($1, $2, $3, $4::jsonb, now(), now(), $5)
+                ON CONFLICT (user_id, bundle_id, key) DO NOTHING
+                """,
+                str(user_id or "").strip() or "anonymous",
+                str(bundle_id or "").strip(),
+                str(key or "").strip(),
+                json.dumps(dict(value), ensure_ascii=False, sort_keys=True),
+                str(subsystem or "bundle").strip(),
+            )
+        return str(result or "").strip().endswith("1")
+
     async def merge_record(
         self,
         *,
@@ -185,9 +219,11 @@ class UserSettingsStore:
     ) -> dict[str, Any]:
         """Shallow merge-write: read → overlay the patch's top-level fields →
         upsert. Omitted fields keep their stored value (or the default), so
-        partial writes never clobber sibling fields — this is also the
-        concurrency model. Stores with structured fields implement their own
-        deep merge and call ``put_record`` directly."""
+        one partial write does not clobber sibling fields from its read
+        snapshot. Concurrent writes to the same exact key are last-writer-wins;
+        callers that need stronger ordering must serialize them. Stores with
+        structured fields implement their own deep merge and call
+        ``put_record`` directly."""
         stored = await self.get_record(user_id=user_id, bundle_id=bundle_id, subsystem=subsystem, key=key)
         value: dict[str, Any] = dict(defaults or {})
         if stored:

@@ -2,10 +2,11 @@
  * Standalone capabilities view-model for the served capability-picker widget.
  *
  * The full chat widget drives the picker through the chat engine; a served
- * widget has no conversation and no engine — it talks straight to the same
- * two operations (`agent_capabilities` GET-shaped read, `agent_selection_update`
- * merge-write) with the widget's own auth. This hook reproduces the engine's
- * capabilities contract (optimistic toggle + debounced merge-write + explicit
+ * widget has no engine and talks straight to the same two operations
+ * (`agent_capabilities` read, `agent_selection_update` merge-write) with its
+ * own auth. Its injected fetchers decide whether those calls carry a
+ * conversation id or target the unscoped baseline. This hook reproduces the engine's
+ * capabilities contract (local draft + explicit save + explicit cache
  * decisions) over injected fetchers and shapes the result as the `vm` slice
  * `useCapabilityPickerBody` consumes — the picker logic itself is not forked.
  */
@@ -57,8 +58,6 @@ export interface StandaloneCapabilityRuntime {
   openConnections?: (consent?: ConnectionsConsentOpen) => void
 }
 
-const SAVE_DEBOUNCE_MS = 600
-
 /** A `vm`-shaped object for `useCapabilityPickerBody` / `CapabilityPickerPage`
  *  backed by plain operation calls. Only the slice the picker reads is real;
  *  the cast is the documented seam (the picker touches nothing else). */
@@ -74,18 +73,24 @@ export function useStandaloneCapabilitiesVm(
   const [model, setModel] = useState<AgentModelPick | null>(null)
   const [cachePolicy, setCachePolicy] = useState<AgentCachePolicy | null>(null)
   const [pending, setPending] = useState<AgentSelectionPending | null>(null)
+  const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
 
   const statusRef = useRef(status)
   statusRef.current = status
-  const timerRef = useRef<number | null>(null)
   const pendingPatchRef = useRef<AgentSelectionPatch | null>(null)
 
-  const applyResponseSelection = (response: StandaloneCapabilitiesResponse) => {
-    setDisabled(response.selection?.disabled ?? {})
-    setModel(response.selection?.model ?? null)
+  const applyResponseSelection = (
+    response: StandaloneCapabilitiesResponse,
+    queuedPatch: AgentSelectionPatch | null = null,
+  ) => {
+    const responseDisabled = response.selection?.disabled ?? {}
+    const responseModel = response.selection?.model ?? null
+    setDisabled(queuedPatch ? applySelectionPatch(responseDisabled, queuedPatch) : responseDisabled)
+    setModel(queuedPatch?.model !== undefined ? queuedPatch.model ?? null : responseModel)
     setPending(response.selection?.pending ?? null)
+    setDirty(Boolean(queuedPatch))
   }
 
   const load = async (opts?: { force?: boolean }) => {
@@ -107,19 +112,17 @@ export function useStandaloneCapabilitiesVm(
   }
 
   const flush = async () => {
-    if (timerRef.current !== null) {
-      window.clearTimeout(timerRef.current)
-      timerRef.current = null
-    }
     const patch = pendingPatchRef.current
     pendingPatchRef.current = null
     if (!patch) return
     setSaving(true)
     try {
       const response = await runtime.submitUpdate(patch)
-      applyResponseSelection(response)
+      applyResponseSelection(response, pendingPatchRef.current)
       setSaveError(null)
     } catch (err) {
+      pendingPatchRef.current = mergeSelectionPatches(patch, pendingPatchRef.current ?? {})
+      setDirty(true)
       setSaveError(err instanceof Error ? err.message : String(err))
     } finally {
       setSaving(false)
@@ -130,11 +133,7 @@ export function useStandaloneCapabilitiesVm(
     setDisabled((current) => applySelectionPatch(current, patch))
     if (patch.model !== undefined) setModel(patch.model ?? null)
     pendingPatchRef.current = mergeSelectionPatches(pendingPatchRef.current ?? {}, patch)
-    if (timerRef.current !== null) window.clearTimeout(timerRef.current)
-    timerRef.current = window.setTimeout(() => {
-      timerRef.current = null
-      void flush()
-    }, SAVE_DEBOUNCE_MS)
+    setDirty(true)
   }
 
   const decide = async (
@@ -142,16 +141,20 @@ export function useStandaloneCapabilitiesVm(
     options: StandaloneSelectionWriteOptions = {},
   ) => {
     const apply = options.apply ?? 'now'
+    const submittedPatch = mergeSelectionPatches(pendingPatchRef.current ?? {}, patch)
+    pendingPatchRef.current = null
     if (apply === 'now') {
       setDisabled((current) => applySelectionPatch(current, patch))
       if (patch.model !== undefined) setModel(patch.model ?? null)
     }
     setSaving(true)
     try {
-      const response = await runtime.submitUpdate(patch, options)
-      applyResponseSelection(response)
+      const response = await runtime.submitUpdate(submittedPatch, options)
+      applyResponseSelection(response, pendingPatchRef.current)
       setSaveError(null)
     } catch (err) {
+      pendingPatchRef.current = mergeSelectionPatches(submittedPatch, pendingPatchRef.current ?? {})
+      setDirty(true)
       setSaveError(err instanceof Error ? err.message : String(err))
     } finally {
       setSaving(false)
@@ -178,10 +181,12 @@ export function useStandaloneCapabilitiesVm(
         model,
         cachePolicy,
         pending,
+        dirty,
         saving,
         saveError,
         load,
         toggle,
+        save: () => { void flush() },
         decide,
       },
       connections: {
@@ -196,5 +201,5 @@ export function useStandaloneCapabilitiesVm(
     }
     return vm as unknown as ChatViewModel
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, error, agent, inventory, disabled, model, cachePolicy, pending, saving, saveError, options.spotlight])
+  }, [status, error, agent, inventory, disabled, model, cachePolicy, pending, dirty, saving, saveError, options.spotlight])
 }

@@ -336,7 +336,7 @@ blocks.
 
 ## Selection Changes, The Cold-Turn Marker, And The User-Held Policy
 
-Per-user selection changes are the main runtime source of deliberate cache
+Conversation-scoped selection changes are the main runtime source of deliberate cache
 invalidation, and the platform makes their cost visible and governable:
 
 - **Any tool/skill/MCP/namespace toggle colds the ENTIRE prompt for one
@@ -360,9 +360,11 @@ invalidation, and the platform makes their cost visible and governable:
   component within the turn's spend sum (a turn's cost is always the sum of
   the spendings inside it).
 - **The user decides when to pay.** The user pays for the cache, so the user
-  holds the selection-change policy (`accept`, `confirm` — the platform
+  holds the standing selection-change policy on their user-default record
+  (`accept`, `confirm` — the platform
   default, `defer_cold`, `defer_conversation`; admin config bounds the set).
-  Under `confirm` the composer menu turns a costly change into an inline
+  Ordinary picker edits remain a local draft until **Save changes**. Under
+  `confirm` the composer menu turns a costly change into an inline
   choice (apply now / from the next conversation / when the cache is cold —
   where applying is free); deferred changes park as a pending delta the
   runtime promotes when the trigger fires. The selection layer itself is owned

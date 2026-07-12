@@ -10,8 +10,10 @@
  * widget); a timeout or standalone context keeps the in-chat modal.
  *
  * RECEIVE (the served `capabilities` widget): parse the routed command,
- * apply `{agent_id?, spotlight_tools?, section?}` at runtime, and ack for
- * host diagnostics.
+ * apply `{agent_id?, conversation_id?, spotlight_tools?, section?}` at
+ * runtime, and ack for host diagnostics. A chat-originated open carries the
+ * active conversation id; an independently mounted widget has no id and edits
+ * the future-conversation baseline.
  */
 
 export const CAPABILITIES_SURFACE = 'sdk.agent.capabilities'
@@ -26,6 +28,8 @@ const CAPABILITIES_ACK_TIMEOUT_MS = 600
 export interface CapabilitiesOpenPayload {
   /** The bundle agent whose inventory the picker should manage. */
   agent_id?: string
+  /** Exact conversation to edit; absent means the user baseline. */
+  conversation_id?: string
   /** Entries to highlight + scroll to (`alias.tool` or a namespace token). */
   spotlight_tools?: string[]
   /** Section to bring into view: model | skills | tools | mcp | services. */
@@ -64,6 +68,8 @@ export function openCapabilitiesOnHost(
   const ui_event: Record<string, unknown> = {}
   const agent = String(payload.agent_id || '').trim()
   if (agent) ui_event.agent_id = agent
+  const conversation = String(payload.conversation_id || '').trim()
+  if (conversation) ui_event.conversation_id = conversation
   const spotlight = (payload.spotlight_tools ?? []).map((item) => String(item || '').trim()).filter(Boolean)
   if (spotlight.length) ui_event.spotlight_tools = spotlight
   const section = String(payload.section || '').trim()
@@ -165,6 +171,8 @@ export function parseCapabilitiesOpen(data: unknown): CapabilitiesOpenCommand | 
   const payload: CapabilitiesOpenPayload = {}
   const agent = typeof source.agent_id === 'string' ? source.agent_id.trim() : ''
   if (agent) payload.agent_id = agent
+  const conversation = typeof source.conversation_id === 'string' ? source.conversation_id.trim() : ''
+  if (conversation) payload.conversation_id = conversation
   if (Array.isArray(source.spotlight_tools)) {
     const spotlight = source.spotlight_tools.map((item) => String(item || '').trim()).filter(Boolean)
     if (spotlight.length) payload.spotlight_tools = spotlight

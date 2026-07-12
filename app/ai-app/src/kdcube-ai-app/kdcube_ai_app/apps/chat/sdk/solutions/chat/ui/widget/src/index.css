@@ -2413,7 +2413,13 @@ button.k-menu-status:hover { background: var(--surface-2); }
   border-top: 1px solid var(--line-soft);
   font-size: 10.5px;
   color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
 }
+.k-menu-foot-copy { min-width: 0; line-height: 1.35; }
+.k-menu-foot .k-btn { flex: none; }
 
 /* Composer-menu inline tag (e.g. the "default" model marker). */
 /* Per-row connected-account consent state in the composer menu: a quiet

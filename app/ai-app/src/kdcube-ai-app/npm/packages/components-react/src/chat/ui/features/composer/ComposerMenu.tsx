@@ -1,11 +1,10 @@
 /**
- * ComposerMenu — the composer "+" menu: per-user agent capability toggles.
+ * ComposerMenu — the composer "+" menu: conversation capability settings.
  *
  * A registered user narrows which of the agent's CONFIGURED tools and skills it
  * uses. The inventory + saved selection lazy-load on first open
- * (`agent_capabilities`); each row toggle applies optimistically and saves via
- * the engine's debounced `agent_selection_update` merge-write. Toggles apply
- * from the next message.
+ * (`agent_capabilities`); row toggles update a local draft and the explicit
+ * Save changes command sends one scoped `agent_selection_update` merge-write.
  *
  * Structure is a SECTIONS REGISTRY: ordered descriptors, each rendering its own
  * rows. The four capability sections (skills / tool groups / MCP servers /
@@ -860,7 +859,7 @@ function ServicesSection({ inventory, disabled, toggle, namespaceStyles, spotlig
  *  ability). Tri-state: the toggle's state with no stored preference follows the
  *  payload's `default_on` (an admin can offer it default-OFF); toggling writes
  *  the explicit boolean (opt-out `true` / opt-in `false`) through the same
- *  optimistic + debounced selection flow as every other category. Label and
+ *  local-draft + explicit-save selection flow as every other category. Label and
  *  description come from the payload — the server owns the quality-vs-spend
  *  copy. */
 function HelperAgentsSection({ inventory, disabled, toggle, pending }: CapabilityRowsProps) {
@@ -1163,9 +1162,23 @@ export function useCapabilityPickerBody({
         </div>
       ) : null}
       <div className="k-menu-foot">
-        {capabilities.saveError
-          ? 'Changes couldn’t be saved. They’ll retry with your next change.'
-          : 'Changes apply from your next message.'}
+        <span className="k-menu-foot-copy">
+          {capabilities.saveError
+            ? 'Changes couldn’t be saved.'
+            : capabilities.saving
+              ? 'Saving changes…'
+              : capabilities.dirty
+                ? 'Unsaved changes'
+                : 'Saved changes apply from your next message.'}
+        </span>
+        <button
+          type="button"
+          className="k-btn k-sm k-primary"
+          disabled={!capabilities.dirty || capabilities.saving || Boolean(confirmState)}
+          onClick={() => capabilities.save()}
+        >
+          {capabilities.saving ? 'Saving…' : 'Save changes'}
+        </button>
       </div>
     </>
   ) : (
@@ -1245,7 +1258,11 @@ export function ComposerMenu({
       // contract opens the picker as a real scene window (resizable,
       // dockable); its ack replaces the in-chat modal. No ack -> the modal.
       void openCapabilitiesOnHost(
-        { spotlight_tools: targets, agent_id: vm.agentId },
+        {
+          spotlight_tools: targets,
+          agent_id: vm.agentId,
+          conversation_id: vm.state.conversationId ?? undefined,
+        },
         { source: 'chat-spotlight' },
       ).then((acked) => {
         if (acked) {
@@ -1336,7 +1353,10 @@ export function ComposerMenu({
               <CanvasExpandButton
                 onClick={() => {
                   void openCapabilitiesOnHost(
-                    { agent_id: vm.agentId },
+                    {
+                      agent_id: vm.agentId,
+                      conversation_id: vm.state.conversationId ?? undefined,
+                    },
                     { source: 'composer-expand' },
                   ).then((acked) => {
                     if (acked) setOpen(false)

@@ -1,10 +1,10 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/how/how-to-construct-react-agent-README.md
 title: "How To Construct A ReAct Agent"
-summary: "The full story of creating and customizing a ReAct agent from app code and config: the construction pipeline, the per-agent config surface, system instructions vs ANNOUNCE, the per-user selection layer (tools/skills/model), and the prompt-cache consequences of each customization."
+summary: "The full story of creating and customizing a ReAct agent from app code and config: construction, per-agent configuration, conversation-scoped model/capability selection, and prompt-cache consequences."
 status: current
 tags: ["sdk", "agents", "react", "how-to", "configuration", "per-user-selection", "supported-models", "composer-menu"]
-updated_at: 2026-07-06
+updated_at: 2026-07-12
 keywords:
   [
     "build_react",
@@ -15,6 +15,8 @@ keywords:
     "supported_models",
     "agent_capabilities",
     "agent_selection_update",
+    "conversation scoped agent selection",
+    "Save changes",
     "additional_instructions",
     "role_models",
     "prompt cache invalidation",
@@ -289,21 +291,26 @@ Everything fails open to the configured behavior.
 The chat engine carries the agent identity and the selection UI end to end:
 
 - `EngineConfig.agentId` (default `main`) rides every message target and event
-  batch and scopes the selection operations — one chat instance drives one
-  configured agent.
+  batch and scopes the selection operations. The current `conversation_id`
+  scopes the effective model/capability selection — one chat instance drives
+  one configured agent in one active conversation.
 - The composer "+" menu is fed by `agent_capabilities` (lazy, on first open)
-  and writes toggles through debounced `agent_selection_update` merge-writes.
+  and keeps toggles as a local draft. **Save changes** sends one scoped
+  `agent_selection_update` merge-write; sending a chat message does not save
+  the draft implicitly.
   Sections: Model (radio pick with the configured default tagged), Skills,
   Tools (two-level per-tool rows), MCP servers, Services (namespaces), plus a
   Connection-Hub entry that renders only when opening it can actually happen —
   a host that acks the `connection_hub.settings` surface command owns the
   open, and without an ack the served connections widget opens directly.
-- Toggles apply **from the next message**: the backend reads the saved
-  selection per turn, so there is no session invalidation — the next turn is
-  simply built from the updated selection (with the cache cost from section 5
-  when the toggle touched the cached slice).
+- Saved toggles apply **from the next message in that conversation**: the
+  backend reads the conversation row per turn, so there is no session
+  invalidation. Switching conversations discards unsaved edits and loads that
+  conversation's selection. A chat-originated Capabilities window carries the
+  same conversation id. Only an independently mounted, unscoped widget edits
+  the baseline used to seed future conversations.
 
-The engine API detail (state branch, methods, flush-on-send) is owned by
+The engine API detail (state branch, draft/save methods, switch-race handling) is owned by
 [Chat Engine](../../../npm/components-core/chat-engine-README.md); the
 end-to-end app wiring by the
 [chat-with-react-agent recipe](../../../../recipes/components/chat-with-react-agent-README.md).

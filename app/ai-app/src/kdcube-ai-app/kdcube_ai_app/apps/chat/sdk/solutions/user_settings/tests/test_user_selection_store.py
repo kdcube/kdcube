@@ -82,12 +82,15 @@ class _FakeConnection:
         if not args:
             return  # DDL from ensure_schema
         user_id, bundle_id, key, value_json, subsystem = args
+        if "DO NOTHING" in sql and (user_id, bundle_id, key) in self._rows:
+            return "INSERT 0 0"
         self._rows[(user_id, bundle_id, key)] = {
             "value_json": value_json,
             "subsystem": subsystem,
             "created_at": "now",
             "updated_at": "now",
         }
+        return "INSERT 0 1"
 
 
 class _FakeAcquire:
@@ -240,6 +243,98 @@ async def test_selection_rows_are_per_agent():
     helper = await store.get_selection(user_id="u1", bundle_id="b", agent_id="helper")
     assert main["disabled"] == {"tools": {"a": True}}
     assert helper["disabled"] == {"tools": {"b": True}}
+
+
+def test_conversation_selection_key_is_typed_and_exact():
+    assert agent_selection_key("main", conversation_id="conv-42") == (
+        "conversation:conv-42:agent_selection:main"
+    )
+
+
+@pytest.mark.asyncio
+async def test_conversation_inherits_default_then_diverges_without_changing_default():
+    pool = _FakePool()
+    store = _store(pool)
+    await store.set_selection(
+        user_id="u1", bundle_id="b", agent_id="main",
+        patch={"tools": {"gmail": True}},
+    )
+
+    inherited = await store.get_selection(
+        user_id="u1", bundle_id="b", agent_id="main",
+        conversation_id="conv-a",
+    )
+    assert inherited["disabled"] == {"tools": {"gmail": True}}
+    assert inherited["scope"] == {
+        "kind": "conversation", "conversation_id": "conv-a", "inherited": True,
+    }
+
+    changed = await store.set_selection(
+        user_id="u1", bundle_id="b", agent_id="main",
+        conversation_id="conv-a",
+        patch={"tools": {"gmail": False}, "mcp": {"knowledge": True}},
+    )
+    assert changed["disabled"] == {"mcp": {"knowledge": True}}
+    assert changed["scope"]["inherited"] is False
+
+    default = await store.get_selection(user_id="u1", bundle_id="b", agent_id="main")
+    other = await store.get_selection(
+        user_id="u1", bundle_id="b", agent_id="main", conversation_id="conv-b",
+    )
+    assert default["disabled"] == {"tools": {"gmail": True}}
+    assert other["disabled"] == {"tools": {"gmail": True}}
+
+
+@pytest.mark.asyncio
+async def test_materialized_conversation_does_not_follow_later_default_changes():
+    pool = _FakePool()
+    store = _store(pool)
+    await store.set_selection(
+        user_id="u1", bundle_id="b", agent_id="main",
+        patch={"tools": {"gmail": True}},
+    )
+    frozen = await store.get_selection(
+        user_id="u1", bundle_id="b", agent_id="main",
+        conversation_id="conv-a", materialize=True,
+    )
+    assert frozen["disabled"] == {"tools": {"gmail": True}}
+
+    await store.set_selection(
+        user_id="u1", bundle_id="b", agent_id="main",
+        patch={"mcp": {"knowledge": True}},
+    )
+
+    same_conversation = await store.get_selection(
+        user_id="u1", bundle_id="b", agent_id="main", conversation_id="conv-a",
+    )
+    new_conversation = await store.get_selection(
+        user_id="u1", bundle_id="b", agent_id="main", conversation_id="conv-b",
+    )
+    assert same_conversation["disabled"] == {"tools": {"gmail": True}}
+    assert new_conversation["disabled"] == {
+        "tools": {"gmail": True},
+        "mcp": {"knowledge": True},
+    }
+
+
+@pytest.mark.asyncio
+async def test_cache_policy_stays_on_default_while_selection_is_conversation_scoped():
+    pool = _FakePool()
+    store = _store(pool)
+    selection = await store.set_selection(
+        user_id="u1", bundle_id="b", agent_id="main",
+        conversation_id="conv-a",
+        patch={"tools": {"gmail": True}},
+        cache_policy={"capability_toggle": "accept"},
+    )
+    assert selection["cache_policy"] == {"capability_toggle": "accept"}
+
+    scoped_value = json.loads(pool.rows[
+        ("u1", "b", agent_selection_key("main", conversation_id="conv-a"))
+    ]["value_json"])
+    default_value = json.loads(pool.rows[("u1", "b", agent_selection_key("main"))]["value_json"])
+    assert "cache_policy" not in scoped_value
+    assert default_value["cache_policy"] == {"capability_toggle": "accept"}
 
 
 # ── model pick in the same record ─────────────────────────────────────────────
