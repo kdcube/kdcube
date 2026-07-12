@@ -2032,3 +2032,27 @@ def test_tools_block_opens_with_a_derived_roster():
     for tool in catalog:
         assert str(tool["id"]) in block.split("═")[0]  # every id in the roster head
     assert "react.delegate" in block.split("═")[0]
+
+
+def test_send_path_threads_subagent_role_into_the_catalog():
+    """Regression: the system text SENT to the model (via
+    react_decision_stream_v2) must build the tool catalog with the same
+    subagent_role the debug/compaction render uses — else the model receives
+    a catalog without react.delegate while the rendered debug file shows it
+    (the render-not-equal-sent defect)."""
+    import inspect
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.v3.agents import decision as d
+
+    # the send-path streamer forwards subagent_role to the builder
+    assert "subagent_role" in inspect.signature(d.react_decision_stream_v2).parameters
+
+    parent = d.build_decision_system_text(
+        adapters=[], include_skill_gallery=False, subagent_role="parent",
+    )
+    none = d.build_decision_system_text(
+        adapters=[], include_skill_gallery=False, subagent_role=None,
+    )
+    assert "react.delegate" in parent
+    assert "react.delegate" not in none
+    # the derived roster and the entry agree (one list)
+    assert "react.delegate." in parent  # roster tail

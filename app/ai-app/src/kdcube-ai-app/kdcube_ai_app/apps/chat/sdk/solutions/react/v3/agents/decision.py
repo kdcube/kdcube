@@ -468,6 +468,7 @@ async def react_decision_stream_v2(
     subscribers: Optional[Dict[str, List[Any]]] = None,
     max_tokens: int = 6000,
     user_blocks: Optional[List[Dict[str, Any]]] = None,
+    subagent_role: Optional[str] = None,
 ) -> Dict[str, Any]:
     system_text = build_decision_system_text(
         adapters=adapters,
@@ -480,6 +481,7 @@ async def react_decision_stream_v2(
         include_skill_gallery=include_skill_gallery,
         multi_action_mode=multi_action_mode,
         skill_consumer=agent_name,
+        subagent_role=subagent_role,
     )
     system_msg = create_cached_system_message([
         {"text": system_text, "cache": True},

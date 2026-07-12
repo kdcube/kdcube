@@ -3377,6 +3377,7 @@ class ReactSolverV2:
                 agent_name=role,
                 max_tokens=decision_max_tokens,
                 user_blocks=blocks,
+                subagent_role=self._subagent_role(),
             )
 
         render_params = {
