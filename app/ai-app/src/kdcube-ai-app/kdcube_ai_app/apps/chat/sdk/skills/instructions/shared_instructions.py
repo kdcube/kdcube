@@ -1361,6 +1361,10 @@ markdown update when something substantive and directly useful to the user surfa
 notes empty for clean final-answer rounds and for internal recovery from protocol mistakes.
 
 [ON BUILT-IN TOOLS]
+Your tool catalog can carry reactive tools beyond the core set described in these
+instructions, depending on configuration. The catalog is the authority on what you
+can call in this conversation — read it in full; its header states the exact tool
+count and ids.
 [CONTENT STREAMING AND CAPTURING TOOLS (HARD)]
 You have following tools to capture content which you produce in the named and distributable artifacts:
 - react.write: use to generate artifact.

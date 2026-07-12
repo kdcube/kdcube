@@ -3,7 +3,7 @@ id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/work-with-subagents-READ
 title: "Work With Subagents"
 summary: "The charter-scoped subagent contract: react.delegate spawns a child conversation, react.contribute and subagent.* lane events carry results back."
 tags: ["sdk", "agents", "react", "subagents", "delegation"]
-keywords: ["react.delegate", "react.contribute", "charter", "subagent.contribution", "subagent.converged", "subagent.failed", "fork", "child conversation", "visibility", "subagent thread"]
+keywords: ["react.delegate", "react.contribute", "charter", "agent_alias", "helper alias", "strength class", "subagent.contribution", "subagent.converged", "subagent.failed", "fork", "child conversation", "visibility", "subagent thread"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/timeline/fork-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/micro-agents-and-subagents-README.md
@@ -62,14 +62,19 @@ react:
     main:
       subagents:
         allowed: true
-        models:                 # capability tiers the agent delegates to
-          strong:
+        models:                 # helper aliases the agent delegates to
+          strong_agent:
             provider: anthropic
             model: claude-sonnet-4-6
-          fast:
+            class: strong       # regular | strong | strongest
+            caption: deep reasoning and synthesis
+          fast_agent:
             provider: anthropic
-            model: claude-haiku-4-5
-        model: strong           # default tier when a charter names none
+            model: claude-haiku-4-5-20251001
+            class: regular
+            caption: quick focused work
+        model: strong_agent     # default alias when a charter names none
+        max_rounds: 8           # round budget for every delegated assignment
 ```
 
 `allowed: true` puts the ability in the agent's pickable inventory,
@@ -89,55 +94,81 @@ instructions; every other turn's catalog and instructions are assembled
 without them. With the flag absent (or `allowed: false`) the ability is
 outside the inventory entirely — users cannot enable it. The bundle-level
 `react.subagents:` block keeps serving the shared defaults (the `models`
-tier map, the default tier, `visibility`), and a bundle-level
+alias map, the default alias, `max_rounds`, `visibility`), and a bundle-level
 `react.subagents.allowed: true` offers it for the bundle's agents as a
 group; the per-agent declaration decides when both are present. A bare
 `subagents: true` and the `enabled:` key stay accepted as shorthand for
 `allowed: true`.
 
-The `models` map defines **capability tiers**: the label (`strong`, `fast`,
-whatever the admin chooses) is the vocabulary the agent's `model` argument
-speaks; the `provider`/`model` mapping behind each label stays the admin's.
-Tier models are the admin's delegation choices — independent of the
-user-pickable `supported_models` list.
+The `models` map defines **helper aliases**: the label (`strong_agent`,
+`fast_agent`, whatever the admin chooses) is the vocabulary the agent's
+`agent_alias` argument speaks; the `provider`/`model` mapping behind each
+alias stays the admin's. Each entry may carry a `class` (one of `regular <
+strong < strongest`, the strength vocabulary the delegating agent reads) and
+a `caption` (one line on what the helper is good for). Two aliases ship as
+built-in defaults and are present even with an empty `models:` map —
+`fast_agent` (class `regular`, anthropic `claude-haiku-4-5-20251001`,
+"quick focused work") and `strong_agent` (class `strong`, anthropic
+`claude-sonnet-4-6`, "deep reasoning and synthesis"); admin entries merge
+over them (admin wins), and `strongest_agent` belongs to the vocabulary but
+ships unconfigured. An alias that is not configured resolves to the
+smartest configured one by class order — so `strongest_agent` without an
+admin entry runs as `strong_agent`. Alias models are the admin's delegation
+choices — independent of the user-pickable `supported_models` list.
 
 ## Spawn: react.delegate
 
 `react.delegate` is available on turns where delegation is on. Arguments:
 
-- `charter` -- the assignment contract:
-  - `goal` (required): what the subagent must achieve, self-contained. The
-    subagent cannot ask the user or the parent questions.
-  - `deliverables`: declared outputs (for example file paths it should
-    produce).
-  - `max_rounds`: the round budget (default 8, hard cap 30). This IS the
-    child's iteration budget; reactive iteration credit is disabled on the
-    child, so nothing extends it.
-  - `contribute`: what to send back and when.
-- `model` (optional): the capability tier for the subagent's strong decision
-  role — a label from the agent's `subagents.models` map. A tier-less
-  charter runs on the default tier (`subagents.model`); with no tiers
-  configured the child inherits the parent's role models. An unknown label
-  resolves to the default (the spawn never fails on naming).
+- `charter` — the assignment prompt, a single string. The delegating agent
+  writes it self-contained: the goal and what to send back (deliverables,
+  contribution expectations) belong in the prompt text. The subagent cannot
+  ask the user or the parent questions.
+- `agent_alias` (optional) — which helper runs the assignment: an alias
+  from the agent's alias map (admin `subagents.models` entries over the
+  shipped defaults). An alias-less charter runs on the configured default
+  alias (`subagents.model`); with no default configured the child inherits
+  the parent's role models. An unconfigured alias resolves to the smartest
+  configured one, and a direct model name from the admin-allowed
+  `supported_models` list keeps resolving — the spawn never fails on
+  naming.
 
-The catalog entry the agent reads carries model self-knowledge, resolved at
-spawner install: the agent's own effective decision model (the user's pick
-already applied), and each tier label with the model behind it — for example
-`strong (claude-sonnet-4-6), fast (claude-haiku-4-5)` — so the agent judges
-delegation against models it can actually name. The delegation guidance keys
-off the pair: when the default tier is a different model, the entry frames
-delegation around assignments that deserve that model's reasoning (dense
-synthesis, strategy over unfamiliar service schemas, sizable drafting); when
-both reason with the same model, it frames a subagent as a parallel worker
-with its own round budget and keeps synthesis with the agent itself. With no
-tiers configured, the `model` argument is absent from the entry — the
-charter runs on the configured default.
+The round budget is config's business, never the model's: every delegated
+assignment runs on `subagents.max_rounds` (default 8, hard cap 30). It IS
+the child's iteration budget; reactive iteration credit is disabled on the
+child, so nothing extends it.
+
+The tool doc the agent reads is **static and cache-pure**: identical for
+every user, free of model and provider names, part of the byte-stable
+cached system instruction. The situational half lives in the per-round
+announce block's `[DELEGATION]` section (parents only; a subagent gets no
+section):
+
+- the agent's own identity in the same alias vocabulary as the helper list
+  (`you are: fast_agent [regular]`), resolved by matching its effective
+  strong-decision model (the user's pick already applied) against the alias
+  map — so comparing itself to a helper is a direct read; unmatched means
+  the line is simply absent;
+- the helper aliases, one line each: alias, class, caption (from config or
+  the shipped defaults);
+- the live delegations on this conversation's timeline, one line each:
+  charter caption, the alias/class the helper runs as, and its status
+  (`running` / `contributed N` / `converged` / `failed`), derived from the
+  fork markers and folded `subagent.*` events. Lifecycle: an unresolved
+  delegation renders every round — it is a live obligation; a terminal one
+  renders only during the turn its completion folded, after which the
+  outcome lives on as ordinary timeline history.
+
+The agent therefore judges delegation by aliases, classes, and captions it
+reads fresh every round, while the cached instruction stays identical
+across users and configurations.
 
 The tool returns immediately with a launch ticket
 (`child_conversation_id`, `child_conversation_ref`, `child_turn_id`,
 `status: scheduled`) and records a `react.subagent.fork` marker block on the
 parent timeline -- the parent model's durable knowledge of what it spawned,
-with the charter summary and budget. At turn end the marker blocks become
+with the charter caption, the helper alias/class it runs as, and the
+budget. At turn end the marker blocks become
 structured `forks: [{child_conversation_id, charter_goal, forked_at}]`
 descriptors on the parent turn's stored record (the turn log), and the child
 conversation's stored timeline carries the matching
@@ -181,9 +212,10 @@ event lane (`payload.event.type = subagent.charter`, author
 `agent:conv_<parent id>/<parent turn>`, targeted at the child turn id minted
 at delegate time). When the promoted child turn runs, the ordinary timeline
 load finds the seed as prior history and the external-event fold
-materializes the charter inside the turn. The charter text names the goal,
-deliverables, budget, and the contribute expectation; it is the child's
-task, while the forked blocks above it are context.
+materializes the charter inside the turn. The charter text carries the
+assignment prompt as the parent wrote it plus the budget and the reporting
+mechanics; it is the child's task, while the forked blocks above it are
+context.
 
 The child turn itself runs with the charter's overrides: `max_rounds` IS the
 iteration budget (reactive iteration credit is off, so nothing extends it),
@@ -200,8 +232,8 @@ The child's catalog carries `react.contribute(report, refs)`:
 - `refs`: logical paths from the CHILD conversation, delivered
   conversation-qualified. File refs (`conv:fi:conv_<child id>.turn_...`)
   are the working currency: the parent's `react.pull` resolves them
-  directly, which is why charter deliverables are declared as files. Other
-  namespaces ride along as provenance.
+  directly, which is why a charter prompt asks for its deliverables as
+  files. Other namespaces ride along as provenance.
 
 Each contribute call authors one `subagent.contribution` event into the
 parent conversation's lane, through the same inception primitive consent

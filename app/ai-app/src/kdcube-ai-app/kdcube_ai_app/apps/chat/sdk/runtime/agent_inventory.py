@@ -191,51 +191,155 @@ def react_subagents_config(
     return (bool(enabled) if enabled is not None else False), defaults
 
 
-def subagent_model_tiers(
+# The strength-class vocabulary helper aliases speak, weakest first. The
+# class is what the delegating agent reads (announce renders alias + class +
+# caption); the provider/model mapping behind an alias stays the admin's.
+SUBAGENT_CLASS_ORDER = ("regular", "strong", "strongest")
+
+# The shipped helper aliases, present even when the admin configures nothing.
+# Admin entries under ``subagents.models`` merge OVER these (admin wins);
+# ``strongest_agent`` belongs to the vocabulary but ships unconfigured — a
+# charter naming it resolves to the smartest configured alias.
+DEFAULT_SUBAGENT_ALIASES: dict[str, dict[str, str]] = {
+    "fast_agent": {
+        "provider": "anthropic",
+        "model": "claude-haiku-4-5-20251001",
+        "class": "regular",
+        "caption": "quick focused work",
+    },
+    "strong_agent": {
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-6",
+        "class": "strong",
+        "caption": "deep reasoning and synthesis",
+    },
+}
+
+
+def normalize_subagent_class(value: Any, *, alias: str = "") -> str:
+    """One class from :data:`SUBAGENT_CLASS_ORDER`.
+
+    A declared class wins; an undeclared one derives from the alias label
+    when the label carries a class word (legacy tier labels like ``strong``
+    or ``fast`` stay meaningful); everything else lands ``regular``.
+    """
+    text = _norm(value).lower()
+    if text in SUBAGENT_CLASS_ORDER:
+        return text
+    label = _norm(alias).lower()
+    if label.startswith("strongest"):
+        return "strongest"
+    if label.startswith("strong"):
+        return "strong"
+    return "regular"
+
+
+def subagent_alias_map(
     defaults: Mapping[str, Any] | None,
 ) -> dict[str, dict[str, str]]:
-    """The admin's capability-tier map for subagent models.
+    """The helper-alias map ``react.delegate``'s ``agent_alias`` speaks.
 
-    Config shape, under the agent's ``subagents:`` block::
+    Config shape, under the agent's ``subagents:`` block (the ``models:``
+    key, kept from the tier era — labels there ARE aliases)::
 
         subagents:
           allowed: true
           models:
-            strong: {provider: anthropic, model: claude-sonnet-4-6}
-            fast: {provider: anthropic, model: claude-haiku-4-5}
-          model: strong        # default tier when a charter names none
+            strong_agent:
+              provider: anthropic
+              model: claude-sonnet-4-6
+              class: strong                  # regular | strong | strongest
+              caption: deep reasoning and synthesis
+          model: strong_agent  # default alias when a charter names none
 
-    The tier label is the vocabulary ``react.delegate``'s ``model`` argument
-    speaks; the mapping stays the admin's. Invalid rows drop.
+    Every entry carries ``{provider, model, class, caption}``; the shipped
+    :data:`DEFAULT_SUBAGENT_ALIASES` merge underneath (admin entries win).
+    Invalid rows drop.
     """
+    out: dict[str, dict[str, str]] = {
+        name: dict(entry) for name, entry in DEFAULT_SUBAGENT_ALIASES.items()
+    }
     raw = (defaults or {}).get("models")
-    out: dict[str, dict[str, str]] = {}
     if not isinstance(raw, Mapping):
         return out
     for label, row in raw.items():
-        name = str(label or "").strip()
+        name = _norm(label)
         pick = normalize_model_pick(row)
-        if name and pick:
-            out[name] = pick
+        if not name or not pick:
+            continue
+        row = row if isinstance(row, Mapping) else {}
+        shipped = DEFAULT_SUBAGENT_ALIASES.get(name) or {}
+        out[name] = {
+            "provider": pick["provider"] or _norm(shipped.get("provider")) or "anthropic",
+            "model": pick["model"],
+            "class": normalize_subagent_class(
+                row.get("class") or shipped.get("class"), alias=name,
+            ),
+            "caption": _norm(row.get("caption")) or _norm(shipped.get("caption")),
+        }
     return out
+
+
+def smartest_configured_alias(
+    aliases: Mapping[str, Mapping[str, Any]] | None,
+) -> str | None:
+    """The configured alias with the highest strength class (first-declared
+    wins a tie); ``None`` on an empty map."""
+    best: str | None = None
+    best_rank = -1
+    for name, entry in (aliases or {}).items():
+        rank = SUBAGENT_CLASS_ORDER.index(
+            normalize_subagent_class((entry or {}).get("class"), alias=str(name)),
+        )
+        if rank > best_rank:
+            best, best_rank = str(name), rank
+    return best
+
+
+def _alias_pick(entry: Mapping[str, Any]) -> dict[str, str]:
+    return {
+        "provider": _norm(entry.get("provider")) or "anthropic",
+        "model": _norm(entry.get("model")),
+    }
+
+
+def resolve_subagent_alias(
+    alias: Any,
+    aliases: Mapping[str, Mapping[str, Any]] | None,
+) -> tuple[str | None, dict[str, str] | None]:
+    """``(effective alias, model pick)`` for a requested helper alias.
+
+    A configured alias resolves to its own entry; an unconfigured one falls
+    back to the SMARTEST configured alias (so ``strongest_agent`` without an
+    admin entry runs as ``strong_agent``). Returns ``(None, None)`` only when
+    nothing is configured at all.
+    """
+    aliases = dict(aliases or {})
+    name = _norm(alias)
+    if name and name in aliases:
+        return name, _alias_pick(aliases[name])
+    fallback = smartest_configured_alias(aliases)
+    if fallback is None:
+        return None, None
+    return fallback, _alias_pick(aliases[fallback])
 
 
 def subagent_default_pick(
     defaults: Mapping[str, Any] | None,
-    tiers: Mapping[str, dict[str, str]] | None = None,
+    aliases: Mapping[str, dict[str, str]] | None = None,
 ) -> tuple[str | None, dict[str, str] | None]:
-    """The (tier label, model pick) a charter without ``model`` runs on.
+    """The (alias, model pick) a charter without ``agent_alias`` runs on.
 
-    ``model:`` under ``subagents:`` names a tier label from ``models`` (the
+    ``model:`` under ``subagents:`` names an alias from the alias map (the
     documented form) or carries a direct pick; absent both, the child
     inherits the parent's role models — ``(None, None)``.
     """
-    tiers = dict(tiers if tiers is not None else subagent_model_tiers(defaults))
+    aliases = dict(aliases if aliases is not None else subagent_alias_map(defaults))
     configured = (defaults or {}).get("model")
     if isinstance(configured, str) and configured.strip():
         label = configured.strip()
-        if label in tiers:
-            return label, dict(tiers[label])
+        if label in aliases:
+            return label, _alias_pick(aliases[label])
         return None, normalize_model_pick({"model": label})
     pick = normalize_model_pick(configured)
     return None, pick
@@ -1864,7 +1968,12 @@ __all__ = [
     "react_supported_models",
     "selection_deltas",
     "selection_snapshot",
+    "DEFAULT_SUBAGENT_ALIASES",
+    "SUBAGENT_CLASS_ORDER",
+    "normalize_subagent_class",
+    "resolve_subagent_alias",
+    "smartest_configured_alias",
+    "subagent_alias_map",
     "subagent_default_pick",
-    "subagent_model_tiers",
     "subagents_denied",
 ]

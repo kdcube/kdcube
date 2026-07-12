@@ -169,36 +169,43 @@ def resolve_child_model(
     agent_id: Any,
     subagent_defaults: Optional[Dict[str, Any]],
 ) -> Optional[Dict[str, str]]:
-    """The child's strong-decision model, resolved from the charter's tier.
+    """The child's strong-decision model, resolved from the charter's alias.
 
-    ``charter.model`` names a capability tier from the agent's
-    ``subagents.models`` map; the admin owns the label → model mapping. A
-    tier-less charter runs on the configured default tier; with no default
-    the child inherits the parent's role models. Direct model names from the
-    admin-allowed ``supported_models`` list also resolve."""
+    ``charter.agent_alias`` names a helper alias from the agent's alias map
+    (admin ``subagents.models`` entries over the shipped defaults; the admin
+    owns the alias → model mapping). An unconfigured alias falls back to the
+    smartest configured one. Direct model names from the admin-allowed
+    ``supported_models`` list keep resolving, silently. An alias-less charter
+    runs on the configured default alias; with no default the child inherits
+    the parent's role models."""
     from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import (
         match_supported_model,
         react_supported_models,
+        resolve_subagent_alias,
+        subagent_alias_map,
         subagent_default_pick,
-        subagent_model_tiers,
     )
 
-    tiers = subagent_model_tiers(subagent_defaults)
-    if charter.model:
-        label = str(charter.model).strip()
-        if label in tiers:
-            return dict(tiers[label])
+    aliases = subagent_alias_map(subagent_defaults)
+    if charter.agent_alias:
+        alias = str(charter.agent_alias).strip()
+        if alias in aliases:
+            _name, pick = resolve_subagent_alias(alias, aliases)
+            return pick
         supported = react_supported_models(dict(bundle_props or {}), agent_id)
-        matched = match_supported_model({"model": label}, supported)
+        matched = match_supported_model({"model": alias}, supported)
         if matched:
             return matched
-        LOGGER.warning(
-            "[react.subagents] charter model %r matches no configured tier %s; "
-            "using the configured default",
-            charter.model,
-            sorted(tiers) or "(none configured)",
-        )
-    _label, pick = subagent_default_pick(subagent_defaults, tiers)
+        fallback, pick = resolve_subagent_alias(alias, aliases)
+        if pick and pick.get("model"):
+            LOGGER.warning(
+                "[react.subagents] charter alias %r is unconfigured; running as "
+                "the smartest configured alias %r",
+                alias,
+                fallback,
+            )
+            return pick
+    _label, pick = subagent_default_pick(subagent_defaults, aliases)
     return pick
 
 

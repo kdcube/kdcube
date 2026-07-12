@@ -384,36 +384,53 @@ def _subagent_model_facts(
     defaults: Dict[str, Any],
     agent_id: Any,
 ) -> Optional[Dict[str, Any]]:
-    """The model self-knowledge react.delegate's catalog entry renders.
+    """The situational delegation identity the announce block renders.
 
-    ``own`` is the agent's effective strong-decision model (config with the
-    user's pick already overlaid on ``agent_role_models``); ``tiers`` is the
-    admin's capability-tier map (label → pick) the delegate ``model``
-    argument speaks; ``default`` is the tier a charter without ``model``
-    runs on (absent = the child inherits ``own``)."""
+    The delegate tool doc is static and cache-pure; per-round, per-config
+    identity lives here and surfaces in the announce's DELEGATION section:
+    ``aliases`` — the helper aliases (name, class, caption) the delegate
+    ``agent_alias`` argument speaks; ``own_alias``/``own_class`` — the
+    agent's own identity IN THE SAME alias vocabulary, resolved by matching
+    its effective strong-decision model (config with the user's pick already
+    overlaid on ``agent_role_models``) against the alias map's models
+    (unmatched = absent, never guessed) — the alias form makes the agent
+    directly comparable to the helpers it can call;
+    ``default_alias`` — the alias a charter without ``agent_alias`` runs on
+    (absent = the child inherits the parent's role models)."""
     from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import (
         USER_MODEL_TARGET_ROLE,
         normalize_model_pick,
+        subagent_alias_map,
         subagent_default_pick,
-        subagent_model_tiers,
     )
 
     try:
         role_models = getattr(runtime_ctx, "agent_role_models", None) or {}
         own = normalize_model_pick(role_models.get(USER_MODEL_TARGET_ROLE))
-        tiers = subagent_model_tiers(defaults)
-        default_label, default = subagent_default_pick(defaults, tiers)
-        facts: Dict[str, Any] = {}
+        aliases = subagent_alias_map(defaults)
+        default_alias, _default_pick = subagent_default_pick(defaults, aliases)
+        facts: Dict[str, Any] = {
+            "aliases": [
+                {"alias": name, **entry} for name, entry in aliases.items()
+            ],
+        }
         if own:
             facts["own"] = own
-        if tiers:
-            facts["tiers"] = [
-                {"label": label, **pick} for label, pick in tiers.items()
-            ]
-        if default:
-            facts["default"] = (
-                {"label": default_label, **default} if default_label else default
+            own_alias, own_entry = next(
+                (
+                    (name, entry)
+                    for name, entry in aliases.items()
+                    if str(entry.get("model") or "") == own["model"]
+                ),
+                ("", {}),
             )
+            if own_alias:
+                facts["own_alias"] = own_alias
+                own_class = str(own_entry.get("class") or "").strip()
+                if own_class:
+                    facts["own_class"] = own_class
+        if default_alias:
+            facts["default_alias"] = default_alias
         return facts or None
     except Exception:
         return None

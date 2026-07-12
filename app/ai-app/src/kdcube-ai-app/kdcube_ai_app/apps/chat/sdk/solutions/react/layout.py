@@ -1551,6 +1551,162 @@ def build_announce_reactivated_tools_lines(*, runtime_ctx: Optional[RuntimeCtx])
     return lines
 
 
+def _delegation_status_by_child(timeline_blocks: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """Per-child delegation status derived from timeline blocks.
+
+    Fork marker blocks open a row (caption, alias/class, budget); folded
+    ``subagent.*`` event blocks advance its status: contributions count up,
+    a converged/failed event closes it.
+    """
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.subagents.events import (
+        SUBAGENT_CONTRIBUTION_EVENT_KIND,
+        SUBAGENT_CONVERGED_EVENT_KIND,
+        SUBAGENT_FAILED_EVENT_KIND,
+    )
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.subagents.fork import (
+        FORK_MARKER_BLOCK_TYPE,
+    )
+
+    def _event_child_id(meta: Dict[str, Any]) -> str:
+        payload = meta.get("payload") if isinstance(meta.get("payload"), dict) else {}
+        stamp = payload.get("subagent") if isinstance(payload.get("subagent"), dict) else {}
+        event_meta = meta.get("event") if isinstance(meta.get("event"), dict) else {}
+        nested = event_meta.get("payload") if isinstance(event_meta.get("payload"), dict) else {}
+        nested_event = nested.get("event") if isinstance(nested.get("event"), dict) else {}
+        return str(
+            payload.get("child_conversation_id")
+            or stamp.get("child_conversation_id")
+            or nested_event.get("child_conversation_id")
+            or ""
+        ).strip()
+
+    rows: Dict[str, Dict[str, Any]] = {}
+    for block in timeline_blocks or []:
+        if not isinstance(block, dict):
+            continue
+        btype = str(block.get("type") or "").strip()
+        meta = block.get("meta") if isinstance(block.get("meta"), dict) else {}
+        if btype == FORK_MARKER_BLOCK_TYPE:
+            child_id = str(meta.get("child_conversation_id") or "").strip()
+            if not child_id:
+                continue
+            rows[child_id] = {
+                "caption": str(meta.get("charter_summary") or "").strip(),
+                "agent_alias": str(meta.get("agent_alias") or "").strip(),
+                "agent_class": str(meta.get("agent_class") or "").strip(),
+                "contributions": 0,
+                "outcome": "",
+            }
+            continue
+        event_type = str(meta.get("event_type") or btype or "").strip()
+        if event_type not in {
+            SUBAGENT_CONTRIBUTION_EVENT_KIND,
+            SUBAGENT_CONVERGED_EVENT_KIND,
+            SUBAGENT_FAILED_EVENT_KIND,
+        }:
+            continue
+        child_id = _event_child_id(meta)
+        row = rows.get(child_id)
+        if row is None:
+            continue
+        if event_type == SUBAGENT_CONTRIBUTION_EVENT_KIND:
+            row["contributions"] = int(row.get("contributions") or 0) + 1
+        elif event_type == SUBAGENT_CONVERGED_EVENT_KIND:
+            row["outcome"] = "converged"
+            row["outcome_turn"] = str(block.get("turn") or "").strip()
+        else:
+            row["outcome"] = "failed"
+            row["outcome_turn"] = str(block.get("turn") or "").strip()
+    return rows
+
+
+def build_announce_delegation_lines(
+    *,
+    runtime_ctx: Optional[RuntimeCtx],
+    timeline_blocks: List[Dict[str, Any]],
+) -> List[str]:
+    """`[DELEGATION]` — the situational half of react.delegate's contract.
+
+    The tool doc (cached instructions) is static and identical for every
+    user; who the agent is, which helper aliases exist, and what is live
+    right now are per-round facts, so they render here: the agent's own
+    strength class (matched, never guessed), the helper aliases with class +
+    caption, and one status line per delegation on this conversation's
+    timeline. Parents only — a subagent completes its own assignment and
+    gets no section.
+    """
+    if runtime_ctx is None:
+        return []
+    if int(getattr(runtime_ctx, "subagent_depth", 0) or 0) >= 1:
+        return []
+    if getattr(runtime_ctx, "subagent_spawner", None) is None:
+        return []
+    facts = getattr(runtime_ctx, "subagent_model_facts", None)
+    facts = facts if isinstance(facts, dict) else {}
+    aliases = [
+        row for row in (facts.get("aliases") or [])
+        if isinstance(row, dict) and str(row.get("alias") or "").strip()
+    ]
+    lines = ["[DELEGATION]"]
+    own_alias = str(facts.get("own_alias") or "").strip()
+    if own_alias:
+        # The agent's identity in the SAME vocabulary as the helper list, so
+        # "would a helper be stronger than me?" is a direct comparison.
+        own_class = str(facts.get("own_class") or "").strip()
+        lines.append(
+            f"  you are: {own_alias}" + (f" [{own_class}]" if own_class else "")
+        )
+    if aliases:
+        default_alias = str(facts.get("default_alias") or "").strip()
+        lines.append("  helper aliases (react.delegate agent_alias):")
+        for row in aliases:
+            alias = str(row.get("alias") or "").strip()
+            klass = str(row.get("class") or "").strip()
+            caption = str(row.get("caption") or "").strip()
+            entry = f"    - {alias}"
+            if klass:
+                entry += f" [{klass}]"
+            if alias == default_alias:
+                entry += " (default)"
+            if caption:
+                entry += f": {caption}"
+            lines.append(entry)
+    delegations = _delegation_status_by_child(timeline_blocks or [])
+    # Lifecycle: an unresolved delegation is a live obligation and renders
+    # every round; a terminal one renders only during the turn its completion
+    # folded — from the next turn on the outcome is ordinary timeline history.
+    current_turn = str(getattr(runtime_ctx, "turn_id", "") or "").strip()
+    delegations = {
+        child_id: row
+        for child_id, row in delegations.items()
+        if not str(row.get("outcome") or "")
+        or str(row.get("outcome_turn") or "") == current_turn
+    }
+    if delegations:
+        lines.append("  delegations in this conversation:")
+        for child_id, row in delegations.items():
+            outcome = str(row.get("outcome") or "")
+            if outcome:
+                status = outcome
+            elif int(row.get("contributions") or 0) > 0:
+                status = f"contributed {int(row['contributions'])}"
+            else:
+                status = "running"
+            caption = _shorten(str(row.get("caption") or "") or f"conv_{child_id}", 100)
+            entry = f"    - {caption}"
+            alias = str(row.get("agent_alias") or "").strip()
+            klass = str(row.get("agent_class") or "").strip()
+            if alias:
+                entry += f" — {alias}"
+                if klass:
+                    entry += f" [{klass}]"
+            entry += f" — {status}"
+            lines.append(entry)
+    if len(lines) == 1:
+        return []
+    return lines
+
+
 def build_announce_cold_turn_lines(*, runtime_ctx: Optional[RuntimeCtx]) -> List[str]:
     """`[CACHE]` — one small turn-local line when a selection change applied on
     a warm conversation: the context re-caches this turn, and the rebuild
@@ -1733,6 +1889,14 @@ def build_announce_text(
         if workspace_lines:
             lines.append("")
             lines.extend(workspace_lines)
+
+        delegation_lines = build_announce_delegation_lines(
+            runtime_ctx=runtime_ctx,
+            timeline_blocks=timeline_blocks,
+        )
+        if delegation_lines:
+            lines.append("")
+            lines.extend(delegation_lines)
 
     if show_status_sections and feedback_updates and mode != "turn_finalize":
         updates = [u for u in (feedback_updates or []) if isinstance(u, dict)]
@@ -2064,10 +2228,16 @@ def build_tools_block(
     if not tool_catalog:
         return ""
 
+    # Derived roster: a completeness check the model can verify against
+    # ("keep reading until you have seen N"), generated from the catalog it
+    # heads so it can never disagree with the entries below.
+    roster_ids = [str(t.get("id") or "unknown") for t in tool_catalog]
+    roster = f"This catalog: {len(roster_ids)} tools — {', '.join(roster_ids)}."
     lines: List[str] = [
         header,
         "Available tools extend agent capabilities with specific operations. "
         "Call tools using their full ID (e.g., web_tools.web_search).",
+        *_wrap_lines(roster, indent=""),
         "",
         "═" * 79,
         "",

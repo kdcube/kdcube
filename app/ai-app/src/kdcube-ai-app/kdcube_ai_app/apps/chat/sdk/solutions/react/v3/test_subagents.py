@@ -202,29 +202,77 @@ def test_catalog_gates_subagent_tools_by_role():
 # ---------------------------------------------------------------- charter
 
 
-def test_parse_charter_requires_goal_and_clamps_budget():
+def test_parse_charter_takes_the_prompt_string_and_the_alias():
+    charter, err = parse_charter({
+        "charter": "Research X.\nSend back the report file ref plus a 5-line summary.",
+        "agent_alias": "strong_agent",
+    })
+    assert err == ""
+    assert charter.goal.startswith("Research X.")
+    assert charter.agent_alias == "strong_agent"
+    # the round budget is config's business: absent config = the default
+    assert charter.max_rounds == DEFAULT_SUBAGENT_MAX_ROUNDS
+
+    text = charter.charter_text()
+    assert "[SUBAGENT CHARTER]" in text and "Research X." in text
+
+
+def test_parse_charter_budget_comes_from_config_never_the_params():
+    charter, err = parse_charter(
+        {"charter": "Research X", "max_rounds": 500},
+        max_rounds=6,
+    )
+    assert err == "" and charter.max_rounds == 6
+
+    # the configured value itself stays capped
+    capped, _ = parse_charter({"charter": "Research X"}, max_rounds=500)
+    assert capped.max_rounds == MAX_SUBAGENT_MAX_ROUNDS
+
+
+def test_parse_charter_missing_prompt_is_rejected():
+    missing, err = parse_charter({"charter": {"deliverables": ["x"]}})
+    assert missing is None and err == "missing_goal"
+    missing, err = parse_charter({"charter": "   "})
+    assert missing is None and err == "missing_goal"
+
+
+def test_parse_charter_tolerates_the_earlier_object_form():
+    """A legacy {goal, deliverables, contribute, model} object folds into the
+    prompt string; `model` reads as the alias (dual-read)."""
     charter, err = parse_charter({
         "charter": {
             "goal": "Research X",
             "deliverables": ["files/report.md"],
-            "max_rounds": 500,
             "contribute": "the report ref",
         },
-        "model": "claude-sonnet-4-6",
+        "model": "strong_agent",
     })
     assert err == ""
-    assert charter.goal == "Research X"
-    assert charter.max_rounds == MAX_SUBAGENT_MAX_ROUNDS
-    assert charter.model == "claude-sonnet-4-6"
-
-    missing, err = parse_charter({"charter": {"deliverables": ["x"]}})
-    assert missing is None and err == "missing_goal"
+    assert "Research X" in charter.goal
+    assert "files/report.md" in charter.goal
+    assert "the report ref" in charter.goal
+    assert charter.agent_alias == "strong_agent"
 
     flat, err = parse_charter({"goal": "flat form"})
-    assert err == "" and flat.max_rounds == DEFAULT_SUBAGENT_MAX_ROUNDS
+    assert err == "" and "flat form" in flat.goal
 
-    text = flat.charter_text()
-    assert "[SUBAGENT CHARTER]" in text and "flat form" in text
+
+def test_charter_round_trips_alias_dual_read_single_write():
+    stored = SubagentCharter.from_dict({"goal": "g", "model": "fast_agent"})
+    assert stored.agent_alias == "fast_agent"
+    # freshly written charters carry agent_alias only
+    data = SubagentCharter(goal="g", agent_alias="fast_agent").to_dict()
+    assert data["agent_alias"] == "fast_agent"
+    assert "model" not in data
+
+
+def test_charter_summary_line_is_the_first_sentence():
+    charter = SubagentCharter(
+        goal="Research the market. Then compile a long report.\nMore detail here.",
+    )
+    assert charter.summary_line() == "Research the market."
+    long_first = SubagentCharter(goal="A" * 300)
+    assert len(long_first.summary_line()) <= 140
 
 
 # ---------------------------------------------------------------- fork
@@ -326,21 +374,25 @@ def test_fork_projection_is_idempotent_for_qualified_refs():
     assert copied[1]["text"] == own_qualified["text"]
 
 
-def test_fork_marker_block_names_child_and_charter():
+def test_fork_marker_block_names_child_charter_and_helper_identity():
     marker = build_fork_marker_block(
         parent_turn_id="turn_3",
         child_conversation_id="childconv",
         child_turn_id="turn_c1",
         charter_summary="Research X",
-        deliverables=["files/report.md"],
         max_rounds=8,
+        agent_alias="strong_agent",
+        agent_class="strong",
         tool_call_id="tc1",
     )
     assert marker["type"] == FORK_MARKER_BLOCK_TYPE
     assert "conv_childconv" in marker["text"]
     assert "Research X" in marker["text"]
+    assert "strong_agent [strong]" in marker["text"]
     assert marker["meta"]["child_conversation_id"] == "childconv"
     assert marker["meta"]["max_rounds"] == 8
+    assert marker["meta"]["agent_alias"] == "strong_agent"
+    assert marker["meta"]["agent_class"] == "strong"
     assert marker["call_id"] == "tc1"
 
 
@@ -558,7 +610,7 @@ async def test_delegate_refuses_depth_beyond_one():
     browser = _StubChildBrowser(ctx)
     state = await handle_react_delegate(
         ctx_browser=browser,
-        state=_tool_state("react.delegate", {"charter": {"goal": "nested"}}),
+        state=_tool_state("react.delegate", {"charter": "nested"}),
         tool_call_id="tc2",
     )
     assert state["last_tool_result"]["code"] == "delegate_depth_limit"
@@ -579,7 +631,7 @@ async def test_delegate_without_wired_spawner_is_rejected():
     browser = _StubChildBrowser(ctx)
     state = await handle_react_delegate(
         ctx_browser=browser,
-        state=_tool_state("react.delegate", {"charter": {"goal": "goal"}}),
+        state=_tool_state("react.delegate", {"charter": "goal"}),
         tool_call_id="tc3",
     )
     assert state["last_tool_result"]["code"] == "delegate_unavailable"
@@ -627,6 +679,7 @@ async def test_delegate_spawns_and_marks_fork_on_parent_timeline():
         turn_id="turn_parent",
         subagent_depth=0,
         subagent_spawner=_Spawner(),
+        subagent_defaults={"max_rounds": 4},
         tenant="tenant",
         project="project",
         user_id="user_1",
@@ -637,17 +690,23 @@ async def test_delegate_spawns_and_marks_fork_on_parent_timeline():
     state = await handle_react_delegate(
         ctx_browser=browser,
         state=_tool_state("react.delegate", {
-            "charter": {"goal": "Research X", "max_rounds": 4, "deliverables": ["files/r.md"]},
+            "charter": "Research X. Send back files/r.md.",
+            "agent_alias": "strongest_agent",
         }),
         tool_call_id="tc5",
     )
     result = state["last_tool_result"]
     assert result["status"] == "scheduled"
     assert result["child_conversation_ref"] == "conv_sub_abc"
-    assert launches and launches[0].charter.goal == "Research X"
+    assert launches and launches[0].charter.goal.startswith("Research X.")
+    # the budget is the configured one, never a model-provided count
     assert launches[0].charter.max_rounds == 4
     marker = next(b for b in browser.blocks if b.get("type") == FORK_MARKER_BLOCK_TYPE)
     assert marker["meta"]["child_conversation_id"] == "sub_abc"
+    # the unconfigured strongest_agent resolves to the smartest configured
+    # alias, recorded on the marker for the announce
+    assert marker["meta"]["agent_alias"] == "strong_agent"
+    assert marker["meta"]["agent_class"] == "strong"
 
 
 # ---------------------------------------------------------------- spawner (child run)
@@ -1566,95 +1625,107 @@ async def test_completion_wake_promotes_only_if_unconsumed():
 
 
 # ---------------------------------------------------------------------------
-# Delegate catalog entry: model self-knowledge
+# Delegate catalog entry: cache-pure static spec
 # ---------------------------------------------------------------------------
 
 
-def test_delegate_spec_names_both_models_when_the_default_tier_differs():
-    from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.delegate import (
-        build_delegate_tool_spec,
-    )
+def test_delegate_spec_is_static_and_names_no_models():
+    """The spec is part of the cached system instruction: identical for every
+    user, free of model names, provider names, and per-config text."""
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.delegate import TOOL_SPEC
 
-    spec = build_delegate_tool_spec({
-        "own": {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
-        "default": {"label": "strong", "provider": "anthropic", "model": "claude-sonnet-4-6"},
-        "tiers": [
-            {"label": "strong", "provider": "anthropic", "model": "claude-sonnet-4-6"},
-            {"label": "fast", "provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
-        ],
-    })
-    assert (
-        "You reason with claude-haiku-4-5-20251001; a subagent reasons with "
-        "claude-sonnet-4-6" in spec["purpose"]
-    )
-    # the model arg speaks tier labels, each with the model behind it
-    assert (
-        "one of: strong (claude-sonnet-4-6), fast (claude-haiku-4-5-20251001)"
-        in spec["args"]["model"]
-    )
-    assert "Omit to use the default tier (strong)." in spec["args"]["model"]
+    rendered = json.dumps(TOOL_SPEC)
+    for token in ("claude", "anthropic", "haiku", "sonnet", "opus", "ReAct"):
+        assert token not in rendered
+    # the alias vocabulary itself stays out of the spec — it lives in announce
+    for alias in ("fast_agent", "strong_agent", "strongest_agent"):
+        assert alias not in rendered
+    assert "agent_alias" in TOOL_SPEC["args"]
+    assert "charter" in TOOL_SPEC["args"]
+    assert "str (FIRST FIELD)" in TOOL_SPEC["args"]["charter"]
+    # the spec points at the announce section for the situational half
+    assert "DELEGATION" in TOOL_SPEC["args"]["agent_alias"]
 
 
-def test_delegate_spec_frames_equal_models_as_a_parallel_worker():
-    from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.delegate import (
-        build_delegate_tool_spec,
-    )
-
-    spec = build_delegate_tool_spec({
-        "own": {"provider": "anthropic", "model": "claude-sonnet-4-6"},
-        "tiers": [{"label": "strong", "provider": "anthropic", "model": "claude-sonnet-4-6"}],
-    })
-    assert "both reason with claude-sonnet-4-6" in spec["purpose"]
-    assert "parallel worker" in spec["purpose"]
-    assert "one of: strong (claude-sonnet-4-6)" in spec["args"]["model"]
-    assert "Omit to reason with your model (claude-sonnet-4-6)." in spec["args"]["model"]
-
-
-def test_delegate_spec_without_tiers_carries_no_model_arg():
-    from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.delegate import (
-        build_delegate_tool_spec,
-    )
-
-    spec = build_delegate_tool_spec({"own": {"model": "claude-sonnet-4-6"}})
-    assert "model" not in spec["args"]
-    assert "charter" in spec["args"]
-
-
-def test_delegate_spec_without_facts_is_the_base_spec():
-    from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.delegate import (
-        TOOL_SPEC,
-        build_delegate_tool_spec,
-    )
-
-    spec = build_delegate_tool_spec(None)
-    assert spec["purpose"] == TOOL_SPEC["purpose"]
-    assert set(spec["args"]) == set(TOOL_SPEC["args"])
-
-
-def test_catalog_renders_model_facts_into_the_delegate_entry():
+def test_catalog_delegate_entry_is_the_static_spec():
     from kdcube_ai_app.apps.chat.sdk.solutions.react.call import get_react_tools_catalog
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.delegate import TOOL_SPEC
 
-    catalog = get_react_tools_catalog(
-        subagent_role="parent",
-        delegate_model_facts={
-            "own": {"model": "model-a"},
-            "default": {"label": "strong", "model": "model-b"},
-            "tiers": [{"label": "strong", "model": "model-b"}],
-        },
-    )
-    entry = next(c for c in catalog if c["id"] == "react.delegate")
-    assert "You reason with model-a; a subagent reasons with model-b" in entry["purpose"]
-    assert "one of: strong (model-b)" in entry["args"]["model"]
-    assert entry["tool_traits"]["strategy"] == ["neutral"]
-    # no facts -> the base entry stands
-    base = next(
+    entry = next(
         c for c in get_react_tools_catalog(subagent_role="parent")
         if c["id"] == "react.delegate"
     )
-    assert "You reason with" not in base["purpose"]
+    assert entry["purpose"] == TOOL_SPEC["purpose"]
+    assert entry["args"] == TOOL_SPEC["args"]
+    assert entry["tool_traits"]["strategy"] == ["neutral"]
 
 
-def test_resolve_child_model_speaks_tier_labels():
+# ---------------------------------------------------------------------------
+# Alias resolution
+# ---------------------------------------------------------------------------
+
+
+def test_alias_map_ships_defaults_and_admin_entries_win():
+    from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import subagent_alias_map
+
+    shipped = subagent_alias_map({})
+    assert shipped["fast_agent"]["model"] == "claude-haiku-4-5-20251001"
+    assert shipped["fast_agent"]["class"] == "regular"
+    assert shipped["fast_agent"]["caption"] == "quick focused work"
+    assert shipped["strong_agent"]["model"] == "claude-sonnet-4-6"
+    assert shipped["strong_agent"]["class"] == "strong"
+    assert "strongest_agent" not in shipped
+
+    merged = subagent_alias_map({
+        "models": {
+            "strong_agent": {"provider": "anthropic", "model": "claude-opus-4-6"},
+            "strongest_agent": {
+                "provider": "anthropic",
+                "model": "claude-opus-4-6",
+                "class": "strongest",
+                "caption": "the heaviest reasoning",
+            },
+            # legacy tier labels become aliases; class derives from the label
+            "fast": {"provider": "anthropic", "model": "claude-haiku-4-5"},
+        }
+    })
+    assert merged["strong_agent"]["model"] == "claude-opus-4-6"
+    assert merged["strong_agent"]["class"] == "strong"  # shipped class kept
+    assert merged["strongest_agent"]["class"] == "strongest"
+    assert merged["strongest_agent"]["caption"] == "the heaviest reasoning"
+    assert merged["fast"]["class"] == "regular"
+    assert merged["fast_agent"]["model"] == "claude-haiku-4-5-20251001"
+
+
+def test_unconfigured_alias_falls_back_to_the_smartest_configured():
+    from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import (
+        resolve_subagent_alias,
+        subagent_alias_map,
+    )
+
+    aliases = subagent_alias_map({})
+    # strongest_agent belongs to the vocabulary but ships unconfigured
+    name, pick = resolve_subagent_alias("strongest_agent", aliases)
+    assert name == "strong_agent"
+    assert pick == {"provider": "anthropic", "model": "claude-sonnet-4-6"}
+
+    name, pick = resolve_subagent_alias("fast_agent", aliases)
+    assert name == "fast_agent"
+    assert pick == {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"}
+
+    configured = subagent_alias_map({
+        "models": {
+            "strongest_agent": {
+                "provider": "anthropic", "model": "claude-opus-4-6", "class": "strongest",
+            },
+        }
+    })
+    name, pick = resolve_subagent_alias("made_up_alias", configured)
+    assert name == "strongest_agent"
+    assert pick["model"] == "claude-opus-4-6"
+
+
+def test_resolve_child_model_speaks_aliases():
     from kdcube_ai_app.apps.chat.sdk.solutions.react.subagents.child_turn import (
         resolve_child_model,
     )
@@ -1662,36 +1733,303 @@ def test_resolve_child_model_speaks_tier_labels():
         SubagentCharter,
     )
 
-    defaults = {
-        "models": {
-            "strong": {"provider": "anthropic", "model": "claude-sonnet-4-6"},
-            "fast": {"provider": "anthropic", "model": "claude-haiku-4-5"},
-        },
-        "model": "strong",
-    }
+    defaults = {"model": "strong_agent"}
     pick = resolve_child_model(
-        SubagentCharter(goal="g", model="fast"),
+        SubagentCharter(goal="g", agent_alias="fast_agent"),
         bundle_props={}, agent_id="main", subagent_defaults=defaults,
     )
-    assert pick == {"provider": "anthropic", "model": "claude-haiku-4-5"}
+    assert pick == {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"}
 
-    # tier-less charter runs on the default tier
+    # alias-less charter runs on the configured default alias
     pick = resolve_child_model(
         SubagentCharter(goal="g"),
         bundle_props={}, agent_id="main", subagent_defaults=defaults,
     )
     assert pick == {"provider": "anthropic", "model": "claude-sonnet-4-6"}
 
-    # an unknown label resolves to the default tier (spawn never fails on naming)
+    # unconfigured strongest_agent runs as the smartest configured alias
     pick = resolve_child_model(
-        SubagentCharter(goal="g", model="galactic"),
+        SubagentCharter(goal="g", agent_alias="strongest_agent"),
         bundle_props={}, agent_id="main", subagent_defaults=defaults,
     )
     assert pick == {"provider": "anthropic", "model": "claude-sonnet-4-6"}
 
-    # no tiers and no default: the child inherits the parent's role models
+    # an unknown alias resolves the same way (spawn never fails on naming)
+    pick = resolve_child_model(
+        SubagentCharter(goal="g", agent_alias="galactic"),
+        bundle_props={}, agent_id="main", subagent_defaults=defaults,
+    )
+    assert pick == {"provider": "anthropic", "model": "claude-sonnet-4-6"}
+
+    # a stored charter under the earlier field spelling keeps resolving
+    pick = resolve_child_model(
+        SubagentCharter.from_dict({"goal": "g", "model": "fast_agent"}),
+        bundle_props={}, agent_id="main", subagent_defaults=defaults,
+    )
+    assert pick == {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"}
+
+    # a direct model name from the admin-allowed list keeps resolving, silently
+    props = {
+        "react": {
+            "default_agent": {
+                "supported_models": [
+                    {"model": "claude-opus-4-6", "provider": "anthropic", "label": "Opus"},
+                ],
+            }
+        }
+    }
+    pick = resolve_child_model(
+        SubagentCharter(goal="g", agent_alias="claude-opus-4-6"),
+        bundle_props=props, agent_id="main", subagent_defaults=defaults,
+    )
+    assert pick == {"provider": "anthropic", "model": "claude-opus-4-6"}
+
+    # alias-less charter with no configured default: the child inherits the
+    # parent's role models
     pick = resolve_child_model(
         SubagentCharter(goal="g"),
         bundle_props={}, agent_id="main", subagent_defaults={},
     )
     assert pick is None
+
+
+def test_configured_max_rounds_reads_the_subagents_block():
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.subagents.charter import (
+        configured_max_rounds,
+    )
+
+    assert configured_max_rounds({}) == DEFAULT_SUBAGENT_MAX_ROUNDS
+    assert configured_max_rounds(None) == DEFAULT_SUBAGENT_MAX_ROUNDS
+    assert configured_max_rounds({"max_rounds": 12}) == 12
+    assert configured_max_rounds({"max_rounds": 500}) == MAX_SUBAGENT_MAX_ROUNDS
+    assert configured_max_rounds({"max_rounds": 0}) == DEFAULT_SUBAGENT_MAX_ROUNDS
+
+
+# ---------------------------------------------------------------------------
+# Announce: the DELEGATION section
+# ---------------------------------------------------------------------------
+
+
+def _parent_delegation_ctx(**overrides):
+    kwargs = dict(
+        subagent_depth=0,
+        subagent_spawner=object(),
+        subagent_model_facts={
+            "own": {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
+            "own_alias": "fast_agent",
+            "own_class": "regular",
+            "aliases": [
+                {
+                    "alias": "fast_agent",
+                    "provider": "anthropic",
+                    "model": "claude-haiku-4-5-20251001",
+                    "class": "regular",
+                    "caption": "quick focused work",
+                },
+                {
+                    "alias": "strong_agent",
+                    "provider": "anthropic",
+                    "model": "claude-sonnet-4-6",
+                    "class": "strong",
+                    "caption": "deep reasoning and synthesis",
+                },
+            ],
+            "default_alias": "strong_agent",
+        },
+    )
+    kwargs.update(overrides)
+    return SimpleNamespace(**kwargs)
+
+
+def test_announce_delegation_section_lists_self_class_and_aliases():
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.layout import (
+        build_announce_delegation_lines,
+    )
+
+    lines = build_announce_delegation_lines(
+        runtime_ctx=_parent_delegation_ctx(), timeline_blocks=[],
+    )
+    text = "\n".join(lines)
+    assert lines[0] == "[DELEGATION]"
+    # self-identity speaks the SAME alias vocabulary as the helper list
+    assert "you are: fast_agent [regular]" in text
+    assert "fast_agent [regular]: quick focused work" in text
+    assert "strong_agent [strong] (default): deep reasoning and synthesis" in text
+    # the announce speaks aliases and classes; model names stay out of it
+    assert "claude" not in text
+    # no spawned subagents: no delegations block
+    assert "delegations in this conversation" not in text
+
+
+def test_announce_delegation_section_omits_an_unmatched_self_identity():
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.layout import (
+        build_announce_delegation_lines,
+    )
+
+    ctx = _parent_delegation_ctx()
+    facts = dict(ctx.subagent_model_facts)
+    facts.pop("own_alias")
+    facts.pop("own_class")
+    ctx.subagent_model_facts = facts
+    text = "\n".join(build_announce_delegation_lines(runtime_ctx=ctx, timeline_blocks=[]))
+    assert "you are:" not in text
+    assert "fast_agent" in text
+
+
+def _subagent_event_block(event_type, child_id):
+    return {
+        "type": event_type,
+        "turn_id": "turn_parent",
+        "meta": {
+            "event_type": event_type,
+            "payload": {"child_conversation_id": child_id},
+        },
+    }
+
+
+def test_announce_delegation_section_tracks_live_delegations():
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.layout import (
+        build_announce_delegation_lines,
+    )
+
+    marker_running = build_fork_marker_block(
+        parent_turn_id="turn_parent",
+        child_conversation_id="sub_run",
+        child_turn_id="turn_r1",
+        charter_summary="Research the market",
+        max_rounds=8,
+        agent_alias="strong_agent",
+        agent_class="strong",
+    )
+    marker_done = build_fork_marker_block(
+        parent_turn_id="turn_parent",
+        child_conversation_id="sub_done",
+        child_turn_id="turn_d1",
+        charter_summary="Draft the appendix",
+        max_rounds=8,
+        agent_alias="fast_agent",
+        agent_class="regular",
+    )
+    blocks = [
+        marker_running,
+        marker_done,
+        _subagent_event_block(SUBAGENT_CONTRIBUTION_EVENT_KIND, "sub_run"),
+        _subagent_event_block(SUBAGENT_CONTRIBUTION_EVENT_KIND, "sub_run"),
+        _subagent_event_block(SUBAGENT_CONVERGED_EVENT_KIND, "sub_done"),
+    ]
+    text = "\n".join(build_announce_delegation_lines(
+        runtime_ctx=_parent_delegation_ctx(), timeline_blocks=blocks,
+    ))
+    assert "delegations in this conversation:" in text
+    assert "Research the market — strong_agent [strong] — contributed 2" in text
+    assert "Draft the appendix — fast_agent [regular] — converged" in text
+
+    failed = blocks + [_subagent_event_block(SUBAGENT_FAILED_EVENT_KIND, "sub_run")]
+    text = "\n".join(build_announce_delegation_lines(
+        runtime_ctx=_parent_delegation_ctx(), timeline_blocks=failed,
+    ))
+    assert "Research the market — strong_agent [strong] — failed" in text
+
+
+def test_announce_delegation_section_absent_for_children_and_non_parents():
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.layout import (
+        build_announce_delegation_lines,
+        build_announce_text,
+    )
+
+    # a subagent (child) gets no section, spawner or not
+    child = _parent_delegation_ctx(subagent_depth=1)
+    assert build_announce_delegation_lines(runtime_ctx=child, timeline_blocks=[]) == []
+    # an agent without delegation wired gets none either
+    plain = _parent_delegation_ctx(subagent_spawner=None)
+    assert build_announce_delegation_lines(runtime_ctx=plain, timeline_blocks=[]) == []
+
+    # end to end through the full announce render
+    child_announce = build_announce_text(
+        iteration=0,
+        max_iterations=8,
+        started_at=None,
+        timezone="UTC",
+        timeline_blocks=[],
+        runtime_ctx=child,
+    )
+    assert "[DELEGATION]" not in child_announce
+    parent_announce = build_announce_text(
+        iteration=0,
+        max_iterations=8,
+        started_at=None,
+        timezone="UTC",
+        timeline_blocks=[],
+        runtime_ctx=_parent_delegation_ctx(),
+    )
+    assert "[DELEGATION]" in parent_announce
+    assert "strong_agent [strong] (default)" in parent_announce
+
+
+def test_announce_delegation_terminal_rows_expire_after_their_turn():
+    """Lifecycle: unresolved delegations render every round (live
+    obligations); a terminal one renders only during the turn its completion
+    folded — afterwards the outcome is ordinary timeline history."""
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.layout import (
+        build_announce_delegation_lines,
+    )
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.subagents.events import (
+        SUBAGENT_CONVERGED_EVENT_KIND,
+    )
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.subagents.fork import (
+        FORK_MARKER_BLOCK_TYPE,
+    )
+
+    def _marker(child_id, caption):
+        return {
+            "type": FORK_MARKER_BLOCK_TYPE,
+            "meta": {
+                "child_conversation_id": child_id,
+                "charter_summary": caption,
+                "agent_alias": "strong_agent",
+                "agent_class": "strong",
+            },
+        }
+
+    def _converged(child_id, turn):
+        return {
+            "type": SUBAGENT_CONVERGED_EVENT_KIND,
+            "turn": turn,
+            "meta": {
+                "event_type": SUBAGENT_CONVERGED_EVENT_KIND,
+                "payload": {"child_conversation_id": child_id},
+            },
+        }
+
+    blocks = [
+        _marker("sub_running", "Long research."),
+        _marker("sub_done_old", "Old drafting."),
+        _converged("sub_done_old", "turn_earlier"),
+        _marker("sub_done_now", "Fresh drafting."),
+        _converged("sub_done_now", "turn_current"),
+    ]
+    ctx = _parent_delegation_ctx(turn_id="turn_current")
+    text = "\n".join(
+        build_announce_delegation_lines(runtime_ctx=ctx, timeline_blocks=blocks)
+    )
+    # live obligation: always visible
+    assert "Long research." in text and "running" in text
+    # completion folded THIS turn: visible once
+    assert "Fresh drafting." in text and "converged" in text
+    # completion folded an earlier turn: expired from the announce
+    assert "Old drafting." not in text
+
+
+def test_tools_block_opens_with_a_derived_roster():
+    """The catalog section header carries a machine-derived roster (count +
+    ids) the model can verify completeness against; generated from the same
+    list it heads, so it can never disagree with the entries below."""
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.call import get_react_tools_catalog
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.layout import build_tools_block
+
+    catalog = get_react_tools_catalog(subagent_role="parent")
+    block = build_tools_block(catalog, header="[AVAILABLE REACT TOOLS]")
+    assert f"This catalog: {len(catalog)} tools —" in block
+    for tool in catalog:
+        assert str(tool["id"]) in block.split("═")[0]  # every id in the roster head
+    assert "react.delegate" in block.split("═")[0]

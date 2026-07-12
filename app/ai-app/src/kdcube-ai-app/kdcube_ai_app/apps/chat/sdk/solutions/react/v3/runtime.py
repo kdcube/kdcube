@@ -2790,14 +2790,6 @@ class ReactSolverV2:
             return "parent"
         return None
 
-    def _delegate_model_facts(self) -> Optional[Dict[str, Any]]:
-        """Model self-knowledge for the delegate catalog entry (parents only)."""
-        if self._subagent_role() != "parent":
-            return None
-        runtime_ctx = getattr(self.ctx_browser, "runtime_ctx", None) if self.ctx_browser else None
-        facts = getattr(runtime_ctx, "subagent_model_facts", None)
-        return dict(facts) if isinstance(facts, dict) and facts else None
-
     async def run(
         self,
         *,
@@ -3354,7 +3346,6 @@ class ReactSolverV2:
                 build_tool_catalog(announced_adapters + extra_adapters_for_decision, exclude_tool_ids=[])
                 + get_react_tools_catalog(
                     subagent_role=self._subagent_role(),
-                    delegate_model_facts=self._delegate_model_facts(),
                 )
             )
         except Exception:
@@ -3438,7 +3429,6 @@ class ReactSolverV2:
                         include_skill_gallery=self.include_skill_gallery,
                         multi_action_mode=self.multi_action_mode,
                         subagent_role=self._subagent_role(),
-                        delegate_model_facts=self._delegate_model_facts(),
                     ),
                     render_params=render_params,
                     agent_fn=_decision_agent,

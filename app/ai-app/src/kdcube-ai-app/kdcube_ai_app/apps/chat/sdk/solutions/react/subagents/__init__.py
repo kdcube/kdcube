@@ -9,7 +9,8 @@ The child reports back through the conversation event lane (the same authored
 external-event primitive user followups and consent grants ride on).
 
 Modules:
-- ``charter``     — the charter contract (goal, deliverables, budget, contribute).
+- ``charter``     — the charter contract (the assignment prompt, the configured
+                    budget, the helper alias).
 - ``events``      — authoring ``subagent.*`` events into a conversation lane.
 - ``fork``        — the fork projection (current-turn blocks + working summaries)
                     and the fork marker block on the parent timeline.

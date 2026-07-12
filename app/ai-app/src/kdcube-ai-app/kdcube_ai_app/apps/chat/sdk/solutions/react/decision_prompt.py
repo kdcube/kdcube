@@ -175,7 +175,6 @@ def compose_decision_system_text(
     include_tool_catalog: bool = True,
     include_skill_gallery: bool = True,
     subagent_role: Optional[str] = None,
-    delegate_model_facts: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Compose a full ReAct decision system prompt.
 
@@ -199,7 +198,6 @@ def compose_decision_system_text(
         )
         react_tool_catalog = get_react_tools_catalog(
             subagent_role=subagent_role,
-            delegate_model_facts=delegate_model_facts,
         )
         tool_catalog = availability_tool_catalog if include_tool_catalog else []
         parts.append(

@@ -533,7 +533,6 @@ async def test_finish_turn_lifts_fork_records_into_turn_log():
         child_conversation_id="sub_grandchild",
         child_turn_id="turn_g1",
         charter_summary="Draft the appendix",
-        deliverables=[],
         max_rounds=6,
     )
     assert marker["type"] == FORK_MARKER_BLOCK_TYPE
@@ -889,18 +888,24 @@ async def test_apply_accounting_marks_child_turn_usage_as_helper_spend(monkeypat
     assert "helpers" not in data
 
 
-def test_spawner_install_computes_model_facts_for_the_delegate_entry():
-    """The delegate catalog entry names the agent's own model and the
-    admin's capability tiers — resolved at spawner install."""
+def test_spawner_install_computes_delegation_facts_for_the_announce():
+    """The situational delegation identity — helper aliases, the agent's own
+    strength class, the default alias — is resolved at spawner install and
+    lands on the runtime ctx for the announce's DELEGATION section. The
+    delegate tool doc itself stays static and cache-pure."""
     props = {
         "react": {
             "agents": {"main": {"subagents": {
                 "allowed": True,
                 "models": {
-                    "strong": {"provider": "anthropic", "model": "claude-sonnet-4-6"},
-                    "fast": {"provider": "anthropic", "model": "claude-haiku-4-5"},
+                    "strong_agent": {
+                        "provider": "anthropic",
+                        "model": "claude-sonnet-4-6",
+                        "caption": "deep reasoning and synthesis",
+                    },
+                    "fast_agent": {"provider": "anthropic", "model": "claude-haiku-4-5"},
                 },
-                "model": "strong",
+                "model": "strong_agent",
             }}},
         }
     }
@@ -918,28 +923,73 @@ def test_spawner_install_computes_model_facts_for_the_delegate_entry():
 
     facts = runtime_ctx.subagent_model_facts
     assert facts["own"]["model"] == "claude-haiku-4-5"
-    assert facts["default"] == {
-        "label": "strong", "provider": "anthropic", "model": "claude-sonnet-4-6",
-    }
-    assert [(t["label"], t["model"]) for t in facts["tiers"]] == [
-        ("strong", "claude-sonnet-4-6"), ("fast", "claude-haiku-4-5"),
-    ]
+    # the own identity is a MATCH against the alias map, in the same alias
+    # vocabulary as the helper list: the agent runs the fast_agent model
+    assert facts["own_alias"] == "fast_agent"
+    assert facts["own_class"] == "regular"
+    assert facts["default_alias"] == "strong_agent"
+    by_alias = {row["alias"]: row for row in facts["aliases"]}
+    assert by_alias["strong_agent"]["class"] == "strong"
+    assert by_alias["strong_agent"]["caption"] == "deep reasoning and synthesis"
+    assert by_alias["fast_agent"]["class"] == "regular"
+    # admin caption absent: the shipped caption backs the alias
+    assert by_alias["fast_agent"]["caption"] == "quick focused work"
 
-    # the facts render into the entry the decision agent reads
+    # the facts feed the announce, never the tool doc: the delegate entry
+    # stays the static spec with no model names in it
     from kdcube_ai_app.apps.chat.sdk.solutions.react.call import get_react_tools_catalog
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.layout import (
+        build_announce_delegation_lines,
+    )
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.delegate import TOOL_SPEC
 
     entry = next(
-        c for c in get_react_tools_catalog(
-            subagent_role="parent", delegate_model_facts=facts,
-        )
+        c for c in get_react_tools_catalog(subagent_role="parent")
         if c["id"] == "react.delegate"
     )
-    assert (
-        "You reason with claude-haiku-4-5; a subagent reasons with claude-sonnet-4-6"
-        in entry["purpose"]
+    assert entry["purpose"] == TOOL_SPEC["purpose"]
+    assert "claude" not in entry["purpose"]
+
+    announce = "\n".join(build_announce_delegation_lines(
+        runtime_ctx=runtime_ctx, timeline_blocks=[],
+    ))
+    assert "[DELEGATION]" in announce
+    assert "you are: fast_agent [regular]" in announce
+    assert "strong_agent [strong] (default): deep reasoning and synthesis" in announce
+
+
+def test_spawner_install_omits_an_unmatched_self_class():
+    """An effective decision model outside the alias map yields no own_class
+    (the announce omits the self-class line rather than guessing)."""
+    props = {"react": {"agents": {"main": {"subagents": {"allowed": True}}}}}
+    runtime_ctx = RuntimeCtx(
+        agent_id="main",
+        agent_role_models={
+            "solver.react.v2.decision.v2.strong": {
+                "provider": "anthropic",
+                "model": "some-model-outside-the-map",
+            }
+        },
     )
-    assert "one of: strong (claude-sonnet-4-6), fast (claude-haiku-4-5)" in entry["args"]["model"]
-    assert "Omit to use the default tier (strong)." in entry["args"]["model"]
+    stub = SimpleNamespace(bundle_props=props, _user_subagents_denied=False)
+    BaseWorkflow._install_subagent_spawner(stub, runtime_ctx=runtime_ctx, build_template={})
+
+    facts = runtime_ctx.subagent_model_facts
+    assert "own_alias" not in facts
+    assert "own_class" not in facts
+    # the shipped aliases are present even with an empty admin config
+    aliases = {row["alias"] for row in facts["aliases"]}
+    assert aliases == {"fast_agent", "strong_agent"}
+
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.layout import (
+        build_announce_delegation_lines,
+    )
+
+    announce = "\n".join(build_announce_delegation_lines(
+        runtime_ctx=runtime_ctx, timeline_blocks=[],
+    ))
+    assert "you are:" not in announce
+    assert "fast_agent [regular]" in announce
 
 
 def test_subagents_allowed_key_controls_availability():

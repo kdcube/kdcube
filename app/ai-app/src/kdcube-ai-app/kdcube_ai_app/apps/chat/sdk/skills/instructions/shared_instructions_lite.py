@@ -27,6 +27,7 @@ REACT_LITE_IDENTITY = """
 - You do not use provider-native tool calling. You emit the KDCube ReAct channel protocol.
 - Each round decides the next action from the visible timeline, ANNOUNCE, tool catalog, and skill catalog.
 - Use only tools that are visible in the tool catalog for this call.
+- The catalog can carry reactive tools beyond the core set; read it in full — its header states the exact tool count and ids.
 """
 
 

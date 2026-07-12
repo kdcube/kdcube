@@ -150,18 +150,23 @@ def build_fork_marker_block(
     child_conversation_id: str,
     child_turn_id: str,
     charter_summary: str,
-    deliverables: List[str],
     max_rounds: int,
+    agent_alias: str = "",
+    agent_class: str = "",
     tool_call_id: str = "",
 ) -> Dict[str, Any]:
-    """The parent-timeline record of the spawn: child ref + charter summary."""
+    """The parent-timeline record of the spawn: child ref + charter caption +
+    the helper identity (alias/class) the child runs as."""
     lines = [
         "[SUBAGENT FORKED]",
         f"child_conversation: conv_{child_conversation_id} (turn {child_turn_id})",
         f"charter: {charter_summary}",
     ]
-    if deliverables:
-        lines.append("deliverables: " + "; ".join(deliverables))
+    if agent_alias:
+        alias_line = f"runs as: {agent_alias}"
+        if agent_class:
+            alias_line += f" [{agent_class}]"
+        lines.append(alias_line)
     lines.append(f"budget: {int(max_rounds or 0)} rounds")
     lines.append(
         "The subagent works silently in its own conversation. Its reports arrive "
@@ -182,6 +187,8 @@ def build_fork_marker_block(
             "child_turn_id": child_turn_id,
             "charter_summary": charter_summary,
             "max_rounds": int(max_rounds or 0),
+            **({"agent_alias": agent_alias} if agent_alias else {}),
+            **({"agent_class": agent_class} if agent_class else {}),
         },
     }
     if tool_call_id:
