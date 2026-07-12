@@ -458,6 +458,8 @@ def test_serve_static_asset_does_not_refresh_existing_asset_request(monkeypatch,
     asset = storage_root / "ui" / "assets" / "app.js"
     asset.parent.mkdir(parents=True)
     asset.write_text("console.log('cached asset');", encoding="utf-8")
+    root_asset = storage_root / "ui" / "site.js"
+    root_asset.write_text("console.log('site shell');", encoding="utf-8")
 
     async def _resolve_bundle_async(*args, **kwargs):
         bundle_id = kwargs.get("bundle_id") or (args[0] if args else None)
@@ -488,3 +490,18 @@ def test_serve_static_asset_does_not_refresh_existing_asset_request(monkeypatch,
     )
 
     assert getattr(response, "path", None) == str(asset)
+    assert response.headers["cache-control"] == "public, max-age=31536000, immutable"
+
+    response = asyncio.run(
+        integrations.serve_static_asset(
+            tenant="tenant-a",
+            project="project-a",
+            bundle_id="echo.ui@2026-03-30",
+            path="site.js",
+            request=_request(),
+            session=_session(),
+        )
+    )
+
+    assert getattr(response, "path", None) == str(root_asset)
+    assert response.headers["cache-control"] == "no-cache"

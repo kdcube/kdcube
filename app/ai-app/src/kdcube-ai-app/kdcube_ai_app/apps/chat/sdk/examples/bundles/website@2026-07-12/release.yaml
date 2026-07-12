@@ -1,0 +1,15 @@
+bundle:
+  repo: "kdcube/kdcube-ai-app"
+  ref: "unreleased"
+  description: |
+    Initial website@2026-07-12 reference app.
+
+    Highlights
+
+    - Owns a dependency-free public main-view website.
+    - Reads platform/auth configuration from the platform backend.
+    - Reads site composition from app-owned bundle config.
+    - Hosts the configured KDCube scene and relays the standard config/auth
+      handshake.
+    - Registers a unique `/sites/{alias}` route and can participate in
+      host-first, default-second root resolution.

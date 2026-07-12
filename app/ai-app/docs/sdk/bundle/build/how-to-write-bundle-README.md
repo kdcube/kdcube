@@ -225,6 +225,18 @@ Environment rule:
 So a bundle is the end-to-end application unit inside an environment.
 `tenant/project` is the environment boundary, not the bundle boundary.
 
+An app may also expose a deployment website. Give it a normal `ui.main_view`,
+expose any non-secret composition through an app API, and register
+`ui.main_view.site` with `enabled`, a unique `alias`, optional `hosts`, and
+optional `default` in `bundles.yaml`. Every site is reachable under
+`/sites/{alias}`; root selection is host first and then one default. Do not
+create a parallel website service or put website composition in
+`assembly.yaml`.
+Platform/auth browser metadata must come from `/api/cp-frontend-config`, not
+from provider-specific constants in the website source. See the reference app
+`sdk/examples/bundles/website@2026-07-12` and
+[Application-Hosted Sites](../../solutions/sites/application-sites-README.md).
+
 ## 1D. If You Are Wrapping Existing Code
 
 Treat the existing application code and the bundle adapter as different layers.

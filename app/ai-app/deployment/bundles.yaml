@@ -7,6 +7,7 @@
 # image and are auto-discovered (no path/module entries needed):
 #   connection-hub@1-0        identity, consent, delegated credentials, OAuth
 #   kdcube-services@1-0       managed MCP surfaces + named-services bridge
+#   website@2026-07-12        application-hosted site registry example
 #   user-memories@2026-06-26  the mem provider + memories widget
 #   workspace@2026-03-31-13-36  showcase scene + chat wired to everything
 #
@@ -1068,6 +1069,21 @@ bundles:
                 mode: managed
                 authority_id: delegated_client
                 selected_tool_grants: true
+  - id: website@2026-07-12
+    name: Website
+    singleton: false
+    config:
+      ui:
+        main_view:
+          src_folder: ui/site
+          build_command: cp index.html site.js styles.css <VI_BUILD_DEST_ABSOLUTE_PATH>/
+          site:
+            enabled: true
+            alias: workspace
+            default: true
+            hosts: []
+            title: KDCube Workspace
+            scene_application_id: workspace@2026-03-31-13-36
   - id: user-memories@2026-06-26
     singleton: false
     config:

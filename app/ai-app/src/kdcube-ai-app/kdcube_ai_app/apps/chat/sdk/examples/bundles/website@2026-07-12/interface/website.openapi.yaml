@@ -1,0 +1,58 @@
+openapi: 3.1.0
+info:
+  title: KDCube Website App
+  version: 2026.07.12
+  description: Public configuration contract for website@2026-07-12.
+x-kdcube-surfaces:
+  main_view:
+    config: ui.main_view
+    public_route: public/static
+    site_registry: ui.main_view.site
+    alias_route: /sites/{alias}
+    root_resolution: host-then-default
+  api:
+    site_config:
+      route: public
+      method: GET
+servers:
+  - url: /api/integrations
+tags:
+  - name: Site
+paths:
+  /bundles/{tenant}/{project}/{bundle_id}/public/site_config:
+    get:
+      tags: [Site]
+      summary: Return app-owned public site composition.
+      operationId: site_config
+      x-kdcube-result-alias: site_config
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/BundleId"
+      responses:
+        "200":
+          description: Wrapped site configuration.
+          content:
+            application/json:
+              schema:
+                type: object
+components:
+  parameters:
+    Tenant:
+      name: tenant
+      in: path
+      required: true
+      schema: { type: string }
+    Project:
+      name: project
+      in: path
+      required: true
+      schema: { type: string }
+    BundleId:
+      name: bundle_id
+      in: path
+      required: true
+      schema:
+        type: string
+        const: website@2026-07-12

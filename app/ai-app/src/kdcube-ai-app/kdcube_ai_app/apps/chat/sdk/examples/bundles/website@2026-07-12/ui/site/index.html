@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="light dark" />
+  <title>KDCube Workspace</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" id="brand-link" href="/" aria-label="KDCube home">KDCube</a>
+    <div class="runtime-scope" id="runtime-scope" aria-live="polite">Connecting...</div>
+    <nav class="site-actions" aria-label="Account and platform">
+      <span class="identity" id="identity"></span>
+      <button class="auth-button" id="auth-button" type="button">Sign in</button>
+      <a class="platform-link" id="platform-link" href="/platform/chat">Platform</a>
+    </nav>
+  </header>
+
+  <main class="site-main">
+    <div class="site-notice" id="site-notice" role="status">Loading workspace...</div>
+    <iframe
+      id="workspace-scene"
+      title="KDCube workspace"
+      allow="clipboard-read; clipboard-write"
+    ></iframe>
+  </main>
+
+  <script type="module" src="./site.js"></script>
+</body>
+</html>

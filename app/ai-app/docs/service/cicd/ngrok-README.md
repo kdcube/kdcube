@@ -20,11 +20,13 @@ There are three local shapes:
 
 - **CLI-started runtime**: `kdcube start` runs Docker Compose and already puts
   the KDCube web proxy in front of frontend, ingress, and proc. This is the
-  normal user path. Point ngrok directly at the web proxy port.
+  normal user path. Point ngrok directly at the web proxy port. Enabled app
+  sites are available at `/sites/{alias}`; `/` resolves by host and then by one
+  default site. No Caddy layer is needed.
 - **Website root through Caddy**: a local website is served at `/`, while
   KDCube runtime paths are routed to the CLI-started KDCube web proxy. This is
-  the normal shape for testing website pages that embed KDCube app widgets or a
-  scene. Point ngrok at Caddy, not directly at the KDCube web proxy.
+  for a separately hosted website outside the KDCube app runtime. Point ngrok
+  at Caddy, not directly at the KDCube web proxy.
 - **Manual split services**: frontend, ingress, and proc are started by hand.
   In that case use a local Caddy proxy first, then point ngrok at Caddy.
 
@@ -73,7 +75,10 @@ https://<ngrok-domain>
       /api/integrations/*      -> proc
       /sse/*, /api/*           -> ingress
       /cb/socket.io/           -> ingress /socket.io/ websocket
-      /*                       -> frontend
+      /sites/{alias}/*         -> registered app public main view
+      /                        -> host-matched or default app site
+      /platform/*              -> platform frontend
+      /*                       -> frontend fallback
 ```
 
 Manual split services:

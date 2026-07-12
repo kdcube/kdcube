@@ -65,6 +65,42 @@ For the operational local workflow for reusing a runtime, changing bundle roots,
 | `bundles.items[].path` / `module` | proc local-path loading | local development bundle definition |
 | `bundles.items[].config` | `self.bundle_prop("...")` | non-secret effective bundle config |
 
+### Application-hosted websites
+
+An app with a built `ui.main_view` may register a public site:
+
+```yaml
+bundles:
+  items:
+    - id: website@2026-07-12
+      config:
+        ui:
+          main_view:
+            site:
+              enabled: true
+              alias: workspace
+              default: true
+              hosts:
+                - workspace.example.com
+              title: KDCube Workspace
+              scene_application_id: workspace@2026-03-31-13-36
+```
+
+Every enabled site is reachable at `/sites/{alias}`. Many apps may register
+sites, but aliases must be unique. Root `/` resolves the single matching
+`hosts` declaration first and otherwise the single site with `default: true`.
+Multiple defaults or ambiguous host matches are configuration errors.
+
+OpenResty forwards stable root and alias routes. Proc resolves the active app
+registry and authoritative app props at request time, so changing site config
+does not require generated proxy config. The CLI does not interpret this
+section. `/api/*` and the configured platform frontend prefix remain platform
+routes.
+
+Do not put website selection, title, or scene composition in `assembly.yaml`.
+The browser reads platform/auth configuration from `/api/cp-frontend-config`
+and reads site composition from the owning app's API.
+
 ### Reserved runtime config under `config`
 
 Most values under `bundles.items[].config` belong only to the bundle. A small

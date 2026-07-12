@@ -21,7 +21,7 @@ from typing import Optional, Dict, Any, Set, List, Tuple, Mapping
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
@@ -111,6 +111,12 @@ from kdcube_ai_app.infra.plugin.bundle_loader import (
 from kdcube_ai_app.apps.chat.sdk.solutions.chat import (
     DEFAULT_CHAT_WIDGET_ALIAS,
     default_chat_widget_config,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.sites import (
+    ApplicationSite,
+    SiteRegistryError,
+    application_site_from_props,
+    resolve_application_site,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.surface_guard import (
     authorize_delegated_mcp_request,
@@ -2941,7 +2947,9 @@ async def serve_static_asset(
         return _index_html_response(content, request)
 
     rel_parts = target.relative_to(ui_root).parts
-    headers = {"Cache-Control": "public, max-age=3600"}
+    headers = {"Cache-Control": "no-cache"} if len(rel_parts) == 1 else {
+        "Cache-Control": "public, max-age=3600"
+    }
     if rel_parts and rel_parts[0] == "assets":
         headers = {"Cache-Control": "public, max-age=31536000, immutable"}
 
@@ -3002,6 +3010,109 @@ async def bundle_static_asset_public_path(
         tenant=tenant, project=project, bundle_id=bundle_id, path=path, request=request,
         base_href=f"/api/integrations/bundles/{tenant}/{project}/{bundle_id}/public/static/",
         session=_build_public_api_request_session(request),
+    )
+
+
+def _platform_chat_path() -> str:
+    raw = str(get_settings().plain("proxy.route_prefix") or "/chatbot").strip()
+    prefix = raw if raw.startswith("/") else f"/{raw}"
+    prefix = prefix.rstrip("/") or "/"
+    return "/chat" if prefix == "/" else f"{prefix}/chat"
+
+
+async def _application_site_catalog(
+    request: Request,
+) -> tuple[str, str, list[ApplicationSite]]:
+    settings = get_settings()
+    tenant = str(settings.TENANT or "").strip()
+    project = str(settings.PROJECT or "").strip()
+    redis = _get_app_redis(request)
+    registry = await load_registry(redis, tenant, project)
+
+    sites: list[ApplicationSite] = []
+    for application_id in sorted(registry.bundles or {}):
+        props = _authoritative_bundle_props(
+            tenant=tenant,
+            project=project,
+            bundle_id=application_id,
+        )
+        if not is_bundle_enabled(props):
+            continue
+        site = application_site_from_props(
+            application_id=application_id,
+            props=props,
+        )
+        if site is not None:
+            sites.append(site)
+    return tenant, project, sites
+
+
+async def _serve_application_site(
+    *,
+    request: Request,
+    site_alias: str,
+    path: str = "index.html",
+) -> Response:
+    try:
+        tenant, project, sites = await _application_site_catalog(request)
+        forwarded_host = (
+            str(request.headers.get("x-forwarded-host") or "")
+            .split(",", 1)[0]
+            .strip()
+        )
+        site = resolve_application_site(
+            sites,
+            alias=site_alias,
+            host=forwarded_host or request.headers.get("host", ""),
+        )
+    except SiteRegistryError as exc:
+        logger.error("Invalid application site registry: %s", exc)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Failed to resolve application site")
+        raise HTTPException(status_code=503, detail="Application site registry is unavailable") from exc
+
+    if site is None:
+        if not site_alias:
+            return RedirectResponse(url=_platform_chat_path(), status_code=307)
+        raise HTTPException(status_code=404, detail=f"Application site '{site_alias}' not found")
+
+    return await serve_static_asset(
+        tenant=tenant,
+        project=project,
+        bundle_id=site.application_id,
+        path=path or "index.html",
+        request=request,
+        base_href=(
+            f"/api/integrations/bundles/{tenant}/{project}/"
+            f"{site.application_id}/public/static/"
+        ),
+        session=_build_public_api_request_session(request),
+    )
+
+
+@router.get("/site-root")
+async def application_site_landing(request: Request):
+    return await _serve_application_site(
+        request=request,
+        site_alias="",
+    )
+
+
+@router.get("/sites/{site_alias}")
+async def application_site_root(site_alias: str, request: Request):
+    return await _serve_application_site(
+        request=request,
+        site_alias=site_alias,
+    )
+
+
+@router.get("/sites/{site_alias}/{path:path}")
+async def application_site_path(site_alias: str, path: str, request: Request):
+    return await _serve_application_site(
+        request=request,
+        site_alias=site_alias,
+        path=path,
     )
 
 

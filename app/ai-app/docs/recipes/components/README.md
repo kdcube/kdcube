@@ -4,7 +4,7 @@ title: "Component Recipes"
 summary: "Short recipes for composing KDCube app components, with links to the canonical architecture and provider contracts."
 status: current
 tags: ["recipes", "components", "scene", "chat", "pinboard", "named-services", "ecosystem"]
-updated_at: 2026-06-23
+updated_at: 2026-07-13
 keywords:
   [
     "component recipes",
@@ -43,6 +43,7 @@ Read order for app builders:
 | [Your Component](your-component-README.md) | You are adding a new app/widget and need to choose which ecosystem planes it uses. |
 | [Named-Service App](named-service-README.md) | You want a regular app/domain realm to become an agent-usable service provider. |
 | [Scene](scene-README.md) | You are composing multiple widgets/surfaces into one browser scene. |
+| [Application-Hosted Website](website-README.md) | An app should own a complete website, be directly addressable by alias, and optionally serve root by host/default selection. |
 | [Scene Surface Command](scene-surface-command-README.md) | One widget should summon and direct another (declare the contract, receive + ack, emit with fallback). |
 | [Canvas Pinboard](pinboard-README.md) | You want objects from different realms pinned, searched, moved, opened, and reused as context. |
 | [Chat Widget](chat-README.md) | You are embedding a ReAct chat surface that attaches, emits, and consumes context. |

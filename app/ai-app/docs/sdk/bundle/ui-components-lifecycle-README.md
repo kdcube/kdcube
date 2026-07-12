@@ -543,6 +543,13 @@ The main view can build successfully while a widget is still cold. A widget can
 build successfully while the main view is absent. Do not use one as proof of
 the other.
 
+`ui.main_view.site` does not introduce another UI build lifecycle. It registers
+the already-built public main view under `/sites/{alias}` and optionally for
+host/default root resolution. The owning app still builds through
+`ui.main_view`, stores output under its normal app storage root, and serves
+assets through the standard public static route. Proc derives the site catalog
+from the active app registry; OpenResty and the CLI do not rebuild site state.
+
 ## Shared Sources Lifecycle
 
 `shared_sources` are copied into the consuming bundle's temporary build source

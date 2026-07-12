@@ -1,0 +1,18 @@
+bundles:
+  version: "1"
+  items:
+    - id: "website@2026-07-12"
+      name: "Website"
+      singleton: false
+      config:
+        ui:
+          main_view:
+            src_folder: "ui/site"
+            build_command: "cp index.html site.js styles.css <VI_BUILD_DEST_ABSOLUTE_PATH>/"
+            site:
+              enabled: true
+              alias: "workspace"
+              default: true
+              hosts: []
+              title: "KDCube Workspace"
+              scene_application_id: "workspace@2026-03-31-13-36"

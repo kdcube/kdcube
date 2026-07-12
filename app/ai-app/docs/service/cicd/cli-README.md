@@ -827,6 +827,34 @@ Current proc behavior:
 - `config/bundles.yaml` is the normal bundle descriptor authority
 - proc can seed/reset from that descriptor directly
 
+The descriptor may also register app-owned websites:
+
+```yaml
+- id: website@2026-07-12
+  config:
+    ui:
+      main_view:
+        site:
+          enabled: true
+          alias: workspace
+          default: true
+          hosts: []
+          scene_application_id: workspace@2026-03-31-13-36
+```
+
+The CLI stages `bundles.yaml` as it does for every app setting, but does not
+interpret site registration or generate proxy routes. OpenResty forwards stable
+routes and proc resolves the active app registry:
+
+```text
+/sites/workspace -> the registered site
+/                 -> matching host, then one default site
+```
+
+Many apps may register sites with unique aliases. No website setting is read
+from `assembly.yaml`. The app's browser code obtains platform/auth metadata
+from `/api/cp-frontend-config`.
+
 Local bundle root contract:
 
 - service env files stay bootstrap-minimal: `.env.ingress`, `.env.proc`, and `.env.metrics` contain only `GATEWAY_COMPONENT` and `PLATFORM_DESCRIPTORS_DIR`; runtime settings under `assembly.platform.services.*` are read from the mounted descriptor, not copied into service env files

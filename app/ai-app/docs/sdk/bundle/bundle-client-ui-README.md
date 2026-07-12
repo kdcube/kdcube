@@ -162,6 +162,38 @@ the UI, while actions that need a user (e.g. sending a chat turn) still return
 The injected `<base href>` is route-aware, so relative assets resolve under
 `/public/static/`.
 
+### Registering an app main view as a website
+
+An app can expose its main view as a directly addressable website. Configure
+the registration on that app in `bundles.yaml`:
+
+```yaml
+ui:
+  main_view:
+    site:
+      enabled: true
+      alias: workspace
+      default: true
+      hosts:
+        - workspace.example.com
+```
+
+The site is always reachable at `/sites/workspace`. Multiple apps may register
+sites with unique aliases. Root `/` selects a host match first, then one
+explicit default. OpenResty only forwards stable routes; proc resolves active
+app configuration. The CLI does not select or mount websites.
+
+The app remains responsible for its website composition and browser config.
+Platform/auth metadata comes from `/api/cp-frontend-config`; authenticated
+state comes from `/profile`; app-specific site data comes from an app API. This
+keeps the same site code valid across Cognito and app-hosted platform
+authorities.
+
+The reference implementation is
+`sdk/examples/bundles/website@2026-07-12`. Site composition does not belong in
+`assembly.yaml`. The complete registry contract is documented in
+[Application-Hosted Sites](../solutions/sites/application-sites-README.md).
+
 Buildable app browser surfaces must therefore emit relative asset URLs. For Vite
 apps under `ui/main` or `ui/widgets/<alias>`, set `base: './'`:
 
