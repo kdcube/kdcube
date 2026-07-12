@@ -23,7 +23,7 @@ MAX_SUBAGENT_MAX_ROUNDS = 30
 # The human display name a helper runs under when the delegating agent names
 # none. The delegating agent sets a specific title (react.delegate
 # `agent_title`) so the user knows who the helper is.
-DEFAULT_SUBAGENT_TITLE = "Helper agent"
+DEFAULT_SUBAGENT_TITLE = "Sub-agent"
 
 
 @dataclass

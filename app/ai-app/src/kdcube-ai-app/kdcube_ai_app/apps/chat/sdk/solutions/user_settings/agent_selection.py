@@ -129,11 +129,13 @@ def merge_selection_patch(
     if skills:
         out["skills"] = skills
 
-    subagents = bool(current.get("subagents"))
+    # Tri-state: an explicit stored value is kept either way (True = opted
+    # out, False = opted in — the latter matters when the admin default is
+    # off); absent in both = no preference, the admin default decides.
     if "subagents" in patch:
-        subagents = bool(patch.get("subagents"))
-    if subagents:
-        out["subagents"] = True
+        out["subagents"] = bool(patch.get("subagents"))
+    elif isinstance(current, Mapping) and "subagents" in current:
+        out["subagents"] = bool(current.get("subagents"))
     return out
 
 

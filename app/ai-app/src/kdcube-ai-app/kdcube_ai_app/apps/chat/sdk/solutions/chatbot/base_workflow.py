@@ -2906,9 +2906,17 @@ class BaseWorkflow():
             # Captured from the APPLIED (post-pinning) selection so a deferred
             # change and every later config resync see the same decision;
             # _install_subagent_spawner enforces admin-offered AND NOT denied.
-            from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import subagents_denied
+            from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import (
+                subagents_default_on,
+                subagents_denied,
+            )
 
-            self._user_subagents_denied = subagents_denied(disabled)
+            _sub_offered, _sub_defaults = _react_subagents_config(
+                self.bundle_props or {}, agent_id=agent_id
+            )
+            self._user_subagents_denied = subagents_denied(
+                disabled, default_on=subagents_default_on(_sub_defaults)
+            )
 
             # ── model pick (independent of the deny-list) ─────────────────────
             # Turn-local: rebase agent_role_models from config FIRST so a

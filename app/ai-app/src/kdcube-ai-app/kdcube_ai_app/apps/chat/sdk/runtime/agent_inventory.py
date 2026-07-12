@@ -135,11 +135,11 @@ def _react_agent_config_blocks(
 # Picker copy for the subagents ability. The register is the user's: helpers
 # may raise quality, they definitely add spend, and the paying user decides —
 # the same principle as the per-user model pick.
-SUBAGENTS_CAPABILITY_LABEL = "Helper agents"
+SUBAGENTS_CAPABILITY_LABEL = "Subagents"
 SUBAGENTS_CAPABILITY_DESCRIPTION = (
-    "The agent may hand sizable sub-tasks to helper agents that work in "
-    "parallel and report back. Helpers can raise the quality of hard tasks; "
-    "each helper runs on its own model calls, billed to your account."
+    "The agent may hand sizable sub-tasks to sub-agents that work in "
+    "parallel and report back. Sub-agents can raise the quality of hard "
+    "tasks; each one runs on its own model calls, billed to your account."
 )
 
 
@@ -345,10 +345,33 @@ def subagent_default_pick(
     return None, pick
 
 
-def subagents_denied(disabled: Mapping[str, Any] | None) -> bool:
-    """The user's subagents toggle: truthy ``disabled.subagents`` turns the
-    ability off for that user's turns."""
-    return bool((disabled or {}).get("subagents")) if isinstance(disabled, Mapping) else False
+def subagents_default_on(defaults: Mapping[str, Any] | None) -> bool:
+    """Whether an OFFERED subagents ability is active by default for users.
+
+    Admin ``subagents.default_on: false`` offers the ability in the capability
+    picker but leaves it OFF until the user turns it on (available for opt-in,
+    not active by default). Default ``True`` — an offered ability is on unless
+    the user denies it, preserving the original behavior."""
+    raw = (defaults or {}).get("default_on")
+    if raw is None:
+        return True
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def subagents_denied(
+    disabled: Mapping[str, Any] | None, *, default_on: bool = True
+) -> bool:
+    """Effective OFF state of the user's subagents toggle.
+
+    An explicit stored value wins (``disabled.subagents`` — True = off,
+    False = on); with no stored preference the admin default (``default_on``)
+    decides, so an offered-but-default-off ability stays off until the user
+    opts in."""
+    if isinstance(disabled, Mapping) and "subagents" in disabled:
+        return bool(disabled.get("subagents"))
+    return not default_on
 
 
 def react_supported_models(
@@ -815,14 +838,18 @@ def agent_capabilities_catalog(
         # role the pick overrides.
         "supported_models": react_supported_models(bundle_props, agent_id),
         "default_model": configured_strong_model(bundle_props, agent_id),
-        # Subagent delegation: admin `subagents: true` puts it in the
-        # inventory, default ON for users; the user's toggle decides use
-        # (deny key `subagents: true`). Absent from the config = not offered.
+        # Subagent delegation: admin `subagents.allowed: true` puts it in the
+        # inventory; the user's toggle decides use (deny key `subagents`).
+        # Absent from the config = not offered. `default_on` (admin
+        # `subagents.default_on`, default true) is the toggle's default state
+        # when the user has no stored preference — false = offered but not
+        # active until the user opts in.
         "subagents": (
             {
                 "available": True,
                 "label": SUBAGENTS_CAPABILITY_LABEL,
                 "description": SUBAGENTS_CAPABILITY_DESCRIPTION,
+                "default_on": subagents_default_on(_subagent_defaults),
             }
             if subagents_enabled
             else None
@@ -1600,8 +1627,11 @@ def clamp_selection(
         out["named_services"] = out_namespaces
     if out_skills:
         out["skills"] = out_skills
-    if subagents_offered and disabled.get("subagents"):
-        out["subagents"] = True
+    if subagents_offered and "subagents" in disabled:
+        # Store the user's explicit choice either way: True = opted out,
+        # False = opted in (matters when the admin default is off). An absent
+        # key means "no preference" and the admin default decides.
+        out["subagents"] = bool(disabled.get("subagents"))
     return out
 
 
@@ -1975,5 +2005,6 @@ __all__ = [
     "smartest_configured_alias",
     "subagent_alias_map",
     "subagent_default_pick",
+    "subagents_default_on",
     "subagents_denied",
 ]

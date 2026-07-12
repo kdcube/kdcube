@@ -199,8 +199,9 @@ def test_subagents_denial_clamps_to_the_offered_inventory():
     # admin does not offer it: nothing to deny, nothing stored
     assert clamp_selection({"subagents": True}, {"subagents": None}) == {}
     assert clamp_selection({"subagents": True}, {}) == {}
-    # falsy value = enabled = absent from the record
-    assert clamp_selection({"subagents": False}, offered) == {}
+    # an explicit opt-in is preserved (meaningful when the admin default is
+    # off — the user turning it on is a real, stored choice)
+    assert clamp_selection({"subagents": False}, offered) == {"subagents": False}
 
 
 def test_subagents_toggle_is_a_capability_delta():
@@ -228,8 +229,8 @@ def test_selection_merge_toggles_subagents():
     assert merge_selection_patch({}, {"subagents": True}) == {"subagents": True}
     # absent from the patch keeps the stored state
     assert merge_selection_patch({"subagents": True}, {}) == {"subagents": True}
-    # false re-enables (the key leaves the record)
-    assert merge_selection_patch({"subagents": True}, {"subagents": False}) == {}
+    # false = explicit opt-in, stored (so it can enable a default-off ability)
+    assert merge_selection_patch({"subagents": True}, {"subagents": False}) == {"subagents": False}
 
 
 def test_user_denial_removes_the_spawner():
@@ -1010,3 +1011,32 @@ def test_subagents_allowed_key_controls_availability():
         agent_id="main",
     )
     assert enabled is False
+
+
+def test_subagents_default_on_is_the_third_admin_state():
+    """Three admin states: not offered; offered default-on; offered default-off
+    (available in the picker but not active until the user opts in)."""
+    from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import (
+        react_subagents_config,
+        subagents_default_on,
+        subagents_denied,
+    )
+
+    # offered, no default_on key -> default ON (preserves original behavior)
+    _off, defaults = react_subagents_config(
+        {"react": {"agents": {"main": {"subagents": {"allowed": True}}}}}, "main",
+    )
+    assert subagents_default_on(defaults) is True
+    # offered, default_on: false -> default OFF
+    _off, defaults_off = react_subagents_config(
+        {"react": {"agents": {"main": {"subagents": {"allowed": True, "default_on": False}}}}},
+        "main",
+    )
+    assert subagents_default_on(defaults_off) is False
+
+    # effective off-state honors the default when the user has no preference
+    assert subagents_denied({}, default_on=True) is False    # default-on, unset -> on
+    assert subagents_denied({}, default_on=False) is True     # default-off, unset -> off
+    # an explicit user choice wins over the default either way
+    assert subagents_denied({"subagents": False}, default_on=False) is False  # opted in
+    assert subagents_denied({"subagents": True}, default_on=True) is True     # opted out

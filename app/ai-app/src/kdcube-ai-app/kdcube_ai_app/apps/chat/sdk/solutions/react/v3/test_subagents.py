@@ -978,7 +978,7 @@ async def test_spawn_persists_seed_and_schedules_promotable_charter(tmp_path):
         "forked_from_conversation_id": "conv_parent",
         "forked_from_turn_id": "turn_parent",
         "charter_goal": "Research X",
-        "agent_title": "Helper agent",
+        "agent_title": "Sub-agent",
     }
 
     # the kickoff is the promotion: one lane wakeup rides the processor queue
@@ -1188,7 +1188,7 @@ def test_apply_child_runtime_overrides_sets_budget_depth_and_parent_lane():
         "forked_from_conversation_id": "conv_parent",
         "forked_from_turn_id": "turn_parent",
         "charter_goal": "Research X",
-        "agent_title": "Helper agent",
+        "agent_title": "Sub-agent",
     }
     # configured subagent default model lands on the user-model role
     from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import USER_MODEL_TARGET_ROLE
@@ -1319,7 +1319,7 @@ def _stamp():
         "forked_from_conversation_id": "conv_parent",
         "forked_from_turn_id": "turn_parent",
         "charter_goal": "Research X",
-        "agent_title": "Helper agent",
+        "agent_title": "Sub-agent",
     }
 
 
@@ -1508,11 +1508,11 @@ async def test_converged_completion_is_promotable_on_parent_lane():
         "forked_from_conversation_id": "conv_parent",
         "forked_from_turn_id": "turn_parent",
         "charter_goal": "Research X",
-        "agent_title": "Helper agent",
+        "agent_title": "Sub-agent",
     }
     # the completion is authored by the helper (persona), with its title
     assert (stored.payload or {}).get("authored_by") == "agent"
-    assert (stored.payload or {}).get("agent_title") == "Helper agent"
+    assert (stored.payload or {}).get("agent_title") == "Sub-agent"
     # no react.contribute was made this run: no handoff line is invented
     assert "handoff" not in (stored.payload or {})
     # promotable: the task payload describes the parent's continuation turn
