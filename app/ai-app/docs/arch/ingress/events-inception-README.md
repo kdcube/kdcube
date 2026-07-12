@@ -199,6 +199,12 @@ prevents accepted external events from being unordered relative to each other;
 lane state `T` coordinates the race between ingress wakeups, proc scheduling,
 reader acceptance, and handler close.
 
+The Postgres conversation-state row can describe the conversation as
+`in_progress`, but it does not prove that a processor or ReAct reader is alive.
+Ingress must not infer takeover authority from that row's age. Live ownership
+and stale-owner recovery belong to the processor claim/start markers, Redis
+event-source owner lease, and owner-fenced lane state `T`.
+
 For idle non-reactive authored events, the current implementation records only
 to the Redis external-event source and leaves the conversation state idle. That
 is useful for low-latency event admission, but it is not sufficient as permanent

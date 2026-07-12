@@ -379,10 +379,9 @@ class EnhancedChatRequestProcessor:
     """
 
     # Must cover every user_type the gateway admits into the prompt queues
-    # (see infra/gateway/backpressure.QUEUE_USER_TYPES) — a queue that is
-    # admitted but absent here is never polled, so its tasks are never
-    # consumed. "external" is polled last (lowest priority), mirroring how
-    # backpressure gates it with the anonymous capacity ratio.
+    # (see infra/gateway/backpressure.QUEUE_USER_TYPES). A queue that is
+    # admitted but absent here is never claimed or reaped. Tuple order defines
+    # the round-robin rotation only; it is not a priority ranking.
     QUEUE_ORDER: Iterable[str] = ("privileged", "registered", "anonymous", "paid", "external")
 
     def __init__(

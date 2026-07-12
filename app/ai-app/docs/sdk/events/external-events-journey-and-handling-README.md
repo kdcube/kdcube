@@ -118,6 +118,7 @@ external_events[] from client/widget/webhook/API
          no fresh consumer/start    -> T.consumer = scheduled
   -> bundle-load/on-message fence
        resolve/load bundle, bind request context, invoke bundle turn entrypoint
+       once for this scheduled proc task
   -> ReAct ContextBrowser
        open handler in T for this turn; reclaim stale open handler if there is
        no fresh active consumer heartbeat
@@ -125,6 +126,8 @@ external_events[] from client/widget/webhook/API
        read L after timeline cursor
        accept_events_for_open_handler(...)
        fold events into TL only if still owner
+       later live events stay inside this turn; they do not invoke the bundle
+       entrypoint again
   -> ReAct loop
        consume TL
   -> finish_turn
@@ -178,8 +181,9 @@ with event_id + sequence           batch has reactive work
         |                               v
         |                         chat-proc process
         |                         load/resolve the bundle instance
-        |                         then invoke its on-message turn entrypoint
-        |                         (for ReAct bundles: @on_reactive_event / workflow run)
+        |                         then invoke its on-message turn entrypoint once
+        |                         (for ReAct bundles:
+        |                         @on_reactive_event / workflow run)
         |                               |
         v                               v
 chat-proc process
@@ -264,7 +268,9 @@ matter:
 | Handler open | `T.handler_turn_id` must be this turn after `open_handler(...)`. | Raise `ExternalEventLaneTurnSuperseded`. |
 | Consumer acknowledgement | Consumer heartbeat updates are guarded by handler owner. | The stale turn cannot refresh liveness for a different owner. |
 | Initial and live event fold | `accept_events_for_open_handler(...)` requires `T.handler_turn_id` to still be this turn before calling the fold/materialization callback and advancing processed cursors. | Raise `ExternalEventLaneTurnSuperseded` on handler mismatch. |
+| ReAct decision/tool phase watch | The backup phase watcher calls `ContextBrowser.apply_live_external_events()`, the same owner-fenced path used by the background listener. | Cancel the old active phase; never dispatch or fold the event through an unfenced fallback. |
 | Finish turn | `finish_turn` calls the event-lane current-owner assertion before answer emission and final turn persistence. | Raise `ExternalEventLaneTurnSuperseded`; the normal turn exception path abandons this turn. |
+| Proc-task cancellation | ReAct closes the ContextBrowser handler before propagating `CancelledError`. | Stop/release the independent listener lease and leave the started inflight task to normal interrupted-task recovery. |
 
 This is the idempotence rule: a lane event is folded and cursor-advanced only
 for the turn that still owns the lane, and a superseded turn does not publish
@@ -353,6 +359,7 @@ T.consumer_status                active | scheduled | none
 T.consumer_status_at
 
 T.last_processed_event_timestamp
+T.last_processed_event_id
 T.last_processed_reactive_event_timestamp
 ```
 
@@ -360,6 +367,9 @@ T.last_processed_reactive_event_timestamp
 state was last written. The handler-liveness signal is a fresh
 `T.consumer_status_at` written by an active reader/consumer as an
 acknowledgement that it is still consuming this lane.
+
+`T.last_processed_event_id` is paired with the processed timestamp so the
+close gate can distinguish multiple events accepted with the same timestamp.
 
 ```text
 fresh active consumer_status_at
@@ -433,6 +443,12 @@ normal turn exception path:
 exception path. The important property is that the stale turn is discarded as
 a wrong turn, while the newer owner continues from the last committed turn in
 the index.
+
+Cancellation is a separate path from supersession. The processor may cancel a
+turn because of shutdown or its watchdog. ReAct v2/v3 then closes the
+ContextBrowser handler before re-raising cancellation, so the independently
+scheduled lane listener cannot continue refreshing an owner lease after its
+processor turn has stopped.
 
 This means bundles can use the same SSE/Socket.IO-backed lane for explicit
 conversation events. An event can be useful to the bundle even when it should

@@ -123,6 +123,13 @@ Current user-type lanes:
 - `registered`
 - `anonymous`
 - `paid`
+- `external`
+
+`external` is the gateway user type used by external identities such as an
+unconnected Telegram user. It is a processor queue lane, not the
+`external_event` conversation-event kind. Every user type admitted by gateway
+backpressure must appear in the processor rotation; otherwise ingress can
+successfully enqueue work that no processor ever claims or reaps.
 
 Ingress enqueues with `LPUSH`.
 Processor claims with `BRPOPLPUSH`.
@@ -260,7 +267,8 @@ Current implementation note:
 
 High-level flow:
 
-1. rotate through user-type lanes in `("privileged", "registered", "anonymous", "paid")`
+1. rotate fairly through user-type lanes in
+   `("privileged", "registered", "anonymous", "paid", "external")`
 2. claim one item with `BRPOPLPUSH(ready -> inflight)`
 3. parse payload and derive `task_id`
 4. acquire the per-task Redis lock
@@ -315,6 +323,11 @@ On terminal completion:
   - ack the inflight claim
   - set conversation state to `error`
   - emit `conv_status` with `completion="error"`
+
+The durable Postgres conversation-state row is an output/admission projection,
+not the running-turn lease. Live ownership and stale-owner reclaim are decided
+from the Redis event-lane handler/consumer state and owner lease. A row being
+old is not, by itself, permission to start a competing turn.
 
 ### 4.4.1 Tool execution inside proc-owned turns
 
@@ -461,6 +474,9 @@ If a running task gets cancelled during shutdown:
 - proc does not ack the inflight claim
 - proc leaves the started marker in place
 - external child runtimes are explicitly terminated
+- ReAct v2/v3 closes its ContextBrowser event handler, which stops and releases
+  the independently running lane-listener lease and performs the fenced
+  handoff check
 - recovery later resolves the task as interrupted rather than replaying it
 
 ---

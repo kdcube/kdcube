@@ -51,6 +51,7 @@ T.handler.status                         open | closed
 T.handler.status_at
 
 T.last_processed_event_timestamp
+T.last_processed_event_id
 T.last_processed_reactive_event_timestamp
 
 T.consumer.status                        active | scheduled | none
@@ -61,6 +62,8 @@ T.consumer.status_at
 types. `T.last_processed_reactive_event_timestamp` is the same cursor for
 reactive events only. Both values come from event-envelope timestamps. They
 are not Redis Stream ids, sequence numbers, or wall-clock timestamps.
+`T.last_processed_event_id` disambiguates two accepted events that carry the
+same timestamp.
 
 `T.consumer.status_at` is a real lane-local acknowledgement timestamp written
 by proc or the Reader/Consumer. It is not derived from processor heartbeat.
@@ -73,6 +76,7 @@ by proc or the Reader/Consumer. It is not derived from processor heartbeat.
 | Stream | Store accepted lane events. |
 | Wake queue | Carry a nudge for the lane, including the first reactive event timestamp. |
 | Proc | Read a wake and, under `lock(T)`, decide whether to set `T.consumer.status = scheduled`. |
+| Bundle `@on_reactive_event` entrypoint | Start one scheduled workflow turn. It is invoked once for that proc task, not once for every later event in the lane. |
 | BaseWorkflow / ContextBrowser handler setup | When the turn runtime is constructed and before timeline load, write `T.handler.turn_id`, `T.handler.status = open`, and `T.handler.status_at`. |
 | ReAct handler close gate | Close the handler only if the candidate answer saw all processed lane events. |
 | Reader/Consumer | Start after handler open, set `T.consumer.status = active`, accept lane events into the live turn path while `T.handler.status == open`, and update `T.last_processed_*`. |
@@ -160,6 +164,7 @@ Initial Lane Drain / Live Lane Drain
   for accepted entries:
     lock(T)
       if T.handler.status == open:
+        require T.handler.turn_id == current runtime turn id
         contribute entries to the live turn path
         mark the source consumed for accepted entries
         update T.last_processed_event_timestamp
@@ -207,6 +212,12 @@ Reader / Consumer Release
 Ingress does not decide whether the conversation is idle or busy. It accepts
 the batch into the lane and wakes proc when reactive work exists. The lane and
 `T` decide scheduling and reader acceptance.
+
+The Postgres `conversation.state` record is not part of this ownership table.
+It remains useful as a durable UI/admission projection, but its timestamp is
+not a lease or heartbeat and must not authorize stale-owner takeover. The live
+authorities are the processor claim/start markers, the event-source owner
+lease, and the owner-fenced fields in `T`.
 
 Reactive ingress has one transaction boundary: the lane write and wake enqueue
 stand or fall together. If the processor queue rejects the wake because of
@@ -260,6 +271,12 @@ before it could reclaim the stale owner.
 `now` must come from the same clock source used by the state table. The first
 implementation uses Redis-backed state and may use process UTC timestamps
 until Redis `TIME` is wired.
+
+The current owner-freshness window is configured by
+`KDCUBE_EVENT_BUS_OPEN_HANDLER_CONSUMER_TTL_SECONDS` and defaults to 30
+seconds. Missing, non-numeric, zero, or negative values fall back to that
+default. This setting controls Redis lane-owner reclaim only; it does not
+change Postgres conversation-state handling.
 
 ## Probe-Based Wakeup
 

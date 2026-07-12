@@ -56,11 +56,12 @@ Processor
   else:
     validate item directly as ExternalEventPayload
   build communicator/accounting/runtime context
-  invoke bundle @on_reactive_event
+  invoke bundle @on_reactive_event once for this scheduled processor turn
   |
   v
 Bundle / ReAct
-  folds lane events into the timeline before model rendering
+  ContextBrowser performs the initial fold, then its live listener folds later
+  lane events into the same turn before subsequent model renders
 ```
 
 The important boundary is:
@@ -69,6 +70,11 @@ The important boundary is:
 - the Redis event lane owns the ordered event body;
 - lane state `T` synchronizes proc, the handler, and the reader;
 - the bundle/ReAct runtime owns timeline folding.
+
+The processor rotates across every gateway-admitted user type:
+`privileged`, `registered`, `anonymous`, `paid`, and `external`. Here
+`external` names an identity/queue lane. It is unrelated to the
+`external_event` event kind stored in the conversation lane.
 
 ## Queue Item Kinds
 
@@ -128,6 +134,11 @@ When proc claims work:
 8. invoke the bundle through the normal reactive-entrypoint path when the wake
    schedules work.
 
+`@on_reactive_event` is the turn-start entrypoint. It is not called once per
+event accepted during a living turn. After the entrypoint constructs the
+workflow, `ContextBrowser` owns the Redis lane listener and invokes ReAct's
+registered external-event hook for each accepted live batch.
+
 `schedule_consumer_from_wake(...)` may mark `T.consumer.status = scheduled`.
 That is only a duplicate-start reservation for the proc/app-load boundary. It
 does not prove that an old open handler is still alive. When the invoked turn
@@ -147,6 +158,13 @@ The live ReAct handler opens the lane state for its turn. The ContextBrowser
 reader drains the lane and folds accepted events into the in-memory timeline
 only while `T.handler.status == open`. Accepting lane events and advancing
 `T.last_processed_*` happens under the same short state lock.
+
+Both the background listener and ReAct's direct phase watcher enter through
+`ContextBrowser.apply_live_external_events()`. That method calls
+`accept_events_for_open_handler(...)`; neither path may call the raw block
+folding method directly. If `T.handler.turn_id` names a newer turn, the old
+phase is cancelled with `ExternalEventLaneTurnSuperseded` before its fold
+callback runs.
 
 When ReAct has a candidate final answer, its close gate compares the last event
 timestamp it rendered with `T.last_processed_event_timestamp`. If the reader
@@ -180,7 +198,8 @@ Proc does not own:
 - timeline block production details;
 - ReAct projection/announce/compaction behavior;
 - persistent product storage for idle non-reactive events;
-- final model-visible rendering.
+- final model-visible rendering;
+- liveness inferred from the age of a Postgres conversation-state row.
 
 Those live in the SDK event-source subsystem, ReAct `ContextBrowser`, and
 bundle/application code.

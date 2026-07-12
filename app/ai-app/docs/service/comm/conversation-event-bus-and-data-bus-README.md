@@ -60,7 +60,8 @@ Data Bus handler explicitly bridges a result back into the conversation bus.
 ```text
 conversation event:
   target.agent_id -> tenant/project/user/conversation/agent_id lane
-  -> @on_reactive_event run(...)
+  -> reactive wake -> one @on_reactive_event run(...)
+  -> ContextBrowser initial/live lane drains inside that running turn
 
 data bus message:
   messages[].subject -> app Data Bus stream
@@ -83,6 +84,16 @@ browser/chat client
   -> timeline blocks / announce / summaries / compaction
   -> ReAct agent
 ```
+
+`@on_reactive_event` starts a scheduled turn; it is not invoked again for each
+event that arrives while that turn is alive. The running `ContextBrowser` owns
+those later lane reads and sends accepted events through the ReAct
+external-event hook under the Redis handler-owner fence.
+
+The durable Postgres conversation-state record is a projection used by UI and
+admission logic. It is not the conversation-event-bus lease. Turn liveness,
+reclaim, and permission to fold an event are determined by the Redis event
+source owner lease and lane state `T`.
 
 Use this bus when the user action should influence the current or next agent
 turn.

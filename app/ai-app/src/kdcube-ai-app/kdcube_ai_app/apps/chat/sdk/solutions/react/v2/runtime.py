@@ -21,6 +21,7 @@ from langgraph.graph import StateGraph, END
 from kdcube_ai_app.apps.chat.emitters import ChatCommunicator
 from kdcube_ai_app.apps.chat.ids import new_exec_id
 from kdcube_ai_app.apps.chat.sdk.protocol import ExternalEventPayload
+from kdcube_ai_app.apps.chat.sdk.events.event_bus.exceptions import ExternalEventLaneTurnSuperseded
 from kdcube_ai_app.apps.chat.sdk.solutions.react.browser import ContextBrowser
 from kdcube_ai_app.apps.chat.sdk.solutions.infra import emit_event
 from kdcube_ai_app.apps.chat.sdk.runtime.execution import execute_tool, _safe_label
@@ -380,32 +381,31 @@ class ReactSolverV2:
                     f"[react.v2] phase={phase} direct external-event watch received count={len(events)} turn_id={self.scratchpad.turn_id}",
                     level="INFO",
                 )
-                apply_events = getattr(ctx_browser, "apply_external_events", None)
-                changed = 0
-                if apply_events is not None and timeline is not None:
-                    maybe = apply_events(events, call_hooks=True)
-                    changed = int(await maybe if asyncio.iscoroutine(maybe) else maybe or 0)
-                else:
-                    for event in events:
-                        stream_id = str(getattr(event, "stream_id", "") or "")
-                        if stream_id:
-                            self._active_phase_external_cursor = stream_id
-                        try:
-                            handled = await self.on_external_event(
-                                type=str(getattr(event, "kind", "external") or "external"),
-                                event=event,
-                                blocks=[],
-                            )
-                            changed += int(bool(handled))
-                        except Exception:
-                            self.log.log(
-                                f"[react.v2] direct external-event dispatch failure phase={phase}: {traceback.format_exc()}",
-                                level="ERROR",
-                            )
+                apply_events = getattr(ctx_browser, "apply_live_external_events", None)
+                if not callable(apply_events):
+                    self.log.log(
+                        f"[react.v2] phase={phase} cannot apply live external events: "
+                        "ownership-fenced ContextBrowser consumer is unavailable",
+                        level="ERROR",
+                    )
+                    if not phase_task.done():
+                        phase_task.cancel()
+                    return
+                maybe = apply_events(events)
+                changed = int(await maybe if asyncio.iscoroutine(maybe) else maybe or 0)
                 if changed and self._steer_interrupt_requested:
                     return
             except asyncio.CancelledError:
                 raise
+            except ExternalEventLaneTurnSuperseded as exc:
+                self.log.log(
+                    f"[react.v2] phase={phase} cancelled because external-event lane ownership moved "
+                    f"turn_id={exc.turn_id or '-'} owner_turn_id={exc.owner_turn_id or '-'}",
+                    level="INFO",
+                )
+                if not phase_task.done():
+                    phase_task.cancel()
+                return
             except Exception:
                 self.log.log(
                     f"[react.v2] external-event phase watcher failure phase={phase}: {traceback.format_exc()}",
@@ -1590,11 +1590,31 @@ class ReactSolverV2:
         allowed_plugins: List[str],
         allowed_tool_names_by_alias: Dict[str, Any] | None = None,
     ):
-        with self._bind_runtime_role_models():
-            return await self._run_impl(
-                allowed_plugins=allowed_plugins,
-                allowed_tool_names_by_alias=allowed_tool_names_by_alias,
-            )
+        try:
+            with self._bind_runtime_role_models():
+                return await self._run_impl(
+                    allowed_plugins=allowed_plugins,
+                    allowed_tool_names_by_alias=allowed_tool_names_by_alias,
+                )
+        except asyncio.CancelledError:
+            close_handler = getattr(self.ctx_browser, "close_external_event_handler", None) if self.ctx_browser else None
+            if callable(close_handler):
+                try:
+                    maybe = close_handler()
+                    if asyncio.iscoroutine(maybe):
+                        await asyncio.shield(maybe)
+                except asyncio.CancelledError:
+                    self.log.log(
+                        f"[react.v2] cancellation interrupted external-event handler cleanup "
+                        f"turn_id={self.scratchpad.turn_id}",
+                        level="WARNING",
+                    )
+                except Exception:
+                    self.log.log(
+                        f"[react.v2] failed to close external-event handler after cancellation:\n{traceback.format_exc()}",
+                        level="ERROR",
+                    )
+            raise
 
     async def _run_impl(
         self,

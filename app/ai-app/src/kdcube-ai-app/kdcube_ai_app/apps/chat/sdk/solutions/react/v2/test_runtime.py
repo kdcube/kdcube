@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from kdcube_ai_app.apps.chat.sdk.events.event_bus.exceptions import ExternalEventLaneTurnSuperseded
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.runtime import ReactSolverV2
 from kdcube_ai_app.apps.chat.sdk.solutions.react.round import ReactRound
 
@@ -27,6 +28,8 @@ def _solver_stub() -> ReactSolverV2:
     solver._steer_interrupt_requested = False
     solver._latest_steer_seq_seen = 0
     solver._last_handled_steer_seq = 0
+    solver._latest_followup_seq_seen = 0
+    solver._finalize_superseded_followup_seq = 0
     solver._latest_steer_text = ""
     solver._active_phase_task = None
     solver._active_phase_name = ""
@@ -576,13 +579,16 @@ async def test_decision_node_direct_phase_watcher_interrupts_without_browser_lis
         async def ensure_external_event_listener(self):
             self.ensure_calls += 1
 
-        async def apply_external_events(self, events, *, call_hooks):
-            assert call_hooks is True
+        async def apply_live_external_events(self, events):
             for event in events:
                 self.timeline.last_external_event_seq = int(getattr(event, "sequence", 0) or 0)
                 self.timeline.last_external_event_id = str(getattr(event, "stream_id", "") or "")
                 await self.react.on_external_event(type=str(event.kind), event=event, blocks=[{"type": "user.steer"}])
             return len(events)
+
+        async def apply_external_events(self, *args, **kwargs):
+            del args, kwargs
+            raise AssertionError("phase watcher must use the ownership-fenced live consumer")
 
         def current_turn_blocks(self):
             return []
@@ -608,6 +614,69 @@ async def test_decision_node_direct_phase_watcher_interrupts_without_browser_lis
     assert out["retry_decision"] is True
     assert out["steer_finalize_mode"] is True
     assert out["steer_interrupt"]["cancelled_phase"] == "decision"
+
+
+@pytest.mark.asyncio
+async def test_phase_watcher_cancels_when_event_lane_owner_changes():
+    solver = _solver_stub()
+    event = SimpleNamespace(
+        kind="followup",
+        sequence=14,
+        text="new request",
+        message_id="evt_14",
+        stream_id="1775871766337-0",
+    )
+
+    class _EventSource:
+        async def read_since(self, cursor, *, limit=None):
+            del cursor, limit
+            return [event]
+
+    class _Browser:
+        timeline = SimpleNamespace(last_external_event_id="", last_external_event_seq=0)
+        runtime_ctx = SimpleNamespace(external_event_source=_EventSource())
+
+        async def ensure_external_event_listener(self):
+            return None
+
+        async def apply_live_external_events(self, events):
+            assert events == [event]
+            raise ExternalEventLaneTurnSuperseded(
+                turn_id="turn-1",
+                owner_turn_id="turn-2",
+                handler_status="open",
+                phase="accept_live_external_events",
+            )
+
+    solver.ctx_browser = _Browser()
+
+    with pytest.raises(asyncio.CancelledError):
+        await solver._run_cancellable_phase(phase="decision", coro=asyncio.sleep(30))
+
+
+@pytest.mark.asyncio
+async def test_run_closes_external_event_handler_when_cancelled():
+    solver = _solver_stub()
+    close_calls = 0
+
+    class _Browser:
+        runtime_ctx = SimpleNamespace(agent_role_models={})
+
+        async def close_external_event_handler(self):
+            nonlocal close_calls
+            close_calls += 1
+
+    async def _cancelled_run(**kwargs):
+        del kwargs
+        raise asyncio.CancelledError
+
+    solver.ctx_browser = _Browser()
+    solver._run_impl = _cancelled_run
+
+    with pytest.raises(asyncio.CancelledError):
+        await solver.run(allowed_plugins=[], allowed_tool_names_by_alias={})
+
+    assert close_calls == 1
 
 
 

@@ -12,6 +12,7 @@ not a liveness signal.
 from __future__ import annotations
 
 import datetime as _dt
+from types import SimpleNamespace
 
 import pytest
 
@@ -306,3 +307,79 @@ async def test_browser_raises_superseded_when_handler_owner_changed():
 
     assert raised_again.value.turn_id == "turn_OLD"
     assert raised_again.value.owner_turn_id == "turn_NEW"
+
+
+@pytest.mark.asyncio
+async def test_two_turn_reclaim_fences_old_browser_from_accepting_lane_events():
+    redis = _Redis()
+    source = _Source(redis=redis)
+
+    def _browser(turn_id: str) -> ContextBrowser:
+        browser = ContextBrowser(
+            runtime_ctx=RuntimeCtx(
+                tenant="tenant",
+                project="project",
+                user_id="user",
+                conversation_id="conversation",
+                turn_id=turn_id,
+                bundle_id="bundle@1",
+                external_event_source=source,
+            ),
+        )
+        browser._timeline = SimpleNamespace()
+        return browser
+
+    old_browser = _browser("turn_OLD")
+    await old_browser.open_external_event_handler()
+    old_orchestrator = old_browser._event_bus_orchestrator()
+    assert old_orchestrator is not None
+    await old_orchestrator.mark_consumer_active(turn_id="turn_OLD")
+
+    blocked_browser = _browser("turn_BLOCKED")
+    with pytest.raises(ExternalEventLaneTurnSuperseded):
+        await blocked_browser.open_external_event_handler()
+
+    state = await old_orchestrator.state()
+    state.consumer_status_at = _ago(120)
+    await old_orchestrator.table.put(state)
+
+    new_browser = _browser("turn_NEW")
+    assert await new_browser.open_external_event_handler()
+
+    old_applied = False
+    new_applied = False
+
+    async def _old_apply(events, *, call_hooks):
+        nonlocal old_applied
+        del events, call_hooks
+        old_applied = True
+        return 1
+
+    async def _new_apply(events, *, call_hooks):
+        nonlocal new_applied
+        assert call_hooks is True
+        assert len(events) == 1
+        new_applied = True
+        return 1
+
+    old_browser.apply_external_events = _old_apply
+    new_browser.apply_external_events = _new_apply
+    event = SimpleNamespace(
+        created_at="2026-07-12T10:00:00Z",
+        message_id="evt_NEW",
+        is_continuation=True,
+        consumed_at=None,
+    )
+
+    with pytest.raises(ExternalEventLaneTurnSuperseded) as raised:
+        await old_browser.apply_live_external_events([event])
+
+    assert raised.value.turn_id == "turn_OLD"
+    assert raised.value.owner_turn_id == "turn_NEW"
+    assert old_applied is False
+    assert await new_browser.apply_live_external_events([event]) == 1
+    assert new_applied is True
+
+    final_state = await old_orchestrator.state()
+    assert final_state.handler_turn_id == "turn_NEW"
+    assert final_state.consumer_status == "active"
