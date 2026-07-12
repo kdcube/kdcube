@@ -217,6 +217,56 @@ def external_event_request_start_label(request: Any) -> str:
     return ""
 
 
+def _accepted_event_agent_persona(event: Any) -> Dict[str, Any]:
+    """The agent persona an accepted external event carries, or ``{}``.
+
+    A turn triggered by a helper-authored event (a subagent completion) carries
+    the ``authored_by: "agent"`` contract in its facts: ``agent_title`` (the
+    helper's display name) and, when the helper reported one, ``handoff`` (its
+    own message back to the delegating agent). Scans the event and its nested
+    ``payload.event`` body — the same surfaces the client reads — so the label
+    and the persona resolve off one shape."""
+    if not isinstance(event, dict):
+        return {}
+    candidates = [event]
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    body = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+    if body:
+        candidates.append(body)
+    for candidate in candidates:
+        if str(candidate.get("authored_by") or "").strip().lower() != "agent":
+            continue
+        persona: Dict[str, Any] = {
+            "authored_by": "agent",
+            "agent_title": str(candidate.get("agent_title") or ""),
+        }
+        handoff = str(candidate.get("handoff") or "").strip()
+        if handoff:
+            persona["handoff"] = handoff
+        return persona
+    return {}
+
+
+def external_event_request_start_persona(request: Any) -> Dict[str, Any]:
+    """Persona fields for a turn whose triggering event a helper authored.
+
+    Returns ``{authored_by: "agent", agent_title, handoff?}`` when the turn was
+    opened by a subagent completion event, so the continuation turn renders as
+    the helper persona instead of the user; ``{}`` for user-authored turns.
+    Rides onto ``chat.start.data`` next to ``message`` (the live surface the
+    client reads the persona from)."""
+    events = getattr(request, "external_events", None)
+    if events is None and isinstance(request, dict):
+        events = request.get("external_events")
+    if not isinstance(events, list):
+        return {}
+    for event in events:
+        persona = _accepted_event_agent_persona(event)
+        if persona:
+            return persona
+    return {}
+
+
 class ExternalEventRouting(_ProtoBase):
     bundle_id: str
     session_id: str

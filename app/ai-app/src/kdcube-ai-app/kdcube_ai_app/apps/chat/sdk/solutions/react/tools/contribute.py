@@ -137,6 +137,15 @@ async def handle_react_contribute(
             author=f"agent:conv_{child_conversation_id}/{turn_id}",
             target_turn_id=str(parent.get("turn_id") or "") or None,
         )
+        # The report is the child's message TO the delegating agent (the
+        # child->parent channel). The latest one becomes the handoff the
+        # converged completion carries, so the continuation-turn persona
+        # speaks the helper's own words rather than a sliced deliverable.
+        if runtime_ctx is not None:
+            try:
+                runtime_ctx.subagent_last_contribution_report = report
+            except Exception:
+                pass
     except Exception as exc:
         try:
             log = getattr(react, "log", None)

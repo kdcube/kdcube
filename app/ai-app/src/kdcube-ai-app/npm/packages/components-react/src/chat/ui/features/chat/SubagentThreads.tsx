@@ -92,6 +92,9 @@ function SubagentThreadViewImpl({
   }
   const milestones = thread.contributions
   const goal = thread.charterGoal || 'Delegated task'
+  /* The persona name the delegating agent chose; the thread header and the
+   * continuation-turn persona show the SAME name. */
+  const personaName = thread.agentTitle || 'Helper agent'
   return (
     <section className="k-subthread" data-thread-anchor={thread.childConversationId}>
       <button
@@ -103,7 +106,7 @@ function SubagentThreadViewImpl({
       >
         <BranchIcon />
         <span className="k-subthread-title">
-          <span className="k-subthread-kicker">Helper agent</span>
+          <span className="k-subthread-kicker">{personaName}</span>
           <span className="k-subthread-goal">{goal}</span>
         </span>
         <span className="k-subthread-meta">

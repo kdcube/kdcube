@@ -384,7 +384,7 @@ async def fetch_conversation(
     #                            # (subagent child) conversation
     #   "turns": [
     #       {"turn_id": "t1",
-    #        "forks": [{"child_conversation_id": "...", "charter_goal": "...", "forked_at": "..."}],
+    #        "forks": [{"child_conversation_id": "...", "charter_goal": "...", "agent_title": "...", "forked_at": "..."}],
     #                            # present when the turn delegated subagents;
     #                            # each child conversation is fetchable through
     #                            # this same endpoint by the same user

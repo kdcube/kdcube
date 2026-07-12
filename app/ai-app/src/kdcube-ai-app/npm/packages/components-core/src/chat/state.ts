@@ -224,6 +224,18 @@ export interface AdditionalUserMessage {
   eventType: string
 }
 
+/** A turn triggered by an agent, not the user (a subagent's converged
+ *  completion reactively opens a parent continuation turn). Read off the
+ *  triggering input's `authored_by: "agent"` contract: `agentTitle` is the
+ *  helper persona name the delegating agent chose, `handoff` the helper's own
+ *  message back to the parent (its `react.contribute` report), absent when the
+ *  helper made no contribution. The turn renders as this persona in place of
+ *  the "You" bubble. */
+export interface TurnAgentPersona {
+  agentTitle: string
+  handoff?: string | null
+}
+
 /** A structured context object dropped or pinned into chat.
  *  Canvas and wizard chips attach the whole current state/snapshot. Canvas
  *  card chips focus individual pins from the board into the next prompt. */
@@ -287,6 +299,10 @@ export interface ChatTurn {
   artifacts: Artifact[]
   timeline: TimelineEntry[]
   followups: string[]
+  /* Present when the turn was triggered by an agent rather than the user (a
+   * subagent completion opening a parent continuation turn). Renders the
+   * helper persona in place of the "You" bubble. */
+  authoredBy?: TurnAgentPersona | null
   /* Transient, live-only notice shown when this turn took over a conversation
    * whose previous response was interrupted before it finished (a crash, reload,
    * or superseded turn). Set from the live `external_event.handler.reclaim` step;
@@ -326,6 +342,11 @@ export interface SubagentThread {
   childConversationId: string
   parentTurnId: string
   parentConversationId?: string | null
+  /** The helper persona name the delegating agent chose (react.delegate
+   *  `agent_title`), carried on the stamp and the reload fork descriptor.
+   *  Names the thread header and the continuation-turn persona alike; empty
+   *  falls back to "Helper agent" at render. */
+  agentTitle: string
   charterGoal: string
   forkedAt: number
   status: SubagentThreadStatus

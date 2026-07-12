@@ -48,6 +48,7 @@ import type {
   TimelineArtifact,
   TimelineEntry,
   TimelineEntryFormat,
+  TurnAgentPersona,
   TurnAttachment,
   TurnState,
   TurnStep,
@@ -95,6 +96,32 @@ function recordValue(value: unknown): Record<string, unknown> | null {
 
 function stringValue(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+/** The agent persona a turn's triggering input carries, or null when the user
+ *  authored it. Reads the `authored_by: "agent"` contract (`agent_title` plus
+ *  the optional `handoff` — the helper's own message back to the delegating
+ *  agent) off a record and the nested triggering-event shapes it can arrive in
+ *  (`event`, `payload.event`), so the live start payload and a reloaded turn's
+ *  stored triggering event resolve the same persona. */
+function agentPersonaFromInput(
+  record: Record<string, unknown> | null | undefined,
+): TurnAgentPersona | null {
+  if (!record) return null
+  const candidates: Array<Record<string, unknown>> = [record]
+  const event = recordValue(record.event)
+  if (event) candidates.push(event)
+  const payloadEvent = recordValue(recordValue(record.payload)?.event)
+  if (payloadEvent) candidates.push(payloadEvent)
+  for (const candidate of candidates) {
+    if (stringValue(candidate.authored_by).toLowerCase() !== 'agent') continue
+    const handoff = stringValue(candidate.handoff)
+    return {
+      agentTitle: stringValue(candidate.agent_title),
+      handoff: handoff || null,
+    }
+  }
+  return null
 }
 
 function consentActionUrl(value: unknown): string {
@@ -842,10 +869,15 @@ export function hydrateHistoricalConversation(conversation: ConversationDTO): Ch
             currentUserSlot = 'additional'
             break
           }
+          /* An agent-authored triggering input (a subagent completion that
+           * opened this continuation turn) names its persona; render it in
+           * place of the "You" bubble on reload, same as live. */
+          const persona = agentPersonaFromInput(dataRecord) || agentPersonaFromInput(payload)
           turn = {
             ...turn,
             createdAt: ts,
             userMessage: displayText,
+            ...(persona ? { authoredBy: persona } : {}),
           }
           currentUserSlot = 'main'
           break
@@ -1123,9 +1155,14 @@ export function applyChatStart(state: ChatState, env: ChatStartEnvelope): ChatSt
     typeof env.data?.message === 'string' ? env.data.message : '',
   )
   const syncedState = syncConversationFromEnvelope(ensuredState, env)
+  /* An agent-authored turn (a subagent completion opening a parent
+   * continuation turn) names its persona on the triggering input; it renders
+   * in place of the "You" bubble. User-authored turns carry no persona. */
+  const persona = agentPersonaFromInput(recordValue(env.data))
   return updateTurn(syncedState, env.conversation.turn_id, (turn) => ({
     ...turn,
     state: 'running',
+    ...(persona ? { authoredBy: persona } : {}),
     timeline: [
       ...turn.timeline,
       {

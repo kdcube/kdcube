@@ -46,7 +46,7 @@ import {
 } from './transport/index.ts'
 import { mergeSelectionPatches } from './capabilities.ts'
 import type { AgentSelectionPatch } from './capabilities.ts'
-import { subagentStampOf } from './subagents.ts'
+import { subagentThreadChildId } from './subagents.ts'
 import type { SubagentStreamKind } from './subagents.ts'
 import type { AttachedContext } from './state.ts'
 import type {
@@ -369,9 +369,13 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
   /* Subagent multiplexing: a child conversation's emissions arrive on THIS
    * conversation's channel stamped with the fork envelope (`env.subagent`).
    * Stamped traffic routes into its thread (keyed by child conversation id)
-   * instead of the main-lane reducers — same pipeline, nested turn list. */
+   * instead of the main-lane reducers — same pipeline, nested turn list. The
+   * stamp is what routes; an emission the backend didn't stamp (some widget
+   * sub_types) still carries the child's own conversation id and folds into
+   * the thread that child already opened. Either way it stays out of the
+   * main lane. */
   const routeSubagentEnvelope = (kind: SubagentStreamKind, env: BaseEnvelope): boolean => {
-    if (!subagentStampOf(env)) return false
+    if (!subagentThreadChildId(env, getChat().threads)) return false
     dispatch(chatActions.subagentStreamEvent({ kind, envelope: env }))
     return true
   }

@@ -456,6 +456,7 @@ def _subagent_fork_records_from_blocks(blocks: Any) -> List[Dict[str, Any]]:
         out.append({
             "child_conversation_id": child_conversation_id,
             "charter_goal": str(meta.get("charter_summary") or ""),
+            "agent_title": str(meta.get("agent_title") or ""),
             "forked_at": str(block.get("ts") or ""),
         })
     return out

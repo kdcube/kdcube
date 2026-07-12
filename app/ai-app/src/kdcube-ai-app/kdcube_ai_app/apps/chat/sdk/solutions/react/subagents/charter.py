@@ -20,6 +20,11 @@ from typing import Any, Dict, List, Optional, Tuple
 DEFAULT_SUBAGENT_MAX_ROUNDS = 8
 MAX_SUBAGENT_MAX_ROUNDS = 30
 
+# The human display name a helper runs under when the delegating agent names
+# none. The delegating agent sets a specific title (react.delegate
+# `agent_title`) so the user knows who the helper is.
+DEFAULT_SUBAGENT_TITLE = "Helper agent"
+
 
 @dataclass
 class SubagentCharter:
@@ -29,6 +34,10 @@ class SubagentCharter:
     max_rounds: int = DEFAULT_SUBAGENT_MAX_ROUNDS
     # The helper alias the parent picked (react.delegate `agent_alias`).
     agent_alias: str = ""
+    # The human display name the delegating agent gave the helper
+    # (react.delegate `agent_title`), shown to the user so they know who the
+    # helper is. Omitted at the call site -> the default title.
+    agent_title: str = DEFAULT_SUBAGENT_TITLE
     # Fields kept for charters persisted under the earlier object contract
     # ({goal, deliverables, contribute}); read on parse, rendered when
     # present, absent from freshly written charters.
@@ -40,6 +49,7 @@ class SubagentCharter:
             "goal": self.goal,
             "max_rounds": int(self.max_rounds or DEFAULT_SUBAGENT_MAX_ROUNDS),
             "agent_alias": self.agent_alias,
+            "agent_title": self.agent_title or DEFAULT_SUBAGENT_TITLE,
         }
         if self.deliverables:
             out["deliverables"] = list(self.deliverables)
@@ -100,6 +110,7 @@ class SubagentCharter:
             goal=str(raw.get("goal") or "").strip(),
             max_rounds=_clamp_rounds(raw.get("max_rounds") or raw.get("budget")),
             agent_alias=str(raw.get("agent_alias") or raw.get("model") or "").strip(),
+            agent_title=str(raw.get("agent_title") or "").strip() or DEFAULT_SUBAGENT_TITLE,
             deliverables=[str(d).strip() for d in (deliverables or []) if str(d or "").strip()],
             contribute=str(raw.get("contribute") or "").strip(),
         )
@@ -142,6 +153,7 @@ def parse_charter(
     params = params if isinstance(params, dict) else {}
     raw = params.get("charter")
     alias = str(params.get("agent_alias") or params.get("model") or "").strip()
+    title = str(params.get("agent_title") or "").strip()
     if isinstance(raw, str):
         goal = raw.strip()
     else:
@@ -158,10 +170,12 @@ def parse_charter(
                 parts.append(f"Send back: {legacy.contribute}")
             goal = "\n\n".join(parts)
         alias = alias or legacy.agent_alias
+        title = title or (legacy.agent_title if legacy.agent_title != DEFAULT_SUBAGENT_TITLE else "")
     if not goal:
         return None, "missing_goal"
     return SubagentCharter(
         goal=goal,
         max_rounds=_clamp_rounds(max_rounds if max_rounds is not None else DEFAULT_SUBAGENT_MAX_ROUNDS),
         agent_alias=alias,
+        agent_title=title or DEFAULT_SUBAGENT_TITLE,
     ), ""

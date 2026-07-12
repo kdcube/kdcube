@@ -52,18 +52,22 @@ def build_subagent_stamp(
     parent_conversation_id: str,
     parent_turn_id: str,
     charter_goal: str,
+    agent_title: str = "",
 ) -> Dict[str, Any]:
     """The subagent envelope stamp — one shape everywhere.
 
     Rides as the top-level ``subagent`` key on every thread-mode live
     emission AND inside the structured ``facts`` of every ``subagent.*``
     lane event (charter, contribution, converged/failed), so clients anchor
-    subagent traffic into threads without parsing text."""
+    subagent traffic into threads without parsing text. ``agent_title`` is the
+    helper's human display name (set by the delegating agent), so a client can
+    name the helper wherever it renders subagent traffic."""
     return {
         "child_conversation_id": str(child_conversation_id or ""),
         "forked_from_conversation_id": str(parent_conversation_id or ""),
         "forked_from_turn_id": str(parent_turn_id or ""),
         "charter_goal": str(charter_goal or ""),
+        "agent_title": str(agent_title or ""),
     }
 
 

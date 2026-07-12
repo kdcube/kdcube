@@ -534,8 +534,10 @@ async def test_finish_turn_lifts_fork_records_into_turn_log():
         child_turn_id="turn_g1",
         charter_summary="Draft the appendix",
         max_rounds=6,
+        agent_title="Appendix drafter",
     )
     assert marker["type"] == FORK_MARKER_BLOCK_TYPE
+    assert marker["meta"]["agent_title"] == "Appendix drafter"
     wf, _order, saved_turn_logs = _finish_turn_workflow(
         child_context=None,
         contrib_blocks=[{"type": "user.prompt", "turn_id": "turn_c1", "text": "hi"}, marker],
@@ -552,6 +554,7 @@ async def test_finish_turn_lifts_fork_records_into_turn_log():
     assert forks == [{
         "child_conversation_id": "sub_grandchild",
         "charter_goal": "Draft the appendix",
+        "agent_title": "Appendix drafter",
         "forked_at": str(marker.get("ts") or ""),
     }]
 

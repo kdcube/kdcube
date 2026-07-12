@@ -234,10 +234,35 @@ function TurnViewImpl({
    * "You" bubble would be misleading. */
   const hasUserContent = Boolean(turn.userMessage) || turn.userAttachments.length > 0
 
+  /* An agent-authored turn (a subagent completion opening this continuation
+   * turn) renders as the helper persona in place of the "You" bubble: the
+   * persona name where "You" sits, and the helper's handoff — its own message
+   * back to the delegating agent — as "<name> said: …". No contribution means
+   * no handoff line; the persona simply returned. */
+  const agentPersona = turn.authoredBy || null
+  const personaName = agentPersona ? (agentPersona.agentTitle || 'Helper agent') : null
+
   return (
     <article className="flex flex-col gap-2">
-      {/* User turn */}
-      {hasUserContent ? (
+      {/* Triggering input: helper persona when agent-authored, else the user */}
+      {agentPersona ? (
+        <div className="flex flex-col gap-1 self-end max-w-[760px]" data-turn-anchor={turn.id}>
+          <div className="flex items-center gap-2 text-[11px] text-[var(--muted)]">
+            <span className="font-semibold text-[var(--text-2)]">{personaName}</span>
+            <span>{formatTime(turn.createdAt)}</span>
+          </div>
+          <div className="k-msg rounded-md border border-[var(--line)] bg-[var(--surface-2)] px-3 py-1.5 text-[13.5px] leading-[1.45] text-[var(--ink)]">
+            {agentPersona.handoff ? (
+              <div className="whitespace-pre-wrap">
+                <span className="font-semibold text-[var(--text-2)]">{personaName} said:</span>{' '}
+                {agentPersona.handoff}
+              </div>
+            ) : (
+              <div className="whitespace-pre-wrap text-[var(--muted)]">Handed its results back.</div>
+            )}
+          </div>
+        </div>
+      ) : hasUserContent ? (
         <div className="flex flex-col gap-1 self-end max-w-[760px]" data-turn-anchor={turn.id}>
           <div className="flex items-center gap-2 text-[11px] text-[var(--muted)]">
             <span className="font-semibold text-[var(--text-2)]">You</span>

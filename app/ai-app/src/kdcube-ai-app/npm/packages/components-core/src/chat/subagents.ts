@@ -86,7 +86,24 @@ export function subagentStampOf(env: BaseEnvelope): SubagentEnvelopeStamp | null
       ? { forked_from_turn_id: textOf(raw.forked_from_turn_id) }
       : {}),
     ...(textOf(raw.charter_goal) ? { charter_goal: textOf(raw.charter_goal) } : {}),
+    ...(textOf(raw.agent_title) ? { agent_title: textOf(raw.agent_title) } : {}),
   }
+}
+
+/** The child conversation an envelope belongs to, if any: the stamp names it
+ *  directly; an emission the backend didn't stamp (some widget deltas ride a
+ *  contextvar communicator that isn't the stamping one) still carries the
+ *  CHILD's own `conversation.conversation_id`, so it folds into a thread that
+ *  child already opened. The stamp is what routes; identity is the fallback so
+ *  routing is total regardless of emission sub_type. */
+export function subagentThreadChildId(
+  env: BaseEnvelope,
+  threads: Record<string, SubagentThread>,
+): string | null {
+  const stamp = subagentStampOf(env)
+  if (stamp) return stamp.child_conversation_id
+  const conversationId = textOf(env.conversation?.conversation_id)
+  return conversationId && threads[conversationId] ? conversationId : null
 }
 
 const LANE_EVENT_PATTERN = /^subagent\.(charter|contribution|converged|failed)$/
@@ -137,6 +154,7 @@ function createThread(input: {
   childConversationId: string
   parentTurnId: string
   parentConversationId?: string | null
+  agentTitle?: string
   charterGoal?: string
   forkedAt: number
   status?: SubagentThreadStatus
@@ -146,6 +164,7 @@ function createThread(input: {
     childConversationId: input.childConversationId,
     parentTurnId: input.parentTurnId,
     parentConversationId: input.parentConversationId ?? null,
+    agentTitle: input.agentTitle || '',
     charterGoal: input.charterGoal || '',
     forkedAt: input.forkedAt,
     status: input.status ?? 'running',
@@ -175,34 +194,44 @@ export function applySubagentEnvelope(
   env: BaseEnvelope,
 ): ChatState {
   const stamp = subagentStampOf(env)
-  if (!stamp) return state
+  /* Route by the stamp when present; otherwise by the child's own conversation
+   * identity matching a live thread (an emission the backend didn't stamp). */
+  const childId = stamp?.child_conversation_id
+    || subagentThreadChildId(env, state.threads)
+  if (!childId) return state
   /* Another conversation's subagent traffic (the socket is per-user, the
-   * thread model is per-open-conversation): drop it. */
+   * thread model is per-open-conversation): drop it. Only stamped traffic
+   * names its parent; an identity-matched emission already belongs to a
+   * thread of THIS conversation. */
   if (
-    state.conversationId
+    stamp
+    && state.conversationId
     && stamp.forked_from_conversation_id
     && stamp.forked_from_conversation_id !== state.conversationId
   ) {
     return state
   }
-  const childId = stamp.child_conversation_id
   const timestamp = timestampValue(env.timestamp)
   let thread = state.threads[childId]
     ?? createThread({
       childConversationId: childId,
-      parentTurnId: stamp.forked_from_turn_id || '',
-      parentConversationId: stamp.forked_from_conversation_id || state.conversationId,
-      charterGoal: stamp.charter_goal,
+      parentTurnId: stamp?.forked_from_turn_id || '',
+      parentConversationId: stamp?.forked_from_conversation_id || state.conversationId,
+      agentTitle: stamp?.agent_title,
+      charterGoal: stamp?.charter_goal,
       forkedAt: timestamp,
     })
   /* A reload stub receiving live traffic becomes a live thread; the stamp may
    * also fill anchors the stub creation didn't know. */
   if (thread.hydration === 'stub') thread = { ...thread, hydration: 'live' }
-  if (!thread.parentTurnId && stamp.forked_from_turn_id) {
+  if (!thread.parentTurnId && stamp?.forked_from_turn_id) {
     thread = { ...thread, parentTurnId: stamp.forked_from_turn_id }
   }
-  if (!thread.charterGoal && stamp.charter_goal) {
+  if (!thread.charterGoal && stamp?.charter_goal) {
     thread = { ...thread, charterGoal: stamp.charter_goal }
+  }
+  if (!thread.agentTitle && stamp?.agent_title) {
+    thread = { ...thread, agentTitle: stamp.agent_title }
   }
 
   const laneKind = subagentLaneEventKind(env)
@@ -274,6 +303,7 @@ export function applySubagentEnvelope(
 interface ForkDescriptorLike {
   child_conversation_id?: unknown
   charter_goal?: unknown
+  agent_title?: unknown
   forked_at?: unknown
 }
 
@@ -294,6 +324,7 @@ function forkStubFromDescriptor(
     childConversationId: childId,
     parentTurnId: turnId,
     parentConversationId: conversationId,
+    agentTitle: textOf(raw.agent_title),
     charterGoal: textOf(raw.charter_goal),
     forkedAt,
     status: 'unknown',

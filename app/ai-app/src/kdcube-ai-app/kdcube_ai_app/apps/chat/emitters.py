@@ -1346,10 +1346,17 @@ class ChatCommunicator:
         await self.emit(route, env)
 
     # ---------- high-level helpers ----------
-    async def start(self, *, message: str, queue_stats: Optional[dict] = None) -> None:
+    async def start(self, *, message: str, queue_stats: Optional[dict] = None,
+                    persona: Optional[dict] = None) -> None:
         env = self._base_env("chat.start")
         env["event"] = {"step": "turn", "status": "started", "title": "Turn Started"}
         env["data"] = {"message": message, "queue_stats": queue_stats or {}}
+        # A helper-authored triggering event (a subagent completion opening this
+        # continuation turn) names its persona on chat.start.data: the client
+        # reads authored_by/agent_title/handoff off it to render the helper in
+        # place of the "You" bubble. Absent (user turns) -> nothing added.
+        if isinstance(persona, dict) and persona:
+            env["data"].update(persona)
         await self.emit("chat_start", env)
 
     async def step(self, *, step: str, status: str, title: Optional[str] = None,

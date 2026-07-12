@@ -266,6 +266,31 @@ def test_charter_round_trips_alias_dual_read_single_write():
     assert "model" not in data
 
 
+def test_charter_reads_agent_title_and_defaults():
+    """The delegating agent names the helper via `agent_title`; omitted, the
+    charter carries the generic default, and it round-trips through to_dict."""
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.subagents.charter import (
+        DEFAULT_SUBAGENT_TITLE,
+    )
+
+    named, err = parse_charter({
+        "charter": "Research X",
+        "agent_title": "Science news researcher",
+    })
+    assert err == ""
+    assert named.agent_title == "Science news researcher"
+    assert named.to_dict()["agent_title"] == "Science news researcher"
+
+    # omitted -> the generic default, present in the dict (one shape everywhere)
+    plain, _ = parse_charter({"charter": "Research X"})
+    assert plain.agent_title == DEFAULT_SUBAGENT_TITLE
+    assert plain.to_dict()["agent_title"] == DEFAULT_SUBAGENT_TITLE
+
+    # dual-read tolerates a stored charter with no agent_title
+    stored = SubagentCharter.from_dict({"goal": "g"})
+    assert stored.agent_title == DEFAULT_SUBAGENT_TITLE
+
+
 def test_charter_summary_line_is_the_first_sentence():
     charter = SubagentCharter(
         goal="Research the market. Then compile a long report.\nMore detail here.",
@@ -383,6 +408,7 @@ def test_fork_marker_block_names_child_charter_and_helper_identity():
         max_rounds=8,
         agent_alias="strong_agent",
         agent_class="strong",
+        agent_title="Science news researcher",
         tool_call_id="tc1",
     )
     assert marker["type"] == FORK_MARKER_BLOCK_TYPE
@@ -393,6 +419,8 @@ def test_fork_marker_block_names_child_charter_and_helper_identity():
     assert marker["meta"]["max_rounds"] == 8
     assert marker["meta"]["agent_alias"] == "strong_agent"
     assert marker["meta"]["agent_class"] == "strong"
+    # the helper's human display title rides the marker meta for the client
+    assert marker["meta"]["agent_title"] == "Science news researcher"
     assert marker["call_id"] == "tc1"
 
 
@@ -692,6 +720,7 @@ async def test_delegate_spawns_and_marks_fork_on_parent_timeline():
         state=_tool_state("react.delegate", {
             "charter": "Research X. Send back files/r.md.",
             "agent_alias": "strongest_agent",
+            "agent_title": "Science news researcher",
         }),
         tool_call_id="tc5",
     )
@@ -701,8 +730,11 @@ async def test_delegate_spawns_and_marks_fork_on_parent_timeline():
     assert launches and launches[0].charter.goal.startswith("Research X.")
     # the budget is the configured one, never a model-provided count
     assert launches[0].charter.max_rounds == 4
+    # the delegating agent's helper title travels charter -> marker
+    assert launches[0].charter.agent_title == "Science news researcher"
     marker = next(b for b in browser.blocks if b.get("type") == FORK_MARKER_BLOCK_TYPE)
     assert marker["meta"]["child_conversation_id"] == "sub_abc"
+    assert marker["meta"]["agent_title"] == "Science news researcher"
     # the unconfigured strongest_agent resolves to the smartest configured
     # alias, recorded on the marker for the announce
     assert marker["meta"]["agent_alias"] == "strong_agent"
@@ -946,6 +978,7 @@ async def test_spawn_persists_seed_and_schedules_promotable_charter(tmp_path):
         "forked_from_conversation_id": "conv_parent",
         "forked_from_turn_id": "turn_parent",
         "charter_goal": "Research X",
+        "agent_title": "Helper agent",
     }
 
     # the kickoff is the promotion: one lane wakeup rides the processor queue
@@ -1155,6 +1188,7 @@ def test_apply_child_runtime_overrides_sets_budget_depth_and_parent_lane():
         "forked_from_conversation_id": "conv_parent",
         "forked_from_turn_id": "turn_parent",
         "charter_goal": "Research X",
+        "agent_title": "Helper agent",
     }
     # configured subagent default model lands on the user-model role
     from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import USER_MODEL_TARGET_ROLE
@@ -1285,6 +1319,7 @@ def _stamp():
         "forked_from_conversation_id": "conv_parent",
         "forked_from_turn_id": "turn_parent",
         "charter_goal": "Research X",
+        "agent_title": "Helper agent",
     }
 
 
@@ -1473,7 +1508,13 @@ async def test_converged_completion_is_promotable_on_parent_lane():
         "forked_from_conversation_id": "conv_parent",
         "forked_from_turn_id": "turn_parent",
         "charter_goal": "Research X",
+        "agent_title": "Helper agent",
     }
+    # the completion is authored by the helper (persona), with its title
+    assert (stored.payload or {}).get("authored_by") == "agent"
+    assert (stored.payload or {}).get("agent_title") == "Helper agent"
+    # no react.contribute was made this run: no handoff line is invented
+    assert "handoff" not in (stored.payload or {})
     # promotable: the task payload describes the parent's continuation turn
     task_payload = stored.task_payload or {}
     assert task_payload["routing"]["conversation_id"] == "conv_parent"
@@ -1500,6 +1541,84 @@ async def test_converged_completion_is_promotable_on_parent_lane():
 
 
 @pytest.mark.asyncio
+async def test_converged_handoff_is_the_contribution_report_not_the_answer():
+    """The handoff (the persona's spoken line on the continuation turn) is the
+    child's own react.contribute report — its message TO the delegating agent —
+    never a slice of final_answer (the child→user deliverable)."""
+    redis = _FakeRedis()
+    charter = SubagentCharter(
+        goal="Research X", max_rounds=4, agent_title="Science news researcher",
+    )
+    context = _child_context(charter=charter)
+    report = "I found three credible sources; the summary file has the details."
+    runtime = SimpleNamespace(
+        conversation_id="sub_x",
+        turn_id="turn_c1",
+        subagent_parent_lane=None,
+        subagent_last_contribution_report=report,
+    )
+    event = await publish_child_completion(
+        redis=redis,
+        runtime_ctx=runtime,
+        context=context,
+        child_payload=None,
+        ok=True,
+        final_answer="Here is the full researched deliverable for the user.",
+        queue_manager=_FakeAtomicQueueManager(redis),
+    )
+    parent_lane = _lane(redis, "conv_parent")
+    stored = await parent_lane.get_event(event.message_id)
+    payload = stored.payload or {}
+    # handoff = the report, not the answer
+    assert payload["handoff"] == report
+    assert "deliverable for the user" not in payload["handoff"]
+    assert payload["authored_by"] == "agent"
+    assert payload["agent_title"] == "Science news researcher"
+    # the event text LEADS with the handoff (human-first), before the marker
+    text = str(stored.text or "")
+    assert text.startswith(report)
+    assert text.index(report) < text.index("[SUBAGENT CONVERGED]")
+    # the continuation task's event block surfaces the persona for the client
+    event_block = (stored.task_payload or {}).get("event") or {}
+    assert event_block["authored_by"] == "agent"
+    assert event_block["agent_title"] == "Science news researcher"
+    assert event_block["handoff"] == report
+
+
+@pytest.mark.asyncio
+async def test_converged_handoff_is_trimmed_and_omitted_without_contribution():
+    redis = _FakeRedis()
+    context = _child_context()
+    # a long report is trimmed to a spoken-sentence cap
+    long_report = "A" * 400
+    runtime = SimpleNamespace(
+        conversation_id="sub_x", turn_id="turn_c1", subagent_parent_lane=None,
+        subagent_last_contribution_report=long_report,
+    )
+    event = await publish_child_completion(
+        redis=redis, runtime_ctx=runtime, context=context, child_payload=None,
+        ok=True, final_answer="answer", queue_manager=_FakeAtomicQueueManager(redis),
+    )
+    parent_lane = _lane(redis, "conv_parent")
+    stored = await parent_lane.get_event(event.message_id)
+    assert len(str((stored.payload or {}).get("handoff") or "")) <= 240
+
+    # no contribution this run: the handoff is absent everywhere (the persona
+    # simply carries no "said" line), and the continuation event omits it too
+    redis2 = _FakeRedis()
+    runtime2 = SimpleNamespace(
+        conversation_id="sub_x", turn_id="turn_c1", subagent_parent_lane=None,
+    )
+    event2 = await publish_child_completion(
+        redis=redis2, runtime_ctx=runtime2, context=_child_context(), child_payload=None,
+        ok=True, final_answer="answer", queue_manager=_FakeAtomicQueueManager(redis2),
+    )
+    stored2 = await _lane(redis2, "conv_parent").get_event(event2.message_id)
+    assert "handoff" not in (stored2.payload or {})
+    assert "handoff" not in ((stored2.task_payload or {}).get("event") or {})
+
+
+@pytest.mark.asyncio
 async def test_failed_completion_is_authored_and_promotable():
     redis = _FakeRedis()
     context = _child_context()
@@ -1522,11 +1641,139 @@ async def test_failed_completion_is_authored_and_promotable():
     parent_lane = _lane(redis, "conv_parent")
     stored = await parent_lane.get_event(event.message_id)
     assert "decision model unavailable" in str(stored.text or "")
+    # the failure handoff IS the reason (the persona's spoken line), and the
+    # text leads with it
+    assert (stored.payload or {}).get("handoff") == "decision model unavailable"
+    assert (stored.payload or {}).get("authored_by") == "agent"
+    assert str(stored.text or "").startswith("decision model unavailable")
     assert ((stored.payload or {}).get("subagent") or {}).get("child_conversation_id") == "sub_x"
     task_payload = stored.task_payload or {}
+    assert (task_payload.get("event") or {}).get("handoff") == "decision model unavailable"
     request_events = (task_payload.get("request") or {}).get("external_events") or []
     assert request_events and request_events[0]["type"] == SUBAGENT_FAILED_EVENT_KIND
     assert len(_enqueued_wakeups(redis)) == 1
+
+
+# --------------------------------- persona surfaces: live start + reload record
+
+
+@pytest.mark.asyncio
+async def test_start_persona_rides_the_completion_triggering_request():
+    """LIVE: the continuation turn's triggering request yields the persona the
+    processor threads onto chat.start.data; a user turn yields nothing."""
+    from kdcube_ai_app.apps.chat.sdk.protocol import external_event_request_start_persona
+
+    redis = _FakeRedis()
+    charter = SubagentCharter(
+        goal="Research X", max_rounds=4, agent_title="Science news researcher",
+    )
+    context = _child_context(charter=charter)
+    runtime = SimpleNamespace(
+        conversation_id="sub_x", turn_id="turn_c1", subagent_parent_lane=None,
+        subagent_last_contribution_report="I found three credible sources.",
+    )
+    event = await publish_child_completion(
+        redis=redis, runtime_ctx=runtime, context=context, child_payload=None,
+        ok=True, final_answer="answer", queue_manager=_FakeAtomicQueueManager(redis),
+    )
+    stored = await _lane(redis, "conv_parent").get_event(event.message_id)
+    request = (stored.task_payload or {}).get("request") or {}
+    persona = external_event_request_start_persona(request)
+    assert persona == {
+        "authored_by": "agent",
+        "agent_title": "Science news researcher",
+        "handoff": "I found three credible sources.",
+    }
+
+    # a user-authored prompt event carries no persona
+    user_request = {"external_events": [{
+        "type": "event.user.prompt",
+        "event_source_id": "react.user",
+        "payload": {"event": {"text": "hello"}},
+    }]}
+    assert external_event_request_start_persona(user_request) == {}
+
+
+@pytest.mark.asyncio
+async def test_chat_start_data_carries_the_agent_persona():
+    """LIVE: ChatCommunicator.start merges the persona onto chat.start.data
+    next to `message`; a user turn (empty persona) adds nothing."""
+    emitter = _RecordingEmitter()
+    comm = _child_base_comm(emitter)
+    await comm.start(
+        message="subagent.converged (react.subagent)",
+        persona={
+            "authored_by": "agent",
+            "agent_title": "Science news researcher",
+            "handoff": "I found three credible sources.",
+        },
+    )
+    data = emitter.calls[-1]["data"]["data"]
+    assert data["message"] == "subagent.converged (react.subagent)"
+    assert data["authored_by"] == "agent"
+    assert data["agent_title"] == "Science news researcher"
+    assert data["handoff"] == "I found three credible sources."
+
+    emitter.calls.clear()
+    await comm.start(message="hello", persona={})
+    plain = emitter.calls[-1]["data"]["data"]
+    assert "authored_by" not in plain and "agent_title" not in plain
+
+
+@pytest.mark.asyncio
+async def test_reload_persona_reads_off_the_folded_completion_block_meta():
+    """RELOAD: the folded completion block's meta carries the persona; the
+    fetch helper reads authored_by/agent_title/handoff from it to surface the
+    continuation turn's `chat:user` record — the same fields, same shape as the
+    live start payload."""
+    from kdcube_ai_app.apps.chat.sdk.context.retrieval.ctx_rag import (
+        _SUBAGENT_COMPLETION_BLOCK_TYPES,
+        _subagent_completion_persona_from_block_meta,
+    )
+
+    redis = _FakeRedis()
+    charter = SubagentCharter(
+        goal="Research X", max_rounds=4, agent_title="Science news researcher",
+    )
+    context = _child_context(charter=charter)
+    runtime = SimpleNamespace(
+        conversation_id="sub_x", turn_id="turn_c1", subagent_parent_lane=None,
+        subagent_last_contribution_report="I found three credible sources.",
+    )
+    event = await publish_child_completion(
+        redis=redis, runtime_ctx=runtime, context=context, child_payload=None,
+        ok=True, final_answer="answer", queue_manager=_FakeAtomicQueueManager(redis),
+    )
+    stored = await _lane(redis, "conv_parent").get_event(event.message_id)
+    # the fold stamps the lane payload onto the block meta (meta.payload)
+    block_meta = {"event_type": SUBAGENT_CONVERGED_EVENT_KIND, "payload": dict(stored.payload or {})}
+    assert SUBAGENT_CONVERGED_EVENT_KIND in _SUBAGENT_COMPLETION_BLOCK_TYPES
+    persona = _subagent_completion_persona_from_block_meta(block_meta)
+    assert persona == {
+        "authored_by": "agent",
+        "agent_title": "Science news researcher",
+        "handoff": "I found three credible sources.",
+    }
+
+    # a failed completion carries the reason as handoff
+    redis2 = _FakeRedis()
+    failed = await publish_child_completion(
+        redis=redis2, runtime_ctx=SimpleNamespace(
+            conversation_id="sub_x", turn_id="turn_c1", subagent_parent_lane=None,
+        ),
+        context=_child_context(), child_payload=None, ok=False,
+        reason="decision model unavailable", queue_manager=_FakeAtomicQueueManager(redis2),
+    )
+    stored_failed = await _lane(redis2, "conv_parent").get_event(failed.message_id)
+    assert SUBAGENT_FAILED_EVENT_KIND in _SUBAGENT_COMPLETION_BLOCK_TYPES
+    persona_failed = _subagent_completion_persona_from_block_meta(
+        {"payload": dict(stored_failed.payload or {})}
+    )
+    assert persona_failed["authored_by"] == "agent"
+    assert persona_failed["handoff"] == "decision model unavailable"
+
+    # a plain (user) block meta yields no persona
+    assert _subagent_completion_persona_from_block_meta({"payload": {"text": "hi"}}) == {}
 
 
 @pytest.mark.asyncio
@@ -2071,7 +2318,7 @@ def test_protocol_validator_recognizes_subagent_tools():
     ids, params = _known_react_tool_validation_sets()
     assert "react.delegate" in ids
     assert "react.contribute" in ids
-    assert params["react.delegate"] == {"charter", "agent_alias"}
+    assert params["react.delegate"] == {"charter", "agent_alias", "agent_title"}
     assert params["react.contribute"] == {"report", "refs"}
     # the core tools remain recognized
     for core in ("react.read", "react.pull", "react.write", "react.plan"):

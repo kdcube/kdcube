@@ -9,6 +9,7 @@ import {
   mergeSelectionPatches,
   subagentLaneEventKind,
   subagentStampOf,
+  subagentThreadChildId,
   subagentThreadsForTurn,
   subagentsTogglePatch,
 } from '../dist/chat/index.js'
@@ -221,6 +222,151 @@ test('threads reset on conversation switch', () => {
   assert.equal(Object.keys(state.threads).length, 2)
   state = chatReducer(state, chatActions.startNewConversation())
   assert.deepEqual(state.threads, {})
+})
+
+// ── Fix A: widget deltas (web_search / web_fetch) thread by the stamp OR the
+// child conversation identity, regardless of sub_type ─────────────────────────
+
+test('a stamped web-search widget delta threads regardless of sub_type', () => {
+  let state = parentState()
+  const webSearch = {
+    ...envelope({ delta: { text: JSON.stringify({ results: [{ url: 'https://a' }], objective: 'x', queries: ['q'] }), marker: 'subsystem', index: 0 } }),
+    extra: { sub_type: 'web_search.filtered_results', search_id: 's1', artifact_name: 'Web Search' },
+  }
+  state = chatReducer(state, chatActions.subagentStreamEvent({ kind: 'delta', envelope: webSearch }))
+  const thread = state.threads.conv_child_a
+  assert.ok(thread, 'the stamped widget delta opened/fed the thread')
+  assert.equal(state.turns.length, 0, 'the widget delta stayed out of the main lane')
+  const artifact = thread.turns[0]?.artifacts.find((a) => a.kind === 'web_search')
+  assert.ok(artifact, 'a web_search artifact built inside the thread turn')
+  assert.equal(artifact.items.length, 1)
+})
+
+test('an UNSTAMPED child widget delta threads by the child conversation identity', () => {
+  let state = parentState()
+  // The thread opens on a stamped thinking delta the backend did stamp.
+  state = chatReducer(state, chatActions.subagentStreamEvent({
+    kind: 'delta',
+    envelope: envelope({ delta: { text: 'thinking…', marker: 'thinking', index: 0 } }),
+  }))
+  assert.ok(state.threads.conv_child_a)
+  // A web_fetch delta the backend did NOT stamp still carries the child's own
+  // conversation id — it folds into that child's thread, not the main lane.
+  const unstamped = {
+    ...envelope({ stamp: null, delta: { text: JSON.stringify({ urls: [{ url: 'https://a', status: 'success' }] }), marker: 'subsystem', index: 0 } }),
+    extra: { sub_type: 'web_fetch.results', execution_id: 'e1', artifact_name: 'Web Fetch' },
+  }
+  assert.equal(subagentThreadChildId(unstamped, state.threads), 'conv_child_a')
+  state = chatReducer(state, chatActions.subagentStreamEvent({ kind: 'delta', envelope: unstamped }))
+  assert.equal(state.turns.length, 0, 'the unstamped child delta never reached the main lane')
+  const artifact = state.threads.conv_child_a.turns[0]?.artifacts.find((a) => a.kind === 'web_fetch')
+  assert.ok(artifact, 'the web_fetch artifact folded into the existing thread')
+})
+
+test('a main-lane envelope with no stamp and no matching thread does not thread', () => {
+  const state = parentState()
+  const mainLane = {
+    ...envelope({ stamp: null, delta: { text: 'hi', marker: 'answer', index: 0 } }),
+    conversation: { session_id: '', conversation_id: 'conv_parent', turn_id: 'turn_p1' },
+  }
+  assert.equal(subagentThreadChildId(mainLane, state.threads), null)
+})
+
+// ── Fix C: the delegating agent's chosen persona name flows to the thread ──────
+
+test('the stamp agent_title names the thread; a reload fork descriptor carries it too', () => {
+  const stamp = { ...STAMP, agent_title: 'Science news researcher' }
+  const live = chatReducer(parentState(), chatActions.subagentStreamEvent({
+    kind: 'start',
+    envelope: envelope({ type: 'chat.start', stamp, data: { message: '' } }),
+  }))
+  assert.equal(live.threads.conv_child_a.agentTitle, 'Science news researcher')
+
+  const conversation = {
+    conversation_id: 'conv_parent',
+    turns: [{
+      turn_id: 'turn_p1',
+      artifacts: [],
+      forks: [{ child_conversation_id: 'conv_child_a', charter_goal: 'Research', agent_title: 'Science news researcher', forked_at: '2026-07-12T09:01:00Z' }],
+    }],
+  }
+  const reloaded = chatReducer({ ...initialState }, chatActions.hydrateConversation({ conversation }))
+  assert.equal(reloaded.threads.conv_child_a.agentTitle, 'Science news researcher')
+})
+
+// ── Fix B: a subagent completion opens an agent-authored continuation turn ─────
+
+function startEnvelope({ turnId = 'turn_cont', data }) {
+  return {
+    type: 'chat.start',
+    timestamp: '2026-07-12T10:00:00Z',
+    service: { request_id: 'r1' },
+    conversation: { session_id: '', conversation_id: 'conv_parent', turn_id: turnId },
+    event: { step: 'turn', status: 'started' },
+    data,
+  }
+}
+
+test('an agent-authored continuation turn hydrates the helper persona (live start)', () => {
+  const state = chatReducer(
+    { ...initialState, conversationId: 'conv_parent' },
+    chatActions.chatStarted(startEnvelope({
+      data: {
+        message: 'subagent.converged (react.subagent)',
+        authored_by: 'agent',
+        agent_title: 'Science news researcher',
+        handoff: 'Found three fresh sources on the topic.',
+      },
+    })),
+  )
+  const turn = state.turns.find((t) => t.id === 'turn_cont')
+  assert.ok(turn.authoredBy, 'the turn is agent-authored, not the user')
+  assert.equal(turn.authoredBy.agentTitle, 'Science news researcher')
+  assert.equal(turn.authoredBy.handoff, 'Found three fresh sources on the topic.')
+})
+
+test('an agent-authored turn with no contribution carries the persona but no handoff', () => {
+  const state = chatReducer(
+    { ...initialState, conversationId: 'conv_parent' },
+    chatActions.chatStarted(startEnvelope({
+      data: { message: 'subagent.converged (react.subagent)', authored_by: 'agent', agent_title: 'Helper' },
+    })),
+  )
+  const turn = state.turns[0]
+  assert.equal(turn.authoredBy.agentTitle, 'Helper')
+  assert.equal(turn.authoredBy.handoff, null)
+})
+
+test('a user-authored turn carries no persona', () => {
+  const state = chatReducer(
+    { ...initialState, conversationId: 'conv_parent' },
+    chatActions.chatStarted(startEnvelope({ data: { message: 'hello there' } })),
+  )
+  assert.equal(state.turns[0].authoredBy ?? null, null)
+})
+
+test('reload: a stored agent-authored triggering input hydrates the persona', () => {
+  const conversation = {
+    conversation_id: 'conv_parent',
+    turns: [{
+      turn_id: 'turn_cont',
+      artifacts: [{
+        type: 'chat:user',
+        ts: '2026-07-12T09:05:00Z',
+        data: {
+          text: 'subagent.converged (react.subagent)',
+          authored_by: 'agent',
+          agent_title: 'Science news researcher',
+          handoff: 'Found three fresh sources on the topic.',
+        },
+      }],
+    }],
+  }
+  const state = chatReducer({ ...initialState }, chatActions.hydrateConversation({ conversation }))
+  const turn = state.turns[0]
+  assert.ok(turn.authoredBy)
+  assert.equal(turn.authoredBy.agentTitle, 'Science news researcher')
+  assert.equal(turn.authoredBy.handoff, 'Found three fresh sources on the topic.')
 })
 
 test('helper-agents deny key: toggle patch, optimistic flip, merge, and re-enable', () => {

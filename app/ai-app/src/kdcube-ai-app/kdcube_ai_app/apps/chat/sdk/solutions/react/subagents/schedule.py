@@ -245,6 +245,7 @@ def build_completion_task_payload(
         "request_id": task_id,
     }
     data["continuation"] = {"is_continuation": False}
+    facts = dict(facts or {})
     data["event"] = {
         "kind": "external_event",
         "type": semantic_type,
@@ -254,6 +255,11 @@ def build_completion_task_payload(
         "logical_path": completion_event["logical_path"],
         "reactive": False,
         "source": SUBAGENT_COMPLETION_TASK_SOURCE,
+        # The continuation turn is triggered by the helper, not the user: the
+        # persona a client renders reads these off the triggering event.
+        "authored_by": str(facts.get("authored_by") or "agent"),
+        "agent_title": str(facts.get("agent_title") or ""),
+        **({"handoff": facts["handoff"]} if str(facts.get("handoff") or "").strip() else {}),
     }
 
     # The continuation turn is a NORMAL parent turn: no subagent assignment

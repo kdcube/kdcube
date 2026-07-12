@@ -75,6 +75,50 @@ FINGERPRINT_KIND = "artifact:turn.fingerprint.v1"
 CONV_START_FPS_TAG = "conv.start"
 TURNS_SUMMARY_TAG = "conv.range.summary"
 
+# Block types a subagent completion folds into the continuation turn's timeline
+# (converged / failed). Such a turn's triggering input was authored by the
+# helper, so on fetch it surfaces as the turn's user-input record carrying the
+# helper persona rather than a "You" bubble.
+_SUBAGENT_COMPLETION_BLOCK_TYPES = {"subagent.converged", "subagent.failed"}
+
+
+def _subagent_completion_persona_from_block_meta(meta: Dict[str, Any]) -> Dict[str, Any]:
+    """The authored_by/agent_title/handoff persona a folded subagent-completion
+    block carries, or ``{}``.
+
+    The completion's facts ride the folded block meta both at the lane payload's
+    top level (``meta.payload``) and inside the accepted event body
+    (``meta.event.payload.event``); scanning both keeps the read robust to how
+    the block was materialized. ``handoff`` is present only when the helper
+    reported one."""
+    if not isinstance(meta, dict):
+        return {}
+    candidates: List[Dict[str, Any]] = []
+    payload = meta.get("payload")
+    if isinstance(payload, dict):
+        candidates.append(payload)
+        body = payload.get("event")
+        if isinstance(body, dict):
+            candidates.append(body)
+    event = meta.get("event")
+    if isinstance(event, dict):
+        event_payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        event_body = event_payload.get("event") if isinstance(event_payload.get("event"), dict) else {}
+        if event_body:
+            candidates.append(event_body)
+    for candidate in candidates:
+        if str(candidate.get("authored_by") or "").strip().lower() != "agent":
+            continue
+        persona: Dict[str, Any] = {
+            "authored_by": "agent",
+            "agent_title": str(candidate.get("agent_title") or ""),
+        }
+        handoff = str(candidate.get("handoff") or "").strip()
+        if handoff:
+            persona["handoff"] = handoff
+        return persona
+    return {}
+
 def unwrap_payload(p: dict) -> dict:
     """
     Accepts either a raw payload dict or a message record dict (with a 'payload' field)
@@ -2515,6 +2559,25 @@ class ContextRAGClient:
                     if _btype == "assistant.completion":
                         _row_type = "chat:assistant"
                         _row_data = {"text": _text, "meta": _row_meta}
+                    elif _btype in _SUBAGENT_COMPLETION_BLOCK_TYPES:
+                        # The continuation turn opened by a subagent completion:
+                        # its triggering input was authored by the helper, not
+                        # the user. Surface it as the turn's user-input record
+                        # carrying the authored_by/agent_title/handoff persona
+                        # so a reloaded turn renders the helper in place of the
+                        # "You" bubble (mirrors the live chat.start.data path).
+                        _persona = _subagent_completion_persona_from_block_meta(_blk_meta)
+                        if not _persona:
+                            continue
+                        _row_type = "chat:user"
+                        _row_data = {
+                            "text": str(_persona.get("handoff") or ""),
+                            "event_type": _btype,
+                            "contexts": [],
+                            "attachments": [],
+                            "meta": _row_meta,
+                            **_persona,
+                        }
                     else:
                         continue
 

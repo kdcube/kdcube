@@ -153,10 +153,12 @@ def build_fork_marker_block(
     max_rounds: int,
     agent_alias: str = "",
     agent_class: str = "",
+    agent_title: str = "",
     tool_call_id: str = "",
 ) -> Dict[str, Any]:
     """The parent-timeline record of the spawn: child ref + charter caption +
-    the helper identity (alias/class) the child runs as."""
+    the helper identity (alias/class) the child runs as, plus the helper's
+    human display title (``agent_title``) so a client can name the helper."""
     lines = [
         "[SUBAGENT FORKED]",
         f"child_conversation: conv_{child_conversation_id} (turn {child_turn_id})",
@@ -189,6 +191,7 @@ def build_fork_marker_block(
             "max_rounds": int(max_rounds or 0),
             **({"agent_alias": agent_alias} if agent_alias else {}),
             **({"agent_class": agent_class} if agent_class else {}),
+            **({"agent_title": agent_title} if agent_title else {}),
         },
     }
     if tool_call_id:

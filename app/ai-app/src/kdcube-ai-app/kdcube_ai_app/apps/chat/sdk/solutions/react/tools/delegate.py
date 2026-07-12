@@ -62,6 +62,12 @@ TOOL_SPEC = {
             "are listed in the DELEGATION section of the announce block — read "
             "them there. Omit to use the configured default."
         ),
+        "agent_title": (
+            "str, optional. A short human display name for the helper, shown to "
+            "the user so they know who is working, e.g. \"Science news "
+            "researcher\". Name it for the assignment. Omit to use a generic "
+            "default."
+        ),
     },
     "returns": (
         "launch ticket {child_conversation_id, child_conversation_ref, child_turn_id, "
@@ -213,6 +219,7 @@ async def handle_react_delegate(
         max_rounds=charter.max_rounds,
         agent_alias=effective_alias or "",
         agent_class=effective_class,
+        agent_title=charter.agent_title,
         tool_call_id=tool_call_id,
     )
     add_block(ctx_browser, marker)

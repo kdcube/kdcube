@@ -159,6 +159,7 @@ def subagent_stamp_from_context(
         parent_conversation_id=context.parent.conversation_id,
         parent_turn_id=context.parent.turn_id,
         charter_goal=context.charter.summary_line(),
+        agent_title=context.charter.agent_title,
     )
 
 
@@ -294,6 +295,30 @@ def _completion_directive(parent_turn_id: str) -> str:
     )
 
 
+# The human handoff line reads on the continuation turn as the helper's own
+# words back to the delegating agent, so it is capped like a spoken sentence.
+HANDOFF_MAX_CHARS = 240
+
+
+def _trim_handoff(text: str, *, max_chars: int = HANDOFF_MAX_CHARS) -> str:
+    """One tidy line, capped — the helper's message as the persona speaks it."""
+    out = " ".join(str(text or "").split())
+    if len(out) > max_chars:
+        out = out[: max_chars - 1] + "…"
+    return out
+
+
+def _converged_handoff(runtime_ctx: Any) -> str:
+    """The helper's own message back to the delegating agent.
+
+    Sourced from the child's latest ``react.contribute`` report — the
+    child→parent channel it authored on purpose — never from the final answer
+    (the child→user deliverable). Absent a contribution, there is no handoff:
+    the continuation turn simply carries no "the helper said" line."""
+    report = str(getattr(runtime_ctx, "subagent_last_contribution_report", "") or "").strip()
+    return _trim_handoff(report) if report else ""
+
+
 async def publish_child_completion(
     *,
     redis: Any,
@@ -335,9 +360,18 @@ async def publish_child_completion(
     stamp = subagent_stamp_from_context(
         context, child_conversation_id=child_conversation_id,
     )
+    agent_title = context.charter.agent_title
     if ok:
         semantic_type = SUBAGENT_CONVERGED_EVENT_KIND
+        # The handoff is the helper's own message to the delegating agent; on
+        # the continuation turn a client renders it as "<agent_title> said:
+        # <handoff>". The event text LEADS with it so any client showing raw
+        # text shows something human, not the "[SUBAGENT CONVERGED]" marker.
+        handoff = _converged_handoff(runtime_ctx)
+        lead = handoff or f"{agent_title} completed its assignment."
         text = "\n".join([
+            lead,
+            "",
             "[SUBAGENT CONVERGED]",
             f"Subagent conv_{child_conversation_id} completed its charter.",
             "",
@@ -351,12 +385,20 @@ async def publish_child_completion(
             "child_turn_id": child_turn_id,
             "final_answer": final_answer,
             "charter_goal": context.charter.summary_line(),
+            "authored_by": "agent",
+            "agent_title": agent_title,
             "subagent": stamp,
         }
+        # No contribution -> no handoff line: the persona simply speaks nothing.
+        if handoff:
+            facts["handoff"] = handoff
     else:
         semantic_type = SUBAGENT_FAILED_EVENT_KIND
         reason = str(reason or "").strip() or "no final answer within budget"
+        handoff = _trim_handoff(reason)
         text = "\n".join([
+            handoff,
+            "",
             "[SUBAGENT FAILED]",
             f"Subagent conv_{child_conversation_id} stopped without converging: {reason}",
             "",
@@ -368,6 +410,9 @@ async def publish_child_completion(
             "child_turn_id": child_turn_id,
             "reason": reason,
             "charter_goal": context.charter.summary_line(),
+            "authored_by": "agent",
+            "agent_title": agent_title,
+            "handoff": handoff,
             "subagent": stamp,
         }
 

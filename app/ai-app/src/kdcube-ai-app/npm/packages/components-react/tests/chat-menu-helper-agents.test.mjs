@@ -74,6 +74,29 @@ test('threads anchor inline under their fork turn with the same rendering pipeli
   assert.match(SHELL_SOURCE, /engine\.loadSubagentThread/)
 })
 
+test('the thread header names the delegating agent\'s chosen persona (fix C)', () => {
+  // the persona name comes from the stamp/reload agent_title, not a hardcoded string
+  assert.match(THREADS_SOURCE, /thread\.agentTitle \|\| 'Helper agent'/)
+  assert.match(THREADS_SOURCE, /k-subthread-kicker">\{personaName\}/)
+  // the old hardcoded "Helper agent" kicker literal is gone
+  assert.doesNotMatch(THREADS_SOURCE, /k-subthread-kicker">Helper agent</)
+})
+
+const TURNVIEW_SOURCE = readFileSync(
+  new URL('../src/chat/ui/features/chat/TurnView.tsx', import.meta.url),
+  'utf8',
+)
+
+test('an agent-authored continuation turn renders as the helper persona, not "You" (fix B)', () => {
+  // the turn's triggering-input persona is read from the state model
+  assert.match(TURNVIEW_SOURCE, /turn\.authoredBy/)
+  // the persona name replaces "You"; the handoff renders as "<name> said: …"
+  assert.match(TURNVIEW_SOURCE, /agentTitle \|\| 'Helper agent'/)
+  assert.match(TURNVIEW_SOURCE, /\{personaName\} said:/)
+  // no contribution -> persona with a neutral line, never the raw event or "You"
+  assert.match(TURNVIEW_SOURCE, /agentPersona\.handoff \?/)
+})
+
 const STYLESHEETS = [
   new URL('../examples/standalone/chat-ui.css', import.meta.url),
   new URL(

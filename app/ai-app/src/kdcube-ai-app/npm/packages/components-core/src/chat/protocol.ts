@@ -35,6 +35,10 @@ export interface SubagentEnvelopeStamp {
   forked_from_conversation_id?: string
   forked_from_turn_id?: string
   charter_goal?: string
+  /** The helper persona name the delegating agent chose (react.delegate
+   *  `agent_title`); the client names the thread and the continuation-turn
+   *  persona with it. */
+  agent_title?: string
   [key: string]: unknown
 }
 
@@ -154,6 +158,9 @@ export interface ConversationArtifactDTO {
 export interface ConversationTurnForkDTO {
   child_conversation_id: string
   charter_goal?: string
+  /** Helper persona name (react.delegate `agent_title`), so a reloaded thread
+   *  header names the helper the same as a live one. */
+  agent_title?: string
   forked_at?: string
 }
 

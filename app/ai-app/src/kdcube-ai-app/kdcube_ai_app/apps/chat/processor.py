@@ -65,6 +65,7 @@ from kdcube_ai_app.apps.chat.sdk.protocol import (
     ConversationCtx,
     ServiceCtx,
     external_event_request_start_label,
+    external_event_request_start_persona,
 )
 from kdcube_ai_app.apps.chat.sdk.event_identity import DEFAULT_REACT_AGENT_ID, normalize_agent_id, safe_event_lane_part
 from kdcube_ai_app.apps.chat.sdk.events.event_bus import ExternalEventLaneWakeIgnored
@@ -2708,6 +2709,10 @@ class EnhancedChatRequestProcessor:
         # chat.start.data.message as the authoritative user-bubble text when
         # the SSE event wins a race against the POST ack.
         start_message = external_event_request_start_label(payload.request)
+        # When a helper (subagent completion) authored the triggering event,
+        # the continuation turn renders as that persona, not as the user: the
+        # authored_by/agent_title/handoff contract rides chat.start.data.
+        start_persona = external_event_request_start_persona(payload.request)
 
         success = False
         task_cancelled = False
@@ -2730,7 +2735,7 @@ class EnhancedChatRequestProcessor:
                         extra_ttl_sec=self.started_marker_ttl_sec if started_key else None,
                 ):
                     exec_started_at = time.monotonic()
-                    await tracked_comm.start(message=start_message, queue_stats={})
+                    await tracked_comm.start(message=start_message, queue_stats={}, persona=start_persona)
                     await tracked_comm.step(
                         step="workflow_start",
                         status="started",
