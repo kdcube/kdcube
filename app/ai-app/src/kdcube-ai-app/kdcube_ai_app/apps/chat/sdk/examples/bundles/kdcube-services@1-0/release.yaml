@@ -11,8 +11,15 @@ bundle:
     - Adds managed MCP surface public/mcp/conversations.
     - Adds conversations_export as the platform-native replacement for the old
       root /mcp conversation export shortcut.
+    - Publishes configured named-service namespaces through the managed
+      public/mcp/named_services resource and the idempotent named-service relay.
+    - Serves privileged platform administration widgets from one stable app.
+    - Supports signed out-of-band conversation, mail, Slack, and staged-upload
+      file transfer without placing binary bytes in MCP/model context.
     - Uses Connection Hub delegated credentials and descriptor-managed
       tool-centric grants.
+    - Declares the complete interface in OpenAPI and documents storage
+      ownership, retention, backup, cleanup, and temporary staging constraints.
 
     Known follow-ups
 

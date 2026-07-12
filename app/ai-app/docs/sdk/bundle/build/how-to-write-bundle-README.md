@@ -4,7 +4,7 @@ title: "How To Write A Bundle"
 summary: "Authoring guide for bundle creators and integrators: bundle shape, lifecycle, decorators, runtime surfaces, bundle events, configuration and storage decisions, and how to turn a product idea or existing app into a deployable bundle."
 tags: ["sdk", "bundle", "authoring", "workflow", "widget", "api", "events", "testing"]
 keywords: ["bundle authoring guide", "bundle creator path", "bundle integrator path", "end to end bundle design", "decorator selection", "runtime surface selection", "widget api mcp cron on_job choices", "bundle events", "event sources", "artifact rehosters", "shared sdk widget components", "configuration and storage decisions", "bundle lifecycle design", "reference authoring patterns"]
-updated_at: 2026-07-09
+updated_at: 2026-07-12
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
@@ -85,9 +85,12 @@ code/config changes.
 
 Tier 1 rule:
 
-- this page is one part of the Tier 1 pack
-- do not treat it as sufficient on its own
-- read it together with the Tier 1 test, configuration, and configure/run pages
+- this page is the canonical end-to-end app-authoring instruction: it defines
+  what an app package contains, the order to build it, and when it is complete
+- linked Tier 1 pages remain normative for detailed test, configuration,
+  runtime, and release procedures; read the ones selected by the app's surfaces
+- a builder must not infer missing package structure from an example app;
+  examples demonstrate the standard but do not define it
 
 Primary references:
 
@@ -356,87 +359,206 @@ Shared-storage rule:
 - `on_bundle_load` may run once per process unless the work is explicitly guarded
 - generated UI builds, indexes, and shared workspace preparation must tolerate concurrent loaders
 
-## 1B.1 New Bundle Skeleton Checklist
+## 1B.1 Canonical App Package
 
-When creating a new bundle from scratch, create the smallest useful skeleton
-before implementing product behavior.
-
-Recommended first-pass shape:
+Create the package contract before product behavior. The following shape is
+normative for a maintained KDCube app (bundle), including apps with no chat UI:
 
 ```text
-<bundle-id>/
-  README.md
-  release.yaml
+<app-id>/
+  __init__.py
   entrypoint.py
+  README.md
+  AGENTS.md
+  release.yaml
+
   config/
     bundles.template.yaml
     bundles.secrets.template.yaml
+
   interface/
     README.md
+    <app-slug>.openapi.yaml
+
   docs/
-    design/
-      <bundle-design>.md
+    README.md
+    storage/
+      README.md
     journal/
+      README.md
       journal.md
+      YYYY-MM-DD-<change>.md
+
   tests/
+    ...
 ```
 
-Add only the implementation folders the first milestone needs, for example:
+Every maintained app carries these declarations even when the declaration says
+"none": an app with no owned persistent state still has `docs/storage/README.md`
+that identifies read-through and ephemeral stores; an app with no public HTTP
+API still has an interface contract that lists its decorators and non-HTTP
+surfaces. This prevents absence of documentation from being mistaken for an
+intentional stateless or private design.
+
+Add implementation folders only when their ownership is real:
 
 ```text
-  services/
-  tools/
-  events/
+  agents/       # agent orchestration and per-agent assembly
+  services/     # domain behavior; preferred owner of product logic
+  surfaces/     # thin API/MCP/widget/Data Bus transport adapters
+  events/       # event-source declarations, policies, rehosters
+  tools/        # app-owned agent tools
+  skills/       # app-owned SKILL.md packages
+  resources/    # static prompts/templates/service messages
   ui/
-    main/
-    widgets/
-  skills/
+    main/       # optional main-view app
+    widgets/    # optional widget apps, one stable folder per alias
+  scripts/      # operator/developer scripts, never request-path code
 ```
 
-Skeleton file rules:
+### Required file contracts
 
-- `README.md` should have front matter with at least bundle id, title, summary,
-  status, tags, module, singleton expectation, primary surfaces, and links to
-  config/design/journal docs
-- `release.yaml` may be empty until the first real release is cut
-- when the user agrees to cut a release, fill `release.yaml` using
-  [how-to-release-bundle-content-README.md](how-to-release-bundle-content-README.md)
-- `entrypoint.py` should be loadable and thin, even if it only exposes a safe
-  placeholder workflow/status API at first
-- `config/bundles.template.yaml` documents non-secret deployment props
-- `config/bundles.secrets.template.yaml` documents deployment-scoped bundle
-  secrets only
-- `interface/README.md` documents the bundle-visible contract: widget aliases,
-  API/MCP/cron/job route aliases, public-auth rules, payload shapes, and the
-  config keys that control them
-- if the bundle has authored external events, `interface/README.md` documents
-  `payload.target.agent_id`, `story_kind`, `story_id`, event-source ids,
-  reactive flags, and artifact-ref namespaces the UI may send
-- user-owned credentials and user state do not belong in descriptor templates
-- `docs/design/` should contain the structured design that implementation will
-  follow, not only raw notes
-- `docs/journal/journal.md` should track important build decisions and
-  bundle-builder-doc proposals while the bundle is being built
-- update `docs/journal/journal.md` in the same change that alters runtime
-  behavior, tool/skill contracts, storage semantics, user-scope mapping,
-  release shape, or Tier 1 builder guidance
-- if the bundle has source-folder main UI or widgets, the entrypoint class
-  should inherit a concrete `BaseEntrypoint` family class unless it explicitly
-  implements the same UI build contract; otherwise `ui.main_view` /
-  `ui.widgets.<alias>.src_folder` can be present while no static artifacts are
-  built or served. The family includes the bare base plus economics and memory
-  variants; see [Bundle Entrypoint Classes](../bundle-entrypoint-classes-README.md)
-- if the bundle has a chat/agent turn, semantic query embedding, task execution,
-  or background job that spends quota/money, wire the appropriate economics
-  surface from [Bundle Economics Integration](../bundle-economics-integration-README.md):
-  `BaseEntrypointWithEconomics`, `search_model_service(flow=...)`, or
-  `EconomicsGuard`
-- when such an entrypoint overrides `on_bundle_load(...)`, preserve
-  `await super().on_bundle_load(**kwargs)` so startup preload builds configured
-  UI before live widget traffic
-- do not decorate a `BaseWorkflow` subclass as the singleton bundle entrypoint.
-  `BaseWorkflow` is the per-message orchestrator created inside the
-  `BaseEntrypoint` turn execution.
+| File | Required content |
+| --- | --- |
+| `__init__.py` | Package marker only unless a small, stable export is required. Do not trigger runtime setup on import. |
+| `entrypoint.py` | Thin runtime composition root: identity decorators, constructor injection, configuration defaults, surface decorators, and lifecycle wiring. Domain logic belongs in `services/`, `agents/`, or SDK components. |
+| `README.md` | Product role, boundaries, current surfaces, high-level dataflow, package layout, runtime notes, and links to config/interface/design/storage/journal/test instructions. Include front matter with id, title, summary, status, tags, module, singleton expectation, and primary surfaces. |
+| `AGENTS.md` | Local builder-agent read order, ownership rules, invariants, forbidden shortcuts, and exact validation commands. It supplements this platform guide; it must not invent conflicting platform semantics. |
+| `release.yaml` | Release source repo/ref plus release description, highlights, validation, and known follow-ups. Before the first release, keep `ref: unreleased`; do not omit the file or use it as an ongoing journal. |
+| `config/bundles.template.yaml` | Complete non-secret app descriptor example: identity, module, singleton, declared surfaces, feature gates, UI source/build config, and safe placeholder values. |
+| `config/bundles.secrets.template.yaml` | Complete deployment-secret key shape using placeholders only. Never place real values, user credentials, generated tokens, or user state here. |
+| `interface/README.md` | Human contract for every API, MCP, named-service, widget, main UI, Data Bus handler, external event, cron, job, artifact namespace, auth boundary, request/response shape, and controlling config key. |
+| `interface/<app-slug>.openapi.yaml` | Machine-readable HTTP contract matching decorator aliases, methods, routes, auth, wrapping, and payloads. Use `x-kdcube-surfaces` for widgets, MCP tools, Data Bus handlers, jobs, named services, and other discoverable non-REST surfaces. A non-HTTP app may have an empty `paths` map but still declares those surfaces. |
+| `docs/README.md` | Architecture and design index: owners, process/runtime boundaries, dependency direction, and links to deeper design/integration/operations docs. |
+| `docs/storage/README.md` | Ownership matrix for descriptors, secrets, Postgres, Redis, object storage, app storage, caches, remote providers, generated outputs, retention, backup, and cleanup. Explicitly distinguish owned, read-through, and ephemeral state. |
+| `docs/journal/README.md` | Human-readable index of dated change entries. |
+| `docs/journal/journal.md` | Stable chronological index. Update it in the same change as meaningful app work. |
+| `tests/` | App-owned unit and contract tests. At minimum cover entrypoint/manifest discovery, configured surface wiring, auth-sensitive boundaries, and the primary product path. |
+
+### What `AGENTS.md` must contain
+
+`AGENTS.md` is the app-local operating instruction for coding agents. It should
+be short enough to read before every change and specific enough to prevent the
+agent from rediscovering ownership or running the wrong tests. It is not a
+duplicate product README and not a scratchpad.
+
+Minimum sections:
+
+1. **Front matter** — app-specific id/title/summary/status/tags and `see_also`
+   links to the root README, design index, storage map, journal, interface
+   README/OpenAPI, config templates, and important SDK owners.
+2. **Read first** — ordered files the agent must inspect before editing.
+3. **Product shape** — compact ASCII map of surfaces and module owners.
+4. **Implementation rules** — app-specific invariants, ownership boundaries,
+   required SDK reuse, and prohibited shortcuts.
+5. **Configuration and storage rules** — authoritative config/secret paths and
+   which stores are owned, read-through, or ephemeral.
+6. **Change synchronization** — which docs, templates, interface files, tests,
+   and journal entries must change together.
+7. **Validation** — exact syntax, test, UI build, reload, and real-transport
+   commands for this app.
+
+Copyable outline:
+
+````markdown
+---
+id: <app-id>/agents
+title: "<App> Builder-Agent Onboarding"
+summary: "How to change <app> without violating its runtime contracts."
+status: active
+tags: [agents, builder, onboarding]
+see_also:
+  - repo:<repo>/<app-path>/README.md
+  - repo:<repo>/<app-path>/docs/README.md
+  - repo:<repo>/<app-path>/docs/storage/README.md
+  - repo:<repo>/<app-path>/docs/journal/README.md
+  - repo:<repo>/<app-path>/interface/README.md
+  - repo:<repo>/<app-path>/interface/<app-slug>.openapi.yaml
+  - repo:<repo>/<app-path>/config/bundles.template.yaml
+---
+
+# <App> Builder-Agent Onboarding
+
+## Read First
+...
+
+## Product Shape
+```text
+transport -> surface adapter -> service owner -> storage/remote owner
+```
+
+## Implementation Rules
+...
+
+## Configuration And Storage
+...
+
+## Keep In Sync
+...
+
+## Validate
+```bash
+python -m py_compile ...
+python -m pytest -q tests
+# UI build/reload/real transport checks when applicable
+```
+````
+
+Current strong example:
+
+- `connection-hub@1-0/AGENTS.md` demonstrates front matter, read order, concept
+  separation, a product map, security/storage invariants, SDK ownership, and
+  runtime checks
+
+Use `workspace@2026-03-31-13-36/AGENTS.md` for full chat/scene/tool wiring
+content, but use the Connection Hub document as the stronger structural model.
+Neither example overrides this canonical checklist.
+
+### Conditional package contracts
+
+| Condition | Required addition |
+| --- | --- |
+| UI exists | `ui/main` or `ui/widgets/<alias>` source, build config in the descriptor template, interface route, responsive UI test/build command, and no committed `node_modules`/build output. |
+| External integration exists | `docs/integrations/` with provider prerequisites, callback/webhook registration, proof/auth boundary, secrets, and a regression procedure. |
+| Operational deployment behavior exists | `docs/operations/` with health, scaling, recovery, backup/restore, and destructive-action procedures. |
+| Complex domain design exists | `docs/design/` with the implemented ownership and dataflow, not brainstorm fragments. |
+| Authored external events exist | Event types, source ids, reactive behavior, target agent/story fields, block-production behavior, and artifact refs in the interface contract; event code under `events/` when app-owned. |
+| Named service exists | Namespace/ref grammar, capabilities, schemas, filters/actions, authority/grants, provider discovery, and object ownership in the interface contract and tests. |
+| MCP exists | Resource URL, transport, auth-config path, tool ids/schemas, grants, consent metadata, and direct protocol tests. |
+| Scheduled/background work exists | Cron/job declaration, lock/exclusivity span, identity/economics context, retry/idempotency behavior, and tests. |
+| App-local dependencies exist | `requirements.txt` and `@venv(...)` contract; pin only app-owned dependencies and test the isolated environment. |
+
+### Cross-file synchronization invariants
+
+The package is one contract expressed several ways. Keep these synchronized in
+the same change:
+
+```text
+entrypoint decorators
+  == interface aliases/methods/routes
+  == OpenAPI paths and x-kdcube-surfaces
+  == config template keys and feature gates
+  == README surface list
+  == AGENTS.md validation/ownership notes
+  == focused contract tests
+  == dated journal entry
+```
+
+Also preserve these rules:
+
+- user-owned credentials and user state never belong in descriptor templates
+- generated files such as `.DS_Store`, `__pycache__`, `.pytest_cache`,
+  `node_modules`, built UI output, runtime storage, and local secret files do not
+  belong in the app package
+- if source-folder main UI or widgets exist, inherit a concrete
+  `BaseEntrypoint` family class or explicitly implement the same build contract
+- if a chat/agent turn, semantic search, tool, or job spends quota/money, wire
+  the appropriate economics surface
+- an `on_bundle_load(...)` override preserves
+  `await super().on_bundle_load(**kwargs)` unless it deliberately replaces the
+  platform lifecycle contract
+- never decorate a per-turn `BaseWorkflow` as the app entrypoint;
+  `BaseEntrypoint` owns app surfaces and creates per-message orchestration
 
 ### If the bundle has wizard, canvas, snapshot, or external artifact flows
 
@@ -913,38 +1035,42 @@ Operationally:
 - HTTPS + PAT is usually the simpler deployment choice
 - SSH is supported, but it requires key and host-verification material to be mounted and configured
 
-## 3. Start From The Minimal Bundle Shape
+## 3. Implement From The Contract
 
-Recommended layout:
+Use the canonical package in [1B.1](#1b1-canonical-app-package). Do not begin by
+copying an old `entrypoint.py` and documenting it afterward.
 
-```text
-my_bundle/
-  entrypoint.py
-  agents/
-    main.py
-  config/
-    bundles.template.yaml # default consumer tool/skill/event/UI policy
-  requirements.txt    # optional, but required when bundle-local venv code needs Python deps
-  tools/
-  skills/
-  ui/
-    main/              # optional main-view React/Vite source folder
-    widgets/           # optional widget React/Vite source folders
-  tests/
-```
+An agent creating a new app follows this order:
 
-Required in practice:
+1. **State the product boundary.** Write `README.md` and `docs/README.md`: what
+   the app owns, what it consumes, which process executes each surface, and what
+   is explicitly out of scope.
+2. **Choose runtime surfaces.** Select only the required decorators: reactive
+   event, API, MCP, named service, Data Bus, widget/main UI, cron, or job. Record
+   aliases, methods, routes, auth, grants, and config keys in
+   `interface/README.md` and OpenAPI before implementing handlers.
+3. **Design state ownership.** Write `docs/storage/README.md`, including a matrix
+   for durable, read-through, ephemeral, secret, cache, remote-provider, and
+   generated state. Decide retention and cleanup before code writes bytes.
+4. **Define deployment configuration.** Add complete non-secret and secret
+   templates. Every code-read config path must appear in one of them or in a
+   documented platform setting; every placeholder must be safe to publish.
+5. **Build the thin entrypoint.** Add app identity, constructor injection,
+   configuration defaults, surface decorators, lifecycle hooks, and composition
+   into `services/`, `agents/`, and SDK components.
+6. **Implement domain modules and optional UI.** Keep transport adapters thin;
+   keep domain behavior independently testable. Build UI only through the
+   loader-provided output directory.
+7. **Add contract and regression tests.** Verify manifest discovery, interface
+   alias/method/route parity, authorization, config mapping, storage behavior,
+   lifecycle/reload behavior, and each primary user journey.
+8. **Record and validate.** Add a dated journal entry, update both journal
+   indexes, run compile/tests/UI builds, reload the app, and exercise the real
+   transport. Update `release.yaml` only to describe a release-ready snapshot.
 
-- `entrypoint.py`
-- bundle registration decorators
-- compiled graph or equivalent execution path
-
-Usually present:
-
-- `agents/main.py`
-- `config/bundles.template.yaml` for default consumer tool/skill/event/UI policy
-- `skills/` when the bundle has local skills
-- `requirements.txt` when bundle-local Python deps are installed through `@venv(...)`
+At the end of each stage, the package must remain loadable. A placeholder
+execution graph may be used while product behavior is incomplete, but its
+interface and README must label it as a placeholder.
 
 If the bundle ships a full main UI app:
 
@@ -2634,7 +2760,14 @@ Fix:
 
 Before considering the bundle “implemented”, verify:
 
+- canonical package declarations exist: `README.md`, `AGENTS.md`,
+  `release.yaml`, config templates, interface README/OpenAPI, docs index,
+  storage map, journal indexes, and tests
 - entrypoint decorators are correct
+- decorator aliases/methods/routes match interface docs and OpenAPI
+- every code-read config/secret path appears in the correct descriptor template
+- README, AGENTS, interface, storage map, tests, and journal agree on ownership
+  and behavior
 - runtime identity does not depend on folder name
 - all mutable local state uses bundle storage helper
 - all deployment config uses bundle props/settings/secrets instead of raw env
@@ -2648,7 +2781,11 @@ Before considering the bundle “implemented”, verify:
 - cron/background logic does not assume request-bound comm context
 - isolated-exec code does not assume host-process globals
 - destructive operations are explicit
+- generated caches, local secrets, runtime output, and built dependencies are
+  not committed as app source
 - bundle-local tests exist for bundle-specific logic
+- UI builds pass for every source-folder main view/widget
+- the app reloads and every declared transport is exercised end to end
 - shared bundle suite passes
 
 ## 17. Minimum Deliverable Standard
@@ -2658,6 +2795,7 @@ A bundle implementation is not complete when it only “works once”.
 It is complete when:
 
 - it follows the documented platform contract
+- its human, machine-readable, deployment, storage, and test contracts agree
 - it survives reloads
 - runtime identity is stable
 - widget/API surfaces are discoverable

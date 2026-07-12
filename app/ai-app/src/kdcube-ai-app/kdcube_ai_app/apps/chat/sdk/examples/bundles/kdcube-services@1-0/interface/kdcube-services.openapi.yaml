@@ -1,0 +1,466 @@
+openapi: 3.1.0
+info:
+  title: KDCube Services App Interface
+  version: 1.0.0
+  description: |
+    Machine-readable HTTP contract for kdcube-services@1-0.
+
+    The app exposes privileged platform widgets, managed delegated-credential
+    MCP resources, signed session-less file transfer routes, and one internal
+    Data Bus handler. MCP tool schemas are discovered through MCP `tools/list`;
+    this document describes their HTTP transport boundary and stable tool ids.
+
+    KDCube `/operations/...` responses are platform-wrapped. Consumers unwrap
+    the property named by `x-kdcube-result-alias`. Public file routes return raw
+    bytes or a direct JSON error and are authorized by short-lived signed query
+    tokens, not by a platform browser session.
+x-kdcube-surfaces:
+  widgets:
+    bundle_storage:
+      visibility: privileged
+      source_folder: sdk://solutions/storage/ui.widget.storage
+      operation_alias: bundle_storage_widget
+    control_plane:
+      visibility: privileged
+      operation_alias: control_plane
+    conversation_browser:
+      visibility: privileged
+      operation_alias: conversation_browser
+    svc_gateway:
+      visibility: privileged
+      operation_alias: svc_gateway
+    redis_browser:
+      visibility: privileged
+      operation_alias: redis_browser
+    ai_bundles:
+      visibility: privileged
+      operation_alias: ai_bundles
+  mcp:
+    conversations:
+      route: public
+      transport: streamable-http
+      auth_config: surfaces.as_provider.mcp.conversations.auth
+      tools: [conversations_export]
+    named_services:
+      route: public
+      transport: streamable-http
+      auth_config: surfaces.as_provider.mcp.named_services.auth
+      tools:
+        - named_services_list
+        - named_services_about
+        - named_services_capabilities
+        - named_services_schema
+        - named_services_search
+        - named_services_get
+        - named_services_upsert
+        - named_services_host_file
+        - named_services_action
+        - named_services_delete
+        - named_services_call
+  data_bus_handlers:
+    kdcube.named_service.relay.v1:
+      method: named_service_relay
+      idempotency: required
+  named_service_providers:
+    note: Provider availability is deployment and request-context dependent.
+    wired_by_this_app: [conv, mail, slack]
+servers:
+  - url: /api/integrations
+tags:
+  - name: Widgets
+  - name: Widget Operations
+  - name: MCP
+  - name: Signed Files
+security:
+  - PlatformAuth: []
+paths:
+  /bundles/{tenant}/{project}/{bundle_id}/widgets/bundle_storage:
+    get:
+      tags: [Widgets]
+      summary: Serve the privileged bundle-storage browser.
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/BundleId"
+      responses:
+        "200": { $ref: "#/components/responses/WidgetHtml" }
+
+  /bundles/{tenant}/{project}/{bundle_id}/widgets/control_plane:
+    get:
+      tags: [Widgets]
+      summary: Serve the privileged economics control-plane dashboard.
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/BundleId"
+      responses:
+        "200": { $ref: "#/components/responses/WidgetHtml" }
+
+  /bundles/{tenant}/{project}/{bundle_id}/widgets/conversation_browser:
+    get:
+      tags: [Widgets]
+      summary: Serve the privileged conversation browser.
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/BundleId"
+      responses:
+        "200": { $ref: "#/components/responses/WidgetHtml" }
+
+  /bundles/{tenant}/{project}/{bundle_id}/widgets/svc_gateway:
+    get:
+      tags: [Widgets]
+      summary: Serve the privileged gateway-monitoring dashboard.
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/BundleId"
+      responses:
+        "200": { $ref: "#/components/responses/WidgetHtml" }
+
+  /bundles/{tenant}/{project}/{bundle_id}/widgets/redis_browser:
+    get:
+      tags: [Widgets]
+      summary: Serve the privileged Redis browser.
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/BundleId"
+      responses:
+        "200": { $ref: "#/components/responses/WidgetHtml" }
+
+  /bundles/{tenant}/{project}/{bundle_id}/widgets/ai_bundles:
+    get:
+      tags: [Widgets]
+      summary: Serve the privileged apps administration dashboard.
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/BundleId"
+      responses:
+        "200": { $ref: "#/components/responses/WidgetHtml" }
+
+  /bundles/{tenant}/{project}/{bundle_id}/operations/bundle_storage_widget:
+    post:
+      tags: [Widget Operations]
+      summary: Return the bundle-storage widget bootstrap content.
+      operationId: bundle_storage_widget
+      x-kdcube-result-alias: bundle_storage_widget
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/BundleId"
+      requestBody: { $ref: "#/components/requestBodies/OperationEnvelope" }
+      responses:
+        "200": { $ref: "#/components/responses/WrappedOperation" }
+
+  /bundles/{tenant}/{project}/{bundle_id}/operations/control_plane:
+    post:
+      tags: [Widget Operations]
+      summary: Return the economics control-plane widget content.
+      operationId: control_plane
+      x-kdcube-result-alias: control_plane
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/BundleId"
+      requestBody: { $ref: "#/components/requestBodies/OperationEnvelope" }
+      responses:
+        "200": { $ref: "#/components/responses/WrappedOperation" }
+
+  /bundles/{tenant}/{project}/{bundle_id}/operations/conversation_browser:
+    post:
+      tags: [Widget Operations]
+      summary: Return the conversation-browser widget content.
+      operationId: conversation_browser
+      x-kdcube-result-alias: conversation_browser
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/BundleId"
+      requestBody: { $ref: "#/components/requestBodies/OperationEnvelope" }
+      responses:
+        "200": { $ref: "#/components/responses/WrappedOperation" }
+
+  /bundles/{tenant}/{project}/{bundle_id}/operations/svc_gateway:
+    post:
+      tags: [Widget Operations]
+      summary: Return the gateway-monitoring widget content.
+      operationId: svc_gateway
+      x-kdcube-result-alias: svc_gateway
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/BundleId"
+      requestBody: { $ref: "#/components/requestBodies/OperationEnvelope" }
+      responses:
+        "200": { $ref: "#/components/responses/WrappedOperation" }
+
+  /bundles/{tenant}/{project}/{bundle_id}/operations/redis_browser:
+    post:
+      tags: [Widget Operations]
+      summary: Return the Redis-browser widget content.
+      operationId: redis_browser
+      x-kdcube-result-alias: redis_browser
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/BundleId"
+      requestBody: { $ref: "#/components/requestBodies/OperationEnvelope" }
+      responses:
+        "200": { $ref: "#/components/responses/WrappedOperation" }
+
+  /bundles/{tenant}/{project}/{bundle_id}/operations/ai_bundles:
+    post:
+      tags: [Widget Operations]
+      summary: Return the apps-administration widget content.
+      operationId: ai_bundles
+      x-kdcube-result-alias: ai_bundles
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/BundleId"
+      requestBody: { $ref: "#/components/requestBodies/OperationEnvelope" }
+      responses:
+        "200": { $ref: "#/components/responses/WrappedOperation" }
+
+  /bundles/{tenant}/{project}/{bundle_id}/public/mcp/conversations:
+    post:
+      tags: [MCP]
+      summary: Invoke the managed conversations MCP resource.
+      description: |
+        Stateless streamable-HTTP MCP endpoint. The managed MCP guard validates
+        the delegated credential, resource, selected tool, and grants before
+        FastMCP dispatch. Tool schemas are authoritative through `tools/list`.
+      operationId: conversations_mcp
+      security:
+        - DelegatedBearerAuth: []
+      x-kdcube-auth-config: surfaces.as_provider.mcp.conversations.auth
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/BundleId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/JsonRpcRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/McpResponse" }
+        "401": { $ref: "#/components/responses/JsonError" }
+        "403": { $ref: "#/components/responses/JsonError" }
+
+  /bundles/{tenant}/{project}/{bundle_id}/public/mcp/named_services:
+    post:
+      tags: [MCP]
+      summary: Invoke the managed named-services MCP resource.
+      description: |
+        Stateless streamable-HTTP MCP endpoint. The outer managed boundary
+        checks MCP tool consent; the bridge additionally checks the selected
+        namespace operation and namespace-specific grants.
+      operationId: named_services_mcp
+      security:
+        - DelegatedBearerAuth: []
+      x-kdcube-auth-config: surfaces.as_provider.mcp.named_services.auth
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/BundleId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/JsonRpcRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/McpResponse" }
+        "401": { $ref: "#/components/responses/JsonError" }
+        "403": { $ref: "#/components/responses/JsonError" }
+
+  /bundles/{tenant}/{project}/{bundle_id}/public/integration_file_upload:
+    post:
+      tags: [Signed Files]
+      summary: Upload one integration file into short-lived staging.
+      description: |
+        Session-less raw-byte upload. A prior authorized named-service call
+        mints a signed upload token bound to the exact `staged:` ref and user.
+        The staged ref is single-use and expires through the staging sweep.
+      operationId: integration_file_upload
+      security:
+        - SignedUploadToken: []
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/BundleId"
+        - $ref: "#/components/parameters/ObjectRef"
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        "200":
+          description: Staged upload accepted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StagedUploadResult" }
+        "400": { $ref: "#/components/responses/JsonError" }
+        "403": { $ref: "#/components/responses/JsonError" }
+        "413": { $ref: "#/components/responses/JsonError" }
+
+  /bundles/{tenant}/{project}/{bundle_id}/public/integration_file_download:
+    get:
+      tags: [Signed Files]
+      summary: Download one mail or Slack binary by signed object ref.
+      operationId: integration_file_download
+      security:
+        - SignedDownloadToken: []
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/BundleId"
+        - $ref: "#/components/parameters/ObjectRef"
+      responses:
+        "200": { $ref: "#/components/responses/BinaryDownload" }
+        "400": { $ref: "#/components/responses/JsonError" }
+        "403": { $ref: "#/components/responses/JsonError" }
+        "404": { $ref: "#/components/responses/JsonError" }
+
+  /bundles/{tenant}/{project}/{bundle_id}/public/conv_file_download:
+    get:
+      tags: [Signed Files]
+      summary: Download one conversation `conv:fi:` artifact by signed ref.
+      operationId: conv_file_download
+      security:
+        - SignedDownloadToken: []
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/BundleId"
+        - $ref: "#/components/parameters/ObjectRef"
+      responses:
+        "200": { $ref: "#/components/responses/BinaryDownload" }
+        "400": { $ref: "#/components/responses/JsonError" }
+        "403": { $ref: "#/components/responses/JsonError" }
+        "404": { $ref: "#/components/responses/JsonError" }
+
+components:
+  securitySchemes:
+    PlatformAuth:
+      type: apiKey
+      in: cookie
+      name: __Secure-LATC
+    DelegatedBearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: KDCube delegated credential
+    SignedUploadToken:
+      type: apiKey
+      in: query
+      name: upload_token
+    SignedDownloadToken:
+      type: apiKey
+      in: query
+      name: download_token
+  parameters:
+    Tenant:
+      name: tenant
+      in: path
+      required: true
+      schema: { type: string }
+      example: demo-tenant
+    Project:
+      name: project
+      in: path
+      required: true
+      schema: { type: string }
+      example: demo-project
+    BundleId:
+      name: bundle_id
+      in: path
+      required: true
+      schema: { type: string }
+      example: kdcube-services@1-0
+    ObjectRef:
+      name: object_ref
+      in: query
+      required: true
+      description: Exact `staged:`, `mail:`, `slack:`, or `conv:fi:` object ref bound into the signed token.
+      schema: { type: string }
+  requestBodies:
+    OperationEnvelope:
+      required: false
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data:
+                type: object
+                additionalProperties: true
+  responses:
+    WidgetHtml:
+      description: HTML widget application.
+      content:
+        text/html:
+          schema: { type: string }
+    WrappedOperation:
+      description: Platform-wrapped operation response; unwrap the alias-specific property.
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: true
+    McpResponse:
+      description: MCP JSON-RPC or streamable-HTTP response.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/JsonRpcResponse" }
+        text/event-stream:
+          schema: { type: string }
+    BinaryDownload:
+      description: Raw file bytes with Content-Disposition and private, no-store cache policy.
+      content:
+        application/octet-stream:
+          schema: { type: string, format: binary }
+    JsonError:
+      description: Direct JSON error response.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+  schemas:
+    JsonRpcRequest:
+      type: object
+      required: [jsonrpc, method]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        id: {}
+        method: { type: string }
+        params:
+          type: object
+          additionalProperties: true
+    JsonRpcResponse:
+      type: object
+      required: [jsonrpc]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        id: {}
+        result: {}
+        error:
+          type: object
+          additionalProperties: true
+    StagedUploadResult:
+      type: object
+      required: [ok, staged_ref, size_bytes]
+      properties:
+        ok: { type: boolean, const: true }
+        staged_ref: { type: string, pattern: "^staged:" }
+        size_bytes: { type: integer, minimum: 1, maximum: 26214400 }
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        message: { type: string }
+        resolution:
+          type: object
+          additionalProperties: true

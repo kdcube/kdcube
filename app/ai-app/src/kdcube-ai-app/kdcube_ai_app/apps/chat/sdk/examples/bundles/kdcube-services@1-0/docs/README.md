@@ -4,9 +4,21 @@ title: "KDCube Services Design"
 summary: "Design notes for the built-in KDCube services app."
 status: active
 tags: ["design", "mcp", "delegated-credentials", "connection-hub"]
+see_also:
+  - ../interface/README.md
+  - ../interface/kdcube-services.openapi.yaml
+  - storage/README.md
+  - journal/README.md
 ---
 
 # KDCube Services Design
+
+Contract indexes:
+
+- [Interface](../interface/README.md)
+- [OpenAPI](../interface/kdcube-services.openapi.yaml)
+- [Storage map](storage/README.md)
+- [Build journal](journal/README.md)
 
 ## Role
 
@@ -187,3 +199,12 @@ Connection Hub OAuth consent
 
 This keeps consent resource-specific and lets different bundles define their
 own managed MCP surfaces.
+
+## Storage Boundary
+
+This app is a facade over several owners rather than one data store. It reads
+conversation records from the conversation subsystem, fetches mail/Slack bytes
+from provider APIs, writes only temporary integration staging, uses app secrets
+for signed transfer URLs, and uses Redis for discovery/relay coordination. The
+canonical ownership, retention, backup, and cleanup map is
+[storage/README.md](storage/README.md).

@@ -8,12 +8,17 @@ module: entrypoint
 singleton: false
 primary_surfaces:
   - "Widget `bundle_storage` — privileged operational storage browser"
+  - "Privileged platform administration widgets — economics, conversations, gateway, Redis, and apps"
   - "MCP endpoint `conversations` — delegated access to conversations_export"
   - "MCP endpoint `named_services` — delegated access to configured named-service namespaces"
+  - "Signed public file transfer — conversation, mail, Slack, and staged uploads"
 links:
   config: config/bundles.template.yaml
   interface: interface/README.md
+  openapi: interface/kdcube-services.openapi.yaml
   design: docs/README.md
+  storage: docs/storage/README.md
+  journal: docs/journal/README.md
 ---
 
 # KDCube Services App
@@ -54,6 +59,20 @@ The widget consumes the platform admin storage APIs:
 
 Cloud deployments must mount the browsed filesystem roots into `chat-ingress`,
 because the storage APIs are served by ingress.
+
+### Platform Administration Widgets
+
+The app is the stable home for these privileged platform widgets:
+
+| Alias | Purpose |
+| --- | --- |
+| `control_plane` | Economics control-plane dashboard. |
+| `conversation_browser` | Conversation inspection and operations. |
+| `svc_gateway` | Gateway monitoring. |
+| `redis_browser` | Redis inspection. |
+| `ai_bundles` | App registry and administration. |
+
+All are authenticated, privileged surfaces. They are not public MCP tools.
 
 ### Conversations
 
@@ -170,6 +189,21 @@ reliably convert that tool result into a new OAuth consent flow, so production
 resources should advertise likely namespace grants during initial Connection
 Hub consent.
 
+### Signed File Transfer
+
+The named-service MCP surface keeps binary bytes out of model context through
+three session-less, signed routes:
+
+| Alias | Method | Purpose |
+| --- | --- | --- |
+| `integration_file_upload` | POST | Upload one short-lived `staged:` file for a later mail/Slack action. |
+| `integration_file_download` | GET | Stream a mail or Slack file under the signed delegated-user scope. |
+| `conv_file_download` | GET | Stream a `conv:fi:` conversation artifact under the signed user/conversation scope. |
+
+These routes are public only in transport terms. A managed MCP call mints the
+short-lived token, and the route trusts the verified token rather than a
+browser session or query-supplied identity.
+
 ## Shape
 
 ```text
@@ -189,9 +223,14 @@ kdcube-services@1-0/
     bundles.secrets.template.yaml
   interface/
     README.md
+    kdcube-services.openapi.yaml
   docs/
     README.md
+    storage/
+      README.md
     journal/
+  tests/
+    test_interface_contract.py
 ```
 
 ## Auth Model
@@ -229,6 +268,11 @@ validated the delegated credential and selected tool grant.
 
 The FastMCP surface uses stateless streamable HTTP because the proc bridge
 dispatches each bundle MCP request independently.
+
+For the complete ownership map, including conversation read-through storage,
+provider-owned bytes, temporary upload staging, Redis coordination, generated
+UI output, and the signing secret, see
+[docs/storage/README.md](docs/storage/README.md).
 
 ## Extension Rule
 

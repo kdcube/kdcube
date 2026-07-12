@@ -7,7 +7,9 @@ tags: ["agents", "builder", "onboarding", "mcp", "delegated-credentials", "conne
 see_also:
   - "README.md"
   - "interface/README.md"
+  - "interface/kdcube-services.openapi.yaml"
   - "docs/README.md"
+  - "docs/storage/README.md"
 ---
 
 # KDCube Services — Builder-Agent Onboarding
@@ -16,6 +18,10 @@ see_also:
 
 - `README.md` — product role and current service list.
 - `interface/README.md` — public MCP URL, auth policy, tools, dataflow.
+- `interface/kdcube-services.openapi.yaml` — machine contract for widget,
+  operation, MCP, signed-file, and non-HTTP surface declarations.
+- `docs/storage/README.md` — storage ownership, read-through data, temporary
+  staging, signing secrets, generated output, and cleanup.
 - `entrypoint.py` — thin bundle/surface adapter.
 - `services/` — product service modules.
 - `surfaces/mcp/` — service-family FastMCP adapters only. Keep `mcp` nested
@@ -37,12 +43,16 @@ see_also:
   `configuration_defaults()`.
 - Add one MCP alias per service family. Do not overload a generic `kdcube`
   endpoint with unrelated tools.
-- Keep docs and journal updated with every new service surface.
+- Keep decorators, interface README/OpenAPI, descriptor templates, root README,
+  storage map, tests, and journal synchronized in the same change.
+- Add a dated journal entry for runtime, interface, configuration, storage,
+  security, or release-contract changes.
 
 ## Validate
 
 ```bash
 python -m py_compile entrypoint.py surfaces/mcp/conversations.py services/conversations/__init__.py
+python -m pytest -q tests
 ```
 
 Export domain logic lives in the conversation SDK

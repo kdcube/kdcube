@@ -8,6 +8,24 @@ tags: ["interface", "widget", "mcp", "storage", "delegated-credentials", "connec
 
 # KDCube Services — Interface
 
+The machine-readable HTTP contract is
+[kdcube-services.openapi.yaml](kdcube-services.openapi.yaml). This README owns
+the human contract, including MCP tools, Data Bus and named-service surfaces,
+storage/auth boundaries, and deployment configuration.
+
+Current declared surface families:
+
+| Family | Aliases |
+| --- | --- |
+| Widgets | `bundle_storage`, `control_plane`, `conversation_browser`, `svc_gateway`, `redis_browser`, `ai_bundles` |
+| Operations | `bundle_storage_widget`, `control_plane`, `conversation_browser`, `svc_gateway`, `redis_browser`, `ai_bundles` |
+| MCP | `conversations`, `named_services` |
+| Signed public files | `integration_file_upload`, `integration_file_download`, `conv_file_download` |
+| Data Bus | `kdcube.named_service.relay.v1` |
+
+See [../docs/storage/README.md](../docs/storage/README.md) for the authority and
+storage map behind these surfaces.
+
 ## Widget: `bundle_storage`
 
 ```text
@@ -36,6 +54,20 @@ Backend APIs:
 Ingress must have the same local storage roots mounted that the widget is
 allowed to browse. In ECS that means `/kdcube-storage`, `/bundle-storage`, and
 `/bundles` are mounted into `chat-ingress`.
+
+## Privileged Platform Widgets
+
+All widget and matching operation surfaces below require a privileged platform
+session:
+
+| Widget alias | Operation alias | Purpose |
+| --- | --- | --- |
+| `bundle_storage` | `bundle_storage_widget` | Browse permitted platform storage roots. |
+| `control_plane` | `control_plane` | Economics control plane. |
+| `conversation_browser` | `conversation_browser` | Inspect conversation state and artifacts. |
+| `svc_gateway` | `svc_gateway` | Monitor gateway behavior. |
+| `redis_browser` | `redis_browser` | Inspect Redis state. |
+| `ai_bundles` | `ai_bundles` | Inspect and administer installed apps. |
 
 ## MCP Endpoint: Conversations
 
@@ -267,6 +299,32 @@ The protected-resource discovery document exposes this nested catalog as
 `kdcube_named_services`, next to the generic `kdcube_tools` list. The OAuth
 authorization code, refresh token, and access-grant record then preserve the
 same catalog for runtime enforcement.
+
+## Signed File Routes
+
+Binary transfer is out-of-band so MCP JSON does not inject file bytes into the
+model context:
+
+| Alias | Method | Required query | Result |
+| --- | --- | --- | --- |
+| `integration_file_upload` | POST | `object_ref`, `upload_token` | Raw request bytes become a short-lived, single-use `staged:` ref. |
+| `integration_file_download` | GET | `object_ref`, `download_token` | Raw mail/Slack bytes with `Content-Disposition` and `private, no-store`. |
+| `conv_file_download` | GET | `object_ref`, `download_token` | Raw conversation artifact bytes under token-bound user/conversation scope. |
+
+The routes require no browser session because the HMAC token binds the exact
+ref, user, tenant/project, optional conversation, and expiry. The signing key
+is `conversations.file_download_secret` in app secrets. Missing secret fails
+closed and no usable URL is emitted.
+
+Uploads are limited to 25 MiB and staged for at most one hour as a cleanup
+backstop. See the storage map for the current filesystem-sharing constraint.
+
+## Data Bus Relay
+
+`kdcube.named_service.relay.v1` is an idempotent Data Bus handler for detached
+runtimes that cannot hold an in-process named-service registry caller. It
+dispatches the request under the message actor context and returns the recorded
+response for redelivery. This is not a public REST route.
 
 ## Dataflow
 
