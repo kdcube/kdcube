@@ -58,10 +58,7 @@ def get_react_tools_catalog(
         PLAN_SPEC,
     ]
     if subagent_role == "parent":
-        # Early placement is deliberate: catalog tails get truncated by
-        # weaker models' attention (observed twice: an enumeration of 13
-        # entries that stops at 12 reads the 13th as nonexistent).
-        specs.insert(2, DELEGATE_SPEC)
+        specs.append(DELEGATE_SPEC)
     elif subagent_role == "child":
         specs.append(CONTRIBUTE_SPEC)
     strategy_by_id = {

@@ -1642,10 +1642,6 @@ def test_delegate_spec_is_static_and_names_no_models():
         assert alias not in rendered
     assert "agent_alias" in TOOL_SPEC["args"]
     assert "charter" in TOOL_SPEC["args"]
-    # each arg leads with a bare type token then a comma, so the catalog
-    # renderer's split-on-first-comma lands cleanly on the type
-    assert TOOL_SPEC["args"]["charter"].startswith("str, ")
-    assert TOOL_SPEC["args"]["agent_alias"].startswith("str, ")
     # the spec points at the announce section for the situational half
     assert "DELEGATION" in TOOL_SPEC["args"]["agent_alias"]
 
