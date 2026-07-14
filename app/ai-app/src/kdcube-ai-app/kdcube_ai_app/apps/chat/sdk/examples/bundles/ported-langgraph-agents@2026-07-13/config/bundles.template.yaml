@@ -99,15 +99,16 @@ bundles:
           # wrapped in the code-exec scope so hosting resolves.
           #
           #   enabled  — turn the tool on (default false).
-          #   runtime  — exec runtime mode: docker (default) | fargate | external.
-          #              The isolated runtime requires a reachable docker (or
-          #              distributed) executor; there is no in-process offline
-          #              mode. Fail-open: with no runtime the tool returns a clean
-          #              error and the turn still answers.
+          #   runtime  — OPTIONAL. Omit to use the deployment's ON-BOARD exec runtime
+          #              (`execution.runtime`) — the SAME runtime the React agent runs
+          #              code in (in-memory / subprocess / docker / fargate, per
+          #              deployment); no separate setup needed. A string names a
+          #              profile from it (e.g. "fargate_default"); a mapping overrides
+          #              the spec. Fail-open: with no runtime reachable the tool
+          #              returns a clean error and the turn still answers.
           #   timeout_s— per-run wall-clock timeout in seconds (default 120).
           code_exec:
             enabled: false
-            runtime: docker
             timeout_s: 120
         # The Telegram Bot API webhook (a public @api that drives the SAME
         # execute_core for the DEFAULT agent). `route="public"` exposes it at the

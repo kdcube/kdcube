@@ -275,19 +275,7 @@ def test_run_python_tool_reports_disabled(tmp_path: Path) -> None:
 
 # ── config ───────────────────────────────────────────────────────────────────
 
-def test_read_code_exec_config_defaults_off() -> None:
-    mod = _code_exec_module()
-    ep = SimpleNamespace(bundle_prop=lambda path, default=None: default)
-    cfg = mod.read_code_exec_config(ep)
-    assert cfg["enabled"] is False
-    assert cfg["exec_runtime"].get("mode") == "docker"
-    assert cfg["timeout_s"] == mod.CODE_EXEC_TIMEOUT_DEFAULT
-
-
-def test_read_code_exec_config_enabled_parse() -> None:
-    mod = _code_exec_module()
-    props = {"tools": {"code_exec": {"enabled": True, "runtime": "fargate", "timeout_s": 45}}}
-
+def _bundle_prop_factory(props):
     def _bp(path, default=None):
         cur = props
         for part in path.split("."):
@@ -295,10 +283,49 @@ def test_read_code_exec_config_enabled_parse() -> None:
                 return default
             cur = cur[part]
         return cur
+    return _bp
 
-    ep = SimpleNamespace(bundle_prop=_bp)
+
+def test_read_code_exec_config_defaults_off() -> None:
+    mod = _code_exec_module()
+    # No runtime_ctx -> no on-board runtime -> exec_runtime resolves to empty (the
+    # runtime is NOT hardcoded to docker; it comes from the deployment).
+    ep = SimpleNamespace(bundle_prop=lambda path, default=None: default, runtime_ctx=None)
+    cfg = mod.read_code_exec_config(ep)
+    assert cfg["enabled"] is False
+    assert not cfg["exec_runtime"]
+    assert cfg["timeout_s"] == mod.CODE_EXEC_TIMEOUT_DEFAULT
+
+
+def test_read_code_exec_config_uses_onboard_runtime() -> None:
+    # By default (no `tools.code_exec.runtime` override) the exec runtime IS the
+    # deployment's on-board runtime (runtime_ctx.exec_runtime) — same as the React
+    # harness, no hardcoded docker.
+    mod = _code_exec_module()
+    props = {"tools": {"code_exec": {"enabled": True, "timeout_s": 45}}}
+    ep = SimpleNamespace(
+        bundle_prop=_bundle_prop_factory(props),
+        runtime_ctx=SimpleNamespace(exec_runtime={"mode": "subprocess"}),
+    )
     cfg = mod.read_code_exec_config(ep)
     assert cfg["enabled"] is True
-    assert cfg["exec_runtime"].get("mode") == "fargate"
+    assert cfg["exec_runtime"].get("mode") == "subprocess"
     assert cfg["timeout_s"] == 45
     assert mod.code_exec_enabled(ep) is True
+
+
+def test_read_code_exec_config_runtime_string_resolves_via_profile_resolver() -> None:
+    # A string `runtime` is passed as the PROFILE selector to the same resolver the
+    # React harness uses; the resolved spec still derives from the on-board runtime
+    # (exact profile semantics are deployment-defined).
+    mod = _code_exec_module()
+    props = {"tools": {"code_exec": {"enabled": True, "runtime": "some_profile"}}}
+    onboard = {"mode": "subprocess"}
+    ep = SimpleNamespace(
+        bundle_prop=_bundle_prop_factory(props),
+        runtime_ctx=SimpleNamespace(exec_runtime=onboard),
+    )
+    cfg = mod.read_code_exec_config(ep)
+    # Resolves without error and stays anchored to the on-board runtime.
+    assert isinstance(cfg["exec_runtime"], dict)
+    assert cfg["exec_runtime"].get("mode") == "subprocess"

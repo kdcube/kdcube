@@ -20,12 +20,14 @@
 #   run_code_and_host(code, timeout_s=…)          — run freeform Python in the
 #       sandbox (side-effects / no-contract exec) and host every produced file.
 #
-# ISOLATION MODEL (mirrors the SDK exec tool): the actual sandbox is the SDK's
-# `_InProcessRuntime` reached through `run_exec_tool_side_effects`, which runs the
-# code in a DOCKER container (the SDK's `run_exec_tool` fixes isolation="docker").
-# So a LIVE run needs a reachable docker runtime. Everything here is FAIL-OPEN:
-# offline / no docker / no hosting → a clean error result, never an exception into
-# the turn, so the agent still answers.
+# ISOLATION MODEL (mirrors the React harness): the code runs in the SDK's isolated
+# runtime reached through `run_exec_tool_side_effects`. The runtime is the ON-BOARD
+# one — the deployment's `execution.runtime` (in-memory / subprocess / docker /
+# fargate), resolved from `runtime_ctx.exec_runtime` via `resolve_exec_runtime_profile`
+# exactly as `base_workflow.resolve_exec_runtime` does. So it runs wherever the
+# platform is configured to run code, with NO separate docker requirement. Everything
+# here is FAIL-OPEN: no runtime / no hosting → a clean error result, never an
+# exception into the turn, so the agent still answers.
 
 from __future__ import annotations
 
@@ -40,7 +42,10 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
-from kdcube_ai_app.apps.chat.sdk.runtime.exec_runtime_config import normalize_exec_runtime_config
+from kdcube_ai_app.apps.chat.sdk.runtime.exec_runtime_config import (
+    normalize_exec_runtime_config,
+    resolve_exec_runtime_profile,
+)
 from kdcube_ai_app.apps.chat.sdk.runtime.run_ctx import OUTDIR_CV, WORKDIR_CV
 from kdcube_ai_app.apps.chat.sdk.runtime.tool_subsystem import create_tool_subsystem_with_mcp
 from kdcube_ai_app.apps.chat.sdk.runtime.workspace import (
@@ -53,14 +58,12 @@ LOGGER = logging.getLogger("kdcube.ported_langgraph_agents.code_exec")
 
 # ── config defaults (documented in config/bundles.template.yaml) ─────────────
 # `tools.code_exec.enabled`  — off by default (additive, config-gated).
-# `tools.code_exec.runtime`  — exec runtime mode: "docker" (default) | "fargate" |
-#                              "external". The SDK exec harness runs docker for the
-#                              in-process modes, so docker is the safe hosted
-#                              default; there is no offline in-memory mode reachable
-#                              through the SDK exec tool (see module docstring).
+# `tools.code_exec.runtime`  — OPTIONAL. Omit to use the deployment's on-board exec
+#                              runtime (`execution.runtime`), the same one the React
+#                              harness uses. A string selects a named profile from it
+#                              (e.g. "fargate_default"); a dict overrides the spec.
 # `tools.code_exec.timeout_s`— per-run timeout (default 120s).
 CODE_EXEC_ENABLED_DEFAULT = False
-CODE_EXEC_RUNTIME_DEFAULT = "docker"
 CODE_EXEC_TIMEOUT_DEFAULT = 120
 
 # A model-call inside the sandbox may write anywhere under OUTPUT_DIR; only files
@@ -123,11 +126,27 @@ def read_code_exec_config(ep: Any) -> Dict[str, Any]:
     if not isinstance(cfg, dict):
         cfg = {}
     enabled = bool(cfg.get("enabled", CODE_EXEC_ENABLED_DEFAULT))
-    runtime_raw = cfg.get("runtime", CODE_EXEC_RUNTIME_DEFAULT)
+    # Runtime: resolve it the SAME way the React harness does. base_workflow's
+    # `resolve_exec_runtime` reads `runtime_ctx.exec_runtime` (the deployment's
+    # `execution.runtime`, normalized onto runtime_ctx by the platform) and selects
+    # a profile via `resolve_exec_runtime_profile`. So the exec tool runs wherever
+    # the platform is configured to run code (in-memory / subprocess / docker /
+    # fargate per deployment) — it is "on board", no separate docker requirement.
+    # `tools.code_exec.runtime`, when a string, names a PROFILE to select (like the
+    # iso-runtime demo's "fargate_default"); a dict overrides the resolved spec.
+    runtime_ctx = getattr(ep, "runtime_ctx", None)
+    onboard = getattr(runtime_ctx, "exec_runtime", None) if runtime_ctx is not None else None
+    runtime_sel = cfg.get("runtime")
+    profile = runtime_sel.strip() if isinstance(runtime_sel, str) and runtime_sel.strip() else None
+    overrides = runtime_sel if isinstance(runtime_sel, dict) and runtime_sel else None
     try:
-        exec_runtime = normalize_exec_runtime_config(runtime_raw)
+        exec_runtime = resolve_exec_runtime_profile(
+            runtime=dict(onboard) if isinstance(onboard, dict) else {},
+            profile=profile,
+            overrides=overrides,
+        )
     except Exception:
-        exec_runtime = {"mode": CODE_EXEC_RUNTIME_DEFAULT}
+        exec_runtime = dict(onboard) if isinstance(onboard, dict) else {}
     try:
         timeout_s = int(cfg.get("timeout_s", CODE_EXEC_TIMEOUT_DEFAULT))
     except Exception:
