@@ -28,24 +28,28 @@ integration:
 solution/
   lg_solution/     the research graph (retrieve -> plan -> [delegate] -> answer).
                    Vendored UNCHANGED. Has a DEDICATED answer node.
-  lg_prebuilt/     the prebuilt create_react_agent (agent <-> tools loop).
-                   Vendored UNCHANGED. Has a LOOPING agent node, no answer node.
+  lg_prebuilt/     the langchain.agents.create_agent ReAct agent (model <-> tools loop).
+                   Vendored UNCHANGED. Has a LOOPING `model` node, no answer node.
 platform/          the shared integration glue:
   identity.py        platform identity + agent_id -> each agent's per-user keys
-  pg_target.py       storage edge -> KDCube pg_pool, a PER-AGENT schema
+  pg_target.py       storage edge -> KDCube pg_pool, ONE shared schema + agent_id column
   stream_solution.py the dedicated-answer-node astream_events(v2) loop -> comm_ctx
-  stream_prebuilt.py the looping-agent-node astream_events(v2) loop -> comm_ctx
-  capabilities.py    per-turn, per-agent model pick
-  tools_mcp.py       lg-react's tools seam (plain | mcp | both)
+  stream_prebuilt.py the looping model-node astream_events(v2) loop -> comm_ctx
+  capabilities.py    per-turn, per-agent model pick (role_models overlay)
+  tool_pick.py       lg-react's tool inventory (admin ∩ user-enabled, per turn)
+  tools_mcp.py       lg-react's MCP tools seam
+  code_exec.py       lg-react's code-execution tool (files hosted into the conversation)
   telegram.py        the shared ingress (drives the DEFAULT agent)
 entrypoint.py      execute_core DISPATCHES on agent_id over the AGENTS registry;
-                   per-agent lazy graph cache; the telegram_webhook @api
+                   REBUILDS the graph per turn; serves telegram_webhook + the two
+                   scene chat widgets + scene_object_action (file download)
 ```
 
-The app owns TWO ingresses that drive the SAME turn: the reactive chat turn (which
+The app owns ingresses that drive the SAME turn: the reactive chat turn (which
 dispatches on `agent_id`) and the Telegram Bot API webhook (which drives the
-default agent). It provides no MCP, widget, Data Bus handler, cron, or background
-job.
+default agent). It serves two scene chat widgets (`chat_lg_solution` /
+`chat_lg_react`) and the `scene_object_action` file-download operation; no MCP
+server, Data Bus handler, cron, or background job.
 
 ## Read First
 
@@ -74,7 +78,7 @@ Telegram webhook (public @api) ────────┤  (webhook -> DEFAULT 
        agent_id = normalize(state.agent_id) or DEFAULT_AGENT_ID   [entrypoint.py]
        spec = AGENTS[agent_id]                                    (else default)
        -> platform/identity.turn_identity(state, agent_id)  -> TurnIdentity
-       -> _ensure_graph(agent_id)   per-agent lazy graph CACHE (own schema + deps)
+       -> _build_graph(agent_id, disabled_tools)   REBUILT this turn (no graph cache)
        -> spec.build_inputs(question, ident) -> inputs, run_config(thread_id)
        -> spec.stream(graph, inputs, run_config)  -> the agent's OWN stream adapter
             -> comm_ctx.step/delta/complete
@@ -88,10 +92,14 @@ Telegram webhook (public @api) ────────┤  (webhook -> DEFAULT 
   a behavior change seems to require editing `solution/`, stop and reconsider the
   platform layer, or report it.
 - The dispatch is by `agent_id`. Keep the `AGENTS` registry the single source of
-  truth: each `AgentSpec` carries `build_graph`, `stream`, `build_inputs`, `role`,
-  and per-agent `schema`. To add or change an agent, add/adjust a spec — do not
-  branch on agent_id inside `execute_core`. Unknown/blank agent_id falls back to
-  `DEFAULT_AGENT_ID`; keep that fallback.
+  truth: each `AgentSpec` carries `build_graph`, `stream`, `build_inputs`, and
+  `role`. To add or change an agent, add/adjust a spec — do not branch on agent_id
+  inside `execute_core`. Unknown/blank agent_id falls back to `DEFAULT_AGENT_ID`;
+  keep that fallback.
+- The graph is REBUILT every turn (`_build_graph`), never cached on the entrypoint —
+  KDCube is distributed, a turn lands on any worker, so no per-agent graph may be
+  held. Only the checkpointer CONNECTION is opened once per agent (`_open_checkpointer`)
+  and reused. This is scaled serving.
 - One stream adapter PER agent shape. `stream_solution.py` streams the DEDICATED
   answer node's tokens; `stream_prebuilt.py` streams only the FINAL turn of the
   LOOPING agent node. A new agent shape adds its own adapter and a spec — never
@@ -100,11 +108,14 @@ Telegram webhook (public @api) ────────┤  (webhook -> DEFAULT 
   into `user_id`, and scopes `thread_id` by it. This is the multi-agent safety
   invariant: the two agents' per-user memories must never mix. Keep it explicit
   and testable, not inlined into `execute_core`.
-- Storage is isolated PER AGENT by schema (`ported_langgraph_agents__lg_solution`
-  / `..._lg_prebuilt`) on KDCube's shared Postgres when hosted (pg_pool present),
-  the agent's own `DATABASE_URL` when standalone, an in-memory saver when
-  unreachable. Keep the fallback chain and the driver bridge (asyncpg pool present
-  = hosted signal; psycopg DSN derived from `get_settings()` PG* fields).
+- Storage is ONE shared schema `kdcube_{tenant}_{project}` (`schema_for_scope`) with
+  bundle-prefixed tables (`ported_langgraph_agents_memories`/`_kb`); the two agents
+  are isolated by the `agent_id` COLUMN (+ the identity fold), NOT a per-agent schema
+  (that would pollute Postgres). Never `CREATE EXTENSION` — the platform provides it.
+  On KDCube's shared Postgres when hosted (pg_pool present), the agent's own
+  `DATABASE_URL` when standalone, an in-memory saver when unreachable. Keep the
+  fallback chain and the driver bridge (asyncpg pool present = hosted signal; psycopg
+  DSN derived from `get_settings()` PG* fields).
 - Bundle-local imports are package-relative (`from .solution.lg_solution...`,
   `from .platform.identity import ...`). Never add a `try/except ImportError`
   fallback to a top-level import. Both vendored packages are already

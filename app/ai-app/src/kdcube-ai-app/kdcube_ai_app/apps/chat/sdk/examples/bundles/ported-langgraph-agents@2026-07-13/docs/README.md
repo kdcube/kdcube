@@ -15,8 +15,9 @@ vendored **unchanged**, behind a **single `execute_core`** that dispatches on
 
 - `lg-solution` — the rich research graph (KB retrieval + per-user pgvector memory
   + a nested subagent). Linear shape with a **dedicated answer node**.
-- `lg-react` — the standard `langgraph.prebuilt.create_react_agent`. A ReAct
-  loop with a **looping agent node** and no dedicated answer node.
+- `lg-react` — a `langchain.agents.create_agent` ReAct agent (plain tools + MCP + a
+  code-exec tool; `SummarizationMiddleware` for context). A ReAct loop with a
+  looping **`model` node** and no dedicated answer node.
 
 The teaching point is the seam that DIFFERS between the two: **different agent
 shapes → different stream adapters, selected by `agent_id`.** Everything else is
@@ -27,10 +28,11 @@ shared platform glue.
 ```text
 this app owns
   - the dispatcher                 (execute_core resolves agent_id -> the right graph)
-  - the per-agent graph cache      (each agent's graph built lazily once per process)
-  - the two stream adapters        (dedicated-answer-node + looping-agent-node)
+  - the per-turn graph rebuild     (each agent's graph rebuilt every turn; no cache)
+  - the two stream adapters        (dedicated-answer-node + looping-model-node)
   - the multi-tenant + multi-agent identity gate
-  - the per-agent storage edge     (a schema per agent on KDCube's shared Postgres)
+  - the storage edge               (ONE shared schema + agent_id column on pg_pool)
+  - the two scene chat widgets + scene_object_action (file download)
 
 this app consumes (does not own)
   - the KDCube chat surface        (the reactive event that starts a turn)
@@ -48,26 +50,26 @@ this app does NOT own
 ```text
 1. resolve     entrypoint.py     agent_id = normalize(state.agent_id) or default;
                                  spec = AGENTS[agent_id]  (unknown -> default)
-2. graph       entrypoint.py     _ensure_graph(agent_id): a per-agent lazy CACHE;
-                                 each built with its own deps + checkpointer + schema
+2. graph       entrypoint.py     _build_graph(agent_id, disabled_tools): REBUILT this
+                                 turn (no cache); reuses only the opened checkpointer
 3. inputs      spec.build_inputs the agent's own input shape + run_config(thread_id)
 4. stream      spec.stream       the agent's OWN adapter -> comm_ctx.step/delta/complete
 5. model pick  capabilities.py   resolve_turn_role_models(self, state, agent_id) for
                                  the ACTIVE agent, bound onto role_models for the turn
 ```
 
-The `AGENTS` registry is a dict of `AgentSpec(agent_id, role, schema, build_graph,
-stream, build_inputs)`. Adding an agent is adding a spec — `execute_core` never
-branches on agent_id.
+The `AGENTS` registry is a dict of `AgentSpec(agent_id, role, build_graph, stream,
+build_inputs)`. Adding an agent is adding a spec — `execute_core` never branches on
+agent_id.
 
 ## The two stream adapters (the shape difference)
 
 - `platform/stream_solution.py` — lg-solution has a **dedicated answer node**, so
   the adapter streams that node's model tokens as the answer and surfaces the other
   nodes (retrieve/plan/delegate) as steps.
-- `platform/stream_prebuilt.py` — lg-react's **agent node LOOPS** (once per
+- `platform/stream_prebuilt.py` — lg-react's **`model` node LOOPS** (once per
   tool-decision cycle) with no answer node, so the adapter streams ONLY the final
-  agent turn (visible content + no tool-call chunk) and surfaces each `tools` run
+  model turn (visible content + no tool-call chunk) and surfaces each `tools` run
   as a step.
 
 A different framework or agent shape swaps ONLY its adapter file; the dispatcher,
@@ -75,20 +77,23 @@ identity, and storage edge are unchanged.
 
 ## Statelessness
 
-Each agent's graph is a **per-process template** built lazily once and reused
-across turns/users; per-turn state lives only in shared Postgres keyed by
-`thread_id`. Nothing per-turn lives on `self`. So any processor worker can serve
-any turn for either agent (regression-tested: `tests/test_storage_pg_target.py`,
-`tests/test_dispatch.py`).
+Each agent's graph is **rebuilt every turn** (`_build_graph`) — no in-process cache,
+because KDCube is distributed and a turn lands on any worker; only the checkpointer
+CONNECTION is opened once per agent and reused. Per-turn state lives only in shared
+Postgres keyed by `thread_id`. Nothing per-turn lives on `self`. So any processor
+worker can serve any turn for either agent (regression-tested:
+`tests/test_storage_pg_target.py`, `tests/test_dispatch.py`).
 
 ## The persistence split (per agent)
 
-Each agent keeps its **own** store — routed onto KDCube's shared Postgres in its
-**own per-agent schema** when hosted (`ported_langgraph_agents__lg_solution` /
-`..._lg_prebuilt`), its own `DATABASE_URL` when standalone, an in-memory saver when
-unreachable. KDCube separately owns the **conversation record** (framework-neutral,
-the same for either agent). Full ownership matrix + the injection point:
-[storage/README.md](storage/README.md).
+Each agent keeps its **own** store — routed onto KDCube's shared Postgres into ONE
+per-tenant/project schema (`kdcube_{tenant}_{project}`) with bundle-prefixed tables
+(`ported_langgraph_agents_memories`/`_kb`), the two agents separated by the
+**`agent_id` column** (a per-agent schema would pollute Postgres); its own
+`DATABASE_URL` when standalone, an in-memory saver when unreachable. KDCube
+separately owns the **conversation record** (framework-neutral turn log + a comm
+events artifact replayed on reload, the same for either agent). Full ownership matrix
++ the injection point: [storage/README.md](storage/README.md).
 
 ## Dependency direction
 

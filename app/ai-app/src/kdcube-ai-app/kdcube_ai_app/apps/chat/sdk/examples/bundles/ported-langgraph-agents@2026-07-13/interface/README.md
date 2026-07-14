@@ -1,8 +1,8 @@
 # Ported LangGraph Agents Interface
 
 `ported-langgraph-agents@2026-07-13` hosts **two** ported LangGraph agents
-(`lg-solution` = a research graph with a dedicated answer node; `lg-react` = the
-prebuilt `create_react_agent` with a looping agent node), both vendored unchanged
+(`lg-solution` = a research graph with a dedicated answer node; `lg-react` = a
+`langchain.agents.create_agent` ReAct agent with a looping `model` node), both vendored unchanged
 under `solution/`, dispatched by `agent_id` through a **single `execute_core`**. It
 exposes **two ingresses that drive that same turn**:
 
@@ -78,9 +78,10 @@ External setup (creating the bot, the token, the webhook secret, and calling
 `setWebhook`) happens outside the code — see
 [../docs/integrations/admin-integrational-homework.md](../docs/integrations/admin-integrational-homework.md).
 
-This app declares no further surface: no MCP server (`@mcp`), no widget
-(`@ui_widget`) — it reuses the chat component and ships no UI — no Data Bus handler,
-cron, or background job.
+Beyond the chat turn + Telegram webhook, the app declares two scene chat widgets
+(`@ui_widget` `chat_lg_solution` / `chat_lg_react`, mounted in `ui/scene/`) and the
+`scene_object_action` file-download operation. No MCP server (`@mcp`), no Data Bus
+handler, cron, or background job.
 
 ## The isolation boundary (per agent)
 
@@ -100,10 +101,10 @@ then `"anonymous"`; a blank agent id folds to `default`.
 
 ## The storage boundary (per agent)
 
-Each agent keeps its **own** store — routed onto KDCube's shared Postgres in its own
-per-agent schema when hosted, its own `DATABASE_URL` standalone (external /
-read-through from KDCube's view). The platform owns the **conversation record**
-(the app writes none). See [../docs/storage/README.md](../docs/storage/README.md).
+Each agent keeps its **own** store — routed onto KDCube's shared Postgres into ONE
+per-tenant/project schema with bundle-prefixed tables, the two agents separated by
+the `agent_id` column (no per-agent schema); its own `DATABASE_URL` standalone. The
+platform owns the **conversation record** (the app writes none). See [../docs/storage/README.md](../docs/storage/README.md).
 
 ## Config and secret keys that control this app
 
@@ -133,10 +134,9 @@ role onto `bundle_call_context.role_models`. See [../docs/README.md](../docs/REA
 
 ## Runtime notes
 
-- Each agent's graph is built lazily on the first turn that dispatches to it (its
-  checkpointer needs an event loop) and reused across turns/users; every turn is
-  keyed per (agent, user, conversation), so one graph per agent serves everyone
-  safely.
+- Each agent's graph is REBUILT every turn (`_build_graph`) — no in-process cache;
+  only the checkpointer connection is opened once per agent and reused. Every turn is
+  keyed per (agent, user, conversation), so any worker serves any turn safely.
 - The app hard-requires only `langgraph`, which the processor environment already
   provides. Each agent degrades if the optional Postgres checkpointer / `psycopg` v3
   are absent. For a hardened deploy that pins the full dependency set, use the

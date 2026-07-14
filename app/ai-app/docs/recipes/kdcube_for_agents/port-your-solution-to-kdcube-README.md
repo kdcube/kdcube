@@ -1,16 +1,19 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/recipes/kdcube_for_agents/port-your-solution-to-kdcube-README.md
 title: "Port Your Solution To A KDCube App"
-summary: "Executable procedure a coding agent (or engineer) follows to host an existing Python agent — in its own framework — as a KDCube app: vendor the solution unchanged, add a thin wrap (entry seam, state mapping, streaming, per-user isolation), then satisfy the canonical app-package contract. Worked instance: the lg-solution → lg-solution-port pair."
+summary: "Executable procedure a coding agent (or engineer) follows to host an existing Python agent — in its own framework — as a KDCube app: vendor the solution unchanged, add a thin wrap (entry seam, state mapping, streaming, per-user isolation, per-turn rebuild), then satisfy the canonical app-package contract. Worked instance: ported-langgraph-agents@2026-07-13 (poc/lg-solution + poc/lg-react-agent)."
 status: draft
-tags: ["recipes", "kdcube-for-agents", "port", "wrap", "langgraph", "streaming", "bundle", "app"]
-updated_at: 2026-07-12
+tags: ["recipes", "kdcube-for-agents", "port", "wrap", "langgraph", "streaming", "bundle", "app", "scaled-serving"]
+updated_at: 2026-07-14
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-write-bundle-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/chat/chat-stream-events-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/chat/chat-component-communication-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/chat/chat-widget-solution-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/reactive-turn-delivery-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/dataflow/connect-agentic-loop-to-ordered-delivery-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/cross-runtime-context-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/conversation/hosted-agent-conversation-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-test-bundle-README.md
 ---
 # Port Your Solution To A KDCube App
@@ -43,7 +46,7 @@ One before/after pair demonstrates every step. Read both:
 | | Path | Role |
 | --- | --- | --- |
 | **Before** | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/poc/lg-solution` | A standalone LangGraph research assistant: KB retrieval + per-user pgvector memory + a nested subagent, streaming via `astream_events`, Postgres-checkpointed. Runs on one machine for one user. Zero KDCube references. |
-| **After** | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/ported-langgraph-agents@2026-07-13` | ONE KDCube app hosting BOTH agents (`poc/lg-solution` + `poc/lg-prebuilt-agent`), vendored unchanged under `solution/`, dispatched by `agent_id` through a single `execute_core`. The recipe below teaches the single-agent port; the multi-agent dispatch is a small extension (`execute_core` selects the graph by `agent_id`). |
+| **After** | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/ported-langgraph-agents@2026-07-13` | ONE KDCube app hosting BOTH agents (`poc/lg-solution` + `poc/lg-react-agent`, a `langchain.agents.create_agent` ReAct agent with tools + MCP + code-exec), vendored unchanged under `solution/`, dispatched by `agent_id` through a single `execute_core`. The recipe below teaches the single-agent port; the multi-agent dispatch is a small extension (`execute_core` selects the graph by `agent_id`). Its `README.md` / `AGENTS.md` / `docs/` are the maintained reference for every point below. |
 
 The diff between them is exactly what this recipe produces: `solution/` copied
 verbatim, plus `entrypoint.py` + `identity.py` + `stream_adapter.py`, plus the
@@ -107,11 +110,11 @@ from the source project.
 
 ---
 
-## Phase 3 — Write the wrap (three glue concerns)
+## Phase 3 — Write the wrap (the glue)
 
-The wrap is the only hand-written code. Keep it in three focused files so each
-concern is visible and testable. Read the worked instance's versions as you
-write yours.
+The wrap is the only hand-written code: three focused files (entry seam, streaming,
+isolation) so each concern is visible and testable, plus one structural rule —
+rebuild every turn (3d). Read the worked instance's versions as you write yours.
 
 ### 3a. Entry seam + state mapping — `entrypoint.py`
 
@@ -180,6 +183,30 @@ Forwarding a raw or constant user id here is the silent bug that leaks one user'
 memory into another's turns. Keep this in its own module with a unit test that
 asserts cross-tenant keys differ.
 
+### 3d. Rebuild every turn — no in-process cache (scaled serving)
+
+KDCube is distributed: a turn can land on any processor worker or machine. So
+`execute_core` must **rebuild** the agent for each reactive event from rebuildable
+state — never cache the compiled graph, the framework runner, or any per-turn object
+on the long-lived entrypoint instance. Anything cached in one worker's memory is
+invisible to the next turn on another worker and silently drifts.
+
+- Build the graph **inside** `execute_core` (worked instance: `_build_graph(agent_id,
+  disabled_tools)` per turn), not once at load. A first-port instinct is to cache the
+  compiled graph "for speed" — don't; correctness beats the microseconds, and the
+  per-turn build is also what lets per-user tool opt-outs (§5) narrow the graph.
+- Reuse only true **connections** — a DB pool, a checkpointer connection opened once
+  (worked instance: `_open_checkpointer`, idempotent) — because a connection is not
+  rebuildable per-turn state.
+- Keep nothing per-turn on `self`; every mutable byte lives in shared storage keyed
+  by (user, conversation).
+
+This is what lets any worker serve any turn. The runtime restores only its context
+room across boundaries, never your cached Python objects — see
+[Cross-Runtime Context](../../runtime/cross-runtime-context-README.md). Add a
+regression test asserting the entrypoint holds no per-agent graph (the worked
+instance asserts `not hasattr(inst, "_graphs")`).
+
 Checkpoint (offline smoke, no DB, no API key): build the solution's entry with an
 in-memory fallback, run one turn through `stream_adapter`, and assert it emits
 steps, at least one answer `delta`, a `complete` carrying `final_answer`, and that
@@ -236,15 +263,38 @@ These are the choices a port must make on purpose, not by default.
 ### Persistence split
 
 Your solution keeps its **own** store (its DB, its checkpointer, its memory) —
-internal and unchanged. KDCube separately owns the **conversation record**: the
-platform records a minimal turn log for any framework, so the chat component's
-list / fetch / reload work with no record-writing code in your app. Document the
-split in `docs/storage/README.md` as an ownership matrix (owned / read-through /
-ephemeral / platform-owned). Reload/history is owned by
-`chat-component-communication-README.md` ("Stored Conversation Reload"). The full
-continuity model — the two memories (your agent's own store vs. the platform
-record), durable-checkpointer keying, the first-turn title, and restoring the turn
-cost/time on reload (a `post_run_hook` that calls `_save_events_artifact`) — is
+internal and unchanged. KDCube separately owns the **conversation record**, so the
+chat component's list / fetch / reload work with **no** record-writing code in your
+app. What "reload works" means for a run-to-completion turn:
+
+- The platform records a **minimal turn log** carrying the **user message, its
+  attachments, and any hosted files** plus your `state["final_answer"]` — so the
+  reloaded turn shows the user bubble + files, not just the answer.
+- The dynamic objects your turn **emits through comm** — citations, progress steps,
+  follow-ups — are captured full-payload and **replayed** on reload (the client
+  renders them exactly as live). The rule: reload content comes from **comm + the
+  turn log**, not from your runtime `state`. You get this by emitting through
+  `comm_ctx` (§3b); you write no reload code.
+- If your agent produces **downloadable files**, serve the `scene_object_action`
+  operation so a file card's Download resolves — delegate a `conv:fi:` ref to
+  `resolve_event_ref_action` (worked instance: `entrypoint.py::scene_object_action`).
+  Without it the file is shown but Download has no endpoint. Contract:
+  [chat-widget-solution-README.md](../../sdk/solutions/chat/chat-widget-solution-README.md).
+
+**Where your agent's own store goes (hosted).** Route it onto KDCube's shared
+Postgres (`self.pg_pool`) into the ONE per-tenant/project schema `schema_for_scope()`
+returns, in **bundle-prefixed tables** scoped by `(tenant, project, bundle_id, user_id
+[, agent_id])` columns. Do **not** create a per-agent / per-bundle / per-version
+schema and do **not** `CREATE EXTENSION` — that pollutes Postgres and is a documented
+anti-pattern (the platform provides `vector`/`pg_trgm`). Provision idempotently in
+`on_bundle_load`. Guardrail + pattern: `how-to-write-bundle-README.md` ("Relational
+(Postgres) storage rule").
+
+Document the split in `docs/storage/README.md` as an ownership matrix (owned /
+read-through / ephemeral / platform-owned). The full continuity model — the two
+memories (your agent's own store vs. the platform record), durable-checkpointer
+keying, the first-turn title, and restoring turn cost/time on reload (a
+`post_run_hook` that calls `_save_events_artifact`) — is
 [hosted-agent-conversation-README.md](../../sdk/solutions/conversation/hosted-agent-conversation-README.md).
 
 ### Dependencies
@@ -268,13 +318,41 @@ actually targets so the intent is recorded.
 Neither is required to run if the solution degrades gracefully when a dep is
 absent (the worked instance falls back to an in-memory checkpointer).
 
-### Model routing (optional hardening)
+### Capabilities: model pick, tools, code execution (optional)
 
-If the solution selects its model internally (its own env/config), the first port
-keeps that — it just works, and the KDCube per-user model picker stays invisible.
-Routing the model through KDCube roles (so admins set a ceiling and users pick per
-turn) is a later step, not part of the port. State which you chose in
-`docs/README.md`.
+The chat component's Capabilities widget can expose your agent's model and tools so
+an admin sets a ceiling and a user picks per turn. All optional; add when the product
+wants them. State which you chose in `docs/README.md`.
+
+**Model pick.** If the solution selects its model internally (its own env/config),
+the first port keeps that — it just works and the picker stays invisible. To route
+through KDCube roles: declare the generic `simple_model_pick` provider per agent
+(`surfaces.as_consumer.agents.<agent>`), naming an answer role + model list;
+`execute_core` resolves the pick and overlays it onto `bundle_call_context.role_models`
+around the graph run.
+
+- **Title-binding gotcha:** if you generate a first-turn conversation title using an
+  agent's answer role, ALSO bind that role in **base `config.role_models`**. The pick
+  overlay is scoped to the active agent's turn, but the title runs outside it —
+  without the base binding the role resolves to no model and the title comes back
+  empty ("Untitled conversation").
+
+**Tools (admin ceiling + user opt-out).** Declare your agent's tools as a
+**connection list** under `surfaces.as_consumer.agents.<agent>.tools`
+(`- {name, kind: python|mcp, alias, allowed}`) — the standard KDCube shape, so the
+Capabilities catalog lists them natively and the platform stores per-user opt-outs as
+a deny-map. Admin `allowed: false` is a hard ceiling; a user may opt OUT of an
+admin-allowed tool but never opt IN to a denied one. Bind exactly (admin-declared ∩
+user-enabled) each turn — the per-turn rebuild (§3d) is what makes this a clean
+narrowing (worked instance: `platform/tool_pick.py`, `capabilities.py`).
+
+**Code execution.** If a tool runs generated code, use the platform's isolated exec
+runtime — do NOT invent a sandbox. Root the per-turn workspace at
+`get_exec_workspace_root()` (a docker-mountable isolated workspace, the same concept
+the React path uses via `resolve_exec_runtime_profile`) so files the code produces are
+hosted into the conversation like attachments — reload + Download then work via the
+Persistence-split machinery. It runs wherever the platform runs code; no separate
+Docker requirement (worked instance: `platform/code_exec.py`).
 
 ### Ingress beyond chat (optional)
 
@@ -297,8 +375,11 @@ In order:
 3. **Package validation** — the shared bundle suite + compile/import checks
    (`how-to-test-bundle-README.md`).
 4. **Live run** — with a real model + the solution's DB reachable: confirm the
-   answer streams token-by-token in the chat component and that the turn appears
-   in the conversation list and on reload (the platform-owned record).
+   answer streams token-by-token; the turn appears in the conversation list; and on
+   **reload** the user message, its attachments, any hosted files, and the emitted
+   citations/steps/followups all come back (the platform-owned record). If the agent
+   hosts files, confirm **Download** works (`scene_object_action`); if it names the
+   conversation, confirm the **title** appears (role bound in base `role_models`).
 
 ---
 
@@ -307,10 +388,13 @@ In order:
 ```
 your Python agent (unchanged)          KDCube adds (the wrap + package)
 ──────────────────────────────         ────────────────────────────────
-solution/  (vendored verbatim)   ──►    entrypoint.py   drive it via execute_core
-  its graph / framework                 stream_adapter  its stream → comm_ctx
-  its memory + persistence              identity.py     platform identity → its keys
-  its streaming loop                    + canonical package (docs/interface/config/tests)
+solution/  (vendored verbatim)   ──►    entrypoint.py   drive it via execute_core,
+  its graph / framework                                 REBUILT every turn (no cache)
+  its memory + persistence              stream_adapter  its stream → comm_ctx
+  its streaming loop                    identity.py     platform identity → its keys
+                                        + canonical package (docs/interface/config/tests)
+                                        + (optional) capabilities / tools / code-exec
+                                                     / file download / conversation title
 ```
 
-Keep your framework. Add a wrap. Ship an app.
+Keep your framework. Add a wrap. Rebuild it per turn. Ship an app.

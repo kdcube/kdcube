@@ -44,18 +44,16 @@ The **processor is only an orchestrator**. Everything app-specific happens from
 
    AGENTS = {
      "lg-solution": AgentSpec(role="lg-solution.answer",
-                              schema="ported_langgraph_agents__lg_solution",
                               build_graph=_build_solution_graph,
                               stream=_stream_solution,   ← dedicated-answer-node adapter
                               build_inputs=_solution_inputs),
      "lg-react": AgentSpec(role="lg-react.answer",
-                              schema="ported_langgraph_agents__lg_react",
                               build_graph=_build_prebuilt_graph,
-                              stream=_stream_prebuilt,   ← looping-agent-node adapter
+                              stream=_stream_prebuilt,   ← looping model-node adapter
                               build_inputs=_prebuilt_inputs),
    }
 
-   graph = _ensure_graph(agent_id)         per-agent lazy CACHE (own deps/checkpointer/schema)
+   graph = _build_graph(agent_id, disabled_tools)   REBUILT this turn (no cache; reuses the checkpointer)
    inputs, run_config = spec.build_inputs(question, turn_identity(state, agent_id))
    role_models = resolve_turn_role_models(self, state, agent_id)   (active agent's pick)
    answer = spec.stream(graph, inputs, run_config)   → comm_ctx.step/delta/complete
@@ -81,7 +79,8 @@ Teaching point: **different agent shapes → different stream adapters, selected
 
 Both ingresses drive the **same** `execute_core`. The webhook drives the default
 agent (`lg-solution`); the reactive chat turn dispatches on whatever `agent_id` the
-turn carries. No MCP, widget, Data Bus handler, cron, or background job. The
+turn carries. Plus two scene chat widgets + `scene_object_action` (file download);
+no MCP server, Data Bus handler, cron, or background job. The
 OpenAPI `paths` map carries the one HTTP path (the webhook); both surfaces are also
 under `x-kdcube-surfaces`.
 
@@ -114,8 +113,8 @@ under `x-kdcube-surfaces`.
    ├─▶ the chat component + the Telegram SDK (reusable)     [now]
    │
    └─▶ each agent's OWN store, on KDCube's SHARED Postgres  [now]  pg_pool
-         PER-AGENT schema: ported_langgraph_agents__lg_solution
-                           ported_langgraph_agents__lg_react
+         ONE schema kdcube_{tenant}_{project}; tables ported_langgraph_agents_memories/_kb
+         agents separated by the agent_id COLUMN (no per-agent schema)
          lg-solution: per-user memory + KB + checkpointer; lg-react: checkpointer
 ```
 
@@ -124,19 +123,19 @@ under `x-kdcube-surfaces`.
 ```text
  data kind                        local (before)        hosted (KDCube backend)
  ──────────────────────────────   ───────────────────   ─────────────────────────────
- lg-solution memory + KB          own PG                pg_pool, schema __lg_solution
- lg-solution checkpointer         own PG                pg_pool, schema __lg_solution
- lg-react checkpointer         own PG                pg_pool, schema __lg_react
+ lg-solution memory + KB          own PG                pg_pool, tables ..._memories/_kb, agent_id col
+ lg-solution checkpointer         own PG                pg_pool, kdcube_{tenant}_{project}
+ lg-react checkpointer            own PG                pg_pool, kdcube_{tenant}_{project}
  conversation record              (none)                platform conversation record
 ```
 
 The ONLY selection is the injection point — no runtime toggle: `pg_pool` present →
-KDCube shared Postgres + the agent's own schema (HOSTED); absent → the agent's own
+KDCube shared Postgres + `schema_for_scope()` (HOSTED); absent → the agent's own
 `DATABASE_URL` (LOCAL/poc); unreachable → empty recall + a MemorySaver (OFFLINE).
 `pg_pool` is asyncpg while the agents use psycopg v3, so `platform/pg_target.py`
 derives a psycopg DSN from the same `get_settings()` PG* fields the pool is built
-from. The two per-agent schemas + the identity gate's `agent_id` fold are what keep
-the two agents' state from ever mixing.
+from. The `agent_id` COLUMN + the identity gate's `agent_id` fold are what keep the
+two agents' state from ever mixing — one shared schema, never one per agent.
 
 ---
 
@@ -146,18 +145,21 @@ the two agents' state from ever mixing.
  ported-langgraph-agents@2026-07-13/
    entrypoint.py         composition root: LGPortedAgentsBundle(BaseEntrypointWithEconomics);
                          execute_core DISPATCHES on agent_id over the AGENTS registry;
-                         per-agent lazy graph cache; the telegram_webhook @api
+                         REBUILDS the graph per turn; telegram_webhook + scene widgets
+                         + scene_object_action @api
    platform/             the shared KDCube integration
      identity.py           platform identity + agent_id -> each agent's per-user keys
-     pg_target.py          storage edge -> pg_pool, a per-agent schema (agent_schema)
+     pg_target.py          storage edge -> pg_pool, ONE shared schema + agent_id column
      stream_solution.py    dedicated-answer-node astream_events(v2) -> comm_ctx
-     stream_prebuilt.py    looping-agent-node astream_events(v2) -> comm_ctx
-     capabilities.py       per-turn, per-agent model pick
-     tools_mcp.py          lg-react's tools seam (plain | mcp | both)
+     stream_prebuilt.py    looping model-node astream_events(v2) -> comm_ctx
+     capabilities.py       per-turn, per-agent model pick (role_models overlay)
+     tool_pick.py          lg-react's tool inventory (admin ∩ user-enabled)
+     tools_mcp.py          lg-react's MCP tools seam
+     code_exec.py          lg-react's code-execution tool (files hosted to the conversation)
      telegram.py           the shared ingress (thin wiring over the Telegram SDK)
    solution/
      lg_solution/          the research graph (vendored; retrieve->plan->[delegate]->answer)
-     lg_prebuilt/          the create_react agent (vendored; agent<->tools loop)
+     lg_prebuilt/          the create_agent ReAct agent (vendored; model<->tools loop)
    config/               bundles.template.yaml + bundles.secrets.template.yaml
    interface/            interface README + OpenAPI (x-kdcube-surfaces)
    docs/                 README (design), arch (this), storage, journal
@@ -182,9 +184,9 @@ the two agents' state from ever mixing.
    │  external_events_text(state) -> question
    │  turn_identity(state, agent_id) -> user_id (t:p:AGENT:user), thread_id
    ▼
- spec.stream( _ensure_graph(agent_id).astream_events(inputs, {thread_id}, v2) )
+ spec.stream( _build_graph(agent_id, disabled_tools).astream_events(inputs, {thread_id}, v2) )
    lg-solution: retrieve -> plan -> [delegate] -> answer   (dedicated answer node)
-   lg-react: agent <-> tools (loops); final agent turn is the answer
+   lg-react: model <-> tools (loops); final model turn is the answer
    │  every event ▶ the agent's stream adapter ▶ comm_ctx.delta/step/complete ▶ chat UI
    ▼
  state["final_answer"] = answer
