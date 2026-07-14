@@ -719,17 +719,25 @@ async def resolve_ingress_conversation_id(
         # A newly created conversation writes its conversation.state row before
         # the HTTP ack, while searchable turn artifacts may arrive later in the
         # processor. Treat that state row as sufficient ownership evidence so a
-        # rapid follow-up does not 404 during the indexing gap.
+        # rapid follow-up does not read as a fresh conversation during the
+        # indexing gap.
         exists = await _conversation_state_row_exists(
             conversation_browser,
             user_id=owner_id,
             conversation_id=conversation_id,
         )
-    if not exists:
-        raise HTTPException(status_code=404, detail="Conversation not found")
 
     message_data["conversation_id"] = conversation_id
-    return conversation_id, False
+    if exists:
+        return conversation_id, False
+
+    # A supplied id that resolves to nothing in this user's namespace is a
+    # client-minted conversation that has not been created yet — e.g. the client
+    # mints a stable id to anchor a per-conversation model pick before the first
+    # turn is sent. Conversation storage is keyed by (user_id, conversation_id),
+    # so this id can only ever address the caller's own conversation; create it
+    # here with the supplied id (first-class client ids) rather than rejecting.
+    return conversation_id, True
 
 
 async def process_chat_message(
