@@ -675,6 +675,14 @@ class ContextRAGClient:
             tags=tags,
             ttl_days=365, user_type=user_type, embedding=None, message_id=message_id
         )
+        # Any turn-log write (React's rich log, or the minimal fallback) marks
+        # the turn recorded, so the framework-neutral fallback stays a no-op
+        # when a log already exists this turn.
+        try:
+            from kdcube_ai_app.apps.chat.sdk.runtime.turn_recording import mark_turn_log_recorded
+            mark_turn_log_recorded()
+        except Exception:
+            pass
         return {"hosted_uri": hosted_uri, "message_id": message_id, "rn": rn}
 
     async def materialize_turn(

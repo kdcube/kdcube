@@ -18,7 +18,7 @@ from typing import Optional, Any, Dict, List, AsyncIterator, Callable, Awaitable
 
 from pydantic import BaseModel, Field
 from langchain_core.embeddings import Embeddings
-from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage, AIMessage, AIMessageChunk
+from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage, AIMessage, AIMessageChunk, ToolMessage
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 from kdcube_ai_app.apps.chat.reg import MODEL_CONFIGS, EMBEDDERS, model_caps
@@ -1667,6 +1667,16 @@ class ModelServiceBase:
             if temperature_supported:
                 stream_kwargs["temperature"] = temperature
 
+            if tools and not tools_support:
+                # The caller bound tools but this model's caps don't declare tool
+                # support, so they are dropped here — the model then answers in prose
+                # ("let me search…") without ever emitting a tool call, and a ReAct
+                # loop ends after one round. Surface it loudly instead of silently.
+                logger.warning(
+                    "[model.tools] %d tool(s) DROPPED: model=%s has no declared tool support "
+                    "(model_caps tools=False). A tool-using agent on this model cannot call tools.",
+                    len(tools or []), model_name,
+                )
             if tools and tools_support:
                 stream_kwargs["tools"] = tools
                 if tool_choice is not None:
@@ -1987,25 +1997,94 @@ class ModelServiceBase:
                         else:
                             convo.append({"role": "user", "content": m.content})
 
-                elif isinstance(m, AIMessage):
-                    # Handle tool calls in additional_kwargs
-                    addkw = m.additional_kwargs or {}
-                    tool_calls = addkw.get("tool_calls")
+                elif isinstance(m, ToolMessage):
+                    # A tool result. Anthropic carries it as a `tool_result` block on
+                    # a USER turn, referencing the assistant's `tool_use` id. LangChain
+                    # / create_agent append it as a ToolMessage after the AIMessage that
+                    # made the call; without converting it here the model never sees the
+                    # result and re-issues the SAME tool call every turn until the graph
+                    # hits its recursion limit. Consecutive tool results (parallel calls)
+                    # merge into one user turn so provider turn-alternation holds.
+                    result_content = m.content if isinstance(m.content, str) else json.dumps(m.content)
+                    tool_result_block = {
+                        "type": "tool_result",
+                        "tool_use_id": getattr(m, "tool_call_id", None) or "",
+                        "content": result_content,
+                    }
+                    last = convo[-1] if convo else None
+                    if (
+                        isinstance(last, dict)
+                        and last.get("role") == "user"
+                        and isinstance(last.get("content"), list)
+                        and last["content"]
+                        and isinstance(last["content"][0], dict)
+                        and last["content"][0].get("type") == "tool_result"
+                    ):
+                        last["content"].append(tool_result_block)
+                    else:
+                        convo.append({"role": "user", "content": [tool_result_block]})
 
-                    if tool_calls:
-                        content_blocks = []
-                        if m.content:
-                            content_blocks.append({"type": "text", "text": m.content})
-                        for tc in tool_calls:
-                            content_blocks.append({
+                elif isinstance(m, AIMessage):
+                    # Tool calls: LangChain / create_agent parse them onto `.tool_calls`
+                    # ({name, args, id}); some native flows carry the raw list on
+                    # additional_kwargs ({id, name, input}). Prefer the parsed attribute
+                    # (reading ONLY additional_kwargs silently dropped create_agent's
+                    # tool_use block, breaking the ReAct loop).
+                    addkw = m.additional_kwargs or {}
+                    parsed_tool_calls = getattr(m, "tool_calls", None) or []
+                    raw_tool_calls = addkw.get("tool_calls") or []
+
+                    tool_use_blocks = []
+                    for tc in parsed_tool_calls:
+                        tool_use_blocks.append({
+                            "type": "tool_use",
+                            "id": tc.get("id"),
+                            "name": tc.get("name"),
+                            "input": tc.get("args") or {},
+                        })
+                    if not tool_use_blocks:
+                        for tc in raw_tool_calls:
+                            tool_use_blocks.append({
                                 "type": "tool_use",
                                 "id": tc.get("id"),
                                 "name": tc.get("name"),
-                                "input": tc.get("input", {})
+                                "input": tc.get("input", {}),
                             })
+
+                    if tool_use_blocks:
+                        content_blocks = []
+                        if m.content:
+                            content_blocks.append({"type": "text", "text": m.content})
+                        content_blocks.extend(tool_use_blocks)
                         convo.append({"role": "assistant", "content": content_blocks})
                     else:
                         convo.append({"role": "assistant", "content": m.content})
+
+            # Anthropic rejects EMPTY text content blocks ("messages: text content
+            # blocks must be non-empty"). A degenerate turn — e.g. a prior model call
+            # that produced no text and no tool call (a failed/empty response) — leaves
+            # an assistant (or user) message with empty content that, replayed from
+            # history, would 400 the whole conversation. Substitute a minimal
+            # placeholder so the request is valid and the turn still runs.
+            _EMPTY_PLACEHOLDER = "(no content)"
+            for _msg in convo:
+                _c = _msg.get("content")
+                if isinstance(_c, str):
+                    if not _c.strip():
+                        _msg["content"] = _EMPTY_PLACEHOLDER
+                elif isinstance(_c, list):
+                    if not _c:
+                        _msg["content"] = _EMPTY_PLACEHOLDER
+                    else:
+                        for _blk in _c:
+                            if (
+                                isinstance(_blk, dict)
+                                and _blk.get("type") == "text"
+                                and not str(_blk.get("text") or "").strip()
+                            ):
+                                _blk["text"] = _EMPTY_PLACEHOLDER
+                elif not _c:
+                    _msg["content"] = _EMPTY_PLACEHOLDER
 
             final_system = sys_blocks if sys_blocks else None
 
