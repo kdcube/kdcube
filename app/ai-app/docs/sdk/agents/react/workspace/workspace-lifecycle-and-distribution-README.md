@@ -3,6 +3,7 @@ id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/workspace-life
 title: "ReAct Workspace Lifecycle & Distribution"
 summary: "Filesystem contract and lifecycle of the per-turn ReAct workspace (work/out), including local origin, runtime population, persistence, and Fargate/distributed snapshot transport."
 tags: ["sdk", "agents", "react", "workspace", "execution", "snapshot", "fargate", "distributed"]
+updated_at: 2026-07-14
 keywords: ["exec-workspace", "exec_YYYYMMDDHHMMSS", "workdir", "outdir", "timeline.json", "tool_calls_index.json", "user.log", "infra.log", "EXEC_SNAPSHOT", "build_exec_snapshot_workspace", "snapshot_exec_input", "py_code_exec_entry.py"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/workspace-model-README.md
@@ -65,6 +66,14 @@ Current behavior:
 - External owner refs such as `nmsp:`, `cnv:`, or `mem:` have no physical path
   until `react.pull` invokes a registered namespace rehoster and returns the
   materialized `conv:fi:` / physical rows.
+
+Materialization authority comes from runtime context rather than the ref. ReAct
+may request a conversation, turn, or owner locator, but the trusted resolver
+retains the ingress-bound tenant, project, user, and authority. Conversation
+history lookup always includes `RuntimeCtx.user_id`; git lineage always includes
+tenant/project/user/conversation; namespace rehosters authorize under the
+carried request identity. A locator outside that scope produces no workspace
+bytes.
 
 Workspace implementation (`RuntimeCtx.workspace_implementation`):
 - `custom`

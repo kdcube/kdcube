@@ -3,8 +3,8 @@ id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-storage-README.
 title: "Artifact Storage"
 summary: "Where ReAct files, attachments, timeline artifacts, hosted file metadata, and conv:fi paths are stored and indexed."
 tags: ["sdk", "agents", "react", "artifacts", "storage"]
-updated_at: 2026-07-04
-keywords: ["artifact storage", "attachments", "turn artifacts", "timeline files", "conv:fi", "storage rules"]
+updated_at: 2026-07-14
+keywords: ["artifact storage", "attachments", "turn artifacts", "timeline files", "conv:fi", "storage rules", "bound user scope", "artifact materialization"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-realm-refs-and-workspace-paths-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-discovery-README.md
@@ -108,6 +108,27 @@ storage key:
 ```
 
 Visibility controls transport/UI emission, not byte persistence.
+
+## Ref Resolution Preserves The Bound User
+
+The model-facing `conv:fi:` ref contains conversation, turn, namespace, and
+relative path identity. It does not carry tenant or user authority.
+
+Historical artifact lookup receives `RuntimeCtx.user_id` from the authenticated
+runtime and queries the conversation index by:
+
+```text
+bound user_id + requested conversation_id + requested turn_id
+```
+
+The resolved turn-log artifact supplies trusted hosted metadata. Only then does
+the workspace service fetch the hosted bytes and copy them into the current
+workspace. A guessed ref for another user's conversation yields no artifact in
+the bound user's index scope, so no hosted bytes are materialized.
+
+External owner refs follow their registered owner resolver instead of this
+conversation-artifact path. The owner resolver applies its own authorization
+under the carried request identity.
 
 ## Conversation State Artifacts
 

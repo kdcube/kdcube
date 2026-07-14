@@ -4,7 +4,7 @@ title: "ReAct Realm Refs And Workspace Paths"
 summary: "Authoritative grammar for conversation-owned ReAct refs, conv_<conversation_id> body segments, current per-turn workspace paths, and pull/read/checkout boundaries."
 status: active
 tags: ["sdk", "agents", "react", "refs", "workspace", "namespaces", "events"]
-updated_at: 2026-07-04
+updated_at: 2026-07-14
 keywords:
   [
     "conv:fi",
@@ -18,6 +18,8 @@ keywords:
     "react.read",
     "react.pull",
     "react.checkout",
+    "ref authorization",
+    "bound user scope",
   ]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/workspace-model-README.md
@@ -98,6 +100,44 @@ conv:ar:conv_123.turn_2026-07-04-09-00-00-000.assistant.completion
 Conversation-owned family prefixes are not standalone model-facing
 namespaces. Runtime code, instructions, docs, descriptors, UI styling, and
 tests should use the `conv:<family>:` form.
+
+## A Ref Is A Locator, Not Authority
+
+ReAct can propose any ref string as a tool argument. Treat that string as
+untrusted input. Tenant, project, actor, user, and authority come from the
+runtime context established before the model runs.
+
+The resolver owns access:
+
+```text
+ReAct proposes ref
+  conv:fi:conv_<conversation>.turn_<turn>.files/<path>
+       |
+       v
+trusted resolver combines locator with RuntimeCtx scope
+  tenant + project + bound user + current authority
+       |
+       +-- resolves in scope -> copy bytes into current workspace
+       +-- no in-scope object -> missing/denied result, no copied bytes
+```
+
+For conversation refs, the ref may select a conversation and turn. The user
+used by historical context lookup remains `RuntimeCtx.user_id`; the query is
+keyed by that user plus conversation and turn. Inventing another user's
+conversation id therefore does not select that other user.
+
+For git-backed project refs, runtime lineage is rooted by
+`tenant/project/user_id/conversation_id`. Changing the conversation segment in
+a ref preserves the bound tenant, project, and user. Absolute paths and parent
+traversal fail safe-path validation.
+
+External owner refs such as `mem:`, `task:`, and `cnv:` cross a registered
+trusted rehoster. The owner service authorizes the ref under the carried
+request identity before returning bytes. A custom rehoster is trusted app code
+and must enforce its owner contract.
+
+A compromised ReAct model can change which refs and tools it requests. It
+cannot use a ref to rewrite runtime identity, grants, or storage roots.
 
 ## Physical Workspace
 

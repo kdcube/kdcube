@@ -14,9 +14,10 @@ keywords:
     "PORTABLE_SPEC_JSON",
     "ContextVar restore",
   ]
-updated_at: 2026-06-26
+updated_at: 2026-07-14
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/runtime/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/tenant-project-user-and-execution-boundaries-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/runtime/fenced-runtime-bootstrap-and-reduce-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-runtime-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/exec/runtime-README.md
@@ -92,9 +93,44 @@ The context accessors live in:
 kdcube_ai_app/apps/chat/sdk/runtime/comm_ctx.py
 ```
 
-## What Does Not Cross
+## Model Arguments Do Not Select Runtime Identity
 
-These are not serialized:
+The host binds `REQUEST_CONTEXT` before model-facing tools run. Tenant,
+project, actor, user, authority provenance, routing, and accounting context
+come from authenticated ingress and trusted runtime resolution. A model/tool
+argument can name an object, conversation, turn, provider operation, or file
+ref; it cannot replace the bound user context.
+
+This distinction governs materialization across a runtime boundary:
+
+```text
+model/agent argument
+  untrusted object locator
+       |
+       v
+trusted resolver
+  RuntimeCtx tenant/project/user + carried authority
+       |
+       +-- in scope ------> materialize into current workspace
+       +-- outside scope -> missing/denied; materialize nothing
+```
+
+For ReAct conversation history, the runtime passes its bound `user_id` into
+the context index lookup even when the ref names another conversation and
+turn. For git-backed workspace history, lineage refs include
+`tenant/project/user_id/conversation_id`. For external owner refs, the
+registered owner resolver authorizes under the restored request identity.
+
+This remains true when model behavior is compromised. The model can alter the
+locator or tool arguments it proposes; the restored context continues to
+select the user and authority under which trusted storage and tools evaluate
+that request.
+
+## Portable Context And Trusted Runtime Configuration
+
+The request-context portion serializes identity, routing, authority,
+accounting, and other JSON-safe descriptors. These runtime objects stay in
+their owning process and are reconstructed where required:
 
 - Redis client objects
 - Postgres pools
@@ -102,11 +138,20 @@ These are not serialized:
 - Python callbacks
 - arbitrary provider/client objects
 - non-JSON selector functions
-- secrets
 - large documents or binary payloads
 
-The target runtime reconstructs trusted services from descriptor-backed runtime
-configuration and the restored identity descriptor.
+The complete `PORTABLE_SPEC_JSON` also contains `model_config`. In the current
+implementation, `ModelConfigSpec` can carry model-provider keys so a local child
+or trusted supervisor can rebuild `ModelService`. Docker/Fargate supervisor
+bootstrap can additionally receive descriptor payloads and resolve settings and
+secrets for trusted tool implementations.
+
+Split execution applies a second boundary. The restricted executor payload
+strips `PORTABLE_SPEC_JSON`, descriptor payloads, app/platform storage paths,
+tool implementation specs, and other privileged runtime globals. Generated
+code receives the narrow executor environment and calls trusted tools through
+the supervisor socket. Provider-account credentials and user secrets resolve
+through those trusted supervisor-side implementations.
 
 ## ReAct Agent Identity
 

@@ -4,7 +4,7 @@ title: "ReAct Workspace Model"
 summary: "Authoritative agent-facing contract for the sparse per-turn ReAct workspace, conv:fi refs, git/projects project state, files produced artifacts, git/snapshots state snapshots, and pull/checkout/read/search boundaries."
 status: active
 tags: ["sdk", "agents", "react", "workspace", "pull", "checkout", "announce", "artifacts"]
-updated_at: 2026-07-04
+updated_at: 2026-07-14
 keywords:
   [
     "react workspace",
@@ -16,6 +16,8 @@ keywords:
     "react.pull",
     "react.checkout",
     "react.rg",
+    "materialization authorization",
+    "bound user scope",
   ]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-realm-refs-and-workspace-paths-README.md
@@ -135,6 +137,32 @@ Example:
 
 If a ref is visible in timeline but absent from LOCAL, it is not on disk now.
 Pull it before local search or byte-level work.
+
+## Who Requests And Who Materializes
+
+ReAct decides which locator to request. The runtime decides which identity and
+authority apply to that request. These are separate decisions.
+
+| Step | Owner | Security meaning |
+| --- | --- | --- |
+| Propose ref | ReAct/model | Untrusted locator input; it grants no access. |
+| Bind scope | Ingress/runtime | Tenant, project, actor, user, and authority are established outside model output. |
+| Resolve | Conversation store, git workspace service, or owner rehoster | Lookup executes under the bound user/authority scope. |
+| Materialize | Trusted workspace service | Successfully resolved bytes are copied into the current workspace. |
+| Execute | Generated-code runtime | Code reads only the resulting physical workspace view. |
+
+For `conv:fi:` history, a ref may name a conversation and turn. The context
+lookup still receives the runtime-bound `user_id`, so the effective lookup is
+`bound user + requested conversation + requested turn`. Git-backed workspace
+lineage similarly remains rooted at
+`tenant/project/bound user/conversation`.
+
+For external owner refs, the namespace rehoster resolves under the carried
+request identity and its own owner policy. If resolution yields no in-scope
+object, no bytes are placed in the workspace.
+
+This rule holds for compromised model behavior: changing a ref string changes
+the requested locator, while the bound user and authority remain unchanged.
 
 ## Pull
 

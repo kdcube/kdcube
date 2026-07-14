@@ -15,8 +15,9 @@ keywords:
     "iso runtime",
     "bundle runtime",
   ]
-updated_at: 2026-06-11
+updated_at: 2026-07-14
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/tenant-project-user-and-execution-boundaries-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/runtime/cross-runtime-context-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/runtime/fenced-runtime-bootstrap-and-reduce-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-runtime-README.md
@@ -32,8 +33,19 @@ they do not all share one Python process, one thread, or one set of live Python
 objects. This directory documents what crosses those boundaries and which
 surfaces must be reconstructed in the target runtime.
 
+For the complete deployment, user, authority, and generated-code boundary map,
+read [Tenant, User, Authority, And Execution Boundaries](tenant-project-user-and-execution-boundaries-README.md).
 For the portable context contract, read
 [Cross-Runtime Context](cross-runtime-context-README.md).
+
+## Boundary Reading Order
+
+| Need | Read |
+| --- | --- |
+| Separate tenant/project scope, concurrent users, Connection Hub authority, apps, and reusable agent-code isolation | [Tenant, User, Authority, And Execution Boundaries](tenant-project-user-and-execution-boundaries-README.md) |
+| Know which identity and descriptors cross runtime transitions | [Cross-Runtime Context](cross-runtime-context-README.md) |
+| Bootstrap and reduce a scoped execution fence | [Fenced Runtime Bootstrap And Reduce](fenced-runtime-bootstrap-and-reduce-README.md) |
+| Operate the supervisor/executor isolation model | [ISO Runtime](../exec/README-iso-runtime.md) |
 
 ## Runtime Surface Map
 

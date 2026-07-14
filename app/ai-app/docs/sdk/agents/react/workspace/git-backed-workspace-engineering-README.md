@@ -4,6 +4,7 @@ title: "Git-Backed Workspace Engineering"
 summary: "Git-backed React workspace model, immutable per-turn version refs, explicit workspace pull and checkout hydration, sparse current-turn repos, point-wise hosted binary hydration, and lineage-only git isolation."
 status: experimental
 tags: ["sdk", "agents", "react", "workspace", "git", "artifacts"]
+updated_at: 2026-07-14
 keywords:
   [
     "git workspace",
@@ -315,6 +316,20 @@ Isolation goes beyond network:
 - immutable version refs are resolved in the lineage-only mirror outside exec and are used to materialize explicit `react.pull(...)` requests
 - exec must not see other users' branches, other conversations' branches, unrelated tags, or broader remote metadata
 - a setup that removes network but still exposes a broader shared git cache through local metadata is not sufficient
+
+The agent does not select this lineage identity. A `conv:fi:` request may
+provide a conversation id, turn id, and relative project path. Trusted runtime
+code keeps tenant, project, and `RuntimeCtx.user_id`, then derives the lineage
+root and immutable ref from:
+
+```text
+tenant / project / bound user_id / requested conversation_id / requested turn_id
+```
+
+The conversation segment can select another conversation within the bound
+user's lineage space. It cannot select another tenant, project, or user. The
+agent-supplied ref is therefore a locator inside a runtime-selected lineage,
+not a lineage selector with authority of its own.
 
 If another conversation later needs the same project history, that should be
 designed as a separate problem. It is not part of this first workspace model.
