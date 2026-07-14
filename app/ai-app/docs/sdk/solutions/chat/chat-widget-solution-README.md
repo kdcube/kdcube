@@ -225,7 +225,7 @@ chatbot/ReAct solution stack:
 | stream transport | Live assistant events through SSE or Socket.IO. |
 | dry-run preview operation | Rendering `external_events[]` without invoking ReAct. |
 | file/artifact operations | Showing and dragging chat artifacts. |
-| object-action facade | Resolving context-chip object actions such as `capabilities`, `open`, and `download`; current compatible alias is `canvas_object_action`. |
+| object-action facade (`scene_object_action`) | Resolving object-ref actions — `capabilities`, `open`, and `download` — for BOTH a chat file card's Download button and context-chip actions. A bundle whose chat produces downloadable files (attachments, code-exec output, deliverables) MUST serve this operation; without it the file is shown but Download has no endpoint. It resolves any object ref (files, boards, provider refs), so the name is surface-neutral. For a `conv:fi:` conversation file, delegate to the platform file resolver (`resolve_event_ref_action`), which reads the bytes from conversation storage and returns a `download_url`. See the ported-langgraph bundle for a board-less example. |
 
 The widget defaults match the task-tracker composition bundle. Other bundles
 can override the event-source profile either at build time with Vite env
@@ -297,7 +297,7 @@ uses the same resolver-backed operation that canvas pins use:
 user clicks context chip
   -> chat widget calls the app object-action facade
        { action: capabilities, object_ref }
-     (current compatible operation name: canvas_object_action)
+     (operation name: scene_object_action)
   -> owner resolver returns capabilities plus default_open_effect_action
   -> chat runs exactly that declared effect
        default_open_effect_action=download -> object.action(download)
