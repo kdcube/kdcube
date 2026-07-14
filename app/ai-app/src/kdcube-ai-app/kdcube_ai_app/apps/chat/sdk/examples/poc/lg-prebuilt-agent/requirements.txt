@@ -1,0 +1,8 @@
+langgraph>=1.0.0
+langgraph-checkpoint-postgres>=2.0.0
+langchain-core>=1.0.0
+langchain-openai>=0.2.0
+# Optional: only needed when LG_PREBUILT_PROVIDER=anthropic
+langchain-anthropic>=0.2.0
+psycopg[binary]>=3.1
+pydantic>=2.0
