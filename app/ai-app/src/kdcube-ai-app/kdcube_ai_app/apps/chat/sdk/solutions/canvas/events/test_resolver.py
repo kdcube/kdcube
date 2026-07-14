@@ -40,7 +40,7 @@ def test_canvas_artifact_download_returns_url_not_json_bytes():
     assert result["size"] == len(b"<html>Hello</html>")
     assert "content_base64" not in result
     assert result["download_url"].startswith(
-        "/api/integrations/bundles/tenant/project/bundle%401/operations/canvas_object_download?"
+        "/api/integrations/bundles/tenant/project/bundle%401/operations/scene_object_download?"
     )
     assert "object_ref=cnv%3Acanvas%2Fusers%2Fuser-1%2Ffiles%2Freport.html" in result["download_url"]
 

@@ -632,13 +632,13 @@ class WorkspaceEntrypoint(BaseEntrypointWithEconomics):
             ),
         )
 
-    @api(method="POST", alias="canvas_object_action", route="operations", **_api_visibility("canvas_object_action"))
-    async def canvas_object_action(self, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Dict[str, Any]:
+    @api(method="POST", alias="scene_object_action", route="operations", **_api_visibility("scene_object_action"))
+    async def scene_object_action(self, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Dict[str, Any]:
         payload = payload_from_call(data, **kwargs)
         return await self._canvas_service().object_action(payload)
 
-    @api(method="GET", alias="canvas_object_download", route="operations", **_api_visibility("canvas_object_action"))
-    async def canvas_object_download(self, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> BundleBinaryResponse:
+    @api(method="GET", alias="scene_object_download", route="operations", **_api_visibility("scene_object_action"))
+    async def scene_object_download(self, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> BundleBinaryResponse:
         payload = payload_from_call(data, **kwargs)
         return await self._canvas_service().object_download(payload)
 

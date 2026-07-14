@@ -692,6 +692,12 @@ class LGPortedAgentsBundle(BaseEntrypointWithEconomics):
         # before the agent ran (see above), so it is unaffected by a turn error.
         state["final_answer"] = (result or {}).get("final_answer") or (result or {}).get("answer") or ""
 
+        # Surface the files this turn hosted (run_python outputs) so the framework-
+        # neutral turn recorder persists their refs — reload re-surfaces the files and
+        # a later turn can pull them by ref. Empty when code exec was off/unused.
+        if code_exec_ctx is not None and getattr(code_exec_ctx, "hosted_files", None):
+            state["hosted_files"] = list(code_exec_ctx.hosted_files)
+
         # Turn timing: emit the SAME `chat.turn.summary` event React authors, so the
         # turn's elapsed time is recorded (and, via the events artifact, restored on
         # reload) alongside the economics door's `accounting.usage` $ badge. The cost
@@ -968,3 +974,59 @@ class LGPortedAgentsBundle(BaseEntrypointWithEconomics):
         platform identity and drives the SAME turn (`execute_core`) for the DEFAULT
         agent, then renders the answer back over the Bot API. Thin: routes only."""
         return await telegram_ingress.handle_webhook(self, request=request, **update)
+
+    @api(
+        method="POST",
+        alias="scene_object_action",
+        route="operations",
+        **_api_visibility("scene_object_action"),
+    )
+    async def scene_object_action(self, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Dict[str, Any]:
+        """Serve the chat component's generic object-action operation for THIS bundle's
+        hosted conversation FILES. The chat file card calls `scene_object_action` for
+        any object ref; this bundle has no canvas/scene board — only conversation files
+        a turn produced (e.g. code-exec output). For a `conv:fi:` file ref, delegate to
+        the platform file resolver: it reads the bytes from conversation storage and
+        returns a `download_url` the client fetches. Without this operation the file is
+        hosted and shown but the Download action has no endpoint to serve it.
+
+        Identity: the file is stored under the turn owner (svc-first — see
+        `resolve_request_identity`), so the download resolves under that same owner;
+        tenant/project come from the bundle runtime."""
+        from kdcube_ai_app.apps.chat.sdk.solutions.react.events.resolver import resolve_event_ref_action
+        from kdcube_ai_app.apps.chat.sdk.event_identity import resolve_request_identity
+
+        payload: Dict[str, Any] = (
+            {str(k): v for k, v in data.items()} if isinstance(data, dict)
+            else {
+                str(k): v for k, v in kwargs.items()
+                if k not in {"request", "alias", "route", "endpoint_alias"} and v is not None
+            }
+        )
+        ident = self.runtime_identity()
+        owner = ""
+        try:
+            owner = str(resolve_request_identity(self.comm).get("owner") or "").strip()
+        except Exception:
+            owner = ""
+        user_id = str(
+            payload.get("user_id") or owner or getattr(self.comm, "user_id", "") or ""
+        ).strip()
+        result = await resolve_event_ref_action(
+            payload,
+            tenant=ident.get("tenant") or "default",
+            project=ident.get("project") or "default",
+            user_id=user_id,
+            storage_path=str(getattr(self.settings, "STORAGE_PATH", "")),
+            require_embedded_conversation=True,
+        )
+        try:
+            LOGGER.info(
+                "[ported-langgraph] scene_object_action action=%s ref=%s user=%s ok=%s error=%s",
+                payload.get("action"),
+                payload.get("ref") or payload.get("object_ref") or payload.get("event_ref"),
+                user_id, (result or {}).get("ok"), (result or {}).get("error"),
+            )
+        except Exception:
+            pass
+        return result

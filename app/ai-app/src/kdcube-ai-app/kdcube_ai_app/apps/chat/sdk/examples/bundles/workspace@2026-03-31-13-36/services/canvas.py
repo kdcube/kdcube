@@ -826,7 +826,7 @@ class WorkspaceCanvasService:
             )
         except Exception as exc:
             result = {"ok": False, "user_id": user_id, "error": str(exc)}
-        self.log_failure("canvas_object_action", payload, result)
+        self.log_failure("scene_object_action", payload, result)
         return result
 
     async def object_download(self, payload: Mapping[str, Any]) -> BundleBinaryResponse:

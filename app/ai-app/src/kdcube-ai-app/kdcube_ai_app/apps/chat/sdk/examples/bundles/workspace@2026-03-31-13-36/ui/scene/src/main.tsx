@@ -525,7 +525,7 @@ function App() {
   const contextDragBroker = useMemo(() => createContextDragBroker({
     logger: console,
     objectAction: async (request) => {
-      const response = await postOperation<Record<string, unknown>, SceneRecord>(ctxRef.current, 'canvas_object_action', {
+      const response = await postOperation<Record<string, unknown>, SceneRecord>(ctxRef.current, 'scene_object_action', {
         action: 'open',
         object_ref: request.object_ref,
         mime: (request.context as SceneContextItem | undefined)?.mime,

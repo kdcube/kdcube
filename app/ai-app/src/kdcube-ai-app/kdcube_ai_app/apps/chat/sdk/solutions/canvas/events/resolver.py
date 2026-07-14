@@ -470,7 +470,7 @@ class CanvasArtifactResolver(CanvasObjectResolver):
         return {
             **self.base_response(ref=ref, action=action),
             "ok": False,
-            "error": "unsupported_canvas_object_action",
+            "error": "unsupported_scene_object_action",
             "status": 400,
         }
 
@@ -537,7 +537,7 @@ class CanvasArtifactResolver(CanvasObjectResolver):
         }
         download_url = _bundle_operation_url(
             self.store,
-            "canvas_object_download",
+            "scene_object_download",
             {
                 "object_ref": ref,
                 "mime": meta.get("mime") or mime,

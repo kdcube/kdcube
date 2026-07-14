@@ -577,7 +577,7 @@ async function fetchDownloadUrlAsBlob(runtime: EngineRuntime, downloadUrl: strin
 
 export async function resolveObjectAction(runtime: EngineRuntime, params: ResolveObjectActionParams): Promise<ObjectActionResponse> {
   const { tenant, project } = requireScope(runtime)
-  const response = await fetch(operationsUrl(runtime, 'canvas_object_action', runtime.bundleId, tenant, project), {
+  const response = await fetch(operationsUrl(runtime, 'scene_object_action', runtime.bundleId, tenant, project), {
     method: 'POST',
     credentials: runtime.credentials,
     headers: await buildRequestHeaders(runtime, { 'Content-Type': 'application/json' }),
@@ -592,8 +592,8 @@ export async function resolveObjectAction(runtime: EngineRuntime, params: Resolv
     }),
   })
   const payload = await response.json().catch(() => null) as Record<string, unknown> | null
-  const body = payload && typeof payload === 'object' && 'canvas_object_action' in payload
-    ? payload.canvas_object_action as ObjectActionResponse
+  const body = payload && typeof payload === 'object' && 'scene_object_action' in payload
+    ? payload.scene_object_action as ObjectActionResponse
     : payload
   if (!response.ok || !body || body.ok === false) {
     const code = body && typeof body === 'object'

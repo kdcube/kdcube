@@ -480,7 +480,7 @@ export function createCanvasHost(config: CanvasHostConfig): CanvasHost {
     action: CanvasObjectActionName,
     activeCanvas: CanvasDefinition,
   ): Promise<CanvasObjectActionResponse> => (
-    postOperation<unknown, CanvasObjectActionResponse>(ctx, 'canvas_object_action', {
+    postOperation<unknown, CanvasObjectActionResponse>(ctx, 'scene_object_action', {
       action,
       object_ref: card.ref,
       card_id: card.id,
