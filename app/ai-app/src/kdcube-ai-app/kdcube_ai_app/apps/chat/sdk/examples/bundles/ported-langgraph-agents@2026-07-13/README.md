@@ -21,7 +21,7 @@ recipe. It hosts **two** standalone LangGraph/LangChain agents — vendored
 | agent_id | what it is | shape | stream adapter |
 | --- | --- | --- | --- |
 | `lg-solution` | a rich research graph (KB retrieval + per-user pgvector memory + a nested subagent) — the "before" is [`../../poc/lg-solution`](../../poc/lg-solution) | linear, with a **dedicated answer node** | `platform/stream_solution.py` |
-| `lg-react` | a `langchain.agents.create_agent` ReAct agent (plain tools + MCP + a code-exec tool; `SummarizationMiddleware` for context) — the "before" is [`../../poc/lg-react-agent`](../../poc/lg-react-agent) | ReAct loop, with a looping **`model` node** (no answer node) | `platform/stream_prebuilt.py` |
+| `lg-react` | a `langchain.agents.create_agent` ReAct agent (plain tools + MCP + a code-exec tool; `SummarizationMiddleware` for context) — the "before" is [`../../poc/lg-prebuilt-agent`](../../poc/lg-prebuilt-agent) | ReAct loop, with a looping **`model` node** (no answer node) | `platform/stream_prebuilt.py` |
 
 The teaching point: **different agent shapes → different stream adapters, selected
 by `agent_id`.** Everything else — identity, storage, capabilities, economics, the
@@ -39,7 +39,7 @@ conversation record, file download, the Telegram ingress — is shared platform 
 ported-langgraph-agents@2026-07-13/
   solution/
     lg_solution/       ← the research graph (vendored UNCHANGED from poc/lg-solution)
-    lg_prebuilt/       ← the create_agent ReAct agent (vendored from poc/lg-react-agent)
+    lg_prebuilt/       ← the create_agent ReAct agent (vendored from poc/lg-prebuilt-agent)
   platform/            ← the KDCube integration (shared across both agents):
     identity.py          platform identity + agent_id → each agent's per-user keys
     pg_target.py         storage edge → KDCube pg_pool, ONE shared schema + agent_id column
@@ -78,7 +78,7 @@ rebuildable state; nothing agent-specific is cached on the long-lived entrypoint
 object. The only reused handle is the **checkpointer connection** (opened once per
 agent, like a pool), because it is a connection, not rebuildable per-turn state.
 This is the "scaled serving" principle — see
-[docs/recipes](../../../../journal/26/07/port-your-solution-to-kdcube/) and the
+[Port Your Solution To A KDCube App](../../../../../../../../../docs/recipes/kdcube_for_agents/port-your-solution-to-kdcube-README.md) and the
 `_build_graph` / `_open_checkpointer` docstrings in `entrypoint.py`.
 
 ## Storage — ONE shared schema, agents separated by a column
@@ -155,6 +155,32 @@ answer role, and it runs OUTSIDE the per-turn pick overlay (and the pick is only
 wired for the active agent) — without the base binding the role resolves to no
 model and the title comes back empty. See [docs/README.md](docs/README.md).
 
+## Code execution (lg-react)
+
+Declaring the `code_exec` tool connection gives `lg-react` a `run_python` tool that
+runs the model's Python in the platform's isolated runtime (`get_exec_workspace_root()`).
+It is wired to behave like the built-in React code tool (`platform/code_exec.py` +
+`code_exec_tool.py`):
+
+- **A declared output contract** (like the real exec tool). `run_python` takes the
+  same params — `code` + `contract` (+ `prog_name`, `timeout_s`) — so the model can
+  PLAN the files it will produce; with a contract the code runs verbatim through the
+  platform contract runner (`run_exec_tool`) and only contracted files are hosted.
+  With NO contract it falls back to side-effects (plain relative paths auto-hosted).
+- **Files** the code produces are hosted into the conversation like attachments, so
+  they reload and Download through `scene_object_action`.
+- **A live exec widget** — the reusable `solutions/widgets/exec.py` streamer emits the
+  `code_exec.*` panel (program name → the contract → code → status
+  `gen → exec → done|error`), so the chat renders the same exec panel React shows. The
+  widget is built for exactly these inputs (program name, contract, code). No client change.
+- **Classified errors** reach the model so it reacts correctly: a **runtime/sandbox**
+  failure (`sandbox_execution_failed`) is a platform problem it may RETRY; a **program**
+  error is its own code to fix. Both are surfaced in the tool's text result, so a
+  failure is never silent. Contract: `docs/exec/exec-logging-error-propagation-README.md`.
+- **Available packages** are appended to the tool description
+  (`build_packages_installed_block()` — the same block the React exec tool surfaces),
+  so the model writes imports that actually resolve.
+
 ## Degradation
 
 With no provider key each agent runs its deterministic stub; with no reachable
@@ -181,7 +207,7 @@ neither agent implements — the correct default for a ported LangGraph agent.
 
 ## The generic procedure
 
-This bundle follows the port procedure a coding agent executes against an arbitrary
-Python project. The recipe (the executable steps) and its journal live under
-`kdcube_ai_app/journal/26/07/port-your-solution-to-kdcube/`; this bundle is the
-"one app, many agents" worked instance those steps point to.
+This app follows the port procedure a coding agent executes against an arbitrary
+Python project. The executable steps are in
+[Port Your Solution To A KDCube App](../../../../../../../../../docs/recipes/kdcube_for_agents/port-your-solution-to-kdcube-README.md);
+this app is the "one app, many agents" worked instance those steps point to.

@@ -281,6 +281,58 @@ def test_run_python_report_distinguishes_error_class() -> None:
     assert "Runtime/sandbox error" in rt and "RETRY" in rt
 
 
+def test_run_python_tool_description_lists_available_packages() -> None:
+    """The tool description carries the sandbox's `AVAILABLE PACKAGES` block (the same
+    one the React exec tool surfaces), so the model writes imports that resolve."""
+    tool_mod = _code_exec_tool_module()
+    tool = tool_mod.build_run_python_tool()
+    assert "AVAILABLE PACKAGES" in (tool.description or "")
+
+
+# ── contract-mode exec (declared output files) ───────────────────────────────
+
+def test_run_python_tool_exposes_contract_signature() -> None:
+    """The tool takes the same params as the real exec tool (contract/prog_name/
+    timeout_s) plus `code` (which the create_agent loop passes as an argument)."""
+    tool_mod = _code_exec_tool_module()
+    tool = tool_mod.build_run_python_tool()
+    args = set((tool.args or {}).keys())
+    assert {"code", "contract", "prog_name", "timeout_s"} <= args
+
+
+def test_begin_exec_widget_emits_program_name_and_contract(tmp_path: Path) -> None:
+    """When the model declares a contract, the widget shows the program name AND the
+    contract of files it will produce — the three inputs the widget is built for."""
+    mod = _code_exec_module()
+    ctx = _make_ctx(mod, tmp_path=tmp_path, exec_runner=_make_side_effects_runner())
+    captured: list = []
+
+    async def _delta(**kwargs):
+        captured.append(kwargs)
+
+    ctx.comm.delta = _delta
+    output_contract = {
+        "report": {"type": "file", "filepath": "turn_test/files/report.csv",
+                   "mime": "text/csv", "description": "the report", "visibility": "external"},
+    }
+    asyncio.run(mod._begin_exec_widget(ctx, "exec-1", "print(1)", prog_name="My Prog",
+                                       output_contract=output_contract))
+    subtypes = [d.get("sub_type") for d in captured]
+    assert "code_exec.program.name" in subtypes
+    assert "code_exec.code" in subtypes
+    assert "code_exec.contract" in subtypes
+
+
+def test_run_code_and_host_invalid_contract_is_program_error(tmp_path: Path) -> None:
+    """A malformed contract is the MODEL's error to fix (program), returned before any
+    sandbox runs — never a platform failure."""
+    mod = _code_exec_module()
+    ctx = _make_ctx(mod, tmp_path=tmp_path, exec_runner=_make_side_effects_runner())
+    result = asyncio.run(mod.run_code_and_host("open('x','w')", contract="not-a-list", ctx=ctx))
+    assert result["ok"] is False
+    assert result["error_kind"] == "program"
+
+
 # ── code wrapping + artifact conversion ──────────────────────────────────────
 
 def test_wrap_code_targets_hosted_files_namespace() -> None:

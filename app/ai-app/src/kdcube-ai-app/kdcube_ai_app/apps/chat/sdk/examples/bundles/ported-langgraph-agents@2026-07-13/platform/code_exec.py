@@ -613,9 +613,18 @@ def _program_name_from_code(code: str) -> str:
     return "Python program"
 
 
-async def _begin_exec_widget(ctx: "CodeExecContext", exec_id: str, code: str) -> Tuple[Optional[Any], float]:
-    """Create + prime the live code-exec widget: program name, the code, and the
-    gen→exec transition, BEFORE the run. Returns (widget|None, t0). Fail-open."""
+async def _begin_exec_widget(
+    ctx: "CodeExecContext",
+    exec_id: str,
+    code: str,
+    *,
+    prog_name: Optional[str] = None,
+    output_contract: Optional[Dict[str, Any]] = None,
+) -> Tuple[Optional[Any], float]:
+    """Create + prime the live code-exec widget BEFORE the run — program name, the
+    code, and (when the model declared one) the CONTRACT of files it will produce,
+    then the gen→exec transition. The widget is built for exactly these three inputs.
+    Returns (widget|None, t0). Fail-open."""
     import time as _time
     t0 = _time.perf_counter()
     comm = getattr(ctx, "comm", None)
@@ -631,9 +640,12 @@ async def _begin_exec_widget(ctx: "CodeExecContext", exec_id: str, code: str) ->
             execution_id=exec_id,
             turn_id=str(getattr(ctx, "turn_id", "") or ""),
         )
-        await widget.emit_program_name(_program_name_from_code(code))
+        await widget.emit_program_name((prog_name or "").strip() or _program_name_from_code(code))
         await widget.feed_code(code, completed=True)   # streams `code_exec.code` (activates, emits gen)
-        await widget.emit_status(status="exec")
+        if isinstance(output_contract, dict) and output_contract:
+            await widget.emit_contract(output_contract)   # `code_exec.contract` + auto status "exec"
+        else:
+            await widget.emit_status(status="exec")
         return widget, t0
     except Exception:
         LOGGER.info("[ported-langgraph] code_exec: exec widget begin failed (non-fatal)", exc_info=True)
@@ -658,15 +670,25 @@ async def _end_exec_widget(widget: Optional[Any], t0: float, *, ok: bool, error:
 async def run_code_and_host(
     code: str,
     *,
+    contract: Optional[Any] = None,
+    prog_name: Optional[str] = None,
     timeout_s: Optional[int] = None,
     ctx: Optional[CodeExecContext] = None,
 ) -> Dict[str, Any]:
-    """Run freeform Python in the isolated sandbox and host every produced file.
+    """Run Python in the isolated sandbox and host produced files.
 
-    Returns `{"ok", "stdout", "stderr", "files":[{rn, hosted_uri, mime,
-    filename}]}`. The file BYTES are never in the result — only refs, exactly like
-    a hosted attachment. FAIL-OPEN: no active scope / offline / a sandbox-harness
-    failure yields a clean error result, never an exception into the turn."""
+    Two modes, chosen by whether the model declared a `contract`:
+    - **contract mode** (a non-empty `contract` of output-file specs): the model
+      names the files it will produce (like the React exec tool); the code runs
+      VERBATIM via the platform contract runner (`run_exec_tool`) and only the
+      contracted files are hosted. The widget shows the declared contract.
+    - **side-effects mode** (no contract): freeform Python, wrapped so plain relative
+      paths land in the hosted namespace; every produced file is hosted.
+
+    Returns `{"ok", "stdout", "stderr", "files":[...], + error_kind/error on failure}`.
+    The file BYTES are never in the result — only refs. FAIL-OPEN: no active scope /
+    offline / a sandbox-harness failure yields a clean error result, never an
+    exception into the turn."""
     ctx = ctx or current_code_exec_context()
     LOGGER.info(
         "[ported-langgraph] code_exec: run_python CALLED ctx=%s enabled=%s code_len=%d",
@@ -693,29 +715,76 @@ async def run_code_and_host(
     workdir = ctx.workdir or (ctx.outdir.parent / "work")
     workdir.mkdir(parents=True, exist_ok=True)
     ctx.outdir.mkdir(parents=True, exist_ok=True)
-    wrapped = _wrap_code(code, turn_id=ctx.turn_id)
+
+    # Contract mode: the model DECLARED its output files. Build + normalize the output
+    # contract (to this turn). A bad contract is the MODEL's error to fix, not a
+    # platform failure.
+    output_contract: Optional[Dict[str, Any]] = None
+    normalized_contract: Optional[list] = None
+    if contract is not None and (not isinstance(contract, (list, str)) or contract):
+        try:
+            from kdcube_ai_app.apps.chat.sdk.tools.exec_tools import (
+                normalize_exec_contract_for_turn, build_exec_output_contract,
+            )
+            normalized_contract, _rewrites, c_err = normalize_exec_contract_for_turn(contract, turn_id=ctx.turn_id)
+            if c_err is None:
+                output_contract, normalized_contract, c_err = build_exec_output_contract(normalized_contract)
+            if c_err is not None:
+                return {
+                    "ok": False, "stdout": "", "stderr": str(c_err.get("message") or c_err), "files": [],
+                    "error": str(c_err.get("code") or "invalid_contract"), "error_kind": "program",
+                    "error_message": f"Your output contract is invalid: {c_err.get('message') or c_err}. Fix the contract and retry.",
+                }
+        except Exception as exc:
+            LOGGER.warning("[ported-langgraph] code_exec: contract build failed", exc_info=True)
+            return _error_result(
+                f"Failed to process the output contract: {type(exc).__name__}: {exc}",
+                code="invalid_contract", kind="program",
+            )
+
+    # Contract mode runs the code VERBATIM (the model writes to its declared paths, like
+    # the React exec tool); side-effects mode wraps it so plain relative paths are hosted.
+    contract_mode = bool(output_contract)
+    code_for_run = code if contract_mode else _wrap_code(code, turn_id=ctx.turn_id)
     runner = ctx.exec_runner or _default_exec_runner
 
     # Drive the live code-exec widget (same one React streams) around the run.
-    exec_widget, _widget_t0 = await _begin_exec_widget(ctx, exec_id, code)
+    exec_widget, _widget_t0 = await _begin_exec_widget(
+        ctx, exec_id, code, prog_name=prog_name, output_contract=output_contract,
+    )
 
     LOGGER.info(
-        "[ported-langgraph] code_exec: EXEC start exec_id=%s runner=%s runtime=%s timeout_s=%s workdir=%s outdir=%s",
-        exec_id, getattr(runner, "__name__", type(runner).__name__),
+        "[ported-langgraph] code_exec: EXEC start exec_id=%s mode=%s runtime=%s timeout_s=%s workdir=%s outdir=%s",
+        exec_id, "contract" if contract_mode else "side_effects",
         (ctx.exec_runtime or {}).get("type") or (ctx.exec_runtime or {}).get("runtime") or "?",
         int(timeout_s or ctx.timeout_s), workdir, ctx.outdir,
     )
     try:
-        envelope = await runner(
-            tool_manager=ctx.tool_subsystem,
-            code=wrapped,
-            timeout_s=int(timeout_s or ctx.timeout_s),
-            workdir=workdir,
-            outdir=ctx.outdir,
-            exec_id=exec_id,
-            exec_runtime=ctx.exec_runtime,
-            logger=ctx.logger,
-        )
+        if contract_mode:
+            from kdcube_ai_app.apps.chat.sdk.tools.exec_tools import run_exec_tool
+            envelope = await run_exec_tool(
+                tool_manager=ctx.tool_subsystem,
+                output_contract=output_contract,
+                code=code_for_run,
+                contract=normalized_contract or [],
+                timeout_s=int(timeout_s or ctx.timeout_s),
+                workdir=workdir,
+                outdir=ctx.outdir,
+                exec_id=exec_id,
+                exec_runtime=ctx.exec_runtime,
+                logger=ctx.logger,
+            )
+        else:
+            envelope = await runner(
+                tool_manager=ctx.tool_subsystem,
+                code=code_for_run,
+                timeout_s=int(timeout_s or ctx.timeout_s),
+                workdir=workdir,
+                outdir=ctx.outdir,
+                exec_id=exec_id,
+                exec_runtime=ctx.exec_runtime,
+                logger=ctx.logger,
+            )
     except Exception as exc:  # never let a sandbox-harness failure crash the turn
         LOGGER.warning("[ported-langgraph] code_exec: exec runner failed", exc_info=True)
         await _end_exec_widget(

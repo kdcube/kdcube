@@ -1,7 +1,7 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/recipes/kdcube_for_agents/port-your-solution-to-kdcube-README.md
 title: "Port Your Solution To A KDCube App"
-summary: "Executable procedure a coding agent (or engineer) follows to host an existing Python agent — in its own framework — as a KDCube app: vendor the solution unchanged, add a thin wrap (entry seam, state mapping, streaming, per-user isolation, per-turn rebuild), then satisfy the canonical app-package contract. Worked instance: ported-langgraph-agents@2026-07-13 (poc/lg-solution + poc/lg-react-agent)."
+summary: "Executable procedure a coding agent (or engineer) follows to host an existing Python agent — in its own framework — as a KDCube app: vendor the solution unchanged, add a thin wrap (entry seam, state mapping, streaming, concurrent-user isolation, per-turn rebuild), then satisfy the canonical app-package contract. Worked instance: ported-langgraph-agents@2026-07-13 (poc/lg-solution + poc/lg-prebuilt-agent)."
 status: draft
 tags: ["recipes", "kdcube-for-agents", "port", "wrap", "langgraph", "streaming", "bundle", "app", "scaled-serving"]
 updated_at: 2026-07-14
@@ -46,7 +46,7 @@ One before/after pair demonstrates every step. Read both:
 | | Path | Role |
 | --- | --- | --- |
 | **Before** | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/poc/lg-solution` | A standalone LangGraph research assistant: KB retrieval + per-user pgvector memory + a nested subagent, streaming via `astream_events`, Postgres-checkpointed. Runs on one machine for one user. Zero KDCube references. |
-| **After** | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/ported-langgraph-agents@2026-07-13` | ONE KDCube app hosting BOTH agents (`poc/lg-solution` + `poc/lg-react-agent`, a `langchain.agents.create_agent` ReAct agent with tools + MCP + code-exec), vendored unchanged under `solution/`, dispatched by `agent_id` through a single `execute_core`. The recipe below teaches the single-agent port; the multi-agent dispatch is a small extension (`execute_core` selects the graph by `agent_id`). Its `README.md` / `AGENTS.md` / `docs/` are the maintained reference for every point below. |
+| **After** | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/ported-langgraph-agents@2026-07-13` | ONE KDCube app hosting BOTH agents (`poc/lg-solution` + `poc/lg-prebuilt-agent`, a `langchain.agents.create_agent` ReAct agent with tools + MCP + code-exec), vendored unchanged under `solution/`, dispatched by `agent_id` through a single `execute_core`. The recipe below teaches the single-agent port; the multi-agent dispatch is a small extension (`execute_core` selects the graph by `agent_id`). Its `README.md` / `AGENTS.md` / `docs/` are the maintained reference for every point below. |
 
 The diff between them is exactly what this recipe produces: `solution/` copied
 verbatim, plus `entrypoint.py` + `identity.py` + `stream_adapter.py`, plus the
@@ -360,10 +360,18 @@ Persistence-split machinery. It runs wherever the platform runs code; no separat
 Docker requirement (worked instance: `platform/code_exec.py`). Two things make it feel
 native:
 
+- **Match the exec tool's shape.** Give your tool the same inputs the platform exec
+  tool takes — `code` + a `contract` of declared output files (+ `prog_name`) — and run
+  it through the platform's contract runner (`run_exec_tool`, reusing the SDK's
+  `normalize_exec_contract_for_turn` / `build_exec_output_contract`). The contract lets
+  the model plan its deliverables and is what the exec widget renders. (Wrapping the
+  KDCube exec tool means re-declaring the tool for your framework — a `create_agent`
+  tool takes the code as an argument, not the React `<channel:code>` — so copy the
+  runtime-neutral guidance; a shared-builder factoring to avoid the copy is future work.)
 - **Live exec widget.** Drive the reusable `solutions/widgets/exec.py`
   streamer (`comm.delta(marker="subsystem", sub_type="code_exec.*")`, keyed by an
-  `execution_id`) around the run — emit the program name, the code, and status
-  `gen → exec → done|error`. The chat renders the same exec panel React shows; no
+  `execution_id`) around the run — emit the program name, the **contract**, the code, and
+  status `gen → exec → done|error`. The chat renders the same exec panel React shows; no
   client change. React feeds it from a decision `<channel:code>` stream; a
   create_agent tool call carries the code as an argument, so drive the widget directly.
 - **Propagate errors, classified.** Return a structured error the model can act on:
