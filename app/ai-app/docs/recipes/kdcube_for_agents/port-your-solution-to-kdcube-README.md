@@ -360,14 +360,17 @@ Persistence-split machinery. It runs wherever the platform runs code; no separat
 Docker requirement (worked instance: `platform/code_exec.py`). Two things make it feel
 native:
 
-- **Match the exec tool's shape.** Give your tool the same inputs the platform exec
-  tool takes — `code` + a `contract` of declared output files (+ `prog_name`) — and run
-  it through the platform's contract runner (`run_exec_tool`, reusing the SDK's
-  `normalize_exec_contract_for_turn` / `build_exec_output_contract`). The contract lets
-  the model plan its deliverables and is what the exec widget renders. (Wrapping the
-  KDCube exec tool means re-declaring the tool for your framework — a `create_agent`
-  tool takes the code as an argument, not the React `<channel:code>` — so copy the
-  runtime-neutral guidance; a shared-builder factoring to avoid the copy is future work.)
+- **Match the exec tool's shape, keep the contract advisory.** Give your tool the same
+  inputs the platform exec tool takes — `code` + a `contract` of declared output files
+  (+ `prog_name`) — so the model can plan its deliverables and the exec widget can render
+  them. But the platform's strict contract runner (`run_exec_tool`) requires the code to
+  write to the exact `OUTPUT_DIR/turn_<id>/files/…` path; a small model that saves to a
+  plain path produces the file yet trips "missing contracted output" and **retries in a
+  loop**. So run **side-effects** (wrap the code, host every produced file) and treat the
+  contract as **advisory** (planning + widget only) — robust, and the model never loops
+  on paths. (Wrapping the KDCube exec tool re-declares it for your framework — a
+  `create_agent` tool takes code as an argument, not the React `<channel:code>` — so you
+  copy the runtime-neutral guidance; a shared-builder factoring is future work.)
 - **Live exec widget.** Drive the reusable `solutions/widgets/exec.py`
   streamer (`comm.delta(marker="subsystem", sub_type="code_exec.*")`, keyed by an
   `execution_id`) around the run — emit the program name, the **contract**, the code, and

@@ -323,14 +323,16 @@ def test_begin_exec_widget_emits_program_name_and_contract(tmp_path: Path) -> No
     assert "code_exec.contract" in subtypes
 
 
-def test_run_code_and_host_invalid_contract_is_program_error(tmp_path: Path) -> None:
-    """A malformed contract is the MODEL's error to fix (program), returned before any
-    sandbox runs — never a platform failure."""
+def test_run_code_and_host_bad_contract_is_advisory_not_fatal(tmp_path: Path) -> None:
+    """The contract is ADVISORY: a bad/unparseable contract NEVER fails the run — the
+    code still executes side-effects and hosts its files. (This is what stops the
+    contract-retry loop a strict runner caused.)"""
     mod = _code_exec_module()
     ctx = _make_ctx(mod, tmp_path=tmp_path, exec_runner=_make_side_effects_runner())
-    result = asyncio.run(mod.run_code_and_host("open('x','w')", contract="not-a-list", ctx=ctx))
-    assert result["ok"] is False
-    assert result["error_kind"] == "program"
+    result = asyncio.run(mod.run_code_and_host("open('hello.txt','w').write('hi')",
+                                               contract="not-a-list", ctx=ctx))
+    assert result["ok"] is True
+    assert result["files"], "the produced file is hosted regardless of the bad contract"
 
 
 # ── code wrapping + artifact conversion ──────────────────────────────────────

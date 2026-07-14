@@ -162,11 +162,14 @@ runs the model's Python in the platform's isolated runtime (`get_exec_workspace_
 It is wired to behave like the built-in React code tool (`platform/code_exec.py` +
 `code_exec_tool.py`):
 
-- **A declared output contract** (like the real exec tool). `run_python` takes the
-  same params — `code` + `contract` (+ `prog_name`, `timeout_s`) — so the model can
-  PLAN the files it will produce; with a contract the code runs verbatim through the
-  platform contract runner (`run_exec_tool`) and only contracted files are hosted.
-  With NO contract it falls back to side-effects (plain relative paths auto-hosted).
+- **An advisory output contract.** `run_python` takes the same params as the real exec
+  tool — `code` + `contract` (+ `prog_name`, `timeout_s`) — so the model can PLAN and
+  show the files it will produce in the exec panel. The contract is **advisory**: the
+  code always runs **side-effects** (plain relative paths, every produced file hosted),
+  so declaring — or mis-declaring — a contract never changes hosting and never fails the
+  run. (The platform's strict contract runner requires exact `OUTPUT_DIR/turn_<id>/…`
+  paths; a small model that saves to a plain path would loop on "missing output", so the
+  bundle keeps the contract advisory and hosts everything.)
 - **Files** the code produces are hosted into the conversation like attachments, so
   they reload and Download through `scene_object_action`.
 - **A live exec widget** — the reusable `solutions/widgets/exec.py` streamer emits the

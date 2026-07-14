@@ -716,75 +716,54 @@ async def run_code_and_host(
     workdir.mkdir(parents=True, exist_ok=True)
     ctx.outdir.mkdir(parents=True, exist_ok=True)
 
-    # Contract mode: the model DECLARED its output files. Build + normalize the output
-    # contract (to this turn). A bad contract is the MODEL's error to fix, not a
-    # platform failure.
+    # The model MAY declare a contract of the files it plans to produce. It is ADVISORY:
+    # it drives the exec panel + the model's own planning, but it NEVER gates the run or
+    # hosting. Execution is always side-effects — the code is wrapped so plain relative
+    # paths land in the hosted namespace and EVERY produced file is hosted. This is the
+    # robust choice for a small model: the strict "write to the exact OUTPUT_DIR path or
+    # the file is lost" contract runner sends it into a retry loop when it saves to a
+    # plain path. Best-effort: a bad/unparseable contract just means no contract panel.
     output_contract: Optional[Dict[str, Any]] = None
-    normalized_contract: Optional[list] = None
     if contract is not None and (not isinstance(contract, (list, str)) or contract):
         try:
             from kdcube_ai_app.apps.chat.sdk.tools.exec_tools import (
                 normalize_exec_contract_for_turn, build_exec_output_contract,
             )
-            normalized_contract, _rewrites, c_err = normalize_exec_contract_for_turn(contract, turn_id=ctx.turn_id)
+            _normalized, _rewrites, c_err = normalize_exec_contract_for_turn(contract, turn_id=ctx.turn_id)
             if c_err is None:
-                output_contract, normalized_contract, c_err = build_exec_output_contract(normalized_contract)
-            if c_err is not None:
-                return {
-                    "ok": False, "stdout": "", "stderr": str(c_err.get("message") or c_err), "files": [],
-                    "error": str(c_err.get("code") or "invalid_contract"), "error_kind": "program",
-                    "error_message": f"Your output contract is invalid: {c_err.get('message') or c_err}. Fix the contract and retry.",
-                }
-        except Exception as exc:
-            LOGGER.warning("[ported-langgraph] code_exec: contract build failed", exc_info=True)
-            return _error_result(
-                f"Failed to process the output contract: {type(exc).__name__}: {exc}",
-                code="invalid_contract", kind="program",
-            )
+                output_contract, _n2, c_err2 = build_exec_output_contract(_normalized)
+                if c_err2 is not None:
+                    output_contract = None
+        except Exception:
+            LOGGER.info("[ported-langgraph] code_exec: contract parse failed (advisory — ignored)", exc_info=True)
+            output_contract = None
 
-    # Contract mode runs the code VERBATIM (the model writes to its declared paths, like
-    # the React exec tool); side-effects mode wraps it so plain relative paths are hosted.
-    contract_mode = bool(output_contract)
-    code_for_run = code if contract_mode else _wrap_code(code, turn_id=ctx.turn_id)
+    wrapped = _wrap_code(code, turn_id=ctx.turn_id)
     runner = ctx.exec_runner or _default_exec_runner
 
-    # Drive the live code-exec widget (same one React streams) around the run.
+    # Drive the live code-exec widget (same one React streams) around the run — it shows
+    # the program name, the (advisory) contract, and the code.
     exec_widget, _widget_t0 = await _begin_exec_widget(
         ctx, exec_id, code, prog_name=prog_name, output_contract=output_contract,
     )
 
     LOGGER.info(
-        "[ported-langgraph] code_exec: EXEC start exec_id=%s mode=%s runtime=%s timeout_s=%s workdir=%s outdir=%s",
-        exec_id, "contract" if contract_mode else "side_effects",
+        "[ported-langgraph] code_exec: EXEC start exec_id=%s runtime=%s timeout_s=%s workdir=%s outdir=%s",
+        exec_id,
         (ctx.exec_runtime or {}).get("type") or (ctx.exec_runtime or {}).get("runtime") or "?",
         int(timeout_s or ctx.timeout_s), workdir, ctx.outdir,
     )
     try:
-        if contract_mode:
-            from kdcube_ai_app.apps.chat.sdk.tools.exec_tools import run_exec_tool
-            envelope = await run_exec_tool(
-                tool_manager=ctx.tool_subsystem,
-                output_contract=output_contract,
-                code=code_for_run,
-                contract=normalized_contract or [],
-                timeout_s=int(timeout_s or ctx.timeout_s),
-                workdir=workdir,
-                outdir=ctx.outdir,
-                exec_id=exec_id,
-                exec_runtime=ctx.exec_runtime,
-                logger=ctx.logger,
-            )
-        else:
-            envelope = await runner(
-                tool_manager=ctx.tool_subsystem,
-                code=code_for_run,
-                timeout_s=int(timeout_s or ctx.timeout_s),
-                workdir=workdir,
-                outdir=ctx.outdir,
-                exec_id=exec_id,
-                exec_runtime=ctx.exec_runtime,
-                logger=ctx.logger,
-            )
+        envelope = await runner(
+            tool_manager=ctx.tool_subsystem,
+            code=wrapped,
+            timeout_s=int(timeout_s or ctx.timeout_s),
+            workdir=workdir,
+            outdir=ctx.outdir,
+            exec_id=exec_id,
+            exec_runtime=ctx.exec_runtime,
+            logger=ctx.logger,
+        )
     except Exception as exc:  # never let a sandbox-harness failure crash the turn
         LOGGER.warning("[ported-langgraph] code_exec: exec runner failed", exc_info=True)
         await _end_exec_widget(

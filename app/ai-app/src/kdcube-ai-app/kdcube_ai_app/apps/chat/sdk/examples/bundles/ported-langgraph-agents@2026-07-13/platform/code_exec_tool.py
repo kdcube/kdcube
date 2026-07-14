@@ -120,22 +120,18 @@ def build_run_python_tool() -> Any:
         access is disabled.
 
         INPUTS
-        - `code` (REQUIRED): the Python program (a module body / snippet). Unlike the
-          React exec tool, the code is passed HERE as an argument, not via a channel.
-        - `contract` (recommended): a list of the output files you plan to produce —
-          each `{filepath, description, visibility?}`. `filepath` is the OUTPUT_DIR-
-          relative path your code writes to, under `turn_<current>/files/<name>`;
-          `visibility` is `external` (default: hosted AND shown to the user) or
-          `internal` (hosted + pullable by you later, not shown). Declaring the
-          contract lets you PLAN the deliverables and shows them in the exec panel.
-          When you pass a contract, ONLY the contracted files are hosted — each
-          `filepath` must byte-match the path your code writes to.
+        - `code` (REQUIRED): the Python program (a module body / snippet). The code is
+          passed HERE as an argument (not via a channel). Write files with PLAIN relative
+          paths — e.g. ``wb.save("sample.xlsx")`` — the working directory is already the
+          deliverables folder, and EVERY file your code writes is hosted and delivered
+          automatically. You do NOT need to know any output directory or turn id.
+        - `contract` (optional): a list of `{filepath, description, visibility?}` naming
+          the files you PLAN to produce. It is ADVISORY — it labels your intended
+          outputs in the exec panel and helps you plan; it does NOT change where you
+          write or what gets hosted (all files your code produces are hosted either way).
+          Do NOT retry just to adjust the contract.
         - `prog_name` (optional): short label for the exec panel.
         - `timeout_s` (optional): wall-clock timeout.
-
-        WITHOUT a contract, the working directory is already the deliverables folder:
-        write files with plain relative paths (``open("summary.csv","w")…``) and every
-        produced file is auto-hosted. Prefer a contract when you know your outputs.
 
         RESULTS
         - The result is a short report: status, any error (a runtime/sandbox failure
