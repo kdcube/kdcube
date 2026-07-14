@@ -8,6 +8,20 @@ langchain-core==1.2.6
 # langgraph==0.6.1
 # langmem>=0.0.4,<0.1.0
 langgraph==1.0.5
+# Pin the split-out prebuilt/checkpoint packages: unpinned, the container resolved a
+# newer langgraph-prebuilt whose tool_node imports ExecutionInfo/ServerInfo from a
+# newer langgraph.runtime than core 1.0.5 ships -> ImportError on create_react_agent.
+# 1.0.8 is the version compatible with langgraph 1.0.5 (used for create_react agents).
+langgraph-prebuilt==1.0.8
+langgraph-checkpoint==3.0.1
+# langgraph-checkpoint-postgres — the durable Postgres checkpointer (AsyncPostgresSaver)
+# a ported LangGraph agent opens so its per-conversation history survives restarts and
+# is restored when a conversation is reloaded. Pinned to the release compatible with
+# langgraph-checkpoint 3.0.1: unpinned it resolves a newer build that requires
+# langgraph-checkpoint >=4, which conflicts with langgraph 1.0.5's <4.0.0 ceiling.
+# Pulls psycopg-pool transitively. Without it the checkpointer degrades to an in-memory
+# saver (no cross-turn history) — see docs/sdk/solutions/conversation/hosted-agent-conversation-README.md.
+langgraph-checkpoint-postgres==3.0.5
 langmem==0.0.30
 dramatiq==1.18.0
 PyJWT[crypto]==2.10.1
@@ -22,6 +36,11 @@ networkx
 neo4j
 asyncpg
 psycopg2-binary==2.9.10
+# psycopg v3 — required by LangGraph's Postgres checkpointer (AsyncPostgresSaver)
+# and the optional langgraph_store backend (AsyncPostgresStore). Coexists with
+# psycopg2-binary + asyncpg. Ported LangGraph agents' memory/KB use asyncpg (the
+# shared pool); only these framework stores need psycopg v3.
+psycopg[binary]>=3.1
 ddgs
 semantic-kernel
 reportlab
