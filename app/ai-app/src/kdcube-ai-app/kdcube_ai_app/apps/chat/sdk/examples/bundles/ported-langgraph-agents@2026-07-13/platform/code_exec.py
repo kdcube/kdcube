@@ -37,7 +37,6 @@ import logging
 import os
 import pathlib
 import shutil
-import tempfile
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Optional
@@ -52,6 +51,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.workspace import (
     artifact_outdir_for,
     build_items_from_diff,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.infra import get_exec_workspace_root
 from kdcube_ai_app.apps.chat.sdk.tools import bundle_tool_context
 
 LOGGER = logging.getLogger("kdcube.ported_langgraph_agents.code_exec")
@@ -116,24 +116,30 @@ def current_code_exec_context() -> Optional[CodeExecContext]:
 
 # ── config reading ───────────────────────────────────────────────────────────
 
-def read_code_exec_config(ep: Any) -> Dict[str, Any]:
-    """Resolve the `tools.code_exec` config for this bundle from the entrypoint's
-    bundle props, with safe defaults. Never raises."""
-    try:
-        cfg = ep.bundle_prop("tools.code_exec", {}) or {}
-    except Exception:
-        cfg = {}
+def read_code_exec_config(ep: Any, agent_id: str) -> Dict[str, Any]:
+    """Resolve the ACTIVE agent's code-exec config, with safe defaults. Never raises.
+
+    Tools are declared per agent as a CONNECTION LIST at
+    `surfaces.as_consumer.agents.<agent_id>.tools` (the standard KDCube shape). Code
+    execution is enabled iff the admin declared the code-exec connection (alias
+    `code_exec`, tool `run_python`) — its PRESENCE is the ceiling. That connection's
+    optional `code_exec` sub-block carries `timeout_s` / `runtime`. An agent that
+    declares no such connection simply has code execution off."""
+    from .tool_pick import agent_tool_connections, code_exec_connection
+
+    connection = code_exec_connection(agent_tool_connections(ep, agent_id))
+    enabled = connection is not None
+    cfg = connection.get("code_exec") if isinstance(connection, dict) else None
     if not isinstance(cfg, dict):
         cfg = {}
-    enabled = bool(cfg.get("enabled", CODE_EXEC_ENABLED_DEFAULT))
     # Runtime: resolve it the SAME way the React harness does. base_workflow's
     # `resolve_exec_runtime` reads `runtime_ctx.exec_runtime` (the deployment's
     # `execution.runtime`, normalized onto runtime_ctx by the platform) and selects
     # a profile via `resolve_exec_runtime_profile`. So the exec tool runs wherever
     # the platform is configured to run code (in-memory / subprocess / docker /
     # fargate per deployment) — it is "on board", no separate docker requirement.
-    # `tools.code_exec.runtime`, when a string, names a PROFILE to select (like the
-    # iso-runtime demo's "fargate_default"); a dict overrides the resolved spec.
+    # The connection's `code_exec.runtime`, when a string, names a PROFILE to select
+    # (like the iso-runtime demo's "fargate_default"); a dict overrides the spec.
     runtime_ctx = getattr(ep, "runtime_ctx", None)
     onboard = getattr(runtime_ctx, "exec_runtime", None) if runtime_ctx is not None else None
     runtime_sel = cfg.get("runtime")
@@ -154,23 +160,29 @@ def read_code_exec_config(ep: Any) -> Dict[str, Any]:
     return {"enabled": enabled, "exec_runtime": exec_runtime, "timeout_s": max(1, timeout_s)}
 
 
-def code_exec_enabled(ep: Any) -> bool:
-    return bool(read_code_exec_config(ep).get("enabled"))
+def code_exec_enabled(ep: Any, agent_id: str) -> bool:
+    return bool(read_code_exec_config(ep, agent_id).get("enabled"))
 
 
-# ── sandbox bootstrap (minimal, bundle-local) ────────────────────────────────
+# ── sandbox bootstrap (per-turn isolated workspace) ──────────────────────────
 
 def _bootstrap_sandbox(*, conversation_id: str, turn_id: str) -> pathlib.Path:
-    """Create a fresh per-turn sandbox with `work/` and `out/` subdirectories.
+    """Create a fresh per-turn sandbox with `work/` and `out/` subdirectories,
+    ROOTED at the platform exec-workspace root (`get_exec_workspace_root`).
 
-    A minimal, bundle-local equivalent of the with-isoruntime demo's
-    bootstrap: the SDK exec tool writes the program into `work/` and its outputs
-    under `out/`; we diff `out/` afterwards to discover created files. Rooted in a
-    temp area so a failed run never corrupts anything durable."""
-    base = pathlib.Path(tempfile.gettempdir()) / "kdcube-code-exec"
+    This is the SAME reusable isolated-workspace concept the React path uses
+    (`solutions/react/browser.py::_ensure_workspace`) — not React-specific; any
+    agent can provision one. The root MATTERS: the docker iso-runtime bind-mounts
+    `workdir -> /workspace/work` and `outdir -> /workspace/out`, translating host
+    paths against this shared exec-workspace volume. A path under an arbitrary
+    `/tmp` dir does NOT translate, so the container sees an empty `/workspace/work`
+    and fails with `main.py not found`. The SDK exec tool writes the program into
+    `work/` and its outputs under `out/`; we diff `out/` afterwards to discover
+    created files. Per-turn (never cached), and cleaned up after the run."""
+    base = pathlib.Path(get_exec_workspace_root())
     conv_seg = _safe_seg(conversation_id) or "conv"
     turn_seg = _safe_seg(turn_id) or f"turn_{uuid.uuid4().hex[:8]}"
-    root = base / conv_seg / turn_seg
+    root = base / "code-exec" / conv_seg / turn_seg / uuid.uuid4().hex[:8]
     (root / "work").mkdir(parents=True, exist_ok=True)
     (root / "out").mkdir(parents=True, exist_ok=True)
     return root
@@ -191,7 +203,7 @@ def build_code_exec_context(ep: Any, state: Dict[str, Any], agent_id: str) -> Co
     the SAME edge the React agent hosts through), and builds a tool subsystem bound
     to that hosting service. Fail-open: any construction failure yields a DISABLED
     context, so the turn runs unchanged with the tool inert."""
-    cfg = read_code_exec_config(ep)
+    cfg = read_code_exec_config(ep, agent_id)
     if not cfg["enabled"]:
         return CodeExecContext(enabled=False)
 
@@ -311,8 +323,21 @@ async def code_exec_scope(ctx: Optional[CodeExecContext]):
     Disabled / None ctx is a clean no-op: the graph runs unchanged and any
     `run_python` call fails open (the tool is inert)."""
     if ctx is None or not ctx.enabled:
+        LOGGER.info(
+            "[ported-langgraph] code_exec: scope INERT (ctx=%s enabled=%s) — run_python will fail open",
+            "none" if ctx is None else "present",
+            None if ctx is None else ctx.enabled,
+        )
         yield ctx
         return
+
+    LOGGER.info(
+        "[ported-langgraph] code_exec: scope ENTER conv=%s turn=%s outdir=%s workdir=%s runtime=%s timeout_s=%s",
+        ctx.conversation_id, ctx.turn_id,
+        ctx.outdir, ctx.workdir,
+        (ctx.exec_runtime or {}).get("type") or (ctx.exec_runtime or {}).get("runtime") or "?",
+        ctx.timeout_s,
+    )
 
     # 1) publish the per-turn handle
     handle_token = _CODE_EXEC_HANDLE_CV.set(ctx)
@@ -334,6 +359,10 @@ async def code_exec_scope(ctx: Optional[CodeExecContext]):
     try:
         yield ctx
     finally:
+        LOGGER.info(
+            "[ported-langgraph] code_exec: scope EXIT conv=%s turn=%s (unbinding + cleanup)",
+            ctx.conversation_id, ctx.turn_id,
+        )
         with contextlib.suppress(Exception):
             _CODE_EXEC_HANDLE_CV.reset(handle_token)
         with contextlib.suppress(Exception):
@@ -487,8 +516,17 @@ async def _host_artifacts(
     )
     hosted = hosted or []
     # Deliver them to the chat surface as attachments (best-effort).
-    with contextlib.suppress(Exception):
+    try:
         await hosting.emit_solver_artifacts(files=list(hosted), citations=[])
+        LOGGER.info(
+            "[ported-langgraph] code_exec: emit_solver_artifacts OK — %d file(s) sent to chat as a user event",
+            len(hosted),
+        )
+    except Exception:
+        LOGGER.warning(
+            "[ported-langgraph] code_exec: emit_solver_artifacts FAILED (files hosted, not surfaced in chat)",
+            exc_info=True,
+        )
     refs: List[Dict[str, Any]] = []
     for row in hosted:
         if not isinstance(row, dict):
@@ -521,7 +559,14 @@ async def run_code_and_host(
     a hosted attachment. FAIL-OPEN: no active scope / offline / a sandbox-harness
     failure yields a clean error result, never an exception into the turn."""
     ctx = ctx or current_code_exec_context()
+    LOGGER.info(
+        "[ported-langgraph] code_exec: run_python CALLED ctx=%s enabled=%s code_len=%d",
+        "none" if ctx is None else "present",
+        None if ctx is None else ctx.enabled,
+        len(code or ""),
+    )
     if ctx is None or not ctx.enabled:
+        LOGGER.info("[ported-langgraph] code_exec: run_python INERT (no active scope) — returning fail-open")
         return _error_result(
             "Code execution is not available for this turn (disabled or offline).",
             code="code_exec_disabled",
@@ -529,6 +574,10 @@ async def run_code_and_host(
     if not str(code or "").strip():
         return _error_result("No code was provided to run.", code="code_exec_empty")
     if ctx.hosting_service is None or ctx.tool_subsystem is None or ctx.outdir is None:
+        LOGGER.warning(
+            "[ported-langgraph] code_exec: run_python NOT WIRED hosting=%s tool_subsystem=%s outdir=%s",
+            ctx.hosting_service is not None, ctx.tool_subsystem is not None, ctx.outdir is not None,
+        )
         return _error_result("Code execution runtime is not fully wired for this turn.")
 
     exec_id = f"code-exec-{uuid.uuid4().hex[:12]}"
@@ -538,6 +587,12 @@ async def run_code_and_host(
     wrapped = _wrap_code(code, turn_id=ctx.turn_id)
     runner = ctx.exec_runner or _default_exec_runner
 
+    LOGGER.info(
+        "[ported-langgraph] code_exec: EXEC start exec_id=%s runner=%s runtime=%s timeout_s=%s workdir=%s outdir=%s",
+        exec_id, getattr(runner, "__name__", type(runner).__name__),
+        (ctx.exec_runtime or {}).get("type") or (ctx.exec_runtime or {}).get("runtime") or "?",
+        int(timeout_s or ctx.timeout_s), workdir, ctx.outdir,
+    )
     try:
         envelope = await runner(
             tool_manager=ctx.tool_subsystem,
@@ -566,11 +621,23 @@ async def run_code_and_host(
         stderr_parts.append(str(err.get("description") or err.get("message") or "").strip())
     stderr = "\n".join(p for p in stderr_parts if p).strip()
     ok = bool(envelope.get("ok"))
+    LOGGER.info(
+        "[ported-langgraph] code_exec: EXEC done exec_id=%s ok=%s stdout_len=%d stderr_len=%d",
+        exec_id, ok, len(stdout), len(stderr),
+    )
 
     files: List[Dict[str, Any]] = []
     try:
         artifacts = _artifacts_from_side_effects(envelope, outdir=ctx.outdir)
+        LOGGER.info(
+            "[ported-langgraph] code_exec: HOST %d produced file(s) exec_id=%s",
+            len(artifacts), exec_id,
+        )
         files = await _host_artifacts(ctx, artifacts)
+        LOGGER.info(
+            "[ported-langgraph] code_exec: HOSTED %d file(s) → conversation storage + chat event exec_id=%s rns=%s",
+            len(files), exec_id, [f.get("rn") for f in files],
+        )
     except Exception:
         LOGGER.warning("[ported-langgraph] code_exec: hosting produced files failed", exc_info=True)
 

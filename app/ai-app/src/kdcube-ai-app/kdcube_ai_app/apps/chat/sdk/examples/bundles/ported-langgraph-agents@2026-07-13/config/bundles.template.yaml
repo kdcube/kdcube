@@ -60,56 +60,60 @@ bundles:
                     supported:
                       - { model: claude-haiku-4-5-20251001, provider: anthropic, label: "Haiku 4.5" }
                       - { model: claude-sonnet-4-5-20250929, provider: anthropic, label: "Sonnet 4.5" }
-        # ── lg-react TOOLS, BOTH WAYS ──────────────────────────────────────
-        # The prebuilt agent gets its tools two ways, selectable here:
-        #   mode: plain  (default) — the vendored plain LangChain tools only
-        #                            (calc, unit_convert, kb_search). External to the
-        #                            host and, running no accounted model call,
-        #                            unmetered. Works offline with no extra deps.
-        #   mode: mcp              — KDCube-served MCP tools only, loaded via
-        #                            langchain-mcp-adapters (falls back to plain if
-        #                            the lib/endpoint is unavailable).
-        #   mode: both             — plain tools + MCP tools bound together.
-        #
-        # ACCOUNTING (marked = counted): a plain tool, or an MCP tool that only does
-        # a lookup, runs no KDCube-marked model call and is NOT metered. An MCP tool
-        # whose implementation runs KDCube-marked model calls IS metered — the
-        # marking, not the MCP transport, is what makes it counted.
-        #
-        # This block applies to the lg-react agent only (lg-solution has no
-        # pickable tools). The KDCube-served MCP endpoint is reached over
-        # streamable_http at its published URL (optionally with a bearer header).
-        tools:
-          mode: plain
-          # mcp:
-          #   servers:
-          #     knowledge:
-          #       url: "https://<PUBLIC_HOST>/api/mcp/<TENANT>/<PROJECT>/<KNOWLEDGE_BUNDLE>/mcp"
-          #       transport: streamable_http
-          #       headers:
-          #         Authorization: "Bearer <MCP_ACCESS_TOKEN>"
-          # ── CODE EXECUTION (run_python) ──────────────────────────────────
-          # Adds a model-callable `run_python` tool that runs Python in an
-          # isolated runtime and HOSTS every file the code produces into this
-          # conversation's storage — exactly like a user attachment (the same
-          # ApplicationHostingService edge the React agent's host_files uses).
-          #
-          # OFF by default (additive, so agent behavior is unchanged). When on,
-          # `run_python` is bound to lg-react's tool set and the graph run is
-          # wrapped in the code-exec scope so hosting resolves.
-          #
-          #   enabled  — turn the tool on (default false).
-          #   runtime  — OPTIONAL. Omit to use the deployment's ON-BOARD exec runtime
-          #              (`execution.runtime`) — the SAME runtime the React agent runs
-          #              code in (in-memory / subprocess / docker / fargate, per
-          #              deployment); no separate setup needed. A string names a
-          #              profile from it (e.g. "fargate_default"); a mapping overrides
-          #              the spec. Fail-open: with no runtime reachable the tool
-          #              returns a clean error and the turn still answers.
-          #   timeout_s— per-run wall-clock timeout in seconds (default 120).
-          code_exec:
-            enabled: false
-            timeout_s: 120
+                # ── lg-react TOOLS (per-agent inventory + user pick) ───────
+                # Tools are declared PER AGENT as a CONNECTION LIST — the standard
+                # KDCube shape the capabilities catalog reads (same as the workspace
+                # `main` agent). This list is the ADMIN CEILING and drives the picker
+                # natively: the widget lists each tool and a user can OPT OUT per
+                # conversation (admin false = tool absent = hard off, cannot enable;
+                # admin true = declared = on by default, user may disable). The bundle
+                # binds its own LangChain @tools narrowed to (declared − user-disabled)
+                # each turn — lg-solution has no tool loop and declares none.
+                #
+                # Each entry: `alias`/`name` (the pickable group), `kind: python`,
+                # `allowed: [tool names]`. The tool NAMES map to the vendored plain
+                # tools (calc, unit_convert, kb_search) and, for the exec connection,
+                # `run_python`.
+                #
+                # ACCOUNTING (marked = counted): a plain tool, or an MCP tool that only
+                # does a lookup, runs no KDCube-marked model call and is NOT metered. An
+                # MCP tool whose implementation runs KDCube-marked model calls IS
+                # metered — the marking, not the transport, is what makes it counted.
+                tools:
+                  - { name: calc,         kind: python, alias: calc,         allowed: [calc] }
+                  - { name: unit_convert, kind: python, alias: unit_convert, allowed: [unit_convert] }
+                  - { name: kb_search,    kind: python, alias: kb_search,    allowed: [kb_search] }
+                  # ── CODE EXECUTION (run_python) ──────────────────────────
+                  # DECLARE this connection to make `run_python` available (its
+                  # PRESENCE is the admin ceiling — omit it and code exec is hard off).
+                  # The model writes Python, it runs in the isolated runtime, and every
+                  # file it produces is HOSTED into this conversation's storage exactly
+                  # like a user attachment (the same ApplicationHostingService edge the
+                  # React agent's host_files uses). OFF by default (commented out).
+                  #   code_exec.timeout_s — per-run wall-clock timeout (default 120).
+                  #   code_exec.runtime   — OPTIONAL. Omit to use the deployment's
+                  #     ON-BOARD exec runtime (`execution.runtime`) — the SAME runtime the
+                  #     React agent runs code in (in-memory / subprocess / docker /
+                  #     fargate, per deployment); no separate setup. A string names a
+                  #     profile (e.g. "fargate_default"); a mapping overrides the spec.
+                  # - name: code_exec
+                  #   kind: python
+                  #   alias: code_exec
+                  #   allowed: [run_python]
+                  #   code_exec:
+                  #     timeout_s: 120
+                  # ── MCP tools (optional) ─────────────────────────────────
+                  # Declare a KDCube-served MCP endpoint as a `kind: mcp` connection to
+                  # bind its tools (via langchain-mcp-adapters; degrades to none if the
+                  # lib/endpoint is unavailable). Reached over streamable_http, optional
+                  # bearer header.
+                  # - name: knowledge
+                  #   kind: mcp
+                  #   server_id: knowledge
+                  #   url: "https://<PUBLIC_HOST>/api/mcp/<TENANT>/<PROJECT>/<KNOWLEDGE_BUNDLE>/mcp"
+                  #   transport: streamable_http
+                  #   headers:
+                  #     Authorization: "Bearer <MCP_ACCESS_TOKEN>"
         # The Telegram Bot API webhook (a public @api that drives the SAME
         # execute_core for the DEFAULT agent). `route="public"` exposes it at the
         # proc layer; the trust boundary is the Telegram webhook secret, verified by

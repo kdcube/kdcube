@@ -286,32 +286,65 @@ def _bundle_prop_factory(props):
     return _bp
 
 
+_AGENT_ID = "lg-react"
+
+
+def _agent_tools_props(code_exec: dict, *, agent_id: str = _AGENT_ID) -> dict:
+    """Build the per-agent tools CONNECTION LIST the code now reads at
+    `surfaces.as_consumer.agents.<agent_id>.tools`.
+
+    The exec connection is included iff `code_exec.get("enabled", True)` — its
+    PRESENCE is the admin ceiling. Its `timeout_s`/`runtime` ride the connection's
+    own `code_exec` sub-block. A plain `calc` connection is always present so the
+    list is a realistic inventory."""
+    tools: list = [{"name": "calc", "kind": "python", "alias": "calc", "allowed": ["calc"]}]
+    if code_exec.get("enabled", True):
+        conn: dict = {"name": "code_exec", "kind": "python", "alias": "code_exec", "allowed": ["run_python"]}
+        sub = {k: v for k, v in code_exec.items() if k in ("timeout_s", "runtime")}
+        if sub:
+            conn["code_exec"] = sub
+        tools.append(conn)
+    return {"surfaces": {"as_consumer": {"agents": {agent_id: {"tools": tools}}}}}
+
+
 def test_read_code_exec_config_defaults_off() -> None:
     mod = _code_exec_module()
     # No runtime_ctx -> no on-board runtime -> exec_runtime resolves to empty (the
     # runtime is NOT hardcoded to docker; it comes from the deployment).
     ep = SimpleNamespace(bundle_prop=lambda path, default=None: default, runtime_ctx=None)
-    cfg = mod.read_code_exec_config(ep)
+    cfg = mod.read_code_exec_config(ep, _AGENT_ID)
     assert cfg["enabled"] is False
     assert not cfg["exec_runtime"]
     assert cfg["timeout_s"] == mod.CODE_EXEC_TIMEOUT_DEFAULT
 
 
-def test_read_code_exec_config_uses_onboard_runtime() -> None:
-    # By default (no `tools.code_exec.runtime` override) the exec runtime IS the
-    # deployment's on-board runtime (runtime_ctx.exec_runtime) — same as the React
-    # harness, no hardcoded docker.
+def test_read_code_exec_config_is_per_agent() -> None:
+    # The block lives under the ACTIVE agent; a different agent id sees no config.
     mod = _code_exec_module()
-    props = {"tools": {"code_exec": {"enabled": True, "timeout_s": 45}}}
+    props = _agent_tools_props({"enabled": True, "timeout_s": 45})
     ep = SimpleNamespace(
         bundle_prop=_bundle_prop_factory(props),
         runtime_ctx=SimpleNamespace(exec_runtime={"mode": "subprocess"}),
     )
-    cfg = mod.read_code_exec_config(ep)
+    assert mod.code_exec_enabled(ep, _AGENT_ID) is True
+    assert mod.code_exec_enabled(ep, "lg-solution") is False
+
+
+def test_read_code_exec_config_uses_onboard_runtime() -> None:
+    # By default (no `runtime` override) the exec runtime IS the deployment's
+    # on-board runtime (runtime_ctx.exec_runtime) — same as the React harness, no
+    # hardcoded docker.
+    mod = _code_exec_module()
+    props = _agent_tools_props({"enabled": True, "timeout_s": 45})
+    ep = SimpleNamespace(
+        bundle_prop=_bundle_prop_factory(props),
+        runtime_ctx=SimpleNamespace(exec_runtime={"mode": "subprocess"}),
+    )
+    cfg = mod.read_code_exec_config(ep, _AGENT_ID)
     assert cfg["enabled"] is True
     assert cfg["exec_runtime"].get("mode") == "subprocess"
     assert cfg["timeout_s"] == 45
-    assert mod.code_exec_enabled(ep) is True
+    assert mod.code_exec_enabled(ep, _AGENT_ID) is True
 
 
 def test_read_code_exec_config_runtime_string_resolves_via_profile_resolver() -> None:
@@ -319,13 +352,13 @@ def test_read_code_exec_config_runtime_string_resolves_via_profile_resolver() ->
     # React harness uses; the resolved spec still derives from the on-board runtime
     # (exact profile semantics are deployment-defined).
     mod = _code_exec_module()
-    props = {"tools": {"code_exec": {"enabled": True, "runtime": "some_profile"}}}
+    props = _agent_tools_props({"enabled": True, "runtime": "some_profile"})
     onboard = {"mode": "subprocess"}
     ep = SimpleNamespace(
         bundle_prop=_bundle_prop_factory(props),
         runtime_ctx=SimpleNamespace(exec_runtime=onboard),
     )
-    cfg = mod.read_code_exec_config(ep)
+    cfg = mod.read_code_exec_config(ep, _AGENT_ID)
     # Resolves without error and stays anchored to the on-board runtime.
     assert isinstance(cfg["exec_runtime"], dict)
     assert cfg["exec_runtime"].get("mode") == "subprocess"

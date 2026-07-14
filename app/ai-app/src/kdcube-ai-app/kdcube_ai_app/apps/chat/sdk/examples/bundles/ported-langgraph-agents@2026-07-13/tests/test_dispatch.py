@@ -146,8 +146,6 @@ def test_lg_solution_dispatch_runs_the_research_graph(monkeypatch) -> None:
     # lg-solution (dedicated-answer-node) stream adapter ran.
     step_names = {name for name, _status in comm.steps}
     assert "answer" in step_names
-    # Its graph was cached under the lg-solution key.
-    assert "lg-solution" in inst._graphs
 
 
 def test_lg_prebuilt_dispatch_runs_the_create_react_graph(monkeypatch) -> None:
@@ -163,7 +161,6 @@ def test_lg_prebuilt_dispatch_runs_the_create_react_graph(monkeypatch) -> None:
     assert "answer" not in step_names
     assert "retrieve" not in step_names
     assert "plan" not in step_names
-    assert "lg-react" in inst._graphs
 
 
 def test_both_agents_can_run_in_the_same_process(monkeypatch) -> None:
@@ -171,8 +168,9 @@ def test_both_agents_can_run_in_the_same_process(monkeypatch) -> None:
     _c1, out1 = _run_turn(inst, "lg-solution", "hello there", "c1")
     _c2, out2 = _run_turn(inst, "lg-react", "hello there", "c2")
     assert out1["final_answer"] and out2["final_answer"]
-    # Both graphs cached, keyed per agent.
-    assert set(inst._graphs.keys()) == {"lg-solution", "lg-react"}
+    # Scaled serving: NO in-process graph cache — the graph is rebuilt every turn,
+    # so any worker can serve any turn. This negative assertion guards the invariant.
+    assert not hasattr(inst, "_graphs")
 
 
 # ── 3. isolation + fallback ─────────────────────────────────────────────────
@@ -193,5 +191,3 @@ def test_unknown_agent_id_falls_back_to_the_default(monkeypatch) -> None:
     assert out["final_answer"]
     step_names = {name for name, _status in comm.steps}
     assert "answer" in step_names            # lg-solution's dedicated answer node
-    assert "lg-solution" in inst._graphs
-    assert "does-not-exist" not in inst._graphs

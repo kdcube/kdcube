@@ -102,3 +102,39 @@ async def resolve_turn_role_models(
         return dict(holder.agent_role_models or {})
     except Exception:
         return {}
+
+
+async def resolve_turn_disabled_tools(
+    entrypoint: Any, state: Dict[str, Any], agent_id: str
+) -> Dict[str, Any]:
+    """Resolve THIS (user, conversation)'s tool opt-outs for the ACTIVE ``agent_id``.
+
+    Returns the platform deny-map ``{alias: true | [tool_names]}`` the user saved in
+    the capabilities widget for this conversation under this agent, or ``{}`` when
+    they disabled nothing. The tools themselves are declared as a connection list on
+    the agent (the admin ceiling); `platform/tool_pick.py` turns this deny-map plus
+    that ceiling into the bound tool set for the turn. Identity keys are resolved
+    exactly as the model pick / the wire op resolve them, so the LOAD key here
+    matches the SAVE key there and conversation A never leaks into conversation B.
+
+    Fails open: any error yields ``{}`` so every tool the admin allows stays bound.
+    """
+    try:
+        if getattr(entrypoint, "pg_pool", None) is None:
+            return {}
+        identity = entrypoint._agent_selection_identity()
+        store = entrypoint._agent_selection_store(identity)
+        conversation_id = str(
+            state.get("conversation_id") or state.get("session_id") or ""
+        ).strip()
+        selection = await store.get_selection(
+            user_id=str(identity.get("user_id") or "anonymous"),
+            bundle_id=str(identity.get("bundle_id") or ""),
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            materialize=bool(conversation_id),
+        )
+        disabled = ((selection or {}).get("disabled") or {}).get("tools") or {}
+        return dict(disabled) if isinstance(disabled, dict) else {}
+    except Exception:
+        return {}

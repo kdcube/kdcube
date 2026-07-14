@@ -17,9 +17,12 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, List
 
 from langchain_core.tools import tool
+
+LOGGER = logging.getLogger("kdcube.ported_langgraph_agents.code_exec")
 
 # Bytes cap on stdout/stderr folded into the model-visible result (the authoritative
 # large outputs are the hosted files, not the message).
@@ -87,7 +90,13 @@ def build_run_python_tool() -> Any:
         # pulling the exec seam into offline tool-list construction.
         from .code_exec import run_code_and_host
 
+        LOGGER.info("[ported-langgraph] run_python: model invoked the tool (code_len=%d)", len(code or ""))
         result = await run_code_and_host(code)
-        return _format_result(result)
+        report = _format_result(result)
+        LOGGER.info(
+            "[ported-langgraph] run_python: returning report to model (ok=%s files=%d report_len=%d)",
+            bool(result.get("ok")), len(result.get("files") or []), len(report),
+        )
+        return report
 
     return run_python

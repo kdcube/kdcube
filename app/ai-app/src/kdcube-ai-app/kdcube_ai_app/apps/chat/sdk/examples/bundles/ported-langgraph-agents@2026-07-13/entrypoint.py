@@ -22,8 +22,12 @@
 #                          through its own stream adapter (the teaching point:
 #                          different agent shapes -> different stream adapters,
 #                          selected by agent_id)
-#   2. a per-agent graph cache — each agent's graph is built lazily once per process
-#                          and reused (stateless: state per turn via thread_id)
+#   2. scaled serving    — the agent's graph is REBUILT every turn, never cached
+#                          in-process. KDCube is distributed (turns hop workers/
+#                          machines), so a process-cached graph would neither survive
+#                          the hop nor reflect this turn's per-user state. Durable
+#                          state lives in shared Postgres (checkpointer, keyed by
+#                          thread_id); only connections are long-lived on self.
 #   3. isolation         — platform identity + agent_id -> per-agent per-user keys
 #                          (platform/identity.py) AND a per-agent storage schema
 #                          (platform/pg_target.py), so the two agents never mix
@@ -71,6 +75,7 @@ from .solution.lg_solution.memory import ensure_memory_tables
 from .solution.lg_solution.knowledge import ensure_kb_tables
 #   lg-react (the create_react agent)
 from .solution.lg_prebuilt.agent import build_agent as build_prebuilt_agent, AGENT_NODE as PREBUILT_AGENT_NODE
+from .solution.lg_prebuilt.tools import plain_tool_registry
 from .solution.lg_prebuilt.config import get_config as get_prebuilt_config
 from .solution.lg_prebuilt.llm import StubChatModel
 
@@ -80,9 +85,10 @@ from .platform.attachments import materialize_turn_attachments
 from .platform.identity import turn_identity, normalize_agent_id
 from .platform.stream_solution import stream_graph_turn
 from .platform.stream_prebuilt import stream_react_turn
-from .platform.tools_mcp import resolve_tools
-from .platform.capabilities import resolve_turn_role_models
-from .platform.code_exec import build_code_exec_context, code_exec_scope, code_exec_enabled
+from .platform.tools_mcp import load_mcp_tools, mcp_cfg_from_connections
+from .platform.tool_pick import agent_tool_connections, select_bound_tools
+from .platform.capabilities import resolve_turn_role_models, resolve_turn_disabled_tools
+from .platform.code_exec import build_code_exec_context, code_exec_scope
 from .platform import telegram as telegram_ingress
 
 LOGGER = logging.getLogger("kdcube.ported_langgraph_agents")
@@ -109,6 +115,9 @@ SOLUTION_RETRIEVAL_FLOW = "lg-solution.retrieval"
 SOLUTION_SUMMARY_ROLE = "lg-solution.summary"
 
 # ── lg-react constants ────────────────────────────────────────────────────
+# The agent id lg-react is dispatched + configured under. Its per-agent config
+# (capabilities, tools) lives at `surfaces.as_consumer.agents.lg-react`.
+PREBUILT_AGENT_ID = "lg-react"
 # The model role the create_react agent's chat calls bill under.
 PREBUILT_ANSWER_ROLE = "lg-react.answer"
 # A DISTINCT accounted role for lg-react's compaction (LangMem SummarizationNode)
@@ -187,8 +196,12 @@ def _solution_scope(ep: "LGPortedAgentsBundle", agent_id: str) -> StorageScope:
     )
 
 
-async def _build_solution_graph(ep: "LGPortedAgentsBundle") -> Any:
-    """Build lg-solution's research graph: route its pgvector memory + KB onto
+async def _build_solution_graph(
+    ep: "LGPortedAgentsBundle", *, disabled_tools: Optional[Dict[str, Any]] = None
+) -> Any:
+    """Build lg-solution's research graph. (`disabled_tools` is accepted for a
+    uniform build signature but ignored — the linear research graph has no pickable
+    tool loop.) Route its pgvector memory + KB onto
     KDCube's SHARED asyncpg pool (in the ONE per-tenant/project schema, rows scoped
     by columns) and its checkpointer onto the same shared Postgres via a psycopg
     DSN, hand the graph an accounted + economics-guarded model/embedding edge, open
@@ -221,12 +234,19 @@ async def _build_solution_graph(ep: "LGPortedAgentsBundle") -> Any:
     return build_solution_graph(deps, checkpointer=checkpointer)
 
 
-async def _build_prebuilt_graph(ep: "LGPortedAgentsBundle") -> Any:
-    """Build lg-react's create_react agent: route its checkpointer onto KDCube's
-    shared Postgres in the per-tenant/project schema (hosted), bind an accounted
-    model (or the offline stub), resolve its tools (plain | mcp | both) via the
-    tools seam, open its checkpointer. `build_agent` is vendored + injectable — no
-    edit."""
+async def _build_prebuilt_graph(
+    ep: "LGPortedAgentsBundle", *, disabled_tools: Optional[Dict[str, Any]] = None
+) -> Any:
+    """Build lg-react's create_agent graph FOR THIS TURN (never cached).
+
+    Tools are DECLARED as a connection list on the agent
+    (`surfaces.as_consumer.agents.lg-react.tools`, the standard KDCube shape) — the
+    ADMIN CEILING. This binds EXACTLY the declared tools the user has NOT opted out
+    of this turn (`disabled_tools`, the saved capabilities-widget deny-map), so the
+    per-tool picker takes effect: a tool the admin does not declare is never bound;
+    a declared tool is on by default and the user may opt out per conversation. MCP
+    tools are declared as `kind: mcp` connections and loaded best-effort. Checkpointer
+    reused across per-turn builds. `build_agent` is vendored + injectable — no edit."""
     own = get_prebuilt_config()
     schema = schema_for_scope(
         str(getattr(ep.settings, "TENANT", "") or ""),
@@ -236,21 +256,29 @@ async def _build_prebuilt_graph(ep: "LGPortedAgentsBundle") -> Any:
     config = replace(own, database_url=database_url)
     model = ep._build_prebuilt_model(config)
     summary_model = ep._build_prebuilt_summary_model(config)
-    tools_cfg = ep.bundle_prop("tools", {}) or {}
-    # Config-gated: append the platform `run_python` code-execution tool to the
-    # prebuilt agent's tool set when `tools.code_exec.enabled` is on. Additive —
-    # off by default, so the agent's behavior is unchanged unless enabled.
-    tools = await resolve_tools(tools_cfg, _prebuilt_plain_tools(code_exec_enabled(ep)))
+
+    connections = agent_tool_connections(ep, PREBUILT_AGENT_ID)
+
+    def _run_python_factory() -> Any:
+        # Lazy + package-relative: only import the code-exec tool when the exec
+        # connection is declared and enabled for this turn.
+        from .platform.code_exec_tool import build_run_python_tool
+        return build_run_python_tool()
+
+    # Plain + code-exec tools narrowed to (admin-declared − user-disabled) this turn.
+    tools = select_bound_tools(
+        connections,
+        disabled_tools or {},
+        plain_registry=plain_tool_registry(),
+        run_python_factory=_run_python_factory,
+    )
+    # MCP tools declared as `kind: mcp` connections (optional; degrades to none).
+    tools += await load_mcp_tools(mcp_cfg_from_connections(connections))
+
     checkpointer = await ep._open_checkpointer("lg-react", config.database_url)
     return build_prebuilt_agent(
         config, model=model, tools=tools, checkpointer=checkpointer, summary_model=summary_model
     )
-
-
-def _prebuilt_plain_tools(include_code_exec: bool = False):
-    # Imported lazily so a build for lg-solution never imports lg-react's tools.
-    from .solution.lg_prebuilt.tools import build_plain_tools
-    return build_plain_tools(include_code_exec=include_code_exec)
 
 
 def _solution_inputs(
@@ -362,13 +390,17 @@ class LGPortedAgentsBundle(BaseEntrypointWithEconomics):
         # across turns/users — keyed per turn by thread_id in `run_config`, so one
         # graph per agent serves everyone safely.
         #
-        # STATELESSNESS INVARIANT: nothing per-turn lives in-process. Everything on
-        # `self` is a per-PROCESS template or a connection — the compiled graphs and
-        # the held checkpointer connections. Every mutable byte is in shared Postgres
-        # keyed per (agent, user, conversation). So ANY worker can serve ANY turn.
-        self._graphs: Dict[str, Any] = {}
-        self._graph_locks: Dict[str, asyncio.Lock] = {}
-        self._checkpointer_cms: Dict[str, Any] = {}  # held so async PG savers aren't GC'd
+        # SCALED-SERVING INVARIANT: the compiled graph is REBUILT every turn, never
+        # cached in-process. KDCube is distributed — turn 1 can land on worker 1,
+        # turn 2 on worker 2 on machine B — so a process-cached graph would neither
+        # survive the hop nor reflect THIS turn's per-user state (model pick, tool
+        # selection). The only long-lived things on `self` are CONNECTIONS (the
+        # checkpointer, like `pg_pool`): infra, re-established lazily per worker, not
+        # rebuildable state. Every mutable byte is in shared Postgres keyed per
+        # (agent, user, conversation). So ANY worker can serve ANY turn.
+        self._checkpointer_cms: Dict[str, Any] = {}      # held so async PG savers aren't GC'd
+        self._checkpointers: Dict[str, Any] = {}         # opened saver, reused across per-turn builds
+        self._checkpointer_locks: Dict[str, asyncio.Lock] = {}  # open-once guard per agent
 
     # ── one-time provisioning (bundle load) ───────────────────────────────────
 
@@ -441,40 +473,66 @@ class LGPortedAgentsBundle(BaseEntrypointWithEconomics):
             await con.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
 
     async def _open_checkpointer(self, agent_id: str, database_url: str):
-        """Open a LangGraph Postgres checkpointer for one agent on the resolved DSN,
-        falling back to an in-memory saver when no DB is reachable (offline
-        degradation). The cm is held per agent so the async saver isn't GC'd.
+        """Return the LangGraph Postgres checkpointer for one agent, opening it ONCE
+        and reusing it across every per-turn graph rebuild.
 
-        The fallback is LOUD: an in-memory saver keeps NO cross-turn history — every
-        conversation restarts empty on the next process, and a reloaded conversation
-        has no memory. That is a silent, confusing failure if it happens by accident
-        (the usual cause: the declared deps `langgraph-checkpoint-postgres` +
-        `psycopg[binary]` v3 are not installed in the runtime venv, or the DSN is
-        unreachable). We log WHY at WARNING so it is visible, not mysterious."""
-        try:
-            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+        The graph is rebuilt each turn (scaled serving), but the checkpointer is a
+        CONNECTION — infra, like `pg_pool` — so it is opened lazily per agent and
+        held (the cm is retained so the async saver isn't GC'd), not reopened per
+        turn (which would leak a psycopg connection every turn). Concurrency note:
+        `from_conn_string` opens a single connection shared by concurrent turns of
+        this agent — same as the prior cached-graph design; a pooled
+        `AsyncConnectionPool` is a clean follow-up if concurrency grows.
 
-            cm = AsyncPostgresSaver.from_conn_string(database_url)
-            checkpointer = await cm.__aenter__()
-            await checkpointer.setup()
-            self._checkpointer_cms[agent_id] = cm
-            LOGGER.info(
-                "[ported-langgraph] %s checkpointer: durable Postgres (cross-turn history persists)",
-                agent_id,
-            )
-            return checkpointer
-        except Exception:
-            from langgraph.checkpoint.memory import MemorySaver
+        Falls back to an in-memory saver when no DB is reachable (offline
+        degradation). The fallback is LOUD: an in-memory saver keeps NO cross-turn
+        history — every conversation restarts empty on the next process, and a
+        reloaded conversation has no memory. That is a silent, confusing failure if
+        it happens by accident (the usual cause: the declared deps
+        `langgraph-checkpoint-postgres` + `psycopg[binary]` v3 are not installed in
+        the runtime venv, or the DSN is unreachable). We log WHY at WARNING so it is
+        visible, not mysterious. The in-memory fallback is NOT cached (each rebuild
+        retries Postgres, so a transient outage self-heals on the next turn)."""
+        existing = self._checkpointers.get(agent_id)
+        if existing is not None:
+            return existing
 
-            LOGGER.warning(
-                "[ported-langgraph] %s checkpointer FELL BACK to in-memory — cross-turn "
-                "history will NOT persist (lost on restart, absent for reloaded "
-                "conversations). Install `langgraph-checkpoint-postgres` + `psycopg[binary]` "
-                "(v3) in the runtime venv and ensure the DSN is reachable. Cause:",
-                agent_id,
-                exc_info=True,
-            )
-            return MemorySaver()
+        lock = self._checkpointer_locks.get(agent_id)
+        if lock is None:
+            # Safe to create lazily under asyncio: no await between get and set.
+            lock = asyncio.Lock()
+            self._checkpointer_locks[agent_id] = lock
+        async with lock:
+            existing = self._checkpointers.get(agent_id)
+            if existing is not None:
+                return existing
+            try:
+                from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+                cm = AsyncPostgresSaver.from_conn_string(database_url)
+                checkpointer = await cm.__aenter__()
+                await checkpointer.setup()
+                self._checkpointer_cms[agent_id] = cm
+                self._checkpointers[agent_id] = checkpointer
+                LOGGER.info(
+                    "[ported-langgraph] %s checkpointer: durable Postgres (cross-turn history persists)",
+                    agent_id,
+                )
+                return checkpointer
+            except Exception:
+                # NOT cached: the next per-turn rebuild retries Postgres, so a
+                # transient outage self-heals on a later turn.
+                from langgraph.checkpoint.memory import MemorySaver
+
+                LOGGER.warning(
+                    "[ported-langgraph] %s checkpointer FELL BACK to in-memory — cross-turn "
+                    "history will NOT persist (lost on restart, absent for reloaded "
+                    "conversations). Install `langgraph-checkpoint-postgres` + `psycopg[binary]` "
+                    "(v3) in the runtime venv and ensure the DSN is reachable. Cause:",
+                    agent_id,
+                    exc_info=True,
+                )
+                return MemorySaver()
 
     # ── lg-solution model/embedding edge ──────────────────────────────────────
 
@@ -515,29 +573,23 @@ class LGPortedAgentsBundle(BaseEntrypointWithEconomics):
             )
         return None
 
-    # ── the per-agent graph cache ─────────────────────────────────────────────
+    # ── graph build (per turn) ────────────────────────────────────────────────
 
-    async def _ensure_graph(self, agent_id: str) -> Any:
-        """Return the cached graph for `agent_id`, building it lazily under a
-        per-agent lock. Each agent builds with its own deps + checkpointer, storing
-        into the shared tenant/project schema scoped by its agent_id column; the
-        graph is a per-process template, stateless across turns."""
-        graph = self._graphs.get(agent_id)
-        if graph is not None:
-            return graph
-        lock = self._graph_locks.get(agent_id)
-        if lock is None:
-            # Safe to create lazily under asyncio: no await between get and set.
-            lock = asyncio.Lock()
-            self._graph_locks[agent_id] = lock
-        async with lock:
-            graph = self._graphs.get(agent_id)
-            if graph is not None:
-                return graph
-            spec = AGENTS[agent_id]
-            graph = await spec.build_graph(self)
-            self._graphs[agent_id] = graph
-            return graph
+    async def _build_graph(
+        self, agent_id: str, *, disabled_tools: Optional[Dict[str, Any]] = None
+    ) -> Any:
+        """Build the agent's graph FOR THIS TURN — never cached in-process.
+
+        KDCube is distributed (turns hop workers/machines), so a process-cached
+        graph would neither survive the hop nor reflect this turn's per-user state
+        (model pick, tool selection). Each agent builds with its own deps + the
+        SHARED checkpointer connection (opened once per agent, reused — see
+        `_open_checkpointer`), storing into the shared tenant/project schema scoped
+        by its agent_id column. Rebuilding is cheap: the checkpointer is reused, and
+        the rest is pure in-memory graph compilation. `disabled_tools` is this turn's
+        per-user tool opt-outs — the per-turn build is exactly what lets them narrow
+        the bound tool set (lg-react); agents with no tool loop ignore it."""
+        return await AGENTS[agent_id].build_graph(self, disabled_tools=disabled_tools)
 
     # ── the turn (the dispatcher) ─────────────────────────────────────────────
 
@@ -554,7 +606,13 @@ class LGPortedAgentsBundle(BaseEntrypointWithEconomics):
             agent_id = DEFAULT_AGENT_ID
         spec = AGENTS[agent_id]
 
-        graph = await self._ensure_graph(agent_id)
+        # This (user, conversation)'s tool opt-outs from the capabilities widget —
+        # resolved BEFORE the build so they narrow the bound tool set (admin ceiling
+        # ∩ user-enabled). Fails open to {} (every admin-allowed tool stays bound).
+        disabled_tools = await resolve_turn_disabled_tools(self, state, agent_id)
+
+        # Built fresh every turn — no in-process graph cache (scaled serving).
+        graph = await self._build_graph(agent_id, disabled_tools=disabled_tools)
 
         # (state mapping) pull the user's question out of the platform external
         # events; each agent shapes it into its own inputs.

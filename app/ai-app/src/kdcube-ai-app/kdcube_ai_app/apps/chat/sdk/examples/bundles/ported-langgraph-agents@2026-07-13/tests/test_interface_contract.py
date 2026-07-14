@@ -218,8 +218,15 @@ def test_config_template_declares_two_agents_and_both_surfaces() -> None:
     for a in (sol, pre):
         assert all(row["provider"] == "anthropic" for row in a["capabilities"]["models"]["supported"])
 
-    # lg-react tools seam, default mode.
-    assert item_config["tools"]["mode"] == "plain"
+    # lg-react tools are a per-agent CONNECTION LIST (the standard KDCube shape):
+    # the admin ceiling the capabilities picker reads. The vendored plain tools are
+    # declared; code_exec/MCP are commented-out (opt-in), so they don't appear here.
+    assert isinstance(pre["tools"], list)
+    tool_aliases = {str(c.get("alias") or c.get("name")) for c in pre["tools"] if isinstance(c, dict)}
+    assert {"calc", "unit_convert", "kb_search"} <= tool_aliases
+    assert all(str(c.get("kind") or "python") == "python" for c in pre["tools"])
+    # lg-solution has no tool loop, so it carries no tools block.
+    assert "tools" not in sol
 
     # Telegram webhook surface enabled + integration present.
     assert item_config["enabled"]["api"]["public.telegram_webhook.POST"] is True

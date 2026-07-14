@@ -187,9 +187,12 @@ def test_entrypoint_holds_no_per_user_state_across_turns(monkeypatch) -> None:
     class _StubGraph:
         pass
 
-    async def _fake_ensure_graph(agent_id):
-        inst._graphs[agent_id] = _StubGraph()
-        return inst._graphs[agent_id]
+    build_calls: list[str] = []
+
+    async def _fake_build_graph(agent_id, *, disabled_tools=None):
+        # Built fresh every turn (scaled serving) — nothing cached on the instance.
+        build_calls.append(agent_id)
+        return _StubGraph()
 
     async def _fake_stream(graph, inputs, run_config, **kw):
         # Prove the turn is driven by per-turn LOCALS (identity in run_config), not
@@ -203,7 +206,7 @@ def test_entrypoint_holds_no_per_user_state_across_turns(monkeypatch) -> None:
     async def _fake_delivery(_self, runner):
         return await runner()
 
-    monkeypatch.setattr(inst, "_ensure_graph", _fake_ensure_graph)
+    monkeypatch.setattr(inst, "_build_graph", _fake_build_graph)
     # Both stream adapters resolve `stream_graph_turn`/`stream_react_turn` from
     # module globals at call time, so patching them here reaches both agents.
     monkeypatch.setattr(ep_mod, "stream_graph_turn", _fake_stream)
@@ -232,11 +235,12 @@ def test_entrypoint_holds_no_per_user_state_across_turns(monkeypatch) -> None:
     assert out_a["final_answer"] == "stub answer"
     assert out_b["final_answer"] == "stub answer"
 
-    # Only per-PROCESS graph-cache entries were added, keyed per agent — nothing
-    # per user/conversation on the instance.
+    # Scaled serving: the graph is rebuilt EVERY turn (no in-process cache), and
+    # NOTHING new lands on the instance across turns — no per-user/conversation state.
     new_keys = set(inst.__dict__.keys()) - keys_before
-    assert new_keys == set(), new_keys  # dicts were created in __init__
-    assert set(inst._graphs.keys()) == {"lg-solution", "lg-react"}
+    assert new_keys == set(), new_keys
+    assert build_calls == ["lg-solution", "lg-react"]  # one build per turn
+    assert not hasattr(inst, "_graphs")                # no graph cache at all
 
     leaked = [
         k for k, v in inst.__dict__.items()

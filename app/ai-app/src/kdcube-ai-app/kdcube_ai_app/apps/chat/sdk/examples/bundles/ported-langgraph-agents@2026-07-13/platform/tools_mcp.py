@@ -77,6 +77,30 @@ def build_mcp_server_config(mcp_cfg: Dict[str, Any]) -> Dict[str, Dict[str, Any]
     return servers
 
 
+def mcp_cfg_from_connections(connections: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Build the `{servers: {...}}` shape `load_mcp_tools` consumes from the agent's
+    `kind: mcp` tool-connection entries (the standard per-agent tools list). Each MCP
+    connection carries `server_id`/`name`, `url`, optional `transport`/`headers`."""
+    servers: Dict[str, Dict[str, Any]] = {}
+    for conn in connections or []:
+        if str((conn or {}).get("kind") or "").strip().lower() != "mcp":
+            continue
+        server_id = str(
+            conn.get("server_id") or conn.get("server") or conn.get("name") or ""
+        ).strip()
+        url = conn.get("url")
+        if not server_id or not url:
+            continue
+        entry: Dict[str, Any] = {
+            "url": url,
+            "transport": conn.get("transport") or "streamable_http",
+        }
+        if conn.get("headers"):
+            entry["headers"] = dict(conn["headers"])
+        servers[server_id] = entry
+    return {"servers": servers}
+
+
 async def load_mcp_tools(mcp_cfg: Dict[str, Any]) -> List[Any]:
     """Load a KDCube-served MCP endpoint's tools as LangChain tools.
 

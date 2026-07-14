@@ -123,16 +123,29 @@ def kb_search(query: str) -> str:
     return "\n\n".join(f"[{d['title']}] {d['text']}" for d in hits)
 
 
-def build_plain_tools(*, include_code_exec: bool = False) -> list:
-    """The default plain-tool set the agent binds. A single place so the graph
-    builder and any host stay free of tool-construction detail.
+# The plain tools this agent can bind, keyed by tool name (each object's `.name`).
+# A registry (not a fixed list) so the host can bind EXACTLY the subset an admin
+# declares in config and a user leaves enabled — the per-agent tool picker's ceiling
+# (see platform/tool_pick.py). `run_python` is not here: it is built on demand
+# (build_run_python_tool) only when the code-exec connection is declared.
+def plain_tool_registry() -> dict:
+    """name -> LangChain @tool for the vendored plain tools (calc, unit_convert,
+    kb_search). A fresh dict per call so callers may bind independent instances."""
+    return {"calc": calc, "unit_convert": unit_convert, "kb_search": kb_search}
 
-    ``include_code_exec`` (config-gated by the host) appends the platform
-    ``run_python`` tool — a model-callable code-execution tool whose produced files
-    are hosted into conversation storage like a user attachment. It is additive:
-    off by default so the standalone plain-tool set is unchanged, and even when
-    bound it is inert unless a code-exec scope is active (see platform/code_exec)."""
-    tools = [calc, unit_convert, kb_search]
+
+def build_plain_tools(*, include_code_exec: bool = False) -> list:
+    """The full plain-tool set (all three vendored tools), optionally plus
+    ``run_python``. A single place so the graph builder and any host stay free of
+    tool-construction detail. Used as the OFFLINE / no-picker default; the hosted
+    path narrows to the admin-declared, user-enabled subset via
+    platform/tool_pick.py.
+
+    ``include_code_exec`` appends the platform ``run_python`` tool — a
+    model-callable code-execution tool whose produced files are hosted into
+    conversation storage like a user attachment. Additive, and inert unless a
+    code-exec scope is active (see platform/code_exec)."""
+    tools = list(plain_tool_registry().values())
     if include_code_exec:
         # Package-relative, lazy: the standalone plain tools stay dependency-free
         # and this import only happens when the host enables code execution.
