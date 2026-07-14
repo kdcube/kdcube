@@ -233,7 +233,9 @@ _CATALOG_CSS = """
   .kdcpub-hero{margin:0 0 4px}
   .kdcpub-eyebrow{font-size:12px;font-weight:700;letter-spacing:.15em;color:var(--kdcpub-accent-dark);text-transform:uppercase}
   .kdcpub-hero h1{font-family:var(--kdcpub-display);font-weight:600;font-size:clamp(28px,4.2vw,36px);line-height:1.12;letter-spacing:-.01em;margin:8px 0;color:var(--kdcpub-ink)}
-  .kdcpub-sub{color:var(--kdcpub-dim);font-size:15px;line-height:1.55;max-width:62ch;margin:0 0 10px}
+  /* Always reserve two lines: fold descriptions differ in length, and a
+     1-vs-2-line subtitle would shift everything below when switching folds. */
+  .kdcpub-sub{color:var(--kdcpub-dim);font-size:15px;line-height:1.55;max-width:62ch;margin:0 0 10px;min-height:3.1em}
   .kdcpub-meta{color:var(--kdcpub-muted);font-size:13px;font-variant-numeric:tabular-nums}
   .kdcpub-meta a{color:var(--kdcpub-accent-dark)}
   /* toolbar — segmented fold control + quiet search, one stable row */
@@ -260,7 +262,9 @@ _CATALOG_CSS = """
   .kdcpub-row h2{margin:0 0 5px;font-size:16.5px;line-height:1.35;font-weight:650}
   .kdcpub-row h2 a{color:var(--kdcpub-ink);text-decoration:none}
   .kdcpub-row h2 a:hover{color:var(--kdcpub-accent-dark)}
-  .kdcpub-row p{margin:0 0 8px;color:var(--kdcpub-dim);font-size:13.5px;line-height:1.55;max-width:76ch;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  /* Clamp AND reserve two lines, so every row is the same height whether its
+     summary runs one line, two, or is absent — no jumping between rows/pages. */
+  .kdcpub-row p{margin:0 0 8px;color:var(--kdcpub-dim);font-size:13.5px;line-height:1.55;max-width:76ch;min-height:3.1em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   .kdcpub-row-meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
   .kdcpub-row-meta .kdcpub-date{font-size:12.5px;margin-left:auto}
   /* deliberate empty state */
@@ -471,8 +475,10 @@ def _terms_html(entry: PublicContentIndexEntry, *, limit: int = 5) -> str:
 
 def _catalog_row(entry: PublicContentIndexEntry, *, item_url: str) -> str:
     """One article row in the catalog band: title, clamped summary, then a
-    quiet meta line (kicker badge + tag chips, date right-aligned)."""
-    summary = f"<p>{_esc(entry.summary)}</p>" if entry.summary else ""
+    quiet meta line (kicker badge + tag chips, date right-aligned). The summary
+    paragraph renders even when empty — it reserves its two lines so every row
+    is the same height."""
+    summary = f"<p>{_esc(entry.summary)}</p>"
     kicker = (
         f'<span class="kdcpub-rubric">{_esc(entry.kicker)}</span>' if entry.kicker else ""
     )
@@ -672,7 +678,9 @@ def render_catalog_page(
     eyebrow = (
         f'<div class="kdcpub-eyebrow">{_esc(catalog.eyebrow)}</div>' if catalog.eyebrow else ""
     )
-    subtitle = f'<p class="kdcpub-sub">{_esc(catalog.subtitle)}</p>' if catalog.subtitle else ""
+    # Rendered even when empty: the subtitle reserves two lines so switching
+    # between folds with short/long/no descriptions never shifts the layout.
+    subtitle = f'<p class="kdcpub-sub">{_esc(catalog.subtitle)}</p>'
 
     body = (
         f"{header}\n"
