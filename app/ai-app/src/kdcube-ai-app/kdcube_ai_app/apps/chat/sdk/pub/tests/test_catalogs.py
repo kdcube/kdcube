@@ -7,6 +7,7 @@ hot-index schema upgrade path."""
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import pathlib
 
@@ -122,7 +123,7 @@ def _seed(tmp_path) -> None:
     asyncio.run(_registry(tmp_path).publish_many(items))
 
 
-def _serve(tmp_path, path_tail: str, *, workflow=None, query_params=None):
+def _serve(tmp_path, path_tail: str, *, workflow=None, query_params=None, props=None):
     import kdcube_ai_app.apps.chat.sdk.pub.service as service_mod
 
     original = service_mod.BundleArtifactStorage
@@ -136,7 +137,7 @@ def _serve(tmp_path, path_tail: str, *, workflow=None, query_params=None):
         return asyncio.run(serve_public_content(
             workflow=workflow or _App(),
             tenant="t1", project="p1", bundle_id="news@test",
-            props=_PROPS,
+            props=props or _PROPS,
             hot_root=tmp_path / "hot",
             path_tail=path_tail,
             serving_base_url=_BASE,
@@ -151,6 +152,62 @@ def test_catalogs_mapping_form_parses():
     assert [c.prefix for c in config.catalogs] == ["kdcube/blogs", "kdcube/journal"]
     assert config.catalog("kdcube/blogs").label == "Blogs"
     assert config.chrome and config.chrome.links[1].label == "Blog"
+
+
+def test_empty_prefix_declares_alias_root_catalog():
+    props = copy.deepcopy(_PROPS)
+    props["public_content"]["news"]["catalogs"] = {
+        "": {"title": "All writing", "nav_label": "All"},
+        "kdcube/blogs": {"title": "Engineering"},
+    }
+    config = resolve_alias_configs(props)["news"]
+    assert [c.prefix for c in config.catalogs] == ["", "kdcube/blogs"]
+    assert config.catalog("").covers("industry/ai/2026-07-05-eps") is True
+    assert config.canonical_url("") == "https://kdcube.tech/news"
+
+
+def test_alias_root_can_redirect_to_a_declared_catalog(tmp_path):
+    _seed(tmp_path)
+    props = copy.deepcopy(_PROPS)
+    props["public_content"]["news"]["root_redirect"] = "industry/ai"
+    props["public_content"]["news"]["catalogs"]["industry/ai"] = {
+        "title": "AI Industry News",
+    }
+    response = _serve(tmp_path, "news", props=props)
+    assert response.status_code == 302
+    assert response.headers["Location"] == "https://kdcube.tech/news/industry/ai"
+
+
+def test_alias_root_redirect_must_name_a_non_empty_catalog():
+    props = copy.deepcopy(_PROPS)
+    props["public_content"]["news"]["root_redirect"] = "industry/ai"
+    assert "news" not in resolve_alias_configs(props)
+
+    props["public_content"]["news"]["catalogs"][""] = {"title": "All"}
+    props["public_content"]["news"]["catalogs"]["industry/ai"] = {
+        "title": "AI Industry News",
+    }
+    assert "news" not in resolve_alias_configs(props)
+
+
+def test_alias_root_catalog_lists_every_published_item(tmp_path):
+    _seed(tmp_path)
+    props = copy.deepcopy(_PROPS)
+    props["public_content"]["news"]["catalogs"] = {
+        "": {"title": "All writing", "nav_label": "All", "page_size": 10},
+        "kdcube/blogs": {"title": "Engineering"},
+        "kdcube/journal": {"title": "Journal"},
+    }
+    page = _serve(tmp_path, "news", props=props).content.decode("utf-8")
+    assert "All writing" in page
+    assert "Gamma article" in page
+    assert "Delta note" in page
+    assert "Industry digest" in page
+    assert 'rel="canonical" href="https://kdcube.tech/news"' in page
+
+    payload = json.loads(_serve(tmp_path, "", props=props).content)
+    catalog_sitemaps = payload["sitemaps"][0]["catalog_sitemaps"]
+    assert all(row["prefix"] for row in catalog_sitemaps)
 
 
 def test_catalog_page_lists_newest_first_with_pagination(tmp_path):

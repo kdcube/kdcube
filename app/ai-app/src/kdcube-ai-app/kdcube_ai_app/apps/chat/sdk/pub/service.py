@@ -179,6 +179,15 @@ def _not_found(detail: str) -> BundleBinaryResponse:
     return _binary(json.dumps({"detail": detail}), _JSON, status_code=404)
 
 
+def _redirect(location: str) -> BundleBinaryResponse:
+    return BundleBinaryResponse(
+        content=b"",
+        media_type="text/plain; charset=utf-8",
+        headers={"Location": location},
+        status_code=302,
+    )
+
+
 # ------------------ catalog helpers ------------------
 
 
@@ -395,6 +404,8 @@ async def serve_public_content(
       (what a host reads to build its top-level sitemap index);
     - ``<alias>/sitemap.xml`` — the per-alias sitemap;
     - ``<alias>/<catalog-prefix>/sitemap.xml`` — one filtered catalog sitemap;
+    - ``<alias>`` — either the optional root catalog (configured with an empty
+      prefix) or a redirect to ``root_redirect``;
     - ``<alias>/<catalog-prefix>`` — a configured catalog: the server-rendered,
       paginated (``?offset=``), searchable (``?q=``) listing page;
     - ``<alias>/<slug…>`` — the crawlable item page (410 when retracted);
@@ -478,7 +489,23 @@ async def serve_public_content(
         return _binary(xml, _XML)
 
     if not rest:
-        return _not_found("Missing content slug")
+        if config.root_redirect:
+            target = config.canonical_url(config.root_redirect)
+            if not target:
+                target = f"{_alias_base(alias)}/{config.root_redirect}"
+            return _redirect(target)
+        root_catalog = config.catalog("")
+        if root_catalog is None:
+            return _not_found("Missing content slug")
+        return await _serve_catalog_page(
+            workflow=workflow,
+            bundle_id=bundle_id,
+            config=config,
+            catalog=root_catalog,
+            registry=registry,
+            alias_base=_alias_base(alias),
+            query_params=query_params or {},
+        )
 
     # A configured catalog prefix serves the listing page, not an item.
     catalog = config.catalog(rest)

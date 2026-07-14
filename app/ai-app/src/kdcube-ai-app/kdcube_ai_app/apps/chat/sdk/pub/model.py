@@ -186,7 +186,12 @@ class PublicContentCatalogConfig(BaseModel):
           kdcube/journal: { title: "Our Journal",      accent: "#0969DA" }
     """
 
-    prefix: str = Field(description="Slug prefix this catalog lists (e.g. kdcube/blogs).")
+    prefix: str = Field(
+        description=(
+            "Slug prefix this catalog lists (e.g. engineering). An empty "
+            "prefix declares the alias landing catalog and covers every item."
+        )
+    )
     title: str = ""
     nav_label: str = Field(
         default="",
@@ -206,6 +211,8 @@ class PublicContentCatalogConfig(BaseModel):
     @field_validator("prefix")
     @classmethod
     def _validate_prefix(cls, value: str) -> str:
+        if not str(value or "").strip().strip("/"):
+            return ""
         return normalize_slug_path(value)
 
     @property
@@ -214,6 +221,8 @@ class PublicContentCatalogConfig(BaseModel):
 
     def covers(self, slug: str) -> bool:
         clean = str(slug or "").strip("/")
+        if not self.prefix:
+            return True
         return clean == self.prefix or clean.startswith(self.prefix + "/")
 
 
@@ -256,6 +265,14 @@ class PublicContentAliasConfig(BaseModel):
             "path. Empty = derive from the serving route."
         ),
     )
+    root_redirect: str = Field(
+        default="",
+        description=(
+            "Optional non-empty catalog prefix to redirect the alias root to "
+            "(e.g. industry/ai). Mutually exclusive with an empty-prefix "
+            "root catalog."
+        ),
+    )
     sitemap: bool = True
     og_defaults: OpenGraphDefaults = Field(default_factory=OpenGraphDefaults)
     catalogs: List[PublicContentCatalogConfig] = Field(default_factory=list)
@@ -284,11 +301,32 @@ class PublicContentAliasConfig(BaseModel):
             raise ValueError(f"invalid public content alias: {value!r}")
         return alias
 
+    @field_validator("root_redirect")
+    @classmethod
+    def _validate_root_redirect(cls, value: str) -> str:
+        clean = str(value or "").strip().strip("/")
+        return normalize_slug_path(clean) if clean else ""
+
+    @model_validator(mode="after")
+    def _validate_root_landing(self) -> "PublicContentAliasConfig":
+        if not self.root_redirect:
+            return self
+        if self.catalog("") is not None:
+            raise ValueError(
+                "root_redirect cannot be combined with an empty-prefix root catalog"
+            )
+        if self.catalog(self.root_redirect) is None:
+            raise ValueError(
+                "root_redirect must name a configured non-empty catalog prefix"
+            )
+        return self
+
     def canonical_url(self, slug: str) -> str:
         base = (self.canonical_base or "").rstrip("/")
         if not base:
             return ""
-        return f"{base}/{slug}"
+        clean = str(slug or "").strip("/")
+        return f"{base}/{clean}" if clean else base
 
     def catalog(self, prefix: str) -> Optional[PublicContentCatalogConfig]:
         """The catalog configured for exactly this prefix, if any."""

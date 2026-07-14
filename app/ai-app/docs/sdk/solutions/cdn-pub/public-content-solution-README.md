@@ -178,9 +178,14 @@ public_content:
   news:
     enabled: true
     canonical_base: https://site.example/news
+    # Use this instead of catalogs."" when the alias should open one fold.
+    # root_redirect: engineering
     catalogs:                       # keyed by slug prefix
-      kdcube/blogs:
-        title: Engineering blog     # hero + rail title
+      "":                           # optional alias landing page
+        title: All writing          # covers every item in the alias
+        nav_label: All
+      engineering:
+        title: Engineering          # hero + rail title
         nav_label: Blogs            # short fold-pill label (defaults to title)
         eyebrow: KDCube Press
         subtitle: Deep dives from building the platform.
@@ -188,7 +193,7 @@ public_content:
         background: '#F6FAFA'       # page tint — per-fold color world
         border: '#D8ECEB'
         page_size: 10
-      kdcube/journal:
+      journal:
         title: Our Journal
         accent: '#0969DA'
         background: '#F4F9FF'
@@ -198,7 +203,7 @@ public_content:
       logo_url: https://site.example/assets/logo.svg
       links:
         - { label: Home, href: 'https://site.example/' }
-        - { label: Blog, href: 'https://site.example/news/kdcube/blogs' }
+        - { label: Blog, href: 'https://site.example/news/engineering' }
 ```
 
 Behavior and guarantees:
@@ -206,6 +211,15 @@ Behavior and guarantees:
 - **Everything renders from the hot index** — a catalog request costs index
   reads only, no durable backend, no app operation. Entries sort newest
   first by `published_at`; only `published` items appear.
+- **An empty prefix is the alias landing catalog** — `""` serves directly at
+  `canonical_base`, covers every published item in the alias, and carries its
+  own canonical tag. It is included once in the alias sitemap, not repeated as
+  a child-catalog sitemap.
+- **A root redirect is the alternative landing policy** — set
+  `root_redirect: <catalog-prefix>` to return an HTTP `302` from the alias root
+  to that configured non-empty catalog. `root_redirect` and `catalogs.""` are
+  mutually exclusive. This is app/runtime configuration; Caddy or CloudFront
+  only maps the clean alias path to `public/__content__`.
 - **Pagination is server-side** (`?offset=`, prev/next links) — crawlable,
   works without JavaScript.
 - **Search** (`?q=`) is a plain GET form round-trip: results render
@@ -271,9 +285,11 @@ crawler / shared link
    ▼
 site CDN (https://site.example)
    ├─ static site               → /, /docs/*, sitemap.xml, robots.txt
-   └─ ordered behavior /news/*  → custom origin = the runtime host
+   ├─ ordered behavior /news/*  → custom origin = the runtime host
+   └─ ordered behavior /blog/*  → the same runtime origin
         + viewer-request function rewriting the URI:
           /news/<rest> → /api/integrations/bundles/<t>/<p>/<app>/public/__content__/news/<rest>
+          /blog/<rest> → /api/integrations/bundles/<t>/<p>/<app>/public/__content__/blog/<rest>
               │
               ▼
         runtime CDN → proxy (public location) → proc → __content__ handler → hot tier
@@ -283,9 +299,9 @@ The three configuration pieces, each in its owner's home:
 
 | Piece | Owner | Value |
 | --- | --- | --- |
-| `canonical_base` | runtime descriptor (`public_content.<alias>` block) | `https://site.example/news` — item pages, JSON-LD `url`, and sitemap `<loc>` all use it |
-| path behavior + URI-rewrite function | the **site's** CDN distribution | maps the clean prefix to the `__content__` route (CDN routes by path but does not rewrite it — a small viewer-request function does) |
-| federation | the website build | `Sitemap: https://site.example/news/sitemap.xml` plus any independently monitored catalog sitemap in `robots.txt`; matching `<sitemap>` entries in the site's sitemap index |
+| `canonical_base` | runtime descriptor (`public_content.<alias>` block) | one clean prefix per alias, such as `https://site.example/news` and `https://site.example/blog` |
+| path behavior + URI-rewrite function | the **site's** CDN distribution | maps each clean alias prefix to its matching `__content__/<alias>` route |
+| federation | the website build | one sitemap entry per enabled public alias, plus independently monitored catalog sitemaps when useful |
 
 Result for a crawler: `robots.txt` → site sitemap index → the app's
 runtime-generated sitemap (accurate `lastmod`) → clean item URLs, each

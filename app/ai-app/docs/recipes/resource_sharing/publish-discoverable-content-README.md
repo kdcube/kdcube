@@ -4,7 +4,7 @@ title: "Publish Discoverable Content From An App"
 summary: "Step-by-step recipe for making an app a public content provider: declare @public_content, adapt your domain objects to PublicContentItem, wire publish/retract hooks and a Publish-to-Web seed, configure the public_content block (singleton, canonical_base), verify with curl, map clean canonical URLs, federate into the site's robots.txt and sitemap index, and give the set a browsable face — config-declared catalogs with search/pagination/site chrome and the @public_content_search hook."
 status: active
 tags: ["recipes", "resource-sharing", "public-content", "seo", "sitemap", "jsonld", "crawlable", "cdn", "bundle", "catalogs", "search"]
-updated_at: 2026-07-10
+updated_at: 2026-07-14
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/public-content-provider-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/cdn-pub/public-content-solution-README.md
@@ -278,6 +278,7 @@ public_content:
     enabled: true
     canonical_base: https://example.com/articles
     catalogs:
+      "":     { title: "All articles", nav_label: "All" }
       guides: { title: "Guides",  accent: "#01BEB2", background: "#F6FAFA" }
       blog:   { title: "Blog",    accent: "#0969DA", background: "#F4F9FF" }
     chrome:
@@ -289,11 +290,33 @@ public_content:
         - { label: Blog,   href: 'https://example.com/articles/blog' }
 ```
 
-`https://example.com/articles/blog` now answers the catalog page (it also
-joins the sitemap); every `articles/blog/...` item page gets the chrome and
+`https://example.com/articles` now answers the alias-root catalog over every
+published item. `https://example.com/articles/blog` answers the filtered Blog
+catalog page (both join the alias sitemap); every
+`articles/blog/...` item page gets the chrome and
 the rail; per-fold accent/background give each catalog its own color world.
 The authored item body renders byte-exact — the shell is namespaced around
 it.
+
+If the alias should open one fold instead of an aggregate landing page, omit
+the empty-prefix catalog and configure a redirect to a declared non-empty
+catalog:
+
+```yaml
+public_content:
+  articles:
+    enabled: true
+    canonical_base: https://example.com/articles
+    root_redirect: blog
+    catalogs:
+      guides: { title: "Guides" }
+      blog:   { title: "Blog" }
+```
+
+`GET /articles` now returns `302 Location:
+https://example.com/articles/blog`. The platform validates that `blog` exists
+in `catalogs`; the reverse proxy only forwards `/articles*` and contains no
+content-specific redirect rule.
 
 Search defaults to a lexical match over the index. If your app owns a better
 engine, declare the hook — the platform calls it in-process and renders the

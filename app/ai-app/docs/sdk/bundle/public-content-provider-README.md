@@ -58,11 +58,16 @@ public_content:
   articles:
     enabled: true                                  # explicit exposure — off by default
     canonical_base: "https://example.com/articles" # clean canonical prefix (CDN-mapped)
+    # Optional alternative to catalogs."": redirect the alias root to one
+    # declared non-empty catalog, for example: root_redirect: engineering
     sitemap: true
     og_defaults:
       site_name: "Example"
       image: "https://example.com/og-default.png"
       twitter_site: "@example"
+    catalogs:
+      "": { title: "All articles", nav_label: "All" } # optional alias root
+      engineering: { title: "Engineering" }
 ```
 
 - `enabled: false` (or an absent block) means nothing is public and app-side
@@ -71,6 +76,14 @@ public_content:
   operator maps a clean prefix (CDN behavior / reverse-proxy rewrite) and
   `rel=canonical`, JSON-LD `url`, and sitemap `<loc>` all use it. Empty =
   serving-route URLs (fine for local verification).
+- `catalogs.""` declares an optional alias landing page. The empty prefix
+  covers all published items and serves directly at `canonical_base`; named
+  prefixes remain filtered folds beneath it.
+- `root_redirect` declares the other alias-root policy: an HTTP `302` from the
+  alias root to one configured non-empty catalog. It is mutually exclusive
+  with `catalogs.""`, and the target must be present in `catalogs`. The
+  platform uses `canonical_base` for the clean `Location` when configured;
+  the reverse proxy only maps the alias and does not own this decision.
 
 ### Singleton requirement
 
@@ -124,6 +137,7 @@ Once declared + enabled, with no further app code:
 ```text
 GET …/public/__content__                         descriptor list (host federation)
 GET …/public/__content__/{alias}/sitemap.xml     per-alias sitemap
+GET …/public/__content__/{alias}                 optional alias-root catalog
 GET …/public/__content__/{alias}/{catalog-prefix}/sitemap.xml
                                                   filtered catalog sitemap
 GET …/public/__content__/{alias}/{slug…}         crawlable item page / 410 / 404
