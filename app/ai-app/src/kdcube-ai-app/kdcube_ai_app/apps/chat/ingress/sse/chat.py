@@ -397,16 +397,38 @@ class SSEHub:
                         for client in clients
                         if client.project_events and client.tenant == tenant and client.project == project
                     ]
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(
-                        "[SSEHub._on_relay] project event event=%s type=%s tenant=%s project=%s recipients=%d",
-                        event,
+                    if not recipients:
+                        # Trace why nothing matched: the registered population
+                        # with their scope/flag is the whole answer. Project
+                        # events are low-rate, so INFO is affordable.
+                        population = [
+                            f"{client.tenant}:{client.project}"
+                            f":pe={'y' if client.project_events else 'n'}"
+                            f":{client.stream_id or client.session_id}"
+                            for clients in self._by_session.values()
+                            for client in clients
+                        ]
+                # Delivery trace at INFO: project events are the live-update
+                # backbone for scene widgets (task changes, stats snapshots)
+                # and are low-volume — this line is the one observable that
+                # says whether a broadcast reached SSE clients, and which.
+                logger.info(
+                    "[SSEHub._on_relay] project event event=%s type=%s tenant=%s project=%s recipients=%d streams=%s",
+                    event,
+                    (data or {}).get("type"),
+                    tenant,
+                    project,
+                    len(recipients),
+                    [client.stream_id or client.session_id for client in recipients],
+                )
+                if not recipients:
+                    logger.info(
+                        "[SSEHub._on_relay] project event dropped (no matching clients) type=%s tenant=%s project=%s registered=%s",
                         (data or {}).get("type"),
                         tenant,
                         project,
-                        len(recipients),
+                        population,
                     )
-                if not recipients:
                     return
                 frame = _sse_frame(event, data, event_id=str(uuid.uuid4()))
                 for client in recipients:

@@ -263,12 +263,22 @@ class ChatRelayCommunicator:
             tenant: str,
             project: str,
     ) -> None:
+        channel = self._project_channel(tenant=tenant, project=project)
+        # Publish trace pairs with the SSEHub project-event delivery log: the
+        # two lines together show a broadcast's channel on both sides of the
+        # relay. Project events are low-volume, so INFO is affordable.
+        logger.info(
+            "[ChatRelayCommunicator] emit_project event=%s type=%s channel=%s",
+            event,
+            (data or {}).get("type"),
+            channel,
+        )
         await self._comm.pub(
             event=event,
             data=data,
             target_sid=None,
             session_id=PROJECT_BROADCAST_ROOM,
-            channel=self._project_channel(tenant=tenant, project=project),
+            channel=channel,
         )
 
     async def emit_start(self, service: ServiceCtx, conv: ConversationCtx, *, message: str, queue_stats: Dict[str, Any] | None = None, target_sid: Optional[str] = None, session_id: Optional[str] = None):
