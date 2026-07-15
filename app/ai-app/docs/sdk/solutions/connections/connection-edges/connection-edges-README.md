@@ -187,6 +187,10 @@ The live update event is:
 connection_hub.edge.changed
 ```
 
+(The delegated-access grant registry has its own sibling event,
+`connection_hub.delegated_access.changed` — see
+[Delegated Connections → Live Delivery](../delegated-connections/delegated-connections-README.md#live-delivery-to-open-hubs).)
+
 ## Delegated Client Edge Example
 
 For an external client such as Claude, the edge is not a human identity link in

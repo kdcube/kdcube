@@ -124,6 +124,11 @@ its delegated grants cannot drift apart.
 Issued access records shown by Connection Hub expose this map, not a standalone
 `resources` field or standalone `grants` field.
 
+The Granted Access list updates live: grants landing out-of-band (an OAuth
+consent completing in another tab or client) and revocations push to every
+open hub over the widget's federated Data Bus session — see
+[Delegated Connections → Live Delivery](../../sdk/solutions/connections/delegated-connections/delegated-connections-README.md#live-delivery-to-open-hubs).
+
 ## Runtime Use
 
 An automation calls KDCube with the issued bearer token:

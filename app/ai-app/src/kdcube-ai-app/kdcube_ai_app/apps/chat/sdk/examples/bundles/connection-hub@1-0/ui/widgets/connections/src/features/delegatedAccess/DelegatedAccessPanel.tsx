@@ -1,6 +1,7 @@
-import { FormEvent, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { useAppDispatch, useAppSelector } from '../../app/hooks';
 import { PaneGroup } from '../../components/Pane';
+import { subscribeConnectionHubEvents } from '../../api/dataBus';
 import {
   clearIssuedDelegatedAccess,
   createDelegatedAccess,
@@ -38,6 +39,16 @@ export function DelegatedAccessPanel() {
     [resourceGrants],
   );
   const canSubmit = selectedResourceEntries.length > 0;
+
+  // Live delivery: a grant can land out-of-band (an OAuth consent completing
+  // in another tab/app) or be revoked elsewhere — refetch when the registry
+  // announces a change for this user over the data bus.
+  useEffect(() => {
+    return subscribeConnectionHubEvents((event) => {
+      if (event.type !== 'connection_hub.delegated_access.changed') return;
+      void dispatch(loadDelegatedAccess());
+    });
+  }, [dispatch]);
 
   const grantsForResource = (resource: typeof resources[number]): string[] => {
     const grants = resource.grants?.length

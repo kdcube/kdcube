@@ -532,6 +532,7 @@ Choose transport by interaction shape:
 | progress/result event back to current browser peer | request-bound comm stream with `KDC-Stream-ID` |
 | conversation user prompt and attached context | chat submit with `external_events[]` |
 | cross-widget open/focus request | subsystem resolver emits Data Bus or comm UI event |
+| out-of-band state change pushed to an open authenticated widget | session-routed relay envelope to the widget's own federated Data Bus session (e.g. `connection_hub.delegated_access.changed` — [pattern](../solutions/connections/delegated-connections/delegated-connections-README.md#live-delivery-to-open-hubs)) |
 
 Do not introduce raw WebSocket/SSE endpoints inside a subsystem. Use the shared
 platform transports.

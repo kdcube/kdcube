@@ -56,6 +56,116 @@ AUTOMATION_CLIENT_PREFIX = "automation"
 AUTOMATION_ACCESS_DEFAULT_TTL_SECONDS = ACCESS_TOKEN_TTL_SECONDS
 ALL_RESOURCES_RESOURCE = "*"
 
+# Live delivery: registry mutations (an OAuth consent lands a grant, a manual
+# token is created, anything is revoked) are pushed to the user's OPEN
+# Connection Hub widgets over the Data Bus. The widget registers its federated
+# data-bus session at claim time; mutations fan out to every live session of
+# the grantor. Event type consumed by the widget:
+DELEGATED_ACCESS_CHANGED_EVENT = "connection_hub.delegated_access.changed"
+
+_LOGGER = __import__("logging").getLogger("connection_hub.delegated_access")
+
+
+def _live_sessions_key(tenant: str, project: str, grantor_subject: str) -> str:
+    return (
+        f"{_clean(tenant)}:{_clean(project)}:kdcube:delegated-access:"
+        f"live-sessions:{_subject_key(_clean(grantor_subject))}"
+    )
+
+
+async def register_delegated_access_live_session(
+    redis: Any,
+    *,
+    tenant: str,
+    project: str,
+    grantor_subject: str,
+    session_id: str,
+    expires_at: int | float | None = None,
+) -> None:
+    """Remember a user's live Connection Hub data-bus session so registry
+    mutations can be pushed to it. Members expire with the session token."""
+    subject = _clean(grantor_subject)
+    sid = _clean(session_id)
+    if not subject or not sid:
+        return
+    now = int(time.time())
+    score = int(expires_at or 0) or (now + 3600)
+    key = _live_sessions_key(tenant, project, subject)
+    await redis.zadd(key, {sid: score})
+    await redis.zremrangebyscore(key, "-inf", now)
+    await redis.expire(key, BUNDLE_SESSION_MAX_TTL_SECONDS)
+
+
+async def notify_delegated_access_changed(
+    redis: Any,
+    *,
+    tenant: str,
+    project: str,
+    grantor_subject: str,
+    action: str,
+    access: Mapping[str, Any] | None = None,
+    access_id: str = "",
+    relay: Any = None,
+) -> None:
+    """Fan a registry mutation out to the grantor's live hub sessions.
+
+    Fire-and-forget by contract: a delivery failure must never fail the
+    mutation that triggered it.
+    """
+    subject = _clean(grantor_subject)
+    if not subject:
+        return
+    try:
+        key = _live_sessions_key(tenant, project, subject)
+        now = int(time.time())
+        await redis.zremrangebyscore(key, "-inf", now)
+        session_ids = [
+            sid.decode("utf-8") if isinstance(sid, (bytes, bytearray)) else str(sid)
+            for sid in await redis.zrange(key, 0, -1)
+        ]
+        if not session_ids:
+            return
+        if relay is None:
+            from kdcube_ai_app.apps.chat.emitters import ChatRelayCommunicator
+
+            relay = ChatRelayCommunicator()
+        timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        for sid in session_ids:
+            payload = {
+                "type": DELEGATED_ACCESS_CHANGED_EVENT,
+                "timestamp": timestamp,
+                "service": {
+                    "request_id": f"delegated-access-{_clean(access_id) or action}",
+                    "tenant": _clean(tenant),
+                    "project": _clean(project),
+                    "user": subject,
+                },
+                "conversation": {"session_id": sid, "conversation_id": sid, "turn_id": ""},
+                "event": {
+                    "agent": "connection-hub",
+                    "title": "Delegated Access Changed",
+                    "status": "completed",
+                    "step": "connection.delegated_access",
+                },
+                "data": {
+                    "action": action,
+                    "access_id": _clean(access_id) or str((access or {}).get("access_id") or ""),
+                    "access": dict(access or {}),
+                },
+                "route": "chat_service",
+            }
+            await relay.emit(
+                event="chat_service",
+                data=payload,
+                tenant=tenant,
+                project=project,
+                session_id=sid,
+            )
+    except Exception:
+        _LOGGER.exception(
+            "[connection-hub.delegated_access] live notify failed action=%s", action
+        )
+
 
 def _clean(value: Any) -> str:
     return str(value or "").strip()
@@ -513,6 +623,7 @@ class AutomationAccessService:
         await self._redis.setex(self._record_key(access_id), expires_in, json.dumps(record.to_dict()))
         await self._redis.sadd(self._index_key(grantor_subject), access_id)
         await self._redis.expire(self._index_key(grantor_subject), BUNDLE_SESSION_MAX_TTL_SECONDS)
+        await self.notify_change(grantor_subject, action="created", access=record.to_public_dict())
 
         return {
             "ok": True,
@@ -577,6 +688,7 @@ class AutomationAccessService:
         await self._redis.setex(self._record_key(access_id), ttl, json.dumps(record.to_dict()))
         await self._redis.sadd(self._index_key(grantor), access_id)
         await self._redis.expire(self._index_key(grantor), BUNDLE_SESSION_MAX_TTL_SECONDS)
+        await self.notify_change(grantor, action="granted", access=record.to_public_dict())
         return record
 
     async def revoke_access(self, user: Mapping[str, Any], *, access_id: str) -> dict[str, Any]:
@@ -609,6 +721,7 @@ class AutomationAccessService:
         await self._redis.delete(self._record_key(access_id_value))
         if hasattr(self._redis, "srem"):
             await self._redis.srem(self._index_key(grantor_subject), access_id_value)
+        await self.notify_change(grantor_subject, action="revoked", access_id=access_id_value)
         return {
             "ok": True,
             "removed": True,
@@ -616,11 +729,46 @@ class AutomationAccessService:
             "refresh_token_revoked": refresh_revoked,
         }
 
+    # ------------------------- live-session delivery -------------------------
+
+    async def register_live_session(
+        self, grantor_subject: str, session_id: str, expires_at: int | float | None = None
+    ) -> None:
+        await register_delegated_access_live_session(
+            self._redis,
+            tenant=self._tenant,
+            project=self._project,
+            grantor_subject=grantor_subject,
+            session_id=session_id,
+            expires_at=expires_at,
+        )
+
+    async def notify_change(
+        self,
+        grantor_subject: str,
+        *,
+        action: str,
+        access: Mapping[str, Any] | None = None,
+        access_id: str = "",
+    ) -> None:
+        await notify_delegated_access_changed(
+            self._redis,
+            tenant=self._tenant,
+            project=self._project,
+            grantor_subject=grantor_subject,
+            action=action,
+            access=access,
+            access_id=access_id,
+        )
+
 
 __all__ = [
     "ALL_RESOURCES_RESOURCE",
     "AUTOMATION_ACCESS_DEFAULT_TTL_SECONDS",
     "AUTOMATION_ACCESS_SCHEMA",
+    "DELEGATED_ACCESS_CHANGED_EVENT",
     "AutomationAccessRecord",
     "AutomationAccessService",
+    "notify_delegated_access_changed",
+    "register_delegated_access_live_session",
 ]

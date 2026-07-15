@@ -2436,6 +2436,17 @@ class ConnectionHubEntrypoint(BaseEntrypoint):
             grant.session.session_id,
             bool(auth.get("linked")),
         )
+        # Register this live data-bus session for the user so delegated-access
+        # registry mutations (OAuth grants landing out-of-band, revocations)
+        # are pushed to the open widget in real time. Never fails the claim.
+        try:
+            live_subject = platform_user_id or actor_user_id
+            if live_subject:
+                await _automation_access_service(self, request).register_live_session(
+                    live_subject, grant.session.session_id, grant.expires_at
+                )
+        except Exception:
+            LOGGER.exception("[connection-hub.data_bus] live-session registration failed")
         return {
             "ok": True,
             "schema": "kdcube.federated_token_claim.v1",

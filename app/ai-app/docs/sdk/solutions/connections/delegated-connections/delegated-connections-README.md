@@ -391,6 +391,35 @@ Public listings never expose token material — only metadata (label, source,
 resource grants, created/approved and expiry times, token last-four for
 manual rows).
 
+### Live Delivery To Open Hubs
+
+Registry mutations reach an OPEN Connection Hub widget in real time — an OAuth
+consent completing in another tab (or another client entirely) lands its row
+without a refresh, and a revocation disappears everywhere at once.
+
+```text
+event                connection_hub.delegated_access.changed
+emitted on           oauth grant recorded · manual token created · grant revoked
+delivered over       the widget's OWN federated Data Bus session (chat_service
+                     envelopes routed by session_id)
+session registry     {t}:{p}:kdcube:delegated-access:live-sessions:<sha256(user)>
+                     — a ZSET of live session_ids scored by expiry, registered
+                     when the widget claims its federated Data Bus token and
+                     pruned as sessions expire
+contract             fire-and-forget: a delivery failure never fails the
+                     mutation (mirrors "registry writes never fail issuance")
+```
+
+The transport choice is deliberate: these events are **session-routed to the
+authenticated widget**, so they ride the widget's own federated Data Bus
+socket in every host — a bundle scene and an embedding website page alike. A
+scene host's centralized event channel (`liveEventsTransport: "scene"`) is the
+right shape for broadcast families such as stats snapshots; it cannot claim
+the hub's per-user session, and an embedding page stays auth-neutral, so the
+hub keeps its own socket. The widget subscribes exactly like the identity
+link panel does (`subscribeConnectionHubEvents`) and refetches the list on
+the event.
+
 ## Current KDCube Services MCP Example
 
 The built-in example for inbound delegated external clients is

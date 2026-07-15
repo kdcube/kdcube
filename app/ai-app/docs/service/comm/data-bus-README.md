@@ -201,7 +201,10 @@ The preferred shared-identity path is Connection Hub's
 `federated_data_bus_claim` operation. Connection Hub validates promoted
 upstream auth context, resolves identity links when present, creates or
 refreshes the actor `UserSession`, stores projected authority on that session,
-and returns a short-lived Data Bus token.
+and returns a short-lived Data Bus token. The claim also registers the session
+in the hub's per-user live-session registry, so delegated-access registry
+mutations push to the open widget in real time — see
+[Delegated Connections → Live Delivery](../../sdk/solutions/connections/delegated-connections/delegated-connections-README.md#live-delivery-to-open-hubs).
 
 A bundle-owned public claim endpoint may also issue the same token shape when
 the bundle owns a custom authority. It must validate upstream proof and build

@@ -425,3 +425,78 @@ async def test_oauth_grant_registers_lists_and_revokes():
     assert store.revoked_refresh == ["refresh-2"]
     assert store.revoked_access == ["kst1.oauth.token2"]
     assert (await service.list_access(user))["items"] == []
+
+
+async def test_live_sessions_receive_delegated_access_changes():
+    """A registered live hub session is notified on grant record and revoke;
+    expired sessions are pruned and receive nothing."""
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.automation_access import (
+        DELEGATED_ACCESS_CHANGED_EVENT,
+        notify_delegated_access_changed,
+        register_delegated_access_live_session,
+    )
+
+    class _ZRedis(_Redis):
+        def __init__(self) -> None:
+            super().__init__()
+            self.zsets: dict[str, dict[str, float]] = {}
+
+        async def zadd(self, key: str, mapping: dict[str, float]):
+            self.zsets.setdefault(key, {}).update(mapping)
+
+        async def zremrangebyscore(self, key: str, low, high):
+            members = self.zsets.get(key, {})
+            low_v = float("-inf") if low == "-inf" else float(low)
+            high_v = float("inf") if high == "+inf" else float(high)
+            for member in [m for m, s in members.items() if low_v <= s <= high_v]:
+                members.pop(member, None)
+
+        async def zrange(self, key: str, start: int, end: int):
+            members = sorted(self.zsets.get(key, {}).items(), key=lambda kv: kv[1])
+            stop = len(members) if end == -1 else end + 1
+            return [m for m, _ in members[start:stop]]
+
+    class _Relay:
+        def __init__(self) -> None:
+            self.emitted: list[dict] = []
+
+        async def emit(self, *, event, data, tenant, project, session_id):
+            self.emitted.append(
+                {"event": event, "type": data.get("type"), "session_id": session_id,
+                 "action": (data.get("data") or {}).get("action")}
+            )
+
+    redis = _ZRedis()
+    relay = _Relay()
+    import time as _time
+    now = int(_time.time())
+
+    await register_delegated_access_live_session(
+        redis, tenant="demo-tenant", project="demo-project",
+        grantor_subject="platform-user-1", session_id="live-1", expires_at=now + 600,
+    )
+    # an expired session must be pruned, never notified
+    await register_delegated_access_live_session(
+        redis, tenant="demo-tenant", project="demo-project",
+        grantor_subject="platform-user-1", session_id="stale-1", expires_at=now - 5,
+    )
+
+    await notify_delegated_access_changed(
+        redis, tenant="demo-tenant", project="demo-project",
+        grantor_subject="platform-user-1", action="granted",
+        access={"access_id": "oauth-abc"}, relay=relay,
+    )
+    await notify_delegated_access_changed(
+        redis, tenant="demo-tenant", project="demo-project",
+        grantor_subject="platform-user-1", action="revoked",
+        access_id="oauth-abc", relay=relay,
+    )
+    # a different user's mutation reaches nobody here
+    await notify_delegated_access_changed(
+        redis, tenant="demo-tenant", project="demo-project",
+        grantor_subject="platform-user-2", action="granted", relay=relay,
+    )
+
+    assert [e["session_id"] for e in relay.emitted] == ["live-1", "live-1"]
+    assert {e["type"] for e in relay.emitted} == {DELEGATED_ACCESS_CHANGED_EVENT}
+    assert [e["action"] for e in relay.emitted] == ["granted", "revoked"]
