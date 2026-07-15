@@ -1,20 +1,30 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.07.15.415"
+  ref: "2026.07.16.140"
   description: |
-    This release follows 2026.7.15.150.
+    This release follows 2026.07.15.415.
 
-    Application identity is now preserved throughout bundle loading. BundleSpec
-    has one authoritative immutable shape with a required id, every runtime
-    construction path supplies that id, and loader cache keys include it. This
-    prevents applications that share a code location from colliding and restores
-    application-hosted site initialization, including property-default loading,
-    without the prior missing-id failure.
+    Run-to-completion hosted agents now receive complete external-event batches
+    and an explicit per-turn frame, while working from a fresh execution
+    directory backed by durable conversation-file links. Shared workspace APIs
+    let an agent inspect or pull prior-turn files, execute code against them, and
+    host generated outputs back into the conversation. Upload resolution also
+    bridges timestamped storage names to stable conversation refs, with focused
+    coverage for batch folding, workspace pulls, and hosted-agent turn behavior.
 
-    Focused regression coverage now checks identity propagation, static
-    entrypoint loading, singleton request context, and cache eviction. Bundle
-    lifecycle and processor architecture documentation describe the identity
-    contract, while the repository README more clearly presents KDCube as the
-    runtime around an application's own agent or the built-in KDCube ReAct Agent.
+    Public-content items can carry durable binary assets such as social-preview
+    images, served through validated content routes with cache headers and
+    durable-storage fallback. Conversation search gains an undockable served
+    surface, role-aware result navigation, persisted pane sizing, and improved
+    compact-mode controls.
+
+    Live application delivery now covers both scene relay legs: session-routed
+    Socket.IO events and tenant/project SSE broadcasts. Delegated-access changes
+    are pushed to every registered Connection Hub session, and paired INFO traces
+    make project-event emission, fan-out, and zero-recipient drops observable.
+    New recipes document live widget updates, scene ownership, public-content
+    assets and styling, and distributed hosted-agent workspaces. Built-in
+    workspace defaults are aligned with the runtime agent inventory and the
+    one-owner-per-surface scene contract.
 config:
-  version: "2026.07.15.415"
+  version: "2026.07.16.140"
