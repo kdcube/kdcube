@@ -1,41 +1,20 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.7.15.150"
+  ref: "2026.07.15.415"
   description: |
-    This release follows 2026.7.11.017 — the multi-agent & port wave.
+    This release follows 2026.7.15.150.
 
-    Chartered subagents land in ReAct: an agent can fork, delegate, contribute,
-    and converge. The helper runs as a fair-scheduled turn and shows up as a
-    named participant (not "you"), with threaded visibility, tiered delegation,
-    and its own economics. A default-off subagents toggle and a third admin
-    state (offered but off) let operators gate the capability.
+    Application identity is now preserved throughout bundle loading. BundleSpec
+    has one authoritative immutable shape with a required id, every runtime
+    construction path supplies that id, and loader cache keys include it. This
+    prevents applications that share a code location from colliding and restores
+    application-hosted site initialization, including property-default loading,
+    without the prior missing-id failure.
 
-    Agents become customizable. Pluggable per-agent capability providers expose
-    a per-user model pick; a capability inventory and composer menu let a user
-    choose tools, skills, and a model within an admin-set ceiling; capabilities
-    scope to a conversation, and the conversation list and search scope to the
-    bound agent.
-
-    A worked port example ships: ported-langgraph-agents hosts two vendored
-    LangGraph/LangChain agents behind one execute_core dispatched by agent_id.
-    It rebuilds the graph per turn (scaled serving), reuses an isolated exec
-    workspace, picks tools per agent, and runs a live code-exec widget with
-    classified error propagation and an advisory output contract. A KDCube model
-    bridge and a durable Postgres checkpointer back it, and it is part of the
-    install default.
-
-    Framework-neutral turn recording lets any run-to-completion agent reload
-    like a React one: the platform records the full conversation (prompt,
-    attachments, hosted files, and emitted objects) so reload needs no
-    in-framework timeline. Conversation-title cross-talk is fixed and
-    economics/timing replay on reload.
-
-    scene_object_action (renamed from canvas_object_action) is the file-download
-    operation a file-hosting bundle serves. Public content apps gain browsable
-    catalogs with site chrome, an article rail, a provider search hook,
-    sitemaps, and alias landing policies, plus an application-hosted website
-    registry and CDN routing. Generic OAuth connected accounts arrive, the
-    ingress honors a preassigned conversation id from the caller, and Anthropic
-    Sonnet 5, Opus 4.8, and Sonnet 4.6 pricing is added.
+    Focused regression coverage now checks identity propagation, static
+    entrypoint loading, singleton request context, and cache eviction. Bundle
+    lifecycle and processor architecture documentation describe the identity
+    contract, while the repository README more clearly presents KDCube as the
+    runtime around an application's own agent or the built-in KDCube ReAct Agent.
 config:
-  version: "2026.7.15.150"
+  version: "2026.07.15.415"
