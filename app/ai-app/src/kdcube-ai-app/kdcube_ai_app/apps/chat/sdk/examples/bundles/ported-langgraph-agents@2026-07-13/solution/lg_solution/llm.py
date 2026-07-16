@@ -151,6 +151,9 @@ class LLMClient:
                     models_service=self.models_service,
                     role=self.model_role,
                     temperature=0.2,
+                    # A generous output cap — the adapter's small default silently
+                    # amputates long answers mid-generation.
+                    max_tokens=int(getattr(self.config, "max_tokens", 0) or 8192),
                 )
             elif self.config.offline:
                 return None

@@ -218,7 +218,13 @@ async def _build_solution_graph(
     scope = _solution_scope(ep, "lg-solution")
     schema = schema_for_scope(scope.tenant, scope.project)
     database_url = await ep._hosted_database_url(own.database_url, schema)
-    config = replace(own, database_url=database_url)
+    # Hosted config comes from the DESCRIPTOR: the answer model's output budget
+    # overlays the vendored config's standalone default (see _agent_max_tokens).
+    config = replace(
+        own,
+        database_url=database_url,
+        max_tokens=ep._agent_max_tokens("lg-solution", own.max_tokens),
+    )
     # memory + KB drive KDCube's asyncpg pool DIRECTLY (no psycopg), in the shared
     # tenant/project schema; the agent's rows stay apart via the agent_id column.
     mem = resolve_solution_memory(getattr(ep, "pg_pool", None), schema)
@@ -283,6 +289,26 @@ async def _build_prebuilt_graph(
         # (text bounded; images/PDF as visual payloads — react.read semantics).
         return build_read_file_tool()
 
+    def _web_tool_factories() -> Dict[str, Callable[[], Any]]:
+        # web_search / web_fetch run PAID backends (search provider + an LLM
+        # that filters/segments the retrieved results) — the LLM side binds to
+        # this app's ACCOUNTED model service, the search side meters through
+        # the ambient turn accounting. Without a model service (standalone
+        # offline) the tools stay unbound even if declared.
+        svc = getattr(ep, "models_service", None)
+        if svc is None:
+            return {}
+
+        def _search() -> Any:
+            from .platform.web_tools import build_web_search_tool
+            return build_web_search_tool(svc)
+
+        def _fetch() -> Any:
+            from .platform.web_tools import build_web_fetch_tool
+            return build_web_fetch_tool(svc)
+
+        return {"web_search": _search, "web_fetch": _fetch}
+
     # Plain + code-exec tools narrowed to (admin-declared − user-disabled) this turn.
     tools = select_bound_tools(
         connections,
@@ -291,6 +317,7 @@ async def _build_prebuilt_graph(
         run_python_factory=_run_python_factory,
         pull_files_factory=_pull_files_factory,
         read_file_factory=_read_file_factory,
+        extra_factories=_web_tool_factories(),
     )
     # MCP tools declared as `kind: mcp` connections (optional; degrades to none).
     tools += await load_mcp_tools(mcp_cfg_from_connections(connections))
@@ -592,13 +619,39 @@ class LGPortedAgentsBundle(BaseEntrypointWithEconomics):
         `offline` flag (which only tracks the STANDALONE OpenAI key) is irrelevant
         here — mirror lg-solution's `llm.chat_model()`, which gates on
         `models_service` alone. Only with NO model service (truly standalone) ->
-        the vendored deterministic stub, so the agent degrades like the CLI."""
-        del config  # vendored offline flag intentionally not consulted when hosted
+        the vendored deterministic stub, so the agent degrades like the CLI.
+
+        The output budget (NOT the adapter's small default) bounds the answer
+        model: this agent carries whole payloads in tool arguments (`run_python`
+        code), and a ceiling below one complete tool call cuts the response
+        mid-call — the truncated args fail validation and the model retries
+        into the same wall until the recursion limit. Hosted, the budget is a
+        DESCRIPTOR property (`_agent_max_tokens`); the vendored config's value
+        is only the standalone fallback."""
         if getattr(self, "models_service", None) is not None:
             return KDCubeChatModel(
-                models_service=self.models_service, role=PREBUILT_ANSWER_ROLE, temperature=0.2
+                models_service=self.models_service, role=PREBUILT_ANSWER_ROLE,
+                temperature=0.2,
+                max_tokens=self._agent_max_tokens(
+                    PREBUILT_AGENT_ID, int(getattr(config, "max_tokens", 0) or 16384)
+                ),
             )
         return StubChatModel()
+
+    def _agent_max_tokens(self, agent_id: str, fallback: int) -> int:
+        """One agent's answer-model OUTPUT budget, from the app descriptor:
+        `surfaces.as_consumer.agents.<agent>.model.max_tokens`. KDCube apps are
+        configured through descriptor properties (`bundle_prop`) — process env
+        vars are not a configuration surface here; the vendored config's env
+        knob is the STANDALONE idiom and serves only as the hosted fallback."""
+        try:
+            raw = self.bundle_prop(
+                f"surfaces.as_consumer.agents.{agent_id}.model.max_tokens", None
+            )
+            value = int(raw or 0)
+        except Exception:
+            value = 0
+        return value if value > 0 else int(fallback)
 
     def _build_prebuilt_summary_model(self, config: Any):
         """lg-react's compaction summary model: HOSTED -> an accounted

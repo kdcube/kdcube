@@ -35,12 +35,14 @@ def _stream_module():
 class _FakeComm:
     def __init__(self) -> None:
         self.steps: list[tuple[str, str]] = []
+        self.step_payloads: list[dict] = []
         self.deltas: list[str] = []
         self.complete_data: dict | None = None
         self.completed = False
 
     async def step(self, *, step: str, status: str, **payload) -> None:
         self.steps.append((step, status))
+        self.step_payloads.append({"step": step, "status": status, **payload})
 
     async def delta(self, *, text: str, index: int, marker: str = "answer", **kwargs) -> None:
         self.deltas.append(text)
@@ -146,6 +148,76 @@ def test_offline_final_turn_streams_content_as_single_delta() -> None:
     assert comm.deltas == ["canned offline answer"]
     assert comm.completed is True
     assert comm.complete_data == {"final_answer": "canned offline answer"}
+
+
+# ── tool-call visibility in the Steps view ───────────────────────────────────
+# The step row must show HOW the tool was called (title = signature, body =
+# arguments), each invocation as its own row — surfaced live when a truncated
+# turn produced N run_python calls that all rendered as ONE bare "run_python /
+# running" row, hiding that their arguments were empty.
+
+class _TwoCallsGraph:
+    """Two run_python invocations in one turn, args attached the way
+    astream_events v2 delivers them (data.input + run_id)."""
+
+    async def astream_events(self, inputs, config, *, version=None):
+        yield {"event": "on_chain_start", "name": "model", "metadata": {"langgraph_node": "model"}}
+        yield {
+            "event": "on_tool_start", "name": "run_python", "run_id": "r1",
+            "metadata": {"langgraph_node": "tools"},
+            "data": {"input": {"code": "print('hello')\n" * 40, "prog_name": "news"}},
+        }
+        yield {"event": "on_tool_end", "name": "run_python", "run_id": "r1",
+               "metadata": {"langgraph_node": "tools"}, "data": {"output": _ai("ok")}}
+        yield {
+            "event": "on_tool_start", "name": "run_python", "run_id": "r2",
+            "metadata": {"langgraph_node": "tools"},
+            "data": {"input": {}},
+        }
+        yield {"event": "on_tool_end", "name": "run_python", "run_id": "r2",
+               "metadata": {"langgraph_node": "tools"}, "data": {"output": _ai("err")}}
+        yield {
+            "event": "on_chain_end", "name": "model",
+            "metadata": {"langgraph_node": "model"},
+            "data": {"output": {"messages": [_ai("done")]}},
+        }
+
+
+def test_tool_call_views_signature_and_args_body() -> None:
+    m = _stream_module()
+    code = "print('x')\n" * 200
+    title, md = m._tool_call_views("run_python", {"code": code, "prog_name": "news"})
+    # Signature: long values as size, short ones inline.
+    assert title.startswith("run_python(code=<")
+    assert "prog_name='news'" in title
+    # Body: the code as a fenced python block, truncated with the total stated.
+    assert "```python" in md
+    assert "chars total" in md
+
+    # Empty/missing args are STATED, not rendered like a healthy call.
+    t_empty, md_empty = m._tool_call_views("run_python", {})
+    assert t_empty == "run_python()"
+    assert "No arguments received" in md_empty
+
+
+def test_each_tool_invocation_is_its_own_step_with_signature() -> None:
+    comm, _ = _run(_TwoCallsGraph())
+
+    keys = [p["step"] for p in comm.step_payloads if p["status"] == "running"]
+    assert keys == ["run_python", "run_python (2)"]
+
+    first = next(p for p in comm.step_payloads if p["step"] == "run_python")
+    assert first["title"].startswith("run_python(code=<")
+    assert "```python" in first["markdown"]
+
+    second = next(p for p in comm.step_payloads if p["step"] == "run_python (2)")
+    assert second["title"] == "run_python()"
+    assert "No arguments received" in second["markdown"]
+
+    # Completion reuses the invocation's own key + signature (run_id-matched).
+    done = [p for p in comm.step_payloads if p["status"] == "completed" and p["step"].startswith("run_python")]
+    assert {p["step"] for p in done} == {"run_python", "run_python (2)"}
+    assert all(p["title"] for p in done)
 
 
 def _agent_module():

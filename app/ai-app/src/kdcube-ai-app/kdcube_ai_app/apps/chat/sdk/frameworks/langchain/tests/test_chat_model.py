@@ -304,3 +304,62 @@ def test_ainvoke_preserves_tool_calls_then_plain_content() -> None:
     # Second turn (no tool events): plain content, no tool calls.
     assert not second.tool_calls
     assert second.content == "It is sunny."
+
+
+class _CeilingToolCallService(_FakeModelService):
+    """A tool-call turn that spends its ENTIRE output budget — the shape of a
+    response truncated mid-tool-call (surfaced live: run_python(code=<HTML page>)
+    cut at the ceiling on every retry until the graph recursion limit)."""
+
+    async def stream_model_text_tracked(self, client, messages, *, on_delta, **kwargs):
+        on_tool_event = kwargs.get("on_tool_result_event")
+        if on_tool_event is not None:
+            # A truncated-args call, the way the provider delivers it: the JSON
+            # was cut mid-payload, so the parsed input arrives unusable/partial.
+            await on_tool_event({
+                "type": "tool.use", "id": "t1", "name": "run_python",
+                "input": {"code": "html = '<html><body>...cut here"}, "index": 0,
+            })
+        return {"text": "", "usage": {"output_tokens": 64}, "model_name": "fake-1"}
+
+
+def test_interrupted_tool_call_is_explained_to_the_model_and_the_log(caplog) -> None:
+    """Neither audience may be left guessing: the MODEL gets an in-band notice in
+    its own (interrupted) message — so the next round it acts on 'I was cut off'
+    instead of confabulating around the tool's 'missing argument' error — and the
+    LOG records the evidence (budget, spend, each reconstructed call's name, args
+    size, and the tail where the cut hit)."""
+    import logging
+
+    ms = _CeilingToolCallService()
+    model = KDCubeChatModel(models_service=ms, role="unit.role", max_tokens=64).bind_tools([get_weather])
+
+    async def _go():
+        return await model.ainvoke([HumanMessage(content="make the page")])
+
+    with caplog.at_level(logging.WARNING, logger="kdcube.langchain.chat_model"):
+        msg = asyncio.run(_go())
+
+    # To the MODEL: the notice rides the assistant message beside the truncated call.
+    assert msg.tool_calls and msg.tool_calls[0]["name"] == "run_python"
+    assert "interrupted" in msg.content
+    assert "maximum output length" in msg.content
+    assert "Do not repeat the identical call" in msg.content
+
+    # To the LOG: the evidence — what was in flight when the budget ran out.
+    warnings = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
+    hit = next(m for m in warnings if "INTERRUPTED" in m)
+    assert "max_tokens=64" in hit and "output_tokens=64" in hit
+    assert "run_python" in hit and "args=" in hit and "cut here" in hit
+
+
+def test_under_budget_turn_does_not_warn(caplog) -> None:
+    import logging
+
+    ms = _FakeModelService()  # usage empty -> 0 output tokens
+    model = KDCubeChatModel(models_service=ms, role="unit.role", max_tokens=64)
+
+    with caplog.at_level(logging.WARNING, logger="kdcube.langchain.chat_model"):
+        asyncio.run(model.ainvoke([HumanMessage(content="hi")]))
+
+    assert not [r for r in caplog.records if "max_tokens" in r.message and r.levelno >= logging.WARNING]

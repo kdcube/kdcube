@@ -55,6 +55,14 @@ bundles:
             agents:
               # Agent 1 — the rich research graph (dedicated answer node).
               lg-solution:
+                # The answer model's OUTPUT budget (max output tokens per model
+                # call). This descriptor property IS the hosted knob — KDCube apps
+                # are configured through the descriptor, not process env vars (the
+                # vendored config's env variables are its STANDALONE idiom and act
+                # only as fallbacks when this property is absent). Keep it a
+                # generous safety cap, never a target: the model stops on its own.
+                model:
+                  max_tokens: 8192
                 capability_provider: simple_model_pick
                 capabilities:
                   models:
@@ -66,6 +74,16 @@ bundles:
                       - { model: claude-haiku-4-5-20251001, provider: anthropic, label: "Haiku 4.5" }
               # Agent 2 — the prebuilt create_react agent (looping agent node).
               lg-react:
+                # Output budget for the answer model (see lg-solution's note: the
+                # descriptor property is THE hosted knob; env vars are standalone-
+                # only fallbacks). lg-react's is HIGHER because this agent passes
+                # whole payloads as tool arguments (`run_python` carries the full
+                # program text): a budget below one complete tool call cuts the
+                # response MID-CALL — the truncated arguments fail tool validation
+                # and the model retries into the same ceiling until the recursion
+                # limit. Budget = narration + ONE complete payload-bearing call.
+                model:
+                  max_tokens: 16384
                 capability_provider: simple_model_pick
                 capabilities:
                   models:
@@ -117,6 +135,22 @@ bundles:
                   #   allowed: [run_python]
                   #   code_exec:
                   #     timeout_s: 120
+                  # ── WEB (web_search + web_fetch) ─────────────────────────
+                  # DECLARE this connection to make the platform web tools available
+                  # (presence = admin ceiling; one alias, so the picker offers Web as
+                  # one toggle — users can also opt out of a single tool by name).
+                  # These run PAID services, metered on TWO accountable providers:
+                  #   web_search — the search backend (per deployment, e.g. Brave;
+                  #     key from platform secrets), metered inside the backend against
+                  #     the turn's accounting context;
+                  #   llm — reconciliation + content filtering/segmentation of the
+                  #     retrieved results, billed through THIS app's accounted model
+                  #     service like any of its model calls.
+                  # OFF by default (commented out).
+                  # - name: web
+                  #   kind: python
+                  #   alias: web
+                  #   allowed: [web_search, web_fetch]
                   # ── MCP tools (optional) ─────────────────────────────────
                   # Declare a KDCube-served MCP endpoint as a `kind: mcp` connection to
                   # bind its tools (via langchain-mcp-adapters; degrades to none if the

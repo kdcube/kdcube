@@ -227,6 +227,17 @@ class KDCubeChatModel(BaseChatModel):
         # was not streamed, so a streamed call is never double-counted by its
         # trailing `tool.use`.
         streamed_tc_indices: set = set()
+        # Evidence trail for the interruption diagnosis below: per tool-call index,
+        # the name and the reconstructed argument JSON (streamed deltas concatenate;
+        # a complete tool.use overwrites). If the response is cut at the output
+        # budget, this is exactly "what the model did before it was interrupted".
+        tool_call_evidence: Dict[int, Dict[str, Any]] = {}
+
+        def _note_evidence(index: int, name: Optional[str], args_piece: str, *, append: bool) -> None:
+            row = tool_call_evidence.setdefault(index, {"name": "", "args": ""})
+            if name:
+                row["name"] = name
+            row["args"] = (row["args"] + args_piece) if append else args_piece
 
         async def on_tool_event(ev: Dict[str, Any]) -> None:
             LOGGER.info(
@@ -234,6 +245,19 @@ class KDCubeChatModel(BaseChatModel):
                 self.role, ev.get("type"), ev.get("name"),
             )
             etype = ev.get("type")
+            idx_ev = int(ev.get("index", 0) or 0)
+            if etype == "tool.start":
+                _note_evidence(idx_ev, ev.get("name"), "", append=True)
+            elif etype == "tool.arguments_delta":
+                _note_evidence(idx_ev, None, str(ev.get("delta") or ""), append=True)
+            elif etype == "tool.use":
+                args = ev.get("input")
+                if not isinstance(args, str):
+                    try:
+                        args = json.dumps(args or {}, ensure_ascii=False)
+                    except Exception:
+                        args = str(args)
+                _note_evidence(idx_ev, ev.get("name"), args, append=False)
             if etype in ("tool.start", "tool.arguments_delta"):
                 streamed_tc_indices.add(ev.get("index", 0))
                 chunk = _tool_event_to_chunk(ev)
@@ -289,6 +313,59 @@ class KDCubeChatModel(BaseChatModel):
             if isinstance(result, dict) and result.get("service_error"):
                 from kdcube_ai_app.infra.service_hub.errors import ServiceException, ServiceError
                 raise ServiceException(ServiceError.model_validate(result["service_error"]))
+            # A response that spent the WHOLE output budget was cut mid-generation.
+            # Benign-ish for prose (a visibly amputated answer); poisonous on a
+            # tool-call turn — the truncated argument JSON fails tool validation
+            # downstream with a misleading "missing/invalid argument", the model
+            # retries the identical call into the same ceiling, and the loop burns
+            # calls until the graph recursion limit (observed live:
+            # run_python(code=<full HTML page>) × 12 at exactly max_tokens each).
+            # The stop reason does not survive the bridge, so THIS is the one place
+            # that can explain the interruption — and it must explain it to BOTH
+            # audiences, never leave them guessing:
+            #   - the MODEL: an in-band notice appended to its own (interrupted)
+            #     message, so next round it sees WHAT happened and HOW to proceed,
+            #     instead of confabulating around "missing argument";
+            #   - the LOG: the evidence — budget, spend, and each reconstructed
+            #     tool call's name, argument size, and the tail where the cut hit.
+            if isinstance(result, dict) and self.max_tokens:
+                out_tokens = int((result.get("usage") or {}).get("output_tokens") or 0)
+                if out_tokens >= int(self.max_tokens):
+                    evidence = []
+                    for i in sorted(tool_call_evidence):
+                        row = tool_call_evidence[i]
+                        args_str = row.get("args") or ""
+                        evidence.append(
+                            f"tool_call[{i}] {row.get('name') or '?'} args={len(args_str):,} chars"
+                            f" tail={args_str[-160:]!r}"
+                        )
+                    LOGGER.warning(
+                        "[kdcube-chat] role=%s INTERRUPTED: response spent the full output "
+                        "budget (max_tokens=%d, output_tokens=%d) and was cut mid-generation. %s",
+                        self.role, int(self.max_tokens), out_tokens,
+                        ("Reconstructed tool calls (truncated as delivered): " + "; ".join(evidence))
+                        if evidence else "No tool call in flight (prose answer amputated).",
+                    )
+                    if tool_call_evidence:
+                        # Tell the MODEL, in its own message, in plain terms it can
+                        # act on. The agent loop suppresses tool-turn text from the
+                        # user-visible answer, but the note is checkpointed into
+                        # history, so the next round reads it right beside the
+                        # truncated call and the tool's validation error.
+                        notice = (
+                            "\n[Notice: this response was interrupted — it reached the "
+                            f"maximum output length ({int(self.max_tokens)} tokens) while the tool call "
+                            "arguments were still being written. The tool call above is "
+                            "INCOMPLETE as delivered; any 'missing/invalid argument' error is "
+                            "a consequence of the interruption, not of what was intended. Do "
+                            "not repeat the identical call — produce a smaller payload (e.g. "
+                            "shorter code, or build the output in several smaller steps).]"
+                        )
+                        chunk = ChatGenerationChunk(message=AIMessageChunk(content=notice))
+                        if run_manager is not None:
+                            await run_manager.on_llm_new_token(notice, chunk=chunk)
+                        yielded_any = True
+                        yield chunk
             # Robustness: a model turn that produced NO chunks (no text delta and no
             # tool event) leaves an EMPTY stream, which LangChain's
             # `agenerate_from_stream` rejects with "No generations found in stream" —

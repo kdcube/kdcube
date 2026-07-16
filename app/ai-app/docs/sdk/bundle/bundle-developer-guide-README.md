@@ -482,6 +482,16 @@ Use instead:
 The only normal exception for raw env access is code that explicitly sits at
 the iso-runtime or sandbox boundary and is intentionally driven by process env.
 
+Two corollaries that decide real incidents:
+
+- every runtime knob an operator may need (a model's output-token budget, a
+  timeout, a feature toggle) must EXIST as a descriptor property — a knob that
+  lives only in code (an adapter default, an env read) gives the deployment no
+  surface to change it;
+- a vendored standalone solution's env-var config is its STANDALONE idiom, not
+  a hosted channel: the wrap overlays the descriptor property onto the vendored
+  config (property wins; the vendored env/default applies only offline).
+
 ## Git Auth Environment Boundary
 
 If bundle code needs to run git commands, treat git auth as subprocess configuration, not as mutable bundle-local process state.

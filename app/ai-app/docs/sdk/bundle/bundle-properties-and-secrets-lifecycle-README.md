@@ -48,6 +48,16 @@ Do not read deployment secrets from `self.bundle_secrets`, `config.secrets`, or
 raw descriptor helpers. Secrets have no code defaults and are not merged with
 props.
 
+Properties are the app's ONLY configuration channel. Every runtime knob an
+operator may need to change — a model's output-token budget, a timeout, a
+feature toggle — is a descriptor property read via `bundle_prop(...)`; process
+env vars are not a configuration surface (a knob that exists only as
+`os.getenv(...)` is invisible to the deployment: nothing declares it, nothing
+sets it, no admin surface can change it). When a bundle vendors a standalone
+solution whose own config reads env vars, that stays the solution's STANDALONE
+idiom: the wrap overlays the descriptor property onto the vendored config, and
+the env/default value applies only when the property is absent.
+
 ## Terms
 
 | Term | Meaning |

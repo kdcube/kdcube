@@ -45,6 +45,16 @@ DEFAULT_SUMMARY_TRIGGER_TOKENS = 2000
 # summarizes the older ones. Maps to the middleware's ``keep=("messages", N)``.
 DEFAULT_SUMMARY_KEEP_MESSAGES = 20
 
+# Output-token ceiling for the answer model. This agent passes WHOLE PAYLOADS as
+# tool arguments (`run_python` carries the program text — an HTML page, a script),
+# so the ceiling must fit narration + a complete tool call. A ceiling that is too
+# low cuts the response MID-TOOL-CALL: the truncated arguments fail tool validation,
+# the model sees only "invalid/missing argument", retries into the same wall, and
+# the loop burns calls until the graph's recursion limit (observed live: 12 identical
+# 1200-token attempts). The model stops on its own well before this on normal turns;
+# the ceiling is a safety cap, not a target.
+DEFAULT_MAX_TOKENS = 16384
+
 
 @dataclass(frozen=True)
 class Config:
@@ -57,6 +67,7 @@ class Config:
     context_strategy: str = field(default_factory=lambda: os.getenv("LG_PREBUILT_CONTEXT_STRATEGY", DEFAULT_CONTEXT_STRATEGY).strip().lower())
     summary_trigger_tokens: int = field(default_factory=lambda: int(os.getenv("LG_PREBUILT_SUMMARY_TRIGGER_TOKENS", DEFAULT_SUMMARY_TRIGGER_TOKENS)))
     summary_keep_messages: int = field(default_factory=lambda: int(os.getenv("LG_PREBUILT_SUMMARY_KEEP_MESSAGES", DEFAULT_SUMMARY_KEEP_MESSAGES)))
+    max_tokens: int = field(default_factory=lambda: int(os.getenv("LG_PREBUILT_MAX_TOKENS", DEFAULT_MAX_TOKENS)))
 
     @property
     def model_name(self) -> str:

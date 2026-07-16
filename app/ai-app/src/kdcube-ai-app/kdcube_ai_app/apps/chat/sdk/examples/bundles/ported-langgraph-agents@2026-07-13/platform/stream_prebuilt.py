@@ -46,6 +46,68 @@ from kdcube_ai_app.apps.chat.sdk.runtime import comm_ctx
 LOGGER = logging.getLogger("kdcube.ported_langgraph_agents.stream_react")
 
 
+# ── tool-call rendering for the Steps view ───────────────────────────────────
+# A step row that says just "run_python / running" hides the one thing that
+# matters when a call misbehaves: WHAT the model actually passed. Each tool
+# invocation therefore gets its own step whose title is a compact call
+# signature (`run_python(code=<2.4 KB>, prog_name='news')`) and whose body
+# shows the arguments — large string values (e.g. the program text) as their
+# own fenced block, truncated. Empty arguments are stated explicitly: a call
+# that arrives with NO usable args (e.g. truncated upstream) must be visible
+# as such, not rendered like a healthy call.
+
+_SIG_STR_CAP = 48       # inline string preview inside the signature
+_SIG_TOTAL_CAP = 160    # whole signature line
+_BODY_STR_CAP = 1500    # per-argument body preview
+_BODY_INLINE_CAP = 120  # strings up to this render inline in the args list
+
+
+def _sig_value(value: Any) -> str:
+    if isinstance(value, str):
+        flat = " ".join(value.split())
+        if len(flat) <= _SIG_STR_CAP:
+            return repr(flat)
+        return f"<{len(value):,} chars>"
+    if isinstance(value, (list, tuple)):
+        return f"<list:{len(value)}>"
+    if isinstance(value, dict):
+        return f"<dict:{len(value)}>"
+    return repr(value)
+
+
+def _tool_call_views(name: str, args: Any) -> tuple[str, str]:
+    """(title, markdown) for one tool invocation: a compact signature line and
+    an arguments body the Steps row expands to."""
+    if not isinstance(args, dict) or not args:
+        return f"{name}()", "_No arguments received._"
+    parts = []
+    for key, value in args.items():
+        parts.append(f"{key}={_sig_value(value)}")
+    signature = f"{name}({', '.join(parts)})"
+    if len(signature) > _SIG_TOTAL_CAP:
+        signature = signature[: _SIG_TOTAL_CAP - 2] + "…)"
+
+    inline: Dict[str, Any] = {}
+    blocks: list[str] = []
+    for key, value in args.items():
+        if isinstance(value, str) and (len(value) > _BODY_INLINE_CAP or "\n" in value):
+            shown = value[:_BODY_STR_CAP]
+            tail = f"\n… ({len(value):,} chars total)" if len(value) > _BODY_STR_CAP else ""
+            lang = "python" if key == "code" else ""
+            blocks.append(f"**{key}**\n```{lang}\n{shown}\n```{tail}")
+        else:
+            inline[key] = value
+    md_parts: list[str] = []
+    if inline:
+        try:
+            import json
+            md_parts.append("```json\n" + json.dumps(inline, ensure_ascii=False, default=str, indent=2)[:_BODY_STR_CAP] + "\n```")
+        except Exception:
+            md_parts.append("```\n" + str(inline)[:_BODY_STR_CAP] + "\n```")
+    md_parts.extend(blocks)
+    return signature, "\n\n".join(md_parts)
+
+
 def _content_text(content: Any) -> str:
     """Normalize a LangChain message chunk's ``content`` to text.
 
@@ -89,6 +151,11 @@ async def stream_react_turn(
     # each agent-node start, so we can tell an intermediate tool-deciding turn from
     # the final answer turn.
     turn_has_tool_call = False
+    # Steps are keyed by their `step` string client-side, so every tool INVOCATION
+    # gets its own key (`run_python`, `run_python (2)`, …) — a retry loop shows as
+    # N rows with their actual arguments, not one row silently overwritten.
+    tool_call_seq: Dict[str, int] = {}
+    tool_run_step: Dict[str, tuple] = {}  # run_id -> (step_key, title, markdown)
 
     async for event in graph.astream_events(inputs, run_config, version="v2"):
         kind = event.get("event")
@@ -113,13 +180,27 @@ async def stream_react_turn(
                 answer += token
 
         elif kind == "on_tool_start":
-            # Surface each tool run as a progress step (the loop working).
-            LOGGER.info("[ported-langgraph] lg-react tool START: %s", name)
-            await comm_ctx.step(step=str(name), status="running")
+            # Surface each tool run as a progress step showing HOW it was called:
+            # title = the call signature, body = the arguments (large values as
+            # fenced blocks; empty args stated explicitly).
+            tool_args = (event.get("data") or {}).get("input")
+            title, markdown = _tool_call_views(str(name), tool_args)
+            seq = tool_call_seq.get(str(name), 0) + 1
+            tool_call_seq[str(name)] = seq
+            step_key = str(name) if seq == 1 else f"{name} ({seq})"
+            run_id = str(event.get("run_id") or "")
+            if run_id:
+                tool_run_step[run_id] = (step_key, title, markdown)
+            LOGGER.info("[ported-langgraph] lg-react tool START: %s", title)
+            await comm_ctx.step(step=step_key, status="running", title=title, markdown=markdown)
 
         elif kind == "on_tool_end":
-            LOGGER.info("[ported-langgraph] lg-react tool END: %s", name)
-            await comm_ctx.step(step=str(name), status="completed")
+            run_id = str(event.get("run_id") or "")
+            step_key, title, markdown = tool_run_step.pop(
+                run_id, (str(name), str(name), "")
+            )
+            LOGGER.info("[ported-langgraph] lg-react tool END: %s", title)
+            await comm_ctx.step(step=step_key, status="completed", title=title, markdown=markdown)
 
         elif kind == "on_chain_end" and name == agent_node:
             # The agent turn just finished. Read its last message (authoritative):

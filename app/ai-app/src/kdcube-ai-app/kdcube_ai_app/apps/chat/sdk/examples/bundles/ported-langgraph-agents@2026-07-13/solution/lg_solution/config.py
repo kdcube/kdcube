@@ -45,6 +45,11 @@ DEFAULT_SUMMARY_TRIGGER_TOKENS = 1500
 DEFAULT_SUMMARY_MAX_TOKENS = 256
 DEFAULT_CTX_TOKENS = 2000
 
+# Output-token ceiling for the answer model. A ceiling below a full answer cuts the
+# response mid-generation SILENTLY (the turn "succeeds" with an amputated answer),
+# so it is a generous safety cap, not a target — the model stops on its own.
+DEFAULT_MAX_TOKENS = 8192
+
 
 @dataclass(frozen=True)
 class Config:
@@ -58,6 +63,7 @@ class Config:
     summary_trigger_tokens: int = field(default_factory=lambda: int(os.getenv("LG_SUMMARY_TRIGGER_TOKENS", DEFAULT_SUMMARY_TRIGGER_TOKENS)))
     summary_max_tokens: int = field(default_factory=lambda: int(os.getenv("LG_SUMMARY_MAX_TOKENS", DEFAULT_SUMMARY_MAX_TOKENS)))
     ctx_tokens: int = field(default_factory=lambda: int(os.getenv("LG_CTX_TOKENS", DEFAULT_CTX_TOKENS)))
+    max_tokens: int = field(default_factory=lambda: int(os.getenv("LG_MAX_TOKENS", DEFAULT_MAX_TOKENS)))
 
     @property
     def offline(self) -> bool:

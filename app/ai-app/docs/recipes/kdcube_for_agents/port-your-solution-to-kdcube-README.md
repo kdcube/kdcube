@@ -318,6 +318,30 @@ keying, the first-turn title, and restoring turn cost/time on reload (a
 `post_run_hook` that calls `_save_events_artifact`) — is
 [hosted-agent-conversation-README.md](../../sdk/solutions/conversation/hosted-agent-conversation-README.md).
 
+### Configuration: descriptor properties overlay the vendored config
+
+Your solution's own config almost certainly reads env vars — that is the normal
+standalone idiom, and it keeps working offline. Hosted, the app's configuration
+surface is the **descriptor**: a runtime knob an operator may need to change must
+exist as a bundle property (read via `bundle_prop(...)`), because an env read has
+no deployment surface — nothing declares it, nothing sets it, and the code runs
+its hardcoded default forever. The wrap pattern is a per-knob overlay: read the
+descriptor property, fall back to the vendored config's value when the property
+is absent (worked instance: `_agent_max_tokens` overlaying
+`surfaces.as_consumer.agents.<agent>.model.max_tokens` onto the vendored default).
+
+The knob that earns this section its place: the **answer model's output-token
+budget**. A tool-calling agent passes whole payloads as tool arguments (the exec
+tool carries the full program text), so the budget must fit narration plus ONE
+complete payload-bearing tool call. A budget below that cuts the response
+mid-call; the truncated arguments fail tool validation with a misleading
+"missing argument", and the model retries the identical call into the same
+ceiling until the graph recursion limit (observed live: 12 attempts at exactly
+the 1200-token adapter default). Make the budget a descriptor property, size it
+as a generous safety cap (the model stops on its own), and note the platform's
+LangChain adapter logs an INTERRUPTED warning — and tells the model in-band —
+when a response spends its full budget on a tool-call turn.
+
 ### Dependencies
 
 You own the platform, so extra deps are a choice, not a mandate. Most of your
@@ -366,6 +390,25 @@ a deny-map. Admin `allowed: false` is a hard ceiling; a user may opt OUT of an
 admin-allowed tool but never opt IN to a denied one. Bind exactly (admin-declared ∩
 user-enabled) each turn — the per-turn rebuild (§3d) is what makes this a clean
 narrowing (worked instance: `platform/tool_pick.py`, `capabilities.py`).
+
+**Platform paid tools (web search / web fetch).** The platform's web backends
+(`sdk/tools/backends/web/search_backends.py`, `fetch_backends.py`) are directly
+callable from your own `@tool` wrappers — no tool-subsystem adoption needed. Two
+accountable providers meter per call, and both bill through seams your port already
+stands on: the **web_search provider** (the search backend, e.g. Brave; key from
+platform secrets) meters inside the backend against the ambient turn accounting
+context — the same context your model calls bill under; the **llm provider** (snippet
+reconciliation + content filtering/segmentation of retrieved results) runs on the
+`_SERVICE` you pass in — hand it the entrypoint's accounted `models_service` and those
+calls bill like any model call of your app. So the wrapper's whole job is service
+pass-through plus shaping the rows for a chat model: drop accounting-only fields
+(`provider`) and binary payloads (`base64`; keep mime + size), bound page content
+under per-row/per-call budgets, and state truncation in-band so the model refetches
+selectively instead of assuming it saw the full page. Declare the pair as one
+connection (`- {name: web, kind: python, alias: web, allowed: [web_search, web_fetch]}`)
+and bind through the same picker; the backends stream their own search/fetch progress
+widgets over the ambient communicator, so the chat renders them with no client change
+(worked instance: `platform/web_tools.py`).
 
 **Code execution.** If a tool runs generated code, use the platform's isolated exec
 runtime — do NOT invent a sandbox. Root the per-turn workspace at
@@ -519,6 +562,11 @@ In order:
    text. Also confirm a `read_file` of an image returns visual content through your
    framework's tool-message path (the offline tests pin the tool's return shape;
    the wire passage through your framework's tool node is a live check).
+6. **Paid tools accounting (live)** — if you connected the platform web tools, run a
+   turn that searches and confirm BOTH meters ticked in the accounting store
+   (`data/kdcube-storage/accounting/<tenant>/<project>/<date>/`): a `web_search`
+   provider event for the search call and `llm` events for the result
+   filtering/segmentation, all attributed to this conversation/turn.
 
 ---
 
