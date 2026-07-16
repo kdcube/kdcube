@@ -370,7 +370,7 @@ async def delete_user_secret(
     clear_secret_cache(user_id=resolved_user_id, bundle_id=resolved_bundle_id, key=key)
 
 
-def get_user_prop(
+async def get_user_prop(
     key: str,
     *,
     bundle_id: str | None = None,
@@ -384,7 +384,7 @@ def get_user_prop(
     if not resolved_user_id or not resolved_bundle_id:
         return default
     try:
-        value = get_props_manager().get_user_prop(
+        value = await get_props_manager().get_user_prop(
             user_id=resolved_user_id,
             bundle_id=resolved_bundle_id,
             key=key,
@@ -394,7 +394,7 @@ def get_user_prop(
     return default if value is None else value
 
 
-def get_user_props(
+async def get_user_props(
     *,
     bundle_id: str | None = None,
     user_id: str | None = None,
@@ -406,7 +406,7 @@ def get_user_props(
     if not resolved_user_id or not resolved_bundle_id:
         return {}
     try:
-        return get_props_manager().list_user_props(
+        return await get_props_manager().list_user_props(
             user_id=resolved_user_id,
             bundle_id=resolved_bundle_id,
         )
@@ -414,7 +414,7 @@ def get_user_props(
         return {}
 
 
-def set_user_prop(
+async def set_user_prop(
     key: str,
     value: Any,
     *,
@@ -429,7 +429,7 @@ def set_user_prop(
         raise RuntimeError("Current user id is unavailable for user-scoped prop write")
     if not resolved_bundle_id:
         raise RuntimeError("Current bundle id is unavailable for user-scoped prop write")
-    get_props_manager().set_user_prop(
+    await get_props_manager().set_user_prop(
         user_id=resolved_user_id,
         bundle_id=resolved_bundle_id,
         key=key,
@@ -507,7 +507,7 @@ async def set_bundle_props(
         )
 
 
-def delete_user_prop(
+async def delete_user_prop(
     key: str,
     *,
     bundle_id: str | None = None,
@@ -521,7 +521,7 @@ def delete_user_prop(
         raise RuntimeError("Current user id is unavailable for user-scoped prop delete")
     if not resolved_bundle_id:
         raise RuntimeError("Current bundle id is unavailable for user-scoped prop delete")
-    get_props_manager().delete_user_prop(
+    await get_props_manager().delete_user_prop(
         user_id=resolved_user_id,
         bundle_id=resolved_bundle_id,
         key=key,

@@ -9,7 +9,6 @@ in user secrets. Callers should use the broker/client, not these keys directly.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import logging
@@ -57,17 +56,31 @@ class DelegatedToKdcubeStore:
 
     # ── user prop helpers ───────────────────────────────────────────────────
 
-    def _prop(self, key: str, default: Any = None) -> Any:
-        return sdk_config.get_user_prop(key, user_id=self.user_id, bundle_id=self.bundle_id, default=default)
+    async def _prop(self, key: str, default: Any = None) -> Any:
+        return await sdk_config.get_user_prop(
+            key,
+            user_id=self.user_id,
+            bundle_id=self.bundle_id,
+            default=default,
+        )
 
-    def _set_prop(self, key: str, value: Any) -> None:
-        sdk_config.set_user_prop(key, value, user_id=self.user_id, bundle_id=self.bundle_id)
+    async def _set_prop(self, key: str, value: Any) -> None:
+        await sdk_config.set_user_prop(
+            key,
+            value,
+            user_id=self.user_id,
+            bundle_id=self.bundle_id,
+        )
 
-    def _delete_prop(self, key: str) -> None:
-        sdk_config.delete_user_prop(key, user_id=self.user_id, bundle_id=self.bundle_id)
+    async def _delete_prop(self, key: str) -> None:
+        await sdk_config.delete_user_prop(
+            key,
+            user_id=self.user_id,
+            bundle_id=self.bundle_id,
+        )
 
-    def _index(self) -> list[str]:
-        raw = self._prop(ACCOUNT_INDEX_KEY, default=[])
+    async def _index(self) -> list[str]:
+        raw = await self._prop(ACCOUNT_INDEX_KEY, default=[])
         if isinstance(raw, str):
             try:
                 raw = json.loads(raw)
@@ -84,7 +97,7 @@ class DelegatedToKdcubeStore:
                 out.append(value)
         return out
 
-    def _write_index(self, account_ids: Iterable[str]) -> None:
+    async def _write_index(self, account_ids: Iterable[str]) -> None:
         cleaned: list[str] = []
         seen: set[str] = set()
         for item in account_ids:
@@ -92,7 +105,7 @@ class DelegatedToKdcubeStore:
             if value and value not in seen:
                 seen.add(value)
                 cleaned.append(value)
-        self._set_prop(ACCOUNT_INDEX_KEY, cleaned)
+        await self._set_prop(ACCOUNT_INDEX_KEY, cleaned)
 
     @staticmethod
     def account_prop_key(account_id: str) -> str:
@@ -104,12 +117,11 @@ class DelegatedToKdcubeStore:
 
     # ── account metadata ────────────────────────────────────────────────────
 
-    def list_accounts_sync(self, *, provider_id: str = "") -> list[ConnectedAccount]:
-        """The synchronous account listing (user props over psycopg2)."""
+    async def list_accounts(self, *, provider_id: str = "") -> list[ConnectedAccount]:
         wanted = as_str(provider_id)
         accounts: list[ConnectedAccount] = []
-        for account_id in self._index():
-            raw = self._prop(self.account_prop_key(account_id), default=None)
+        for account_id in await self._index():
+            raw = await self._prop(self.account_prop_key(account_id), default=None)
             if not isinstance(raw, dict):
                 continue
             account = ConnectedAccount.from_dict(raw)
@@ -120,13 +132,8 @@ class DelegatedToKdcubeStore:
             accounts.append(account)
         return sorted(accounts, key=lambda item: (item.provider_id, item.display_name or item.account_id))
 
-    async def list_accounts(self, *, provider_id: str = "") -> list[ConnectedAccount]:
-        # The storage client is synchronous; the read runs on a worker thread
-        # so serving event loops keep their heartbeats (never a nested loop).
-        return await asyncio.to_thread(self.list_accounts_sync, provider_id=provider_id)
-
     async def get_account(self, account_id: str) -> ConnectedAccount | None:
-        raw = self._prop(self.account_prop_key(account_id), default=None)
+        raw = await self._prop(self.account_prop_key(account_id), default=None)
         if not isinstance(raw, dict):
             return None
         account = ConnectedAccount.from_dict(raw)
@@ -155,16 +162,16 @@ class DelegatedToKdcubeStore:
             updated_at=now,
             metadata=dict(account.metadata or {}),
         )
-        self._set_prop(self.account_prop_key(account_id), stored.to_dict())
-        self._write_index([*self._index(), account_id])
+        await self._set_prop(self.account_prop_key(account_id), stored.to_dict())
+        await self._write_index([*await self._index(), account_id])
         return stored
 
     async def disconnect_account(self, account_id: str, *, delete_credential: bool = True) -> bool:
         existing = await self.get_account(account_id)
         if existing is None:
             return False
-        self._delete_prop(self.account_prop_key(account_id))
-        self._write_index([item for item in self._index() if item != existing.account_id])
+        await self._delete_prop(self.account_prop_key(account_id))
+        await self._write_index([item for item in await self._index() if item != existing.account_id])
         if delete_credential and existing.credential_id:
             await self.delete_credential(existing.credential_id)
         return True
@@ -209,7 +216,7 @@ class DelegatedToKdcubeStore:
             updated_at=utc_now(),
             metadata=metadata,
         )
-        self._set_prop(self.account_prop_key(account_id), updated.to_dict())
+        await self._set_prop(self.account_prop_key(account_id), updated.to_dict())
         return updated
 
     async def mark_revoked(self, account_id: str) -> ConnectedAccount | None:

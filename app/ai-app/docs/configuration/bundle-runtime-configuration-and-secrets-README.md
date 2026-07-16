@@ -98,7 +98,7 @@ Those remain deployment-owned.
 | platform/global secrets | `await get_secret("canonical.key")` | none supported | tenant + project deployment | configured secrets provider; in local `secrets-file` mode this is `secrets.yaml` | exported by `kdcube config export --include-platform-descriptors` only when the provider/export flow can reconstruct them; otherwise manage through deployment secret workflows |
 | deployment-scoped bundle props | `self.bundle_prop(...)`, `self.bundle_props` | `await set_bundle_prop(...)` | tenant + project + bundle | configured bundle descriptor authority; Redis is the runtime cache. Recommended cloud mode is writable mounted `bundles.yaml` with `BUNDLES_DESCRIPTOR_PROVIDER=file`. | exported to `bundles.yaml`; `kdcube config export` includes it |
 | deployment-scoped bundle secrets | `await get_secret("b:...")` | `await set_bundle_secret(...)` | tenant + project + bundle | configured secrets provider; in local `secrets-file` mode this is `bundles.secrets.yaml` | exported to `bundles.secrets.yaml` when the provider/export flow can reconstruct them |
-| user-scoped bundle props | `get_user_prop(...)`, `get_user_props()` | `set_user_prop(...)`, `delete_user_prop(...)` | tenant + project + bundle + user | PostgreSQL `<SCHEMA>.user_bundle_props` | never exported to descriptors or bundle export |
+| user-scoped bundle props | `await get_user_prop(...)`, `await get_user_props()` | `await set_user_prop(...)`, `await delete_user_prop(...)` | tenant + project + bundle + user | PostgreSQL `<SCHEMA>.user_bundle_props` | never exported to descriptors or bundle export |
 | user-scoped bundle secrets | `await get_secret("u:...")` | `await set_user_secret(...)`, `await delete_user_secret(...)` | tenant + project + bundle + user | configured secrets provider; in local `secrets-file` mode this is `secrets.yaml` | never exported to descriptors or bundle export |
 
 In the user-scoped rows, `user` means the resolved bundle user scope. It may be
@@ -224,7 +224,7 @@ tool runtimes while the context is bound. For surface-specific examples, see
 |---|---|---|
 | the environment or platform deployment as a whole | `get_settings()` or `await get_secret("canonical.key")` | `self.bundle_prop(...)` |
 | one bundle for the whole deployment | `self.bundle_prop(...)` or `await get_secret("b:...")` | user props or user secrets |
-| one user inside one bundle | `get_user_prop(...)` or `await get_secret("u:...")` | `bundles.yaml` or `bundles.secrets.yaml` |
+| one user inside one bundle | `await get_user_prop(...)` or `await get_secret("u:...")` | `bundles.yaml` or `bundles.secrets.yaml` |
 
 Examples:
 
@@ -244,7 +244,11 @@ use the async helpers:
 
 ```python
 from kdcube_ai_app.apps.chat.sdk.config import (
+    delete_user_prop,
     get_secret,
+    get_user_prop,
+    get_user_props,
+    set_user_prop,
     set_user_secret,
     delete_user_secret,
     set_bundle_secret,
@@ -260,6 +264,10 @@ Use:
   (see [bundles-secrets-descriptor-README.md](bundles-secrets-descriptor-README.md)
   for the list of overridable `services.*` keys)
 - `await get_secret("u:group.key")` for current-user bundle secrets
+- `await get_user_prop("group.key", default=...)` for one current-user app property
+- `await get_user_props()` for all current-user properties owned by the app
+- `await set_user_prop("group.key", value)` for user property writes
+- `await delete_user_prop("group.key")` for user property deletes
 - `await set_user_secret("group.key", value)` for user secret writes
 - `await delete_user_secret("group.key")` for user secret deletes
 - `await set_bundle_secret("group.key", value)` for deployment-scoped bundle
@@ -563,9 +571,9 @@ These values belong to one user inside one bundle inside one deployment.
 
 Use:
 
-- `get_user_prop(...)`
-- `set_user_prop(...)`
-- `delete_user_prop(...)`
+- `await get_user_prop(...)`
+- `await set_user_prop(...)`
+- `await delete_user_prop(...)`
 - `await get_secret("u:...")`
 - `await set_user_secret(...)`
 - `await delete_user_secret(...)`
@@ -623,7 +631,7 @@ Supported directly from normal bundle code:
 - read deployment-scoped bundle secrets via `await get_secret("b:...")`
 - write deployment-scoped bundle props via `await set_bundle_prop(...)`
 - write deployment-scoped bundle secrets via `await set_bundle_secret(...)`
-- read/write user-scoped bundle props via `get_user_prop(...)`, `set_user_prop(...)`
+- read/write user-scoped bundle props via `await get_user_prop(...)`, `await set_user_prop(...)`
 - read/write user-scoped bundle secrets via `await get_secret("u:...")`,
   `await set_user_secret(...)`, and `await delete_user_secret(...)`
 
@@ -647,7 +655,7 @@ These are the values the runtime is actually meant to use:
 - `get_settings()`
 - `get_secret("u:...")`
 - `self.bundle_prop(...)`
-- `get_user_prop(...)`
+- `await get_user_prop(...)`
 - `set_user_secret(...)` / `delete_user_secret(...)`
 
 ### Raw descriptor reads

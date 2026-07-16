@@ -1,4 +1,5 @@
 import logging
+import inspect
 from types import SimpleNamespace
 
 import pytest
@@ -41,17 +42,24 @@ class _FakeSecretsManager:
 
 
 class _FakePropsManager:
-    def get_user_prop(self, *, user_id: str, key: str, bundle_id: str | None = None):
+    async def get_user_prop(self, *, user_id: str, key: str, bundle_id: str | None = None):
         values = {
             ("user-1", "bundle.demo", "preferences.theme"): "dark",
         }
         return values.get((user_id, bundle_id, key))
 
-    def list_user_props(self, *, user_id: str, bundle_id: str | None = None):
+    async def list_user_props(self, *, user_id: str, bundle_id: str | None = None):
         values = {
             ("user-1", "bundle.demo"): {"preferences.theme": "dark"},
         }
         return values.get((user_id, bundle_id), {})
+
+
+def test_user_prop_sdk_surface_is_native_async():
+    assert inspect.iscoroutinefunction(sdk_config.get_user_prop)
+    assert inspect.iscoroutinefunction(sdk_config.get_user_props)
+    assert inspect.iscoroutinefunction(sdk_config.set_user_prop)
+    assert inspect.iscoroutinefunction(sdk_config.delete_user_prop)
 
 
 @pytest.fixture(autouse=True)
@@ -272,7 +280,8 @@ async def test_get_secret_uses_central_user_secret_cache_and_bundle_clear(monkey
     ]
 
 
-def test_get_user_prop_uses_request_context_scope(monkeypatch):
+@pytest.mark.asyncio
+async def test_get_user_prop_uses_request_context_scope(monkeypatch):
     monkeypatch.setattr(sdk_config, "get_props_manager", lambda: _FakePropsManager())
     monkeypatch.setattr(
         comm_ctx,
@@ -283,8 +292,8 @@ def test_get_user_prop_uses_request_context_scope(monkeypatch):
         ),
     )
 
-    assert sdk_config.get_user_prop("preferences.theme") == "dark"
-    assert sdk_config.get_user_props() == {"preferences.theme": "dark"}
+    assert await sdk_config.get_user_prop("preferences.theme") == "dark"
+    assert await sdk_config.get_user_props() == {"preferences.theme": "dark"}
 
 
 @pytest.mark.asyncio

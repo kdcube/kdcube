@@ -15,7 +15,6 @@ conversation, so a new conversation simply overwrites the record.
 
 from __future__ import annotations
 
-import asyncio
 import datetime as _dt
 import logging
 from typing import Any
@@ -45,15 +44,13 @@ CONSENT_GRANTED_EVENT_SOURCE_ID = "connection_hub.consent"
 async def read_pending_consent(*, user_id: str, bundle_id: str, conversation_id: str) -> list:
     """The conversation's pending consent-demand groups (empty otherwise).
 
-    The user-props client is synchronous (psycopg2); the read runs in a worker
-    thread so async turn/op paths never block their event loop on it."""
+    User properties use the shared asynchronous Postgres pool."""
     if not user_id or not bundle_id or not conversation_id:
         return []
     try:
         from kdcube_ai_app.apps.chat.sdk import config as sdk_config
 
-        raw = await asyncio.to_thread(
-            sdk_config.get_user_prop,
+        raw = await sdk_config.get_user_prop(
             PENDING_CONSENT_KEY,
             user_id=user_id,
             bundle_id=bundle_id,
@@ -74,16 +71,17 @@ async def write_pending_consent(*, user_id: str, bundle_id: str, conversation_id
         from kdcube_ai_app.apps.chat.sdk import config as sdk_config
 
         if providers:
-            await asyncio.to_thread(
-                sdk_config.set_user_prop,
+            await sdk_config.set_user_prop(
                 PENDING_CONSENT_KEY,
                 {"conversation_id": conversation_id, "providers": providers},
                 user_id=user_id,
                 bundle_id=bundle_id,
             )
         else:
-            await asyncio.to_thread(
-                sdk_config.delete_user_prop, PENDING_CONSENT_KEY, user_id=user_id, bundle_id=bundle_id,
+            await sdk_config.delete_user_prop(
+                PENDING_CONSENT_KEY,
+                user_id=user_id,
+                bundle_id=bundle_id,
             )
     except Exception:
         LOGGER.debug("pending-consent write unavailable", exc_info=True)
@@ -216,8 +214,7 @@ async def _register_demand_address(
         from kdcube_ai_app.apps.chat.sdk import config as sdk_config
 
         hub_bundle = _hub_bundle_id(connection_hub_bundle_id)
-        raw = await asyncio.to_thread(
-            sdk_config.get_user_prop,
+        raw = await sdk_config.get_user_prop(
             PENDING_DEMANDS_REGISTRY_KEY,
             user_id=user_id,
             bundle_id=hub_bundle,
@@ -246,8 +243,7 @@ async def _register_demand_address(
                 "tool_name": tool_name,
                 "recorded_at": time.time(),
             })
-        await asyncio.to_thread(
-            sdk_config.set_user_prop,
+        await sdk_config.set_user_prop(
             PENDING_DEMANDS_REGISTRY_KEY,
             {"demands": demands},
             user_id=user_id,
@@ -314,8 +310,7 @@ async def author_consent_granted_events(
         from kdcube_ai_app.apps.chat.sdk import config as sdk_config
 
         hub_bundle = _hub_bundle_id(connection_hub_bundle_id)
-        raw = await asyncio.to_thread(
-            sdk_config.get_user_prop,
+        raw = await sdk_config.get_user_prop(
             PENDING_DEMANDS_REGISTRY_KEY,
             user_id=clean_user,
             bundle_id=hub_bundle,
@@ -437,18 +432,19 @@ async def author_consent_granted_events(
                     conversation_id, provider_key, exc_info=True,
                 )
                 remaining.append(entry)
-        await asyncio.to_thread(
-            sdk_config.set_user_prop,
-            PENDING_DEMANDS_REGISTRY_KEY,
-            {"demands": remaining},
-            user_id=clean_user,
-            bundle_id=hub_bundle,
-        ) if remaining else await asyncio.to_thread(
-            sdk_config.delete_user_prop,
-            PENDING_DEMANDS_REGISTRY_KEY,
-            user_id=clean_user,
-            bundle_id=hub_bundle,
-        )
+        if remaining:
+            await sdk_config.set_user_prop(
+                PENDING_DEMANDS_REGISTRY_KEY,
+                {"demands": remaining},
+                user_id=clean_user,
+                bundle_id=hub_bundle,
+            )
+        else:
+            await sdk_config.delete_user_prop(
+                PENDING_DEMANDS_REGISTRY_KEY,
+                user_id=clean_user,
+                bundle_id=hub_bundle,
+            )
         return authored
     except Exception:
         LOGGER.debug("consent granted authoring unavailable", exc_info=True)

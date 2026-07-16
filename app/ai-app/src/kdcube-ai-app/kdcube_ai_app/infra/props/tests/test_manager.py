@@ -1,68 +1,117 @@
 # SPDX-License-Identifier: MIT
 
+import json
+
+import pytest
+
 from kdcube_ai_app.infra.props.manager import UserPropsManager
 from kdcube_ai_app.ops.deployment.sql.db_deployment import project_schema
 
 
-class _FakeDbMgr:
+class _FakeConnection:
     def __init__(self):
         self.rows = {}
 
-    def execute_sql(self, sql, data=None, as_dict=True, debug=False, bulk=False):
+    async def execute(self, sql, *args):
         if "INSERT INTO" in sql:
-            user_id, bundle_id, key, value_json = data
-            self.rows[(str(user_id), str(bundle_id), str(key))] = value_json.adapted
-            return None
+            user_id, bundle_id, key, value_json = args
+            self.rows[(str(user_id), str(bundle_id), str(key))] = json.loads(value_json)
+            return "INSERT 0 1"
         if "DELETE FROM" in sql:
-            user_id, bundle_id, key = data
+            user_id, bundle_id, key = args
             self.rows.pop((str(user_id), str(bundle_id), str(key)), None)
-            return None
+            return "DELETE 1"
+        raise AssertionError(f"Unexpected SQL in fake connection: {sql}")
+
+    async def fetchval(self, sql, *args):
         if "SELECT value_json" in sql:
-            user_id, bundle_id, key = data
+            user_id, bundle_id, key = args
             value = self.rows.get((str(user_id), str(bundle_id), str(key)))
-            return [] if value is None else [{"value_json": value}]
+            return None if value is None else json.dumps(value)
+        raise AssertionError(f"Unexpected SQL in fake connection: {sql}")
+
+    async def fetch(self, sql, *args):
         if "SELECT key, value_json" in sql:
-            user_id, bundle_id = data
+            user_id, bundle_id = args
             out = []
             for (stored_user, stored_bundle, key), value in sorted(self.rows.items()):
                 if stored_user == str(user_id) and stored_bundle == str(bundle_id):
-                    out.append({"key": key, "value_json": value})
+                    out.append({"key": key, "value_json": json.dumps(value)})
             return out
-        raise AssertionError(f"Unexpected SQL in fake db manager: {sql}")
+        raise AssertionError(f"Unexpected SQL in fake connection: {sql}")
 
 
-def test_user_props_manager_roundtrip():
-    dbmgr = _FakeDbMgr()
+class _Acquire:
+    def __init__(self, connection):
+        self.connection = connection
+
+    async def __aenter__(self):
+        return self.connection
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class _FakePool:
+    def __init__(self):
+        self.connection = _FakeConnection()
+
+    def acquire(self):
+        return _Acquire(self.connection)
+
+
+@pytest.mark.asyncio
+async def test_user_props_manager_roundtrip():
+    pool = _FakePool()
     mgr = UserPropsManager(
         tenant="tenant-a",
         project="project-a",
-        dbmgr=dbmgr,
+        pg_pool=pool,
     )
 
-    mgr.set_user_prop(
+    await mgr.set_user_prop(
         user_id="user-1",
         bundle_id="bundle.demo",
         key="preferences.theme",
         value={"mode": "dark"},
     )
 
-    assert mgr.get_user_prop(
+    assert await mgr.get_user_prop(
         user_id="user-1",
         bundle_id="bundle.demo",
         key="preferences.theme",
     ) == {"mode": "dark"}
-    assert mgr.list_user_props(
+    assert await mgr.list_user_props(
         user_id="user-1",
         bundle_id="bundle.demo",
     ) == {"preferences.theme": {"mode": "dark"}}
 
-    mgr.delete_user_prop(
+    for key, value in {
+        "preferences.labels": ["one", "two"],
+        "preferences.locale": "de-DE",
+        "preferences.literal": "false",
+        "preferences.limit": 5,
+        "preferences.enabled": False,
+    }.items():
+        await mgr.set_user_prop(
+            user_id="user-1",
+            bundle_id="bundle.demo",
+            key=key,
+            value=value,
+        )
+        assert await mgr.get_user_prop(
+            user_id="user-1",
+            bundle_id="bundle.demo",
+            key=key,
+        ) == value
+
+    await mgr.delete_user_prop(
         user_id="user-1",
         bundle_id="bundle.demo",
         key="preferences.theme",
     )
 
-    assert mgr.get_user_prop(
+    assert await mgr.get_user_prop(
         user_id="user-1",
         bundle_id="bundle.demo",
         key="preferences.theme",
@@ -70,11 +119,10 @@ def test_user_props_manager_roundtrip():
 
 
 def test_user_props_manager_uses_project_schema():
-    dbmgr = _FakeDbMgr()
     mgr = UserPropsManager(
         tenant="tenant-a",
         project="project-a",
-        dbmgr=dbmgr,
+        pg_pool=_FakePool(),
     )
 
     assert mgr._schema == project_schema("tenant-a", "project-a")

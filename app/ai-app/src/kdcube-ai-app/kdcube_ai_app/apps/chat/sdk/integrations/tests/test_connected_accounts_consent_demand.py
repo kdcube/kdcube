@@ -46,13 +46,13 @@ def _install_fakes(monkeypatch, resolution: ClaimResolution):
 
     props: dict[tuple[str, str, str], Any] = {}
 
-    def get_user_prop(key, *, user_id=None, bundle_id=None, default=None):
+    async def get_user_prop(key, *, user_id=None, bundle_id=None, default=None):
         return props.get((user_id or "", bundle_id or "", key), default)
 
-    def set_user_prop(key, value, *, user_id=None, bundle_id=None):
+    async def set_user_prop(key, value, *, user_id=None, bundle_id=None):
         props[(user_id or "", bundle_id or "", key)] = value
 
-    def delete_user_prop(key, *, user_id=None, bundle_id=None):
+    async def delete_user_prop(key, *, user_id=None, bundle_id=None):
         props.pop((user_id or "", bundle_id or "", key), None)
 
     monkeypatch.setattr(sdk_config, "get_user_prop", get_user_prop)

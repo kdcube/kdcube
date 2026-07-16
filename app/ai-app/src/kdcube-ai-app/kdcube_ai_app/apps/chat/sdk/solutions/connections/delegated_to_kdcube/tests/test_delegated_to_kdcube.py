@@ -144,13 +144,13 @@ def _install_fake_storage(monkeypatch):
     props: dict[tuple[str, str, str], Any] = {}
     secrets: dict[tuple[str, str, str], str] = {}
 
-    def get_user_prop(key: str, *, user_id: str | None = None, bundle_id: str | None = None, default: Any = None):
+    async def get_user_prop(key: str, *, user_id: str | None = None, bundle_id: str | None = None, default: Any = None):
         return props.get((user_id or "", bundle_id or "", key), default)
 
-    def set_user_prop(key: str, value: Any, *, user_id: str | None = None, bundle_id: str | None = None):
+    async def set_user_prop(key: str, value: Any, *, user_id: str | None = None, bundle_id: str | None = None):
         props[(user_id or "", bundle_id or "", key)] = value
 
-    def delete_user_prop(key: str, *, user_id: str | None = None, bundle_id: str | None = None):
+    async def delete_user_prop(key: str, *, user_id: str | None = None, bundle_id: str | None = None):
         props.pop((user_id or "", bundle_id or "", key), None)
 
     async def set_user_secret(
@@ -1335,10 +1335,7 @@ async def test_claim_coverage_is_read_only_and_per_tool(monkeypatch):
 
 
 def test_consent_bookkeeping_stays_off_the_event_loop():
-    """Loop-hygiene guard (surfaced live: '+' latency + socket heartbeat
-    starvation): every consent_demand store touch is async-shaped with the
-    synchronous storage client offloaded to a worker thread — and no code in
-    the demand/coverage path ever spins a nested event loop."""
+    """All consent bookkeeping reaches the native async user-props API."""
     import inspect
     import pathlib
 
@@ -1352,12 +1349,15 @@ def test_consent_bookkeeping_stays_off_the_event_loop():
     for module in (consent_demand,):
         source = pathlib.Path(module.__file__).read_text(encoding="utf-8")
         assert "asyncio.run(" not in source, "no nested event loops in the consent path"
-        assert "asyncio.to_thread" in source, "sync storage calls run on worker threads"
+        assert "asyncio.to_thread" not in source, "user props use native async storage"
+        assert "await sdk_config.get_user_prop" in source
+        assert "await sdk_config.set_user_prop" in source
 
     from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube import store as store_mod
 
     store_source = pathlib.Path(store_mod.__file__).read_text(encoding="utf-8")
-    assert "asyncio.to_thread(self.list_accounts_sync" in store_source
+    assert "list_accounts_sync" not in store_source
+    assert "await sdk_config.get_user_prop" in store_source
 
 
 class _FakeLaneSource:
@@ -1394,6 +1394,21 @@ def _demand_kwargs(**overrides):
     return base
 
 
+def _install_async_user_prop_store(monkeypatch, sdk_config, store: dict) -> None:
+    async def get_user_prop(key, *, user_id=None, bundle_id=None, default=None):
+        return store.get((user_id, bundle_id, key), default)
+
+    async def set_user_prop(key, value, *, user_id=None, bundle_id=None):
+        store[(user_id, bundle_id, key)] = value
+
+    async def delete_user_prop(key, *, user_id=None, bundle_id=None):
+        store.pop((user_id, bundle_id, key), None)
+
+    monkeypatch.setattr(sdk_config, "get_user_prop", get_user_prop)
+    monkeypatch.setattr(sdk_config, "set_user_prop", set_user_prop)
+    monkeypatch.setattr(sdk_config, "delete_user_prop", delete_user_prop)
+
+
 @pytest.mark.asyncio
 async def test_consent_demand_records_the_conversation_address(monkeypatch):
     """(a) The demand registry entry carries everything needed to author the
@@ -1405,9 +1420,7 @@ async def test_consent_demand_records_the_conversation_address(monkeypatch):
 
     from kdcube_ai_app.apps.chat.sdk import config as sdk_config
     store: dict = {}
-    monkeypatch.setattr(sdk_config, "get_user_prop", lambda key, *, user_id=None, bundle_id=None, default=None: store.get((user_id, bundle_id, key), default))
-    monkeypatch.setattr(sdk_config, "set_user_prop", lambda key, value, *, user_id=None, bundle_id=None: store.__setitem__((user_id, bundle_id, key), value))
-    monkeypatch.setattr(sdk_config, "delete_user_prop", lambda key, *, user_id=None, bundle_id=None: store.pop((user_id, bundle_id, key), None))
+    _install_async_user_prop_store(monkeypatch, sdk_config, store)
 
     assert await record_consent_demand(**_demand_kwargs()) is True
 
@@ -1437,9 +1450,7 @@ async def test_consent_completion_authors_one_event_per_demand_and_clears(monkey
     from kdcube_ai_app.apps.chat.sdk import config as sdk_config
 
     store: dict = {}
-    monkeypatch.setattr(sdk_config, "get_user_prop", lambda key, *, user_id=None, bundle_id=None, default=None: store.get((user_id, bundle_id, key), default))
-    monkeypatch.setattr(sdk_config, "set_user_prop", lambda key, value, *, user_id=None, bundle_id=None: store.__setitem__((user_id, bundle_id, key), value))
-    monkeypatch.setattr(sdk_config, "delete_user_prop", lambda key, *, user_id=None, bundle_id=None: store.pop((user_id, bundle_id, key), None))
+    _install_async_user_prop_store(monkeypatch, sdk_config, store)
 
     await record_consent_demand(**_demand_kwargs())
 
@@ -1523,9 +1534,7 @@ async def test_publish_failure_keeps_the_record_for_the_announce_fallback(monkey
     from kdcube_ai_app.apps.chat.sdk import config as sdk_config
 
     store: dict = {}
-    monkeypatch.setattr(sdk_config, "get_user_prop", lambda key, *, user_id=None, bundle_id=None, default=None: store.get((user_id, bundle_id, key), default))
-    monkeypatch.setattr(sdk_config, "set_user_prop", lambda key, value, *, user_id=None, bundle_id=None: store.__setitem__((user_id, bundle_id, key), value))
-    monkeypatch.setattr(sdk_config, "delete_user_prop", lambda key, *, user_id=None, bundle_id=None: store.pop((user_id, bundle_id, key), None))
+    _install_async_user_prop_store(monkeypatch, sdk_config, store)
 
     await record_consent_demand(**_demand_kwargs())
 
@@ -1555,9 +1564,7 @@ async def test_unrelated_grants_author_nothing(monkeypatch):
     from kdcube_ai_app.apps.chat.sdk import config as sdk_config
 
     store: dict = {}
-    monkeypatch.setattr(sdk_config, "get_user_prop", lambda key, *, user_id=None, bundle_id=None, default=None: store.get((user_id, bundle_id, key), default))
-    monkeypatch.setattr(sdk_config, "set_user_prop", lambda key, value, *, user_id=None, bundle_id=None: store.__setitem__((user_id, bundle_id, key), value))
-    monkeypatch.setattr(sdk_config, "delete_user_prop", lambda key, *, user_id=None, bundle_id=None: store.pop((user_id, bundle_id, key), None))
+    _install_async_user_prop_store(monkeypatch, sdk_config, store)
 
     # No demand at all -> proactive consent authors nothing.
     sources: list = []
@@ -1632,9 +1639,7 @@ async def test_record_consent_demand_without_conversation_records_nothing(monkey
     from kdcube_ai_app.apps.chat.sdk import config as sdk_config
 
     store: dict = {}
-    monkeypatch.setattr(sdk_config, "get_user_prop", lambda key, *, user_id=None, bundle_id=None, default=None: store.get((user_id, bundle_id, key), default))
-    monkeypatch.setattr(sdk_config, "set_user_prop", lambda key, value, *, user_id=None, bundle_id=None: store.__setitem__((user_id, bundle_id, key), value))
-    monkeypatch.setattr(sdk_config, "delete_user_prop", lambda key, *, user_id=None, bundle_id=None: store.pop((user_id, bundle_id, key), None))
+    _install_async_user_prop_store(monkeypatch, sdk_config, store)
 
     assert await record_consent_demand(**_demand_kwargs(conversation_id="")) is False
     assert await record_consent_demand(**_demand_kwargs(conversation_id="   ")) is False
@@ -1684,9 +1689,7 @@ async def test_grant_drops_legacy_addressless_demand_without_authoring(monkeypat
             ]
         }
     }
-    monkeypatch.setattr(sdk_config, "get_user_prop", lambda key, *, user_id=None, bundle_id=None, default=None: store.get((user_id, bundle_id, key), default))
-    monkeypatch.setattr(sdk_config, "set_user_prop", lambda key, value, *, user_id=None, bundle_id=None: store.__setitem__((user_id, bundle_id, key), value))
-    monkeypatch.setattr(sdk_config, "delete_user_prop", lambda key, *, user_id=None, bundle_id=None: store.pop((user_id, bundle_id, key), None))
+    _install_async_user_prop_store(monkeypatch, sdk_config, store)
 
     sources: list[_FakeLaneSource] = []
 

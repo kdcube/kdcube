@@ -159,10 +159,10 @@ Scope:
 
 This is the persistent backing store for:
 
-- `get_user_prop(...)`
-- `get_user_props(...)`
-- `set_user_prop(...)`
-- `delete_user_prop(...)`
+- `await get_user_prop(...)`
+- `await get_user_props(...)`
+- `await set_user_prop(...)`
+- `await delete_user_prop(...)`
 
 ## 5. Local `secrets-file` model
 

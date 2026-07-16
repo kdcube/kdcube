@@ -308,13 +308,13 @@ def _install_fake_user_props(monkeypatch):
 
     props: dict[tuple[str, str, str], object] = {}
 
-    def get_user_prop(key, *, user_id=None, bundle_id=None, default=None):
+    async def get_user_prop(key, *, user_id=None, bundle_id=None, default=None):
         return props.get((user_id or "", bundle_id or "", key), default)
 
-    def set_user_prop(key, value, *, user_id=None, bundle_id=None):
+    async def set_user_prop(key, value, *, user_id=None, bundle_id=None):
         props[(user_id or "", bundle_id or "", key)] = value
 
-    def delete_user_prop(key, *, user_id=None, bundle_id=None):
+    async def delete_user_prop(key, *, user_id=None, bundle_id=None):
         props.pop((user_id or "", bundle_id or "", key), None)
 
     monkeypatch.setattr(sdk_config, "get_user_prop", get_user_prop)
@@ -407,13 +407,13 @@ def test_announce_renders_connected_accounts_update():
 async def test_blocking_consent_bookkeeping_never_blocks_the_turn(monkeypatch):
     """Fail-open budget: a hanging snapshot store (DB stall, secrets stall —
     any of it) lets the turn proceed with bookkeeping skipped and a warning."""
-    import time as _time
+    import asyncio
     from kdcube_ai_app.apps.chat.sdk import config as sdk_config
 
-    def hanging_get_user_prop(key, *, user_id=None, bundle_id=None, default=None):
-        # Far beyond the 0.3s test budget; short enough that the leftover
-        # worker thread drains quickly at loop close.
-        _time.sleep(2)
+    async def hanging_get_user_prop(key, *, user_id=None, bundle_id=None, default=None):
+        # Far beyond the 0.3s test budget; cancellation remains event-loop
+        # native and leaves no worker thread behind.
+        await asyncio.sleep(2)
         return default
 
     monkeypatch.setattr(sdk_config, "get_user_prop", hanging_get_user_prop)

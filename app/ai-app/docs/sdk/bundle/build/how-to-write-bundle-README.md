@@ -959,7 +959,7 @@ Use this quick map while writing code:
 | platform/global secrets | `await get_secret("canonical.key")` | none |
 | deployment-scoped bundle props | `self.bundle_prop("path", default=...)`, `self.bundle_props` | `await set_bundle_prop(...)` |
 | deployment-scoped bundle secrets | `await get_secret("b:...")` | `await set_bundle_secret(...)` |
-| user-scoped bundle props | `get_user_prop(...)`, `get_user_props()` | `set_user_prop(...)`, `delete_user_prop(...)` |
+| user-scoped bundle props | `await get_user_prop(...)`, `await get_user_props()` | `await set_user_prop(...)`, `await delete_user_prop(...)` |
 | user-scoped bundle secrets | `await get_secret("u:...")` | `await set_user_secret(...)`, `await delete_user_secret(...)` |
 
 Bundle user-scope rule:

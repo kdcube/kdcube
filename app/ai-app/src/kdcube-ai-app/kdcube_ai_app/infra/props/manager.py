@@ -3,18 +3,38 @@
 
 from __future__ import annotations
 
+import inspect
+import json
+from collections.abc import Awaitable, Callable
 from functools import lru_cache
 from typing import Any
 
-from psycopg2.extras import Json
-
-from kdcube_ai_app.infra.relational.psql.psql_base import PostgreSqlDbMgr
 from kdcube_ai_app.ops.deployment.sql.db_deployment import project_schema as _project_schema
+
+
+PoolFactory = Callable[[], Any | Awaitable[Any]]
+
+
+async def _default_pool() -> Any:
+    # The processor and ingress share this asyncpg pool resolver. Import it
+    # lazily so the infrastructure module does not create an SDK import cycle.
+    from kdcube_ai_app.apps.chat.ingress.resolvers import get_pg_pool
+
+    return await get_pg_pool()
+
+
+def _decode_json_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError):
+        return value
 
 
 class UserPropsManager:
     """
-    Persistent non-secret per-user bundle props.
+    Async persistent non-secret per-user bundle props over the shared pool.
 
     Scope:
     - tenant/project is implicit in the selected project schema
@@ -28,58 +48,73 @@ class UserPropsManager:
         *,
         tenant: str,
         project: str,
-        dbmgr: PostgreSqlDbMgr | None = None,
+        pg_pool: Any | None = None,
+        pool_factory: PoolFactory | None = None,
     ) -> None:
         self._tenant = str(tenant or "").strip()
         self._project = str(project or "").strip()
         self._schema = _project_schema(self._tenant, self._project)
-        self._dbmgr = dbmgr or PostgreSqlDbMgr()
+        self._pg_pool = pg_pool
+        self._pool_factory = pool_factory or _default_pool
 
-    def get_user_prop(
+    async def _pool(self) -> Any:
+        if self._pg_pool is None:
+            candidate = self._pool_factory()
+            self._pg_pool = await candidate if inspect.isawaitable(candidate) else candidate
+        if self._pg_pool is None:
+            raise RuntimeError("UserPropsManager requires an asyncpg pool")
+        return self._pg_pool
+
+    async def get_user_prop(
         self,
         *,
         user_id: str,
         bundle_id: str,
         key: str,
     ) -> Any | None:
-        rows = self._dbmgr.execute_sql(
-            f"""
-            SELECT value_json
-            FROM {self._schema}.user_bundle_props
-            WHERE user_id = %s
-              AND bundle_id = %s
-              AND key = %s
-            LIMIT 1
-            """,
-            data=(str(user_id), str(bundle_id), str(key)),
-        ) or []
-        if not rows:
-            return None
-        return rows[0].get("value_json")
+        pool = await self._pool()
+        async with pool.acquire() as con:
+            value = await con.fetchval(
+                f"""
+                SELECT value_json::text
+                FROM {self._schema}.user_bundle_props
+                WHERE user_id = $1
+                  AND bundle_id = $2
+                  AND key = $3
+                LIMIT 1
+                """,
+                str(user_id),
+                str(bundle_id),
+                str(key),
+            )
+        return _decode_json_value(value)
 
-    def list_user_props(
+    async def list_user_props(
         self,
         *,
         user_id: str,
         bundle_id: str,
     ) -> dict[str, Any]:
-        rows = self._dbmgr.execute_sql(
-            f"""
-            SELECT key, value_json
-            FROM {self._schema}.user_bundle_props
-            WHERE user_id = %s
-              AND bundle_id = %s
-            ORDER BY key ASC
-            """,
-            data=(str(user_id), str(bundle_id)),
-        ) or []
+        pool = await self._pool()
+        async with pool.acquire() as con:
+            rows = await con.fetch(
+                f"""
+                SELECT key, value_json::text AS value_json
+                FROM {self._schema}.user_bundle_props
+                WHERE user_id = $1
+                  AND bundle_id = $2
+                ORDER BY key ASC
+                """,
+                str(user_id),
+                str(bundle_id),
+            )
         return {
-            str(row.get("key")): row.get("value_json")
+            str(row.get("key")): _decode_json_value(row.get("value_json"))
             for row in rows
             if row.get("key") is not None
         }
 
-    def set_user_prop(
+    async def set_user_prop(
         self,
         *,
         user_id: str,
@@ -89,38 +124,47 @@ class UserPropsManager:
     ) -> None:
         if value is None:
             raise ValueError("User prop value cannot be None. Use delete_user_prop(...) to clear it.")
-        self._dbmgr.execute_sql(
-            f"""
-            INSERT INTO {self._schema}.user_bundle_props (
-                user_id,
-                bundle_id,
-                key,
-                value_json
+        pool = await self._pool()
+        async with pool.acquire() as con:
+            await con.execute(
+                f"""
+                INSERT INTO {self._schema}.user_bundle_props (
+                    user_id,
+                    bundle_id,
+                    key,
+                    value_json
+                )
+                VALUES ($1, $2, $3, $4::jsonb)
+                ON CONFLICT (user_id, bundle_id, key) DO UPDATE
+                SET value_json = EXCLUDED.value_json,
+                    updated_at = now()
+                """,
+                str(user_id),
+                str(bundle_id),
+                str(key),
+                json.dumps(value, ensure_ascii=False, sort_keys=True),
             )
-            VALUES (%s, %s, %s, %s)
-            ON CONFLICT (user_id, bundle_id, key) DO UPDATE
-            SET value_json = EXCLUDED.value_json,
-                updated_at = now()
-            """,
-            data=(str(user_id), str(bundle_id), str(key), Json(value)),
-        )
 
-    def delete_user_prop(
+    async def delete_user_prop(
         self,
         *,
         user_id: str,
         bundle_id: str,
         key: str,
     ) -> None:
-        self._dbmgr.execute_sql(
-            f"""
-            DELETE FROM {self._schema}.user_bundle_props
-            WHERE user_id = %s
-              AND bundle_id = %s
-              AND key = %s
-            """,
-            data=(str(user_id), str(bundle_id), str(key)),
-        )
+        pool = await self._pool()
+        async with pool.acquire() as con:
+            await con.execute(
+                f"""
+                DELETE FROM {self._schema}.user_bundle_props
+                WHERE user_id = $1
+                  AND bundle_id = $2
+                  AND key = $3
+                """,
+                str(user_id),
+                str(bundle_id),
+                str(key),
+            )
 
 
 @lru_cache()

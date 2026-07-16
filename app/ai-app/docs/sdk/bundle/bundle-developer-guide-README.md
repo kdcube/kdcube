@@ -361,7 +361,7 @@ The important split is:
   - `await get_secret("b:...")` in async code
   - provisioned through `bundles.secrets.yaml` or the configured secrets provider
 - user-scoped bundle state:
-  - `get_user_prop(...)`
+  - `await get_user_prop(...)`
   - `await get_secret("u:...")`
   - never exported back into descriptors
 - raw mounted descriptor reads:

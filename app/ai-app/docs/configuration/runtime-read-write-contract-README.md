@@ -30,8 +30,10 @@ Use that SDK page for:
 - `self.bundle_prop(...)`
 - `await set_bundle_prop(...)`
 - `await set_bundle_secret(...)`
-- `get_user_prop(...)`
-- `set_user_prop(...)`
+- `await get_user_prop(...)`
+- `await get_user_props()`
+- `await set_user_prop(...)`
+- `await delete_user_prop(...)`
 - `get_secret("u:...")`
 - `set_user_secret(...)`
 - `delete_user_secret(...)`
