@@ -214,6 +214,55 @@ def test_model_service_query_embed():
     asyncio.run(_run_model_service_query_embed())
 
 
+async def _run_poisoned_doc_survival():
+    """One doc whose embedding fails must not sink the batch: the others
+    index fully, the failed doc stays lexically findable with no stale
+    vector, and the missing vector re-queues its embed on the next upsert."""
+    calls = {"n": 0}
+    poison = {"active": True}
+
+    async def flaky_embed(texts):
+        calls["n"] += 1
+        if poison["active"] and any("POISON" in t for t in texts):
+            raise RuntimeError("provider rejected input")
+        return await fake_embed(texts)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        idx = HybridIndex(IndexConfig(
+            db_path=Path(tmp) / "idx.sqlite",
+            embed_fn=flaky_embed,
+            dim=len(VOCAB),
+            vector_store=BruteForceVectorStore(),
+            overfetch=5,
+        ))
+        now = time.time()
+        await idx.upsert([
+            Document(id="ok1", text="alpha beta", metadata={}, timestamp=now),
+            Document(id="bad", text="POISON zeta eta", metadata={}, timestamp=now),
+            Document(id="ok2", text="gamma delta", metadata={}, timestamp=now),
+        ])
+        # Healthy docs answer semantically; the poisoned one is not indexed
+        # as a vector but still answers lexically.
+        sem = await idx.search("alpha beta", top_k=5, mode="semantic")
+        assert {h.id for h in sem} >= {"ok1"}
+        assert all(h.id != "bad" for h in sem)
+        lex = await idx.search("zeta eta", top_k=5, mode="lexical")
+        assert any(h.id == "bad" for h in lex), "failed-embed doc lost from lexical search"
+
+        # Same content upserted again once the provider recovers: the
+        # vector-less doc re-embeds even though its text is unchanged.
+        poison["active"] = False
+        await idx.upsert([
+            Document(id="bad", text="POISON zeta eta", metadata={}, timestamp=now),
+        ])
+        sem2 = await idx.search("zeta eta", top_k=5, mode="semantic")
+        assert any(h.id == "bad" for h in sem2), "recovered doc still missing from semantic search"
+
+
+def test_poisoned_doc_survival():
+    asyncio.run(_run_poisoned_doc_survival())
+
+
 if __name__ == "__main__":
     asyncio.run(_run_all())
     asyncio.run(_run_guard())

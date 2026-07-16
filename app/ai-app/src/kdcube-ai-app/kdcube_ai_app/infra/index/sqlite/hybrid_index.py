@@ -83,34 +83,82 @@ class HybridIndex:
     def _bump_version(self, conn: sqlite3.Connection) -> None:
         self._set_meta(conn, "data_version", self._get_int(conn, "data_version", 0) + 1)
 
+    # Embedding models bound a single input (~8k tokens). One oversized
+    # document must not fail the whole batch, so clamp each text to a budget
+    # that stays inside the window even for code-heavy content (~3 chars per
+    # token). Lexical indexing keeps the full text; only the embedded vector
+    # is computed from the clamped prefix.
+    EMBED_TEXT_MAX_CHARS = 20_000
+
     # ---- writes ----
     async def _embed_documents(self, texts: Sequence[str]) -> List[List[float]]:
+        clamped = [str(t or "")[: self.EMBED_TEXT_MAX_CHARS] for t in texts]
         model_service = self.cfg.model_service
         embed_texts = getattr(model_service, "embed_texts", None)
         if callable(embed_texts):
-            return await embed_texts(list(texts))
-        return await self.cfg.embed_fn(texts)
+            return await embed_texts(clamped)
+        return await self.cfg.embed_fn(clamped)
+
+    async def _embed_documents_tolerant(
+        self, docs: List[Document]
+    ) -> tuple[Dict[str, List[float]], set]:
+        """Embed a batch, surviving per-document failures.
+
+        Fast path embeds everything in one call. When the batch raises, fall
+        back to per-document embedding so one poisoned document (provider
+        rejection, transient API error) cannot sink its whole collection.
+        Returns (vectors by doc id, ids that failed). Every failure is logged
+        with its document id."""
+        try:
+            vectors = await self._embed_documents([d.text for d in docs])
+            return {d.id: v for d, v in zip(docs, vectors)}, set()
+        except Exception as exc:
+            logger.warning(
+                "[HybridIndex] batch embed failed for %d doc(s) (%s); retrying per document",
+                len(docs), exc,
+            )
+        vec_by_id: Dict[str, List[float]] = {}
+        failed: set = set()
+        for doc in docs:
+            try:
+                vec_by_id[doc.id] = (await self._embed_documents([doc.text]))[0]
+            except Exception:
+                failed.add(doc.id)
+                logger.warning(
+                    "[HybridIndex] embed failed for doc id=%s (text_chars=%d); "
+                    "indexed lexical-only, embed retries on next upsert",
+                    doc.id, len(doc.text or ""), exc_info=True,
+                )
+        return vec_by_id, failed
 
     async def upsert(self, docs: Iterable[Document]) -> None:
         docs = list(docs)
         if not docs:
             return
-        # Embed only NEW or text-changed docs (embed-on-write): metadata/timestamp
-        # edits don't re-embed and don't trigger a vector rebuild.
+        # Embed only NEW, text-changed, or vector-less docs (embed-on-write):
+        # metadata/timestamp edits don't re-embed and don't trigger a vector
+        # rebuild. Vector-less covers docs whose embed failed on a previous
+        # pass — their text is already stored, so text equality alone would
+        # never retry them.
         ids = [d.id for d in docs]
         with self._conn() as conn:
             placeholders = ",".join("?" * len(ids))
-            existing = {
-                r["id"]: r["text"]
-                for r in conn.execute(f"SELECT id, text FROM docs WHERE id IN ({placeholders})", ids).fetchall()
-            }
-        to_embed = [d for d in docs if existing.get(d.id) != d.text]
+            rows = conn.execute(
+                f"SELECT d.id AS id, d.text AS text, v.rowid IS NOT NULL AS has_vec "
+                f"FROM docs d LEFT JOIN vectors v ON v.rowid = d.rowid "
+                f"WHERE d.id IN ({placeholders})",
+                ids,
+            ).fetchall()
+            existing = {r["id"]: r["text"] for r in rows}
+            vectored = {r["id"] for r in rows if r["has_vec"]}
+        to_embed = [d for d in docs if existing.get(d.id) != d.text or d.id not in vectored]
         vec_by_id: Dict[str, List[float]] = {}
+        embed_failed: set = set()
         if to_embed:
-            vectors = await self._embed_documents([d.text for d in to_embed])
-            vec_by_id = {d.id: v for d, v in zip(to_embed, vectors)}
+            vec_by_id, embed_failed = await self._embed_documents_tolerant(to_embed)
 
         now = time.time()
+        changed_ids = {d.id for d in to_embed}
         vectors_changed = False
         with self._conn() as conn:
             for doc in docs:
@@ -122,15 +170,24 @@ class HybridIndex:
                     (doc.id, doc.text, json.dumps(doc.metadata or {}), ts),
                 )
                 rid = conn.execute("SELECT rowid FROM docs WHERE id=?", (doc.id,)).fetchone()["rowid"]
-                if doc.id in vec_by_id:  # new or text changed → refresh FTS + vector
+                if doc.id in changed_ids:  # new, text changed, or vector-less → refresh FTS
                     conn.execute("DELETE FROM docs_fts WHERE rowid=?", (rid,))
                     conn.execute("INSERT INTO docs_fts(rowid,text) VALUES(?,?)", (rid, doc.text))
+                if doc.id in vec_by_id:
                     conn.execute(
                         "INSERT INTO vectors(rowid,vec) VALUES(?,?) "
                         "ON CONFLICT(rowid) DO UPDATE SET vec=excluded.vec",
                         (rid, json.dumps([float(x) for x in vec_by_id[doc.id]])),
                     )
                     vectors_changed = True
+                elif doc.id in embed_failed:
+                    # The stored vector (if any) belongs to the PREVIOUS text;
+                    # drop it so semantic search cannot answer for stale
+                    # content. Lexical (FTS, refreshed above) still serves the
+                    # doc; the missing vector re-queues the embed next pass.
+                    deleted = conn.execute("DELETE FROM vectors WHERE rowid=?", (rid,)).rowcount
+                    if deleted:
+                        vectors_changed = True
             if vectors_changed:
                 self._bump_version(conn)
 
