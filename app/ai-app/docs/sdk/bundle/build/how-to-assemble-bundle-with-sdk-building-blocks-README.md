@@ -6,6 +6,7 @@ tags: ["sdk", "bundle", "tier-1", "building-blocks", "integrations", "solutions"
 keywords: ["bundle building blocks", "sdk integrations", "sdk solutions", "bundle assembly map", "reuse sdk components", "surface first app design", "as consumer", "as provider", "mcp consumer surface", "mcp provider surface", "per-agent mcp allow-list", "telegram integration", "email integration", "automations solution", "delivery integration", "shared sdk widget components", "built in tools", "react tools", "bundle events", "event sources", "artifact rehosters"]
 updated_at: 2026-07-16
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/recipes/what-i-should-know-about-app-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-write-bundle-README.md
@@ -64,6 +65,9 @@ Use this page before implementing a new subsystem in a bundle.
 The goal is to assemble product behavior from reusable KDCube blocks where the
 platform already owns the mechanics, and keep bundle code focused on product
 policy, route aliases, prompts, UI composition, and user-scope decisions.
+
+For the complete app-builder mind map before choosing a surface or subsystem,
+read [What I Should Know Before Writing a KDCube App](../../../recipes/what-i-should-know-about-app-README.md).
 
 If you landed here directly, first read
 [how-to-navigate-kdcube-docs-README.md](how-to-navigate-kdcube-docs-README.md).

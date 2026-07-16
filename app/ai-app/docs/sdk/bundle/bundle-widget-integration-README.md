@@ -4,7 +4,7 @@ title: "Bundle Widget Integration"
 summary: "Bundle widget UI contract: source-folder widget apps, runtime config handshake, operation URL construction, Data Bus publishing, auth propagation, and the recommended pattern when a capability is both widget and operation."
 tags: ["sdk", "bundle", "widget", "iframe", "frontend", "integrations", "telegram", "memory", "data-bus"]
 keywords: ["bundle widget contract", "iframe widget contract", "widget source folder", "static widget build", "runtime config handshake", "operation url construction", "data bus publishing", "auth propagation to widget", "widget and operation dual pattern", "shared sdk widget source", "telegram widget components", "memory widget component", "bundle widget integration"]
-updated_at: 2026-07-04
+updated_at: 2026-07-16
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-interfaces-README.md
@@ -144,6 +144,43 @@ See:
 - [Client Transport Protocols: Data Bus Contract](../../service/comm/client-transport-protocols-README.md#7-data-bus-contract)
 - [Data Bus](../../service/comm/data-bus-README.md)
 - [Bundle Federated Auth For Data Bus](auth-bundle-federated-README.md)
+
+## Widget Live Updates
+
+The inbound mirror of publishing is a server-side state change pushed to an
+open widget, so it updates without a manual refresh. This app primitive has two
+shapes:
+
+- **tenant/project broadcast** — the app emits `comm.project_event(...)`
+  (from crons, use a purpose-built scoped communicator rather than an ambient
+  one) and every opted-in viewer receives it;
+- **session-routed push** — the app registers the widget's authenticated
+  session against the subject it displays and emits one relay envelope per live
+  session when that subject changes.
+
+Widget rules:
+
+- broadcasts travel over SSE only; a standalone widget opens
+  `/sse/stream?project_events=true` with its runtime tenant/project. Socket.IO
+  does not carry them.
+- a scene-embedded widget claims its events once through
+  `kdcube-scene-subscribe` / `bindComponentEventSubscriptions` and lets the host
+  deliver them. The host owns the SSE relay leg for broadcasts.
+- support both paths and let the embed decide: own SSE only when top-level
+  (`window.parent === window`), while the scene claim is always registered.
+- filter received snapshots by `data_scope` when the collector serves multiple
+  data scopes.
+- on a change nudge, refetch the authoritative object instead of trusting the
+  inline snapshot, then reconcile in place. Apply every field the widget shows;
+  an in-progress user edit wins field by field.
+- keep broadcast debounce windows and change signatures in Redis for the whole
+  fleet, never in instance memory.
+
+The end-to-end emit/receive recipe and missing-update trace path are in
+[Live Widget Updates](../../recipes/dataflow/live-widget-updates-README.md).
+Shipped examples include the `kdcube.stats` usage widget (broadcast), the task
+tracker wizard/list (broadcast and both receive modes), and Connection Hub
+delegated access (session-routed).
 
 ## Two Contracts: Surface And Build Config
 
@@ -1326,7 +1363,7 @@ void loadFrontendConfig().then((loaded) => {
 Use these as reference implementations for the runtime config handshake and
 operation-call shape:
 
-- [PreferencesBrowser.tsx](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/workspace@2026-03-31-13-36/ui/PreferencesBrowser.tsx)
+- [Echo UI App.tsx](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/echo.ui@2026-03-30/ui/main/src/App.tsx)
 
 Those examples are useful for runtime config and API calls. For new widgets,
 prefer the source-folder layout described above instead of embedding TSX/HTML in

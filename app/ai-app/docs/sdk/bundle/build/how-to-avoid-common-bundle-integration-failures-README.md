@@ -16,7 +16,7 @@ keywords:
     "authored external events",
     "resolver ownership",
   ]
-updated_at: 2026-07-10
+updated_at: 2026-07-16
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/components/scene-README.md
@@ -466,6 +466,52 @@ Read:
 - [How To Assemble A Bundle With SDK Building Blocks](how-to-assemble-bundle-with-sdk-building-blocks-README.md) — the base-deps check before reaching for `@venv`
 - [Bundle Venv](../bundle-venv-README.md)
 
+## Recipe: The `os.environ` Rule — Never Use `os.environ`
+
+KDCube apps define app/user properties and secrets in `bundles.yaml`,
+`bundles.secrets.yaml`, and the platform user-scoped store. Runtime code uses
+the helper contract: `bundle_prop`, `await get_secret("b:...")`,
+`await get_secret("u:...")`, `await set_bundle_prop(...)`,
+`await set_user_prop(...)`, `await set_user_secret(...)`, and `get_settings()`.
+`os.environ` is not an app configuration channel. A knob exposed only as
+`os.getenv(...)` is unreachable in a deployment: nothing declares it, no
+operator surface can change it, and code silently keeps its hardcoded default.
+
+Fix: declare the knob in the descriptor and read it through `bundle_prop(...)`
+in the wrapper. If vendored standalone code legitimately reads env vars, keep
+that only as its standalone fallback; the descriptor value wins when hosted.
+
+One observed failure had an answer-model output budget only in an adapter
+default. A payload-bearing tool call was cut mid-arguments at that ceiling on
+every retry until the graph recursion limit, and no deployment surface could
+raise the budget because it was not a property.
+
+Read:
+
+- [Bundle Properties And Secrets Lifecycle](../bundle-properties-and-secrets-lifecycle-README.md) — property read/write ownership
+- [How To Write A Bundle](how-to-write-bundle-README.md) — the complete definition/read/set map per scope
+
+## Recipe: Dynamic Context Crosses Fences Only Via The Portable Context
+
+Execution in KDCube crosses async tasks, threads, subprocesses, and
+Docker/Fargate runtimes. Process env and module-global state do not survive
+those boundaries. A value stashed there can be present in proc and silently
+absent inside an exec runtime, supervisor tool, or child fence.
+
+Dynamic context, including identity, routing, accounting, communication, and
+app-call context, crosses through the portable cross-runtime context. The host
+snapshots it into `PORTABLE_SPEC_JSON`, the child bootstraps from it, and side
+files reduce back to the host.
+
+Fix: put per-request dynamic state in its carried context (`comm_ctx`, app-call
+context, accounting context) or pass it explicitly in the child spec/arguments.
+Never use env or module globals for it.
+
+Read:
+
+- [Cross-Runtime Context](../../../runtime/cross-runtime-context-README.md) — snapshot and restore anchors
+- [Fenced Runtime Bootstrap And Reduce](../../../runtime/fenced-runtime-bootstrap-and-reduce-README.md) — the fence contract
+
 ## Triage Table
 
 | Symptom | First Check |
@@ -483,4 +529,7 @@ Read:
 | Cross-bundle-mounted widget loads empty or calls the wrong app | host handshake `defaultAppBundleId` overrode the widget's route bundle id. |
 | Bundle UI build fails on a CSS import (postcss/tailwind not found) | a shared stylesheet carries a toolchain directive; move it to the consuming entry. |
 | Every turn slow or wedged at once, no exception | sync I/O or `asyncio.run` on the serving event loop; use async variants or `to_thread`. |
+| A runtime knob cannot be changed in a deployment | it is an env var or hardcoded default instead of a descriptor property read through `bundle_prop`. |
+| A value or identity is present in proc but missing inside exec/subprocess/child runtime | it was stored in `os.environ` or a module global; dynamic state crosses fences only through portable context. |
+| A tool-calling agent loops on retries until a recursion-limit error | the answer model's output budget may be too small for a complete payload-bearing tool call; expose and raise the descriptor property. |
 | Authored event never appears in the timeline and the turn cannot complete | event published with a semantic transport kind instead of `external_event`. |

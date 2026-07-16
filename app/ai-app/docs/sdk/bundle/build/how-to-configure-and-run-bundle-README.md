@@ -4,7 +4,7 @@ title: "How To Configure And Run A Bundle"
 summary: "Current bundle-development runtime workflow: tenant/project environment setup, descriptor staging, local-path and git bundles, configuration translation, start/stop/reload loop, configuration/secret scopes, bundle events, and the rule that one machine may hold many local deployment snapshots but should not be treated as running many local compose-backed KDCubes at once."
 tags: ["sdk", "bundle", "configuration", "runtime", "cli", "bundles.yaml"]
 keywords: ["local bundle development workflow", "tenant project environment boundary", "descriptor driven runtime setup", "local path bundle loop", "git bundle loop", "bundle reload workflow", "runtime sandbox selection", "bundle config and secret scopes", "shared sdk widget sources", "bundle events", "event sources", "artifact rehosters", "bundle configurator workflow", "bundle deployer workflow", "current kdcube cli workflow", "multiple local runtime snapshots", "single active local compose deployment", "run multiple kdcubes on one machine", "kdcube bundle command", "patch bundle config cli", "patch bundle secret cli"]
-updated_at: 2026-07-12
+updated_at: 2026-07-16
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
@@ -29,7 +29,6 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-transports-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/telegram-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/telegram-external-prereq-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-new-cli-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-developer-guide-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-agent-integration-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-subsystem-integration-README.md
@@ -130,6 +129,13 @@ SDK block configuration rule:
 
 - when a bundle uses an SDK integration or solution, configure it through
   bundle props/secrets and user settings rather than hardcoded local constants
+- the descriptor is the app's configuration surface: every runtime knob an
+  operator may need to change, including model output budgets, timeouts, and
+  feature toggles, is a descriptor property read through `bundle_prop(...)`.
+  Process env vars are not a KDCube configuration channel. When wrapping a
+  standalone solution whose own config reads env vars, preserve that only as
+  its standalone idiom and overlay the descriptor property in the wrapper. The
+  descriptor wins; env/default remains the standalone fallback.
 - when a bundle mounts an existing SDK subsystem, configure every layer of that
   subsystem: main enable flag, widget/tool/announce flags, `ui.widgets`,
   `enabled.*`, `visibility.*`, resolver/policy modules, and storage settings
@@ -163,7 +169,6 @@ For exact descriptor schemas, use:
 - [bundles-secrets-descriptor-README.md](../../../configuration/bundles-secrets-descriptor-README.md)
 - [assembly-descriptor-README.md](../../../configuration/assembly-descriptor-README.md)
 - [runtime-configuration-and-secrets-store-README.md](../../../configuration/runtime-configuration-and-secrets-store-README.md)
-- [how-to-configure-and-run-bundle-new-cli-README.md](how-to-configure-and-run-bundle-new-cli-README.md)
 - [cli--as-control-plane-README.md](../../../service/cicd/design/cli--as-control-plane-README.md)
 - [Serving Local KDCube With Ngrok](../../../service/cicd/ngrok-README.md)
 
@@ -501,10 +506,8 @@ isolated from each other.
 This is intentional today because it lets bundle developers keep one known-good
 runtime snapshot while testing another one with a newer platform version.
 
-For broader deployment-first CLI design context, use:
-
-- [how-to-configure-and-run-bundle-new-cli-README.md](how-to-configure-and-run-bundle-new-cli-README.md)
-- [cli--as-control-plane-README.md](../../../service/cicd/design/cli--as-control-plane-README.md)
+For broader deployment-first CLI design context, use
+[cli--as-control-plane-README.md](../../../service/cicd/design/cli--as-control-plane-README.md).
 
 ## Running Multiple KDCubes On One Machine
 

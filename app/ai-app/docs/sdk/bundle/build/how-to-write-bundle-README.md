@@ -4,8 +4,9 @@ title: "How To Write A Bundle"
 summary: "Authoring guide for bundle creators and integrators: bundle shape, lifecycle, decorators, runtime surfaces, bundle events, configuration and storage decisions, and how to turn a product idea or existing app into a deployable bundle."
 tags: ["sdk", "bundle", "authoring", "workflow", "widget", "api", "events", "testing"]
 keywords: ["bundle authoring guide", "bundle creator path", "bundle integrator path", "end to end bundle design", "decorator selection", "runtime surface selection", "widget api mcp cron on_job choices", "bundle events", "event sources", "artifact rehosters", "shared sdk widget components", "configuration and storage decisions", "bundle lifecycle design", "reference authoring patterns"]
-updated_at: 2026-07-12
+updated_at: 2026-07-16
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/recipes/what-i-should-know-about-app-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-test-bundle-README.md
@@ -24,6 +25,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-economics-integration-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-agent-integration-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-platform-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-interfaces-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/comm/client-transport-protocols-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-events-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-transports-README.md
@@ -63,6 +65,10 @@ Terminology note (rebrand in progress):
 
 If you are not yet sure where this page fits in the full reading order, start
 with [how-to-navigate-kdcube-docs-README.md](how-to-navigate-kdcube-docs-README.md).
+
+If you first need the architecture mind map across surfaces, async execution,
+identity, state, delivery, economics, UI, and maintenance, read
+[What I Should Know Before Writing a KDCube App](../../../recipes/what-i-should-know-about-app-README.md).
 
 If the product question is how a host website, host browser client, host
 server, or backend-only app should integrate with KDCube, choose that shape in
@@ -843,6 +849,7 @@ Before writing code, classify the product surface and state model.
 | Admin console | `@ui_widget` + `@api(route="operations")` | widget -> operations | descriptor-backed config, bundle local storage, DB/Redis | keep admin separate from public/user surface |
 | Named semantic provider | named service provider with local/API/MCP/Data Bus adapters | client/provider dispatch | owner storage plus transport-specific auth context | use when other bundles, widgets, agents, or scene hosts need stable access to owned objects, relations, actions, or namespace-level commands |
 | Durable widget/domain mutation | Socket.IO `data_bus.publish` + `@data_bus_handler(...)` | Data Bus Redis Stream -> proc worker -> handler | bundle-owned DB/Redis/storage with idempotency | use for non-chat state changes that need retry or per-object serialization |
+| Live update pushed to open widgets | `comm.project_event(...)` (tenant/project broadcast) or session-routed relay emit to a live-session registry (one user) | relay Redis channel -> SSE hub -> widget SSE / scene relay | broadcast debounce + change-signature state in Redis (fleet-wide, never per-instance) | broadcasts travel over SSE only; recipe: `docs/recipes/dataflow/live-widget-updates-README.md` |
 | External webhook/integration | `@api(route="public")` | public HTTP path | bundle props + secrets, external systems | auth boundary must be explicit |
 | Tool-serving integration | `@mcp(...)` | MCP dispatch path | bundle props + secrets, external systems | bundle owns MCP auth |
 | Background automation | `@cron(...)` plus `@on_job` for ready work | cron scan -> Redis job stream -> proc `@on_job` | bundle local storage, DB/Redis, external APIs | cron detects due work; `@on_job` executes it fairly |
@@ -962,6 +969,25 @@ Use this quick map while writing code:
 | user-scoped bundle props | `await get_user_prop(...)`, `await get_user_props()` | `await set_user_prop(...)`, `await delete_user_prop(...)` |
 | user-scoped bundle secrets | `await get_secret("u:...")` | `await set_user_secret(...)`, `await delete_user_secret(...)` |
 
+Where each value is defined, meaning its authority rather than its read API:
+
+- **bundle props** — code defaults come from the entrypoint's
+  `configuration_defaults()`; the deployment overrides them in
+  `bundles.yaml -> bundles.items[].config` (deep-merged; descriptor wins).
+  `self.bundle_prop("path")` returns that merged view. Every operator-facing
+  runtime knob must exist here. A knob that lives only in code or an env var
+  gives the deployment no surface to change it.
+- **bundle secrets** — declared per deployment in `bundles.secrets.yaml`
+  (file-backed mode) or the configured secrets provider; addressed from code as
+  `await get_secret("b:path.to.secret")`. They have no code defaults and are
+  never merged with props.
+- **user props / user secrets** — not declared in YAML. They are runtime state
+  app code writes in the current user scope with helpers such as
+  `await set_user_prop(...)` and `await set_user_secret("u:...", ...)`.
+  Examples include a per-user API token collected by a widget or a saved
+  preference. Read them in any turn, tool, cron, or job path carrying that user
+  scope.
+
 Bundle user-scope rule:
 
 - `user_id` in bundle storage, user props, and user secrets means the current
@@ -1057,6 +1083,18 @@ That means:
 
 - inherited processor environment variables are shared by design
 - bundle code must not treat `os.environ` as private mutable state
+- the full contract is "The `os.environ` rule: never use `os.environ`" (below):
+  app/user properties and secrets are defined in `bundles.yaml`,
+  `bundles.secrets.yaml`, or the user-scoped store and accessed through the
+  helper contract; every operator-facing knob is a descriptor property read
+  through `bundle_prop(...)`. When wrapping a standalone solution whose
+  vendored config reads env vars, keep that as the standalone idiom and overlay
+  the descriptor property in the wrapper. The descriptor wins; the env/default
+  is only the offline fallback.
+- dynamic per-request state never rides env or module globals either: execution
+  crosses async tasks, threads, subprocesses, and Docker/Fargate fences, while
+  only the portable cross-runtime context survives the hop. See the rule
+  section's runtime links.
 
 For git-backed helpers in particular:
 
@@ -1491,6 +1529,35 @@ async def task_list(self, **kwargs):
 
 Reference:
 - [bundle-platform-integration-README.md](../bundle-platform-integration-README.md)
+
+### File upload into an operation (multipart)
+
+A POST operation accepts `multipart/form-data` as well as JSON. Ingress parses
+the form (`payload` or `data` contains the JSON payload; every file part becomes
+a `BundleUploadedFile`) and delivers the parts as `uploaded_files`. The handler
+filters the parts it requested. They are in-memory bytes intended for documents
+and images, not large media.
+
+```python
+@api(alias="issues_import_xlsx", route="operations", method="POST", user_types=("registered",))
+async def issues_import_xlsx(self, data=None, **kwargs):
+    payload = _payload(data, **kwargs)
+    uploaded = list(payload.get("uploaded_files") or kwargs.get("uploaded_files") or [])
+    sheet = next(
+        (f for f in uploaded
+         if str(getattr(f, "filename", "")).lower().endswith(".xlsx")),
+        None,
+    )
+    if sheet is None:
+        return {"ok": False, "error": "No .xlsx file part", "status": 400}
+    return await self._import_sheet(sheet.content)  # bytes
+```
+
+Client side: send the JSON as a form field plus the files:
+`-F 'data={...};type=application/json' -F 'sheet=@rows.xlsx'`.
+
+Reference:
+- [bundle-interfaces-README.md](../bundle-interfaces-README.md) -> "File uploads (multipart) into an operation"
 
 ### Public API with handler-owned shared secret
 
@@ -2268,25 +2335,51 @@ For platform settings:
 
 - `get_settings()`
 
-### Do not read deployment-owned config with raw `os.getenv(...)`
+### The `os.environ` rule: never use `os.environ`
 
-Bundle logic should not depend on raw env variable names for operational config when the platform already provides:
+In KDCube, a custom application defines its own properties and secrets, and its
+users' properties and secrets, in descriptors and platform stores. It accesses
+them through the runtime helper contract:
 
-- `bundle_prop(...)`
-- `get_settings()`
-- `get_secret(...)`
-- `get_plain(...)`
+| Value | Defined in | Read at runtime | Set at runtime |
+| --- | --- | --- | --- |
+| app properties | `bundles.yaml -> items[].config`, merged over `configuration_defaults()` | `self.bundle_prop(...)` | `await set_bundle_prop(...)` |
+| app secrets | `bundles.secrets.yaml` / configured secrets provider | `await get_secret("b:...")` | `await set_bundle_secret(...)` |
+| user properties | platform user-scoped store (runtime state, no YAML) | `await get_user_prop(...)` | `await set_user_prop(...)` |
+| user secrets | platform user-scoped store (runtime state, no YAML) | `await get_secret("u:...")` | `await set_user_secret(...)` |
+| platform settings / raw descriptors | assembly/platform descriptors | `get_settings()` / `get_plain(...)` | none from app code |
 
-Treat this as prohibited in normal bundle code:
+`os.environ` plays no role in this contract. Never read it as a config source
+or write it as a side channel:
 
-- do not call `os.getenv(...)` or read `os.environ[...]` for deployment-owned
-  config or secrets
-- do not invent bundle-local env variable names as a second config contract
+- proc runs many apps in one process; env is shared, not app-scoped
+- an env-only knob has no deployment surface: nothing declares it and no
+  operator can change it
+- an app-local env variable name creates a second, undocumented config contract
+
+There is a second runtime reason env and module globals cannot carry state:
+**execution crosses fences**. A turn can move through async tasks, threads,
+subprocesses, and Docker/Fargate runtimes. Process env and module-global state
+do not survive those boundaries. Dynamic context, including identity, routing,
+accounting, communication, and app-call context, crosses only through the
+portable cross-runtime context. The host snapshots it into
+`PORTABLE_SPEC_JSON`; the child runtime bootstraps from it through
+`runtime/snapshot.py`, `runtime/bootstrap.py`, and accessors in
+`runtime/comm_ctx.py`. A value stashed in `os.environ` or a module global is
+silently absent at the first fence.
+
+Read:
+
+- [cross-runtime-context-README.md](../../../runtime/cross-runtime-context-README.md)
+  — what crosses and where it is snapshotted and restored
+- [fenced-runtime-bootstrap-and-reduce-README.md](../../../runtime/fenced-runtime-bootstrap-and-reduce-README.md)
+  — the fence bootstrap/reduce contract
 
 Exception:
 
 - direct env access is acceptable only in code that explicitly lives at the
   iso-runtime or sandbox boundary and is intentionally driven by process env
+  (for example, code building the env dict passed to a subprocess)
 
 If you add a standalone helper script for local debugging:
 
