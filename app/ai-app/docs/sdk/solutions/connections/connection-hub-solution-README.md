@@ -20,6 +20,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-connections/delegated-connections-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-credentials/delegation-edges-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/widget-auth-context/widget-auth-context-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-token-storage-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/storage-model/storage-model-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-selector-README.md
 ---
@@ -481,7 +482,8 @@ grantor's full platform session.
 | Connect a custom OAuth/OIDC service so KDCube tools can use the user's provider token | [Custom OAuth/OIDC Provider Accounts](delegated-accounts/custom-oauth-oidc-service-README.md) |
 | Turn credential failures into user actions (reconnect, approve claim, choose account) | [Delegated Accounts](delegated-accounts/delegated-accounts-README.md) |
 | Host Connection Hub or another widget in an iframe | [Widget Auth Context](widget-auth-context/widget-auth-context-README.md) |
-| Know where data/secrets live | [Storage Model](storage-model/storage-model-README.md) |
+| Know where tokens live | [Token Storage](connection-hub-token-storage-README.md) |
+| Know where all data/secrets live | [Storage Model](storage-model/storage-model-README.md) |
 | Understand gateway-level auth selection | [Auth Selector](../../../service/auth/auth-selector-README.md) |
 
 ## Main Roundtrips

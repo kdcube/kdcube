@@ -7,12 +7,15 @@ tags: ["sdk", "connections", "connection-hub", "storage", "postgres", "secrets",
 updated_at: 2026-07-05
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-token-storage-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/secrets/secrets-service-README.md
 ---
 # Connection Hub Storage Model
 
 Connection Hub uses multiple storage surfaces. They are separate on purpose.
+For the token-specific operational answer, start with
+[Connection Hub Token Storage](../connection-hub-token-storage-README.md).
 
 ```text
 descriptors / bundles.yaml

@@ -88,6 +88,7 @@ Curated index of platform, service, and SDK documentation.
 ## Runtime, Storage, And Execution
 
 * App Storage And Cache: [bundle-storage-and-cache-README.md](sdk/bundle/bundle-storage-and-cache-README.md)
+* Connection Hub Token Storage: [connection-hub-token-storage-README.md](sdk/solutions/connections/connection-hub-token-storage-README.md)
 * File Storage And Hosting: [files-storage-system-README.md](hosting/files-storage-system-README.md)
 * Artifacts Limits: [artifacts-limits-README.md](hosting/artifacts-limits-README.md)
 * ISO Runtime: [README-iso-runtime.md](exec/README-iso-runtime.md)
