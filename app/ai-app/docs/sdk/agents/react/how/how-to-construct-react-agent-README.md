@@ -4,7 +4,7 @@ title: "How To Construct A ReAct Agent"
 summary: "The full story of creating and customizing a ReAct agent from app code and config: construction, per-agent configuration, conversation-scoped model/capability selection, and prompt-cache consequences."
 status: current
 tags: ["sdk", "agents", "react", "how-to", "configuration", "per-user-selection", "supported-models", "composer-menu"]
-updated_at: 2026-07-12
+updated_at: 2026-07-16
 keywords:
   [
     "build_react",
@@ -31,13 +31,13 @@ see_also:
 ---
 # How To Construct A ReAct Agent
 
-A ReAct agent is assembled fresh for every turn from three inputs: **app code**
-(the workflow that calls `build_react`), **app config** (the per-agent blocks in
-`bundles.yaml`), and — since the per-user selection layer — **the user's own
-saved choices**. This article walks the whole pipeline: how the instance is
-constructed, which config keys shape it, where a customization belongs
-(instructions vs ANNOUNCE), how users narrow it, and what each customization
-costs in prompt cache.
+A ReAct runtime object is assembled fresh for every turn from four inputs:
+**app code** (the workflow that calls `build_react`), **app config** (the
+per-agent blocks in `bundles.yaml`), the **conversation-scoped user
+selection**, and **durable turn state** (timeline, workspace refs, memory, and
+runtime context). Fresh construction does not mean stateless execution. This
+article walks the pipeline, configuration, selection, consent boundary, and
+prompt-cache consequences.
 
 ## 1. The construction pipeline
 
@@ -83,16 +83,21 @@ beating app-level `role_models`. The full resolution chain (code defaults →
 `bundles.yaml` → invocation overlay) is owned by
 [Bundle Agent Integration §2A](../../../bundle/bundle-agent-integration-README.md#2a-model-selection-for-agent-roles).
 
-Steps 3 and 4 are the two per-turn narrowing passes. Both use the same pure
-narrower (`runtime/agent_inventory.py`), both fail OPEN (any error keeps the
-configured set), and both feed the ANNOUNCE surface rather than rewriting the
-cached instruction text.
+Step 3 is the turn-start narrowing pass: it removes user-disabled entries,
+applies the validated model pick and subagent toggle, and governs when a
+cache-colding selection change lands. Step 4 is deliberately **not** another
+narrower. Connected-account claims remain attached to configured tools and are
+enforced at the concrete tool attempt. The turn-start hook only checks whether
+a claim demanded earlier in this conversation has since become satisfied and,
+if so, publishes that transition through ANNOUNCE. Bookkeeping failure keeps
+the configured set; it never bypasses the operation-level authorization fence.
 
 ## 2. The per-agent config surface
 
-Two config roots shape one agent, both resolved through the same agent-key
-chain — the agent's own key first, then `default_agent`, then `default` — so
-every setting can be declared per agent or once as the default:
+Two config roots shape one agent. ReAct behavior resolves through the agent
+id, its filesystem-safe form, `default_agent`, `default`, and the ReAct root;
+both direct per-agent blocks and `react.agents.<id>` are recognized. This lets
+settings be declared per agent or once as a default:
 
 **`config.react.<agent-key>` — runtime behavior and teaching:**
 
@@ -102,6 +107,7 @@ every setting can be declared per agent or once as the default:
 | `instructions` (body/blocks via `build_react` args `instruction_body` / `instruction_blocks`) | Full replacement/extension of the instruction composition when the app builds them in code. |
 | `supported_models` | The admin-allowed model list users pick from (rows: `model`, `provider`, `label` — the economics price-table naming, so every allowed model is one the platform accounts for). |
 | `role_models` | Per-agent role→model mapping (overrides the app-level `config.role_models` for this agent's runs). |
+| `subagents` | Whether helper delegation is offered for this agent, plus visibility/model defaults. The user's conversation selection may turn an offered capability off. |
 | `max_iterations` | Base decision/tool-round budget. |
 | `render_thinking`, `debug_timeline`, `event_source_pipeline.enabled`, `story_snapshots.enabled` | Runtime switches. |
 
@@ -167,16 +173,16 @@ opposite lifecycles:
 | --- | --- | --- |
 | Lifecycle | Durable across the conversation | Recomputed every decision round |
 | Caching | Part of the big cached prompt slice | Never cached, by design |
-| Belongs here | Teaching: house style, domain rules, tool guidance, the named-service roster, skill galleries | State: `[BUDGET]`, `[RUNTIME LIMITS]`, `[CONTEXT CAPS]`, `[USER MEMORY HOTSET]`, `[WORKSPACE]`, `[INACTIVE TOOLS THIS TURN]`, temporal ground truth |
-| App hook | `additional_instructions` / `instruction_body` / `instruction_blocks` on `build_react` | `RuntimeCtx` fields the announce composer reads (e.g. `memory_hotset`, `inactive_tools`) |
+| Belongs here | Teaching: house style, domain rules, tool catalog and traits, the named-service roster, skill galleries | State: `[BUDGET]`, `[RUNTIME LIMITS]`, `[CONTEXT CAPS]`, `[USER MEMORY HOTSET]`, `[WORKSPACE]`, `[CACHE]`, `[DELEGATION]`, connected-account reactivation, temporal ground truth |
+| App hook | `additional_instructions` / `instruction_body` / `instruction_blocks` on `build_react` | `RuntimeCtx` and durable turn fields the announce composer reads (for example `memory_hotset`, `cold_turn_marker`, `reactivated_tools`) |
 
-The placement rule is the **lifecycle test**: if the content can change between
-turns without the admin changing config — connected accounts, per-turn limits,
-live events, user toggles — it belongs in ANNOUNCE, because putting it in the
-instruction text would rewrite (and thus invalidate) the cached slice the
-moment it changes. If it is stable teaching the agent should always know, it
-belongs in the instructions, where caching makes it nearly free after the
-first turn. Section semantics and examples are owned by
+The placement rule is the **lifecycle test**: stable teaching belongs in the
+instruction; current situational truth belongs in ANNOUNCE. A user capability
+toggle is not merely situational prose: it changes the callable catalog, so it
+must change the instruction and causes one governed cold turn. Budgets,
+workspace state, live events, memory hotset, and consent reactivation can
+change without changing the callable contract and belong in ANNOUNCE. Section
+semantics and examples are owned by
 [ReAct Announce](../react-announce-README.md); the caching mechanics by
 [Context Caching](../context-caching-README.md).
 
@@ -190,9 +196,11 @@ account is connected.
 
 ## 4. The per-user selection layer
 
-On top of the admin-granted inventory, each signed-in user can narrow what THE
-agent uses for THEM. The selection is stored per (user, app id, agent) and
-applied in step 3 of the pipeline.
+On top of the admin-granted inventory, each signed-in user can narrow what the
+agent uses in one conversation. The effective selection is stored per
+`(user, app id, conversation, agent)` and applied in step 3. An optional
+user/app/agent baseline seeds a new conversation once; after materialization,
+that conversation owns its durable selection.
 
 **Two operations on the SDK entrypoint base** (available to every chat app,
 declared for registered users and above):
@@ -213,8 +221,12 @@ declared for registered users and above):
   "disabled": {
     "tools": {"gmail": true, "web_tools": ["web_fetch"]},
     "mcp": {"knowledge": ["kb_fetch"]},
-    "named_services": {"task": true},
-    "skills": ["public.docx-press"]
+    "named_services": {
+      "mail": ["object.action.send"],
+      "task": ["object.delete"]
+    },
+    "skills": ["public.docx-press"],
+    "subagents": true
   },
   "model": {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"}
 }
@@ -226,11 +238,12 @@ disabled` on read):
 - The user can only **remove**; nothing outside the configured inventory can
   ever be enabled. New config entries default ON for everyone.
 - System tool groups (`io`, `context`) are locked on and immune.
-- Python groups toggle whole or per tool; MCP servers toggle whole or per tool
-  (per-tool when the listing is knowable); named-service namespaces toggle
-  whole — a denied namespace also vanishes from the agent's namespace roster
-  and from operation dispatch for the turn; denied skills disappear from every
-  skill consumer, and a skill whose required tool was denied auto-hides.
+- Python groups and MCP servers toggle whole or per tool. Named-service realms
+  toggle whole, per generic operation, or per named action; full denial removes
+  the realm from roster and dispatch, while entry denial is enforced at named-
+  service dispatch. Denied skills disappear from every consumer. If subagents
+  are offered, denying them prevents the spawner, `react.delegate`, and its
+  instruction guidance from being installed.
 - The `model` field is a **pick, not a denial**: one choice from
   `supported_models`, applied for the user's turns to the strong decision role
   (`solver.react.v2.decision.v2.strong`), overriding what `role_models`
@@ -249,14 +262,16 @@ differ sharply by category:
   full input cost for the entire context (instructions, tool catalog, the
   whole visible timeline), exactly as a brand-new conversation would. The
   cache warms again from that turn on.
-- **Toggling tools or skills invalidates the cached prompt slice.** The tool
-  catalog and skill gallery render inside the system prompt, so adding or
-  removing a tool group, an MCP server, a namespace, or a skill changes that
-  text — the next turn re-writes the cache for everything from that point.
-  Same model, so the cost is one cold turn, then caching resumes.
+- **Toggling a capability colds the entire prompt for one turn.** The tool
+  catalog, skill gallery, namespace teaching, and delegation guidance live in
+  one cached system block before timeline messages. Changing a tool, skill,
+  MCP server, namespace, operation/action, or subagent capability invalidates
+  that block and every downstream history cache point for the next applicable
+  turn. Same model, so caching can resume after that turn.
 - **Turn-local state is free.** Everything routed through ANNOUNCE (including
-  the inactive-tools notice and the memory hotset) changes nothing in the
-  cached slice — that is precisely why the lifecycle rule in section 3 exists.
+  budget, workspace, memory hotset, delegation progress, and consent
+  reactivation) changes nothing in the stable cached prefix — that is why the
+  lifecycle rule in section 3 exists.
 
 Two platform behaviors build on this, and both ship. First, the composer menu
 states the mechanism before a costly change lands: picking a different model
@@ -303,8 +318,9 @@ The chat engine carries the agent identity and the selection UI end to end:
   Connection-Hub entry that renders only when opening it can actually happen —
   a host that acks the `connection_hub.settings` surface command owns the
   open, and without an ack the served connections widget opens directly.
-- Saved toggles apply **from the next message in that conversation**: the
-  backend reads the conversation row per turn, so there is no session
+- Saved toggles apply on the next eligible turn under the user's cache policy:
+  now, in the next conversation, or when the current cache is already cold.
+  The backend reads the conversation row per turn, so there is no session
   invalidation. Switching conversations discards unsaved edits and loads that
   conversation's selection. A chat-originated Capabilities window carries the
   same conversation id. Only an independently mounted, unscoped widget edits
