@@ -202,7 +202,6 @@ class WorkspaceEntrypoint(BaseEntrypointWithEconomics):
             comm_context=comm_context,
             event_filter=BundleEventFilter(),
         )
-        self._apply_custom_llm_props()
         self.graph = self._build_graph()
 
     def _apply_custom_llm_props(self) -> None:
@@ -210,9 +209,11 @@ class WorkspaceEntrypoint(BaseEntrypointWithEconomics):
 
         `provider: custom` roles and composer picks route through the models
         gateway named here — config comes from the app descriptor
-        (`services.llm.custom`), never from process env. Applied per instance
-        because the app is rebuilt per reactive event and the model router
-        reads the endpoint from this instance's config lazily."""
+        (`services.llm.custom`), never from process env. Called at TURN
+        start, like every other per-agent config read: descriptor props land
+        on ``self.bundle_props`` via ``refresh_bundle_props`` during
+        ``execute()``, and the model router reads the endpoint from this
+        instance's config lazily when it creates clients."""
         custom = self.bundle_prop("services.llm.custom", {}) or {}
         if not isinstance(custom, Mapping):
             return
@@ -227,6 +228,11 @@ class WorkspaceEntrypoint(BaseEntrypointWithEconomics):
         if api_key:
             self.config.custom_model_api_key = api_key
         self.config.use_custom_endpoint = True
+        _log.info(
+            "[workspace] custom LLM endpoint applied from descriptor: %s (model=%s)",
+            endpoint,
+            self.config.custom_model_name,
+        )
 
     @on_job
     async def on_job(self, **kwargs) -> Dict[str, Any]:
@@ -265,6 +271,10 @@ class WorkspaceEntrypoint(BaseEntrypointWithEconomics):
             from kdcube_ai_app.apps.chat.sdk.context.vector.conv_index import ConvIndex
             from kdcube_ai_app.apps.chat.sdk.retrieval.kb_client import KBClient
             from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import ConversationStore
+
+            # Turn-time, like every other per-agent config read: bundle props
+            # are descriptor-refreshed by execute() before this node runs.
+            self._apply_custom_llm_props()
 
             conv_idx = ConvIndex(pool=self.pg_pool)
             kb = KBClient(pool=self.pg_pool)
