@@ -433,7 +433,7 @@ Per-mode fields:
   `--cognito-app-client-id`, `--cognito-service-client-id` (or the matching `COGNITO_*`
   env vars / descriptor values).
 
-The same flags apply to `kdcube config apply` (see §2.3f, Reconfigure authentication).
+The same flags apply to `kdcube config apply` (see [§2.3f, Reconfigure authentication](#config-apply-auth)).
 
 **Telegram companion (optional).** `--enable-telegram --external-https-url <url>` configures
 the Telegram companion during init. The bot token is a secret with no flag; it is read from
@@ -595,7 +595,7 @@ With `--include-platform-descriptors`, export writes `assembly.yaml`,
 ### 2.3f Reconfigure authentication — `kdcube config apply`<a id="config-apply-auth"></a>
 
 `kdcube config apply` changes the platform authentication of an already-initialized
-runtime. It takes the same `--auth-type` and per-mode flags as `init` (§2.3e) and
+runtime. It takes the same `--auth-type` and per-mode flags as `init` ([§2.3e](#auth-flags)) and
 reconciles the descriptors to the target method: the previous method's platform login
 provider, its upstream authority, admin bootstrap rule, and consent UI are removed, and
 unrelated configuration (bundles, connectors, the Telegram companion) is preserved.
