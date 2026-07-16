@@ -679,7 +679,7 @@ class ContextRAGClient:
         # the turn recorded, so the framework-neutral fallback stays a no-op
         # when a log already exists this turn.
         try:
-            from kdcube_ai_app.apps.chat.sdk.runtime.turn_recording import mark_turn_log_recorded
+            from kdcube_ai_app.apps.chat.sdk.solutions.conversation.record import mark_turn_log_recorded
             mark_turn_log_recorded()
         except Exception:
             pass

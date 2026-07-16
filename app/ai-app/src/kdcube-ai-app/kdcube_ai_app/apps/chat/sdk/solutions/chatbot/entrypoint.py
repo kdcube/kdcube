@@ -2326,7 +2326,7 @@ class BaseEntrypoint:
         # "no turn log written yet" flag. Whoever persists a turn log this turn —
         # the React workflow's finish_turn, or the fallback at the end of run() —
         # marks it; the fallback records a minimal log only when nothing else did.
-        from kdcube_ai_app.apps.chat.sdk.runtime.turn_recording import (
+        from kdcube_ai_app.apps.chat.sdk.solutions.conversation.record import (
             reset_turn_log_recorded,
             reset_turn_error_surfaced,
         )
@@ -2483,7 +2483,7 @@ class BaseEntrypoint:
         it is a no-op when a log already exists or there is no answer. Recording
         never fails the turn.
         """
-        from kdcube_ai_app.apps.chat.sdk.runtime.turn_recording import (
+        from kdcube_ai_app.apps.chat.sdk.solutions.conversation.record import (
             record_minimal_turn_log_if_absent,
             turn_log_was_recorded,
         )
@@ -2610,7 +2610,7 @@ class BaseEntrypoint:
         and economics denials keep their own paths and are never handled here.
         Never fails the turn.
         """
-        from kdcube_ai_app.apps.chat.sdk.runtime.turn_recording import (
+        from kdcube_ai_app.apps.chat.sdk.solutions.conversation.record import (
             mark_turn_error_surfaced,
             turn_error_was_surfaced,
         )
@@ -2668,7 +2668,7 @@ class BaseEntrypoint:
         turn is still saved and reloadable as an errored turn. No-op when a log
         already exists. Recording never fails the turn.
         """
-        from kdcube_ai_app.apps.chat.sdk.runtime.turn_recording import (
+        from kdcube_ai_app.apps.chat.sdk.solutions.conversation.record import (
             record_error_turn_log_if_absent,
             turn_log_was_recorded,
         )
@@ -3140,6 +3140,55 @@ class BaseEntrypoint:
         )
         return self.ctx_client
 
+    async def _persist_stream_artifacts_fallback(self, *, state: Dict[str, Any]) -> None:
+        """Persist this turn's canvas/tool/subsystem delta aggregates as the
+        `conv.artifacts.stream` artifact for a FRAMEWORK-NEUTRAL turn — the exec
+        widget's `code_exec.*` stream is the flagship case: without this the
+        panel renders live and vanishes on reload (the client replays the
+        artifact's rows as synthetic completed deltas).
+
+        State-conditional, inert on the React path twice over: a rich-log turn
+        is skipped by `turn_log_was_recorded()`, and React's own
+        `BaseWorkflow._persist_stream_artifacts` has already saved AND CLEARED
+        the aggregates inside `execute_core` — there is nothing left to export.
+        Same builder as React (`build_stream_artifact_payload`), so the stored
+        shape is identical. Best-effort: any failure logs and the turn stands."""
+        try:
+            from kdcube_ai_app.apps.chat.sdk.solutions.conversation.record import (
+                persist_stream_artifacts,
+                turn_log_was_recorded,
+            )
+            if turn_log_was_recorded():
+                return
+            conversation_id = str(state.get("conversation_id") or state.get("session_id") or "").strip()
+            turn_id = str(state.get("turn_id") or getattr(self, "_turn_id", None) or "").strip()
+            if not (conversation_id and turn_id):
+                return
+            ctx_client = await self.get_ctx_client()
+            if ctx_client is None:
+                return
+            tenant = state.get("tenant") or getattr(self.config, "tenant", None) or self.settings.TENANT
+            project = state.get("project") or getattr(self.config, "project", None) or self.settings.PROJECT
+            user_id = state.get("user") or state.get("fingerprint") or ""
+            storage_label = "anonymous" if not user_id or user_id == "anonymous" else "registered"
+            bundle_id = str(getattr(getattr(self.config, "ai_bundle_spec", None), "id", "") or "")
+            if not (tenant and project and user_id):
+                return
+            agent_id = index_agent_id(
+                getattr(getattr(self, "runtime_ctx", None), "agent_id", None)
+                or state.get("agent_id")
+            )
+            await persist_stream_artifacts(
+                comm=self.comm,
+                ctx_client=ctx_client,
+                tenant=tenant, project=project,
+                user_id=user_id, user_type=storage_label,
+                conversation_id=conversation_id, turn_id=turn_id,
+                bundle_id=bundle_id, agent_id=agent_id,
+            )
+        except Exception:
+            self.logger.log(traceback.format_exc(), "WARNING")
+
     async def _save_events_artifact(self, *, state: Dict[str, Any]) -> None:
         try:
             if not self._persist_events_enabled():
@@ -3164,7 +3213,7 @@ class BaseEntrypoint:
             # avoid double-rendering them on reload. A framework-neutral turn wrote no
             # such log, so ALSO persist the recorded conversation objects; the reload
             # replays them and the client renders them exactly as it did live.
-            from kdcube_ai_app.apps.chat.sdk.runtime.turn_recording import turn_log_was_recorded
+            from kdcube_ai_app.apps.chat.sdk.solutions.conversation.record import turn_log_was_recorded
             export_types = list(step_types)
             if not turn_log_was_recorded():
                 export_types = export_types + [

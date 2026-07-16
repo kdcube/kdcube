@@ -848,6 +848,10 @@ class LGPortedAgentsBundle(BaseEntrypointWithEconomics):
                 save_state = dict(state)
                 save_state["user"] = record_user
         await self._save_events_artifact(state=save_state)
+        # Subsystem/canvas stream replay on reload (the code-exec panel): persist
+        # this turn's delta aggregates as conv.artifacts.stream — the same artifact
+        # React saves itself; the fallback is inert on rich-log turns.
+        await self._persist_stream_artifacts_fallback(state=save_state)
 
     # ── first-turn conversation title ─────────────────────────────────────────
 

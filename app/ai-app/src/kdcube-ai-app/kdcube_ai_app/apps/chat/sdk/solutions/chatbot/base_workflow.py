@@ -1822,23 +1822,12 @@ class BaseWorkflow():
         all_deltas = self.comm.get_delta_aggregates(
             conversation_id=conversation_id, turn_id=turn_id, merge_text=True
         )
-        canvas_and_tools_blocks = [d for d in all_deltas if d.get("marker") in ["canvas", "tool", "subsystem"] and (d.get("text") or d.get("chunks"))]
+        # Shared payload builder (runtime/turn_recording) — the framework-neutral
+        # fallback persists through the same shape, so reload replay never drifts.
+        from kdcube_ai_app.apps.chat.sdk.solutions.conversation.record import build_stream_artifact_payload
+        payload = build_stream_artifact_payload(all_deltas)
 
-        subsystem_blocks = [d for d in all_deltas if d.get("marker") in ["subsystem"] and (d.get("text") or d.get("chunks"))]
-
-        canvas_full = [
-            {**{k: v for k, v in item.items() if k != "chunks"},
-             "chunks_num": len(item.get("chunks") or [])}
-            for item in canvas_and_tools_blocks
-        ]
-        canvas_idx = [
-            {**{k: v for k, v in item.items() if k not in ("text", "chunks")},
-             "text_size": len(item.get("text") or ""),
-             "chunks_num": len(item.get("chunks") or [])}
-            for item in canvas_and_tools_blocks
-        ]
-
-        if canvas_and_tools_blocks:
+        if payload is not None:
             await self.ctx_browser.save_artifact(
                 kind="conv.artifacts.stream",
                 tenant=tenant, project=project,
@@ -1848,8 +1837,8 @@ class BaseWorkflow():
                 bundle_id=self.config.ai_bundle_spec.id,
                 agent_id=self._index_agent_id(),
                 user_type=CONVERSATION_INDEX_LABEL,
-                content={"version": "v1", "items": canvas_full},
-                content_str=json.dumps(canvas_idx),
+                content=payload["content"],
+                content_str=payload["content_str"],
                 extra_tags=["conversation", "stream", "canvas"],
             )
 
@@ -4331,7 +4320,7 @@ class BaseWorkflow():
         # per-turn flag so the platform's run() backstop does not double-emit or
         # re-record a failure this workflow already handled.
         try:
-            from kdcube_ai_app.apps.chat.sdk.runtime.turn_recording import mark_turn_error_surfaced
+            from kdcube_ai_app.apps.chat.sdk.solutions.conversation.record import mark_turn_error_surfaced
             mark_turn_error_surfaced()
         except Exception:
             pass

@@ -633,7 +633,7 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
         # this turn — React's finish_turn or the fallback at the end of run() —
         # marks it; whoever surfaces a turn failure marks the error flag. Both
         # gate the platform backstops below.
-        from kdcube_ai_app.apps.chat.sdk.runtime.turn_recording import (
+        from kdcube_ai_app.apps.chat.sdk.solutions.conversation.record import (
             reset_turn_log_recorded,
             reset_turn_error_surfaced,
         )
