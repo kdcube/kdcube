@@ -1226,7 +1226,14 @@ class ConnectionHubEntrypoint(BaseEntrypoint):
 
     def _connection_hub_provider(self) -> ConnectionHubProvider:
         if self._connection_hub_ns is None:
-            self._connection_hub_ns = ConnectionHubProvider(entrypoint=self, bundle_id=BUNDLE_ID)
+            self._connection_hub_ns = ConnectionHubProvider(
+                entrypoint=self,
+                bundle_id=self._named_services_bundle_id(),
+                # The delegated-grant store for the per-agent grant lookup. This
+                # bundle owns the delegated config sourcing; no request is needed
+                # for a per-agent grant read (the issuer only shapes connect URLs).
+                automation_access_factory=lambda: _automation_access_service(self, None),
+            )
         return self._connection_hub_ns
 
     def _named_service_providers(self) -> list:

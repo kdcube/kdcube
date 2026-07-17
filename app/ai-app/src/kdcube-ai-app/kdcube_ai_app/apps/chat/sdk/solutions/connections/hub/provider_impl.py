@@ -99,10 +99,20 @@ def _is_expired(tokens: dict[str, Any], *, skew: int = _REFRESH_SKEW_SECONDS) ->
     },
 )
 class ConnectionHubProvider(ConnectionsProviderBase):
-    def __init__(self, *, entrypoint: Any, bundle_id: str = BUNDLE_ID) -> None:
+    def __init__(
+        self,
+        *,
+        entrypoint: Any,
+        bundle_id: str = BUNDLE_ID,
+        automation_access_factory: Optional[Callable[[], Any]] = None,
+    ) -> None:
         super().__init__()
         self._entrypoint = entrypoint
         self._bundle_id = bundle_id
+        # Builds an AutomationAccessService (delegated-grant store) for the
+        # per-agent grant lookup. Injected by the bundle entrypoint, which owns
+        # the delegated config sourcing; absent -> agent grants resolve to none.
+        self._automation_access_factory = automation_access_factory
 
     # ── storage choice: user-scoped ConnectionStore ─────────────────────────
 
@@ -195,6 +205,36 @@ class ConnectionHubProvider(ConnectionsProviderBase):
             if refreshed:
                 tokens = refreshed
         return ConnectionToken.from_dict(tokens)
+
+    async def agent_grant_token(
+        self,
+        ctx: NamedServiceContext,
+        *,
+        client_id: str,
+        resource: str,
+    ) -> ConnectionToken | None:
+        """The consented bearer of a hosted agent's per-agent delegated grant,
+        read from the delegated-grant (automation access) store for THIS user.
+        ``None`` when there is no factory, no user, or consent is pending."""
+        if self._automation_access_factory is None:
+            return None
+        user_id = self._user_id(ctx)
+        if not user_id:
+            return None
+        service = self._automation_access_factory()
+        if service is None:
+            return None
+        result = await service.agent_access_token(
+            grantor_subject=user_id, client_id=client_id, resources=[resource],
+        )
+        if not result:
+            return None
+        access_token = str(result.get("access_token") or "").strip()
+        if not access_token:
+            return None
+        grants = result.get("resource_grants") or {}
+        scope = grants.get(resource) or next(iter(grants.values()), [])
+        return ConnectionToken(access_token=access_token, scope=tuple(scope or ()))
 
     async def _refresh_tokens(
         self,

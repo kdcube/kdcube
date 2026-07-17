@@ -179,6 +179,38 @@ class ConnectionsProviderBase(NamedServiceProvider):
             object=result,
         )
 
+    async def agent_grant_get_token(
+        self,
+        ctx: NamedServiceContext,
+        request: NamedServiceRequest,
+    ) -> NamedServiceResponse:
+        payload = dict(request.payload or {})
+        client_id = str(payload.get("client_id") or "").strip()
+        resource = str(payload.get("resource") or "").strip()
+        if not client_id or not resource:
+            return self._error(
+                "connections_agent_grant_args_required",
+                "client_id and resource are required", status=400,
+            )
+        try:
+            token = await self.agent_grant_token(ctx, client_id=client_id, resource=resource)
+        except Exception as exc:
+            return self._error("connections_agent_grant_token_failed", str(exc))
+        if token is None:
+            # Consent pending: the user has not granted THIS agent the resource.
+            return NamedServiceResponse.ok_response(
+                provider=self.provider_identity(),
+                namespace=NAMESPACE,
+                object={},
+                attrs={"has_token": False},
+            )
+        return NamedServiceResponse.ok_response(
+            provider=self.provider_identity(),
+            namespace=NAMESPACE,
+            object=ConnectionToken.coerce(token).to_dict(),
+            attrs={"has_token": True},
+        )
+
     # ── error helper ─────────────────────────────────────────────────────────
 
     def _error(self, code: str, message: str, *, status: int = 500) -> NamedServiceResponse:
@@ -202,6 +234,21 @@ class ConnectionsProviderBase(NamedServiceProvider):
     ) -> ConnectionToken | None:
         """Return the access token for (user, provider, optional account_id)."""
         raise NotImplementedError
+
+    async def agent_grant_token(
+        self,
+        ctx: NamedServiceContext,
+        *,
+        client_id: str,
+        resource: str,
+    ) -> ConnectionToken | None:
+        """Return the consented bearer of the caller's per-agent delegated grant
+        for (user, client_id, resource), or ``None`` when consent is pending.
+
+        Concrete default: no grant (``None``). A bundle that backs per-agent
+        delegated grants (the Connection Hub) overrides this over its automation
+        access store; providers that do not simply expose no agent grants."""
+        return None
 
     @abstractmethod
     async def list_catalog(self, ctx: NamedServiceContext) -> list[CatalogEntry]:

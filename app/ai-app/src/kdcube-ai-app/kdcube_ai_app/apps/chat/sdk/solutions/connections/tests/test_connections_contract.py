@@ -231,3 +231,56 @@ async def test_disconnect():
     assert result["deleted"] is True
     # token is gone after disconnect
     assert await connections.get_token("slack") is None
+
+
+@named_service_provider(
+    provider_id="connections",
+    bundle_id="fake@1-0",
+    namespace=NAMESPACE,
+    operations=build_connection_operations((TRANSPORT_LOCAL,)),
+)
+class _AgentGrantProvider(FakeConnectionsProvider):
+    """Adds a per-agent grant: consent given only for one (client_id, resource)."""
+
+    async def agent_grant_token(self, ctx, *, client_id, resource):
+        if client_id == "kdcube-agent:app:lg-react" and resource == "https://h/mcp/mem":
+            return ConnectionToken(access_token="agent-bound-tok", scope=("memories:read",))
+        return None
+
+
+def _agent_client() -> ConnectionsClient:
+    registry = NamedServiceRegistry()
+    registry.register(_AgentGrantProvider())
+    return ConnectionsClient(registry, transport=TRANSPORT_LOCAL, context=NamedServiceContext())
+
+
+@pytest.mark.asyncio
+async def test_agent_grant_token_round_trip():
+    connections = _agent_client()
+    token = await connections.agent_grant_token("kdcube-agent:app:lg-react", "https://h/mcp/mem")
+    assert isinstance(token, ConnectionToken)
+    assert token.access_token == "agent-bound-tok"
+    assert token.scope == ("memories:read",)
+
+
+@pytest.mark.asyncio
+async def test_agent_grant_token_pending_returns_none():
+    connections = _agent_client()
+    # A different agent has no grant -> consent pending -> None (not an error).
+    assert await connections.agent_grant_token("kdcube-agent:app:other", "https://h/mcp/mem") is None
+
+
+@pytest.mark.asyncio
+async def test_agent_grant_default_provider_has_no_grants():
+    # The base provider does not back per-agent grants -> concrete default None.
+    connections = _client()
+    assert await connections.agent_grant_token("kdcube-agent:app:lg-react", "https://h/mcp/mem") is None
+
+
+@pytest.mark.asyncio
+async def test_agent_grant_requires_client_id_and_resource():
+    connections = _agent_client()
+    with pytest.raises(ConnectionsError):
+        await connections.agent_grant_token("", "https://h/mcp/mem")
+    with pytest.raises(ConnectionsError):
+        await connections.agent_grant_token("kdcube-agent:app:lg-react", "")

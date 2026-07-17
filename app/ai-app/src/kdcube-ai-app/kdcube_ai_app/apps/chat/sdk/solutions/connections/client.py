@@ -22,6 +22,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_registry_client import AuthorityRegistryClient
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.contract import (
     NAMESPACE,
+    AGENT_GRANT_GET_TOKEN,
     CONNECTION_CATALOG,
     CONNECTION_DISCONNECT,
     CONNECTION_GET_TOKEN,
@@ -82,6 +83,20 @@ class ConnectionsClient:
         if account_id:
             payload["account_id"] = account_id
         response = await self._call(CONNECTION_GET_TOKEN, **payload)
+        if not response.attrs.get("has_token"):
+            return None
+        obj = dict(response.object)
+        if not obj.get("access_token"):
+            return None
+        return ConnectionToken.coerce(obj)
+
+    async def agent_grant_token(self, client_id: str, resource: str) -> ConnectionToken | None:
+        """The consented bearer of THIS agent's per-agent delegated grant for
+        ``resource``, or ``None`` when the user has not granted it (consent
+        pending). Identity (which user) rides on the named-service call; the agent
+        is identified by ``client_id`` (its ``kdcube-agent:<app>:<agent>``). The
+        one per-turn read a hosted agent makes to reuse its bound token."""
+        response = await self._call(AGENT_GRANT_GET_TOKEN, client_id=client_id, resource=resource)
         if not response.attrs.get("has_token"):
             return None
         obj = dict(response.object)

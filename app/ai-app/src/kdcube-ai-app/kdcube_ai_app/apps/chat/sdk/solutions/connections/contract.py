@@ -30,6 +30,12 @@ CONNECTION_STATUS = "connection.status"
 CONNECTION_GET_TOKEN = "connection.get_token"
 CONNECTION_DISCONNECT = "connection.disconnect"
 OAUTH_START = "oauth.start"
+# A hosted agent (a "Delegated By KDCube" entity) fetching the CONSENTED bearer of
+# its own per-agent delegated grant — the token the user's grant already bound, so
+# a KDCube @mcp guard passes. Returns no token when consent is pending. This is the
+# per-turn read a bundle makes; the GRANT itself is created by the user in the
+# Connection Hub (the "Delegated by KDCube" tab), not through this op.
+AGENT_GRANT_GET_TOKEN = "agent_grant.get_token"
 
 CONNECTION_OPERATIONS = (
     CONNECTION_CATALOG,
@@ -37,6 +43,7 @@ CONNECTION_OPERATIONS = (
     CONNECTION_GET_TOKEN,
     CONNECTION_DISCONNECT,
     OAUTH_START,
+    AGENT_GRANT_GET_TOKEN,
 )
 
 
@@ -265,6 +272,7 @@ __all__ = [
     "CONNECTION_GET_TOKEN",
     "CONNECTION_DISCONNECT",
     "OAUTH_START",
+    "AGENT_GRANT_GET_TOKEN",
     "CONNECTION_OPERATIONS",
     "build_connection_operations",
     "Connection",
