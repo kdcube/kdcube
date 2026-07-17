@@ -1845,6 +1845,10 @@ class BaseEntrypoint:
         Apply runtime overrides from bundle props (Redis / admin UI / bundles.yaml).
         These are evaluated after refresh_bundle_props() and may override
         configuration-based defaults for this bundle instance.
+
+        Platform-interpreted paths only. Bundle-specific config application
+        belongs in the public :meth:`on_apply_props` template hook — do not
+        override this method in bundle code.
         """
         props = self.bundle_props or {}
 
@@ -1859,6 +1863,52 @@ class BaseEntrypoint:
             self.config.set_embedding(embedding)
             changed = True
 
+        # Locally served models: `services.llm.custom` is a reserved
+        # platform-interpreted prop — the endpoint configures the platform's
+        # own Config/model-router state, exactly like role_models. The
+        # gateway key is NOT read here: it is a bundle secret
+        # (services.llm.custom.api_key) resolved at the construction moment
+        # by resolve_config_request_secrets.
+        custom_llm = self.get_prop_path(props, "services.llm.custom")
+        if isinstance(custom_llm, dict) and custom_llm:
+            endpoint = str(custom_llm.get("endpoint") or "").strip()
+            if endpoint and (
+                self.config.custom_model_endpoint != endpoint
+                or not self.config.use_custom_endpoint
+            ):
+                self.config.custom_model_endpoint = endpoint
+                self.config.custom_model_name = str(
+                    custom_llm.get("model_name")
+                    or self.config.custom_model_name
+                    or "custom-model"
+                )
+                self.config.use_custom_endpoint = True
+                changed = True
+
+        if changed and hasattr(self, "models_service"):
+            self._rebuild_models_service()
+
+    async def on_apply_props(self, props: Dict[str, Any]) -> bool | None:
+        """
+        Public template hook for bundle-specific config application.
+
+        Called by every ``refresh_bundle_props(...)`` AFTER the platform has
+        merged effective props and applied the platform-interpreted paths
+        (``role_models``, ``embedding``, ``services.llm.custom``) — the one
+        moment a bundle may map its own props onto runtime objects such as
+        ``self.config``. Async, so secrets and other awaitable lookups are
+        available; no ``super()`` call is required (the base implementation
+        is a no-op); return ``True`` when the change must rebuild the models
+        service and the base takes care of it.
+
+        Do not override ``_apply_bundle_props_overrides`` for this — that
+        method is platform-internal, synchronous, and forgetting its
+        ``super()`` call silently disables role_models/embedding application.
+        """
+        return None
+
+    async def _invoke_on_apply_props(self) -> None:
+        changed = await self.on_apply_props(copy.deepcopy(self.bundle_props or {}))
         if changed and hasattr(self, "models_service"):
             self._rebuild_models_service()
 
@@ -1886,6 +1936,7 @@ class BaseEntrypoint:
         if not self.kv_cache and not self.redis:
             self.bundle_props = defaults
             self._apply_bundle_props_overrides()
+            await self._invoke_on_apply_props()
             self._sync_runtime_ctx_bundle_props()
             if notify and previous_props != self.bundle_props:
                 await self.on_props_changed(
@@ -1955,6 +2006,7 @@ class BaseEntrypoint:
 
         self.bundle_props = defaults
         self._apply_bundle_props_overrides()
+        await self._invoke_on_apply_props()
         self._sync_runtime_ctx_bundle_props()
         if notify and previous_props != self.bundle_props:
             await self.on_props_changed(
