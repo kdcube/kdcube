@@ -8,7 +8,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.v3.agents.decision import build
 def test_get_workspace_implementation_guide_custom_mentions_hosting_backed_mode():
     guide = get_workspace_implementation_guide("custom")
     assert "react.pull(paths=[...])" in guide
-    assert 'react.checkout(mode="replace", paths=[...])' in guide or 'react.checkout(mode="replace", paths=["fi:' in guide
+    assert 'react.checkout(mode="replace", paths=[...])' in guide or 'react.checkout(mode="replace", paths=["conv:fi:' in guide
     assert "mode=\"overlay\"" in guide
     assert "exact file refs" in guide
     assert "hosted binaries require exact file refs" in guide
@@ -19,7 +19,7 @@ def test_get_workspace_implementation_guide_custom_mentions_hosting_backed_mode(
 def test_lite_workspace_profile_teaches_generic_snapshot_paths_without_story_snapshot_block_by_default():
     text = default_lite_system_instruction("workspace")
     assert "[STORY SNAPSHOTS]" not in text
-    assert "fi:turn_<id>.snapshots/<name>" in text
+    assert "conv:fi:conv_<conversation_id>.turn_<id>.git/snapshots/<name>" in text
 
 
 def test_lite_story_snapshots_block_is_explicit_opt_in():
@@ -28,7 +28,7 @@ def test_lite_story_snapshots_block_is_explicit_opt_in():
         extra_blocks=["REACT_LITE_STORY_SNAPSHOTS"],
     )
     assert "[STORY SNAPSHOTS]" in text
-    assert "fi:turn_<id>.snapshots/<name>" in text
+    assert "conv:fi:conv_<conversation_id>.turn_<id>.git/snapshots/<name>" in text
 
 
 def test_get_workspace_implementation_guide_git_mentions_git_backed_mode():
@@ -41,8 +41,8 @@ def test_get_workspace_implementation_guide_git_mentions_git_backed_mode():
     assert "local git repo" in guide
     assert "active lineage workspace" in guide
     assert "historical reference view" in guide
-    assert 'react.checkout(mode="replace", paths=[...])' in guide or 'react.checkout(mode="replace", paths=["fi:' in guide
-    assert "editable workspace state" in guide
+    assert 'react.checkout(mode="replace", paths=[...])' in guide or 'react.checkout(mode="replace", paths=["conv:fi:' in guide
+    assert "editable project state" in guide
     assert "mode=\"overlay\"" in guide
     assert "turn_<current>/files/..." in guide
     assert "previous saved workspace paths" in guide
@@ -62,8 +62,8 @@ def test_build_decision_system_text_uses_selected_workspace_implementation():
     assert "local git repo" in text
     assert "Workspace activation is explicit" in text
     assert "EACH TURN STARTS BLANK" in text
-    assert 'react.checkout(mode="replace", paths=[fi:...])' in text or 'react.checkout(mode="replace", paths=["fi:' in text
-    assert "editable workspace state" in text
+    assert 'react.checkout(mode="replace", paths=[...])' in text or 'react.checkout(mode="replace", paths=["conv:fi:' in text
+    assert "editable project state" in text
     assert "mode=\"overlay\"" in text
     assert "turn_<current>/files/..." in text
     assert "existing top-level scope" in text
@@ -78,7 +78,7 @@ def test_default_decision_system_text_keeps_story_snapshot_block_opt_in():
         workspace_implementation="custom",
     )
     assert "[STORY SNAPSHOTS]" not in text
-    assert "fi:turn_<id>.snapshots/<name>" in text
+    assert "conv:fi:conv_<conversation_id>.turn_<id>.git/snapshots/<name>" in text
 
 
 def test_build_decision_system_text_appends_agent_admin_customization():
@@ -241,7 +241,7 @@ def test_build_decision_system_text_includes_exec_guidance_only_when_lite_exec_b
     )
     assert "[EXEC TOOL]" in text
     assert "include this block only" not in text.lower()
-    assert "Write every contracted artifact to `Path(OUTPUT_DIR) / filename`" in text
+    assert "Write every contracted artifact to `Path(OUTPUT_DIR) / filepath`" in text
 
 
 def test_build_decision_system_text_can_hide_tool_catalog_but_keep_skill_gallery():
@@ -286,7 +286,7 @@ def test_default_lite_system_instruction_workspace_exec_profile_adds_exec_guidan
     body = default_lite_system_instruction("workspace_exec")
     assert "[EXEC TOOL]" in body
     assert "OUTPUT_DIR/" in body
-    assert "Write every contracted artifact to `Path(OUTPUT_DIR) / filename`" in body
+    assert "Write every contracted artifact to `Path(OUTPUT_DIR) / filepath`" in body
 
 
 def test_multi_action_protocol_teaches_strategy_trait_contract():
