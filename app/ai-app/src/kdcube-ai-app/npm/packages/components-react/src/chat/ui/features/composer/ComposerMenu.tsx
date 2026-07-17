@@ -362,6 +362,47 @@ function ModelsSection({ vm }: ComposerMenuSectionContext) {
   )
 }
 
+/** Radio-style single instruction-set pick from the admin-declared
+ *  `instruction_profiles` options (ids only — resolution is the agent's
+ *  runtime concern). The active row is the user's pick, else the declared
+ *  default (tagged); choosing the default row clears the pick. Hidden when
+ *  the agent declares no profiles. */
+function InstructionsSection({ vm }: ComposerMenuSectionContext) {
+  const { inventory, instructions: pick, toggle, pending } = vm.capabilities
+  const profiles = inventory?.instruction_profiles ?? null
+  const options = profiles?.options ?? []
+  if (!options.length) return null
+  const defaultId = profiles?.default ?? null
+  const pendingInstructions = pending && pending.instructions !== undefined
+  return (
+    <div>
+      <SectionTitle>Instructions</SectionTitle>
+      {options.map((row) => {
+        const isDefaultRow = Boolean(defaultId && defaultId === row.id)
+        const active = pick ? pick === row.id : isDefaultRow
+        return (
+          <MenuRow
+            key={row.id}
+            label={
+              <>
+                {row.label}
+                {isDefaultRow ? <span className="k-menu-tag">default</span> : null}
+                {pendingInstructions && pending?.instructions === row.id ? <PendingTag /> : null}
+              </>
+            }
+            sub={firstLine(row.description ?? '')}
+            checked={active ? 'on' : 'off'}
+            onToggle={() => {
+              if (active) return
+              toggle({ instructions: isDefaultRow ? null : row.id })
+            }}
+          />
+        )
+      })}
+    </div>
+  )
+}
+
 function SkillsSection({ inventory, disabled, toggle }: CapabilityRowsProps) {
   if (!inventory.skills.length) return null
   return (
@@ -965,6 +1006,14 @@ function builtInSections(namespaceStyles: NamespaceStyleMap): ComposerMenuSectio
       render: (ctx: ComposerMenuSectionContext) =>
         ctx.vm.capabilities.inventory?.supported_models?.length
           ? <ModelsSection {...ctx} />
+          : null,
+    },
+    {
+      id: 'instructions',
+      order: 7,
+      render: (ctx: ComposerMenuSectionContext) =>
+        ctx.vm.capabilities.inventory?.instruction_profiles?.options?.length
+          ? <InstructionsSection {...ctx} />
           : null,
     },
     capabilitySection('skills', 10, (inv) => inv.skills.length > 0, SkillsSection),

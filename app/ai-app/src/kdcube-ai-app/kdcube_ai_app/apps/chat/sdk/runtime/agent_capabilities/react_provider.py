@@ -28,6 +28,7 @@ from typing import Any, Optional
 from kdcube_ai_app.apps.chat.sdk.runtime.agent_capabilities.provider import (
     CapabilityBlocks,
     ConversationCaps,
+    InstructionProfiles,
     ModelPick,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.agent_capabilities.registry import (
@@ -67,6 +68,7 @@ class ReactCapabilitiesProvider:
             SUBAGENTS_CAPABILITY_LABEL,
             _catalog_skills,
             configured_strong_model,
+            react_instruction_profiles,
             react_subagents_config,
             react_supported_models,
             subagents_default_on,
@@ -95,10 +97,19 @@ class ReactCapabilitiesProvider:
             else None
         )
 
+        profiles = react_instruction_profiles(bundle_props, agent_id)
         return CapabilityBlocks(
             models=ModelPick(
                 supported=react_supported_models(bundle_props, agent_id),
                 default=configured_strong_model(bundle_props, agent_id),
+            ),
+            instructions=(
+                InstructionProfiles(
+                    options=profiles["options"],
+                    default=profiles.get("default"),
+                )
+                if profiles
+                else None
             ),
             skills=skills_out,
             subagents=subagents,

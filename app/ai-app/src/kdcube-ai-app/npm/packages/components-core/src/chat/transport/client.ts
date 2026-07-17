@@ -429,6 +429,7 @@ export interface AgentCapabilitiesResponse {
     schema_version?: number
     disabled?: AgentSelectionDisabled
     model?: AgentModelPick | null
+    instructions?: string | null
     cache_policy?: Record<string, string>
     pending?: AgentSelectionPending | null
   }
@@ -444,6 +445,7 @@ export interface AgentSelectionUpdateResponse {
     schema_version?: number
     disabled?: AgentSelectionDisabled
     model?: AgentModelPick | null
+    instructions?: string | null
     cache_policy?: Record<string, string>
     pending?: AgentSelectionPending | null
     updated_at?: string

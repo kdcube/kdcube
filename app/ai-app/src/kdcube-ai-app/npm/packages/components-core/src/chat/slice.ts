@@ -390,6 +390,7 @@ const slice = createSlice({
         inventory: AgentCapabilitiesInventory
         disabled: AgentSelectionDisabled
         model?: AgentModelPick | null
+        instructions?: string | null
         cachePolicy?: AgentCachePolicy | null
         pending?: AgentSelectionPending | null
       }>,
@@ -400,6 +401,7 @@ const slice = createSlice({
       state.capabilities.inventory = action.payload.inventory
       state.capabilities.disabled = action.payload.disabled
       state.capabilities.model = action.payload.model ?? null
+      state.capabilities.instructions = action.payload.instructions ?? null
       state.capabilities.cachePolicy = action.payload.cachePolicy ?? null
       state.capabilities.pending = action.payload.pending ?? null
       state.capabilities.dirty = false
@@ -418,6 +420,9 @@ const slice = createSlice({
       if (action.payload.model !== undefined) {
         state.capabilities.model = action.payload.model
       }
+      if (action.payload.instructions !== undefined) {
+        state.capabilities.instructions = action.payload.instructions
+      }
       state.capabilities.dirty = true
       state.capabilities.saveError = null
     },
@@ -430,11 +435,13 @@ const slice = createSlice({
       action: PayloadAction<{
         disabled: AgentSelectionDisabled
         model?: AgentModelPick | null
+        instructions?: string | null
         pending?: AgentSelectionPending | null
       }>,
     ) {
       state.capabilities.disabled = action.payload.disabled
       state.capabilities.model = action.payload.model ?? null
+      state.capabilities.instructions = action.payload.instructions ?? null
       if (action.payload.pending !== undefined) {
         state.capabilities.pending = action.payload.pending
       }

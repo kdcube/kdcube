@@ -33,6 +33,7 @@ export interface StandaloneCapabilitiesResponse {
   selection?: {
     disabled?: AgentSelectionDisabled
     model?: AgentModelPick | null
+    instructions?: string | null
     pending?: AgentSelectionPending | null
   } | null
   cache_policy?: AgentCachePolicy | null
@@ -71,6 +72,7 @@ export function useStandaloneCapabilitiesVm(
   const [inventory, setInventory] = useState<AgentCapabilitiesInventory | null>(null)
   const [disabled, setDisabled] = useState<AgentSelectionDisabled>({})
   const [model, setModel] = useState<AgentModelPick | null>(null)
+  const [instructions, setInstructions] = useState<string | null>(null)
   const [cachePolicy, setCachePolicy] = useState<AgentCachePolicy | null>(null)
   const [pending, setPending] = useState<AgentSelectionPending | null>(null)
   const [dirty, setDirty] = useState(false)
@@ -87,8 +89,12 @@ export function useStandaloneCapabilitiesVm(
   ) => {
     const responseDisabled = response.selection?.disabled ?? {}
     const responseModel = response.selection?.model ?? null
+    const responseInstructions = response.selection?.instructions ?? null
     setDisabled(queuedPatch ? applySelectionPatch(responseDisabled, queuedPatch) : responseDisabled)
     setModel(queuedPatch?.model !== undefined ? queuedPatch.model ?? null : responseModel)
+    setInstructions(
+      queuedPatch?.instructions !== undefined ? queuedPatch.instructions ?? null : responseInstructions,
+    )
     setPending(response.selection?.pending ?? null)
     setDirty(Boolean(queuedPatch))
   }
@@ -132,6 +138,7 @@ export function useStandaloneCapabilitiesVm(
   const toggle = (patch: AgentSelectionPatch) => {
     setDisabled((current) => applySelectionPatch(current, patch))
     if (patch.model !== undefined) setModel(patch.model ?? null)
+    if (patch.instructions !== undefined) setInstructions(patch.instructions ?? null)
     pendingPatchRef.current = mergeSelectionPatches(pendingPatchRef.current ?? {}, patch)
     setDirty(true)
   }
@@ -146,6 +153,7 @@ export function useStandaloneCapabilitiesVm(
     if (apply === 'now') {
       setDisabled((current) => applySelectionPatch(current, patch))
       if (patch.model !== undefined) setModel(patch.model ?? null)
+      if (patch.instructions !== undefined) setInstructions(patch.instructions ?? null)
     }
     setSaving(true)
     try {
@@ -179,6 +187,7 @@ export function useStandaloneCapabilitiesVm(
         inventory,
         disabled,
         model,
+        instructions,
         cachePolicy,
         pending,
         dirty,
@@ -201,5 +210,5 @@ export function useStandaloneCapabilitiesVm(
     }
     return vm as unknown as ChatViewModel
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, error, agent, inventory, disabled, model, cachePolicy, pending, dirty, saving, saveError, options.spotlight])
+  }, [status, error, agent, inventory, disabled, model, instructions, cachePolicy, pending, dirty, saving, saveError, options.spotlight])
 }

@@ -685,6 +685,11 @@ class BaseEntrypoint:
         ``"model": null`` clears it back to the configured default; omitted
         keeps the stored pick.
 
+        The instruction-profile pick rides the same body as an id:
+        ``"instructions": "<profile_id>"`` sets it (clamped to the agent's
+        declared ``instruction_profiles`` options), ``"instructions": null``
+        clears it back to the declared default; omitted keeps the stored pick.
+
         Cold-cache choices ride the same body too: ``"apply": "now" |
         "next_conversation" | "when_cold"`` (deferred choices park the change
         as a pending delta the runtime promotes on its trigger;
@@ -698,12 +703,18 @@ class BaseEntrypoint:
         conversation_id = str(payload.get("conversation_id") or "").strip()
         patch = payload.get("disabled")
         has_model = "model" in payload
+        has_instructions = "instructions" in payload
         raw_cache_policy = payload.get("cache_policy")
-        if not isinstance(patch, Mapping) and not has_model and not isinstance(raw_cache_policy, Mapping):
+        if (
+            not isinstance(patch, Mapping)
+            and not has_model
+            and not has_instructions
+            and not isinstance(raw_cache_policy, Mapping)
+        ):
             return {
                 "ok": False,
                 "error": "invalid_patch",
-                "message": "body.data needs a disabled object, a model field, and/or a cache_policy object",
+                "message": "body.data needs a disabled object, a model field, an instructions field, and/or a cache_policy object",
             }
         identity = self._agent_selection_identity()
         if self.pg_pool is None or not identity.get("bundle_id"):
@@ -734,6 +745,7 @@ class BaseEntrypoint:
                     else None
                 ),
                 **({"model": payload.get("model")} if has_model else {}),
+                **({"instructions": payload.get("instructions")} if has_instructions else {}),
             )
         except Exception as exc:
             self.logger.log(f"[agent_selection_update] failed: {traceback.format_exc()}", "ERROR")

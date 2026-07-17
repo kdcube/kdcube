@@ -176,6 +176,20 @@ export interface AgentSupportedModel {
   label: string
 }
 
+/** One admin-declared instruction-set option (id-based; resolution is the
+ *  agent runtime's concern — the wire never carries instruction content). */
+export interface AgentInstructionOption {
+  id: string
+  label: string
+  description?: string
+}
+
+/** The declared instruction-profile inventory; absent = section hidden. */
+export interface AgentInstructionProfiles {
+  options: AgentInstructionOption[]
+  default?: string | null
+}
+
 /** The user's single model pick (applies to the strong decision role). */
 export interface AgentModelPick {
   provider: string
@@ -202,6 +216,7 @@ export interface AgentCachePolicy {
 export interface AgentSelectionPending {
   disabled?: AgentSelectionPatch
   model?: AgentModelPick | null
+  instructions?: string | null
   apply: 'next_conversation' | 'when_cold'
   since_conversation_id?: string
   created_at?: string
@@ -226,6 +241,8 @@ export interface AgentCapabilitiesInventory {
    *  the composer keeps today's behavior (both enabled) — see
    *  `agentAcceptsFollowup` / `agentAcceptsSteer`. */
   conversation?: AgentConversationCaps | null
+  /** Admin-declared instruction-set options; absent = the section is hidden. */
+  instruction_profiles?: AgentInstructionProfiles | null
 }
 
 /** The saved deny-list. Absent key/entry = enabled (full configured set). */
@@ -259,6 +276,10 @@ export interface AgentSelectionPatch {
   /** The single model PICK: a `{provider, model}` sets it, `null` clears back
    *  to the configured default; omitted keeps the stored pick. */
   model?: AgentModelPick | null
+  /** The single instruction-profile PICK (a declared option id): a string
+   *  sets it, `null` clears back to the declared default; omitted keeps the
+   *  stored pick. */
+  instructions?: string | null
 }
 
 export type AgentCapabilitiesLoadStatus = 'idle' | 'loading' | 'ready' | 'error'
@@ -272,6 +293,8 @@ export interface AgentCapabilitiesState {
   disabled: AgentSelectionDisabled
   /** The user's model pick; null = the configured default runs. */
   model: AgentModelPick | null
+  /** The user's instruction-profile pick; null = the declared default runs. */
+  instructions: string | null
   /** Effective cold-cache policy (user-held over admin default) + bounds. */
   cachePolicy: AgentCachePolicy | null
   /** A deferred change awaiting its trigger (badged in the menu). */
@@ -288,6 +311,7 @@ export const initialCapabilitiesState: AgentCapabilitiesState = {
   agent: null,
   inventory: null,
   disabled: {},
+  instructions: null,
   model: null,
   cachePolicy: null,
   pending: null,
@@ -363,6 +387,8 @@ export function mergeSelectionPatches(
   else if (base.subagents !== undefined) out.subagents = base.subagents
   if (next.model !== undefined) out.model = next.model
   else if (base.model !== undefined) out.model = base.model
+  if (next.instructions !== undefined) out.instructions = next.instructions
+  else if (base.instructions !== undefined) out.instructions = base.instructions
   return out
 }
 

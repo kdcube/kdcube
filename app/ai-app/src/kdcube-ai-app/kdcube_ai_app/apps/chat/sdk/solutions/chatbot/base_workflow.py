@@ -2854,7 +2854,15 @@ class BaseWorkflow():
             disabled = (selection or {}).get("disabled") or {}
             supported = react_supported_models(bundle_props, agent_id)
             matched_pick = match_supported_model((selection or {}).get("model"), supported)
-            curr_snapshot = selection_snapshot(disabled, matched_pick)
+            from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import (
+                match_instruction_profile,
+                react_instruction_profiles,
+            )
+            _instruction_profiles = react_instruction_profiles(bundle_props, agent_id)
+            matched_instructions = match_instruction_profile(
+                (selection or {}).get("instructions"), _instruction_profiles,
+            )
+            curr_snapshot = selection_snapshot(disabled, matched_pick, matched_instructions)
             prev_snapshot = getattr(timeline, "agent_selection_snapshot", None) if timeline is not None else None
             change = classify_selection_change(prev_snapshot, curr_snapshot)
             pinned = False
@@ -2875,6 +2883,9 @@ class BaseWorkflow():
             if pinned:
                 disabled = dict((prev_snapshot or {}).get("disabled") or {})
                 matched_pick = match_supported_model((prev_snapshot or {}).get("model"), supported)
+                matched_instructions = match_instruction_profile(
+                    (prev_snapshot or {}).get("instructions"), _instruction_profiles,
+                )
             else:
                 if change["changed"]:
                     marker = {
@@ -2939,6 +2950,35 @@ class BaseWorkflow():
                     # Fail OPEN to the configured role model.
                     self.logger.log(
                         "[agent_selection] model pick apply failed; configured role model stays\n"
+                        + traceback.format_exc(),
+                        level="WARNING",
+                    )
+
+            # ── instruction-profile pick (mirrors the model pick) ─────────────
+            # Turn-local: reset FIRST so a reused workflow never carries a
+            # stale profile, then resolve the applied pick (user's, else the
+            # declared default id) to its FULL declared option. The build
+            # consumes runtime_ctx.agent_instruction_profile: `body`/`blocks`
+            # override the agent-level instruction config; an option declaring
+            # neither means "the platform default instruction set".
+            if runtime_ctx is not None:
+                runtime_ctx.agent_instruction_profile = None
+                try:
+                    if _instruction_profiles:
+                        from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import (
+                            resolve_react_instruction_profile,
+                        )
+                        applied_id = matched_instructions or _instruction_profiles.get("default")
+                        if applied_id:
+                            resolved = resolve_react_instruction_profile(
+                                bundle_props, agent_id, applied_id,
+                            )
+                            if resolved:
+                                runtime_ctx.agent_instruction_profile = resolved
+                except Exception:
+                    # Fail OPEN to the configured instruction set.
+                    self.logger.log(
+                        "[agent_selection] instruction profile apply failed; configured instructions stay\n"
                         + traceback.format_exc(),
                         level="WARNING",
                     )
@@ -3138,23 +3178,43 @@ class BaseWorkflow():
             additional_instructions = (
                 f"{str(additional_instructions).strip()}\n\n{config_additional_instructions}"
             )
+        # The user's applied instruction-profile pick (resolved per turn by
+        # apply_user_agent_selection) beats the agent-level instruction
+        # config: a profile's body/blocks are used as-is, and a profile
+        # declaring neither means the PLATFORM DEFAULT instruction set — the
+        # agent-level `instructions` prop is deliberately skipped so picking
+        # the default option always returns to the full default body.
+        _profile = getattr(runtime_ctx, "agent_instruction_profile", None)
+        _profile_applied = False
+        if isinstance(_profile, Mapping) and (instruction_body is None and instruction_blocks is None):
+            _profile_applied = True
+            _profile_body = str(_profile.get("body") or "").strip()
+            _profile_blocks = _str_list(_profile.get("blocks"))
+            if _profile_body:
+                instruction_body = _profile_body
+            elif _profile_blocks:
+                instruction_blocks = _profile_blocks
+            else:
+                instruction_body = None
+                instruction_blocks = []
         raw_instructions = _first_react_prop("instructions")
-        if instruction_body is None:
-            if isinstance(raw_instructions, str):
-                instruction_body = raw_instructions
-            else:
-                instruction_body = _first_react_prop(
-                    "instructions.body",
-                    "instruction_body",
-                )
-        if instruction_blocks is None:
-            if isinstance(raw_instructions, (list, tuple)):
-                instruction_blocks = _str_list(raw_instructions)
-            else:
-                instruction_blocks = _str_list(_first_react_prop(
-                    "instructions.blocks",
-                    "instruction_blocks",
-                ))
+        if not _profile_applied:
+            if instruction_body is None:
+                if isinstance(raw_instructions, str):
+                    instruction_body = raw_instructions
+                else:
+                    instruction_body = _first_react_prop(
+                        "instructions.body",
+                        "instruction_body",
+                    )
+            if instruction_blocks is None:
+                if isinstance(raw_instructions, (list, tuple)):
+                    instruction_blocks = _str_list(raw_instructions)
+                else:
+                    instruction_blocks = _str_list(_first_react_prop(
+                        "instructions.blocks",
+                        "instruction_blocks",
+                    ))
         if include_tool_catalog is None:
             include_tool_catalog = _bool_or_none(_first_react_prop(
                 "instructions.include_tool_catalog",

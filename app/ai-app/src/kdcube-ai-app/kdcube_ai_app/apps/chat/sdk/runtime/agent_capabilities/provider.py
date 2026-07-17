@@ -36,6 +36,21 @@ class ModelPick:
 
 
 @dataclass
+class InstructionProfiles:
+    """Admin-declared instruction-set options the user may pick from, by id.
+
+    Framework-neutral and ID-BASED: the wire carries only
+    ``{id, label, description?}`` rows plus the default id. What an id
+    RESOLVES to (an instruction body, named blocks, the platform default) is
+    the provider/agent's apply-time concern and never crosses this contract —
+    any agent kind can declare its own ids.
+    """
+
+    options: List[Dict[str, str]] = field(default_factory=list)
+    default: Optional[str] = None
+
+
+@dataclass
 class ConversationCaps:
     """Whether this agent can CONSUME the two mid-turn conversation affordances.
 
@@ -65,6 +80,7 @@ class CapabilityBlocks:
     skills: List[Dict[str, Any]] = field(default_factory=list)
     subagents: Optional[Dict[str, Any]] = None
     conversation: Optional[ConversationCaps] = None
+    instructions: Optional[InstructionProfiles] = None
 
     def to_catalog_fields(self) -> Dict[str, Any]:
         # Key order mirrors the historical catalog literal
@@ -107,6 +123,14 @@ class CapabilityBlocks:
             out["conversation"] = {
                 "accepts_followup": bool(self.conversation.accepts_followup),
                 "accepts_steer": bool(self.conversation.accepts_steer),
+            }
+        # ADDITIVE like `conversation`: emitted only when the provider declares
+        # options, so agents without instruction profiles keep the exact
+        # historical wire shape and the picker section stays hidden.
+        if self.instructions is not None and self.instructions.options:
+            out["instruction_profiles"] = {
+                "options": [dict(o) for o in self.instructions.options],
+                "default": self.instructions.default,
             }
         return out
 

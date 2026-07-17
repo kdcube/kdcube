@@ -46,7 +46,9 @@ from typing import Any, Mapping, Optional
 
 from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import (
     clamp_selection,
+    match_instruction_profile,
     match_supported_model,
+    normalize_instruction_pick,
     normalize_model_pick,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.user_settings.store import (
@@ -58,8 +60,9 @@ AGENT_SELECTION_SUBSYSTEM = "agents"
 AGENT_SELECTION_KEY_PREFIX = "agent_selection:"
 AGENT_SELECTION_CONVERSATION_KEY_PREFIX = "conversation:"
 
-# set_selection sentinel: "model not in this patch" (None means CLEAR the pick).
+# set_selection sentinels: "not in this patch" (None means CLEAR the pick).
 _MODEL_UNSET = object()
+_INSTRUCTIONS_UNSET = object()
 
 _DICT_CATEGORIES = ("tools", "mcp", "named_services")
 
@@ -197,6 +200,7 @@ class UserAgentSelectionStore(UserSettingsStore):
             "schema_version": 1,
             "disabled": {},
             "model": None,
+            "instructions": None,
             "cache_policy": {},
             "pending": None,
             "created_at": now,
@@ -216,6 +220,7 @@ class UserAgentSelectionStore(UserSettingsStore):
             "schema_version": 1,
             "disabled": dict(disabled) if isinstance(disabled, Mapping) else {},
             "model": normalize_model_pick(value.get("model")),
+            "instructions": normalize_instruction_pick(value.get("instructions")),
             "cache_policy": dict(cache_policy) if isinstance(cache_policy, Mapping) else {},
             "pending": dict(pending) if isinstance(pending, Mapping) else None,
             "created_at": str(record.get("created_at") or ""),
@@ -236,6 +241,9 @@ class UserAgentSelectionStore(UserSettingsStore):
         model = normalize_model_pick(selection.get("model"))
         if model:
             value["model"] = model
+        instructions = normalize_instruction_pick(selection.get("instructions"))
+        if instructions:
+            value["instructions"] = instructions
         if include_cache_policy and selection.get("cache_policy"):
             value["cache_policy"] = dict(selection.get("cache_policy") or {})
         pending = selection.get("pending")
@@ -293,6 +301,9 @@ class UserAgentSelectionStore(UserSettingsStore):
         model = normalize_model_pick(default.get("model"))
         if model:
             seed["model"] = model
+        instructions = normalize_instruction_pick(default.get("instructions"))
+        if instructions:
+            seed["instructions"] = instructions
         await self.put_record_if_absent(
             user_id=user_id,
             bundle_id=bundle_id,
@@ -306,7 +317,12 @@ class UserAgentSelectionStore(UserSettingsStore):
             agent_id=agent_id,
             conversation_id=conversation_id,
         )
-        return stored or {**self._empty_selection(), "disabled": dict(default.get("disabled") or {}), "model": model}
+        return stored or {
+            **self._empty_selection(),
+            "disabled": dict(default.get("disabled") or {}),
+            "model": model,
+            "instructions": instructions,
+        }
 
     @staticmethod
     def _compose_effective_selection(
@@ -332,6 +348,7 @@ class UserAgentSelectionStore(UserSettingsStore):
             "schema_version": 1,
             "disabled": dict(active.get("disabled") or {}),
             "model": normalize_model_pick(active.get("model")),
+            "instructions": normalize_instruction_pick(active.get("instructions")),
             "cache_policy": dict(default.get("cache_policy") or {}),
             "pending": pending,
             "pending_scope": pending_scope,
@@ -377,10 +394,21 @@ class UserAgentSelectionStore(UserSettingsStore):
                     candidate = match_supported_model(candidate, catalog.get("supported_models"))
                 if candidate:
                     merged_model = candidate
+        merged_instructions = normalize_instruction_pick(stored.get("instructions"))
+        if "instructions" in pending:
+            if pending.get("instructions") is None:
+                merged_instructions = None
+            else:
+                candidate_id = normalize_instruction_pick(pending.get("instructions"))
+                if candidate_id and catalog is not None:
+                    candidate_id = match_instruction_profile(candidate_id, catalog.get("instruction_profiles"))
+                if candidate_id:
+                    merged_instructions = candidate_id
         promoted = {
             **stored,
             "disabled": merged,
             "model": merged_model,
+            "instructions": merged_instructions,
             "pending": None,
         }
         await self._write_value(
@@ -456,6 +484,7 @@ class UserAgentSelectionStore(UserSettingsStore):
         agent_id: str,
         patch: Mapping[str, Any] | None,
         model: Any = _MODEL_UNSET,
+        instructions: Any = _INSTRUCTIONS_UNSET,
         cache_policy: Optional[Mapping[str, Any]] = None,
         apply: str = "now",
         conversation_id: str = "",
@@ -523,10 +552,12 @@ class UserAgentSelectionStore(UserSettingsStore):
         if replace:
             current_disabled: Mapping[str, Any] = {}
             current_model: Any = None
+            current_instructions: Any = None
             current_pending: Optional[dict[str, Any]] = None
         else:
             current_disabled = current.get("disabled") or {}
             current_model = current.get("model")
+            current_instructions = current.get("instructions")
             current_pending = current.get("pending")
 
         if apply_mode in ("next_conversation", "when_cold"):
@@ -545,6 +576,15 @@ class UserAgentSelectionStore(UserSettingsStore):
                         candidate = match_supported_model(candidate, catalog.get("supported_models"))
                     if candidate:
                         deferred["model"] = candidate
+            if instructions is not _INSTRUCTIONS_UNSET:
+                if instructions is None:
+                    deferred["instructions"] = None
+                else:
+                    candidate_id = normalize_instruction_pick(instructions)
+                    if candidate_id and catalog is not None:
+                        candidate_id = match_instruction_profile(candidate_id, catalog.get("instruction_profiles"))
+                    if candidate_id:
+                        deferred["instructions"] = candidate_id
             deferred["apply"] = apply_mode
             deferred["since_conversation_id"] = conversation
             deferred.setdefault("created_at", utc_now_iso())
@@ -552,7 +592,12 @@ class UserAgentSelectionStore(UserSettingsStore):
                 **current,
                 "disabled": dict(current_disabled),
                 "model": normalize_model_pick(current_model),
-                "pending": deferred if "disabled" in deferred or "model" in deferred else None,
+                "instructions": normalize_instruction_pick(current_instructions),
+                "pending": (
+                    deferred
+                    if "disabled" in deferred or "model" in deferred or "instructions" in deferred
+                    else None
+                ),
             }
         else:
             merged = merge_selection_patch(current_disabled, patch)
@@ -567,10 +612,20 @@ class UserAgentSelectionStore(UserSettingsStore):
                     candidate = match_supported_model(candidate, catalog.get("supported_models"))
                 if candidate:
                     merged_model = candidate
+            merged_instructions = normalize_instruction_pick(current_instructions)
+            if instructions is None:
+                merged_instructions = None
+            elif instructions is not _INSTRUCTIONS_UNSET:
+                candidate_id = normalize_instruction_pick(instructions)
+                if candidate_id and catalog is not None:
+                    candidate_id = match_instruction_profile(candidate_id, catalog.get("instruction_profiles"))
+                if candidate_id:
+                    merged_instructions = candidate_id
             changed = {
                 **current,
                 "disabled": merged,
                 "model": merged_model,
+                "instructions": merged_instructions,
                 "pending": current_pending,
             }
 

@@ -437,6 +437,96 @@ def configured_strong_model(
     return None
 
 
+def react_instruction_profiles(
+    bundle_props: Mapping[str, Any] | None,
+    agent_id: str | None,
+) -> dict[str, Any] | None:
+    """The admin-declared instruction-set options for this agent's react block.
+
+    Config shape (any agent section may declare its own ids)::
+
+        react:
+          default_agent:
+            instruction_profiles:
+              default: full
+              options:
+                - id: full
+                  label: Full
+                  description: The complete instruction set.
+                - id: extra-lite
+                  label: Extra Lite (local models)
+                  blocks: ["xlite:workspace_exec"]
+
+    Returns the WIRE-SAFE block — ``{options: [{id, label, description}],
+    default}`` with ids only; ``blocks``/``body`` never leave the runtime.
+    ``None`` when the agent declares no profiles (picker section stays hidden).
+    """
+    for block in _react_agent_config_blocks(bundle_props, agent_id):
+        raw = block.get("instruction_profiles")
+        if not isinstance(raw, Mapping):
+            continue
+        options_raw = raw.get("options")
+        if not isinstance(options_raw, list):
+            continue
+        options: list[dict[str, str]] = []
+        for row in options_raw:
+            if not isinstance(row, Mapping):
+                continue
+            profile_id = _norm(row.get("id"))
+            if not profile_id:
+                continue
+            entry = {"id": profile_id, "label": _norm(row.get("label")) or profile_id}
+            description = _norm(row.get("description"))
+            if description:
+                entry["description"] = description
+            options.append(entry)
+        if not options:
+            continue
+        default = _norm(raw.get("default")) or None
+        if default and default not in {o["id"] for o in options}:
+            default = None
+        return {"options": options, "default": default}
+    return None
+
+
+def resolve_react_instruction_profile(
+    bundle_props: Mapping[str, Any] | None,
+    agent_id: str | None,
+    profile_id: Any,
+) -> dict[str, Any] | None:
+    """Resolve a picked profile id to its FULL declared option (including
+    ``blocks``/``body``) — the runtime-side counterpart of the id-only wire
+    block. ``None`` when the id is not declared."""
+    wanted = _norm(profile_id)
+    if not wanted:
+        return None
+    for block in _react_agent_config_blocks(bundle_props, agent_id):
+        raw = block.get("instruction_profiles")
+        if not isinstance(raw, Mapping):
+            continue
+        for row in raw.get("options") or []:
+            if isinstance(row, Mapping) and _norm(row.get("id")) == wanted:
+                return dict(row)
+    return None
+
+
+def normalize_instruction_pick(value: Any) -> str | None:
+    """The stored instruction pick is a bare profile-id string."""
+    text = _norm(value)
+    return text or None
+
+
+def match_instruction_profile(value: Any, profiles: Mapping[str, Any] | None) -> str | None:
+    """Clamp a candidate pick to the declared option ids (wire block shape)."""
+    wanted = normalize_instruction_pick(value)
+    if not wanted or not isinstance(profiles, Mapping):
+        return None
+    for row in profiles.get("options") or []:
+        if isinstance(row, Mapping) and _norm(row.get("id")) == wanted:
+            return wanted
+    return None
+
+
 def normalize_model_pick(pick: Any) -> dict[str, str] | None:
     """`{provider, model}` from a stored/submitted pick; None when shapeless."""
     if not isinstance(pick, Mapping):
@@ -493,11 +583,16 @@ _DISABLED_REASONS = (
 )
 
 
-def selection_snapshot(disabled: Mapping[str, Any] | None, model: Any) -> dict[str, Any]:
+def selection_snapshot(
+    disabled: Mapping[str, Any] | None,
+    model: Any,
+    instructions: Any = None,
+) -> dict[str, Any]:
     """The canonical APPLIED-selection snapshot persisted per conversation."""
     return {
         "disabled": dict(disabled) if isinstance(disabled, Mapping) else {},
         "model": normalize_model_pick(model),
+        "instructions": normalize_instruction_pick(instructions),
     }
 
 
@@ -537,6 +632,12 @@ def classify_selection_change(
     if prev_model != new_model:
         reasons.append(SELECTION_CHANGE_MODEL)
         classes.append(SELECTION_CHANGE_MODEL)
+    # An instruction-profile switch swaps the system prompt — the same cache
+    # impact as a model switch, so it rides that policy class.
+    if normalize_instruction_pick(prev.get("instructions")) != normalize_instruction_pick(curr.get("instructions")):
+        reasons.append("instruction_switch")
+        if SELECTION_CHANGE_MODEL not in classes:
+            classes.append(SELECTION_CHANGE_MODEL)
     prev_disabled = prev.get("disabled")
     curr_disabled = curr.get("disabled")
     for key, reason in _DISABLED_REASONS:
