@@ -1892,11 +1892,13 @@ class BaseEntrypoint:
         """
         Public template hook for bundle-specific config application.
 
-        Called by every ``refresh_bundle_props(...)`` AFTER the platform has
-        merged effective props and applied the platform-interpreted paths
-        (``role_models``, ``embedding``, ``services.llm.custom``) — the one
-        moment a bundle may map its own props onto runtime objects such as
-        ``self.config``. Async, so secrets and other awaitable lookups are
+        Called on every props application, on every surface — the turn door's
+        ``refresh_bundle_props(...)`` and the REST/widget/MCP/local-operation
+        apply paths alike — AFTER the platform has merged effective props and
+        applied the platform-interpreted paths (``role_models``, ``embedding``,
+        ``services.llm.custom``) — the one moment a bundle may map its own
+        props onto runtime objects such as ``self.config``. Async, so secrets
+        and other awaitable lookups are
         available; no ``super()`` call is required (the base implementation
         is a no-op); return ``True`` when the change must rebuild the models
         service and the base takes care of it.

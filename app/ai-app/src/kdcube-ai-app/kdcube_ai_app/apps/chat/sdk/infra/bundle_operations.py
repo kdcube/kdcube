@@ -230,7 +230,7 @@ def _deep_merge_bundle_props(base: Mapping[str, Any], override: Mapping[str, Any
     return out
 
 
-def _apply_bundle_props_to_workflow(*, workflow: Any, props: Mapping[str, Any]) -> dict[str, Any]:
+async def _apply_bundle_props_to_workflow(*, workflow: Any, props: Mapping[str, Any]) -> dict[str, Any]:
     defaults = copy.deepcopy(getattr(workflow, "bundle_props_defaults", None) or {})
     if not defaults:
         defaults = copy.deepcopy(getattr(workflow, "bundle_props", None) or {})
@@ -247,6 +247,14 @@ def _apply_bundle_props_to_workflow(*, workflow: Any, props: Mapping[str, Any]) 
                 hook()
             except Exception:
                 LOGGER.debug("Bundle prop hook failed during local operation apply: %s", hook_name, exc_info=True)
+    # The public on_apply_props hook fires on every props application, this
+    # non-turn surface included.
+    invoke_on_apply = getattr(workflow, "_invoke_on_apply_props", None)
+    if callable(invoke_on_apply):
+        try:
+            await invoke_on_apply()
+        except Exception:
+            LOGGER.debug("on_apply_props failed during local operation apply", exc_info=True)
     return getattr(workflow, "bundle_props", None) or merged
 
 
@@ -510,7 +518,7 @@ async def _invoke_local_bundle_operation_raw(
     )
     if not _endpoint_visible(endpoint_spec.user_types, endpoint_spec.roles, session, endpoint_auth):
         raise RuntimeError(f"Bundle operation {operation} is not visible to this user")
-    _apply_bundle_props_to_workflow(workflow=workflow, props=props or {})
+    await _apply_bundle_props_to_workflow(workflow=workflow, props=props or {})
     if not _bundle_enabled(props):
         raise RuntimeError(f"Bundle {spec_resolved.id} is disabled")
     if not _api_enabled(props, endpoint_spec):
@@ -735,7 +743,7 @@ async def invoke_local_bundle_named_service(
         pg_pool=pg_pool,
     )
     props = await get_bundle_props(redis, tenant=tenant, project=project, bundle_id=spec_resolved.id)
-    _apply_bundle_props_to_workflow(workflow=workflow, props=props or {})
+    await _apply_bundle_props_to_workflow(workflow=workflow, props=props or {})
     if not _bundle_enabled(props):
         raise RuntimeError(f"Bundle {spec_resolved.id} is disabled")
 

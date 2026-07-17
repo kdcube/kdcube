@@ -438,7 +438,7 @@ def _deep_merge_bundle_props(base: Dict[str, Any], override: Dict[str, Any]) -> 
     return out
 
 
-def _apply_rest_bundle_props_to_workflow(
+async def _apply_rest_bundle_props_to_workflow(
         *,
         workflow: Any,
         props: Dict[str, Any],
@@ -469,6 +469,14 @@ def _apply_rest_bundle_props_to_workflow(
                 hook()
             except Exception:
                 logger.debug("Bundle prop hook failed during REST apply: %s", hook_name, exc_info=True)
+    # The public on_apply_props hook fires on every props application, this
+    # non-turn surface included.
+    invoke_on_apply = getattr(workflow, "_invoke_on_apply_props", None)
+    if callable(invoke_on_apply):
+        try:
+            await invoke_on_apply()
+        except Exception:
+            logger.debug("on_apply_props failed during REST apply", exc_info=True)
     return getattr(workflow, "bundle_props", None) or merged
 
 
@@ -699,7 +707,7 @@ async def _reload_widget_manifest_after_miss(
             project=project_id,
             bundle_id=retry_spec.id,
         )
-        workflow_props = _apply_rest_bundle_props_to_workflow(workflow=workflow, props=props)
+        workflow_props = await _apply_rest_bundle_props_to_workflow(workflow=workflow, props=props)
         widget_spec = _resolve_widget_spec(retry_manifest, alias=widget_alias)
         return workflow, retry_spec, tenant_id, project_id, comm_context, retry_manifest, props, workflow_props, widget_spec
     except Exception:
@@ -3290,7 +3298,7 @@ async def get_bundle_interface(
         project=project_id,
         bundle_id=spec_resolved.id,
     )
-    workflow_props = _apply_rest_bundle_props_to_workflow(workflow=workflow, props=props)
+    workflow_props = await _apply_rest_bundle_props_to_workflow(workflow=workflow, props=props)
     visible_widgets = _visible_widget_specs(manifest, session, props=workflow_props)
     visible_apis = _visible_api_specs(manifest, session, props=workflow_props)
     visible_mcp_endpoints = _visible_mcp_specs(manifest, session, props=workflow_props)
@@ -3389,7 +3397,7 @@ async def list_bundle_widgets(
         project=project_id,
         bundle_id=spec_resolved.id,
     )
-    workflow_props = _apply_rest_bundle_props_to_workflow(workflow=workflow, props=props)
+    workflow_props = await _apply_rest_bundle_props_to_workflow(workflow=workflow, props=props)
     return {
         "status": "ok",
         "tenant": tenant_id,
@@ -3434,7 +3442,7 @@ async def _fetch_bundle_widget_payload(
         project=project_id,
         bundle_id=spec_resolved.id,
     )
-    workflow_props = _apply_rest_bundle_props_to_workflow(workflow=workflow, props=props)
+    workflow_props = await _apply_rest_bundle_props_to_workflow(workflow=workflow, props=props)
     widget_spec = _resolve_widget_spec(
         manifest,
         alias=widget_alias,
@@ -3764,7 +3772,7 @@ async def _serve_static_widget_app(
         project=project_id,
         bundle_id=spec_resolved.id,
     )
-    workflow_props = _apply_rest_bundle_props_to_workflow(workflow=workflow, props=props)
+    workflow_props = await _apply_rest_bundle_props_to_workflow(workflow=workflow, props=props)
     widget_spec = _resolve_widget_spec(
         manifest,
         alias=widget_alias,
@@ -4368,7 +4376,7 @@ async def _call_bundle_mcp_inner(
         bundle_id=spec_resolved.id,
     )
     endpoint_spec = apply_mcp_overrides(endpoint_spec, _props)
-    _apply_rest_bundle_props_to_workflow(workflow=workflow, props=_props)
+    await _apply_rest_bundle_props_to_workflow(workflow=workflow, props=_props)
     if not is_bundle_enabled(_props):
         raise HTTPException(status_code=404, detail=f"Bundle {spec_resolved.id} is disabled")
     if not is_mcp_enabled(_props, endpoint_spec):
@@ -4923,7 +4931,7 @@ async def _call_bundle_op_inner(
         _ensure_operations_session_authorized(session)
     if not _endpoint_visible(endpoint_spec.user_types, endpoint_spec.roles, session, endpoint_auth):
         raise HTTPException(status_code=403, detail=f"Bundle operation {operation} is not visible to this user")
-    _apply_rest_bundle_props_to_workflow(workflow=workflow, props=_props)
+    await _apply_rest_bundle_props_to_workflow(workflow=workflow, props=_props)
     if not is_bundle_enabled(_props):
         raise HTTPException(status_code=404, detail=f"Bundle {spec_resolved.id} is disabled")
     if not is_api_enabled(_props, endpoint_spec):

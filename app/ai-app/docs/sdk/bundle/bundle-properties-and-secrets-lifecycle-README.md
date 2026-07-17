@@ -243,7 +243,9 @@ in two layers:
        return True   # when the models service must be rebuilt
    ```
 
-   Called after layer 1 on every refresh. Async (secrets are awaitable), no
+   Called after layer 1 on every props application, on every surface: the
+   turn door's refresh and the REST/widget/MCP/local-operation apply paths
+   alike. Async (secrets are awaitable), no
    `super()` call to forget (the base is a no-op), and the base owns the
    models-service rebuild when the hook returns `True`. Do not override
    `_apply_bundle_props_overrides` instead: it is synchronous,
