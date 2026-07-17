@@ -75,9 +75,18 @@ to `decision` (bounded by the retry/iteration gates).
 
 Decision channels stream to the USER while the generation is still running:
 `thinking`, root `notes`, and the action's `final_answer` string are decoded
-char-level and delivered live. Validation happens AFTER generation — so a
-round rejected post hoc may already have shown its content; streamed text
-stays visible. Two invariants follow:
+char-level and delivered live. Validation is TWO-TIERED:
+
+- **Online (action overseer):** each streamed action candidate is judged
+  IMMEDIATELY for strategy/trait compatibility against already-accepted
+  moves. Only an accepted candidate's gated output (e.g. its `final_answer`
+  answer lane) streams to the user; a dropped candidate never reaches them.
+- **Post hoc (schema/shape):** parsing and validating the action JSON and
+  the channel shape (preamble, first-channel, required channels) run after
+  generation. A round that PASSED the online gate but fails post hoc may
+  therefore already have shown its content; streamed text stays visible.
+
+Two invariants follow for the post-hoc tier:
 
 - **Post-hoc parsing must accept whatever the streaming layer accepted.**
   A fence-dialect mismatch between the two layers produced a duplicated
