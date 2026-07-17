@@ -109,6 +109,8 @@ backend-only apps — start with
 | Study the reference bundle | [workspace-reference-bundle-README.md](workspace-reference-bundle-README.md) |
 | Choose the SDK entrypoint base class | [bundle-entrypoint-classes-README.md](bundle-entrypoint-classes-README.md) |
 | Runtime surfaces | [bundle-runtime-README.md](bundle-runtime-README.md) |
+| Surface model: what an app offers (`surfaces.as_provider`) | [surfaces/as-provider-surfaces-README.md](surfaces/as-provider-surfaces-README.md) |
+| Surface model: what an app consumes (`surfaces.as_consumer`), incl. per-agent tool identity | [surfaces/as-consumer-surfaces-README.md](surfaces/as-consumer-surfaces-README.md) |
 | Record and sink selected comm events | [bundle-event-recording-and-sinks-README.md](bundle-event-recording-and-sinks-README.md) |
 | Conversation agent lanes and Data Bus partitions | [../../service/comm/bus-routing-and-partitioning-README.md](../../service/comm/bus-routing-and-partitioning-README.md) |
 | Named provider/client surfaces for namespaced services, object actions, relations, API/MCP/Data Bus adapters | [../namespace-services/providers-README.md](../namespace-services/providers-README.md) |

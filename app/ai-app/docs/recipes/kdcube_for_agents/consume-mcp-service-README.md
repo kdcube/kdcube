@@ -4,9 +4,10 @@ title: "Connect An MCP Service To A KDCube Agent"
 summary: "Builder recipe for registering an MCP server once, exposing an allow-listed tool view to each KDCube agent through surfaces.as_consumer, resolving secrets, and verifying the resulting mcp.<alias>.<tool> catalog and runtime calls."
 status: active
 tags: ["recipes", "kdcube-for-agents", "mcp", "as-consumer", "agents", "tools", "governance"]
-updated_at: 2026-07-16
+updated_at: 2026-07-18
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/kdcube_for_agents/expose-mcp-service-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/agent-acting-for-user/agent-acting-for-user-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/mcp-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/tool-subsystem-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/multi-action/tool-strategy-traits-README.md
@@ -234,6 +235,30 @@ similar profiles) is not a headless agent connection contract. Such a server is
 omitted from the tool catalog. Use a non-interactive credential provisioned for
 the app, or build a user-connected-account adapter that resolves a server-side
 credential before the tool call.
+
+### Delegated: call a KDCube service as the signed-in user
+
+A static bearer represents the app. When the target is a KDCube `@mcp` surface
+that serves the user's own data (memories, tasks), the agent must act **as the
+user, per agent** — mark the connection `delegated` and declare the claims it
+needs instead of configuring a credential:
+
+```yaml
+- name: memories
+  kind: mcp
+  server_id: memories
+  url: https://runtime.example/api/integrations/bundles/<T>/<P>/user-memories@2026-06-26/public/mcp/memories
+  transport: streamable_http
+  delegated: true
+  scopes: [memories:read]
+```
+
+At bind time the runtime injects the bearer bound by the user's per-agent
+consent grant (the agent is a Delegated-By-KDCube client entity,
+`kdcube-agent:<app>:<agent>`). While the user has not granted this agent, the
+connection stays unbound and a consent demand rises in chat with a one-click
+grant. Identity model, grant round-trip, and the consent middleware:
+[Agents Acting On Behalf Of The User](../../sdk/solutions/connections/agent-acting-for-user/agent-acting-for-user-README.md).
 
 ## 5. How A KDCube Agent Receives The Tools
 

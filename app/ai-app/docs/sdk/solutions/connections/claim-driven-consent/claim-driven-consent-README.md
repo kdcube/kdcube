@@ -4,13 +4,14 @@ title: "Claim-Driven Consent For Integrations"
 summary: "One claim-first consent surface for EVERY integration an agent can use — delegated MCP, connected accounts, named-service realms. Each integration declares the raw claims it needs; a single resolver returns per-claim given/pending/unavailable from the two consent stores, rendered from the grant vocabulary so no service must author a friendly taxonomy; the mint gate refuses to act without consent. The service-defined Read/Actions grouping (Slack) is optional enrichment on top of the claim base."
 status: active
 tags: ["sdk", "connections", "consent", "claims", "delegated-mcp", "connected-accounts", "capabilities", "governance"]
-updated_at: 2026-07-17
+updated_at: 2026-07-18
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/agent-acting-for-user/agent-acting-for-user-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-credentials/delegated-credentials-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-credentials/oauth-delegated-credential-protocol-adapter-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-connections/delegated-connections-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/conversation/hosted-agent-conversation-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/recipes/kdcube_for_agents/port-your-solution-to-kdcube-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/recipes/kdcube_for_agents/settle-your-solution-in-kdcube-README.md
 ---
 # Claim-Driven Consent For Integrations
 
@@ -77,10 +78,14 @@ A claim's consent lives in one of two stores, selected by the claim's `source`:
   construction is passed in by the caller (the inventory), so the mapping stays
   testable.
 - **`delegated_mcp.py`** — `resolve_mcp_server_map(connections, *, user_sub,
-  minter, consent_gate)` mints the per-user delegated MCP bearer. With a
-  `consent_gate` (`async (scopes) -> bool`), a delegated connection is minted
-  ONLY when the gate passes; a failing gate DROPS the connection (consent
-  pending — surface it, do not act).
+  bearer_provider)` binds each `delegated: true` connection with the bearer the
+  user's PER-AGENT grant already bound (`agent_bearer_provider` builds the hook
+  over the delegated-grant store; the agent identity is
+  `delegated_client_id_for_agent(app, agent)`). A `None` bearer DROPS the
+  connection (consent pending — surface it, do not act). A `consent_gate`
+  (`async (scopes) -> bool`) guards the mint fallback the same way when no
+  provider is wired. The full acting-as-the-user model lives in
+  [Agents Acting On Behalf Of The User](../agent-acting-for-user/agent-acting-for-user-README.md).
 
 ## Declaring the claims an integration needs
 
@@ -118,18 +123,20 @@ One vocabulary, per integration kind:
    rendered with its Read/Actions grouping as enrichment; one that did not falls
    back to the raw-claim rows. Never blank. When the consent block is absent
    (fail-open omitted it), the integration renders as before — no regression.
-3. **Mint gate** — the agent's MCP wiring passes a `consent_gate` built from the
-   same resolver: a delegated connection binds only when its claims are `given`;
-   `pending` → not bound (the picker shows how to grant). The gate's failure
-   posture (e.g. fail-open when the consent store is unreadable) is the caller's
-   choice and is logged.
+3. **Binding gate** — the agent's MCP wiring binds a delegated connection only
+   when its claims are `given`: the `bearer_provider` returns the consented
+   grant's token, or nothing while consent pends — an unbound connection raises
+   the reactive consent demand (banner + agent note) instead of a silent gap.
+   The gate's failure posture (e.g. treat an unreadable consent store as
+   pending) is the caller's choice and is logged.
 
 ## Governance, made concrete
 
 The four decisions MCP does not make, now claim-anchored:
 
-- **which agent** — the per-agent tool allow-list (admin ceiling ∩ user picker).
-- **who crosses** — the minted per-user delegated bearer, gated on consent.
+- **which agent** — the per-agent tool allow-list (admin ceiling ∩ user picker),
+  and consent itself keyed to the per-agent client identity.
+- **who crosses** — the per-user delegated bearer the consent grant bound.
 - **whose data** — the token subject IS the signed-in user; the `@mcp` surface
   serves only their own resources.
 - **who pays** — metered iff the tool runs a marked model call.

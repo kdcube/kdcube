@@ -4,8 +4,9 @@ title: "Create Delegated Automation Access"
 summary: "Configure and use Connection Hub delegated access tokens for scripts, agents, and DevOps automation that represent a KDCube platform user."
 status: active
 tags: ["connection-hub", "delegated-credentials", "automation", "resources", "roles", "mcp", "named-services", "least-privilege"]
-updated_at: 2026-07-17
+updated_at: 2026-07-18
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/agent-acting-for-user/agent-acting-for-user-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/protect-bundle-rest-with-managed-credentials-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/protect-bundle-mcp-with-managed-credentials-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-credentials/oauth-delegated-credential-protocol-adapter-README.md
@@ -208,6 +209,18 @@ The Granted Access list updates live: grants landing out-of-band (an OAuth
 consent completing in another tab or client) and revocations push to every
 open hub over the widget's federated Data Bus session — see
 [Delegated Connections → Live Delivery](../../sdk/solutions/connections/delegated-connections/delegated-connections-README.md#live-delivery-to-open-hubs).
+
+## Hosted-Agent Grants Arrive In The Same Registry
+
+Manual creation is one of three issuance paths into this registry. A hosted
+agent (an agent running inside a KDCube app) raises its own consent demand in
+chat when it needs a delegated resource; the user's one-click grant creates a
+record here keyed to the agent's client identity
+(`kdcube-agent:<app>:<agent>`, `source: agent`, shown with an *agent* badge).
+One record per (user, agent, resources) — re-consent updates it — and revoking
+it in this tab is what unbinds the agent's tool. External OAuth clients (Claude
+Code) are the third path. Identity model and the chat grant flow:
+[Agents Acting On Behalf Of The User](../../sdk/solutions/connections/agent-acting-for-user/agent-acting-for-user-README.md).
 
 ## Runtime Use
 

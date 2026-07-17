@@ -477,6 +477,12 @@ consumer app: surfaces.as_consumer.mcp.services.mcpServers.reports
 Follow [Connect An MCP Service To A KDCube Agent](consume-mcp-service-README.md)
 for the exact descriptor and runtime path.
 
+When the exposed surface serves per-user data under Connection Hub managed
+authentication, a consuming agent connects with `delegated: true` + `scopes`
+instead of a static credential — it then calls as the signed-in user under a
+per-agent consent grant. See
+[Agents Acting On Behalf Of The User](../../sdk/solutions/connections/agent-acting-for-user/agent-acting-for-user-README.md).
+
 ## 11. Verify The Boundary
 
 1. Load the app and confirm the MCP endpoint appears in its discovered interface.

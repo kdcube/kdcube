@@ -4,8 +4,9 @@ title: "Delegate A KDCube Service To An External Client"
 summary: "User-facing recipe for connecting Claude or another external client to a KDCube service through Connection Hub delegated credentials."
 status: active
 tags: ["recipes", "connections", "connection-hub", "delegated-credentials", "oauth", "claude", "mcp", "consent"]
-updated_at: 2026-07-17
+updated_at: 2026-07-18
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/agent-acting-for-user/agent-acting-for-user-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/protect-bundle-mcp-with-managed-credentials-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-credentials/oauth-delegated-credential-protocol-adapter-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-credentials/delegation-edges-README.md
@@ -68,19 +69,26 @@ Claude may not call tools that were not consented.
     selected identity scope
 ```
 
-This OAuth connector journey and **Create automation access** are two issuance
-paths over the same Connection Hub resource catalog, but they are not the same
-request flow:
+This OAuth connector journey, **Create automation access**, and the hosted-agent
+chat consent are three issuance paths over the same Connection Hub resource
+catalog, but they are not the same request flow:
 
 ```text
 external MCP connector
   -> OAuth authorize + consent
   -> selected resource/tools/grants in the OAuth grant record
 
-manual script or agent token
+manual script token
   -> Connection Hub / Delegated by KDCube / Create automation access
   -> resource_grants + exact named_service_operations selection
+
+hosted agent (an agent inside a KDCube app)
+  -> consent demand in chat -> one-click grant, per agent
+  -> record keyed to the agent's client identity (kdcube-agent:<app>:<agent>)
 ```
+
+The hosted-agent path is documented in
+[Agents Acting On Behalf Of The User](../../sdk/solutions/connections/agent-acting-for-user/agent-acting-for-user-README.md).
 
 Do not document the manual `named_service_operations` payload as an OAuth
 protocol field. OAuth consent renders the descriptor-backed catalog within the
