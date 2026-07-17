@@ -591,6 +591,9 @@ async def resolve_config_request_secrets(
     await _resolve("google_api_key", "services.google.api_key")
     await _resolve("huggingface_api_key", "services.huggingface.api_key")
     await _resolve("openrouter_api_key", "services.openrouter.api_key")
+    # provider "custom" (locally served models / models gateway): same
+    # door-time, bundle-then-platform key resolution as hosted providers
+    await _resolve("custom_model_api_key", "services.llm.custom.api_key")
 
     if not updates:
         return config_request
@@ -817,9 +820,13 @@ def create_workflow_config(config_request: ConfigRequest) -> Config:
     # custom endpoint
     if config_request.custom_model_endpoint:
         cfg.custom_model_endpoint = config_request.custom_model_endpoint
-        cfg.custom_model_api_key = config_request.custom_model_api_key or ""
         cfg.custom_model_name = config_request.custom_model_name or "custom-model"
         cfg.use_custom_endpoint = True
+    # The key applies regardless of where the endpoint comes from: the
+    # endpoint may arrive later via bundle props (services.llm.custom), while
+    # the door-resolved key must not be dropped on that path.
+    if config_request.custom_model_api_key:
+        cfg.custom_model_api_key = config_request.custom_model_api_key
 
     if config_request.kb_search_endpoint:
         cfg.set_kb_search_endpoint(config_request.kb_search_endpoint)
@@ -969,7 +976,10 @@ class ModelRouter:
             client = self._mk_gemini(model, temperature)
         elif provider == "custom":
             if not self.config.custom_model_endpoint:
-                raise ValueError("Custom provider requires CUSTOM_MODEL_ENDPOINT")
+                raise ValueError(
+                    "Provider 'custom' has no endpoint configured: set the app prop "
+                    "services.llm.custom.endpoint (bundles.yaml) to the model gateway URL"
+                )
             client = self._mk_custom(model, temperature)
         else:
             raise ValueError(f"Unknown provider: {provider}")
