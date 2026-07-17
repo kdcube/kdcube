@@ -79,22 +79,30 @@ async def load_mcp_tools_for_connections(
     disabled_map: Optional[Mapping[str, Any]] = None,
     application: str = "",
     agent_id: str = "",
+    bearer_provider: Optional[Any] = None,
 ) -> tuple[List[Any], List[MCPConsentRequired]]:
     """Bind the agent's declared, user-enabled `kind: mcp` connections as LangChain
     tools for THIS turn's user, AS this agent.
 
-    The delegated bearer is minted under the AGENT's delegated-client identity
-    (`application` + `agent_id`) — the agent is a "Delegated By KDCube" entity, so
-    consent is per-agent. Returns ``(tools, consent_demands)``: when a KDCube
-    `@mcp` load is denied for missing consent (a 403 at connect time), the tools
-    are absent and a ``MCPConsentRequired`` is returned for each delegated
-    connection so the caller can bubble it into chat and explain it to the agent.
-    Never raises."""
+    The agent is a "Delegated By KDCube" entity keyed by `application` + `agent_id`,
+    so consent is per-agent. When ``bearer_provider`` is supplied (the recommended
+    path), a delegated connection uses the token the user's per-agent grant already
+    bound — so the KDCube `@mcp` guard passes; a connection with NO consented grant
+    is dropped and surfaces as a consent demand. Without a provider the resolver
+    falls back to a fresh mint (unbound → the guard denies until consent exists),
+    which still yields the same consent demand.
+
+    Returns ``(tools, consent_demands)``: when a KDCube `@mcp` load is denied for
+    missing consent (a 403 at connect time), the tools are absent and a
+    ``MCPConsentRequired`` is returned for each delegated connection so the caller
+    can bubble it into chat and explain it to the agent. Never raises."""
     conns = mcp_connections(connections, disabled_map)
     if not conns:
         return [], []
     client_id = delegated_client_id_for_agent(application, agent_id)
-    server_map = await resolve_mcp_server_map(conns, user_sub=user_sub, client_id=client_id)
+    server_map = await resolve_mcp_server_map(
+        conns, user_sub=user_sub, client_id=client_id, bearer_provider=bearer_provider,
+    )
     error_sink: Dict[str, Any] = {}
     tools = await load_mcp_tools_from_server_map(server_map, error_sink=error_sink)
 

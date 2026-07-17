@@ -777,3 +777,101 @@ async def test_live_sessions_receive_delegated_access_changes():
     assert [e["session_id"] for e in relay.emitted] == ["live-1", "live-1"]
     assert {e["type"] for e in relay.emitted} == {DELEGATED_ACCESS_CHANGED_EVENT}
     assert [e["action"] for e in relay.emitted] == ["granted", "revoked"]
+
+
+def _agent_service():
+    return AutomationAccessService(
+        redis=_Redis(),
+        tenant="demo-tenant",
+        project="demo-project",
+        config=_config(),
+        grant_store=_Store(),
+        authority=_Authority(),
+        minter=_minter,
+    )
+
+
+_AGENT_CLIENT = "kdcube-agent:app@v1:lg-react"
+_AGENT_USER = {"user_id": "platform-user-1", "roles": ["kdcube:role:registered"], "permissions": []}
+
+
+@pytest.mark.asyncio
+async def test_create_access_with_agent_client_id_is_deterministic_and_stores_token():
+    service = _agent_service()
+    created = await service.create_access(
+        _AGENT_USER,
+        label="lg-react (memories)",
+        resource_grants={"https://example.test/mcp": ["records:read"]},
+        client_id=_AGENT_CLIENT,
+    )
+    assert created["ok"] is True
+    access = created["access"]
+    # Keyed to the agent's deterministic client_id (not a random automation:… one),
+    # with a stable agent-… access_id and source=agent.
+    assert access["client_id"] == _AGENT_CLIENT
+    assert access["access_id"].startswith("agent-")
+    assert access["source"] == "agent"
+    # The public view never leaks the token; the internal record persists it for reuse.
+    assert "access_token" not in access
+    token = await service.agent_access_token(
+        grantor_subject="platform-user-1", client_id=_AGENT_CLIENT,
+        resources=["https://example.test/mcp"],
+    )
+    assert token is not None
+    assert token["access_token"] == "kst1.test.abcdef"
+    assert token["authorization_header"] == "Bearer kst1.test.abcdef"
+    assert token["resource_grants"] == {"https://example.test/mcp": ["records:read"]}
+
+
+@pytest.mark.asyncio
+async def test_reconsent_updates_one_record_and_preserves_created_at():
+    service = _agent_service()
+    first = await service.create_access(
+        _AGENT_USER, label="lg-react", client_id=_AGENT_CLIENT,
+        resource_grants={"https://example.test/mcp": ["records:read"]},
+    )
+    listed = await service.list_access(_AGENT_USER)
+    assert len(listed["items"]) == 1
+    created_at = json.loads(next(iter(service._redis.values.values())))["created_at"]
+
+    again = await service.create_access(
+        _AGENT_USER, label="lg-react (relabeled)", client_id=_AGENT_CLIENT,
+        resource_grants={"https://example.test/mcp": ["records:read"]},
+    )
+    # Same deterministic access_id -> re-consent updates the SAME record, not a pile-up.
+    assert again["access"]["access_id"] == first["access"]["access_id"]
+    assert len((await service.list_access(_AGENT_USER))["items"]) == 1
+    assert json.loads(next(iter(service._redis.values.values())))["created_at"] == created_at
+
+
+@pytest.mark.asyncio
+async def test_agent_access_token_none_when_no_grant_or_scope_mismatch():
+    service = _agent_service()
+    await service.create_access(
+        _AGENT_USER, label="lg-react", client_id=_AGENT_CLIENT,
+        resource_grants={"https://example.test/mcp": ["records:read"]},
+    )
+    # Consent pending for a DIFFERENT agent -> no token.
+    assert await service.agent_access_token(
+        grantor_subject="platform-user-1", client_id="kdcube-agent:app@v1:other",
+        resources=["https://example.test/mcp"],
+    ) is None
+    # Grant exists but for a different resource key -> no token (the resolver must
+    # ask for the exact resource the connection points at).
+    assert await service.agent_access_token(
+        grantor_subject="platform-user-1", client_id=_AGENT_CLIENT,
+        resources=["https://example.test/other"],
+    ) is None
+
+
+@pytest.mark.asyncio
+async def test_manual_automation_keeps_random_client_and_no_stored_token():
+    service = _agent_service()
+    created = await service.create_access(
+        _AGENT_USER, label="Nightly", resource_grants={"https://example.test/mcp": ["records:read"]},
+    )
+    # No client_id -> unchanged manual behavior: random automation:… client, source=manual,
+    # token returned to the caller but NOT persisted in the record for reuse.
+    assert created["access"]["client_id"].startswith("automation:")
+    assert created["access"]["source"] == "manual"
+    assert json.loads(next(iter(service._redis.values.values()))).get("access_token", "") == ""

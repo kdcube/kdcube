@@ -39,6 +39,14 @@ logger = logging.getLogger(__name__)
 # Defaults to the delegated-credentials OAuth mint; injectable for tests.
 Minter = Callable[..., Awaitable[Mapping[str, Any]]]
 
+# A bearer provider: (conn, user_sub) -> the CONSENTED bearer for a delegated
+# connection, or None when consent is pending. When injected it REPLACES the mint
+# for delegated connections — the per-turn token is the one the user's grant
+# already bound (so the @mcp guard passes), not a fresh unbound mint. Returning
+# None means the user has not granted THIS agent the connection's claims; the
+# connection is dropped and the caller shapes a consent demand.
+BearerProvider = Callable[[Mapping[str, Any], str], Awaitable[Optional[str]]]
+
 _DEFAULT_CLIENT_ID = "kdcube-agent"
 
 
@@ -53,6 +61,31 @@ def delegated_client_id_for_agent(application: str, agent_id: str) -> str:
     if app and agent:
         return f"kdcube-agent:{app}:{agent}"
     return _DEFAULT_CLIENT_ID
+
+
+def connection_resource(conn: Mapping[str, Any]) -> str:
+    """The delegated resource identifier a connection points at — an explicit
+    ``resource`` if declared, else the ``url`` (the ``@mcp`` surface URL, which is
+    what the grant's ``resource_grants`` is keyed by and what the guard matches the
+    request against)."""
+    return str((conn or {}).get("resource") or (conn or {}).get("url") or "").strip()
+
+
+def agent_bearer_provider(access_service: Any, *, client_id: str) -> "BearerProvider":
+    """A ``bearer_provider`` over an ``AutomationAccessService``: the consented
+    per-agent grant's already-bound token for the connection's resource, or
+    ``None`` when the user has not granted THIS agent (consent pending). The one
+    reusable glue that turns "reuse the consented grant's token" into the resolver
+    hook; any hosted agent injects it via ``resolve_mcp_server_map``."""
+    async def _provider(conn: Mapping[str, Any], user_sub: str) -> Optional[str]:
+        resource = connection_resource(conn)
+        if not resource:
+            return None
+        result = await access_service.agent_access_token(
+            grantor_subject=user_sub, client_id=client_id, resources=[resource],
+        )
+        return str((result or {}).get("access_token") or "").strip() or None if result else None
+    return _provider
 
 
 def is_mcp_connection(conn: Mapping[str, Any]) -> bool:
@@ -95,18 +128,26 @@ async def resolve_mcp_server_map(
     client_id: str = _DEFAULT_CLIENT_ID,
     ttl_seconds: Optional[int] = None,
     consent_gate: Optional[Callable[[List[str]], Awaitable[bool]]] = None,
+    bearer_provider: Optional[BearerProvider] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """Build ``{server_id: {url, transport, headers}}`` for the ``kind: mcp``
-    connections. Delegated connections get a freshly minted per-user bearer;
-    static connections keep their declared headers. A delegated connection with
-    no ``user_sub`` (or whose mint fails) is omitted — no unauthenticated call.
+    connections. Delegated connections get a per-user bearer; static connections
+    keep their declared headers. A delegated connection with no ``user_sub`` (or
+    no resolvable bearer) is omitted — no unauthenticated call.
 
-    ``consent_gate``: optional ``async (scopes) -> bool``. When provided, a
-    delegated connection is minted ONLY if the gate returns True (the user has
-    consented to the connection's claims). A False gate DROPS the connection (the
-    consent is pending — surface it in the picker, do not act). The gate itself
-    decides its failure posture (e.g. fail-open on an unreadable store); this
-    function just honors its verdict.
+    ``bearer_provider``: optional ``async (conn, user_sub) -> Optional[str]``.
+    When provided it is the delegated bearer source (REPLACING the mint): it
+    returns the token the user's per-agent grant already bound — so the ``@mcp``
+    guard, which validates against the bound grant record, passes. ``None`` means
+    consent is pending (the user has not granted THIS agent the claims); the
+    connection is DROPPED so the caller can shape a consent demand. This is the
+    "reuse the consented grant's token" path.
+
+    ``consent_gate``: optional ``async (scopes) -> bool``, used only on the mint
+    fallback (no ``bearer_provider``). When provided, a delegated connection is
+    minted ONLY if the gate returns True. A False gate DROPS the connection
+    (consent pending). The gate decides its own failure posture; this function
+    honors its verdict.
     """
     mint = minter or _default_minter
     servers: Dict[str, Dict[str, Any]] = {}
@@ -130,6 +171,27 @@ async def resolve_mcp_server_map(
                     "delegated_mcp: connection %s is delegated but no user is bound this "
                     "turn; skipping (no unauthenticated call).", server_id,
                 )
+                continue
+            if bearer_provider is not None:
+                # The consented-grant path: use the token the user's per-agent
+                # grant already bound (guard-valid), or drop when consent pends.
+                try:
+                    token = str(await bearer_provider(conn, user_sub) or "").strip()
+                except Exception:
+                    logger.warning(
+                        "delegated_mcp: bearer provider errored for %s; skipping.", server_id, exc_info=True,
+                    )
+                    continue
+                if not token:
+                    logger.info(
+                        "delegated_mcp: connection %s not bound — consent pending for scopes %s "
+                        "(user grants it to this agent in Connection Hub).", server_id, scopes,
+                    )
+                    continue
+                headers["Authorization"] = f"Bearer {token}"
+                if headers:
+                    entry["headers"] = headers
+                servers[server_id] = entry
                 continue
             if consent_gate is not None:
                 try:

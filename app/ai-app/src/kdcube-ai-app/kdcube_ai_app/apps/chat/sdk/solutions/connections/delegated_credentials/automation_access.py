@@ -251,6 +251,11 @@ def _grantor_authority(
 
 ACCESS_SOURCE_MANUAL = "manual"
 ACCESS_SOURCE_OAUTH = "oauth"
+# A per-agent delegated grant: the consenting user grants a hosted agent
+# (a "Delegated By KDCube" entity, keyed by a deterministic client_id) access to
+# a resource. Unlike a MANUAL automation (which mints its own random client), the
+# client_id is caller-supplied and stable, so re-consent updates one record.
+ACCESS_SOURCE_AGENT = "agent"
 
 
 @dataclass(frozen=True)
@@ -745,7 +750,17 @@ class AutomationAccessService:
         operations: Iterable[str] = (),
         named_service_operations: Mapping[str, Any] | None = None,
         ttl_seconds: Any = None,
+        client_id: str | None = None,
     ) -> dict[str, Any]:
+        """Create a delegated-access grant the current user grants to a client.
+
+        ``client_id`` is normally omitted — a fresh random ``automation:…`` client
+        is minted per grant. When a caller passes a DETERMINISTIC client_id (a
+        hosted agent's ``kdcube-agent:<app>:<agent>`` identity), the grant is keyed
+        to it and DEDUPLICATED: one record per (grantor, client, resources), so
+        re-consent updates the same record instead of piling up. The credential is
+        built + bound identically either way, so the minted token passes the @mcp
+        guard the same as any Delegated-By-KDCube grant."""
         grantor_subject = _subject_from_user(user)
         if not grantor_subject:
             return {"ok": False, "error": "delegated_access_requires_authenticated_user"}
@@ -858,10 +873,30 @@ class AutomationAccessService:
             resources=selected_resources,
         )
 
-        access_id = "aut_" + secrets.token_urlsafe(10)
-        client_id = f"{AUTOMATION_CLIENT_PREFIX}:{access_id}"
+        requested_client_id = _clean(client_id)
+        access_source = ACCESS_SOURCE_MANUAL
+        if requested_client_id:
+            # Deterministic per-agent grant: one record per (grantor, client,
+            # resources) so re-consent updates it instead of accumulating rows.
+            client_id = requested_client_id
+            digest = hashlib.sha256(
+                f"{grantor_subject}|{client_id}|{'+'.join(sorted(selected_resources))}".encode("utf-8")
+            ).hexdigest()[:16]
+            access_id = f"agent-{digest}"
+            access_source = ACCESS_SOURCE_AGENT
+        else:
+            access_id = "aut_" + secrets.token_urlsafe(10)
+            client_id = f"{AUTOMATION_CLIENT_PREFIX}:{access_id}"
         ttl = _bounded_ttl(ttl_seconds)
         now = int(time.time())
+        created_at = now
+        if access_source == ACCESS_SOURCE_AGENT:
+            existing_raw = await self._redis.get(self._record_key(access_id))
+            if existing_raw is not None:
+                try:
+                    created_at = int(json.loads(existing_raw).get("created_at") or now)
+                except Exception:
+                    created_at = now
         credential = build_delegated_client_credential(
             grantor_subject=grantor_subject,
             client_id=client_id,
@@ -925,9 +960,14 @@ class AutomationAccessService:
             },
             identity_scope=identity_scope,
             session_id=session_id,
-            created_at=now,
+            created_at=created_at,
             expires_at=expires_at,
             last_four=access_token[-4:] if access_token else "",
+            source=access_source,
+            # A per-agent grant persists its token so each turn REUSES the
+            # consented bearer (looked up by the resolver) rather than minting an
+            # unbound one; a manual automation keeps the token client-side only.
+            access_token=access_token if access_source == ACCESS_SOURCE_AGENT else "",
         )
         await self._redis.setex(self._record_key(access_id), expires_in, json.dumps(record.to_dict()))
         await self._redis.sadd(self._index_key(grantor_subject), access_id)
@@ -939,6 +979,45 @@ class AutomationAccessService:
             "access": record.to_public_dict(),
             "access_token": access_token,
             "authorization_header": f"Bearer {access_token}" if access_token else "",
+        }
+
+    async def agent_access_token(
+        self,
+        *,
+        grantor_subject: str,
+        client_id: str,
+        resources: Iterable[str],
+    ) -> dict[str, Any] | None:
+        """The consented bearer for a per-agent grant, or ``None`` when the user
+        has not granted THIS agent access to these resources (consent pending) or
+        the grant has expired. Keyed by the SAME deterministic access_id
+        `create_access(client_id=…)` writes, so the per-turn resolver reuses the
+        stored, already-bound token instead of minting an unbound one."""
+        grantor = _clean(grantor_subject)
+        client = _clean(client_id)
+        if not grantor or not client:
+            return None
+        selected = sorted({_clean(r) for r in (resources or ()) if _clean(r)})
+        digest = hashlib.sha256(
+            f"{grantor}|{client}|{'+'.join(selected)}".encode("utf-8")
+        ).hexdigest()[:16]
+        raw = await self._redis.get(self._record_key(f"agent-{digest}"))
+        if raw is None:
+            return None
+        try:
+            record = AutomationAccessRecord.from_mapping(json.loads(raw))
+        except Exception:
+            return None
+        if record.source != ACCESS_SOURCE_AGENT or not record.access_token:
+            return None
+        if record.expires_at and record.expires_at <= int(time.time()):
+            return None
+        return {
+            "access_token": record.access_token,
+            "authorization_header": f"Bearer {record.access_token}",
+            "expires_at": record.expires_at,
+            "resource_grants": {key: list(value) for key, value in record.resource_grants.items()},
+            "client_id": record.client_id,
         }
 
     async def record_oauth_grant(

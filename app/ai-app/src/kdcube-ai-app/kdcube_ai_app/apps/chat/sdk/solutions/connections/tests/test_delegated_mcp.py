@@ -124,6 +124,65 @@ def test_client_id_is_passed_to_the_minter():
     assert calls and calls[0]["client_id"] == "kdcube-agent:app:lg-react"
 
 
+def test_bearer_provider_injects_the_consented_token_and_replaces_the_mint():
+    minter, calls = _fake_minter_calls()
+    seen = {}
+
+    async def provider(conn, user_sub):
+        seen["conn_url"] = conn.get("url")
+        seen["user"] = user_sub
+        return "consented-tok"
+
+    servers = asyncio.run(resolve_mcp_server_map(
+        [_DELEGATED], user_sub="u1", minter=minter, bearer_provider=provider))
+    assert servers["memory"]["headers"]["Authorization"] == "Bearer consented-tok"
+    assert seen == {"conn_url": "https://h/api/mcp/mem", "user": "u1"}
+    assert calls == []  # provider REPLACES the mint — never minted
+
+
+def test_bearer_provider_none_drops_the_connection_consent_pending():
+    minter, calls = _fake_minter_calls()
+
+    async def provider(conn, user_sub):
+        return None  # consent pending for this agent
+
+    servers = asyncio.run(resolve_mcp_server_map(
+        [_DELEGATED, _STATIC], user_sub="u1", minter=minter, bearer_provider=provider))
+    # Delegated dropped (consent pending); static still resolves.
+    assert set(servers) == {"docs"}
+    assert calls == []
+
+
+def test_agent_bearer_provider_over_automation_access_service():
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_mcp import (
+        agent_bearer_provider, resolve_mcp_server_map,
+    )
+
+    class _FakeService:
+        def __init__(self):
+            self.calls = []
+
+        async def agent_access_token(self, *, grantor_subject, client_id, resources):
+            self.calls.append({"sub": grantor_subject, "client_id": client_id, "resources": list(resources)})
+            # Consent given only for the exact resource the connection points at.
+            if resources == ["https://h/api/mcp/mem"] and client_id == "kdcube-agent:app:lg-react":
+                return {"access_token": "granted-tok", "resource_grants": {}}
+            return None
+
+    svc = _FakeService()
+    provider = agent_bearer_provider(svc, client_id="kdcube-agent:app:lg-react")
+
+    servers = asyncio.run(resolve_mcp_server_map(
+        [_DELEGATED], user_sub="u9", bearer_provider=provider))
+    assert servers["memory"]["headers"]["Authorization"] == "Bearer granted-tok"
+    assert svc.calls == [{"sub": "u9", "client_id": "kdcube-agent:app:lg-react", "resources": ["https://h/api/mcp/mem"]}]
+
+    # A different agent has no grant -> connection dropped (consent pending).
+    provider_other = agent_bearer_provider(svc, client_id="kdcube-agent:app:other")
+    assert asyncio.run(resolve_mcp_server_map(
+        [_DELEGATED], user_sub="u9", bearer_provider=provider_other)) == {}
+
+
 def test_claim_requirements_from_connection():
     from kdcube_ai_app.apps.chat.sdk.solutions.connections.consent_state import (
         claim_requirements_from_connection, SOURCE_DELEGATED, SOURCE_CONNECTED,
