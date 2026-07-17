@@ -1,8 +1,12 @@
-"""The "tools, both ways" seam (platform/tools_mcp.py).
+"""The "tools, both ways" seam (platform/tools_mcp.py) — thin over the SDK.
 
-Asserts tool-mode resolution and — critically — clean degradation: with
-langchain-mcp-adapters absent (or no servers configured) the agent is still
-buildable with the plain vendored tools. Fully offline.
+The mechanism moved to SDK: `solutions/connections/delegated_mcp` resolves the
+per-user MCP server map (minting a delegated bearer for delegated connections)
+and `frameworks/langchain/mcp` binds it as LangChain tools. This bundle module
+is the thin adapter (connection list + turn user -> LangChain tools). Asserts:
+only `kind: mcp` connections are considered, and clean degradation (no MCP
+connections / adapter absent -> [] , the agent still builds with plain tools).
+Fully offline.
 """
 from __future__ import annotations
 
@@ -13,51 +17,34 @@ from kdcube_ai_app.apps.chat.sdk.runtime.dynamic_module_loader import load_dynam
 
 BUNDLE_ROOT = Path(__file__).resolve().parents[1]
 
-PLAIN = ["calc", "unit_convert", "kb_search"]  # stand-ins for tool objects
-
 
 def _mcp_module():
     _name, module = load_dynamic_module_for_path(BUNDLE_ROOT / "platform" / "tools_mcp.py")
     return module
 
 
-def test_plain_mode_returns_plain_tools_only() -> None:
+_PLAIN_CONNS = [
+    {"name": "calc", "kind": "python", "alias": "calc", "allowed": ["calc"]},
+    {"name": "code_exec", "kind": "python", "alias": "code_exec", "allowed": ["run_python"]},
+]
+_MCP_CONN = {"name": "memory", "kind": "mcp", "url": "https://h/api/mcp/mem", "delegated": True, "scopes": ["memories:read"]}
+
+
+def test_mcp_connections_filters_by_kind() -> None:
     m = _mcp_module()
-    tools = asyncio.run(m.resolve_tools({"mode": "plain"}, list(PLAIN)))
-    assert tools == PLAIN
+    assert m.mcp_connections(_PLAIN_CONNS) == []
+    assert m.mcp_connections(_PLAIN_CONNS + [_MCP_CONN]) == [_MCP_CONN]
 
 
-def test_default_mode_is_plain() -> None:
+def test_no_mcp_connection_returns_empty() -> None:
     m = _mcp_module()
-    tools = asyncio.run(m.resolve_tools({}, list(PLAIN)))
-    assert tools == PLAIN
+    # No kind:mcp declared -> no MCP tools (the agent still builds with plain tools).
+    assert asyncio.run(m.load_mcp_tools_for_connections(_PLAIN_CONNS, user_sub="u")) == []
 
 
-def test_mcp_mode_degrades_to_plain_when_no_servers() -> None:
+def test_mcp_connection_degrades_to_empty_when_adapter_absent() -> None:
     m = _mcp_module()
-    tools = asyncio.run(m.resolve_tools({"mode": "mcp"}, list(PLAIN)))
-    # No configured servers -> no MCP tools -> degrade to plain (never toolless).
-    assert tools == PLAIN
-
-
-def test_both_mode_without_mcp_is_plain() -> None:
-    m = _mcp_module()
-    tools = asyncio.run(m.resolve_tools({"mode": "both"}, list(PLAIN)))
-    # With MCP adapters absent / no reachable server, `both` == plain only.
-    assert tools == PLAIN
-
-
-def test_build_mcp_server_config_shape() -> None:
-    m = _mcp_module()
-    servers = m.build_mcp_server_config({
-        "servers": {
-            "knowledge": {
-                "url": "https://host/api/mcp/t/p/kb/mcp",
-                "headers": {"Authorization": "Bearer x"},
-            }
-        }
-    })
-    assert servers["knowledge"]["url"] == "https://host/api/mcp/t/p/kb/mcp"
-    # Default transport is streamable_http (KDCube-served MCP endpoints).
-    assert servers["knowledge"]["transport"] == "streamable_http"
-    assert servers["knowledge"]["headers"]["Authorization"] == "Bearer x"
+    # langchain-mcp-adapters is not installed in the test env: the delegated MCP
+    # connection resolves a server map but binding degrades to [] — never a crash.
+    # (No user -> the delegated server is dropped before any bind is attempted.)
+    assert asyncio.run(m.load_mcp_tools_for_connections([_MCP_CONN], user_sub=None)) == []

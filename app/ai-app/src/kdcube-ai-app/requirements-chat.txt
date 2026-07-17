@@ -24,6 +24,9 @@ langgraph-checkpoint==3.0.1
 # Pulls psycopg-pool transitively. Without it the checkpointer degrades to an in-memory
 # saver (no cross-turn history) — see docs/sdk/solutions/conversation/hosted-agent-conversation-README.md.
 langgraph-checkpoint-postgres==3.0.5
+# Bind KDCube-served MCP tools as LangChain tools for hosted LangGraph/LangChain
+# agents (sdk/frameworks/langchain/mcp.py). 0.1.7+ supports langchain 1.x.
+langchain-mcp-adapters>=0.1.7
 langmem==0.0.30
 dramatiq==1.18.0
 PyJWT[crypto]==2.10.1

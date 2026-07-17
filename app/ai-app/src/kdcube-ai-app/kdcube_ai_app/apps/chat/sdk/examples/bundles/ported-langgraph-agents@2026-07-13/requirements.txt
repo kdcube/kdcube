@@ -19,6 +19,10 @@ langgraph>=1.0.0
 langgraph-checkpoint-postgres>=2.0.0
 langchain-core>=1.0.0
 langchain-openai>=0.2.0
+# Bind a KDCube-served MCP endpoint's tools as LangChain tools (lg-react's
+# `kind: mcp` connections, incl. the delegated-credential path). 0.1.7+ supports
+# langchain 1.x. Optional at runtime: absent, MCP tools degrade to none.
+langchain-mcp-adapters>=0.1.7
 # Conversation compaction (running-summary of older turns) for BOTH agents:
 # lg-react's SummarizationNode pre_model_hook + lg-solution's compact node. Absent,
 # both agents fall back to trim (the turn still runs).

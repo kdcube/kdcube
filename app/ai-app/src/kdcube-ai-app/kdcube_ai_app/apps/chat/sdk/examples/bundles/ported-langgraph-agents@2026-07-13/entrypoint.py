@@ -6,28 +6,28 @@
 # This app hosts TWO ported LangGraph agents behind a SINGLE `execute_core`,
 # dispatched by `agent_id`:
 #
-#   - `lg-solution` — the rich research graph vendored under
+#   - `lg-solution` — the preserved research graph under
 #     `solution/lg_solution/` (KB retrieval + per-user pgvector memory + a nested
 #     subagent). Linear shape with a DEDICATED answer node, so its stream adapter
 #     (platform/stream_solution.py) streams that node's tokens.
-#   - `lg-react` — the standard `langgraph.prebuilt.create_react_agent` vendored
-#     under `solution/lg_prebuilt/` (plain + MCP tools). Its `agent` node LOOPS
+#   - `lg-react` — the `langchain.agents.create_agent` solution under
+#     `solution/lg_prebuilt/` (plain + MCP tools). Its `model` node LOOPS
 #     (once per tool-decision cycle) with no dedicated answer node, so its stream
-#     adapter (platform/stream_prebuilt.py) streams ONLY the final agent turn.
+#     adapter (platform/stream_prebuilt.py) streams ONLY the final model turn.
 #
-# Both agents' graph structure and logic are UNCHANGED from their standalone
-# "before" (poc/lg-solution, poc/lg-prebuilt-agent). The platform integration is:
+# Both solution packages preserve their framework/domain boundaries from the
+# standalone "before" (poc/lg-solution, poc/lg-prebuilt-agent). Deliberate async,
+# configuration, model-injection, package-import, and prompt-composition seams are
+# explicit. The platform integration is:
 #
 #   1. a dispatcher      — execute_core resolves agent_id and runs the right graph
 #                          through its own stream adapter (the teaching point:
 #                          different agent shapes -> different stream adapters,
 #                          selected by agent_id)
-#   2. scaled serving    — the agent's graph is REBUILT every turn, never cached
-#                          in-process. KDCube is distributed (turns hop workers/
-#                          machines), so a process-cached graph would neither survive
-#                          the hop nor reflect this conversation's saved selection. Durable
-#                          state lives in shared Postgres (checkpointer, keyed by
-#                          thread_id); only connections are long-lived on self.
+#   2. scaled serving    — this app builds a fresh graph bound to each turn's
+#                          model/tool choices. Durable state lives in shared Postgres
+#                          (checkpointer, keyed by thread_id); only connections are
+#                          long-lived on self.
 #   3. isolation         — platform identity + agent_id -> per-agent per-user keys
 #                          (platform/identity.py), plus one tenant/project schema
 #                          with app-prefixed tables and agent_id row scope
@@ -66,7 +66,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint_with_economic impo
 # KDCube's accounted, still-streaming model service.
 from kdcube_ai_app.apps.chat.sdk.frameworks.langchain import KDCubeChatModel
 
-# The vendored, UNCHANGED agents, imported package-relative as subpackages.
+# The preserved solution packages, imported package-relative as subpackages.
 #   lg-solution (the research graph)
 from .solution.lg_solution.deps import build_deps as build_solution_deps
 from .solution.lg_solution.graph import build_graph as build_solution_graph
@@ -86,7 +86,7 @@ from .platform.turn_batch import fold_turn_external_events
 from .platform.identity import turn_identity, normalize_agent_id
 from .platform.stream_solution import stream_graph_turn
 from .platform.stream_prebuilt import stream_react_turn
-from .platform.tools_mcp import load_mcp_tools, mcp_cfg_from_connections
+from .platform.tools_mcp import load_mcp_tools_for_connections
 from .platform.tool_pick import agent_tool_connections, run_python_bound, select_bound_tools
 from .platform.turn_workspace import (
     build_pull_files_tool,
@@ -172,7 +172,7 @@ def _widget_visibility(
 
 
 # ── the per-agent registry ───────────────────────────────────────────────────
-# Each vendored agent is described by an AgentSpec: how to BUILD its graph (with
+# Each agent is described by an AgentSpec: how to BUILD its graph (with
 # its own deps/checkpointer/store), how to STREAM it (its own adapter), how to
 # shape its INPUTS, its model role, and its `agent_id` (the row-scope discriminator
 # that keeps the two agents' rows apart inside the SHARED tenant/project schema).
@@ -219,7 +219,7 @@ async def _build_solution_graph(
     schema = schema_for_scope(scope.tenant, scope.project)
     database_url = await ep._hosted_database_url(own.database_url, schema)
     # Hosted config comes from the DESCRIPTOR: the answer model's output budget
-    # overlays the vendored config's standalone default (see _agent_max_tokens).
+    # overlays the solution config's standalone default (see _agent_max_tokens).
     config = replace(
         own,
         database_url=database_url,
@@ -248,6 +248,27 @@ async def _build_solution_graph(
     return build_solution_graph(deps, checkpointer=checkpointer)
 
 
+def _current_turn_user_sub(ep: "LGPortedAgentsBundle") -> str:
+    """This turn's user subject, resolved from the BOUND turn context at graph-build
+    time — the accounting context (bound around execute_core), else the comm. Used to
+    mint the per-user delegated MCP bearer without threading identity through the
+    build signatures. Empty when no user is bound (a delegated MCP connection then
+    resolves to nothing — no unauthenticated call)."""
+    try:
+        from kdcube_ai_app.infra.accounting import _get_context
+        sub = str((_get_context().to_dict() or {}).get("user_id") or "").strip()
+        if sub:
+            return sub
+    except Exception:
+        pass
+    # `ep.comm` is a property that BUILDS the communicator and raises when no turn
+    # task is bound (e.g. a graph built outside a turn) — guard the side effect.
+    try:
+        return str(getattr(ep.comm, "user_id", "") or "").strip()
+    except Exception:
+        return ""
+
+
 async def _build_prebuilt_graph(
     ep: "LGPortedAgentsBundle", *, disabled_tools: Optional[Dict[str, Any]] = None
 ) -> Any:
@@ -260,7 +281,7 @@ async def _build_prebuilt_graph(
     per-tool picker takes effect: a tool the admin does not declare is never bound;
     a declared tool is on by default and the user may opt out per conversation. MCP
     tools are declared as `kind: mcp` connections and loaded best-effort. Checkpointer
-    reused across per-turn builds. `build_agent` is vendored + injectable — no edit."""
+    reused across per-turn builds. `build_agent` remains solution-owned and injectable."""
     own = get_prebuilt_config()
     schema = schema_for_scope(
         str(getattr(ep.settings, "TENANT", "") or ""),
@@ -320,7 +341,11 @@ async def _build_prebuilt_graph(
         extra_factories=_web_tool_factories(),
     )
     # MCP tools declared as `kind: mcp` connections (optional; degrades to none).
-    tools += await load_mcp_tools(mcp_cfg_from_connections(connections))
+    # A connection marked `delegated: true` gets a per-user bearer minted for THIS
+    # turn's user (the same delegated `@mcp`-surface auth platform bundles use), so
+    # the agent calls the endpoint acting as the user. User resolved from the bound
+    # turn context (accounting), no signature threading.
+    tools += await load_mcp_tools_for_connections(connections, user_sub=_current_turn_user_sub(ep))
 
     checkpointer = await ep._open_checkpointer("lg-react", config.database_url)
     return build_prebuilt_agent(
@@ -335,7 +360,7 @@ def _prebuilt_system_prompt(tools: List[Any]) -> Optional[str]:
     SDK's standalone distributed-turn-workspace block is APPENDED to the
     agent's own prompt — a separate block, so the agent's prose stays its own
     and any workspace-connected agent shares the same guidance. Without the
-    tools, None keeps the vendored default."""
+    tools, None keeps the solution default."""
     names = {str(getattr(tool, "name", "") or "") for tool in tools or []}
     if "run_python" not in names:
         return None
@@ -456,11 +481,10 @@ class LGPortedAgentsBundle(BaseEntrypointWithEconomics):
             redis=redis,
             comm_context=comm_context,
         )
-        # SCALED-SERVING INVARIANT: the compiled graph is REBUILT every turn, never
-        # cached in-process. KDCube is distributed — turn 1 can land on worker 1,
-        # turn 2 on worker 2 on machine B — so a process-cached graph would neither
-        # survive the hop nor reflect THIS conversation's saved model/tool
-        # selection. The graph instance exists for one turn only. The only
+        # SCALED-SERVING INVARIANT: this app builds a fresh graph bound to each
+        # turn's model/tool selection. KDCube is distributed — turn 1 can land on
+        # worker 1 and turn 2 on worker 2 — so no process-local graph is continuity.
+        # The bound graph instance exists for one turn only. The only
         # long-lived things on `self` are CONNECTIONS (the
         # checkpointer, like `pg_pool`): infra, re-established lazily per worker, not
         # rebuildable state. Every mutable byte is in shared Postgres keyed per
@@ -615,18 +639,18 @@ class LGPortedAgentsBundle(BaseEntrypointWithEconomics):
     def _build_prebuilt_model(self, config: Any):
         """lg-react's create_react `model`: HOSTED (a platform model service is
         present) -> an accounted `KDCubeChatModel` bound to the answer role. The
-        platform service provides the model/key, so the vendored config's own
+        platform service provides the model/key, so the standalone config's own
         `offline` flag (which only tracks the STANDALONE OpenAI key) is irrelevant
         here — mirror lg-solution's `llm.chat_model()`, which gates on
         `models_service` alone. Only with NO model service (truly standalone) ->
-        the vendored deterministic stub, so the agent degrades like the CLI.
+        the solution's deterministic stub, so the agent degrades like the CLI.
 
         The output budget (NOT the adapter's small default) bounds the answer
         model: this agent carries whole payloads in tool arguments (`run_python`
         code), and a ceiling below one complete tool call cuts the response
         mid-call — the truncated args fail validation and the model retries
         into the same wall until the recursion limit. Hosted, the budget is a
-        DESCRIPTOR property (`_agent_max_tokens`); the vendored config's value
+        DESCRIPTOR property (`_agent_max_tokens`); the standalone config's value
         is only the standalone fallback."""
         if getattr(self, "models_service", None) is not None:
             return KDCubeChatModel(
@@ -642,7 +666,7 @@ class LGPortedAgentsBundle(BaseEntrypointWithEconomics):
         """One agent's answer-model OUTPUT budget, from the app descriptor:
         `surfaces.as_consumer.agents.<agent>.model.max_tokens`. KDCube apps are
         configured through descriptor properties (`bundle_prop`) — process env
-        vars are not a configuration surface here; the vendored config's env
+        vars are not a configuration surface here; the standalone config's env
         knob is the STANDALONE idiom and serves only as the hosted fallback."""
         try:
             raw = self.bundle_prop(

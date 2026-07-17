@@ -8,6 +8,10 @@ langchain-core==1.2.6
 # langgraph==0.6.1
 # langmem>=0.0.4,<0.1.0
 langgraph==1.0.5
+# Bind a KDCube-served MCP endpoint's tools as LangChain tools for hosted
+# LangGraph/LangChain agents (sdk/frameworks/langchain/mcp.py). 0.1.7+ supports
+# langchain 1.x. Absent, MCP tools degrade to none and the agent runs plain tools.
+langchain-mcp-adapters>=0.1.7
 # Pin the split-out prebuilt/checkpoint packages: unpinned, the container resolved a
 # newer langgraph-prebuilt whose tool_node imports ExecutionInfo/ServerInfo from a
 # newer langgraph.runtime than core 1.0.5 ships -> ImportError on create_react_agent.
