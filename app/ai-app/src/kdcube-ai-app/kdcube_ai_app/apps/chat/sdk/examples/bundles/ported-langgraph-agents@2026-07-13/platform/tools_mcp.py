@@ -27,7 +27,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_mcp import resolve_mcp_server_map
 from kdcube_ai_app.apps.chat.sdk.frameworks.langchain.mcp import (
@@ -40,24 +40,40 @@ logger = logging.getLogger(__name__)
 __all__ = ["mcp_connections", "load_mcp_tools_for_connections", "mcp_adapters_available"]
 
 
-def mcp_connections(connections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """The `kind: mcp` entries of the agent's declared tool-connection list."""
-    return [
-        c for c in (connections or [])
-        if isinstance(c, dict) and str(c.get("kind") or "").strip().lower() == "mcp"
-    ]
+def _conn_alias(conn: Mapping[str, Any]) -> str:
+    return str(conn.get("alias") or conn.get("name") or "").strip()
+
+
+def mcp_connections(
+    connections: List[Dict[str, Any]],
+    disabled_map: Optional[Mapping[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    """The `kind: mcp` entries of the agent's declared tool-connection list, minus
+    any the user opted OUT of this turn (whole-tool opt-out `{alias: true}` from the
+    capabilities picker deny-map) — the same admin-ceiling ∩ user-enabled narrowing
+    the plain/code-exec tools get, so MCP tools are governed too ("which agent")."""
+    disabled = disabled_map or {}
+    out: List[Dict[str, Any]] = []
+    for c in connections or []:
+        if not (isinstance(c, dict) and str(c.get("kind") or "").strip().lower() == "mcp"):
+            continue
+        if disabled.get(_conn_alias(c)) is True:
+            continue
+        out.append(c)
+    return out
 
 
 async def load_mcp_tools_for_connections(
     connections: List[Dict[str, Any]],
     *,
     user_sub: Optional[str] = None,
+    disabled_map: Optional[Mapping[str, Any]] = None,
 ) -> List[Any]:
-    """Bind the agent's declared `kind: mcp` connections as LangChain tools for
-    THIS turn's user. Delegated connections get a minted per-user bearer; static
-    ones keep their headers. Always returns a list (degrades to [] on any absence
-    or failure), so a graph build never fails over an optional MCP source."""
-    conns = mcp_connections(connections)
+    """Bind the agent's declared, user-enabled `kind: mcp` connections as LangChain
+    tools for THIS turn's user. Delegated connections get a minted per-user bearer;
+    static ones keep their headers. Always returns a list (degrades to [] on any
+    absence or failure), so a graph build never fails over an optional MCP source."""
+    conns = mcp_connections(connections, disabled_map)
     if not conns:
         return []
     server_map = await resolve_mcp_server_map(conns, user_sub=user_sub)

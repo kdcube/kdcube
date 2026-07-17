@@ -345,7 +345,9 @@ async def _build_prebuilt_graph(
     # turn's user (the same delegated `@mcp`-surface auth platform bundles use), so
     # the agent calls the endpoint acting as the user. User resolved from the bound
     # turn context (accounting), no signature threading.
-    tools += await load_mcp_tools_for_connections(connections, user_sub=_current_turn_user_sub(ep))
+    tools += await load_mcp_tools_for_connections(
+        connections, user_sub=_current_turn_user_sub(ep), disabled_map=disabled_tools or {},
+    )
 
     checkpointer = await ep._open_checkpointer("lg-react", config.database_url)
     return build_prebuilt_agent(

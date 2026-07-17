@@ -154,8 +154,9 @@ bundles:
                   # ── MCP tools (optional) ─────────────────────────────────
                   # Declare a KDCube-served MCP endpoint as a `kind: mcp` connection to
                   # bind its tools (via langchain-mcp-adapters; degrades to none if the
-                  # lib/endpoint is unavailable). Reached over streamable_http, optional
-                  # bearer header.
+                  # lib/endpoint is unavailable). Reached over streamable_http.
+                  #
+                  # STATIC auth — a fixed bearer for a protected endpoint:
                   # - name: knowledge
                   #   kind: mcp
                   #   server_id: knowledge
@@ -163,6 +164,22 @@ bundles:
                   #   transport: streamable_http
                   #   headers:
                   #     Authorization: "Bearer <MCP_ACCESS_TOKEN>"
+                  #
+                  # DELEGATED auth — the agent calls the endpoint AS the signed-in
+                  # user. `delegated: true` + `scopes` makes the SDK mint a per-user,
+                  # per-turn, least-privilege bearer (the same delegated-OAuth seam
+                  # KDCube @mcp surfaces authenticate) and inject it; the endpoint then
+                  # serves only that user's own data. No `headers` needed. Governance:
+                  # per-agent allow-list (which agent) + the token subject (whose data)
+                  # + the grant's `delegable_roles` (who may delegate it). Example: the
+                  # user's own KDCube memories via the user-memories @mcp surface.
+                  # - name: memories
+                  #   kind: mcp
+                  #   server_id: memories
+                  #   url: "https://<PUBLIC_HOST>/api/integrations/bundles/<TENANT>/<PROJECT>/user-memories@2026-06-26/public/mcp/memories"
+                  #   transport: streamable_http
+                  #   delegated: true
+                  #   scopes: [memories:read]
         # The Telegram Bot API webhook (a public @api that drives the SAME
         # execute_core for the DEFAULT agent). `route="public"` exposes it at the
         # proc layer; the trust boundary is the Telegram webhook secret, verified by

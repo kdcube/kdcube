@@ -48,3 +48,13 @@ def test_mcp_connection_degrades_to_empty_when_adapter_absent() -> None:
     # connection resolves a server map but binding degrades to [] — never a crash.
     # (No user -> the delegated server is dropped before any bind is attempted.)
     assert asyncio.run(m.load_mcp_tools_for_connections([_MCP_CONN], user_sub=None)) == []
+
+
+def test_user_opt_out_drops_the_mcp_connection() -> None:
+    m = _mcp_module()
+    # The picker deny-map opts the whole MCP tool out this turn -> it is not bound
+    # (governance: admin-declared ∩ user-enabled, same as plain/code-exec tools).
+    # _MCP_CONN's name/alias is "memory".
+    assert m.mcp_connections([_MCP_CONN], None) == [_MCP_CONN]          # not opted out -> kept
+    assert m.mcp_connections([_MCP_CONN], {"memory": True}) == []       # opted out -> dropped
+    assert m.mcp_connections([_MCP_CONN], {"other": True}) == [_MCP_CONN]  # unrelated opt-out ignored
