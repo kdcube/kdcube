@@ -39,7 +39,8 @@ def test_mcp_connections_filters_by_kind() -> None:
 def test_no_mcp_connection_returns_empty() -> None:
     m = _mcp_module()
     # No kind:mcp declared -> no MCP tools (the agent still builds with plain tools).
-    assert asyncio.run(m.load_mcp_tools_for_connections(_PLAIN_CONNS, user_sub="u")) == []
+    tools, consents = asyncio.run(m.load_mcp_tools_for_connections(_PLAIN_CONNS, user_sub="u"))
+    assert tools == [] and consents == []
 
 
 def test_mcp_connection_degrades_to_empty_when_adapter_absent() -> None:
@@ -47,7 +48,8 @@ def test_mcp_connection_degrades_to_empty_when_adapter_absent() -> None:
     # langchain-mcp-adapters is not installed in the test env: the delegated MCP
     # connection resolves a server map but binding degrades to [] — never a crash.
     # (No user -> the delegated server is dropped before any bind is attempted.)
-    assert asyncio.run(m.load_mcp_tools_for_connections([_MCP_CONN], user_sub=None)) == []
+    tools, consents = asyncio.run(m.load_mcp_tools_for_connections([_MCP_CONN], user_sub=None))
+    assert tools == [] and consents == []
 
 
 def test_user_opt_out_drops_the_mcp_connection() -> None:

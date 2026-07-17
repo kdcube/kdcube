@@ -29,9 +29,18 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Mapping, Optional
 
-from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_mcp import resolve_mcp_server_map
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_mcp import (
+    resolve_mcp_server_map,
+    delegated_client_id_for_agent,
+    is_delegated_connection,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.mcp_consent import (
+    MCPConsentRequired,
+    mcp_consent_from_denial,
+)
 from kdcube_ai_app.apps.chat.sdk.frameworks.langchain.mcp import (
     load_mcp_tools_from_server_map,
+    load_error_looks_like_denial,
     mcp_adapters_available,  # re-exported for callers/tests
 )
 
@@ -68,13 +77,42 @@ async def load_mcp_tools_for_connections(
     *,
     user_sub: Optional[str] = None,
     disabled_map: Optional[Mapping[str, Any]] = None,
-) -> List[Any]:
+    application: str = "",
+    agent_id: str = "",
+) -> tuple[List[Any], List[MCPConsentRequired]]:
     """Bind the agent's declared, user-enabled `kind: mcp` connections as LangChain
-    tools for THIS turn's user. Delegated connections get a minted per-user bearer;
-    static ones keep their headers. Always returns a list (degrades to [] on any
-    absence or failure), so a graph build never fails over an optional MCP source."""
+    tools for THIS turn's user, AS this agent.
+
+    The delegated bearer is minted under the AGENT's delegated-client identity
+    (`application` + `agent_id`) — the agent is a "Delegated By KDCube" entity, so
+    consent is per-agent. Returns ``(tools, consent_demands)``: when a KDCube
+    `@mcp` load is denied for missing consent (a 403 at connect time), the tools
+    are absent and a ``MCPConsentRequired`` is returned for each delegated
+    connection so the caller can bubble it into chat and explain it to the agent.
+    Never raises."""
     conns = mcp_connections(connections, disabled_map)
     if not conns:
-        return []
-    server_map = await resolve_mcp_server_map(conns, user_sub=user_sub)
-    return await load_mcp_tools_from_server_map(server_map)
+        return [], []
+    client_id = delegated_client_id_for_agent(application, agent_id)
+    server_map = await resolve_mcp_server_map(conns, user_sub=user_sub, client_id=client_id)
+    error_sink: Dict[str, Any] = {}
+    tools = await load_mcp_tools_from_server_map(server_map, error_sink=error_sink)
+
+    consents: List[MCPConsentRequired] = []
+    load_error = error_sink.get("_load_error")
+    if load_error is not None and load_error_looks_like_denial(load_error) and not tools:
+        # A consent/auth denial at connect time — shape a consent demand for each
+        # delegated connection whose claims the user hasn't granted THIS agent.
+        for c in conns:
+            if not is_delegated_connection(c):
+                continue
+            claims = c.get("scopes") or c.get("claims") or []
+            if isinstance(claims, str):
+                claims = [claims]
+            consents.append(mcp_consent_from_denial(
+                {"status": 403, "reason": "authority_mismatch"},
+                resource=str(c.get("url") or ""),
+                claims=claims,
+                tool_name=str(c.get("alias") or c.get("name") or ""),
+            ))
+    return tools, consents

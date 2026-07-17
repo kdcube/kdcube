@@ -42,6 +42,19 @@ Minter = Callable[..., Awaitable[Mapping[str, Any]]]
 _DEFAULT_CLIENT_ID = "kdcube-agent"
 
 
+def delegated_client_id_for_agent(application: str, agent_id: str) -> str:
+    """The delegated-client identity for one hosted agent — the agent IS a
+    "Delegated By KDCube" client entity (like Claude Code), distinguished by the
+    APPLICATION it is defined in and its AGENT_ID. Consent grants + the minted
+    token are keyed by this, so consent is PER-AGENT and the entity is listable /
+    revocable in Connection Hub. Stable + deterministic (no timestamps)."""
+    app = str(application or "").strip()
+    agent = str(agent_id or "").strip()
+    if app and agent:
+        return f"kdcube-agent:{app}:{agent}"
+    return _DEFAULT_CLIENT_ID
+
+
 def is_mcp_connection(conn: Mapping[str, Any]) -> bool:
     return str((conn or {}).get("kind") or "").strip().lower() == "mcp"
 

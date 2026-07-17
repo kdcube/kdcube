@@ -106,6 +106,24 @@ def test_consent_gate_allows_the_mint_when_given():
     assert calls and calls[0]["scopes"] == ["memories:read"]
 
 
+def test_delegated_client_id_is_per_agent():
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_mcp import (
+        delegated_client_id_for_agent,
+    )
+    cid = delegated_client_id_for_agent("ported-langgraph-agents@2026-07-13", "lg-react")
+    assert cid == "kdcube-agent:ported-langgraph-agents@2026-07-13:lg-react"
+    # distinct per agent (per-agent consent) and per application
+    assert delegated_client_id_for_agent("app", "a") != delegated_client_id_for_agent("app", "b")
+    assert delegated_client_id_for_agent("", "") == "kdcube-agent"  # fallback
+
+
+def test_client_id_is_passed_to_the_minter():
+    minter, calls = _fake_minter_calls()
+    asyncio.run(resolve_mcp_server_map(
+        [_DELEGATED], user_sub="u1", minter=minter, client_id="kdcube-agent:app:lg-react"))
+    assert calls and calls[0]["client_id"] == "kdcube-agent:app:lg-react"
+
+
 def test_claim_requirements_from_connection():
     from kdcube_ai_app.apps.chat.sdk.solutions.connections.consent_state import (
         claim_requirements_from_connection, SOURCE_DELEGATED, SOURCE_CONNECTED,

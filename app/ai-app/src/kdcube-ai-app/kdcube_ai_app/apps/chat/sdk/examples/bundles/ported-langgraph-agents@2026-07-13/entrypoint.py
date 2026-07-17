@@ -341,40 +341,94 @@ async def _build_prebuilt_graph(
         extra_factories=_web_tool_factories(),
     )
     # MCP tools declared as `kind: mcp` connections (optional; degrades to none).
-    # A connection marked `delegated: true` gets a per-user bearer minted for THIS
-    # turn's user (the same delegated `@mcp`-surface auth platform bundles use), so
-    # the agent calls the endpoint acting as the user. User resolved from the bound
-    # turn context (accounting), no signature threading.
-    tools += await load_mcp_tools_for_connections(
+    # A `delegated: true` connection is minted under the AGENT's delegated-client
+    # identity (BUNDLE_ID + agent_id) — the agent is a "Delegated By KDCube"
+    # entity, so consent is per-agent. If the user has not consented to the
+    # claims THIS agent needs, the KDCube @mcp surface denies at connect time; we
+    # get a consent demand per connection instead of the tools.
+    mcp_tools, mcp_consents = await load_mcp_tools_for_connections(
         connections, user_sub=_current_turn_user_sub(ep), disabled_map=disabled_tools or {},
+        application=BUNDLE_ID, agent_id=PREBUILT_AGENT_ID,
     )
+    tools += mcp_tools
+    # Bubble each pending consent into chat (the same banner connected-account
+    # tools raise) so the user can grant it in Connection Hub, per agent.
+    await _bubble_mcp_consents(ep, mcp_consents)
 
     checkpointer = await ep._open_checkpointer("lg-react", config.database_url)
     return build_prebuilt_agent(
         config, model=model, tools=tools, checkpointer=checkpointer, summary_model=summary_model,
-        system_prompt=_prebuilt_system_prompt(tools),
+        system_prompt=_prebuilt_system_prompt(tools, mcp_consents),
     )
 
 
-def _prebuilt_system_prompt(tools: List[Any]) -> Optional[str]:
+async def _bubble_mcp_consents(ep: "LGPortedAgentsBundle", consents: List[Any]) -> None:
+    """Raise each pending MCP consent as the standard chat consent banner (best
+    effort; identity + comm come from the bound turn context)."""
+    if not consents:
+        return
+    try:
+        from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.consent_demand import (
+            announce_consent_demand,
+        )
+    except Exception:
+        return
+    for c in consents:
+        try:
+            await announce_consent_demand(
+                payload=getattr(c, "consent", {}) or {},
+                provider_id="kdcube",
+                claims=list(getattr(c, "claims", []) or []),
+                tool_name=str((getattr(c, "consent", {}) or {}).get("tool_name") or ""),
+            )
+        except Exception:
+            LOGGER.info("[ported-langgraph] MCP consent bubble failed (non-fatal)", exc_info=True)
+
+
+def _prebuilt_system_prompt(tools: List[Any], mcp_consents: Optional[List[Any]] = None) -> Optional[str]:
     """The lg-react system prompt for this turn's tool binding: with the
     workspace tools bound (`run_python` + its `pull_files` companion), the
     SDK's standalone distributed-turn-workspace block is APPENDED to the
     agent's own prompt — a separate block, so the agent's prose stays its own
     and any workspace-connected agent shares the same guidance. Without the
-    tools, None keeps the solution default."""
+    tools, None keeps the solution default.
+
+    `mcp_consents`: a note is appended for any MCP tool the user has not yet
+    consented THIS agent to use — so the agent, which does NOT see that tool
+    this turn, can still explain to the user that it needs their approval rather
+    than claiming the capability is missing."""
+    consent_note = _mcp_consent_prompt_note(mcp_consents)
     names = {str(getattr(tool, "name", "") or "") for tool in tools or []}
     if "run_python" not in names:
-        return None
+        return consent_note or None
     from kdcube_ai_app.apps.chat.sdk.skills.instructions.shared_instructions import (
         distributed_turn_workspace_guide,
     )
     from .solution.lg_prebuilt.agent import SYSTEM_PROMPT
 
-    return SYSTEM_PROMPT + "\n" + distributed_turn_workspace_guide(
+    prompt = SYSTEM_PROMPT + "\n" + distributed_turn_workspace_guide(
         exec_tool="run_python",
         pull_tool="pull_files" if "pull_files" in names else "run_python",
         read_tool="read_file" if "read_file" in names else "",
+    )
+    return prompt + consent_note if consent_note else prompt
+
+
+def _mcp_consent_prompt_note(mcp_consents: Optional[List[Any]]) -> str:
+    if not mcp_consents:
+        return ""
+    lines = []
+    for c in mcp_consents:
+        claims = ", ".join(getattr(c, "claims", []) or []) or "required access"
+        label = str((getattr(c, "consent", {}) or {}).get("tool_name") or "a tool")
+        lines.append(f"- {label}: needs the user's consent to {claims}")
+    return (
+        "\n\n[Pending consent] These tools are NOT available this turn because the "
+        "user has not yet granted YOU (this agent) access to them:\n"
+        + "\n".join(lines)
+        + "\nIf the user asks for something needing one of these, tell them you need "
+        "their approval and that a consent request has been raised for them to grant "
+        "in Connection Hub. Do not claim the capability is missing or unavailable."
     )
 
 
