@@ -153,6 +153,47 @@ def test_bearer_provider_none_drops_the_connection_consent_pending():
     assert calls == []
 
 
+def test_drop_sink_records_why_each_connection_was_omitted():
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_mcp import (
+        DROP_CONSENT_PENDING, DROP_NO_USER, DROP_PROVIDER_ERROR,
+    )
+    minter, _ = _fake_minter_calls()
+
+    async def pending(conn, user_sub):
+        return None
+
+    # Consent pending: the drop happens BEFORE any server contact, so the sink —
+    # not a transport error — is how the caller learns to raise the demand.
+    sink: dict = {}
+    asyncio.run(resolve_mcp_server_map(
+        [_DELEGATED], user_sub="u1", minter=minter, bearer_provider=pending, drop_sink=sink))
+    assert sink == {"memory": DROP_CONSENT_PENDING}
+
+    # No user bound: dropped, but NOT consent-pending (nothing to grant).
+    sink = {}
+    asyncio.run(resolve_mcp_server_map(
+        [_DELEGATED], user_sub=None, minter=minter, drop_sink=sink))
+    assert sink == {"memory": DROP_NO_USER}
+
+    # Provider error: operational, not consentable.
+    async def broken(conn, user_sub):
+        raise RuntimeError("hub unreachable")
+
+    sink = {}
+    asyncio.run(resolve_mcp_server_map(
+        [_DELEGATED], user_sub="u1", minter=minter, bearer_provider=broken, drop_sink=sink))
+    assert sink == {"memory": DROP_PROVIDER_ERROR}
+
+    # A bound connection leaves no drop record.
+    async def granted(conn, user_sub):
+        return "tok"
+
+    sink = {}
+    servers = asyncio.run(resolve_mcp_server_map(
+        [_DELEGATED], user_sub="u1", minter=minter, bearer_provider=granted, drop_sink=sink))
+    assert set(servers) == {"memory"} and sink == {}
+
+
 def test_agent_bearer_provider_over_automation_access_service():
     from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_mcp import (
         agent_bearer_provider, resolve_mcp_server_map,

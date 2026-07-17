@@ -120,6 +120,15 @@ async def _default_minter(sub: str, scopes: List[str], *, client_id: str, ttl_se
     return await mint_delegated_client_access_token(sub, scopes, **kwargs)
 
 
+# Drop reasons recorded in `drop_sink` — WHY a delegated connection was omitted
+# from the server map. `consent_pending` is the caller's cue to raise a consent
+# demand; the others are operational (logged, not consentable).
+DROP_NO_USER = "no_user"
+DROP_CONSENT_PENDING = "consent_pending"
+DROP_PROVIDER_ERROR = "provider_error"
+DROP_MINT_ERROR = "mint_error"
+
+
 async def resolve_mcp_server_map(
     connections: List[Dict[str, Any]],
     *,
@@ -129,6 +138,7 @@ async def resolve_mcp_server_map(
     ttl_seconds: Optional[int] = None,
     consent_gate: Optional[Callable[[List[str]], Awaitable[bool]]] = None,
     bearer_provider: Optional[BearerProvider] = None,
+    drop_sink: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """Build ``{server_id: {url, transport, headers}}`` for the ``kind: mcp``
     connections. Delegated connections get a per-user bearer; static connections
@@ -148,8 +158,17 @@ async def resolve_mcp_server_map(
     minted ONLY if the gate returns True. A False gate DROPS the connection
     (consent pending). The gate decides its own failure posture; this function
     honors its verdict.
+
+    ``drop_sink``: when a dict is passed, every omitted delegated connection is
+    recorded as ``{server_id: reason}`` (the ``DROP_*`` constants). The drop
+    happens BEFORE any server contact, so this — not a transport error — is how
+    a caller learns consent is pending and raises the demand.
     """
     mint = minter or _default_minter
+
+    def _drop(server_id: str, reason: str) -> None:
+        if drop_sink is not None:
+            drop_sink[server_id] = reason
     servers: Dict[str, Dict[str, Any]] = {}
     for conn in connections or []:
         if not is_mcp_connection(conn):
@@ -171,6 +190,7 @@ async def resolve_mcp_server_map(
                     "delegated_mcp: connection %s is delegated but no user is bound this "
                     "turn; skipping (no unauthenticated call).", server_id,
                 )
+                _drop(server_id, DROP_NO_USER)
                 continue
             if bearer_provider is not None:
                 # The consented-grant path: use the token the user's per-agent
@@ -181,12 +201,14 @@ async def resolve_mcp_server_map(
                     logger.warning(
                         "delegated_mcp: bearer provider errored for %s; skipping.", server_id, exc_info=True,
                     )
+                    _drop(server_id, DROP_PROVIDER_ERROR)
                     continue
                 if not token:
                     logger.info(
                         "delegated_mcp: connection %s not bound — consent pending for scopes %s "
                         "(user grants it to this agent in Connection Hub).", server_id, scopes,
                     )
+                    _drop(server_id, DROP_CONSENT_PENDING)
                     continue
                 headers["Authorization"] = f"Bearer {token}"
                 if headers:
@@ -200,21 +222,25 @@ async def resolve_mcp_server_map(
                     logger.warning(
                         "delegated_mcp: consent gate errored for %s; skipping.", server_id, exc_info=True,
                     )
+                    _drop(server_id, DROP_PROVIDER_ERROR)
                     continue
                 if not consented:
                     logger.info(
                         "delegated_mcp: connection %s not bound — consent pending for scopes %s "
                         "(user grants it in Connection Hub).", server_id, scopes,
                     )
+                    _drop(server_id, DROP_CONSENT_PENDING)
                     continue
             try:
                 minted = await mint(user_sub, scopes, client_id=client_id, ttl_seconds=ttl_seconds)
                 token = str((minted or {}).get("access_token") or "").strip()
             except Exception:  # noqa: BLE001 - never fail a build over token minting
                 logger.warning("delegated_mcp: minting the delegated bearer for %s failed; skipping.", server_id, exc_info=True)
+                _drop(server_id, DROP_MINT_ERROR)
                 continue
             if not token:
                 logger.warning("delegated_mcp: minter returned no access_token for %s; skipping.", server_id)
+                _drop(server_id, DROP_MINT_ERROR)
                 continue
             headers["Authorization"] = f"Bearer {token}"
 

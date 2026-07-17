@@ -33,6 +33,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_mcp import (
     resolve_mcp_server_map,
     delegated_client_id_for_agent,
     is_delegated_connection,
+    DROP_CONSENT_PENDING,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.mcp_consent import (
     MCPConsentRequired,
@@ -100,28 +101,37 @@ async def load_mcp_tools_for_connections(
     if not conns:
         return [], []
     client_id = delegated_client_id_for_agent(application, agent_id)
+    drop_sink: Dict[str, str] = {}
     server_map = await resolve_mcp_server_map(
         conns, user_sub=user_sub, client_id=client_id, bearer_provider=bearer_provider,
+        drop_sink=drop_sink,
     )
     error_sink: Dict[str, Any] = {}
     tools = await load_mcp_tools_from_server_map(server_map, error_sink=error_sink)
 
-    consents: List[MCPConsentRequired] = []
+    # A delegated connection the user hasn't granted THIS agent surfaces as a
+    # consent demand, whichever way the block manifested:
+    #   * dropped BEFORE any server contact (the consented-token path returned no
+    #     bearer -> DROP_CONSENT_PENDING in drop_sink) — no transport error exists;
+    #   * denied AT connect time (an unbound bearer met the @mcp guard's 403).
     load_error = error_sink.get("_load_error")
-    if load_error is not None and load_error_looks_like_denial(load_error) and not tools:
-        # A consent/auth denial at connect time — shape a consent demand for each
-        # delegated connection whose claims the user hasn't granted THIS agent.
-        for c in conns:
-            if not is_delegated_connection(c):
-                continue
-            claims = c.get("scopes") or c.get("claims") or []
-            if isinstance(claims, str):
-                claims = [claims]
-            consents.append(mcp_consent_from_denial(
-                {"status": 403, "reason": "authority_mismatch"},
-                resource=str(c.get("url") or ""),
-                claims=claims,
-                tool_name=str(c.get("alias") or c.get("name") or ""),
-                agent_client_id=client_id,
-            ))
+    denied_at_load = load_error is not None and load_error_looks_like_denial(load_error) and not tools
+    consents: List[MCPConsentRequired] = []
+    for c in conns:
+        if not is_delegated_connection(c):
+            continue
+        server_id = str(c.get("server_id") or c.get("server") or c.get("name") or "").strip()
+        dropped_pending = drop_sink.get(server_id) == DROP_CONSENT_PENDING
+        if not dropped_pending and not (denied_at_load and server_id in server_map):
+            continue
+        claims = c.get("scopes") or c.get("claims") or []
+        if isinstance(claims, str):
+            claims = [claims]
+        consents.append(mcp_consent_from_denial(
+            {"status": 403, "reason": "authority_mismatch"},
+            resource=str(c.get("url") or ""),
+            claims=claims,
+            tool_name=str(c.get("alias") or c.get("name") or ""),
+            agent_client_id=client_id,
+        ))
     return tools, consents
