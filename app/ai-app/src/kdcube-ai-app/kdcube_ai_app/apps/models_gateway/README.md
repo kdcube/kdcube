@@ -28,11 +28,14 @@ GATEWAY_MODEL=qwen3.6:35b GATEWAY_NUM_CTX=65536 \
   uvicorn kdcube_ai_app.apps.models_gateway.app:app --port 11500
 ```
 
-`GATEWAY_NUM_CTX` sizes Ollama's context window per call. Ollama's default
-(32768 tokens) silently truncates longer prompts from the front — the
-system instruction goes first, and agent-platform decision prompts run
-40-60K tokens. Set it above your largest prompt; the only truncation
-symptom is a `truncating input prompt` WARN in the Ollama server log.
+The context window is sized per call. Ollama's default (32768 tokens)
+silently truncates longer prompts from the front — the system instruction
+goes first, and agent-platform decision prompts run 40-60K tokens. The
+deployment descriptor owns the value (`services.llm.custom.num_ctx`,
+arriving as `parameters.num_ctx` on each request); `GATEWAY_NUM_CTX` is the
+standalone-run fallback when a request carries none. Set it above your
+largest prompt; the only truncation symptom is a `truncating input prompt`
+WARN in the Ollama server log.
 
 Smoke:
 

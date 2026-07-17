@@ -27,15 +27,18 @@ Environment:
     OLLAMA_BASE_URL     default http://localhost:11434
     GATEWAY_KEEP_ALIVE  Ollama keep_alive (default 30m) — keeps weights warm
                         between turns instead of reloading every request
-    GATEWAY_NUM_CTX     context window (tokens) requested per call. Ollama's
-                        runner default (32768 as of 0.24) SILENTLY truncates
-                        longer prompts from the FRONT — the system instruction
-                        goes first ("truncating input prompt" in the Ollama
-                        server log). Agent-platform prompts run tens of
-                        thousands of tokens: size this to the largest prompt
-                        you serve, within the machine's memory (KV cache
-                        grows linearly with the window). 0/unset = Ollama
-                        default.
+    GATEWAY_NUM_CTX     standalone fallback for the context window (tokens)
+                        when a request carries no `parameters.num_ctx` — in a
+                        platform deployment the descriptor
+                        (services.llm.custom.num_ctx) sends it per request
+                        and wins. Ollama's runner default (32768 as of 0.24)
+                        SILENTLY truncates longer prompts from the FRONT —
+                        the system instruction goes first ("truncating input
+                        prompt" in the Ollama server log). Agent-platform
+                        prompts run tens of thousands of tokens: size the
+                        window to the largest prompt you serve, within the
+                        machine's memory (KV cache grows linearly with the
+                        window). 0/unset = Ollama default.
 
 Run (host, not containerized — proc containers reach it via
 host.docker.internal):
@@ -139,7 +142,12 @@ def _to_ollama_request(payload: Dict[str, Any], *, stream: bool) -> Dict[str, An
         options["top_p"] = float(parameters["top_p"])
     if parameters.get("max_new_tokens") is not None:
         options["num_predict"] = int(parameters["max_new_tokens"])
-    if GATEWAY_NUM_CTX > 0:
+    # Deployment descriptor (services.llm.custom.num_ctx) arrives per request;
+    # the gateway env is the standalone fallback.
+    request_num_ctx = int(parameters.get("num_ctx") or 0)
+    if request_num_ctx > 0:
+        options["num_ctx"] = request_num_ctx
+    elif GATEWAY_NUM_CTX > 0:
         options["num_ctx"] = GATEWAY_NUM_CTX
     return {
         "model": GATEWAY_MODEL,

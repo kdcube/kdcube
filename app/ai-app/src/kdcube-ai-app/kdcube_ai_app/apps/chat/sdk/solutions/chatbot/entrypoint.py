@@ -1884,6 +1884,10 @@ class BaseEntrypoint:
                 )
                 self.config.use_custom_endpoint = True
                 changed = True
+            num_ctx = int(custom_llm.get("num_ctx") or 0)
+            if num_ctx > 0 and getattr(self.config, "custom_model_num_ctx", None) != num_ctx:
+                self.config.custom_model_num_ctx = num_ctx
+                changed = True
 
         if changed and hasattr(self, "models_service"):
             self._rebuild_models_service()

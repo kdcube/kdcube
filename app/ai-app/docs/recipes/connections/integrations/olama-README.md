@@ -98,9 +98,9 @@ that protocol on `/generate` and forwards to Ollama `/api/chat`:
 | — (gateway env `GATEWAY_MODEL`) | `model` |
 | — (gateway env `GATEWAY_KEEP_ALIVE`, default 30m) | `keep_alive` |
 | — (gateway env `GATEWAY_THINK`, default off) | `think` (§4) |
-| — (gateway env `GATEWAY_NUM_CTX`, unset = Ollama default) | `options.num_ctx` |
+| `parameters.num_ctx` (descriptor `services.llm.custom.num_ctx`; gateway env `GATEWAY_NUM_CTX` as standalone fallback) | `options.num_ctx` |
 
-**Size `GATEWAY_NUM_CTX` to your agent prompts — this is load-bearing.**
+**Size the context window to your agent prompts — this is load-bearing.**
 Ollama's runner defaults to a 32768-token window (0.24) and SILENTLY
 truncates longer prompts from the FRONT — exactly where the system
 instruction lives. An agent-platform decision prompt easily exceeds that
@@ -109,10 +109,12 @@ customization ~60K), so the model receives the tail of its prompt, loses
 the channel protocol entirely, and answers as plain text that the platform
 cannot route. The only symptom is a
 `msg="truncating input prompt" limit=... prompt=...` WARN line in the
-Ollama server log. Set the window above your largest prompt plus
-generation room (e.g. `GATEWAY_NUM_CTX=65536` for qwen3.6:35b, which fits
-the KV cache in the same ~26 GiB the weights use on Apple silicon) and
-watch that log line when in doubt.
+Ollama server log. Set `num_ctx` in the app's `services.llm.custom`
+descriptor block above your largest prompt plus generation room (e.g.
+`65536` for qwen3.6:35b, which fits the KV cache in the same ~26 GiB the
+weights use on Apple silicon); the platform sends it per request and the
+gateway prefers it over its own `GATEWAY_NUM_CTX` env (the standalone-run
+fallback). Watch that log line when in doubt.
 
 Coming back, Ollama's JSONL chunks (`{"message":{"content": piece}}`) become
 SSE `{"delta": piece}` events, and the terminal chunk's
@@ -213,6 +215,7 @@ config:
       custom:
         endpoint: http://host.docker.internal:11500/generate
         model_name: qwen3.6:35b        # display/accounting label
+        num_ctx: 65536                 # serving window — size to your agent prompts (see §3)
   # 2) offer it as a per-conversation composer pick (overrides role_models
   #    for the picking user only — nobody's defaults change)
   react:

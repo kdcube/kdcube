@@ -92,7 +92,7 @@ In `aws-sm`, the grouped bundle descriptor docs are:
 |---|---|---|---|
 | `role_models` | bundle `configuration` / base configuration | `BaseEntrypoint` | Merged into `Config.role_models` and used by SDK model-role resolution |
 | `embedding` | bundle `configuration` / base configuration | `BaseEntrypoint` | Applied via `Config.set_embedding(...)` |
-| `services.llm.custom` | no default | `BaseEntrypoint` | Locally served models: `endpoint` (models gateway URL) and `model_name` applied onto `Config` custom-model state; enables `provider: custom` role routing. Key travels the secrets path: `services.llm.custom.api_key` in `bundles.secrets.yaml` |
+| `services.llm.custom` | no default | `BaseEntrypoint` | Locally served models: `endpoint` (models gateway URL), `model_name`, and `num_ctx` (serving context window, sent per request) applied onto `Config` custom-model state; enables `provider: custom` role routing. Key travels the secrets path: `services.llm.custom.api_key` in `bundles.secrets.yaml` |
 | `memory` | disabled in memory mixin defaults | `MemoryEntrypointMixin`, memory tools/widget, ReAct announce integration | User Memory hotset, tools, widget, reconciliation, and snapshots for memory-enabled bundles |
 | `ui.widgets.memories` | disabled in memory mixin defaults | `MemoryEntrypointMixin`, widget builder/loader | Enables and optionally overrides the built Memory widget UI |
 | `economics.reservation_amount_dollars` | `2.0` in `BaseEntrypointWithEconomics.configuration` | `BaseEntrypointWithEconomics` | Per-bundle reservation floor for pre-run economics admission |

@@ -553,6 +553,7 @@ class ConfigRequest(BaseModel):
     custom_model_endpoint: Optional[str] = None
     custom_model_api_key: Optional[str] = None
     custom_model_name: Optional[str] = None
+    custom_model_num_ctx: Optional[int] = None
 
     # KB
     kb_search_endpoint: Optional[str] = None
@@ -646,6 +647,7 @@ class Config:
         self.custom_model_endpoint = os.getenv("CUSTOM_MODEL_ENDPOINT", "")
         self.custom_model_api_key = os.getenv("CUSTOM_MODEL_API_KEY", "")
         self.custom_model_name = os.getenv("CUSTOM_MODEL_NAME", "custom-model")
+        self.custom_model_num_ctx = int(os.getenv("CUSTOM_MODEL_NUM_CTX", "0") or 0) or None
         self.use_custom_endpoint = bool(self.custom_model_endpoint)
 
         # KB
@@ -822,6 +824,8 @@ def create_workflow_config(config_request: ConfigRequest) -> Config:
         cfg.custom_model_endpoint = config_request.custom_model_endpoint
         cfg.custom_model_name = config_request.custom_model_name or "custom-model"
         cfg.use_custom_endpoint = True
+    if config_request.custom_model_num_ctx:
+        cfg.custom_model_num_ctx = int(config_request.custom_model_num_ctx)
     # The key applies regardless of where the endpoint comes from: the
     # endpoint may arrive later via bundle props (services.llm.custom), while
     # the door-resolved key must not be dropped on that path.
@@ -914,6 +918,7 @@ class ModelRouter:
             api_key=self.config.custom_model_api_key,
             model_name=model,
             temperature=temperature,
+            num_ctx=getattr(self.config, "custom_model_num_ctx", None),
         )
     def _mk_anthropic(self):
         if self._anthropic_client:
@@ -3009,7 +3014,8 @@ class ModelServiceBase:
 # Custom endpoint client (unchanged API)
 # =========================
 class CustomModelClient:
-    def __init__(self, endpoint: str, api_key: str, model_name: str, temperature: float = 0.7):
+    def __init__(self, endpoint: str, api_key: str, model_name: str, temperature: float = 0.7,
+                 num_ctx: Optional[int] = None):
         self.endpoint = endpoint
         self.api_key = api_key
         self.model_name = model_name
@@ -3019,6 +3025,10 @@ class CustomModelClient:
             "max_new_tokens": 1024, "temperature": temperature, "top_p": 0.9,
             "min_p": None, "skip_cot": True, "fabrication_awareness": False, "prompt_mode": "default"
         }
+        # Serving context window (descriptor services.llm.custom.num_ctx).
+        # Sent per request; the gateway prefers it over its env default.
+        if num_ctx:
+            self.default_params["num_ctx"] = int(num_ctx)
 
     def _convert_langchain_to_conversation(self, messages: List[BaseMessage]) -> List[Dict[str, Any]]:
         convo = []
