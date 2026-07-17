@@ -276,6 +276,10 @@ class ReactSolverV2:
             fseq = int(seq or 0) if seq is not None else 0
             if fseq > int(self._latest_followup_seq_seen or 0):
                 self._latest_followup_seq_seen = fseq
+        # A live event opens a new completion lineage in this turn (a turn may
+        # hold MANY completions). A final_answer salvaged from a pre-event
+        # failed round must never backfill a post-event close.
+        self._streamed_final_answer_pending = ""
         try:
             self._note_consent_granted_event(event=event)
         except Exception:
@@ -1925,6 +1929,10 @@ class ReactSolverV2:
                 self._streamed_final_answer_pending = ""
                 return None
             return "final_answer_required"
+        if action in {"complete", "exit"} and final_answer:
+            # A fresh non-empty close supersedes any salvage — no stale
+            # carryover into later completions of the same turn.
+            self._streamed_final_answer_pending = ""
         if action in {"complete", "exit"} and (decision.get("notes") or "").strip():
             return "final_answer_with_notes"
         if action != "call_tool":
