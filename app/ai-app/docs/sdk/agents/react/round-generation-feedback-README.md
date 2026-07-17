@@ -258,14 +258,24 @@ Any accepted live event clears it; a fresh non-empty close supersedes it.
     round R2 (new lineage): model closes empty     → NOT backfilled with A
 ```
 
-If the model is nonetheless asked to close (any path still reaching a retry),
-the notice tells it the answer already streamed and invites an **empty
-close** — the platform keeps the streamed text; the model need not repeat it.
-An empty `final_answer` on `complete`/`exit` is ACCEPTED when a live salvage
-is on record (else `final_answer_required` holds as before).
+The determination is FACT, not inference: the salvaged text is the
+overseer's `streamed_state.answer_text` (§2) — exactly what the gate passed
+to the user — carried on the decision packet. And the rule is not tied to one
+code: `_keep_and_stop_if_answer_streamed` runs for EVERY Tier-2 rejection
+(the `action_schema_error` schema branch AND the shape-code branch —
+`decision_preamble_before_first_channel`, `decision_first_channel_not_thinking`,
+`decision_missing_protocol_channels`, packet channel-consistency). Any
+post-hoc reject of a round whose answer already streamed finalizes with the
+streamed text; nothing streamed → the caller retries normally.
 
-Code: `runtime.py` — the `action_schema_error` branch (finalize-instead-of-
-retry) and `_validate_decision` (empty-close acceptance + lineage clears).
+If a path still reaches a retry, the notice tells the model the answer already
+streamed and invites an **empty close** — the platform keeps the streamed
+text. An empty `final_answer` on `complete`/`exit` is ACCEPTED when a live
+salvage is on record (else `final_answer_required` holds as before).
+
+Code: `runtime.py` — `_keep_and_stop_if_answer_streamed` (both rejection
+branches), `_validate_decision` (empty-close acceptance + lineage clears);
+`action_overseer.py` `streamed_state()`.
 
 ---
 
@@ -363,24 +373,30 @@ the fact from real state.
 
 **Complete and shipped:**
 - Two-tier gating (overseer online + shape/schema post hoc).
+- **Per-lane streamed-state at the gates.** `ActionStreamGate` counts only
+  emissions that reach the user; `streamed_state()` reports
+  `{answer_streamed, answer_text, lanes[]}` on the decision packet — the fact
+  the feedback layer reads (replaces the earlier `action_schema_error` regex).
+- **Class 1 keep-and-stop for EVERY Tier-2 rejection** whose answer streamed
+  (schema-error AND shape codes), scoped per completion lineage; empty-close
+  acceptance as the fallback.
 - `react.notice` self-sufficiency (structured `extra` merged into the
-  model-visible block).
-- Class 1 keep-and-stop for `action_schema_error` with a streamed answer,
-  scoped per completion lineage; empty-close acceptance.
-- Class 2 structured diagnosis already carried for tool-call codes.
+  model-visible block); Class 2 structured diagnosis for tool-call codes.
+- **Steer-finalize verified transparent for executed tools:** a
+  parallel-executed tool's `react.tool.result` is contributed by the tool
+  handler at execution time (before the steer), and the interrupted
+  `react.decision.raw` is always rendered — so the finalize decision already
+  sees both.
 
-**Remaining (the transparency generalization):**
-- **Per-lane streamed-state in the decision packet.** Today the runtime infers
-  "the answer streamed" from the raw for `action_schema_error` only. The
-  general build records, per lane and per action instance, whether the
-  overseer allowed it and how much text emitted — so EVERY code can be placed
-  into Class 1 vs Class 2 from FACT, not inference, and keep-and-stop can
-  extend to the mixed shape codes (e.g. a missing-summary round whose answer
-  lane did stream).
-- **Steer-finalize disclosure.** State to the finalizing model what the
-  cancelled decision already showed (needs the per-lane state above).
-- **`max_tokens` in-band notice.** A first-class truncation notice on the
-  same `react.notice` seam.
+**Remaining:**
+- **`max_tokens` in-band notice.** The one confirmed still-open gap: the
+  streaming layer's final event carries `usage` but no `stop_reason` /
+  `finish_reason`, so a first-class truncation notice needs finish-reason
+  plumbing across the providers (anthropic/openai/gemini/custom) into the
+  final event, then a `react.notice` on truncation.
+- **Steer-finalize disclosure of the CANCELLED round's streamed content**
+  (its streamed thinking/answer) — now expressible via `streamed_state`, a
+  one-sentence statement on the finalize prompt.
 
 The design constraints for that work are fixed: feedback from REAL streamed
 state (never guesses); Class 1 discloses what the user saw and stops when an
