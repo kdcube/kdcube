@@ -41,6 +41,9 @@ from kdcube_ai_app.apps.chat.sdk.skills.instructions.shared_instructions import 
 from kdcube_ai_app.apps.chat.sdk.skills.instructions.shared_instructions_lite import (
     compose_lite_instruction_blocks,
 )
+from kdcube_ai_app.apps.chat.sdk.skills.instructions.instructions_extra_lite import (
+    resolve_extra_lite_item,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.react.layout import (
     build_tool_catalog,
     build_instruction_catalog_block,
@@ -109,10 +112,22 @@ You are the Decision module inside a ReAct loop.
 
 
 def normalize_instruction_blocks(blocks: Optional[Iterable[str]]) -> str:
-    """Resolve named lite blocks and join literal custom blocks."""
+    """Resolve named instruction blocks and join literal custom blocks.
+
+    Names resolve from ``shared_instructions_lite.py`` (``REACT_LITE_*``) and
+    ``instructions_extra_lite.py`` (``REACT_XLITE_*`` blocks and
+    ``xlite:<profile>`` whole-profile refs); anything else is literal text.
+    """
     if isinstance(blocks, str):
         blocks = [blocks]
-    return compose_lite_instruction_blocks(blocks or [])
+    resolved: list[str] = []
+    for item in blocks or []:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        xlite = resolve_extra_lite_item(text)
+        resolved.append(xlite if xlite is not None else text)
+    return compose_lite_instruction_blocks(resolved)
 
 
 def build_decision_instruction_body(
