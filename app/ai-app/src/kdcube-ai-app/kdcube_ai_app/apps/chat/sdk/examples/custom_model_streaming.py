@@ -201,11 +201,83 @@ async def stage_3_react_channels(ms: ModelServiceBase) -> None:
     print("[stage 3] done")
 
 
+# ---------------------------------------------------------------- stage 4
+
+async def stage_4_react_decision(ms: ModelServiceBase) -> None:
+    """The real react-v3 decision call: react_decision_stream_v2 builds the
+    same system instruction the react runtime builds (protocol + workspace
+    guide + tool catalog + admin customization) and streams the same
+    thinking/action/code/summary channels.
+
+    REACT_PROMPT_PAD_TOKENS (env, default 0) pads the instruction with
+    reference-note text to simulate a real deployment's prompt size (the
+    workspace app's decision prompt runs ~60K tokens). Use it to verify the
+    serving window: if the prompt exceeds the gateway's GATEWAY_NUM_CTX (or
+    Ollama's default), Ollama TRUNCATES FROM THE FRONT — the protocol
+    instruction is lost and the model answers as plain text. Watch the
+    Ollama server log for `msg="truncating input prompt"`.
+    """
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.v3.agents.decision import (
+        build_decision_system_text,
+        react_decision_stream_v2,
+    )
+
+    pad_tokens = int(os.getenv("REACT_PROMPT_PAD_TOKENS", "0") or 0)
+    additional = None
+    if pad_tokens:
+        para = (
+            "Reference note {i}: deployment conventions the agent must keep in "
+            "mind — naming, file layout, citation style, and channel hygiene "
+            "as configured by the administrator for this workspace. "
+        )
+        reps = max(1, pad_tokens // 30)
+        additional = "\n".join(para.format(i=i) for i in range(reps))
+
+    build_kwargs = dict(
+        adapters=[],
+        workspace_implementation="custom",
+        additional_instructions=additional,
+        multi_action_mode="on",
+    )
+    system_text = build_decision_system_text(**build_kwargs, skill_consumer=ROLE)
+    est_tokens = len(system_text) // 4
+
+    print("\n" + "=" * 60)
+    print(f"STAGE 4: react_decision_stream_v2 — role={ROLE}")
+    print(f"system instruction: {len(system_text)} chars ≈ {est_tokens} tokens"
+          f" (pad={pad_tokens})")
+    print("=" * 60)
+
+    out = await react_decision_stream_v2(
+        ms,
+        agent_name=ROLE,
+        user_blocks=[{"type": "text", "text": "hey"}],
+        max_tokens=1500,
+        **build_kwargs,
+    )
+
+    print("\n--- DECISION RESULT ---")
+    full_raw = out.get("raw") or ""
+    log = out.get("log") or {}
+    print(f"thinking :: {(out.get('internal_thinking') or '').strip()!r}")
+    print(f"agent_response :: {out.get('agent_response')!r}")
+    print(f"error :: {log.get('error')!r} protocol_shape_error :: {log.get('protocol_shape_error')!r}")
+    print(f"raw length :: {len(full_raw)}")
+    followed_protocol = "<channel:" in (full_raw or "")
+    print(f"channel protocol followed :: {followed_protocol}")
+    if not followed_protocol and full_raw:
+        print("!! plain text came back — the serving window truncated the "
+              "instruction (check the Ollama server log) or the model "
+              "ignored the protocol.")
+    print("[stage 4] done")
+
+
 async def main():
     ms = configure_env()
     await stage_1_gateway_raw()
     await stage_2_client_astream(ms)
     await stage_3_react_channels(ms)
+    await stage_4_react_decision(ms)
 
 
 if __name__ == "__main__":
