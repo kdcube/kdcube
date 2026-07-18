@@ -100,6 +100,15 @@ export function DelegatedAccessPanel() {
   const [namedServiceOperations, setNamedServiceOperations] = useState<DelegatedAccessNamedServiceOperations>({});
   const [ttlSeconds, setTtlSeconds] = useState(ttlOptions[0].value);
   const [pendingGrant, setPendingGrant] = useState(pendingAgentGrantFromLocation);
+  // Which of the ASKED claims the user keeps checked — the request is a
+  // proposal, not a bundle: granting a subset is always allowed.
+  const [pendingClaimPicks, setPendingClaimPicks] = useState<Record<string, boolean>>(
+    () => Object.fromEntries((pendingAgentGrantFromLocation()?.claims || []).map((c) => [c, true])),
+  );
+  // Per-record EDIT state for granted agent rows: access_id being edited and
+  // the checkbox set keyed `${resource}:${claim}`.
+  const [editingAccessId, setEditingAccessId] = useState<string | null>(null);
+  const [editPicks, setEditPicks] = useState<Record<string, boolean>>({});
   // Catalog search: narrows the delegable-resource cards (labels, grants,
   // named-service rows) wherever the shared list renders.
   const [resourceQuery, setResourceQuery] = useState('');
@@ -227,14 +236,19 @@ export function DelegatedAccessPanel() {
     void dispatch(loadDelegatedAccess());
   };
 
+  const pendingCheckedClaims = pendingGrant
+    ? pendingGrant.claims.filter((claim) => pendingClaimPicks[claim] !== false)
+    : [];
+
   const grantPending = async () => {
     if (!pendingGrant) return;
-    // What's in hand right now, PLUS anything else the user picked from the
-    // catalog below — merged per resource (one grant record per resource, so
-    // the runtime's per-resource token lookup keys stay intact).
-    const merged: Record<string, string[]> = {
-      [pendingGrant.resource]: [...pendingGrant.claims],
-    };
+    // What the user KEPT CHECKED of the ask, PLUS anything else they picked
+    // from the catalog below — merged per resource (one grant record per
+    // resource, so the runtime's per-resource token lookup keys stay intact).
+    const merged: Record<string, string[]> = {};
+    if (pendingCheckedClaims.length) {
+      merged[pendingGrant.resource] = [...pendingCheckedClaims];
+    }
     selectedResourceEntries.forEach(([resource, grants]) => {
       const current = merged[resource] || [];
       merged[resource] = [...current, ...grants.filter((grant) => !current.includes(grant))];
@@ -250,6 +264,42 @@ export function DelegatedAccessPanel() {
     setPendingGrant(null);
     setResourceGrants({});
     setNamedServiceOperations({});
+    void dispatch(loadDelegatedAccess());
+  };
+
+  const startEdit = (item: DelegatedAccessRecord) => {
+    const picks: Record<string, boolean> = {};
+    Object.entries(item.resource_grants || {}).forEach(([resource, grants]) => {
+      grants.forEach((claim) => { picks[`${resource}:${claim}`] = true; });
+    });
+    setEditingAccessId(item.access_id);
+    setEditPicks(picks);
+  };
+
+  const saveEdit = async (item: DelegatedAccessRecord) => {
+    if (!item.client_id) return;
+    const entries = Object.entries(item.resource_grants || {});
+    const kept: Record<string, string[]> = {};
+    entries.forEach(([resource, grants]) => {
+      kept[resource] = grants.filter((claim) => editPicks[`${resource}:${claim}`] !== false);
+    });
+    const anyKept = Object.values(kept).some((claims) => claims.length > 0);
+    if (!anyKept) {
+      // Removing everything is a revoke, not an edit.
+      await dispatch(revokeDelegatedAccess({ accessId: item.access_id })).unwrap().catch(() => undefined);
+    } else {
+      for (const [resource, claims] of Object.entries(kept)) {
+        if (!claims.length) continue;
+        await dispatch(grantAgentAccess({
+          clientId: item.client_id,
+          resource,
+          claims,
+          replace: true,
+        })).unwrap().catch(() => undefined);
+      }
+    }
+    setEditingAccessId(null);
+    setEditPicks({});
     void dispatch(loadDelegatedAccess());
   };
 
@@ -365,11 +415,18 @@ export function DelegatedAccessPanel() {
           const option = grantOptionByName.get(claim);
           return (
             <li className="account" key={claim}>
-              <div>
-                <div className="account-title"><code>{claim}</code></div>
-                {option?.label ? <div className="account-sub">{option.label}</div> : null}
-                {option?.description ? <div className="account-sub">{option.description}</div> : null}
-              </div>
+              <label style={{ display: 'flex', gap: 10, alignItems: 'baseline', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={pendingClaimPicks[claim] !== false}
+                  onChange={(event) => setPendingClaimPicks((current) => ({ ...current, [claim]: event.target.checked }))}
+                />
+                <div>
+                  <div className="account-title"><code>{claim}</code></div>
+                  {option?.label ? <div className="account-sub">{option.label}</div> : null}
+                  {option?.description ? <div className="account-sub">{option.description}</div> : null}
+                </div>
+              </label>
             </li>
           );
         })}
@@ -393,8 +450,15 @@ export function DelegatedAccessPanel() {
         </details>
       ) : null}
       <div className="row">
-        <button className="btn" type="button" disabled={busy} onClick={grantPending}>
-          {selectedResourceEntries.length ? 'Grant requested + selected access' : 'Grant access'}
+        <button
+          className="btn"
+          type="button"
+          disabled={busy || (!pendingCheckedClaims.length && !selectedResourceEntries.length)}
+          onClick={grantPending}
+        >
+          {pendingCheckedClaims.length < (pendingGrant.claims.length || 0) || selectedResourceEntries.length
+            ? 'Grant selected access'
+            : 'Grant access'}
         </button>
         <button className="btn" type="button" disabled={busy} onClick={() => setPendingGrant(null)}>
           Not now
@@ -447,34 +511,77 @@ export function DelegatedAccessPanel() {
                   <small>{clientId}</small>
                 </span>
                 <ul className="accounts">
-                  {records.map((item) => (
-                    <li className="account" key={item.access_id}>
-                      <div>
-                        {Object.entries(item.resource_grants || {}).map(([resource, grants]) => (
-                          <div key={resource}>
-                            <div className="account-title">{resourceLabelFor(resource) || resource}</div>
-                            <div className="account-sub">{grants.map(claimLabel).join(', ')}</div>
-                            {resourceLabelFor(resource) ? <div className="account-sub"><code>{resource}</code></div> : null}
-                          </div>
-                        ))}
-                        {item.named_service_operations && Object.keys(item.named_service_operations).length ? (
+                  {records.map((item) => {
+                    const editing = editingAccessId === item.access_id;
+                    return (
+                      <li className="account" key={item.access_id}>
+                        <div>
+                          {Object.entries(item.resource_grants || {}).map(([resource, grants]) => (
+                            <div key={resource}>
+                              <div className="account-title">{resourceLabelFor(resource) || resource}</div>
+                              {editing ? (
+                                <div className="resource-grants">
+                                  {grants.map((claim) => (
+                                    <label className="grant-chip" key={`${resource}:${claim}`} title={grantOptionByName.get(claim)?.label || undefined}>
+                                      <input
+                                        type="checkbox"
+                                        checked={editPicks[`${resource}:${claim}`] !== false}
+                                        onChange={(event) => setEditPicks((current) => ({
+                                          ...current, [`${resource}:${claim}`]: event.target.checked,
+                                        }))}
+                                      />
+                                      <span>{claim}</span>
+                                    </label>
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="account-sub">{grants.map(claimLabel).join(', ')}</div>
+                              )}
+                              {resourceLabelFor(resource) ? <div className="account-sub"><code>{resource}</code></div> : null}
+                            </div>
+                          ))}
+                          {item.named_service_operations && Object.keys(item.named_service_operations).length ? (
+                            <div className="account-sub">
+                              Named services: {Object.values(item.named_service_operations)
+                                .flatMap((namespaces) => Object.entries(namespaces))
+                                .map(([namespace, operations]) => `${namespace} (${operations.join(', ')})`)
+                                .join('; ')}
+                            </div>
+                          ) : (
+                            <div className="account-sub">
+                              Operation scope: every operation these claims cover (no
+                              per-operation narrowing was selected).
+                            </div>
+                          )}
                           <div className="account-sub">
-                            Named services: {Object.values(item.named_service_operations)
-                              .flatMap((namespaces) => Object.entries(namespaces))
-                              .map(([namespace, operations]) => `${namespace} (${operations.join(', ')})`)
-                              .join('; ')}
+                            Granted {formatDate(item.created_at) || 'unknown'}
+                            {' · '}expires {formatDate(item.expires_at) || 'unknown'}
                           </div>
-                        ) : null}
-                        <div className="account-sub">
-                          Granted {formatDate(item.created_at) || 'unknown'}
-                          {' · '}expires {formatDate(item.expires_at) || 'unknown'}
                         </div>
-                      </div>
-                      <button className="btn btn-danger" type="button" disabled={busy} onClick={() => revoke(item.access_id)}>
-                        Revoke
-                      </button>
-                    </li>
-                  ))}
+                        <div className="row" style={{ flexDirection: 'column', gap: 6, alignItems: 'stretch' }}>
+                          {editing ? (
+                            <>
+                              <button className="btn" type="button" disabled={busy} onClick={() => saveEdit(item)}>
+                                Save
+                              </button>
+                              <button className="btn" type="button" disabled={busy} onClick={() => { setEditingAccessId(null); setEditPicks({}); }}>
+                                Cancel
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button className="btn" type="button" disabled={busy} onClick={() => startEdit(item)}>
+                                Edit
+                              </button>
+                              <button className="btn btn-danger" type="button" disabled={busy} onClick={() => revoke(item.access_id)}>
+                                Revoke
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             );

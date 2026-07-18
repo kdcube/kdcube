@@ -795,16 +795,20 @@ class AutomationAccessService:
         named_service_operations: Mapping[str, Any] | None = None,
         ttl_seconds: Any = None,
         client_id: str | None = None,
+        merge_existing: bool = True,
     ) -> dict[str, Any]:
         """Create a delegated-access grant the current user grants to a client.
 
         ``client_id`` is normally omitted — a fresh random ``automation:…`` client
         is minted per grant. When a caller passes a DETERMINISTIC client_id (a
         hosted agent's ``kdcube-agent:<app>:<agent>`` identity), the grant is keyed
-        to it and DEDUPLICATED: one record per (grantor, client, resources), so
-        re-consent updates the same record instead of piling up. The credential is
-        built + bound identically either way, so the minted token passes the @mcp
-        guard the same as any Delegated-By-KDCube grant."""
+        to it and DEDUPLICATED: one record per (grantor, client, resources).
+        With ``merge_existing`` (the default) a re-grant MERGES claims and
+        narrowing into the record — sequential one-click grants accumulate.
+        ``merge_existing=False`` is the EDIT semantics: the submitted selection
+        REPLACES the record exactly (the user unchecked something). The
+        credential is built + bound identically either way, so the minted token
+        passes the @mcp guard the same as any Delegated-By-KDCube grant."""
         grantor_subject = _subject_from_user(user)
         if not grantor_subject:
             return {"ok": False, "error": "delegated_access_requires_authenticated_user"}
@@ -909,6 +913,7 @@ class AutomationAccessService:
                     existing = None
             if existing is not None:
                 created_at_override = existing.created_at or None
+            if existing is not None and merge_existing:
                 for resource_key, held in existing.resource_grants.items():
                     merged = list(selected_resource_grants.get(resource_key, []))
                     for grant in held:

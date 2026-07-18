@@ -1806,6 +1806,11 @@ class ConnectionHubEntrypoint(BaseEntrypoint):
         named_service_operations = (
             {resource: dict(raw_ns)} if isinstance(raw_ns, Mapping) and raw_ns else None
         )
+        # Default = MERGE (a one-click grant accumulates). `replace: true` is
+        # the EDIT semantics: the submitted claim set becomes the record exactly
+        # (the user unchecked something). Removing everything is a revoke, not
+        # an edit — the UI calls delegated_access_revoke for that.
+        replace = bool(payload.get("replace"))
         try:
             return await _automation_access_service(self, request).create_access(
                 user,
@@ -1814,6 +1819,7 @@ class ConnectionHubEntrypoint(BaseEntrypoint):
                 named_service_operations=named_service_operations,
                 ttl_seconds=payload.get("ttl_seconds") or AGENT_GRANT_DEFAULT_TTL_SECONDS,
                 client_id=client_id,
+                merge_existing=not replace,
             )
         except ValueError as exc:
             return {"ok": False, "error": "invalid_delegated_access_request", "message": str(exc)}

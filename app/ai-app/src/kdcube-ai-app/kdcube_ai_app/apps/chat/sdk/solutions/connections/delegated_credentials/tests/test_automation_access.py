@@ -886,6 +886,29 @@ async def test_agent_regrant_MERGES_claims_never_replaces():
     assert len((await service.list_access(_AGENT_USER))["items"]) == 1
 
 
+@pytest.mark.asyncio
+async def test_agent_regrant_with_merge_existing_false_REPLACES_the_record():
+    # The EDIT semantics: the user unchecked a claim; the submitted set becomes
+    # the record exactly — the merge default would have kept the removed claim.
+    service = _agent_service()
+    writer = {**_AGENT_USER, "permissions": ["records:write"]}
+    await service.create_access(
+        writer, label="a", client_id=_AGENT_CLIENT,
+        resource_grants={"https://example.test/mcp": ["records:read", "records:write"]},
+    )
+    await service.create_access(
+        writer, label="a", client_id=_AGENT_CLIENT,
+        resource_grants={"https://example.test/mcp": ["records:read"]},
+        merge_existing=False,
+    )
+    token = await service.agent_access_token(
+        grantor_subject="platform-user-1", client_id=_AGENT_CLIENT,
+        resources=["https://example.test/mcp"],
+    )
+    assert token["resource_grants"]["https://example.test/mcp"] == ["records:read"]
+    assert len((await service.list_access(writer))["items"]) == 1
+
+
 def _named_services_agent_service():
     from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.config import (
         oauth_delegated_config,

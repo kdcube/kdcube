@@ -95,6 +95,10 @@ export interface GrantAgentAccessArgs {
   /** Named-service narrowing for THIS resource (namespace -> exact operations),
    *  when the user extends the grant with a named-services resource. */
   namedServiceOperations?: Record<string, string[]>;
+  /** EDIT semantics: the submitted claim set REPLACES the record exactly
+   *  (the user unchecked something). Default merges — one-click grants
+   *  accumulate. */
+  replace?: boolean;
 }
 
 /** Grant a hosted agent (a "Delegated By KDCube" entity) access to a resource —
@@ -107,13 +111,14 @@ export const grantAgentAccess = createAsyncThunk<
   { rejectValue: string }
 >(
   'delegatedAccess/grantAgent',
-  async ({ clientId, resource, claims, label, namedServiceOperations }, { rejectWithValue }) => {
+  async ({ clientId, resource, claims, label, namedServiceOperations, replace }, { rejectWithValue }) => {
     try {
       const res = await postOp<DelegatedAccessCreateResult>('delegated_agent_grant_create', {
         client_id: clientId,
         resource,
         claims: claims || [],
         label: label || '',
+        ...(replace ? { replace: true } : {}),
         ...(namedServiceOperations && Object.keys(namedServiceOperations).length
           ? { named_service_operations: namedServiceOperations }
           : {}),
