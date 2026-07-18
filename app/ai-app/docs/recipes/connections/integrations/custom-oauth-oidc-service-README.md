@@ -268,8 +268,12 @@ first provider call rejected token
 
 ## 6. Optional: Expose S1 As A Named Service
 
-If external agents should use S1 through the generic named-services MCP surface,
-wrap the same provider logic in a named-service namespace:
+If agents should use S1 through the generic named-services surface — external
+MCP clients over the bridge, or agents hosted in KDCube apps through the native
+tools — wrap the same provider logic in a named-service namespace. Either kind
+of agent then enters under the user's per-agent delegated-by grant (checked at
+the attempt on governed deployments), while the S1 connected-account claim from
+step 1 stays the per-call provider check:
 
 ```text
 namespace: s1

@@ -94,7 +94,10 @@ namespace-shaped policy to an ordinary REST resource.
 ## Connection Hub Delegated Resource
 
 Connection Hub owns the delegable grant catalog and the concrete protected
-resource catalog.
+resource catalog. This one catalog serves every issuance path into "Delegated
+by KDCube" — manual automation tokens, external OAuth clients, and per-agent
+grants for agents hosted in KDCube apps (see
+[Agents Acting On Behalf Of The User](../../sdk/solutions/connections/agent-acting-for-user/agent-acting-for-user-README.md)).
 
 ```yaml
 bundles:

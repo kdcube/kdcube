@@ -162,6 +162,23 @@ should match the namespace presentation config used by UI clients, for example
 `task:issue` or `task:attachment`. Neither value is behavior inferred by
 generic surfaces.
 
+## The Per-Agent Gate On Native Tool Calls
+
+When an AGENT invokes a namespace through the generic client tools, the call
+passes a per-agent delegated-by boundary before it reaches the provider. On a
+deployment whose delegated-resource catalog publishes the namespace, the
+calling agent — `kdcube-agent:<app>:<agent>`, the same client entity an
+external MCP consumer is — must hold the user's grant for the operation's
+declared grants plus the resource's entry-tool grants. A missing grant raises
+that namespace's consent demand in chat at the attempt (one click to grant,
+revocable per resource in Connection Hub) and returns the explainable consent
+result to the model. The check rides the `connections` named service
+(`agent_grant.check`), applies only in agent turns, and fails open for
+non-agent surfaces and deployments whose catalog does not publish the
+namespace. Connecting a provider account (Delegated to KDCube) stays a
+separate, per-call-checked layer — it never authorizes an agent by itself.
+Model and flow: [Agents Acting On Behalf Of The User](../solutions/connections/agent-acting-for-user/agent-acting-for-user-README.md).
+
 ## Provider Schemas
 
 `object.schema` is the provider-owned contract for object body fields,

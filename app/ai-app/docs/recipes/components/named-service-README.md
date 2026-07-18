@@ -117,6 +117,17 @@ Named-service providers should emit events with enough identity for consumers:
 
 Today some widget-local event names still exist. The direction is namespace-owned event names and object URIs.
 
+## Agent Access Is Granted Per Agent
+
+A realm's agent consumers — external MCP clients and agents hosted in KDCube
+apps alike — enter under the user's delegated-by grant for that specific agent
+(`kdcube-agent:<app>:<agent>`), checked at the tool attempt when the
+deployment's delegated catalog publishes the namespace; a missing grant raises
+a one-click consent demand in chat. Provider-backed realms keep the
+connected-account consent as a second, per-call-checked layer. The realm
+implements neither check — both ride the platform boundary. Model:
+[Agents Acting On Behalf Of The User](../../sdk/solutions/connections/agent-acting-for-user/agent-acting-for-user-README.md).
+
 ## Current Gaps
 
 - Data Bus subjects and Event Bus event names should converge on URI-like naming.

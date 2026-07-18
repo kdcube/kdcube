@@ -101,17 +101,27 @@ claim needed for the action before calling Gmail.
 
 ## Consent Layers
 
-There are two separate consent layers.
+There are two separate consent layers, and layer 1 applies to EVERY agent —
+external or hosted inside a KDCube app.
 
 ```text
-Layer 1: external agent -> KDCube
-  User approves what Claude may ask KDCube to do.
-  Grants: mail:read, mail:send.
+Layer 1: agent -> KDCube               (Delegated BY KDCube)
+  User approves what THIS AGENT may ask KDCube to do.
+  Grants: mail:read, mail:send (+ the entry grant named_services:use).
+  External agent (Claude): the OAuth connector consent.
+  In-platform agent: a per-agent grant keyed to kdcube-agent:<app>:<agent> —
+    a native mail tool call on a governed deployment checks it at the attempt
+    and, when missing, raises the one-click agent-grant demand in chat.
 
-Layer 2: KDCube -> external mail provider
+Layer 2: KDCube -> external mail provider   (Delegated TO KDCube)
   User connects a provider account to KDCube.
-  Claims: gmail:read, gmail:send.
+  Claims: gmail:read, gmail:send. Checked at every call.
 ```
+
+Connecting a mail account answers only layer 2 — it does not by itself
+authorize any particular agent. Revoking either layer stops the tool
+immediately. Identity model and the grant flow:
+[Agents Acting On Behalf Of The User](../../../sdk/solutions/connections/agent-acting-for-user/agent-acting-for-user-README.md).
 
 If Claude has `mail:read` but the current KDCube user has not connected Gmail
 with `gmail:read`, the provider returns the structured consent error

@@ -177,6 +177,18 @@ turn 2: bearer_provider returns the bound token
 later: user revokes in the same tab -> the tool drops back to the gated stub
 ```
 
+The same boundary reaches **native named-service tools**: when an in-platform
+agent (the workspace React agent) calls a namespace the deployment's delegated
+catalog publishes, the generic tool layer checks the calling agent's grant via
+the `connections` named service (`agent_grant.check`) before dispatch — the
+operation's declared grants plus the resource's entry-tool grants. Pending →
+the same attempt-time demand and one-click grant; sequential grants on the same
+resource MERGE into one record (granting slack after memories never revokes
+memories). Connecting a provider account (Delegated to KDCube) stays a
+separate, per-call-checked layer and never authorizes an agent by itself. The
+gate applies only in agent turns and fails open where the catalog does not
+govern the namespace.
+
 The proactive counterpart — showing given/pending consent per claim in the
 capabilities picker before any call is attempted — is the claim-driven consent
 surface; see

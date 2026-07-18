@@ -135,8 +135,10 @@ readers pass: the agent works it from `about`/`object_schema`, and the
 capability picker's service card explains it (purpose, works-with, human
 labels per operation/action, object-kind one-liners — declared in
 `spec.metadata`, never invented by UI). Provider-backed realms also declare
-their connected-account requirements. See
-[Recipe: Named-Service App](named-service-README.md) and
+their connected-account requirements. Agent access to the realm is granted per
+agent by the platform boundary (nothing to implement in the component — see
+[Agents Acting On Behalf Of The User](../../sdk/solutions/connections/agent-acting-for-user/agent-acting-for-user-README.md)).
+See [Recipe: Named-Service App](named-service-README.md) and
 [Providers — The Presentation Layer](../../sdk/namespace-services/providers-README.md).
 
 ## Related Docs
