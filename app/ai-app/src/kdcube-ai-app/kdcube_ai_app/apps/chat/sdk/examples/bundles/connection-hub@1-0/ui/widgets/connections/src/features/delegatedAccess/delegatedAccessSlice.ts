@@ -92,6 +92,9 @@ export interface GrantAgentAccessArgs {
   resource: string;
   claims: string[];
   label?: string;
+  /** Named-service narrowing for THIS resource (namespace -> exact operations),
+   *  when the user extends the grant with a named-services resource. */
+  namedServiceOperations?: Record<string, string[]>;
 }
 
 /** Grant a hosted agent (a "Delegated By KDCube" entity) access to a resource —
@@ -104,13 +107,16 @@ export const grantAgentAccess = createAsyncThunk<
   { rejectValue: string }
 >(
   'delegatedAccess/grantAgent',
-  async ({ clientId, resource, claims, label }, { rejectWithValue }) => {
+  async ({ clientId, resource, claims, label, namedServiceOperations }, { rejectWithValue }) => {
     try {
       const res = await postOp<DelegatedAccessCreateResult>('delegated_agent_grant_create', {
         client_id: clientId,
         resource,
         claims: claims || [],
         label: label || '',
+        ...(namedServiceOperations && Object.keys(namedServiceOperations).length
+          ? { named_service_operations: namedServiceOperations }
+          : {}),
       });
       if (res?.ok === false) return rejectWithValue(resultError(res, 'Failed to grant agent access'));
       return res || {};

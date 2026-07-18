@@ -15,6 +15,15 @@ import {
   revokeDelegatedAccess,
 } from './delegatedAccessSlice';
 
+/** Human parts of a `kdcube-agent:<app>:<agent>` client id — the agent and the
+ *  app it lives in, version tag stripped from the app for display. */
+function parseAgentClientId(clientId: string): { agent: string; app: string } | null {
+  const parts = String(clientId || '').split(':');
+  if (parts[0] !== 'kdcube-agent' || parts.length < 3) return null;
+  const app = parts[1].replace(/@.+$/, '');
+  return { agent: parts.slice(2).join(':'), app };
+}
+
 /** The pending per-agent grant a chat consent banner deep-links here (the
  *  `pending_agent_grant` params), so this panel offers a one-click grant. */
 function pendingAgentGrantFromLocation(): { clientId: string; resource: string; claims: string[] } | null {
@@ -183,32 +192,139 @@ export function DelegatedAccessPanel() {
 
   const grantPending = async () => {
     if (!pendingGrant) return;
-    await dispatch(grantAgentAccess({
-      clientId: pendingGrant.clientId,
-      resource: pendingGrant.resource,
-      claims: pendingGrant.claims,
-    })).unwrap().catch(() => undefined);
+    // What's in hand right now, PLUS anything else the user picked from the
+    // catalog below — merged per resource (one grant record per resource, so
+    // the runtime's per-resource token lookup keys stay intact).
+    const merged: Record<string, string[]> = {
+      [pendingGrant.resource]: [...pendingGrant.claims],
+    };
+    selectedResourceEntries.forEach(([resource, grants]) => {
+      const current = merged[resource] || [];
+      merged[resource] = [...current, ...grants.filter((grant) => !current.includes(grant))];
+    });
+    for (const [resource, claims] of Object.entries(merged)) {
+      await dispatch(grantAgentAccess({
+        clientId: pendingGrant.clientId,
+        resource,
+        claims,
+        namedServiceOperations: namedServiceOperations[resource],
+      })).unwrap().catch(() => undefined);
+    }
     setPendingGrant(null);
+    setResourceGrants({});
+    setNamedServiceOperations({});
     void dispatch(loadDelegatedAccess());
   };
 
+  // The full delegable catalog (resource -> grant chips -> named-service
+  // operation rows), bound to the shared selection state. Rendered in the
+  // manual create flow AND in the pending agent card's "add more" section.
+  const renderResourceList = () => (
+    <div className="resource-list">
+      {resources.map((item) => {
+        const grants = grantsForResource(item);
+        return (
+          <div className="resource-option resource-option-stack" key={item.resource}>
+            <span>
+              <strong>
+                {item.label || item.resource}
+                {item.admin_only ? <span className="badge badge-admin">admin</span> : null}
+              </strong>
+              <small>{item.resource}</small>
+            </span>
+            <div className="resource-grants">
+              {grants.map((grant) => {
+                const option = grantOptionByName.get(grant);
+                return (
+                  <label className="grant-chip" key={`${item.resource}:${grant}`}>
+                    <input
+                      type="checkbox"
+                      checked={(resourceGrants[item.resource] || []).includes(grant)}
+                      onChange={(event) => toggleResourceGrant(item.resource, grant, event.target.checked)}
+                    />
+                    <span>{option?.label || grant}</span>
+                  </label>
+                );
+              })}
+            </div>
+            <DelegatedResourceCatalog
+              resource={item}
+              selectedGrants={resourceGrants[item.resource] || []}
+              selectedOperations={namedServiceOperations[item.resource] || {}}
+              onOperationChange={(namespace, operation, operationGrants, checked) => (
+                toggleNamedServiceOperation(
+                  item.resource,
+                  namespace,
+                  operation,
+                  operationGrants,
+                  checked,
+                )
+              )}
+              providers={providers}
+              accounts={accounts}
+            />
+          </div>
+        );
+      })}
+    </div>
+  );
+
+  // The landing view must explain itself: WHO asks (the agent, in words),
+  // WHAT exactly (each claim with its grant-vocabulary label), ON WHAT (the
+  // resource's configured label), and what granting means. Raw identifiers
+  // demote to small code hints.
+  const pendingAgent = pendingGrant ? parseAgentClientId(pendingGrant.clientId) : null;
+  const pendingResourceLabel = pendingGrant
+    ? (resources.find((r) => r.resource === pendingGrant.resource)?.label || '')
+    : '';
   const pendingGrantPane = pendingGrant ? (
     <section className="card">
       <div className="card-head">
-        <div className="form-title">Grant agent access</div>
+        <div className="form-title">An agent is asking for your permission</div>
       </div>
-      <p className="muted" style={{ marginTop: 0 }}>
-        An agent (<code>{pendingGrant.clientId}</code>) is requesting access to{' '}
-        <code>{pendingGrant.resource}</code>
-        {pendingGrant.claims.length ? <> for {pendingGrant.claims.join(', ')}</> : null}.
-        Granting lets it act for you until you revoke it below.
+      <p style={{ marginTop: 0 }}>
+        The agent <strong>{pendingAgent?.agent || 'agent'}</strong>
+        {pendingAgent?.app ? <> of the app <strong>{pendingAgent.app}</strong></> : null} wants to
+        act on your behalf on <strong>{pendingResourceLabel || 'this resource'}</strong>. It is asking for:
       </p>
+      <ul className="accounts">
+        {pendingGrant.claims.map((claim) => {
+          const option = grantOptionByName.get(claim);
+          return (
+            <li className="account" key={claim}>
+              <div>
+                <div className="account-title">{option?.label || claim}</div>
+                {option?.description ? <div className="account-sub">{option.description}</div> : null}
+                <div className="account-sub"><code>{claim}</code></div>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      <p className="muted">
+        Granting lets exactly this agent do exactly this for you — nothing else.
+        The grant appears under Granted access below, where you can revoke it at
+        any time; revocation is immediate.
+      </p>
+      <div className="account-sub" style={{ marginBottom: 12 }}>
+        <code>{pendingGrant.clientId}</code>{' → '}<code>{pendingGrant.resource}</code>
+      </div>
+      {resources.length ? (
+        <details style={{ marginBottom: 12 }}>
+          <summary className="muted" style={{ cursor: 'pointer' }}>
+            Give this agent more access (optional) — pick from anything delegable here
+          </summary>
+          <div style={{ marginTop: 8 }}>
+            {renderResourceList()}
+          </div>
+        </details>
+      ) : null}
       <div className="row">
         <button className="btn" type="button" disabled={busy} onClick={grantPending}>
-          Grant access
+          {selectedResourceEntries.length ? 'Grant requested + selected access' : 'Grant access'}
         </button>
         <button className="btn" type="button" disabled={busy} onClick={() => setPendingGrant(null)}>
-          Dismiss
+          Not now
         </button>
       </div>
     </section>
@@ -308,53 +424,7 @@ export function DelegatedAccessPanel() {
             <p className="muted">
               Select the grants inside every surface where this credential can be used.
             </p>
-            <div className="resource-list">
-              {resources.map((item) => {
-                const grants = grantsForResource(item);
-                return (
-                  <div className="resource-option resource-option-stack" key={item.resource}>
-                    <span>
-                      <strong>
-                        {item.label || item.resource}
-                        {item.admin_only ? <span className="badge badge-admin">admin</span> : null}
-                      </strong>
-                      <small>{item.resource}</small>
-                    </span>
-                    <div className="resource-grants">
-                      {grants.map((grant) => {
-                        const option = grantOptionByName.get(grant);
-                        return (
-                          <label className="grant-chip" key={`${item.resource}:${grant}`}>
-                            <input
-                              type="checkbox"
-                              checked={(resourceGrants[item.resource] || []).includes(grant)}
-                              onChange={(event) => toggleResourceGrant(item.resource, grant, event.target.checked)}
-                            />
-                            <span>{option?.label || grant}</span>
-                          </label>
-                        );
-                      })}
-                    </div>
-                    <DelegatedResourceCatalog
-                      resource={item}
-                      selectedGrants={resourceGrants[item.resource] || []}
-                      selectedOperations={namedServiceOperations[item.resource] || {}}
-                      onOperationChange={(namespace, operation, operationGrants, checked) => (
-                        toggleNamedServiceOperation(
-                          item.resource,
-                          namespace,
-                          operation,
-                          operationGrants,
-                          checked,
-                        )
-                      )}
-                      providers={providers}
-                      accounts={accounts}
-                    />
-                  </div>
-                );
-              })}
-            </div>
+            {renderResourceList()}
           </div>
         ) : null}
         <select className="input" value={ttlSeconds} onChange={(event) => setTtlSeconds(Number(event.target.value))}>

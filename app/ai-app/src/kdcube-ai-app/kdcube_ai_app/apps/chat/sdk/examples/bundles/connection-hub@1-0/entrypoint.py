@@ -1799,11 +1799,19 @@ class ConnectionHubEntrypoint(BaseEntrypoint):
         claims = _safe_list(payload.get("claims") or payload.get("scopes"))
         if not resource or not claims:
             return {"ok": False, "error": "delegated_agent_grant_requires_resource_and_claims"}
+        # Optional named-service narrowing for THIS resource (namespace -> exact
+        # operations), same selector the manual create flow sends — so extending
+        # an agent's access from the hub can include named-service resources.
+        raw_ns = payload.get("named_service_operations")
+        named_service_operations = (
+            {resource: dict(raw_ns)} if isinstance(raw_ns, Mapping) and raw_ns else None
+        )
         try:
             return await _automation_access_service(self, request).create_access(
                 user,
                 label=str(payload.get("label") or "").strip() or client_id,
                 resource_grants={resource: claims},
+                named_service_operations=named_service_operations,
                 ttl_seconds=payload.get("ttl_seconds") or AGENT_GRANT_DEFAULT_TTL_SECONDS,
                 client_id=client_id,
             )
