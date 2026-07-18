@@ -7,7 +7,7 @@ keywords: ["BudgetStateV2", "token budget", "remaining budget", "budget snapshot
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-state-machine-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-discovery-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-storage-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/workspace/artifact-storage-README.md
 ---
 # ReAct v2 Budget Model
 

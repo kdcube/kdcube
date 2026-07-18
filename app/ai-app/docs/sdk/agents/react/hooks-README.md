@@ -6,7 +6,7 @@ tags: ["sdk", "agents", "react", "hooks"]
 keywords: ["before/after hooks", "ContextBrowser hooks", "compaction hooks"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-discovery-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-storage-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/workspace/artifact-storage-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/compaction-README.md
 ---
 # Hooks (v2)

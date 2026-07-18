@@ -23,7 +23,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/arch/proc/events-orchestration-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/timeline-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-browser-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/turn-log-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/timeline/turn-log-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/why/memory-architecture-README.md
 ---
 
@@ -82,15 +82,15 @@ Current boundary:
 - retention is bounded per tenant/project/conversation stream by
   `CHAT_EXTERNAL_EVENTS_STREAM_MAX_ENTRIES` and
   `CHAT_EXTERNAL_EVENTS_STREAM_RETENTION_SECONDS`
-- after React folds an event, the folded blocks and cursor become part of the
+- after ReAct folds an event, the folded blocks and cursor become part of the
   normal persisted timeline; idle non-reactive authored events that never open
-  or reach a React turn currently remain only in the Redis external-event source
+  or reach a ReAct turn currently remain only in the Redis external-event source
 - steer interruption is immediate for the active decision phase task
 - steer interruption is immediate for cancellable exec/tool phases that already honor task cancellation
 - a fully blocking tool that does not cooperate with cancellation can still delay final stop until its await boundary
 - authored `external_event` inception is documented in
-  [Ingress Event Inception](../../arch/ingress/events-inception-README.md);
-  this article focuses on React consumption of the shared event source
+  [Ingress Event Inception](../../../arch/ingress/events-inception-README.md);
+  this article focuses on ReAct consumption of the shared event source
 
 Implemented flow:
 

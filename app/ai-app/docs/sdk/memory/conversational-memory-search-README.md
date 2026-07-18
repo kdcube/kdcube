@@ -679,7 +679,7 @@ that conversation is within the same scope.
 kdcube_ai_app/apps/chat/sdk/solutions/react/tools/memsearch.py
   TOOL_SPEC, hybrid orchestration, per-hit RRF metadata surfacing
 
-kdcube_ai_app/apps/chat/sdk/context/retrieval/ctx_rag.py
+kdcube_ai_app/apps/chat/sdk/solutions/conversation/ctx_rag.py
   search_context with scoring_mode="rrf_hybrid":
   parallel semantic+lexical+trigram, RRF (k=60), multiplicative recency lift (L=1.0)
 

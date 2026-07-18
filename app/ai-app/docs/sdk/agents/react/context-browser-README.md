@@ -19,7 +19,7 @@ progress blocks that become part of the in‑turn log.
 
 Relevant code:
 - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/browser.py`
-- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/context/retrieval/ctx_rag.py`
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/conversation/ctx_rag.py`
 - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/layout.py` (block formatting)
 
 ---
@@ -178,4 +178,4 @@ This cache window also bounds `react.hide`: paths **before** the pre‑tail cach
 See also:
 - `context-layout.md`
 - `context-progression.md`
-- `conversation-artifacts-README.md`
+- [Harness Conversation Artifacts](../../../runtime/harness/timeline/conversation-artifacts-README.md)

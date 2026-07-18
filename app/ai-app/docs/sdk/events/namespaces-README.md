@@ -20,8 +20,8 @@ keywords:
     "react.checkout",
   ]
 see_also:
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-realm-refs-and-workspace-paths-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/workspace-model-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/workspace/references-and-paths-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/workspace/workspace-model-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/providers-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/react-object-materialization-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-README.md

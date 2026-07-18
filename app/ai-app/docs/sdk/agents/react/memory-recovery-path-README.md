@@ -8,7 +8,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/session-view-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/compaction-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-discovery-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/turn-log-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/timeline/turn-log-README.md
 ---
 # Memory Recovery Path
 

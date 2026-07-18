@@ -7,7 +7,7 @@ keywords: ["snapshot", "external exec", "fargate", "distributed execution"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-blocks-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-discovery-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-storage-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/workspace/artifact-storage-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/exec/exec-logging-error-propagation-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/exec/distributed-exec-README.md
 ---

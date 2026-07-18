@@ -18,7 +18,7 @@ keywords:
   ]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/draft/note-keeping-and-working-summary-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/workspace-model-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/workspace/workspace-model-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-announce-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/session-view-README.md
   - repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/solution_workspace.py
@@ -31,7 +31,7 @@ This is the engineering reference for the git-backed workspace backend (lineage
 branch, immutable per-turn version refs, isolation, publish flow, integration
 points). It is **not** the agent-facing contract — for namespaces, the
 `[WORKSPACE]` ANNOUNCE map, and the pull/checkout model agents use, start with
-[workspace-model-README.md](./workspace-model-README.md).
+[Agent Harness Workspace Model](../../../../runtime/harness/workspace/workspace-model-README.md).
 
 > **`custom` mode is legacy.** The non-git `custom` backend is being phased out;
 > git is the forward path. Where this doc contrasts `custom` vs `git`, treat
@@ -39,7 +39,7 @@ points). It is **not** the agent-facing contract — for namespaces, the
 
 This document explains the git-backed React workspace model and keeps the same
 agent-facing `conv:fi:` / `react.pull(...)` contract described in
-[workspace-model-README.md](./workspace-model-README.md).
+[Agent Harness Workspace Model](../../../../runtime/harness/workspace/workspace-model-README.md).
 
 The main design choices in this model are:
 
@@ -192,11 +192,11 @@ places it under `files/...` or the agent explicitly writes a current-turn
 ## 2) Current Model and Why It Is Not Enough
 
 Relevant current files:
-- [solution_workspace.py](../../../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/solution_workspace.py)
+- [solution_workspace.py](../../../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/solution_workspace.py)
 - [runtime.py](../../../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/runtime.py)
-- [external.py](../../../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/tools/external.py)
-- [read.py](../../../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/tools/read.py)
-- [timeline.py](../../../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/timeline.py)
+- [external.py](../../../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/tools/external.py)
+- [read.py](../../../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/tools/read.py)
+- [timeline.py](../../../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/timeline.py)
 
 Current behavior:
 - relative `files/...` paths are rewritten into the current turn
@@ -465,7 +465,7 @@ explicit historical compatibility views under the referenced version path.
 
 `react.checkout(...)` is the tool that defines what gets materialized into the
 active current-turn workspace. The fuller cross-backend rationale is captured in
-`workspace/workspace-model-README.md`:
+[Agent Harness Workspace Model](../../../../runtime/harness/workspace/workspace-model-README.md):
 
 - keep `react.pull(...)` strictly historical
 - make checkout define the contents of `turn_<current>/git/projects/`
@@ -1054,9 +1054,9 @@ The requirement remains:
 ## 14) Recommended Next Step
 
 Continue from the already implemented foundation:
-1. [git_workspace.py](../../../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/git_workspace.py)
-2. [workspace.py](../../../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/workspace.py)
-3. [solution_workspace.py](../../../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/solution_workspace.py)
+1. [git_workspace.py](../../../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/git_workspace.py)
+2. [workspace.py](../../../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/workspace.py)
+3. [solution_workspace.py](../../../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/solution_workspace.py)
 4. [base_workflow.py](../../../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/chatbot/base_workflow.py)
 5. [shared_instructions.py](../../../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/skills/instructions/shared_instructions.py)
 

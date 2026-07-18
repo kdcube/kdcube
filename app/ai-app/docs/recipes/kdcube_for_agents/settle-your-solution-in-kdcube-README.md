@@ -558,7 +558,8 @@ with no way to run code would be inert):
 
 **One resolver serves every door.** `read_event_ref_bytes`
 (`react/events/resolver.py`) resolves a `conv:fi:` link to bytes for read, for
-pull (via the SDK core `runtime/workspace/pull.py::pull_refs_into_dir`), and for
+pull (via the SDK core
+`runtime/harness/workspace/pull.py::pull_refs_into_dir`), and for
 the Download button (`scene_object_action`) — a link that downloads also reads and
 pulls. Two ref shapes to know: uploads are
 `conv:fi:turn_<id>.user.attachments/<filename>` (the turn-recorder / Files-tab

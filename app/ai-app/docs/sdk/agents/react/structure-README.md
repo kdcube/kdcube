@@ -1,22 +1,25 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/structure-README.md
-title: "Structure"
-summary: "Module layout of the shared React runtime surface, the v2 implementation, and the v3 implementation (the current default for built-in apps)."
+title: "ReAct Adapter Structure"
+summary: "Module layout of the ReAct adapter, its shared harness dependencies, and the v2/v3 decision runtimes."
 tags: ["sdk", "agents", "react", "structure"]
 keywords: ["react/v2", "react/v3", "modules", "runtime layout", "core files", "workspace docs", "rationale docs"]
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/timeline-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/runtime-configuration-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/flow-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/git-backed-workspace-engineering-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/why/why-not-simply-tool-calling-README.md
 ---
-# React Structure
+# ReAct Adapter Structure
 
-React now has a shared runtime surface plus two versioned implementations:
+ReAct is a framework adapter over the shared
+[Agent Harness Runtime](../../../runtime/harness/README.md), plus two
+versioned ReAct implementations:
 
 - `solutions/react/proto.py`
-  - shared contracts such as `RuntimeCtx`
+  - ReAct runtime contracts such as `RuntimeCtx`
 - `solutions/react/v2/`
   - production runtime
   - one response = one round
@@ -27,9 +30,10 @@ React now has a shared runtime surface plus two versioned implementations:
   - real-time action governance (the action overseer gates each streamed action lane; see `round-generation-feedback-README.md`)
   - optional multi-action mode where repeated action blocks can be accepted in one response and executed sequentially
 
-## Runtime Modules
+## ReAct Modules
 
-Each runtime version keeps the same core module layout:
+The ReAct adapter keeps shared modules at `solutions/react/`; version folders
+contain the decision runtime and version-specific tests:
 
 - `runtime.py` — state machine, decision loop, and per-round generation feedback (see `round-generation-feedback-README.md`)
 - `timeline.py` — timeline storage, rendering, pruning, and compaction
@@ -38,6 +42,15 @@ Each runtime version keeps the same core module layout:
 - `layout.py` — block builders and rendered views
 - `tools/` — React-only tools such as `react.read`, `react.write`, `react.patch`, `react.pull`, `react.checkout`, `react.memsearch`, and `react.hide`
 - `artifacts.py` — artifact helpers and logical-path views
+
+Framework-neutral harness modules:
+
+- `runtime/harness/events/`
+  - canonical event/object ref resolution
+- `runtime/harness/timeline/`
+  - block identity, persisted payloads, turn log/view, provider projection
+- `runtime/harness/workspace/`
+  - canonical refs, artifacts, paths, change detection, and materialization
 
 Adjacent shared modules:
 
@@ -66,12 +79,14 @@ The important difference is only the decision contract:
 
 ## Docs Map
 
-The React docs are now organized into four layers:
+The documentation is organized into a shared harness plus ReAct adapter layers:
 
+- `docs/runtime/harness/`
+  - framework-neutral events, timeline, and workspace contracts
 - root `react/`
-  - runtime, timeline, context, tools, flow, round model
+  - ReAct runtime, timeline adapter, context, tools, flow, and round model
 - `react/workspace/`
-  - core workspace capability docs such as git-backed isolated workspaces and checkout semantics
+  - ReAct-specific git-backed workspace engineering and adapter behavior
 - `react/why/`
   - rationale/origin docs such as memory architecture and why React is not built as plain provider-native tool calling
 - `react/design/` and `react/draft/`

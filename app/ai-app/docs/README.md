@@ -68,6 +68,10 @@ Curated index of platform, service, and SDK documentation.
 ## Agents, Tools, Skills, And Memory
 
 * App Agent Integration: [bundle-agent-integration-README.md](sdk/bundle/bundle-agent-integration-README.md)
+* Agent Harness Runtime: [harness/README.md](runtime/harness/README.md)
+* Agent Harness Events: [events/README.md](runtime/harness/events/README.md)
+* Agent Harness Timeline: [timeline/README.md](runtime/harness/timeline/README.md)
+* Agent Harness Workspace: [workspace/README.md](runtime/harness/workspace/README.md)
 * ReAct Runtime Flow: [flow-README.md](sdk/agents/react/flow-README.md)
 * ReAct Context: [react-context-README.md](sdk/agents/react/react-context-README.md)
 * ReAct Tools: [react-tools-README.md](sdk/agents/react/react-tools-README.md)

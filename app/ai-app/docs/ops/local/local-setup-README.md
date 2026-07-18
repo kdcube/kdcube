@@ -65,12 +65,12 @@ Reference:
   See: https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/storage/sdk-store-README.md
 - **Conversation artifacts & attachments** — per turn, per user  
   See:
-  - https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/conversation-artifacts-README.md
-  - https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/artifact-storage-README.md
+  - https://github.com/kdcube/kdcube/blob/main/app/ai-app/docs/runtime/harness/timeline/conversation-artifacts-README.md
+  - https://github.com/kdcube/kdcube/blob/main/app/ai-app/docs/runtime/harness/workspace/artifact-storage-README.md
 - **Execution snapshots** (optional) — persisted workdir for debugging  
   Enabled by `REACT_PERSIST_WORKSPACE=1`  
   See:
-  - https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/workspace/workspace-lifecycle-and-distribution-README.md
+  - https://github.com/kdcube/kdcube/blob/main/app/ai-app/docs/runtime/harness/workspace/workspace-lifecycle-and-distribution-README.md
   - https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/storage/sdk-store-README.md
 
 Example layout (abbreviated):
@@ -88,7 +88,7 @@ Conversation data is split across:
 - **KDCube storage** (artifacts, attachments, execution logs)
 
 The retrieval layer uses `ctx_rag.py` to fetch turn artifacts from storage:
-`kdcube_ai_app/apps/chat/sdk/context/retrieval/ctx_rag.py`
+`kdcube_ai_app/apps/chat/sdk/solutions/conversation/ctx_rag.py`
 
 ## Temporary exec workspace (per turn)
 Reactive code execution uses a **temporary workspace** per turn:

@@ -15,9 +15,10 @@ keywords:
     "materialization",
   ]
 see_also:
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-realm-refs-and-workspace-paths-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/workspace-model-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-storage-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/workspace/references-and-paths-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/workspace/workspace-model-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/workspace/artifact-storage-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/events/artifact-resolution-and-materialization-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/namespaces-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/react-object-materialization-README.md
 ---
@@ -25,14 +26,14 @@ see_also:
 
 This page explains how an agent should move from a visible ref to usable
 content. The grammar is defined in
-[ReAct Realm Refs And Workspace Paths](./react-realm-refs-and-workspace-paths-README.md).
+[Harness References And Workspace Paths](../../../runtime/harness/workspace/references-and-paths-README.md).
 
 ## Ref Classes
 
 | Ref class | Examples | What to do |
 | --- | --- | --- |
-| Conversation text/control records | `conv:ar:turn_1.user.prompt`, `conv:tc:turn_1.tc_a.result`, `conv:so:sources_pool[1]`, `conv:ev:turn_1.events/...` | Use `react.read` when exact content is needed. |
-| Conversation file/artifact refs | `conv:fi:turn_1.files/report.pdf`, `conv:fi:turn_1.git/projects/app/main.py` | Pull if bytes must exist locally; read for context previews/contents. |
+| Conversation text/control records | `conv:ar:conv_<conversation_id>.turn_1.user.prompt`, `conv:tc:conv_<conversation_id>.turn_1.tc_a.result`, `conv:ev:conv_<conversation_id>.turn_1.events/...` | Use `react.read` when exact content is needed. |
+| Conversation file/artifact refs | `conv:fi:conv_<conversation_id>.turn_1.files/report.pdf`, `conv:fi:conv_<conversation_id>.turn_1.git/projects/app/main.py` | Pull if bytes must exist locally; read for context previews/contents. |
 | External owner refs | `mem:mem_123`, `task:issue:ticket_123`, `cnv:main@7` | Use `react.pull`; then use returned `conv:fi:` and physical paths. |
 | Physical current-turn paths | `turn_1/files/report.pdf`, `turn_1/git/projects/app/main.py` | Use with exec, rendering, patch, or rg when the path is local this turn. |
 
@@ -53,7 +54,8 @@ identify ref class
         +-- conv:fi
         |       -> react.read for content/projection
         |       -> react.pull if local bytes are needed this turn
-        |       -> react.checkout only for conv:fi:<turn>.git/projects/...
+        |       -> react.checkout only for
+        |          conv:fi:conv_<conversation_id>.<turn>.git/projects/...
         |
         +-- mem / task / cnv / other registered owner namespace
                 -> react.pull
@@ -67,7 +69,7 @@ identify ref class
 ```json
 {
   "source_ref": "mem:mem_123",
-  "logical_path": "conv:fi:turn_2026-07-04-09-00-00-000.files/memory/mem_123.json",
+  "logical_path": "conv:fi:conv_<conversation_id>.turn_2026-07-04-09-00-00-000.files/memory/mem_123.json",
   "physical_path": "turn_2026-07-04-09-00-00-000/files/memory/mem_123.json",
   "mime": "application/json",
   "snapshot": true,
@@ -92,11 +94,11 @@ turn_<id>/external/...         rehosted event/domain attachments
 Logical equivalents:
 
 ```text
-conv:fi:turn_<id>.git/projects/...
-conv:fi:turn_<id>.files/...
-conv:fi:turn_<id>.git/snapshots/...
-conv:fi:turn_<id>.user.attachments/...
-conv:fi:turn_<id>.external.<kind>.attachments/<event_id>/...
+conv:fi:conv_<conversation_id>.turn_<id>.git/projects/...
+conv:fi:conv_<conversation_id>.turn_<id>.files/...
+conv:fi:conv_<conversation_id>.turn_<id>.git/snapshots/...
+conv:fi:conv_<conversation_id>.turn_<id>.user.attachments/...
+conv:fi:conv_<conversation_id>.turn_<id>.external.<kind>.attachments/<event_id>/...
 ```
 
 ## Read vs Pull vs Checkout
@@ -113,7 +115,7 @@ react.pull
 
 react.checkout
   Make historical project state editable.
-  Only for conv:fi:<turn>.git/projects/... refs.
+  Only for conv:fi:conv_<conversation_id>.<turn>.git/projects/... refs.
 ```
 
 ## Search And Local Inspection
@@ -129,14 +131,14 @@ If a search needs older project state:
 
 ```text
 1. Find the project ref from visible context or [WORKSPACE] REMOTE.
-2. react.pull(paths=["conv:fi:turn_<anchor>.git/projects/<project>"])
+2. react.pull(paths=["conv:fi:conv_<conversation_id>.turn_<anchor>.git/projects/<project>"])
 3. react.rg(paths=["turn_<anchor>/git/projects/<project>"], pattern="...")
 ```
 
 If the older project must be edited:
 
 ```text
-react.checkout(paths=["conv:fi:turn_<anchor>.git/projects/<project>"], mode="replace")
+react.checkout(paths=["conv:fi:conv_<conversation_id>.turn_<anchor>.git/projects/<project>"], mode="replace")
 ```
 
 Then edit:
@@ -155,7 +157,7 @@ Examples:
 
 ```text
 source logical ref:
-  conv:fi:turn_1.files/report/source.html
+  conv:fi:conv_<conversation_id>.turn_1.files/report/source.html
 
 pull result:
   physical_path = turn_1/files/report/source.html
@@ -174,7 +176,7 @@ the owner identity:
 
 ```text
 source_ref / object_ref = mem:mem_123
-logical_path            = conv:fi:turn_1.files/memory/mem_123.json
+logical_path            = conv:fi:conv_<conversation_id>.turn_1.files/memory/mem_123.json
 ```
 
 The owner-specific block-production policy can use `object_ref` to render a

@@ -38,7 +38,7 @@ Must emit (existing are marked with "already in communicator"):
 Notes:
 - The communicator already records outbound events, which enables replay or fetch later.
 - We can reuse the same "fetch turn" path used in platform, e.g. ctx_rag fetch_conversation_artifacts.
-  - See: kdcube_ai_app/apps/chat/sdk/context/retrieval/ctx_rag.py
+  - See: kdcube_ai_app/apps/chat/sdk/solutions/conversation/ctx_rag.py
 
 ## SDK pseudo code
 ```python

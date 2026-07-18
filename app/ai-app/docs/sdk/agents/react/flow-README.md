@@ -16,7 +16,7 @@ keywords:
   ]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-announce-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/workspace-lifecycle-and-distribution-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/workspace/workspace-lifecycle-and-distribution-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/source-pool-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/external-exec-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/online-strategic-governance-README.md

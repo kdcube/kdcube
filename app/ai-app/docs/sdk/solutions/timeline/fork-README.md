@@ -8,7 +8,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/work-with-subagents-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/timeline-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/compaction-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-realm-refs-and-workspace-paths-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/workspace/references-and-paths-README.md
 ---
 # Timeline Fork
 

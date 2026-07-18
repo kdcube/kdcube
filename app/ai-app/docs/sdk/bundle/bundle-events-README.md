@@ -34,8 +34,8 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-journey-and-handling-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/block-production-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/artifact-namespace-rehosters-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/workspace-lifecycle-and-distribution-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/events/artifact-resolution-and-materialization-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/workspace/workspace-lifecycle-and-distribution-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-agent-integration-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/comm/client-transport-protocols-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-widget-integration-README.md
@@ -447,7 +447,7 @@ ReAct paths, for example:
 ```json
 {
   "source_ref": "nmsp:workspace/draft-123/snapshots/current.yaml",
-  "logical_path": "conv:fi:turn_123.git/snapshots/nmsp/workspace/draft-123/current.yaml",
+  "logical_path": "conv:fi:conv_<conversation_id>.turn_123.git/snapshots/nmsp/workspace/draft-123/current.yaml",
   "physical_path": "turn_123/git/snapshots/nmsp/workspace/draft-123/current.yaml"
 }
 ```
@@ -458,21 +458,21 @@ the returned `logical_path` or `physical_path`.
 ## Registering A Custom Artifact Namespace
 
 Register a namespace rehoster in a loaded tool module or loaded event module.
-The rehoster must know the ReAct workspace layout and choose the destination by
+The rehoster must know the shared harness workspace layout and choose the destination by
 artifact meaning. Read:
 
-- [Agent Workspace Collaboration](../agents/react/workspace/artifact-namespace-rehosters-README.md)
-- [ReAct Turn Workspace](../agents/react/workspace/workspace-lifecycle-and-distribution-README.md)
-- [Files vs Outputs](../agents/react/workspace/workspace-model-README.md)
+- [Artifact Resolution And Materialization](../../runtime/harness/events/artifact-resolution-and-materialization-README.md)
+- [Harness Workspace Lifecycle And Distribution](../../runtime/harness/workspace/workspace-lifecycle-and-distribution-README.md)
+- [Agent Harness Workspace Model](../../runtime/harness/workspace/workspace-model-README.md)
 
 Destination map:
 
 | Source artifact meaning | ReAct destination |
 |---|---|
-| Story/wizard/canvas snapshot | `conv:fi:turn_<id>.git/snapshots/<path>` / `turn_<id>/git/snapshots/<path>` |
-| Evidence or domain attachment | `conv:fi:turn_<id>.external.<event_kind>.attachments/<event_id>/<name>` / `turn_<id>/external/<event_kind>/attachments/<event_id>/<name>` |
-| Editable project/workspace file | `conv:fi:turn_<id>.git/projects/<workspace_scope>/<path>` / `turn_<id>/git/projects/<workspace_scope>/<path>` |
-| Produced report/export/rendered artifact | `conv:fi:turn_<id>.files/<artifact_scope>/<path>` / `turn_<id>/files/<artifact_scope>/<path>` |
+| Story/wizard/canvas snapshot | `conv:fi:conv_<conversation_id>.turn_<id>.git/snapshots/<path>` / `turn_<id>/git/snapshots/<path>` |
+| Evidence or domain attachment | `conv:fi:conv_<conversation_id>.turn_<id>.external.<event_kind>.attachments/<event_id>/<name>` / `turn_<id>/external/<event_kind>/attachments/<event_id>/<name>` |
+| Editable project/workspace file | `conv:fi:conv_<conversation_id>.turn_<id>.git/projects/<workspace_scope>/<path>` / `turn_<id>/git/projects/<workspace_scope>/<path>` |
+| Produced report/export/rendered artifact | `conv:fi:conv_<conversation_id>.turn_<id>.files/<artifact_scope>/<path>` / `turn_<id>/files/<artifact_scope>/<path>` |
 
 Example:
 

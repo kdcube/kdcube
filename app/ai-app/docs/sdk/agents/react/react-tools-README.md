@@ -11,7 +11,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/tool-call-blocks-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-subsystem-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/namespaces-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/workspace-model-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/workspace/workspace-model-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/conversational-memory-search-README.md
 ---
 # React Tools (react.*)

@@ -1,18 +1,21 @@
 ---
-id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/conversation-artifacts-README.md
-title: "Conversation Artifacts"
-summary: "Artifacts persisted in conversation storage for v2 flow."
-tags: ["sdk", "agents", "react", "artifacts", "conversation"]
+id: repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/timeline/conversation-artifacts-README.md
+title: "Harness Conversation Artifacts"
+summary: "Timeline, turn-log, source-pool, feedback, and stream artifacts persisted for agent conversations."
+tags: ["runtime", "harness", "timeline", "artifacts", "conversation"]
+updated_at: 2026-07-18
 keywords: ["ContextRAGClient", "save_artifact", "save_turn_log_artifact", "conversation store"]
 see_also:
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/turn-data-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/turn-log-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/timeline/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/timeline/turn-view-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/timeline/turn-log-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/workspace/artifact-storage-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-discovery-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/workspace-lifecycle-and-distribution-README.md
 ---
-# Conversation Artifacts (v2)
+# Harness Conversation Artifacts
 
-This document lists artifacts persisted in the conversation store/index in the v2 flow.
+This document lists artifacts persisted in the conversation store/index for
+agent conversations.
 It focuses on artifacts written via `ContextRAGClient.save_artifact(...)` or
 `ContextRAGClient.save_turn_log_as_artifact(...)`.
 
@@ -24,7 +27,7 @@ Notes:
 - Embeddings are caller‑supplied; the store does not compute embeddings.
 
 Reference implementations:
-- Save API: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/context/retrieval/ctx_rag.py`
+- Save API: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/conversation/ctx_rag.py`
 - Core workflow writers: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/chatbot/base_workflow.py`
 - Streaming artifacts persistence: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/chatbot/entrypoint.py`
 
@@ -59,9 +62,9 @@ Reference implementations:
   via block metadata; they are not standalone conversation artifacts here.
 - Feedback is persisted as `artifact:turn.log.reaction` and mirrored into the **turn log payload**
   (`turn_log.feedbacks[]` and `turn_log.entries[]`) inside `artifact:turn.log`.
-  When cache is cold, React v2 injects `turn.feedback` blocks into the timeline and those
+  When cache is cold, ReAct v2 injects `turn.feedback` blocks into the timeline and those
   blocks are persisted inside `conv.timeline.v1`.
-- React v2 refreshes feedback by querying **latest reaction per turn** (SQL `DISTINCT ON`),
+- ReAct v2 refreshes feedback by querying **latest reaction per turn** (SQL `DISTINCT ON`),
   filtered by `artifact:turn.log.reaction` tag and the timeline’s `turn_id`s.
 - `artifact:turn.log.reaction` rows store reaction JSON in `conv_messages.text`
   for fast index‑only reads. Shape:
@@ -97,7 +100,10 @@ Reference implementations:
 - The timeline artifact payload includes the current full `sources_pool` so logical source reads and
   exec `fetch_ctx` can recover fetched source content. The indexed text remains compact, and the
   authoritative progressive pool is also persisted as `conv:sources_pool` and loaded at turn start.
-- Loading happens in `ContextBrowser.load_timeline` (`src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/browser.py`).
+- The ReAct adapter loads these artifacts through
+  `ContextBrowser.load_timeline`
+  (`src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/browser.py`).
+  Conversation APIs use the shared harness payload/turn-view modules directly.
 
 ## Storage Layout (Blob Store)
 
@@ -123,5 +129,5 @@ See: `docs/sdk/storage/sdk-store-README.md`
 ## Where These Are Written
 - Core workflow artifacts: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/chatbot/base_workflow.py`
 - Streaming artifacts: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/chatbot/entrypoint.py`
-- Turn log + reactions: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/context/retrieval/ctx_rag.py`
+- Turn log + reactions: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/conversation/ctx_rag.py`
 - Memory artifacts: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/context/memory/conv_memories.py`, `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/context/memory/buckets.py`

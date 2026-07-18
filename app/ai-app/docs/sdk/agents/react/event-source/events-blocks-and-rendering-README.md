@@ -8,6 +8,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/block-production-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/timeline-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/timeline/provider-projection-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-caching-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/compaction-README.md
 ---
@@ -27,6 +28,13 @@ persistent timeline blocks
     -> non-cached tail: sources pool + ANNOUNCE
     -> model message blocks
 ```
+
+This is a **ReAct model-input policy pipeline**. It is not the shared
+[provider projection contract](../../../../runtime/harness/timeline/provider-projection-README.md),
+which lets a named-service or event provider project only the blocks it owns
+for clients, artifacts, and other agent adapters. A provider projection may
+feed this pipeline, but it does not own ReAct cache markers, compaction, or
+ANNOUNCE.
 
 ANNOUNCE is tail material. It is recomputed for the decision render and appended
 after cache markers. It is not stored as a normal timeline block unless a

@@ -1,24 +1,31 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/timeline-README.md
 title: "Timeline"
-summary: "Timeline as the single source of truth for React context, artifacts, round state, and live external events."
+summary: "Timeline as the single source of truth for ReAct context, artifacts, round state, and live external events."
 tags: ["sdk", "agents", "react", "timeline", "blocks"]
 keywords: ["timeline blocks", "ordered events", "artifacts", "turn context"]
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/timeline/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/timeline/turn-log-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/structure-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/turn-log-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-discovery-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/session-view-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/events-blocks-and-rendering-README.md
 ---
-# Timeline (React)
+# Timeline (ReAct)
 
-The **timeline** is the single source of truth for turn context. It stores:
+This page documents the ReAct adapter's live timeline behavior: rounds,
+ANNOUNCE, cache/compaction, memory beacons, and live event folding. The
+framework-neutral persistence, block identity, turn-log, turn-view, and
+provider-projection contracts are in
+[Agent Harness Timeline](../../../runtime/harness/timeline/README.md).
+
+For ReAct, the **timeline** is the single source of truth for turn context. It stores:
 - ordered **blocks** (user prompts, attachments, agent contributions, tool calls/results)
 - live-folded external user event blocks (`user.followup`, `user.steer`)
 - live-folded attachment blocks for busy-turn followups that carry attachments
 - Internal Memory Beacons (`react.note`) and preserved beacons (`react.note.preserved`)
-- working summary blocks (`conv.working.summary`) emitted from React's
+- working summary blocks (`conv.working.summary`) emitted from ReAct's
   `summary` channel
 - conversation metadata (title, started_at, last_activity_at)
 - the persisted external-event replay cursor (`last_external_event_id`, `last_external_event_seq`)
@@ -32,7 +39,7 @@ One turn may contain:
   were produced in the same long turn
 
 Working summaries are first-class timeline blocks. They are not synthetic
-post-processing at persistence time: when React emits `channel:summary` together
+post-processing at persistence time: when ReAct emits `channel:summary` together
 with a final/exit answer attempt, the summary is contributed into the same turn.
 If a later followup causes another answer attempt, that attempt can contribute a
 new summary with its own path. The unsuffixed `conv:ws:<turn_id>.conv.working.summary`
@@ -79,12 +86,12 @@ Both `v2` and `v3` use this same timeline model. The difference is the decision 
 ### External event delivery model
 The delivery model is now shared and durable:
 - ingress appends busy-turn `followup` / `steer` requests into one canonical conversation event source
-- the live React turn consumes from that source when it owns the timeline
+- the live ReAct turn consumes from that source when it owns the timeline
 - if there is no live owner, processor promotion continues from that same source
 - a consumed `followup` remains on the same turn and becomes visible to the next decision round
 - a consumed `steer` is an engineering-layer interrupt first, not just extra timeline text
 - engineering attempts to cancel the active decision generation or cancellable tool phase immediately
-- React then sees the steer block on the same turn timeline and gets a short bounded finalize phase before turn completion
+- ReAct then sees the steer block on the same turn timeline and gets a short bounded finalize phase before turn completion
 - if a live `followup` carries attachments, those attachments are folded into the current turn as normal attachment blocks instead of text-only control input
 
 This avoids having one path for “live events” and a different source of truth for fallback continuation.
@@ -284,7 +291,7 @@ rules are separate from TTL pruning:
 - `stats_only: true` records path metadata in the `react.read` status block
   without adding content blocks to the visible timeline
 - PDF/image content is all-or-marker: if under the byte cap it renders as a
-  normal multimodal block; if over the cap, React renders a recovery marker
+  normal multimodal block; if over the cap, ReAct renders a recovery marker
   with bytes/path metadata
 - admitted PDF/image blocks count toward prompt-size estimates as model tokens
   (image dimensions/PDF pages), not as raw base64 bytes

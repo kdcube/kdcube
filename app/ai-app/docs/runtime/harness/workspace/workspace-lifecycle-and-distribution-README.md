@@ -1,27 +1,36 @@
 ---
-id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/workspace-lifecycle-and-distribution-README.md
-title: "ReAct Workspace Lifecycle & Distribution"
-summary: "Filesystem contract and lifecycle of the per-turn ReAct workspace (work/out), including local origin, runtime population, persistence, and Fargate/distributed snapshot transport."
-tags: ["sdk", "agents", "react", "workspace", "execution", "snapshot", "fargate", "distributed"]
-updated_at: 2026-07-14
+id: repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/workspace/workspace-lifecycle-and-distribution-README.md
+title: "Harness Workspace Lifecycle And Distribution"
+summary: "Filesystem lifecycle of the per-turn agent workspace, including local origin, runtime population, persistence, and distributed snapshot transport."
+tags: ["runtime", "harness", "workspace", "execution", "snapshot", "fargate", "distributed"]
+updated_at: 2026-07-18
 keywords: ["exec-workspace", "exec_YYYYMMDDHHMMSS", "workdir", "outdir", "timeline.json", "tool_calls_index.json", "user.log", "infra.log", "EXEC_SNAPSHOT", "build_exec_snapshot_workspace", "snapshot_exec_input", "py_code_exec_entry.py"]
 see_also:
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/workspace-model-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/workspace/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/workspace/workspace-model-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/events/artifact-resolution-and-materialization-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/timeline-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/turn-log-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/timeline/turn-log-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/source-pool-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/external-exec-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/exec/distributed-exec-README.md
 ---
-# ReAct Workspace Lifecycle & Distribution
+# Harness Workspace Lifecycle And Distribution
 
-This document defines the **actual workspace structure** used by ReAct and how it evolves across phases:
+This document defines the shared workspace structure used by agent harness
+adapters and how it evolves across phases:
 - local turn start (`exec-workspace/exec_<UTC timestamp>_<suffix>`)
 - tool execution and artifact population
 - optional turn snapshot persistence
 - distributed/Fargate serialization, restore, and merge-back
 
-The workspace is execution state. Canonical conversation state still lives in timeline/sources/turn-log artifacts.
+The workspace is execution state. Canonical conversation state still lives in
+timeline, source-pool, turn-log, and hosted-file artifacts.
+
+ReAct currently exercises the complete lifecycle, including ANNOUNCE,
+pull/checkout, optional persistence, and distributed code execution. The ported
+LangGraph example consumes the common materialization and code-exec layout
+without inheriting ReAct's model protocol.
 
 Scope:
 - this document describes the concrete workspace filesystem and lifecycle
@@ -29,7 +38,7 @@ Scope:
   the `[WORKSPACE]` ANNOUNCE map, and pull/checkout — is in
   [workspace-model-README.md](./workspace-model-README.md)
 
-## Effective agent workspace model
+## Effective Harness Workspace Model
 
 The full agent-facing path contract is in
 [workspace-model-README.md](./workspace-model-README.md).
@@ -63,12 +72,12 @@ Current behavior:
 - Reads can target:
   - versioned turn artifacts and attachments
   - any readable artifact file already present under `out/workdir/`
-- External owner refs such as `nmsp:`, `cnv:`, or `mem:` have no physical path
-  until `react.pull` invokes a registered namespace rehoster and returns the
-  materialized `conv:fi:` / physical rows.
+- External owner refs such as `task:`, `cnv:`, or `mem:` have no derived
+  physical path. A framework adapter asks the owner resolver/rehoster to
+  materialize them. In ReAct, that adapter surface is `react.pull`.
 
-Materialization authority comes from runtime context rather than the ref. ReAct
-may request a conversation, turn, or owner locator, but the trusted resolver
+Materialization authority comes from runtime context rather than the ref. An
+agent adapter may request a conversation, turn, or owner locator, but the trusted resolver
 retains the ingress-bound tenant, project, user, and authority. Conversation
 history lookup always includes `RuntimeCtx.user_id`; git lineage always includes
 tenant/project/user/conversation; namespace rehosters authorize under the
@@ -85,7 +94,7 @@ Workspace implementation (`RuntimeCtx.workspace_implementation`):
   - `.git/projects/...` pulls hydrate from git-backed lineage snapshots
   - the current turn root `out/workdir/<current_turn>/` is bootstrapped as a local git repo
   - that current-turn repo keeps lineage history available but does not eagerly populate the worktree
-  - ANNOUNCE may show `previous saved workspace paths (pull to bring local; checkout to edit)` so React can see prior saved workspace paths without mistaking them for the current editable workspace
+  - ANNOUNCE may show `previous saved workspace paths (pull to bring local; checkout to edit)` so ReAct can see prior saved workspace paths without mistaking them for the current editable workspace
   - the agent may use local git inspection/history/edit commands inside that current-turn repo, except pull/push/fetch
 - in both modes:
   - `react.pull` materializes refs as historical/reference material
@@ -95,9 +104,9 @@ Workspace implementation (`RuntimeCtx.workspace_implementation`):
 
 ### Namespace-owned files and exec-time path resolution
 
-Bundle-owned files are not exposed through a generic ReAct-readable knowledge
+App (bundle)-owned files are not exposed through a generic ReAct-readable knowledge
 space. If generated code needs to inspect namespace-owned bytes or directory-like
-content, the owning bundle must provide an explicit resolver, rehoster, tool,
+content, the owning app must provide an explicit resolver, rehoster, tool,
 MCP/search surface, or named-service operation that enforces the current auth
 context.
 
@@ -110,9 +119,10 @@ When such a resolver exists, the generated code flow is:
    logs so the agent can later use the correct owner API or `react.read` on
    normal `conv:fi:`/`conv:tc:`/`conv:ar:` artifacts
 
-## Lifecycle at a glance
+## Lifecycle At A Glance
 
-1. ReAct creates a fresh per-turn workspace directory (`exec_YYYYMMDDHHMMSS_ab12`, timestamped in UTC) with `work/` and `out/`.
+1. The harness adapter creates a fresh per-turn workspace directory
+   (`exec_YYYYMMDDHHMMSS_ab12`, timestamped in UTC) with `work/` and `out/`.
 2. During the turn, tools and runtime write files into `out/` (and sometimes `work/`).
    User-visible artifacts are under `out/workdir`; runtime metadata/logs stay directly under `out`.
 3. Optionally, `react.persist_workspace()` stores zipped `out`/`work` for diagnostics.
@@ -215,8 +225,10 @@ Notes:
 
 ### Path conventions used inside the workspace
 
-The full `conv:fi:` grammar, custom namespace rules, and pull/checkout contract live
-in [artifact-namespace-rehosters-README.md](artifact-namespace-rehosters-README.md).
+The full `conv:fi:` grammar and path contract live in
+[References And Paths](references-and-paths-README.md). Owner-namespace
+resolution is documented in
+[Artifact Resolution And Materialization](../events/artifact-resolution-and-materialization-README.md).
 This runtime article only needs the operational shape:
 
 ```text
@@ -245,7 +257,7 @@ Workspace/read-write summary:
   `conv:fi:` path.
 - `react.rg` searches readable files already materialized in `OUTPUT_DIR`; it is
   not a search over unpulled history.
-- `work/` is internal execution scratch and is not part of the normal React search/read contract.
+- `work/` is internal execution scratch and is not part of the normal ReAct search/read contract.
 
 ## Phase 3: Optional turn snapshot persistence (`react.persist_workspace()`)
 

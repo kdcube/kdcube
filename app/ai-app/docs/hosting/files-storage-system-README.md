@@ -6,9 +6,9 @@ tags: ["hosting", "storage", "artifacts", "resources", "react"]
 keywords: ["files", "artifacts", "resources", "KDCUBE_STORAGE_PATH", "RN", "conversation store"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/storage/sdk-store-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/conversation-artifacts-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-storage-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/workspace-lifecycle-and-distribution-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/timeline/conversation-artifacts-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/workspace/artifact-storage-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/workspace/workspace-lifecycle-and-distribution-README.md
 ---
 # File Storage and Hosting
 
@@ -155,6 +155,6 @@ blocks are model-visible summaries/previews and are not used as file bytes.
   file blobs and timeline metadata are.
 
 ## Related docs
-- [Conversation artifacts](https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/conversation-artifacts-README.md)
-- [Artifact storage](https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/artifact-storage-README.md)
-- [React turn workspace](https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/workspace/workspace-lifecycle-and-distribution-README.md)
+- [Harness conversation artifacts](https://github.com/kdcube/kdcube/blob/main/app/ai-app/docs/runtime/harness/timeline/conversation-artifacts-README.md)
+- [Harness artifact storage](https://github.com/kdcube/kdcube/blob/main/app/ai-app/docs/runtime/harness/workspace/artifact-storage-README.md)
+- [Harness workspace lifecycle](https://github.com/kdcube/kdcube/blob/main/app/ai-app/docs/runtime/harness/workspace/workspace-lifecycle-and-distribution-README.md)

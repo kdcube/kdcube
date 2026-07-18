@@ -8,7 +8,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-budget-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/round-generation-feedback-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-discovery-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-storage-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/workspace/artifact-storage-README.md
 ---
 # ReAct v2 State Machine
 

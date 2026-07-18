@@ -489,7 +489,7 @@ Resolvers belong to the subsystem that owns the object namespace.
 | Namespace | Owner | Resolver Belongs In |
 | --- | --- | --- |
 | `mem:` | memory module | `sdk/context/memory/events/resolver.py` |
-| `conv:fi:` | ReAct artifact/event layer | `sdk/solutions/react/events/resolver.py` |
+| `conv:fi:` | Agent harness artifact/event layer | `sdk/runtime/harness/events/resolver.py` |
 | `task:` | task/issue subsystem | the task subsystem package |
 | `cnv:` | canvas module | `sdk/solutions/canvas/events/resolver.py` |
 | provider-defined refs | named-service provider, MCP/search surface, or explicit rehoster | the owning subsystem package |

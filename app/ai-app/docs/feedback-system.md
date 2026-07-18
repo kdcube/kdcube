@@ -6,8 +6,8 @@ tags: ["feedback", "system", "timeline", "turns", "artifacts"]
 keywords: ["reaction", "feedback blocks", "turn_log", "feedback artifacts", "v2 feedback"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/feedback-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/turn-data-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/turn-log-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/timeline/turn-view-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/timeline/turn-log-README.md
 ---
 # Feedback System – Complete Architecture & Design (v2.2)
 
@@ -266,7 +266,7 @@ Score: `0.85*similarity + 0.15*recency`, `top_k=5`, `days=365`.
 
 ### 3. Feedback Application
 
-**Location:** `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/context/retrieval/ctx_rag.py`
+**Location:** `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/conversation/ctx_rag.py`
 
 * `append_reaction_to_turn_log(...)` writes the **reaction artifact** (`artifact:turn.log.reaction`).
 * `remove_user_reaction(...)` clears prior user-origin reactions for a turn.

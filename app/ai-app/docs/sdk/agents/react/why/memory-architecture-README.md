@@ -22,10 +22,10 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-layout.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-progression.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-caching-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/conversation-artifacts-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/timeline/conversation-artifacts-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-announce-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/source-pool-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/workspace-lifecycle-and-distribution-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/workspace/workspace-lifecycle-and-distribution-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/custom-isolated-workspace-mental-map-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/timeline-projection-README.md

@@ -1,7 +1,7 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/runtime/README.md
 title: "Runtime Surfaces And Boundaries"
-summary: "Index of KDCube runtime surfaces, execution boundaries, and the portable context guarantees used by bundles, tools, agents, and namespace services."
+summary: "Index of KDCube runtime surfaces, execution boundaries, and the portable context guarantees used by apps, tools, agents, and namespace services."
 tags: ["runtime", "sdk", "bundles", "tools", "isolation", "context", "namespace-services"]
 keywords:
   [
@@ -15,8 +15,9 @@ keywords:
     "iso runtime",
     "bundle runtime",
   ]
-updated_at: 2026-07-14
+updated_at: 2026-07-18
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/README.md
   - repo:kdcube-ai-app/app/ai-app/docs/runtime/tenant-project-user-and-execution-boundaries-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/runtime/cross-runtime-context-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/runtime/fenced-runtime-bootstrap-and-reduce-README.md
@@ -45,24 +46,26 @@ For the portable context contract, read
 | Separate tenant/project scope, concurrent users, Connection Hub authority, apps, and reusable agent-code isolation | [Tenant, User, Authority, And Execution Boundaries](tenant-project-user-and-execution-boundaries-README.md) |
 | Know which identity and descriptors cross runtime transitions | [Cross-Runtime Context](cross-runtime-context-README.md) |
 | Bootstrap and reduce a scoped execution fence | [Fenced Runtime Bootstrap And Reduce](fenced-runtime-bootstrap-and-reduce-README.md) |
+| Understand framework-neutral agent events, timelines, refs, and turn workspaces | [Agent Harness Runtime](harness/README.md) |
 | Operate the supervisor/executor isolation model | [ISO Runtime](../exec/README-iso-runtime.md) |
 
 ## Runtime Surface Map
 
 | Surface | Where code runs | Main use | Context guarantee |
 | --- | --- | --- | --- |
-| Processor host runtime | chat processor process | chat turns, bundle entrypoints, local bundle operations | full request context, communicator, Redis/Postgres handles, bundle props/secrets APIs |
-| REST/API bundle operation runtime | proc integration handler | `@api`, widget operations, public/internal bundle endpoints | request/session context is converted to `ExternalEventPayload` and bound around the method |
-| MCP bundle runtime | proc integration handler or bundle-hosted MCP server | bundle MCP tools called by external agents | same request context contract as API when the call enters through KDCube ingress |
+| Processor host runtime | chat processor process | chat turns, app entrypoints, local app operations | full request context, communicator, Redis/Postgres handles, app (bundle) props/secrets APIs |
+| Agent harness runtime | processor plus trusted workspace/timeline services | framework-neutral event resolution, timeline persistence/projection, refs, and turn workspace materialization | runtime-bound identity and shared contracts above concrete ReAct/LangGraph adapters |
+| REST/API app operation runtime | proc integration handler | `@api`, widget operations, public/internal app endpoints | request/session context is converted to `ExternalEventPayload` and bound around the method |
+| MCP app runtime | proc integration handler or app-hosted MCP server | app MCP tools called by external agents | same request context contract as API when the call enters through KDCube ingress |
 | Cron/job runtime | scheduler/worker process | `@cron`, `@on_job`, long-running platform work | headless or stored user context; no implicit browser session unless the job payload carries it |
-| Data Bus handler runtime | Data Bus worker | durable bundle-scoped messages | `DataBusContext`, request-like auth context from message actor, current bundle id, optional comm replies |
+| Data Bus handler runtime | Data Bus worker | durable app-scoped messages | `DataBusContext`, request-like auth context from message actor, current app (bundle) id, optional comm replies |
 | In-process tool runtime | same Python process as current turn | normal SDK tools and provider helpers | current `ContextVar` bindings are visible in the same async task context |
 | Subagent runtime fence | same process, task, thread, subprocess, or isolated runtime | coordinator-delegated scoped agent work | subagent `agent_id`, workspace refs, comm spec, and accounting context are captured in the portable spec built inside the subagent scope |
 | Local subprocess tool runtime | child Python process on same host | crash containment for selected tools | portable spec plus selected contextvars are restored; live Python objects are rebuilt or absent |
 | ISO Docker supervisor runtime | trusted supervisor process/container | tool brokering for isolated execution | descriptors, portable spec, communicator, settings/secrets, and tool subsystem are restored for supervisor |
 | ISO Docker executor runtime | restricted generated-code process/container | untrusted generated code | minimal env, work/out surfaces, supervisor socket; no direct descriptors or platform secrets |
 | Fargate exec supervisor/runtime | external ECS task | distributed isolated execution | same supervisor/executor contract as Docker, transported through the exec payload |
-| Node/backend sidecar runtime | separate sidecar process | bundle-owned non-Python backend | context crosses only through the explicit sidecar bridge, not Python `ContextVar` snapshots |
+| Node/backend sidecar runtime | separate sidecar process | app-owned non-Python backend | context crosses only through the explicit sidecar bridge, not Python `ContextVar` snapshots |
 | Browser/widget runtime | user browser | UI, SSE/Socket.IO/Data Bus clients | no server context; must use authenticated transport or platform-issued scoped tokens |
 
 ## Boundary Types
@@ -74,7 +77,7 @@ For the portable context contract, read
 | Local subprocess | `PORTABLE_SPEC_JSON`, selected contextvars, runtime globals, output side files | live Redis/PG objects, live Python callbacks, nonserializable selectors |
 | Docker/Fargate supervisor | descriptor payloads, portable spec, communicator spec, tool/module maps, storage config | host-only Python objects |
 | Docker/Fargate executor | work/out paths, limited env, supervisor socket | descriptors, secrets, bundle storage roots, platform storage roots |
-| Peer bundle local loop | request/session context, target bundle id, operation payload | browser cookies as raw replay; caller uses platform session/auth context |
+| Peer app local loop | request/session context, target app (bundle) id, operation payload | browser cookies as raw replay; caller uses platform session/auth context |
 | Redis Streams/Data Bus | durable JSON messages and handler results | conversation timeline unless an explicit bridge writes conversation events |
 | SSE/Socket.IO relay | live envelopes to connected clients | durable truth; use storage/Data Bus/event lane for state |
 
@@ -126,9 +129,10 @@ Examples:
 | Data Bus | messages are durable Redis Stream records. Handler lifecycle belongs to runtime workers. |
 | Conversation event lane | conversation `external_events[]` are ordered and consumed by conversation/runtime orchestration, not by comm relay. |
 | Namespace services | provider location is resolved from Named Service Discovery; calls use the best available runtime bridge while preserving auth context. |
-| Bundle operations | same-KDCube calls should use local bundle operation/registry bridges when available; external HTTP is not required for local composition. |
+| App operations | same-KDCube calls should use local app (bundle) operation/registry bridges when available; external HTTP is not required for local composition. |
 | Accounting | accounting context is restored in child runtimes and writes through the configured accounting storage. |
 | Artifacts | child runtimes write to runtime out/work surfaces; host merges expected side files and artifacts after execution. |
+| Agent harness | shared event, timeline, and workspace contracts are imported by framework adapters; model protocols and scheduling policy remain adapter-owned. |
 
 ## Implementation Anchors
 
@@ -139,6 +143,7 @@ Examples:
 | Request/context room | `kdcube_ai_app/apps/chat/sdk/runtime/comm_ctx.py` |
 | Isolated execution | `kdcube_ai_app/apps/chat/sdk/runtime/iso_runtime.py` |
 | External Docker/Fargate runtime | `kdcube_ai_app/apps/chat/sdk/runtime/external/` |
-| Bundle local bridges | `kdcube_ai_app/apps/chat/sdk/infra/bundle_operations.py` |
+| App (bundle) local bridges | `kdcube_ai_app/apps/chat/sdk/infra/bundle_operations.py` |
 | Namespace services | `kdcube_ai_app/apps/chat/sdk/solutions/named_services_providers/` |
 | Data Bus runtime | `kdcube_ai_app/apps/chat/sdk/runtime/data_bus/` |
+| Agent harness | `kdcube_ai_app/apps/chat/sdk/runtime/harness/` |

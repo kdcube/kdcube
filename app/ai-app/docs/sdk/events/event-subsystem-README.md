@@ -28,9 +28,9 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-event-envelope-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/arch/proc/events-orchestration-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/artifact-namespace-rehosters-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/workspace-lifecycle-and-distribution-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/workspace-model-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/events/artifact-resolution-and-materialization-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/workspace/workspace-lifecycle-and-distribution-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/workspace/workspace-model-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/block-production-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/tool-subsystem-README.md
@@ -257,13 +257,13 @@ as `cnv:...` or `mem:...` into a normal ReAct `conv:fi:` artifact ref by copying
 bytes into the current turn artifact surface. The rehoster owns the mapping from
 the owner ref to the ReAct artifact namespace.
 
-A rehoster must be aware of the ReAct workspace and artifact surfaces. It does
-not merely download bytes; it chooses where the artifact belongs in the ReAct
-model and returns the resulting `conv:fi:` logical path plus `OUTPUT_DIR`-relative
-physical path. Read
-[Agent Workspace Collaboration](../agents/react/workspace/artifact-namespace-rehosters-README.md)
-and [Files vs Outputs](../agents/react/workspace/workspace-model-README.md) before
-writing a bundle rehoster.
+A rehoster must be aware of the shared harness workspace and artifact
+surfaces. It does not merely download bytes; it chooses where the artifact
+belongs and returns the resulting `conv:fi:` logical path plus
+`OUTPUT_DIR`-relative physical path. Read
+[Artifact Resolution And Materialization](../../runtime/harness/events/artifact-resolution-and-materialization-README.md)
+and [Agent Harness Workspace](../../runtime/harness/workspace/README.md) before
+writing an app rehoster.
 
 ### Where rehosters are discovered
 
@@ -311,21 +311,23 @@ react = self.build_react(
 
 Inside `events/my_artifacts.py`:
 
-- snapshot-like state should materialize as `conv:fi:turn_<id>.git/snapshots/...`
+- snapshot-like state should materialize as
+  `conv:fi:conv_<conversation_id>.turn_<id>.git/snapshots/...`
 - external evidence/files should materialize as
-  `conv:fi:turn_<id>.external.<event_kind>.attachments/<event_id>/<name>`
+  `conv:fi:conv_<conversation_id>.turn_<id>.external.<event_kind>.attachments/<event_id>/<name>`
 - editable workspace/project state should materialize as
-  `conv:fi:turn_<id>.git/projects/...`
-- produced deliverables/reports should materialize as `conv:fi:turn_<id>.files/...`
+  `conv:fi:conv_<conversation_id>.turn_<id>.git/projects/...`
+- produced deliverables/reports should materialize as
+  `conv:fi:conv_<conversation_id>.turn_<id>.files/...`
 
 The destination is semantic:
 
 | Source artifact meaning | ReAct destination |
 |---|---|
-| Story/wizard state snapshot | `conv:fi:turn_<id>.git/snapshots/<path>` / `turn_<id>/git/snapshots/<path>` |
-| Evidence or domain attachment | `conv:fi:turn_<id>.external.<event_kind>.attachments/<event_id>/<name>` / `turn_<id>/external/<event_kind>/attachments/<event_id>/<name>` |
-| Editable project/workspace file | `conv:fi:turn_<id>.git/projects/<workspace_scope>/<path>` / `turn_<id>/git/projects/<workspace_scope>/<path>` |
-| Produced report/export/rendered artifact | `conv:fi:turn_<id>.files/<artifact_scope>/<path>` / `turn_<id>/files/<artifact_scope>/<path>` |
+| Story/wizard state snapshot | `conv:fi:conv_<conversation_id>.turn_<id>.git/snapshots/<path>` / `turn_<id>/git/snapshots/<path>` |
+| Evidence or domain attachment | `conv:fi:conv_<conversation_id>.turn_<id>.external.<event_kind>.attachments/<event_id>/<name>` / `turn_<id>/external/<event_kind>/attachments/<event_id>/<name>` |
+| Editable project/workspace file | `conv:fi:conv_<conversation_id>.turn_<id>.git/projects/<workspace_scope>/<path>` / `turn_<id>/git/projects/<workspace_scope>/<path>` |
+| Produced report/export/rendered artifact | `conv:fi:conv_<conversation_id>.turn_<id>.files/<artifact_scope>/<path>` / `turn_<id>/files/<artifact_scope>/<path>` |
 
 The returned paths are the agent contract. After
 `react.pull(paths=["cnv:main@7"])`, the agent should use the returned
@@ -344,7 +346,7 @@ async def rehost_canvas_ref(*, ref, key, ctx_browser, outdir, **context):
     return {
         "materialized": [{
             "object_ref": ref,
-            "logical_path": "conv:fi:turn_<id>.git/snapshots/cnv/main.json",
+            "logical_path": "conv:fi:conv_<conversation_id>.turn_<id>.git/snapshots/cnv/main.json",
             "physical_path": "turn_<id>/git/snapshots/cnv/main.json",
         }]
     }

@@ -16,11 +16,11 @@ keywords:
     "react.checkout",
   ]
 see_also:
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/workspace-lifecycle-and-distribution-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/workspace-model-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/workspace/workspace-lifecycle-and-distribution-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/workspace/workspace-model-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/git-backed-workspace-engineering-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/workspace-model-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/artifact-namespace-rehosters-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/workspace/workspace-model-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/events/artifact-resolution-and-materialization-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-announce-README.md
   - repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/layout.py
   - repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/workspace.py
@@ -35,10 +35,14 @@ This is the mental-model companion to the mechanical workspace docs.
 
 **Scope**: agent perception in custom mode only.
 
-- The filesystem layout, lifecycle, and exec snapshot transport are in [workspace-lifecycle-and-distribution-README.md](workspace/workspace-lifecycle-and-distribution-README.md).
-- The `react.pull` / `react.checkout` tool contract is in [workspace/workspace-model-README.md](workspace/workspace-model-README.md).
-- The `git/projects/...` vs `files/...` namespace contract is in [workspace-model-README.md](workspace/workspace-model-README.md).
-- Tool cooperation (read/rg/write/patch) is in [artifact-namespace-rehosters-README.md](workspace/artifact-namespace-rehosters-README.md).
+- The filesystem layout, lifecycle, and exec snapshot transport are in
+  [Harness Workspace Lifecycle And Distribution](../../../runtime/harness/workspace/workspace-lifecycle-and-distribution-README.md).
+- The shared workspace and materialization contract is in
+  [Agent Harness Workspace Model](../../../runtime/harness/workspace/workspace-model-README.md).
+- The `git/projects/...` vs `files/...` namespace contract is in
+  [Harness References And Workspace Paths](../../../runtime/harness/workspace/references-and-paths-README.md).
+- Owner-ref resolution and rehosters are in
+  [Artifact Resolution And Materialization](../../../runtime/harness/events/artifact-resolution-and-materialization-README.md).
 - Git mode is in [workspace/git-backed-workspace-engineering-README.md](workspace/git-backed-workspace-engineering-README.md).
 
 This doc focuses on the question: *given there is no git history to inspect, what does the agent know about its workspace, and how?*
@@ -161,7 +165,7 @@ There is **no separate `conv:fi:` artifact path** holding "the latest known vers
 
 ## 3) `[WORKSPACE]` in ANNOUNCE — what the agent actually reads
 
-The agent's primary source of workspace orientation is the `[WORKSPACE]` section of ANNOUNCE, composed by `build_announce_workspace_lines()` ([layout.py:663-781](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/layout.py)).
+The agent's primary source of workspace orientation is the `[WORKSPACE]` section of ANNOUNCE, composed by `build_announce_workspace_lines()` ([layout.py](../../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/layout.py)).
 
 ### 3.1 Shape with no prior workspace state
 
@@ -283,7 +287,7 @@ This is the single biggest semantic difference from git mode, where deletion *is
    │                                                          │
    │     Reports/exports/test outputs that should NOT become  │
    │     workspace state go to turn_<current>/files/...     │
-   │     (see workspace-model-README.md).                    │
+   │     (see the shared workspace model linked above).      │
    └─────────────────────────────────────────────────────────┘
 ```
 
@@ -314,7 +318,7 @@ OUTPUT_DIR/
 
 For the complete namespace grammar and resolver/rehoster
 discovery rules, see
-[artifact-namespace-rehosters-README.md](workspace/artifact-namespace-rehosters-README.md).
+[Artifact Resolution And Materialization](../../../runtime/harness/events/artifact-resolution-and-materialization-README.md).
 
 ---
 
@@ -369,10 +373,14 @@ Both items are tracked as design targets; the current per-round reconstruction i
 
 ## 8) What this doc does **not** cover
 
-- Filesystem mechanics, exec workspace transport, snapshot persistence — see [workspace-lifecycle-and-distribution-README.md](workspace/workspace-lifecycle-and-distribution-README.md).
-- `react.pull` vs `react.checkout` semantics, `replace` vs `overlay` modes — see [workspace/workspace-model-README.md](workspace/workspace-model-README.md).
-- `git/projects/<scope>/...` vs `files/<scope>/...` namespace rules — see [workspace-model-README.md](workspace/workspace-model-README.md).
-- Per-tool cooperation (`react.read`, `react.rg`, `react.write`, `react.patch`) — see [artifact-namespace-rehosters-README.md](workspace/artifact-namespace-rehosters-README.md).
+- Filesystem mechanics, exec workspace transport, snapshot persistence — see
+  [Harness Workspace Lifecycle And Distribution](../../../runtime/harness/workspace/workspace-lifecycle-and-distribution-README.md).
+- `react.pull` vs `react.checkout` semantics, `replace` vs `overlay` modes — see
+  [Agent Harness Workspace Model](../../../runtime/harness/workspace/workspace-model-README.md).
+- `git/projects/<scope>/...` vs `files/<scope>/...` namespace rules — see
+  [Harness References And Workspace Paths](../../../runtime/harness/workspace/references-and-paths-README.md).
+- Owner-ref resolution and rehosting — see
+  [Artifact Resolution And Materialization](../../../runtime/harness/events/artifact-resolution-and-materialization-README.md).
 - Git-mode lineage branches, immutable version refs, publish flow — see [workspace/git-backed-workspace-engineering-README.md](workspace/git-backed-workspace-engineering-README.md).
 - The shape and lifecycle of ANNOUNCE as a whole — see [react-announce-README.md](./react-announce-README.md).
 

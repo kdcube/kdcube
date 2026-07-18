@@ -6,7 +6,7 @@ tags: ["sdk", "agents", "react", "sources", "citations"]
 keywords: ["sources_pool", "citations", "dedupe", "source entries"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-discovery-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-storage-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/workspace/artifact-storage-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/compaction-README.md
 ---
 # Sources Pool

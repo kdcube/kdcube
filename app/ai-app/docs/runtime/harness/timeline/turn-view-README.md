@@ -1,19 +1,22 @@
 ---
-id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/turn-data-README.md
-title: "Turn Data"
-summary: "Turn fetch payload and how it is constructed for the client."
-tags: ["sdk", "agents", "react", "api", "turn-data"]
+id: repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/timeline/turn-view-README.md
+title: "Harness Turn View"
+summary: "Framework-neutral turn-view projection and its use by conversation fetch."
+tags: ["runtime", "harness", "timeline", "api", "turn-view"]
+updated_at: 2026-07-18
 keywords: ["/conversations/{id}/fetch", "turn log", "conversation payload", "client expectations"]
 see_also:
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/conversation-artifacts-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/turn-log-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/timeline/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/timeline/conversation-artifacts-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/timeline/turn-log-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-context-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/workspace-model-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/workspace/workspace-model-README.md
 ---
-# Turn Data (Conversation Fetch)
+# Harness Turn View And Conversation Fetch
 
-This document describes the `/conversations/{id}/fetch` payload and how it is constructed from
-turn logs and stream artifacts. It reflects the current UI expectations in the reference client.
+The shared turn-view projection reconstructs client-facing turn data from
+persisted blocks. The conversation fetch endpoint uses that projection rather
+than depending on ReAct's in-memory timeline object.
 
 Scope:
 - this document is about fetch/UI payload shape
@@ -23,7 +26,7 @@ Scope:
 ## Fetch flow (server)
 Endpoint: `POST /api/cb/conversations/{tenant}/{project}/{conversation_id}/fetch`
 
-Implementation: `kdcube_ai_app/apps/chat/sdk/context/retrieval/ctx_rag.py::fetch_conversation_artifacts`
+Implementation: `kdcube_ai_app/apps/chat/sdk/solutions/conversation/ctx_rag.py::fetch_conversation_artifacts`
 
 The response shape:
 ```json
@@ -64,7 +67,8 @@ Expected types:
 
 ## Turn log fields used by fetch (v2)
 `fetch_conversation_artifacts` reads:
-- `blocks[]` → reconstructed via `Timeline.build_turn_view(...)`
+- `blocks[]` → reconstructed via
+  `runtime.harness.timeline.turn_view.build_turn_view(...)`
 - timeline `sources_pool[]` → `artifact:solver.program.citables`
 
 ### Artifacts included by fetch
@@ -77,14 +81,13 @@ From the reconstructed turn view / ordered turn-log block stream:
 - `artifact:conv.user_shortcuts` (follow‑up suggestions, if provided this turn)
 - `artifact:conv.clarification_questions` (clarification questions, if provided this turn)
 
-Visibility caps affect only what the model-facing timeline block contains
-during the agent run. `react.read` caps apply per requested path. Large normal
-tool results are also prompt-capped before the next decision round while the
-full `conv:tc:` block remains stored. With `stats_only: true`, only metadata is
-emitted into the status block and no content block is added. Fetch/download
-payloads are reconstructed from artifact metadata and hosting fields (`rn`,
-`hosted_uri`, `physical_path`) when available; they should not rely on a large
-file or tool result having been inlined into the model context.
+Framework-specific prompt visibility caps affect only model-facing blocks
+during a run. For ReAct, `react.read` caps apply per requested path and large
+tool results are prompt-capped before the next decision round while the full
+`conv:tc:` block remains stored. Fetch/download reconstruction uses artifact
+metadata and hosting fields (`rn`, `hosted_uri`, `physical_path`) when
+available; it does not rely on complete file bytes having been inlined into a
+model prompt.
 
 ### Example payloads (follow‑ups & clarifications)
 ```json

@@ -91,7 +91,7 @@ requested limit after that cap.
 ## Ranking: three arms, one fusion, user-held weights
 
 Topic search is `scoring_mode="rrf_hybrid"` in
-`sdk/context/retrieval/ctx_rag.py::search_context`: three parallel retrievers —
+`sdk/solutions/conversation/ctx_rag.py::search_context`: three parallel retrievers —
 **semantic** (embedding cosine), **lexical** (BM25F over `search_tsv`), and
 **trigram** (fuzzy word similarity) — fused by Reciprocal Rank Fusion and
 lifted by recency. The full retrieval mechanics (analyzers, anchor discipline,

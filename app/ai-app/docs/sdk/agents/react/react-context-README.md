@@ -7,7 +7,7 @@ keywords: ["context blocks", "agent view", "timeline source"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-layout.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-progression.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/turn-log-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/timeline/turn-log-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-tools-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/namespaces-README.md
 ---
@@ -150,7 +150,8 @@ Minimal schema:
 }
 ```
 
-See: `turn-log-README.md` and `turn-data-README.md`.
+See the shared [Harness Turn Log](../../../runtime/harness/timeline/turn-log-README.md)
+and [Harness Turn View](../../../runtime/harness/timeline/turn-view-README.md).
 
 ---
 
@@ -171,6 +172,6 @@ Its output is contributed to the timeline as an in‑turn progress block.
 - `context-progression.md`
 - `context-caching-README.md`
 - `react-tools-README.md`
-- `turn-log-README.md`
-- `turn-data-README.md`
-- `conversation-artifacts-README.md`
+- [Harness Turn Log](../../../runtime/harness/timeline/turn-log-README.md)
+- [Harness Turn View](../../../runtime/harness/timeline/turn-view-README.md)
+- [Harness Conversation Artifacts](../../../runtime/harness/timeline/conversation-artifacts-README.md)

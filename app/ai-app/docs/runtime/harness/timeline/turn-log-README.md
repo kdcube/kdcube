@@ -1,22 +1,25 @@
 ---
-id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/turn-log-README.md
-title: "Turn Log"
-summary: "Turn log structure used to reconstruct a turn."
-tags: ["sdk", "agents", "react", "turn-log"]
+id: repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/timeline/turn-log-README.md
+title: "Harness Turn Log"
+summary: "Framework-neutral per-turn ordered block log used for persistence and reconstruction."
+tags: ["runtime", "harness", "timeline", "turn-log", "conversation"]
+updated_at: 2026-07-18
 keywords: ["turn log", "timeline blocks", "reconstruct turn", "block order"]
 see_also:
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-progression.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-context-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/timeline/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/timeline/turn-view-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/timeline/conversation-artifacts-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/timeline-README.md
 ---
-# Turn Log Structure (Current)
+# Harness Turn Log
 
 The turn log is the single source of truth for reconstructing a turn.
 It stores **only the ordered timeline blocks** emitted during that turn.
 All user/assistant text, attachments, tool results, and artifacts are encoded in those blocks.
-That includes Internal Memory Beacons written with `react.write(channel="internal")`.
-It can also include live-folded external user event blocks (`user.followup`, `user.steer`)
-when those events reached the active timeline owner during the turn.
+
+The contract is framework-neutral. ReAct can add Internal Memory Beacons and
+live-folded followup/steer blocks; another adapter can persist a smaller block
+set without changing the turn-log envelope.
 
 ## Top‑level shape
 ```json
@@ -38,9 +41,10 @@ when those events reached the active timeline owner during the turn.
 - `text` (text content) or `base64` (binary)
 - `meta` (optional; includes artifact metadata, hosted file fields, etc.)
 
-See `event-blocks-README.md` for block types and examples.
+See the ReAct [Event Blocks](../../../sdk/agents/react/event-blocks-README.md)
+for blocks produced specifically by that adapter.
 
-Important React-specific beacon blocks:
+ReAct-specific beacon blocks:
 - `react.note` for freshly written Internal Memory Beacons
 - `react.note.preserved` for beacon copies kept visible after compaction
 
@@ -56,12 +60,16 @@ retains the durable event identity (`message_id`, `stream_id`, `sequence`) and r
 
 Runtime meaning:
 - a persisted `user.followup` means the active turn actually consumed that live followup
-- a persisted `user.steer` means the active turn saw the steer, engineering interrupted the live phase, and React finalized the turn from that same timeline
+- a persisted `user.steer` means the active turn saw the steer, engineering interrupted the live phase, and ReAct finalized the turn from that same timeline
 
 ## Reconstruction
-The turn view is reconstructed by:
+The shared turn view is reconstructed by:
 ```
-Timeline.build_turn_view(turn_id, blocks, sources_pool)
+runtime.harness.timeline.turn_view.build_turn_view(
+    turn_id=turn_id,
+    blocks=blocks,
+    sources_pool=sources_pool,
+)
 ```
 which yields:
 - latest user prompt (text + ts)
@@ -72,7 +80,9 @@ which yields:
 - citations (sources_used resolved against sources_pool)
 - follow‑up suggestions (from `stage.suggested_followups` blocks)
 
-Rendered model view (via `timeline.render`) groups tool output into:
+This reconstruction is used by conversation fetch and framework adapters.
+
+ReAct's model-facing `timeline.render` additionally groups tool output into:
 - `[TOOL CALL <id>].call <tool_id>`
 - `[TOOL RESULT <id>].summary <tool_id>` (artifact tools)
 - `[TOOL RESULT <id>].result <tool_id>` (non‑artifact tools)
@@ -95,6 +105,6 @@ unsupported or oversized binaries remain metadata/recovery rows.
   `conv:ar:<turn_id>.assistant.completion.<n>`.
 - No `files` list is stored separately. Files are reconstructed from blocks.
 - All paths must include concrete `turn_id` (no `current_turn`).
-- Internal Memory Beacons are stored in the turn log as normal blocks, but they are not user-facing UI artifacts.
+- ReAct Internal Memory Beacons are stored as normal blocks, but they are not user-facing UI artifacts.
 - The turn log itself does not store the conversation-level external replay cursor; that cursor lives in
   the timeline artifact payload (`last_external_event_id`, `last_external_event_seq`).

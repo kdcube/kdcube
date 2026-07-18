@@ -344,7 +344,8 @@ not required for conversation correctness.
 - `REACT_PERSIST_WORKSPACE=1` (default): persist snapshot
 - `REACT_PERSIST_WORKSPACE=0`: skip snapshot
 
-See `workspace-lifecycle-and-distribution-README.md` for details.
+See [Harness Workspace Lifecycle And Distribution](../../../runtime/harness/workspace/workspace-lifecycle-and-distribution-README.md)
+for details.
 
 ## Legacy Cache Fields
 

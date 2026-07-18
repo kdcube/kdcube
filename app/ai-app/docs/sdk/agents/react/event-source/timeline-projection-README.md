@@ -8,11 +8,19 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/events-blocks-and-rendering-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-caching-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/timeline/provider-projection-README.md
 ---
-# Timeline Projection Phase
+# ReAct Timeline Projection Phase
 
 `timeline_projection` runs on already-produced timeline blocks before they are
 rendered into model-visible messages and before cache markers are assigned.
+
+This phase belongs to the ReAct adapter. It shapes ReAct model input and may
+use ReAct-only concepts such as cache segments, compaction, and ANNOUNCE. Do
+not confuse it with the shared
+[provider projection contract](../../../../runtime/harness/timeline/provider-projection-README.md),
+which lets a provider project only its own blocks for any compatible agent or
+client surface.
 
 The render path passes a phase-local mutable copy of the visible timeline
 blocks. Policies may hide, replace, summarize, or annotate that view inline.

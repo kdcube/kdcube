@@ -527,7 +527,7 @@ If a bundle uses the React agent:
   MCP/search surfaces, or registered rehosters
 
 See:
-- [../agents/react/workspace-lifecycle-and-distribution-README.md](../agents/react/workspace/workspace-lifecycle-and-distribution-README.md)
+- [Harness Workspace Lifecycle And Distribution](../../runtime/harness/workspace/workspace-lifecycle-and-distribution-README.md)
 
 ## Practical rules
 

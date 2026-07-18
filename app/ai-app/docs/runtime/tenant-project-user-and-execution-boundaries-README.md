@@ -25,8 +25,8 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/runtime/cross-runtime-context-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/runtime/fenced-runtime-bootstrap-and-reduce-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/exec/README-iso-runtime.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/workspace-model-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-realm-refs-and-workspace-paths-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/workspace/workspace-model-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/workspace/references-and-paths-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/authority-projection/authority-projection-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-credentials/delegation-edges-README.md
@@ -734,8 +734,8 @@ Runtime and isolation:
 - [Cross-Runtime Context](cross-runtime-context-README.md)
 - [Fenced Runtime Bootstrap And Reduce](fenced-runtime-bootstrap-and-reduce-README.md)
 - [ISO Runtime](../exec/README-iso-runtime.md)
-- [ReAct Workspace Model](../sdk/agents/react/workspace/workspace-model-README.md)
-- [ReAct Realm Refs And Workspace Paths](../sdk/agents/react/react-realm-refs-and-workspace-paths-README.md)
+- [Agent Harness Workspace](harness/workspace/README.md)
+- [Harness References And Workspace Paths](harness/workspace/references-and-paths-README.md)
 
 Reusable agent-framework integration:
 
@@ -745,7 +745,7 @@ Reusable agent-framework integration:
 Identity-bound materialization implementation:
 
 - `kdcube_ai_app/apps/chat/sdk/solutions/react/browser.py`: historical turn lookup passes `RuntimeCtx.user_id` independently of the requested conversation.
-- `kdcube_ai_app/apps/chat/sdk/context/retrieval/ctx_rag.py`: turn materialization queries the index by user, conversation, and turn.
+- `kdcube_ai_app/apps/chat/sdk/solutions/conversation/ctx_rag.py`: turn materialization queries the index by user, conversation, and turn.
 - `kdcube_ai_app/apps/chat/sdk/solutions/react/git_workspace.py`: cross-conversation workspace resolution changes the conversation segment while retaining tenant, project, and user.
 - `kdcube_ai_app/apps/chat/sdk/solutions/react/tools/tests/test_materialization_identity_scope.py`: regression coverage for both invariants.
 
