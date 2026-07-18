@@ -1,13 +1,13 @@
 ---
 id: ported-langgraph-agents@2026-07-13/docs/arch
 title: "Ported LangGraph Agents — Architecture"
-summary: "ASCII architecture of the ported-langgraph-agents app: ONE execute_core dispatching on agent_id to TWO vendored LangGraph agents, each with its own stream adapter; both use one tenant/project schema with app-prefixed tables and agent_id row scope."
+summary: "ASCII architecture of the ported-langgraph-agents app: ONE execute_core dispatching on agent_id to TWO preserved LangGraph agents through per-agent build/input/role/stream specs and shared platform integration."
 status: active
 tags: [arch, ported-langgraph-agents, langgraph, multi-agent, diagram]
 ---
 # Ported LangGraph Agents — Architecture
 
-ONE KDCube app hosting TWO ported LangGraph agents (vendored under `solution/`),
+ONE KDCube app hosting TWO preserved LangGraph agents under `solution/`,
 dispatched by `agent_id` through a single `execute_core`. This page maps the whole
 app: its **dispatch**, its **surfaces**, its **integrations**, the
 **request/data flow**, and **where's what**.
@@ -25,7 +25,7 @@ app: its **dispatch**, its **surfaces**, its **integrations**, the
                             │      (public @api, Telegram SDK)              ▼                   │
                             │                                        execute_core(state, ...)   │
                             │                              DISPATCH on agent_id ─▶ one of two   │
-                            │                              vendored LangGraph agents runs here  │
+                            │                              preserved LangGraph agent runs here  │
                             │   live stream  ◀── comm_ctx.delta/step/complete ◀── stream adapter │
                             └─────────────────────────────────────────────────────────────────┘
 ```
@@ -53,15 +53,15 @@ The **processor is only an orchestrator**. Everything app-specific happens from
                               build_inputs=_prebuilt_inputs),
    }
 
-   graph = _build_graph(agent_id, disabled_tools)   REBUILT this turn (no cache; reuses the checkpointer)
+   graph = await _build_graph(agent_id, disabled_tools=...)   BOUND this turn; reuses the checkpointer
    inputs, run_config = spec.build_inputs(question, turn_identity(state, agent_id))
    role_models = resolve_turn_role_models(self, state, agent_id)   (active agent's pick)
    answer = spec.stream(graph, inputs, run_config)   → comm_ctx.step/delta/complete
    state["final_answer"] = answer
 ```
 
-Teaching point: **different agent shapes → different stream adapters, selected by
-`agent_id`.** Adding an agent is adding a spec; `execute_core` never branches.
+Each `AgentSpec` owns the shape-specific build function, input mapper, model role,
+and stream adapter. Adding an agent is adding a spec; `execute_core` never branches.
 
 ---
 
@@ -108,7 +108,7 @@ under `x-kdcube-surfaces`.
    │     ACTIVE agent's pick per turn via bundle_call_context.role_models
    │
    ├─▶ lg-react tools seam (plain | mcp | both)          [now]
-   │     plain vendored LangChain tools and/or KDCube-served MCP tools (tools_mcp.py)
+   │     plain solution-owned LangChain tools and/or KDCube-served MCP tools (tools_mcp.py)
    │
    ├─▶ the chat component + the Telegram SDK (reusable)     [now]
    │
@@ -158,8 +158,8 @@ two agents' state from ever mixing — one shared schema, never one per agent.
      code_exec.py          lg-react's code-execution tool (files hosted to the conversation)
      telegram.py           the shared ingress (thin wiring over the Telegram SDK)
    solution/
-     lg_solution/          the research graph (vendored; retrieve->plan->[delegate]->answer)
-     lg_prebuilt/          the create_agent ReAct agent (vendored; model<->tools loop)
+     lg_solution/          the preserved research graph (retrieve->plan->[delegate]->answer)
+     lg_prebuilt/          the preserved create_agent ReAct agent (model<->tools loop)
    config/               bundles.template.yaml + bundles.secrets.template.yaml
    interface/            interface README + OpenAPI (x-kdcube-surfaces)
    docs/                 README (design), arch (this), storage, journal

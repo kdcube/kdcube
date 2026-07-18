@@ -3,7 +3,7 @@
 #
 # ── pg_target.py ── the storage-edge injection point (tenant/project schema) ──
 #
-# This is where each vendored agent's OWN store stops being single-machine and
+# This is where each preserved agent's OWN store stops being single-machine and
 # becomes hosted-at-scale — the non-hosted → hosted STORAGE transition.
 #
 # Each standalone agent keeps all its mutable state in its OWN Postgres

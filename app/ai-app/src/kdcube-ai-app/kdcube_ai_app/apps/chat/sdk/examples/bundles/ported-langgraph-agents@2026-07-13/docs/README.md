@@ -1,7 +1,7 @@
 ---
 id: kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/ported-langgraph-agents@2026-07-13/docs/README.md
 title: "Ported LangGraph Agents Design"
-summary: "Design overview of ported-langgraph-agents@2026-07-13: ONE KDCube app hosting TWO vendored LangGraph agents dispatched by agent_id through a single execute_core, with per-agent stream adapters and model pickers, plus one tenant/project storage schema with agent_id row/key scope."
+summary: "Design overview of ported-langgraph-agents@2026-07-13: ONE KDCube app hosting TWO preserved LangGraph agents dispatched by agent_id through a single execute_core, with per-agent build/input/role/stream specs, model pickers, and scoped shared storage."
 status: active
 tags: ["app", "ported-langgraph-agents", "langgraph", "platform", "port", "chat", "multi-agent", "design"]
 ---
@@ -9,8 +9,8 @@ tags: ["app", "ported-langgraph-agents", "langgraph", "platform", "port", "chat"
 # Ported LangGraph Agents Design
 
 `ported-langgraph-agents@2026-07-13` is the **"one app, many agents"** worked
-instance of the KDCube port recipe. It hosts **two** standalone LangGraph agents,
-vendored **unchanged**, behind a **single `execute_core`** that dispatches on
+instance of the KDCube port recipe. It hosts **two** independently maintainable
+LangGraph solution packages behind a **single `execute_core`** that dispatches on
 **`agent_id`**:
 
 - `lg-solution` — the rich research graph (KB retrieval + per-user pgvector memory
@@ -19,16 +19,16 @@ vendored **unchanged**, behind a **single `execute_core`** that dispatches on
   code-exec tool; `SummarizationMiddleware` for context). A ReAct loop with a
   looping **`model` node** and no dedicated answer node.
 
-The teaching point is the seam that DIFFERS between the two: **different agent
-shapes → different stream adapters, selected by `agent_id`.** Everything else is
-shared platform glue.
+The most visible shape-specific seam is streaming, but each `AgentSpec` owns the
+agent's build function, input mapper, model role, and stream adapter. Identity,
+storage, economics, capabilities, and the conversation record are shared glue.
 
 ## Owners
 
 ```text
 this app owns
   - the dispatcher                 (execute_core resolves agent_id -> the right graph)
-  - the per-turn graph rebuild     (each agent's graph rebuilt every turn; no cache)
+  - the per-turn graph binding     (current model/tool choices captured each turn)
   - the two stream adapters        (dedicated-answer-node + looping-model-node)
   - the multi-tenant + multi-agent identity gate
   - the storage edge               (ONE shared schema + agent_id column on pg_pool)
@@ -50,8 +50,8 @@ this app does NOT own
 ```text
 1. resolve     entrypoint.py     agent_id = normalize(state.agent_id) or default;
                                  spec = AGENTS[agent_id]  (unknown -> default)
-2. graph       entrypoint.py     _build_graph(agent_id, disabled_tools): REBUILT this
-                                 turn (no cache); reuses only the opened checkpointer
+2. graph       entrypoint.py     await _build_graph(agent_id, disabled_tools=...):
+                                 bound this turn; reuses the opened checkpointer
 3. inputs      spec.build_inputs the agent's own input shape + run_config(thread_id)
 4. stream      spec.stream       the agent's OWN adapter -> comm_ctx.step/delta/complete
 5. model pick  capabilities.py   resolve_turn_role_models(self, state, agent_id) for
@@ -72,15 +72,17 @@ agent_id.
   model turn (visible content + no tool-call chunk) and surfaces each `tools` run
   as a step.
 
-A different framework or agent shape swaps ONLY its adapter file; the dispatcher,
-identity, and storage edge are unchanged.
+A different framework or agent shape supplies a new `AgentSpec`: build function,
+input mapping, model role, and stream adapter. The dispatcher, identity mapper,
+storage boundary, economics, and conversation integration remain shared.
 
 ## Statelessness
 
-Each agent's graph is **rebuilt every turn** (`_build_graph`) — no in-process cache,
-because KDCube is distributed and a turn lands on any worker; only the checkpointer
+Each graph captures current model/tool choices, so `_build_graph` creates a fresh
+bound graph every turn. An immutable compile artifact could be cached per worker in
+another design, but never as conversation continuity. Only the checkpointer
 CONNECTION is opened once per agent and reused. Per-turn state lives only in shared
-Postgres keyed by `thread_id`. Nothing per-turn lives on `self`. So any processor
+Postgres keyed by `thread_id`; nothing per-turn lives on `self`. So any processor
 worker can serve any turn for either agent (regression-tested:
 `tests/test_storage_pg_target.py`, `tests/test_dispatch.py`).
 
@@ -91,8 +93,8 @@ per-tenant/project schema (`kdcube_{tenant}_{project}`) with bundle-prefixed tab
 (`ported_langgraph_agents_memories`/`_kb`), the two agents separated by the
 **`agent_id` column** (a per-agent schema would pollute Postgres); its own
 `DATABASE_URL` when standalone, an in-memory saver when unreachable. KDCube
-separately owns the **conversation record** (framework-neutral turn log + a comm
-events artifact replayed on reload, the same for either agent). Full ownership matrix
+separately owns the **conversation record** (framework-neutral turn log + comm events
+materialized on reload, the same for either agent). Full ownership matrix
 + the injection point: [storage/README.md](storage/README.md).
 
 ## Dependency direction
@@ -103,7 +105,7 @@ solution/*    ─imports→ nothing in KDCube   (never depends back on the platf
 platform/*    ─ depend only on comm_ctx / platform state / SDK adapters
 ```
 
-Neither vendored package imports KDCube. Only the platform glue and `entrypoint.py`
+Neither solution package imports KDCube. Only the platform glue and `entrypoint.py`
 know both worlds, and they import `solution/` package-relative.
 
 ## Model selection (Capabilities widget), per agent

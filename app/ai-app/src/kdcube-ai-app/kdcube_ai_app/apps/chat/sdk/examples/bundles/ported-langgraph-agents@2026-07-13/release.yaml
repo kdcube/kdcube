@@ -1,20 +1,21 @@
 bundle:
-  repo: "https://github.com/kdcube/kdcube-ai-app.git"
+  repo: "https://github.com/kdcube/kdcube.git"
   ref: "unreleased"
   description: |
     Release for ported-langgraph-agents@2026-07-13 (pre-release).
 
-    ONE KDCube app that hosts TWO ported LangGraph agents, both vendored unchanged
-    under `solution/`, dispatched by `agent_id` through a SINGLE `execute_core` —
+    ONE KDCube app that hosts TWO preserved LangGraph agents under `solution/`,
+    dispatched by `agent_id` through a SINGLE `execute_core` and integrated through
+    explicit async, configuration, model, storage, workspace, and streaming seams —
     the "one app, many agents" demonstration of the port recipe.
 
     The two agents
 
     - `lg-solution` — the rich research graph (KB retrieval + per-user pgvector
-      memory + a nested subagent), vendored under `solution/lg_solution/`. A linear
+      memory + a nested subagent), preserved under `solution/lg_solution/`. A linear
       shape with a DEDICATED answer node.
     - `lg-react` — a `langchain.agents.create_agent` agent (plain + MCP tools),
-      vendored under `solution/lg_prebuilt/`. A ReAct loop with a LOOPING model
+      preserved under `solution/lg_prebuilt/`. A ReAct loop with a LOOPING model
       node, `SummarizationMiddleware`, and no dedicated answer node.
 
     Highlights
@@ -22,8 +23,8 @@ bundle:
     - The dispatcher: `execute_core` resolves `agent_id = normalize(state.agent_id)
       or DEFAULT_AGENT_ID` (unknown -> the default, lg-solution) and runs the right
       agent from a per-agent registry (`AgentSpec`: build_graph, stream,
-      build_inputs, role). It builds a fresh graph inside every turn and discards
-      it afterward; only the checkpointer connection is reused. Durable state is
+      build_inputs, role). It builds a fresh turn-bound graph inside every turn and
+      discards it afterward; only the checkpointer connection is reused. Durable state is
       shared and keyed by agent/user/conversation, so any worker can serve the next
       turn. Adding an agent is adding a spec; execute_core never branches on
       agent_id.
@@ -44,7 +45,7 @@ bundle:
       applies the ACTIVE agent's saved conversation pick per turn via
       `bundle_call_context.role_models`, so a pick for one agent never cross-applies.
     - lg-react tools, both ways (`config.tools.mode`: plain | mcp | both): the
-      vendored plain LangChain tools and/or KDCube-served MCP tools via
+      preserved plain LangChain tools and/or KDCube-served MCP tools via
       langchain-mcp-adapters (streamable_http), degrading to plain when absent.
     - A shared Telegram Bot API webhook (`@api(route="public",
       alias="telegram_webhook")`) drives the SAME `execute_core` for the DEFAULT
@@ -61,7 +62,7 @@ bundle:
 
     Validation
 
-    - `python -m py_compile` passes for the glue files and both vendored `solution/`
+    - `python -m py_compile` passes for the glue files and both preserved `solution/`
       packages.
     - The entrypoint loads through the dynamic module loader with the expected
       `@bundle_entrypoint` / `@bundle_id` values.

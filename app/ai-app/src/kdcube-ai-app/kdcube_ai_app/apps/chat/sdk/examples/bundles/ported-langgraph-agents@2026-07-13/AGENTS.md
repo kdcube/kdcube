@@ -1,7 +1,7 @@
 ---
 id: ported-langgraph-agents@2026-07-13/agents
 title: "Ported LangGraph Agents Builder-Agent Onboarding"
-summary: "How to change ported-langgraph-agents@2026-07-13 — ONE KDCube app hosting TWO ported LangGraph agents dispatched by agent_id through a single execute_core — without changing either agent's graph logic or breaking the dispatcher, isolation, or the shared surfaces."
+summary: "How to change ported-langgraph-agents@2026-07-13 — ONE KDCube app hosting TWO preserved LangGraph agents dispatched by agent_id through a single execute_core — while keeping explicit solution/platform seams and preserving dispatcher, isolation, and surface contracts."
 status: active
 tags: ["agents", "builder", "onboarding", "ported-langgraph-agents", "langgraph", "platform", "port", "chat", "multi-agent"]
 see_also:
@@ -19,17 +19,17 @@ see_also:
 
 This is the builder-agent landing page for `ported-langgraph-agents@2026-07-13`.
 
-The app hosts **TWO** standalone LangGraph agents (vendored unchanged under
-`solution/`) behind **one** `execute_core` that dispatches on `agent_id`. Its
-graph logic is unchanged; the KDCube side is a thin, **shared** platform
-integration:
+The app hosts **TWO** independently maintainable LangGraph solution packages under
+`solution/` behind **one** `execute_core` that dispatches on `agent_id`. The KDCube
+side is a thin, **shared** platform integration; deliberate async, configuration,
+model-injection, package-import, and prompt-composition seams are explicit:
 
 ```text
 solution/
   lg_solution/     the research graph (retrieve -> plan -> [delegate] -> answer).
-                   Vendored UNCHANGED. Has a DEDICATED answer node.
+                   Preserved solution. Has a DEDICATED answer node.
   lg_prebuilt/     the langchain.agents.create_agent ReAct agent (model <-> tools loop).
-                   Vendored UNCHANGED. Has a LOOPING `model` node, no answer node.
+                   Preserved solution. Has a LOOPING `model` node, no answer node.
 platform/          the shared integration glue:
   identity.py        platform identity + agent_id -> each agent's per-user keys
   pg_target.py       storage edge -> KDCube pg_pool, ONE shared schema + agent_id column
@@ -41,7 +41,7 @@ platform/          the shared integration glue:
   code_exec.py       lg-react's code-execution tool (files hosted into the conversation)
   telegram.py        the shared ingress (drives the DEFAULT agent)
 entrypoint.py      execute_core DISPATCHES on agent_id over the AGENTS registry;
-                   REBUILDS the graph per turn; serves telegram_webhook + the two
+                   BUILDS the bound graph per turn; serves telegram_webhook + the two
                    scene chat widgets + scene_object_action (file download)
 ```
 
@@ -78,7 +78,7 @@ Telegram webhook (public @api) ────────┤  (webhook -> DEFAULT 
        agent_id = normalize(state.agent_id) or DEFAULT_AGENT_ID   [entrypoint.py]
        spec = AGENTS[agent_id]                                    (else default)
        -> platform/identity.turn_identity(state, agent_id)  -> TurnIdentity
-       -> _build_graph(agent_id, disabled_tools)   REBUILT this turn (no graph cache)
+       -> await _build_graph(agent_id, disabled_tools=...)   BOUND this turn
        -> spec.build_inputs(question, ident) -> inputs, run_config(thread_id)
        -> spec.stream(graph, inputs, run_config)  -> the agent's OWN stream adapter
             -> comm_ctx.step/delta/complete
@@ -87,19 +87,21 @@ Telegram webhook (public @api) ────────┤  (webhook -> DEFAULT 
 
 ## Implementation Rules
 
-- `solution/lg_solution/` and `solution/lg_prebuilt/` are vendored **UNCHANGED** —
-  never edit anything under them. The port is the shared glue + the dispatcher. If
-  a behavior change seems to require editing `solution/`, stop and reconsider the
-  platform layer, or report it.
+- `solution/lg_solution/` and `solution/lg_prebuilt/` remain independently
+  maintainable framework/domain packages. Prefer host behavior in `platform/`, but
+  make a solution change when a safe async, configuration, model, import, or prompt
+  seam genuinely belongs there. Keep it small, documented, and synchronized with
+  the standalone source; never hide a solution fork inside runtime mutation.
 - The dispatch is by `agent_id`. Keep the `AGENTS` registry the single source of
   truth: each `AgentSpec` carries `build_graph`, `stream`, `build_inputs`, and
   `role`. To add or change an agent, add/adjust a spec — do not branch on agent_id
   inside `execute_core`. Unknown/blank agent_id falls back to `DEFAULT_AGENT_ID`;
   keep that fallback.
-- The graph is REBUILT every turn (`_build_graph`), never cached on the entrypoint —
-  KDCube is distributed, a turn lands on any worker, so no per-agent graph may be
-  held. Only the checkpointer CONNECTION is opened once per agent (`_open_checkpointer`)
-  and reused. This is scaled serving.
+- This app's graph captures the current model/tool choices, so `_build_graph` creates
+  a fresh bound graph every turn and no turn-bound graph is cached on the entrypoint.
+  An immutable compile artifact could be a per-worker optimization in another design,
+  but it is never conversation state. Only the checkpointer CONNECTION is opened once
+  per agent (`_open_checkpointer`) and reused.
 - One stream adapter PER agent shape. `stream_solution.py` streams the DEDICATED
   answer node's tokens; `stream_prebuilt.py` streams only the FINAL turn of the
   LOOPING agent node. A new agent shape adds its own adapter and a spec — never
@@ -118,7 +120,7 @@ Telegram webhook (public @api) ────────┤  (webhook -> DEFAULT 
   DSN derived from `get_settings()` PG* fields).
 - Bundle-local imports are package-relative (`from .solution.lg_solution...`,
   `from .platform.identity import ...`). Never add a `try/except ImportError`
-  fallback to a top-level import. Both vendored packages are already
+  fallback to a top-level import. Both solution packages are already
   package-relative internally; keep them that way.
 - Do not write KDCube conversation records from the app. Set
   `state["final_answer"]`; the platform records the turn for either agent.
@@ -189,7 +191,7 @@ secrets are placeholders only. No `__pycache__`, `.pytest_cache`, or built outpu
 ```bash
 cd app/ai-app/src/kdcube-ai-app
 
-# 1. syntax of the glue + both vendored packages (never edit solution/)
+# 1. syntax of the glue + both preserved solution packages
 python -m py_compile \
   "kdcube_ai_app/apps/chat/sdk/examples/bundles/ported-langgraph-agents@2026-07-13/entrypoint.py" \
   kdcube_ai_app/apps/chat/sdk/examples/bundles/ported-langgraph-agents@2026-07-13/platform/*.py

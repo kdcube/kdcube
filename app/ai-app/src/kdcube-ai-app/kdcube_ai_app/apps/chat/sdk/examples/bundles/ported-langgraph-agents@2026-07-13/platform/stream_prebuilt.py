@@ -3,7 +3,7 @@
 #
 # ── stream_adapter.py ── the streaming seam (the create_agent ReAct shape) ──
 #
-# This is the ONE file that differs meaningfully from a linear-graph port. The
+# This is the stream-policy file that differs from a linear-graph port. The
 # standalone agent is `langchain.agents.create_agent`, whose graph has a LOOPING
 # `model` node (the model node) and a `tools` node:
 #
@@ -32,9 +32,9 @@
 # Compaction (SummarizationMiddleware) runs in its OWN before_model middleware node,
 # not the `model` node, so its summarization tokens never reach this streaming path.
 #
-# The teaching point: a DIFFERENT agent shape swaps ONLY this file. identity.py,
-# entrypoint.py, and the vendored agent are unchanged from any other port; the
-# looping-node handling lives here and nowhere else.
+# A different agent shape supplies an AgentSpec with its own build function, input
+# mapper, model role, and stream adapter. Identity, storage, economics, capabilities,
+# and conversation integration remain shared; looping-node interpretation lives here.
 
 from __future__ import annotations
 

@@ -1,7 +1,7 @@
 ---
 id: ported-langgraph-agents@2026-07-13
 title: "Ported LangGraph Agents"
-summary: "ONE KDCube app that hosts TWO ported LangGraph agents (a custom research graph and a langchain.agents.create_agent ReAct agent), both vendored unchanged, dispatched by agent_id through a single execute_core. The 'one app, many agents' worked instance of the KDCube port recipe."
+summary: "ONE KDCube app that hosts TWO preserved LangGraph agents (a custom research graph and a langchain.agents.create_agent ReAct agent), dispatched by agent_id through a single execute_core and integrated through explicit async, configuration, model, storage, workspace, and streaming seams."
 status: active
 tags: ["app", "ported-langgraph-agents", "langgraph", "langchain", "platform", "port", "chat", "multi-agent", "telegram"]
 module: entrypoint
@@ -15,31 +15,32 @@ primary_surfaces:
 # ported-langgraph-agents — ONE app, MANY agents
 
 This app is the **"one app, many agents"** worked instance of the KDCube port
-recipe. It hosts **two** standalone LangGraph/LangChain agents — vendored
-**unchanged** — behind a **single `execute_core`** that dispatches on **`agent_id`**:
+recipe. It hosts **two** independently maintainable LangGraph/LangChain solution
+packages behind a **single `execute_core`** that dispatches on **`agent_id`**:
 
 | agent_id | what it is | shape | stream adapter |
 | --- | --- | --- | --- |
 | `lg-solution` | a rich research graph (KB retrieval + per-user pgvector memory + a nested subagent) — the "before" is [`../../poc/lg-solution`](../../poc/lg-solution) | linear, with a **dedicated answer node** | `platform/stream_solution.py` |
 | `lg-react` | a `langchain.agents.create_agent` ReAct agent (plain tools + MCP + a code-exec tool; `SummarizationMiddleware` for context) — the "before" is [`../../poc/lg-prebuilt-agent`](../../poc/lg-prebuilt-agent) | ReAct loop, with a looping **`model` node** (no answer node) | `platform/stream_prebuilt.py` |
 
-The teaching point: **different agent shapes → different stream adapters, selected
-by `agent_id`.** Everything else — identity, storage, capabilities, economics, the
-conversation record, file download, the Telegram ingress — is shared platform glue.
+The most visible shape-specific seam is streaming: the dedicated-answer graph and
+the looping model graph need different event interpretation. Each `AgentSpec` also
+owns its build function, input mapper, and model role. Identity, storage, economics,
+capabilities, the conversation record, file download, and Telegram ingress remain
+shared platform glue.
 
 > `lg-react` was migrated off the deprecated `langgraph.prebuilt.create_react_agent`
 > to `langchain.agents.create_agent`; its context management is the first-party
-> `SummarizationMiddleware` (runs in its own `before_model` node). Some vendored
-> `solution/lg_prebuilt/*` comments still name `create_react_agent` — the compiled
-> graph in `agent.py` uses `create_agent`, whose loop node is named `model`.
+> `SummarizationMiddleware` (runs in its own `before_model` node). The compiled graph
+> in `agent.py` uses `create_agent`, whose loop node is named `model`.
 
 ## The two sides: `solution/` and `platform/`
 
 ```
 ported-langgraph-agents@2026-07-13/
   solution/
-    lg_solution/       ← the research graph (vendored UNCHANGED from poc/lg-solution)
-    lg_prebuilt/       ← the create_agent ReAct agent (vendored from poc/lg-prebuilt-agent)
+    lg_solution/       ← the preserved research graph (from poc/lg-solution)
+    lg_prebuilt/       ← the preserved create_agent ReAct agent (from poc/lg-prebuilt-agent)
   platform/            ← the KDCube integration (shared across both agents):
     identity.py          platform identity + agent_id → each agent's per-user keys
     pg_target.py         storage edge → KDCube pg_pool, ONE shared schema + agent_id column
@@ -55,29 +56,31 @@ ported-langgraph-agents@2026-07-13/
   entrypoint.py        ← composition root: execute_core DISPATCHES on agent_id
 ```
 
-Both `solution/` subpackages never import KDCube; only the `platform/` glue and
-`entrypoint.py` know both worlds.
+Both `solution/` subpackages remain framework/domain-owned and import no KDCube
+modules; only the `platform/` glue and `entrypoint.py` know both worlds. Byte identity
+is not the invariant: deliberate async, configuration, model-injection, package-import,
+and prompt-composition changes are kept small, explicit, and documented.
 
-## The dispatcher — the graph is rebuilt every turn (scaled serving)
+## The dispatcher — the bound graph is built every turn (scaled serving)
 
 `execute_core` is a dispatcher over a per-agent registry:
 
 ```text
 agent_id (state) ─normalize→ AGENTS[agent_id]  (else the default, lg-solution)
   AgentSpec: build_graph · stream · build_inputs · role · schema
-    _build_graph(agent_id, disabled_tools)   ← REBUILT this turn (NOT cached)
+    await _build_graph(agent_id, disabled_tools=...)  ← bound to this turn
     build_inputs(question, ident) → the agent's own input + run_config(thread_id)
     stream(graph, inputs, run_config) → the agent's OWN stream adapter → comm_ctx
   role_models = resolve_turn_role_models(self, state, agent_id)   (the active agent's pick)
   state["final_answer"] = <the streamed answer>
 ```
 
-**No in-process graph cache.** KDCube is distributed — a turn can land on any
-processor worker/machine — so the graph is **rebuilt per reactive event** from
-rebuildable state; nothing agent-specific is cached on the long-lived entrypoint
-object. The only reused handle is the **checkpointer connection** (opened once per
-agent, like a pool), because it is a connection, not rebuildable per-turn state.
-This is the "scaled serving" principle — see
+This worked app binds the current model and tool selection while building the graph,
+so it creates a fresh bound graph per reactive turn and stores no per-turn value on
+the long-lived entrypoint object. A genuinely immutable compile artifact could be a
+per-worker optimization in another design, but it is never conversation continuity.
+The app reuses the **checkpointer connection** (opened once per agent, like a pool),
+because it is a connection rather than turn-bound state. See
 [Settle Your Solution In A KDCube App](../../../../../../../../../docs/recipes/kdcube_for_agents/settle-your-solution-in-kdcube-README.md) and the
 `_build_graph` / `_open_checkpointer` docstrings in `entrypoint.py`.
 
@@ -116,8 +119,8 @@ code-exec) — the platform reconstructs the reloadable turn from:
 
 - **the turn log** — user prompt + user attachments + hosted files + the answer;
 - **the events artifact** — the dynamic objects the turn emitted **through comm**
-  (citations, steps, follow-ups), captured full-payload and **replayed** on reload
-  so the client renders them exactly as it did live.
+  (citations, steps, follow-ups), captured full-payload and materialized on reload;
+  stored streams return as synthetic completed deltas, not a replay of live timing.
 
 The rule: reload content comes from **comm + the turn log**, not from runtime
 `state`. Nothing framework-specific is required of the ported agent.

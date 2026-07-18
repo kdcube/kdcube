@@ -58,7 +58,7 @@ def configure(*, bundle_id: str) -> None:
     """Bind the SDK Telegram user-admin subsystem to this bundle's storage.
 
     Called once at module load. No `migrate_telegram_user_to_kdcube_scope` hook:
-    this app keeps no bundle-local per-user store to migrate — the vendored
+    this app keeps no bundle-local per-user store to migrate — the preserved
     solution's per-user memory is keyed by the platform identity that the turn
     already carries (see identity.py), so a linked Telegram user simply resolves
     to a different platform identity and therefore a different memory key."""

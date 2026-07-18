@@ -7,12 +7,13 @@ info:
 
     This ONE app hosts TWO ported LangGraph agents (`lg-solution` = a research
     graph with a dedicated answer node; `lg-react` = the prebuilt
-    create_react_agent with a looping agent node), both vendored unchanged under
-    `solution/`, dispatched by `agent_id` through a SINGLE `execute_core`. It
+    create_agent with a looping model node), both preserved under `solution/` with
+    explicit integration seams, dispatched by `agent_id` through a SINGLE
+    `execute_core`. It
     exposes TWO ingresses that drive that same turn:
 
       1. the reactive chat turn — each user message on the KDCube chat surface
-         dispatches on `agent_id` to the right vendored agent and streams its
+         dispatches on `agent_id` to the right preserved agent and streams its
          answer to the chat component;
       2. the Telegram Bot API webhook — `POST /public/telegram_webhook`, called by
          Telegram, guarded by the Telegram webhook secret, that routes a Telegram
@@ -22,8 +23,9 @@ info:
     The webhook is the one HTTP path (`paths` is no longer empty). It carries no
     platform auth: the trust boundary is the `X-Telegram-Bot-Api-Secret-Token`
     header, verified by the reusable Telegram SDK before any work. Both surfaces
-    are also declared under `x-kdcube-surfaces`. There is no MCP server, widget,
-    Data Bus handler, cron, or background job.
+    are also declared under `x-kdcube-surfaces`. UI widgets and the conversation-file
+    object action are decorator-declared app surfaces outside OpenAPI `paths`; there
+    is no MCP server, Data Bus handler, cron, or background job.
 x-kdcube-surfaces:
   # Surface 1. The turn contract:
   #   in  -> the user's text, delivered as platform external_events
@@ -37,7 +39,7 @@ x-kdcube-surfaces:
     default_chat: true
     description: >
       Reactive chat turn. Dispatches on agent_id (default lg-solution) to one of
-      the two vendored LangGraph agents, runs it for one user message, and streams
+      the two preserved LangGraph agents, runs it for one user message, and streams
       the answer to the reusable chat component via the platform communicator
       (comm_ctx) through that agent's own stream adapter. The app writes no KDCube
       conversation records; the platform records a framework-neutral turn log.

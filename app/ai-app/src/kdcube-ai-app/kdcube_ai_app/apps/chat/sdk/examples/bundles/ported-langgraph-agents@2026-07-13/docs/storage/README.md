@@ -1,7 +1,7 @@
 ---
 id: kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/ported-langgraph-agents@2026-07-13/docs/storage/README.md
 title: "Ported LangGraph Agents Storage Map"
-summary: "The non-hosted → hosted storage transition for ported-langgraph-agents@2026-07-13: each vendored agent's own Postgres store (memory/KB/checkpointer) is routed onto KDCube's SHARED Postgres (pg_pool) into ONE per-tenant/project schema with bundle-prefixed tables, agents separated by the agent_id COLUMN — so each agent is stateless AND the two agents' state never mixes, without polluting Postgres with per-agent schemas."
+summary: "The non-hosted → hosted storage transition for ported-langgraph-agents@2026-07-13: each preserved agent's own Postgres store (memory/KB/checkpointer) is routed onto KDCube's SHARED Postgres (pg_pool) into ONE per-tenant/project schema with bundle-prefixed tables and explicit agent_id scope."
 status: active
 tags: ["ported-langgraph-agents", "storage", "postgres", "pgvector", "langgraph", "checkpointer", "pg_pool", "stateless", "multi-agent", "platform"]
 ---
@@ -17,8 +17,8 @@ storage transition is: route each agent's own store onto KDCube's SHARED Postgre
 per (user, conversation). Each agent then holds nothing per-turn in-process — it is
 stateless and distributed-safe, and the two agents' state can never mix.
 
-The graph LOGIC is unchanged. Only the DB EDGE moves: which Postgres, which schema,
-and the column scope the same nodes + checkpointer connect through.
+The domain graph remains solution-owned. This document covers the DB EDGE: which
+Postgres and schema the nodes/checkpointer use, plus the required row/key scope.
 
 ## One shared schema, agents separated by a column
 
@@ -53,8 +53,9 @@ separation). Tables are created idempotently in `on_bundle_load` with
 | Conversation record — framework-neutral turn log + events | none | the platform conversation record (see below — either agent) |
 | Ephemeral cache | in-process | KDCube KV cache (`kv_cache`, from the base entrypoint) |
 
-The **graph is rebuilt every turn** (scaled serving — no in-process graph cache);
-only the **checkpointer connection** is opened once per agent and reused.
+The worked app builds a fresh graph bound to the turn's model/tool choices; only the
+**checkpointer connection** is opened once per agent and reused. An immutable compile
+cache, if introduced, is not conversation continuity.
 
 ## The injection point (the whole selection)
 
@@ -70,7 +71,7 @@ a KDCube Postgres connection:
 `resolve_solution_pg(pg_pool, own_url, schema)` per agent ensures the schema and
 hands that agent a `Config` whose `database_url` targets the resolved store;
 `_open_checkpointer(agent_id, url)` opens once on the same DSN and is reused across
-per-turn graph rebuilds. Memory and the checkpointer flip together. The fallback
+per-turn graph builds. Memory and the checkpointer flip together. The fallback
 chain keeps an offline / bare-local run working.
 
 **Driver bridge.** KDCube's `pg_pool` is an *asyncpg* pool; the agents and LangGraph
@@ -106,7 +107,7 @@ lg-solution and lg-react resolves to different keys. Anonymous callers fall back
 KDCube separately owns the reloadable conversation record — framework-neutral, the
 app writes no React timeline. After the turn the platform records a **minimal turn
 log** (user prompt + attachments + hosted files + `final_answer`) and an **events
-artifact** replaying the dynamic objects the turn emitted through comm (citations,
+artifact** materializing the dynamic objects the turn emitted through comm (citations,
 steps, follow-ups). The app only sets `state["final_answer"]` (+ `state["hosted_files"]`
 for code-exec output). Reload content comes from **comm + the turn log**, not runtime
 `state`. Hosted files download through the `scene_object_action` operation the bundle
@@ -129,15 +130,15 @@ serves.
 | lg-solution working/episodic memory | the agent | `pg_pool`, `ported_langgraph_agents_memories` | `(tenant,project,bundle_id,agent_id,user_id)` | The agent's OWN working store (not `mem`). Unreachable DB → empty recall. |
 | lg-solution knowledge base | the agent | `pg_pool`, `ported_langgraph_agents_kb` | `(…,agent_id,title)` unique | Seeded corpus; shared across users. |
 | lg-solution / lg-react checkpoints | the agent (framework) | `pg_pool`, `kdcube_{tenant}_{project}` | `thread_id` (user + agent) | Unreachable DB → an in-memory `MemorySaver`. |
-| Checkpointer connection | this app (process-local) | process memory | per process, per agent | A CONNECTION, opened once + reused; the graph is rebuilt per turn (no graph cache). |
+| Checkpointer connection | this app (process-local) | process memory | per process, per agent | A CONNECTION, opened once and reused across turn-bound graph builds. |
 | Conversation record (turn log + events) | the platform | platform conversation store | platform conversation id | Framework-neutral; the app sets `state["final_answer"]` / `hosted_files`. |
 | User agent selection (model pick) | the platform | KDCube control-plane Postgres (`UserAgentSelectionStore`) | `(user_id, bundle_id, agent_id, conversation_id)` | Read-through; resolved per turn for the ACTIVE agent. |
 | Economics / budget state | the platform | KDCube control-plane Postgres + Redis | tenant/project/user subject | Read-through; seeded at deploy from `economics.yaml`. |
 
 ## Statelessness invariant
 
-Nothing per-turn lives in-process. The graph is **rebuilt every turn** from
-rebuildable state; the only thing held on the entrypoint instance is the
+Nothing per-turn lives in-process. The turn-bound graph is built from shared state;
+the only graph-related thing held on the entrypoint instance is the
 checkpointer **connection** (opened once per agent). Every mutable byte is in shared
 Postgres keyed by (agent, user, conversation). So **any processor worker can serve
 any turn for either agent** (regression-tested: `tests/test_storage_pg_target.py`,

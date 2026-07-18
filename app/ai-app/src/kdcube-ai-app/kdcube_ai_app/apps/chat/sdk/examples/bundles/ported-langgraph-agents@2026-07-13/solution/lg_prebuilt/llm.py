@@ -3,7 +3,7 @@
 ``build_chat_model(config)`` returns a LangChain ``BaseChatModel``:
 
   - online  — ``ChatOpenAI`` or ``ChatAnthropic`` (per ``config.provider``),
-              streaming, ready for ``create_react_agent``.
+              streaming, ready for ``langchain.agents.create_agent``.
   - offline — ``StubChatModel``: a deterministic, tool-aware fake that drives the
               REAL create_react loop (it decides to call ``calc`` on arithmetic
               questions, then answers from the tool result) so the whole graph
@@ -37,7 +37,7 @@ class StubChatModel(BaseChatModel):
     def _llm_type(self) -> str:
         return "lg-react-stub"
 
-    # create_react_agent binds tools onto the model; the stub ignores the schema
+    # create_agent binds tools onto the model; the stub ignores the schema
     # and decides tool use heuristically, so it stays dependency-free.
     def bind_tools(self, tools: Any, **kwargs: Any) -> "StubChatModel":
         return self

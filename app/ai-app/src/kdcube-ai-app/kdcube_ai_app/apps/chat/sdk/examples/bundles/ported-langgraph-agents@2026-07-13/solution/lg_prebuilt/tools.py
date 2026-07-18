@@ -129,13 +129,13 @@ def kb_search(query: str) -> str:
 # (see platform/tool_pick.py). `run_python` is not here: it is built on demand
 # (build_run_python_tool) only when the code-exec connection is declared.
 def plain_tool_registry() -> dict:
-    """name -> LangChain @tool for the vendored plain tools (calc, unit_convert,
+    """name -> LangChain @tool for the solution-owned plain tools (calc, unit_convert,
     kb_search). A fresh dict per call so callers may bind independent instances."""
     return {"calc": calc, "unit_convert": unit_convert, "kb_search": kb_search}
 
 
 def build_plain_tools(*, include_code_exec: bool = False) -> list:
-    """The full plain-tool set (all three vendored tools), optionally plus
+    """The full plain-tool set (all three solution-owned tools), optionally plus
     ``run_python``. A single place so the graph builder and any host stay free of
     tool-construction detail. Used as the OFFLINE / no-picker default; the hosted
     path narrows to the admin-declared, user-enabled subset via

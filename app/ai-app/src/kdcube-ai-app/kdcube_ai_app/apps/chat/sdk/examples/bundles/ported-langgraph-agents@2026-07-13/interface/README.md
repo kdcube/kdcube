@@ -2,8 +2,9 @@
 
 `ported-langgraph-agents@2026-07-13` hosts **two** ported LangGraph agents
 (`lg-solution` = a research graph with a dedicated answer node; `lg-react` = a
-`langchain.agents.create_agent` ReAct agent with a looping `model` node), both vendored unchanged
-under `solution/`, dispatched by `agent_id` through a **single `execute_core`**. It
+`langchain.agents.create_agent` ReAct agent with a looping `model` node), preserved
+under `solution/` with explicit integration seams, dispatched by `agent_id` through
+a **single `execute_core`**. It
 exposes **two ingresses that drive that same turn**:
 
 1. **the reactive chat turn** — a browser message on the KDCube chat surface,
@@ -134,9 +135,10 @@ role onto `bundle_call_context.role_models`. See [../docs/README.md](../docs/REA
 
 ## Runtime notes
 
-- Each agent's graph is REBUILT every turn (`_build_graph`) — no in-process cache;
-  only the checkpointer connection is opened once per agent and reused. Every turn is
-  keyed per (agent, user, conversation), so any worker serves any turn safely.
+- Each graph captures current model/tool choices, so `_build_graph` creates a fresh
+  bound graph per turn; only the checkpointer connection is opened once per agent and
+  reused. Every turn is keyed per (agent, user, conversation), so any worker serves
+  any turn safely. An immutable compile cache, if introduced, is not continuity.
 - The app hard-requires only `langgraph`, which the processor environment already
   provides. Each agent degrades if the optional Postgres checkpointer / `psycopg` v3
   are absent. For a hardened deploy that pins the full dependency set, use the

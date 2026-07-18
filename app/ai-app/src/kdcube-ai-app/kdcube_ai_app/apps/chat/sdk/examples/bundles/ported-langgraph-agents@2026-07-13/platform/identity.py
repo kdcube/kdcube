@@ -3,7 +3,7 @@
 #
 # ── identity.py ── the shared multi-user + multi-agent isolation gate ──
 #
-# Each vendored agent ran on one machine for one person: its CLI passed
+# Each preserved agent originally ran on one machine for one person: its CLI passed
 # `--user alice` and that raw string keyed both the per-user store and the
 # checkpointer thread. One KDCube deployment is bound to one tenant/project,
 # while the SAME process serves many users concurrently and this one app hosts
