@@ -1,6 +1,6 @@
 # Knowledge Base (KB)
 
-> Modular Multi-tenant Knowledge Base with **multi-stage processing**, **enhanced hybrid search**, and **moderation endpoints**.
+> Modular tenant/project-scoped Knowledge Base with **multi-stage processing**, **enhanced hybrid search**, and **moderation endpoints**.
 > SPDX-License-Identifier: MIT • © 2025 Elena Viter
 
 ---

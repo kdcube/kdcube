@@ -30,7 +30,7 @@ this app owns
   - the dispatcher                 (execute_core resolves agent_id -> the right graph)
   - the per-turn graph binding     (current model/tool choices captured each turn)
   - the two stream adapters        (dedicated-answer-node + looping-model-node)
-  - the multi-tenant + multi-agent identity gate
+  - the tenant/project/user + multi-agent identity gate
   - the storage edge               (ONE shared schema + agent_id column on pg_pool)
   - the two scene chat widgets + scene_object_action (file download)
 

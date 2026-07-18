@@ -585,7 +585,7 @@ async def root():
     return {
         "name": "KDCube AI App Platform",
         "version": "3.0.0",
-        "description": "Multitenant hosting for your AI applications",
+        "description": "Self-hosted runtime for multi-user AI applications",
         "features": [],
         "available_models": list(MODEL_CONFIGS.keys()),
         "socketio_enabled": socketio_enabled,

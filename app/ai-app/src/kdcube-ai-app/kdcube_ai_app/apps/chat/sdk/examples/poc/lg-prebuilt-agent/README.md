@@ -117,8 +117,8 @@ database the checkpointer falls back to in-memory (no cross-run persistence).
 ## What a hosting platform would still need to add
 
 This prototype is deliberately single-machine. To run it as a real product a
-platform layer would still need to provide: durable multi-tenant persistence and
-isolation (here `--user` is a bare string and everyone shares one database),
+platform layer would still need to provide: durable tenant/project- and
+user-scoped persistence (here `--user` is a bare string and everyone shares one database),
 streaming to a web UI (the CLI consumes `astream_events` in a terminal), auth,
 accounting for the model calls, and deploy/operations. The companion port bundle
 `bundles/lg-prebuilt-agent-port@2026-07-13/` wraps this agent, unchanged, to add

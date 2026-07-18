@@ -403,7 +403,7 @@ React is intentionally not a machine-bound personal agent.
 
 It is designed for:
 - multi-user
-- multi-tenant
+- tenant/project-scoped deployments
 - cluster/distributed execution
 - isolated code execution
 - turn startup on arbitrary nodes

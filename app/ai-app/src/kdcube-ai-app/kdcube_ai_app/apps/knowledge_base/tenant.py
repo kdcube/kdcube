@@ -66,7 +66,7 @@ class TenantProjects:
     - Storage backend agnostic (works with file, S3, etc.)
     - Database-aware for schema management
     - Independent of in-memory caches
-    - Multi-tenant ready
+    - Explicitly tenant-scoped
     - Persistent across application restarts
     """
 

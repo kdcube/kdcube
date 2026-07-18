@@ -204,7 +204,7 @@ dedicated infrastructure sandbox.
 Use a separate deployment (and dedicated backing services where required) when
 you need:
 
-- tenant isolation
+- stronger isolation between tenant environments
 - a separate lifecycle stage such as `dev`, `staging`, or `prod`
 
 Keep multiple bundles inside the same `tenant/project` when they belong to the

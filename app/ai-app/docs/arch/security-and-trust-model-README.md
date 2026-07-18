@@ -79,6 +79,11 @@ deployment or shared by several deployments. When infrastructure is shared,
 KDCube services preserve tenant/project scope through schemas, namespaces,
 keys, prefixes, and service-owned lookup contracts.
 
+This tenant-aware data organization is suitable for a control plane that
+provisions, discovers, upgrades, and observes many tenant/project-scoped
+deployments. It does not change the runtime rule above: one running deployment
+still binds one effective tenant/project.
+
 Inside one tenant/project deployment, many users may share processes, queues,
 connection pools, and filesystem infrastructure. User separation therefore
 depends on authenticated request context and scoped service contracts, not on
