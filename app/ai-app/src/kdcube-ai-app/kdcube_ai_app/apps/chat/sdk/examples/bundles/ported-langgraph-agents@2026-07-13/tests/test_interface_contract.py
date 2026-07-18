@@ -145,10 +145,15 @@ def test_public_ingress_surface_is_only_the_telegram_webhook() -> None:
     assert _kw(dec, "alias", consts) == "telegram_webhook"
 
     # Every other api is an operations route: the scene chat widgets' fallback
-    # companions plus `scene_object_action` (the required chat op serving
-    # conv:fi: file downloads board-less) — nothing else is exposed.
+    # companions, `scene_object_action` (the required chat op serving conv:fi:
+    # file downloads board-less), and `scene_surface_config` (the scene's
+    # descriptor-declared composition — where the Connection Hub component is
+    # configured) — nothing else is exposed.
     operations = {name for name, dec in apis.items() if _kw(dec, "route", consts) == "operations"}
-    assert operations == {"chat_lg_solution_widget", "chat_lg_react_widget", "scene_object_action"}
+    assert operations == {
+        "chat_lg_solution_widget", "chat_lg_react_widget",
+        "scene_object_action", "scene_surface_config",
+    }
 
 
 def test_entrypoint_declares_the_two_scene_chat_widgets() -> None:
