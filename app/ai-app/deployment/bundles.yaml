@@ -1142,6 +1142,35 @@ bundles:
               allowed_roles: []
         as_consumer:
           default_agent: lg-solution
+          # Scene composition (declared, not hardcoded): components the scene
+          # mounts beyond its code defaults (the two chat tiles), merged by
+          # alias via the app's `scene_surface_config` operation. The Connection
+          # Hub component keeps consent in-house — chat consent cards and the
+          # capabilities picker's Grant affordance summon it via the declared
+          # target_surfaces (the `connections.hub.open` contract). Requires
+          # connection-hub@1-0 deployed with its connections_settings widget.
+          # ui:
+          #   scene:
+          #     components:
+          #       connection_hub:
+          #         bundle_id: connection-hub@1-0
+          #         widget_alias: connections_settings
+          #         title: Connection Hub
+          #         accent: purple
+          #         gated: true
+          #         views: false
+          #         params:
+          #           tab: delegated_to_kdcube
+          #         size: { w: 760, h: 640 }
+          #         full: { w: 1040, h: 760 }
+          #         target_surfaces:
+          #           - connection_hub.connections
+          #           - connection_hub.settings
+          #         placement: floating
+          #         rail: true
+          #         default_open: false
+          #         enabled: true
+          #         order: 30
           agents:
             lg-solution:
               # Answer-model OUTPUT budget (max output tokens per model call) — a
