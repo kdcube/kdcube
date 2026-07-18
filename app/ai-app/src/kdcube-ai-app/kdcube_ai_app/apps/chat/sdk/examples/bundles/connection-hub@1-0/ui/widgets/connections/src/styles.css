@@ -75,9 +75,16 @@ body {
 }
 
 .page {
-  max-width: 640px;
+  /* Fluid with the window: the hub renders in anything from a 760px scene
+     window to a full-screen tab, so the column grows with the viewport up to
+     a wide-reading cap instead of pinning to a narrow fixed width. The
+     special narrow flows (.telegram-link-page, .claim-page) keep their own
+     caps. */
+  width: 100%;
+  max-width: 1160px;
   margin: 0 auto;
-  padding: 16px 14px 28px;
+  padding: 16px clamp(14px, 3vw, 32px) 28px;
+  box-sizing: border-box;
 }
 
 .page-head {
@@ -1347,6 +1354,27 @@ code {
 .pane--fill {
   flex: 1 1 auto;
   min-height: 0;
+}
+
+/* Wide windows: the pinned panes tile TWO-UP so the width works instead of
+   one narrow over-tall column — each pane caps at the viewport and scrolls
+   internally (same shrink-and-scroll contract as the column mode). An
+   expanded pane and a lone pane span the full row; floating panes are
+   position:fixed and unaffected. */
+@media (min-width: 1000px) {
+  .pane-group {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    align-items: start;
+    gap: 12px;
+  }
+  .pane {
+    max-height: calc(100vh - 150px);
+  }
+  .pane--fill,
+  .pane:only-child {
+    grid-column: 1 / -1;
+  }
 }
 
 .pane--floating {
