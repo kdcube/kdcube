@@ -4,10 +4,11 @@ title: "Bundle Lifecycle"
 summary: "Lifecycle model for bundles: discovery, load, initialization, invocation, hooks, background jobs, singleton state, UI build behavior, and which storage or config surfaces exist at each phase."
 tags: ["sdk", "bundle", "lifecycle", "storage", "configuration", "entrypoint", "background-jobs"]
 keywords: ["bundle discovery and load", "initialization hooks", "invocation phases", "on_job lifecycle", "background job lifecycle", "singleton bundle state", "ui build lifecycle", "storage availability by phase", "configuration availability by phase", "bundle lifecycle model"]
-updated_at: 2026-05-21
+updated_at: 2026-07-18
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-developer-guide-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-runtime-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/ui-components-lifecycle-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundle-runtime-configuration-and-secrets-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-storage-and-cache-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-interfaces-README.md
@@ -271,7 +272,7 @@ See:
 
 ## What changes apply to new requests
 
-Three classes of changes matter during bundle development:
+Four classes of changes matter during bundle development:
 
 1. **Runtime/admin prop overrides**
    - stored in Redis
@@ -280,16 +281,28 @@ Three classes of changes matter during bundle development:
    - fire `on_props_changed(...)` when the effective props actually changed
 
 2. **Descriptor-backed bundle config**
-   - comes from `bundles.yaml`
-   - affects new requests after proc reapplies the descriptor (`reset-env` / `kdcube bundle reload`)
+   - comes from the authoritative descriptor store:
+     - file-backed `bundles.yaml` in local deployments
+     - per-app descriptor records in AWS Secrets Manager in the current cloud
+       deployment
+   - Bundle Admin **Save** persists that authority, updates the active Redis
+     registry, publishes `bundles.update`, and causes proc workers to evict the
+     changed app's code and static-entrypoint state
+   - an authority edited outside Bundle Admin affects proc workers after
+     **Reload app**, `reset-env`, or `kdcube bundle reload`
 
 3. **Bundle code changes**
    - require proc cache eviction before the next request should load the updated module
+   - changing a Git `ref` in Bundle Admin and pressing **Save** is already a
+     descriptor mutation and cache-invalidation operation; pressing
+     **Reload app** immediately afterward is redundant
    - for local development, the intended path is:
      - `kdcube bundle reload <bundle_id> --workdir <runtime-workdir>`
    - reload evicts the target bundle from bundle-loader caches, drops matching
      dynamic bundle modules, invalidates static widget entrypoint load state,
      and broadcasts the changed bundle id to other proc workers
+   - prefer immutable release tags or commit refs; an unchanged mutable ref is
+     less deterministic than saving a new immutable ref
 
 4. **`@venv` requirements changes**
    - if only `requirements.txt` changed, the next call to the decorated function will rebuild the cached venv automatically
@@ -301,8 +314,118 @@ Practical rule:
 - current in-flight requests continue with the code/config they already loaded
 - new requests pick up:
   - Redis prop edits immediately
-  - descriptor/code changes after proc cache clear + descriptor replay
+  - a Bundle Admin **Save** after its registry update and worker invalidation
+  - externally edited descriptor/code changes after descriptor replay and proc
+    cache eviction
   - `requirements.txt` changes for `@venv` callables when that callable is next invoked
+
+### Save, reload, and UI build are different operations
+
+Changing an app's `repo`, `ref`, `subdir`, `path`, or module in Bundle Admin and
+pressing **Save** activates that registry change. Save does **not** synchronously
+run `npm`, Vite, or another UI build command.
+
+| Action | Registry and runtime effect | UI effect |
+|---|---|---|
+| Refresh/list/read props | Read-only | No build and no lifecycle transition |
+| Save app | Persist authority, update Redis registry, publish `bundles.update`, evict changed app state | No build inside the Save request |
+| Reload app / reload from authority | Re-read the existing authority and evict/reapply the selected app | No synchronous build; next preload or HTML request may build |
+| Reset props from code | Recompute/persist code defaults without `on_bundle_load()` | No build |
+| Open or reload main-view/widget HTML | Load the active app version and inspect the UI signature | Build if output is missing or stale; otherwise serve the current artifact |
+| Proc startup with `bundles_preload_on_start: true` | Load configured app generations once per proc lifespan | May build missing/stale UI before the first browser request |
+
+Therefore:
+
+- after changing a Git ref and pressing **Save**, do not also press **Reload
+  app**
+- reload or reopen the app's main view/widget so the browser makes a new HTML
+  entrypoint request
+- that request resolves the saved app version and builds only if its source and
+  build signature are not already current
+- use **Reload app** when the authoritative descriptor was changed outside
+  Bundle Admin, or when an explicit code/static-entrypoint eviction is needed
+- **Reload app** is not a "build now" command
+
+```text
+Bundle Admin: edit ref -> Save
+                |
+                v
+      authoritative descriptor updated
+                |
+                v
+       active Redis registry updated
+                |
+                v
+       bundles.update broadcast
+                |
+                v
+  proc workers evict old code + static load state
+                |
+                +---------------------- Save returns
+                |
+       later UI preload or GET index.html
+                |
+                v
+      resolve saved ref + compute signature
+                |
+          +-----+------+
+          |            |
+       current       stale/missing
+          |            |
+       serve UI      coordinated build
+                       |
+                       v
+                 publish artifact
+                 + valid signature
+```
+
+If a UI build fails or times out, it publishes neither a completed artifact
+signature nor a permanent failure marker. The owned build task is removed and
+the shared lock is released; the next qualifying preload or HTML request may
+retry. Recovery is demand-driven, not a periodic background retry loop. See
+[UI Components Lifecycle](ui-components-lifecycle-README.md) for cancellation,
+process cleanup, cross-worker locking, and hard-crash recovery.
+
+### Startup preload
+
+Proc can preload all active apps at startup:
+
+```yaml
+platform:
+  services:
+    proc:
+      bundles:
+        bundles_preload_on_start: true
+        bundles_preload_lock_ttl_seconds: 900
+        bundles_preload_bundle_lock_ttl_seconds: 300
+```
+
+`bundles_preload_on_start` maps to `BUNDLES_PRELOAD_ON_START`. When enabled,
+each proc worker starts the collaborative preload pass once during its lifespan,
+after Git bundle prefetch. Redis generation claims distribute apps across
+workers; shared-storage signatures and locks prevent duplicate UI artifact
+publication.
+
+The preload generation includes app id, path, module, singleton flag,
+`repo/ref/subdir`, and resolved Git commit. A newly saved immutable ref therefore
+has a different generation on the next proc startup.
+
+Important timing:
+
+- startup preload is not a continuously running reconciler
+- saving an app ref while proc is already running invalidates that app but does
+  not restart the completed startup preload loop
+- to warm that changed app immediately, open or reload its main-view/widget
+  HTML entrypoint
+- to preload every active app again, restart proc with
+  `bundles_preload_on_start: true`
+- **Reload app** only reloads/invalidates the app; it does not run the startup
+  preload pass
+
+Preload state is exposed by proc `GET /health` through
+`bundles_preload_ready`, `bundles_preload_errors`,
+`bundles_preload_started_at`, `bundles_preload_finished_at`, and the per-app
+`bundles_preload_status` map.
 
 For the CLI reload sequence, Bundle Admin endpoint, worker broadcast, and
 diagnostic signals, see:
@@ -438,8 +561,9 @@ This context is request-bound. Do not cache it as durable bundle state.
 
 ## Custom bundle UI
 
-A bundle can ship a custom frontend (a Vite/React SPA) that is built once at load time
-and served to the browser as a standalone panel.
+A bundle can ship a custom frontend (for example, a Vite/React SPA) that is
+prepared by startup preload or by the first qualifying HTML request and served
+to the browser as a standalone panel.
 
 ### How it works
 
@@ -497,7 +621,15 @@ fall back to `index.html` for client-side routing.
 
 ### Notes
 
-- The UI is built per process per tenant/project (same cadence as `on_bundle_load`).
+- UI load state is process-local per tenant/project, while build artifacts,
+  signatures, and cross-worker locks live in shared bundle storage. Multiple
+  workers may reach the lifecycle, but only one publishes a given stale or
+  missing build.
+- Saving a changed bundle ref invalidates app/static load state but does not
+  block the Save request on UI compilation. The next preload or HTML request
+  builds if needed.
+- A failed build leaves no valid signature; a later preload or HTML request can
+  retry it.
 - `node_modules/` and related generated folders are excluded from the build signature so that
   dependency installation during the build does not rotate the build cache unnecessarily.
 - The built UI typically communicates back to the backend through the bundle operations
@@ -515,6 +647,7 @@ fall back to `index.html` for client-side routing.
   - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/workspace@2026-03-31-13-36/ui/main/src/App.tsx`
   That example shows a lightweight chat main view with bundle-scoped conversation browsing on top of the runtime UI config handshake plus chat REST/SSE endpoints.
 - See:
+  [ui-components-lifecycle-README.md](ui-components-lifecycle-README.md),
   [client-transport-protocols-README.md](../../service/comm/client-transport-protocols-README.md)
   and [docs/sdk/bundle/bundle-runtime-README.md](bundle-runtime-README.md)
 

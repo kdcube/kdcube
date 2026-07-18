@@ -4,8 +4,9 @@ title: "UI Components Lifecycle"
 summary: "How KDCube discovers, builds, caches, serves, and reloads bundle UI components in single-process and concurrent proc deployments."
 tags: ["sdk", "bundle", "ui", "widget", "main-view", "lifecycle", "preload", "concurrency", "efs", "iframe"]
 keywords: ["bundle ui lifecycle", "bundle widget lifecycle", "ui.widgets", "ui.main_view", "ui_widget decorator", "shared storage ui build", "bundle ui preload", "request triggered widget build", "bundle ui locks", "bundle ui signatures", "static widget route", "concurrent proc workers", "ui source edit auto-rebuild", "signature aware coalescing"]
-updated_at: 2026-07-04
+updated_at: 2026-07-18
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-lifecycle-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-widget-integration-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-interfaces-README.md
@@ -307,6 +308,21 @@ When app preload is enabled, each proc worker starts a preload task during
 lifespan startup. All workers see the same registry, but they coordinate the
 shared work through Redis so startup can be collaborative instead of duplicated.
 
+Enable it in `assembly.yaml`:
+
+```yaml
+platform:
+  services:
+    proc:
+      bundles:
+        bundles_preload_on_start: true
+        bundles_preload_lock_ttl_seconds: 900
+        bundles_preload_bundle_lock_ttl_seconds: 300
+```
+
+The setting maps to `BUNDLES_PRELOAD_ON_START`. It controls a startup task, not
+a periodic reconciler and not an administrative Save hook.
+
 Preload does this per worker:
 
 1. Wait for git bundle prefetch to finish.
@@ -374,6 +390,28 @@ sequenceDiagram
 Preload is an optimization and a readiness signal. Serving code still has a
 request-time fallback because bundles can be reloaded or a storage mount can be
 empty after restart.
+
+The preload loop takes its registry snapshot during proc startup. If Bundle
+Admin saves a changed ref after that loop has completed:
+
+- the `bundles.update` event still evicts the old code and static-load state
+- the completed startup preload loop is not rerun
+- the next main-view/widget HTML request loads and builds the changed app if
+  needed
+- restarting proc runs startup preload again; the changed `repo/ref/subdir` or
+  resolved Git commit creates a new preload generation
+
+There is currently no separate **Preload app now** administration operation.
+Opening/reloading the app UI is the immediate per-app warm-up path; restarting
+proc is the full-registry warm-up path.
+
+Proc `GET /health` exposes:
+
+- `bundles_preload_ready`
+- `bundles_preload_errors`
+- `bundles_preload_started_at`
+- `bundles_preload_finished_at`
+- `bundles_preload_status` with per-app state
 
 ## Request-Time Static Widget Serving
 
@@ -530,6 +568,12 @@ Build subprocess timeout:
 - the lock is released in `finally`
 - the next request/preload can attempt the build again
 
+There is no sticky "failed build" state. Retry is demand-driven: another
+startup preload or main-view/widget HTML request installs a new build task.
+There is no periodic retry timer. A hard worker crash is recovered differently:
+the lock heartbeat stops, the lock expires, and a later worker/request can
+claim the operation.
+
 Normal HTTP disconnects therefore do not orphan or cancel the build.
 Administrative cancellation and timeout terminate the subprocess tree instead
 of leaving npm or Vite descendants behind. If the worker itself dies, its lock
@@ -564,7 +608,7 @@ Shared-lock wait behavior:
 
 - default wait is controlled by `BUNDLE_UI_BUILD_LOCK_WAIT_SECONDS`, default
   `600`
-- lock TTL is controlled by `BUNDLE_UI_BUILD_LOCK_TTL_SECONDS`, default `900`
+- lock TTL is controlled by `BUNDLE_UI_BUILD_LOCK_TTL_SECONDS`, default `300`
 - static UI builds do not serve stale output while locked unless the code
   explicitly opts into that mode
 
@@ -585,6 +629,73 @@ lifecycle hooks. UI preload and live UI routes remain the owners of
 This separation matters because an admin polling request can be retried by a
 browser or proxy. Such a read must never turn a transient timeout into repeated
 `npm install` executions.
+
+## Registry Ref Changes: Save Versus Reload
+
+Bundle Admin registry mutations and UI compilation are intentionally separate.
+When an administrator edits an app's Git `ref` and presses **Save**, proc:
+
+1. persists the changed app in the authoritative descriptor store
+2. updates the active Redis registry
+3. publishes `bundles.update`
+4. makes proc workers evict the changed app's imported code, singleton state,
+   manifest caches, and static-entrypoint load state
+5. returns from Save without running the app's UI build command
+
+The next startup preload or main-view/widget **HTML entrypoint** request resolves
+the saved app version and computes its UI signature. It serves an existing
+current artifact or performs the coordinated build when output is stale or
+missing.
+
+```mermaid
+sequenceDiagram
+  participant A as Bundle Admin
+  participant D as Descriptor authority
+  participant R as Redis registry/pubsub
+  participant W as proc workers
+  participant B as Browser
+  participant S as Shared bundle storage
+
+  A->>D: Save app with changed ref
+  D->>R: persist active registry + publish bundles.update
+  D-->>A: Save complete (no npm/Vite)
+  R-->>W: changed bundle id
+  W->>W: evict old code and static load state
+  B->>W: GET main-view/widget index.html
+  W->>W: resolve saved ref and compute signature
+  W->>S: inspect artifact/signature under shared lock
+  alt signature is current
+    S-->>W: current artifact
+  else signature is stale or missing
+    W->>S: build temporary output and publish atomically
+  end
+  W-->>B: index.html
+```
+
+Operator rules:
+
+- **Save** is sufficient after changing `repo`, `ref`, `subdir`, `path`, or
+  module in Bundle Admin.
+- Do not press **Reload app** immediately after Save. It only re-reads the same
+  authority and repeats eviction; it is not a synchronous UI-build button.
+- Reload or reopen an already-open main view/widget so the browser requests its
+  HTML entrypoint against the saved version.
+- Use **Reload app** when `bundles.yaml` or the cloud descriptor authority was
+  changed outside Bundle Admin, or when an explicit app-code/static-load
+  eviction is required.
+- **Reset from code** changes code-derived props defaults but does not invoke
+  `on_bundle_load()` and does not build UI.
+- Prefer immutable release tags or commit refs so the source represented by one
+  saved registry generation is deterministic.
+
+| Action | Calls `on_bundle_load()` now? | Builds UI now? | What happens next |
+|---|---:|---:|---|
+| Refresh/list/read props | No | No | Nothing is invalidated |
+| Save changed app ref | No | No | Workers evict; next preload/HTML request loads saved ref |
+| Reload app/from authority | No | No | Workers evict; next preload/HTML request reloads |
+| Reset props from code | No | No | Runtime lifecycle remains untouched |
+| Open/reload HTML entrypoint | Yes, through static load fallback when needed | If signature is stale/missing | Artifact is served after build/current check |
+| Startup preload | Yes | If signature is stale/missing | Shared artifact becomes warm |
 
 ## Concurrency Rules
 
