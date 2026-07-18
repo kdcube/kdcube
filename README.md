@@ -24,6 +24,26 @@ the whole platform at once.
 Website: [kdcube.tech](https://kdcube.tech) · Interactive architecture:
 [kdcube.tech/architecture.html](https://kdcube.tech/architecture.html)
 
+## Security and deployment scope
+
+KDCube is an application runtime and SDK, not a single MCP server or a
+workstation connector. Applications can expose or consume MCP, REST, UI,
+event, and agent surfaces under explicit deployment policy.
+
+- One running deployment is bound to one effective `tenant/project` and may
+  serve many users and operator-approved applications.
+- Application backend code is trusted deployment code. Generated code is a
+  separate boundary whose isolation strength depends on the configured
+  execution profile.
+- Secrets and connected-account credentials stay server-side; trusted tools
+  resolve them only for an authorized request.
+- Shared backing infrastructure is logically namespaced. Use separate
+  deployments or dedicated infrastructure when a stronger boundary is
+  required.
+
+Read the canonical [Security And Trust Model](app/ai-app/docs/arch/security-and-trust-model-README.md)
+and the repository [security policy](SECURITY.md) before production use.
+
 ## Quick start
 
 ```bash
@@ -53,9 +73,11 @@ Apps may have no UI and no agent, or may host several agents and frontends.
   external events, reconnectable chat, files, and conversation history.
 - **Deploy and update.** App code from Git, descriptor-based configuration,
   secret references, local/cloud parity, and near-live app reloads.
-- **Run generated code safely.** A sparse per-turn workspace and an isolated
-  executor with no ambient network or credentials. Approved tools run on the
-  trusted supervisor side under the current request identity and policy.
+- **Run generated code under explicit isolation policy.** Local subprocess
+  mode provides development-time crash containment; Docker and split profiles
+  add progressively stronger workspace, process, credential, and network
+  boundaries. Approved tools run on the trusted supervisor side under the
+  current request identity and policy.
 - **Connect users and systems.** OIDC and application authority, external
   accounts, Telegram identity linking, managed grants, revocable automation
   access, and protected REST or MCP surfaces.
@@ -125,6 +147,7 @@ ask you to discard either.
 - [What you can do with KDCube](app/ai-app/docs/what-you-can-do-with-kdcube-README.md)
 - [How to integrate with KDCube apps](app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md)
 - [Architecture](app/ai-app/docs/arch/architecture-of-what-we-built-README.md)
+- [Security and trust model](app/ai-app/docs/arch/security-and-trust-model-README.md)
 - [Docs index](app/ai-app/docs/README.md)
 - [Builder navigation](app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md)
 

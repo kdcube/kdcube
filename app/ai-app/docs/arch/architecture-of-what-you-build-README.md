@@ -4,9 +4,10 @@ title: "Architecture Of What You Build"
 summary: "Builder architecture for KDCube apps: optional surface families, provider and consumer directions, existing or ready agents, scenes, named-service realms, events, websites, storage, authority, and package contracts."
 status: current
 tags: ["arch", "architecture", "apps", "surfaces", "provider", "consumer", "named-services", "scene"]
-updated_at: 2026-07-14
+updated_at: 2026-07-18
 keywords: ["KDCube app architecture", "as provider", "as consumer", "app surfaces", "named service", "scene", "default chat"]
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/security-and-trust-model-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/arch/architecture-of-what-we-built-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-write-bundle-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-descriptor-README.md
@@ -42,6 +43,11 @@ app
 Current source and descriptors still use technical names such as `bundle_id`
 and `bundles.yaml`. Those are implementation identifiers; this documentation
 uses **app** for the builder-facing concept.
+
+An app backend is trusted deployment code selected by the operator. It is not
+the same security class as generated code sent to an isolated executor. See
+[Security And Trust Model](security-and-trust-model-README.md) before choosing
+which code belongs in an app or behind an isolation boundary.
 
 ## Two Directions, Chosen Independently
 

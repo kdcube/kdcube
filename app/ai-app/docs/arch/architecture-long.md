@@ -4,9 +4,10 @@ title: "Architecture Long"
 summary: "Detailed current KDCube architecture: deployment scope, app catalogs and surfaces, ingress, ordered conversation lanes, Data Bus and relay, identity and delegation, cross-runtime context, isolated execution, storage, scaling, sites, and economics."
 status: current
 tags: ["arch", "architecture", "runtime", "apps", "events", "identity", "execution", "storage"]
-updated_at: 2026-07-14
+updated_at: 2026-07-18
 keywords: ["KDCube architecture", "tenant project", "app provider consumer", "conversation event bus", "data bus", "isolated execution", "Connection Hub", "site catalog"]
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/security-and-trust-model-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/arch/control-plane-web-app-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/arch/architecture-of-what-we-built-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/arch/architecture-of-what-you-build-README.md
@@ -24,6 +25,9 @@ details; those belong to the deployment and operations descriptors.
 
 Use [Architecture Of What You Build](architecture-of-what-you-build-README.md)
 for the product architecture an app builder composes on top of this runtime.
+Use [Security And Trust Model](security-and-trust-model-README.md) for the
+canonical distinction between tenant/project scope, trusted application code,
+request-scoped users, and profile-dependent generated-code isolation.
 
 ## 1. Architectural Invariants
 
@@ -39,6 +43,8 @@ for the product architecture an app builder composes on top of this runtime.
    storage or credentials.
 9. Storage has subsystem owners; there is no universal KDCube data store.
 10. Accounting follows the same request/work lineage as execution.
+11. Operator-loaded application code is trusted; isolated generated code is a
+    different boundary selected by execution profile.
 
 ## 2. Deployment Scope
 

@@ -4,9 +4,10 @@ title: "Architecture Short"
 summary: "Concise current architecture of KDCube: one tenant/project deployment, directional app surfaces, ordered conversation eventing, app Data Bus, authority, storage, isolation, and accounting."
 status: current
 tags: ["arch", "architecture", "overview", "apps", "runtime"]
-updated_at: 2026-07-14
+updated_at: 2026-07-18
 keywords: ["KDCube architecture", "app surfaces", "as provider", "as consumer", "conversation event lane", "isolated execution"]
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/security-and-trust-model-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/arch/control-plane-web-app-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/arch/architecture-of-what-we-built-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/arch/architecture-of-what-you-build-README.md
@@ -21,6 +22,11 @@ self-hosted production runtime. Builders declare apps, surfaces, dependencies,
 identity rules, execution policy, and storage contracts. The runtime serves and
 enforces those declarations under concurrency, failure, security, and cost
 constraints.
+
+Application backend code is trusted deployment code; generated-code isolation
+is a separate, profile-dependent boundary. Read
+[Security And Trust Model](security-and-trust-model-README.md) before treating
+this architecture map as a security claim.
 
 ## Scope
 

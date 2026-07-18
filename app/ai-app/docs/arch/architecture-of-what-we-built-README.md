@@ -4,9 +4,10 @@ title: "Architecture Of What We Built"
 summary: "Current platform-runtime map of KDCube: one tenant/project deployment, browser and external ingress, app loading, ordered conversation eventing, Data Bus, tenant/project/session relay, identity and authority, storage ownership, isolated execution, economics, and deployment profiles."
 status: current
 tags: ["arch", "architecture", "runtime", "services", "ingress", "events", "authority", "execution", "deployment"]
-updated_at: 2026-07-14
+updated_at: 2026-07-18
 keywords: ["platform architecture", "runtime architecture", "tenant project deployment", "conversation event lane", "data bus", "SSE relay", "cross runtime context", "isolated execution", "application site catalog"]
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/security-and-trust-model-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/arch/control-plane-web-app-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/arch/architecture-of-what-you-build-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/arch/architecture-short.md
@@ -26,6 +27,8 @@ delivers results.
 
 For the architecture an app builder composes on top of this runtime, read
 [Architecture Of What You Build](architecture-of-what-you-build-README.md).
+For the exact trust boundaries behind this map, read
+[Security And Trust Model](security-and-trust-model-README.md).
 
 ## Scope First
 
@@ -38,6 +41,10 @@ tenant/project boundaries through schemas, namespaces, and prefixes. Users
 inside one deployment may share processes, queues, pools, and filesystem
 infrastructure; per-request identity and scoped service contracts are therefore
 part of the runtime boundary.
+
+Applications loaded into processors are operator-approved, trusted backend
+code. They are not isolated from one another by the generated-code sandbox.
+Use separate deployments for mutually untrusted application backends.
 
 ```text
 tenant + project

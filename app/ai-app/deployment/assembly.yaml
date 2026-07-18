@@ -82,7 +82,7 @@ infra:
     port: "5432"         # POSTGRES_PORT
     user: "postgres"     # POSTGRES_USER
     database: "kdcube"   # POSTGRES_DATABASE
-    password: "postgres" # POSTGRES_PASSWORD → also in secrets.yaml: infra.postgres.password
+    password: null       # secret only; resolve from secrets.yaml/provider: infra.postgres.password
     postgres_ssl: false  # POSTGRES_SSL (new)
     # postgres_ssl_mode: "require"  # POSTGRES_SSL_MODE (new, optional)
     # postgres_ssl_root_cert: ""    # POSTGRES_SSL_ROOT_CERT (new, optional)
@@ -90,7 +90,7 @@ infra:
     host: "redis"        # REDIS_HOST
     port: "6379"         # REDIS_PORT
     topology: "standalone" # REDIS_TOPOLOGY
-    password: "redispass" # REDIS_PASSWORD → also in secrets.yaml: infra.redis.password
+    password: null       # secret only; resolve from secrets.yaml/provider: infra.redis.password
 
 # ---------------------------------------------------------------------------
 # Storage
@@ -278,7 +278,7 @@ frontend:
  config:
    auth:
      authType: "simple"
-     token: "test-admin-token-123"
+     token: "" # local installer materializes the development credential; never put a production secret in frontend config
    # auth:
    #   authType: "cognito"
    #   idTokenHeaderName: "X-ID-Token"

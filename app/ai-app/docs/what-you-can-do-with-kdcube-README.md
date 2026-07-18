@@ -4,8 +4,9 @@ title: "What You Can Do With KDCube"
 summary: "Builder-facing map of KDCube as an open-source AI application framework with an integrated production runtime: keep existing agents and product code, adopt one useful boundary, or compose complete multi-surface apps with identity, conversations, files, isolated execution, integrations, economics, and deployment services."
 tags: ["docs", "product", "overview", "framework", "runtime", "platform", "app", "agent", "integration"]
 keywords: ["what is kdcube", "what can kdcube do", "ai application framework", "production agent runtime", "keep existing agent", "langgraph integration", "multi-user chat", "isolated code execution", "connected accounts", "delegated operators", "named services", "scene", "canvas", "user memories", "application hosted website", "deploy from git", "agent economics"]
-updated_at: 2026-07-15
+updated_at: 2026-07-18
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/security-and-trust-model-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/quick-start-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/arch/architecture-of-what-we-built-README.md
@@ -32,6 +33,13 @@ connected accounts, delegated access, user settings, or cost enforcement.
 You do not have to adopt everything. One existing handler behind one app
 operation is valid. So is a complete product with several agents, widgets,
 websites, scheduled jobs, and domain services.
+
+Application backends are trusted code selected by the deployment operator.
+Generated code has a separate, profile-dependent isolation boundary. One
+running deployment serves one effective `tenant/project` and may contain many
+users and applications. Read the
+[Security And Trust Model](arch/security-and-trust-model-README.md) for the
+precise guarantees and non-guarantees behind this overview.
 
 ```text
 your product owns                  KDCube can operate
