@@ -186,7 +186,9 @@ surface; see
 - **Whose data** — the credential's subject derives from the consenting user;
   the service serves that user's own resources under the granted claims.
 - **What exactly** — `resource_grants` scopes claims to concrete resources; the
-  connection's declared resource (its `resource` or `url`) must equal the
-  granted resource key for the lookup and the guard to agree.
+  connection's declared resource (its `resource`, falling back to `url`) must
+  byte-match the deployment's configured delegated-resource id — commonly a
+  wildcard pattern the guard matches request URLs against — so the grant's
+  creation, validation, and per-turn lookup all agree on one key.
 - **For how long** — grants carry a TTL (agent grants default to the delegated
   session ceiling) and re-consent refreshes the same record.

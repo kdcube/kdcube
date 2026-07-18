@@ -4,8 +4,10 @@ title: "Make A Named Service Agent-Friendly (MCP)"
 summary: "What a named-service namespace should implement so a generic external agent (Claude over MCP) can discover, search, read files, and act through object refs alone — using conv as the worked example and mail/slack as integration namespaces."
 status: active
 tags: ["recipes", "kdcube-for-agents", "named-services", "mcp", "conv", "mail", "slack", "search", "files", "schema", "agent"]
-updated_at: 2026-07-06
+updated_at: 2026-07-18
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/recipes/kdcube_for_agents/consume-mcp-service-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/agent-acting-for-user/agent-acting-for-user-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/delegate-kdcube-service-to-external-client-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/integrations/mail-named-service-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/integrations/slack-README.md
@@ -66,18 +68,47 @@ The intended agent workflow — encode it so the surface teaches it:
 
 ## How To Connect
 
-The agent adds the MCP URL as a connector and completes KDCube consent:
+The surface is one MCP URL:
 
 ```text
 https://<runtime>/api/integrations/bundles/<tenant>/<project>/
   kdcube-services@1-0/public/mcp/named_services
 ```
 
-Consent grants concrete tools/grants/identity-scope; the surface enforces them per
-call. The full journey (probe → consent → delegated credential → enforcement)
-lives in the connections recipe linked above. The rest of this recipe assumes the
-agent is connected and asks: what should each operation return so the agent can
-actually use it?
+Two kinds of agent reach it, with the same enforcement behind both:
+
+**An external agent** (Claude over MCP) adds the URL as a connector and
+completes KDCube consent in the browser — the OAuth journey (probe → consent →
+delegated credential) lives in
+[Delegate A KDCube Service To An External Client](../connections/delegate-kdcube-service-to-external-client-README.md).
+
+**A hosted agent** (an agent inside a KDCube app) declares a delegated
+connection in its app's tool inventory — no OAuth dance; the user grants THIS
+agent in Connection Hub (or from the chat consent demand, one click):
+
+```yaml
+# surfaces.as_consumer.agents.<agent_id>.tools
+- name: slack
+  kind: mcp
+  server_id: slack
+  alias: slack
+  url: https://<runtime>/api/integrations/bundles/<T>/<P>/kdcube-services@1-0/public/mcp/named_services
+  resource: "*/api/integrations/bundles/*/*/kdcube-services@1-0/public/mcp/named_services*"
+  transport: streamable_http
+  delegated: true
+  scopes: [named_services:use, slack:read, slack:write]
+```
+
+`resource` must byte-match the deployment's configured delegated-resource id
+(commonly a wildcard pattern) — the per-agent grant is keyed under it. The
+exact connection semantics and the two-consent chain (agent grant + the user's
+own connected-account consent, checked per call):
+[Connect An MCP Service To A KDCube Agent](consume-mcp-service-README.md),
+[Agents Acting On Behalf Of The User](../../sdk/solutions/connections/agent-acting-for-user/agent-acting-for-user-README.md).
+
+Either way, consent grants concrete tools/grants/identity-scope; the surface
+enforces them per call. The rest of this recipe assumes the agent is connected
+and asks: what should each operation return so the agent can actually use it?
 
 ## The Schema Story
 

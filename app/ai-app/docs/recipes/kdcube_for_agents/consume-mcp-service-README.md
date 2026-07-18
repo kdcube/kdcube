@@ -248,10 +248,19 @@ needs instead of configuring a credential:
   kind: mcp
   server_id: memories
   url: https://runtime.example/api/integrations/bundles/<T>/<P>/user-memories@2026-06-26/public/mcp/memories
+  resource: "*/api/integrations/bundles/*/*/user-memories@2026-06-26/public/mcp/memories*"
   transport: streamable_http
   delegated: true
   scopes: [memories:read]
 ```
+
+`url` is the concrete endpoint the client dials. `resource` is the
+delegated-resource id from the deployment's
+`delegated_credentials.oauth.resources` catalog — commonly a wildcard pattern.
+The consent grant is created, validated, and looked up under that exact id
+(the guard matches the request URL against it), so `resource` must byte-match
+the catalog entry; with no `resource`, the `url` is used and must then itself
+be the configured id.
 
 At bind time the runtime injects the bearer bound by the user's per-agent
 consent grant (the agent is a Delegated-By-KDCube client entity,
@@ -259,6 +268,29 @@ consent grant (the agent is a Delegated-By-KDCube client entity,
 connection stays unbound and a consent demand rises in chat with a one-click
 grant. Identity model, grant round-trip, and the consent middleware:
 [Agents Acting On Behalf Of The User](../../sdk/solutions/connections/agent-acting-for-user/agent-acting-for-user-README.md).
+
+The same shape reaches the user's EXTERNAL accounts through the named-services
+bridge — one delegated connection to the `kdcube-services` `named_services`
+surface, claims naming the namespaces in play:
+
+```yaml
+- name: slack
+  kind: mcp
+  server_id: slack
+  alias: slack
+  url: https://runtime.example/api/integrations/bundles/<T>/<P>/kdcube-services@1-0/public/mcp/named_services
+  resource: "*/api/integrations/bundles/*/*/kdcube-services@1-0/public/mcp/named_services*"
+  transport: streamable_http
+  delegated: true
+  scopes: [named_services:use, slack:read, slack:write]
+```
+
+Two consents chain here: the per-agent grant admits the agent into the KDCube
+namespace boundary, and the user's own connected-account consent (Slack in
+Delegated to KDCube) is checked by the provider adapter at every call —
+revoking either stops the tool immediately. What the bridge's operations
+should return so an agent can use them:
+[Make A Named Service Agent-Friendly (MCP)](named-services-mcp-README.md).
 
 ## 5. How A KDCube Agent Receives The Tools
 
