@@ -218,6 +218,61 @@ Door mechanics and the managed-credential guard in depth:
 [Expose an MCP Service from a KDCube App](../kdcube_for_agents/expose-mcp-service-README.md)
 and [Protect App MCP with Managed Credentials](../connections/protect-bundle-mcp-with-managed-credentials-README.md).
 
+## The claim layering — where every claim lives, and which are real
+
+This is the part that makes or breaks a governed service, and it is easy to get
+wrong: **one claim** (say `slack:search` or `mail:read`) appears in up to four
+places, and they must agree. Here is each layer, its exact descriptor path, and
+what it does.
+
+| Layer | Where (descriptor path) | Declares |
+| --- | --- | --- |
+| **1 · Grant vocabulary** | `connection-hub@1-0 · connections.delegated_credentials.oauth.capabilities` — the `- grant: <claim>` entries with `label`, `delegable_roles`, `delegable_permissions` | DEFINES each delegatable claim. A claim used anywhere else MUST exist here, or it has no label and cannot be delegated. |
+| **2 · Access map** | `connection-hub@1-0 · connections.delegated_credentials.oauth.resources[].named_services.<ns>.tools.<op>.grants` | Which grants each OPERATION of a namespace requires — the door's per-call enforcement. `named_services:use` (door entry) **plus** the operation's specific claim. |
+| **3 · Connection scope** | `<consumer> · surfaces.as_consumer.agents.<a>.tools[].scopes` | The agent's CEILING — the most it may be granted at this door. |
+| **4 · Per-account binding** | `account_scope` on the grant (runtime — Connection Hub UI, no descriptor) | Which connected account, and which of its real claims, this caller may use. |
+
+A Slack `object.search` call must be covered at layer 2 (the op requires
+`slack:search`), layer 1 (`slack:search` is a defined grant), and — because Slack
+is account-backed — layer 4 (the account is bound for `slack:search`). Layers 1
+and 2 are **authored in the connection-hub config**; the access map is a
+projection of it, invented nowhere else. This layering is why editing only one
+place (e.g. an agent's `scopes`) does not change what a demand asks for — the
+operation's requirement lives in the access map.
+
+### Which claims are REAL — the rule that avoids invented "wrapper" claims
+
+The claims in layers 1–2 must be the **real permissions the underlying service
+needs at its API**, not an invented namespace wrapper:
+
+- **A single provider** — Slack, LinkedIn, your own OAuth service — declares its
+  OWN real claims. Slack uses `slack:search`, `slack:post`, `slack:channels`,
+  `slack:history`, `slack:files:read`, `slack:files:write`,
+  `slack:assistant:search` (the exact Slack capabilities), **never** an invented
+  `slack:read`/`slack:write`. These are the SAME tokens the connected account
+  authorizes at layer 4, so all four layers speak one vocabulary.
+- **A multi-provider realm** — mail is the example: it serves Gmail (OAuth) AND
+  IMAP/SMTP (username/password, which has no OAuth scopes at all). There is no
+  single real claim across providers, so mail keeps a **provider-agnostic**
+  namespace claim `mail:read`/`mail:send` at layers 1–2, with the real provider
+  claim (`gmail:read`/`gmail:send`) resolved per account at layer 4.
+
+So: real provider claims for a single-provider service; a provider-agnostic
+namespace claim ONLY when the realm genuinely spans providers with no shared
+claim vocabulary (mail). Your own OAuth service is single-provider — it declares
+its own real claims (Step 2's `my_server:read`/`my_server:write`).
+
+### The worked reference, in the built-in apps
+
+Read these — they implement exactly this layering and ship in the repo:
+
+- `…/examples/bundles/kdcube-services@1-0/` — the named-services door + the
+  provider code (mail, slack, conv, tasks) with `claims_by_operation`.
+- `…/examples/bundles/connection-hub@1-0/config/bundles.template.yaml` — the grant
+  **vocabulary** (`oauth.capabilities`) and the **access map**
+  (`oauth.resources[].named_services`), showing mail (provider-agnostic
+  `mail:read`) beside slack (real `slack:search`/`slack:post`/…).
+
 ## Step 5 — Consume it
 
 A **resident agent** declares a delegated connection to the door:

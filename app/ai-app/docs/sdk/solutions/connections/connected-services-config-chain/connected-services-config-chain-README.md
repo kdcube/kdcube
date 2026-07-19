@@ -180,6 +180,16 @@ same door over OAuth, allowed by `public_clients` in ②.
 - **Read/write on an account-backed service** (Gmail, Slack, LinkedIn, a
   third-party) = the **real provider claim, consented per account** — never a
   namespace-level door scope.
+- **The claims must be REAL** — the exact permissions the service needs at its
+  API. A single provider (Slack, LinkedIn, your own OAuth service) declares its
+  own real claims (`slack:search`, `slack:post`, …), never an invented
+  `slack:read`/`slack:write`. A provider-agnostic namespace claim is used ONLY
+  when a realm genuinely spans providers with no shared vocabulary — **mail**
+  (Gmail OAuth *and* IMAP/password) keeps `mail:read`/`mail:send`, with the real
+  `gmail:read`/`gmail:send` per account. A claim lives in up to four layers (grant
+  vocabulary, access map, connection scope, per-account) that must agree — the
+  full map is [Expose a Governed Service over MCP](../../../../recipes/quickstart/expose-governed-service-mcp-README.md)
+  → "The claim layering".
 
 ## Built-in named services ride one door
 
