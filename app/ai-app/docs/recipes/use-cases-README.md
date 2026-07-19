@@ -101,7 +101,8 @@ scope upgrades · revocation · failure UX   structured denials with the fix
 - **External agents get their own grants** (`mail:read`, `slack:write`) —
   separate from provider claims, revocable, consent-snapshot-bound.
 
-Docs: [Connection Hub](../sdk/solutions/connections/connection-hub-solution-README.md) ·
+Docs: [how agents connect to KDCube](quickstart/explore-how-agents-connect-to-kdcube-README.md) ·
+[Connection Hub](../sdk/solutions/connections/connection-hub-solution-README.md) ·
 [delegate to an external client](connections/delegate-kdcube-service-to-external-client-README.md) ·
 [props & secrets](../sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md)
 
