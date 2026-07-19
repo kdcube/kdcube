@@ -75,6 +75,29 @@ def test_bridge_surface_teaches_by_operation_name_with_bundle_file_tools():
     assert "dedup_key" in block
 
 
+def test_account_resolution_renders_on_both_surfaces():
+    """Multi-account resolution parity: both teaching surfaces carry the same
+    two-step behavior — list accounts (machine `account_id`/`ref` + human
+    `label`), resolve by human name, target by id — keyed to the schema
+    showing `account_id`."""
+    react = compose_named_service_agent_instructions(
+        _consumer_props("mail"), client_id="main", surface="react", intros=INTROS
+    )
+    bridge = compose_named_service_agent_instructions(
+        _consumer_props("mail"), client_id="main", surface="bridge", intros=INTROS
+    )
+    for block in (react, bridge):
+        assert "`account_id`" in block
+        assert "serves several connected accounts" in block
+        assert "human label" in block.lower()
+        assert "never from memory or construction" in block
+        assert "fans out across the eligible accounts" in block
+    # the trigger is what the model can inspect: the schema
+    assert "`object_schema` shows an `account_id`" in react
+    # bridge keeps the reactive fallback phrased as the same behavior
+    assert "asks for an account choice" in bridge
+
+
 def test_bridge_surface_binds_the_door_tool_names_when_given():
     from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.instructions import (
         NAMED_SERVICES_MCP_DOOR_TOOL_NAMES,

@@ -20,6 +20,7 @@ When a namespace ref or request appears, pick the visible path that fits the goa
 3. Know exact object fields or search filters -> `named_services.object_schema(namespace=..., object_kind=... or object_ref=...)`. It gives the object body shape, search filter contract (`ret.extra.schema.search.filters`), and concrete tool recipes when available. It is also the contract source for actions and upserts (see 5 and 6).
 
 4. Discover objects when no exact ref is in hand -> `named_services.search_objects(namespace=..., query=...)` for text/semantic lookup, or `named_services.list_objects(namespace=..., ...)` for bounded browsing/pagination. Respect cursor/limit; avoid broad scans unless the user asks.
+   Accounts: a namespace whose `object_schema` shows an `account_id` field (in the object body or in `ret.extra.schema.search.filters`) serves several connected accounts at once. Working with a particular account is two steps: LIST the namespace's connected accounts — each row pairs the machine half (`account_id`, `ref`) with the human half (`label`, plus the raw address / workspace / display name) — then TARGET the chosen account by passing that row's `account_id` (or `ref`) in the filter or payload key the schema names. Speak to the user only in the human name; when the request is about one particular account and the user has not named it, ask, listing the candidates by their human labels. Pass ids only from list rows — an id is opaque and comes from the table, never from memory or construction. A request that spans accounts ("search all my mail") may stay un-targeted; the platform fans out across the eligible accounts. A result that asks for an account choice carries the same candidate rows — resolve by the human label and resend with that `account_id`.
 
 5. Run a provider verb on an object (send, forward, download, upload, ...) -> `named_services.object_action`. Before your FIRST `object_action` or `upsert_object` on a namespace in a conversation, read `named_services.object_schema(namespace=...)` for it — an action is a realm-defined named protocol: the schema names each action's exact payload keys, value shapes, and file forms, and no general API pattern or other namespace predicts them. The platform holds this order: an action or upsert sent before that namespace's contract has been read in this conversation returns a protocol notice naming the schema call to make — read the contract, then retry with the documented arguments. Build the payload only from keys the contract names:
    - `named_services.object_schema(namespace=...)` carries each action's payload keys, recipes, and object semantics;
@@ -143,10 +144,20 @@ def named_services_bridge_instructions(
     )
     find_tail = f", or `{list_objects}(namespace=..., ...)` for bounded browsing/pagination" if list_objects else ""
     get_tail = f" `{get}` reads one object when its exact ref is in hand." if get else ""
+    list_op = f"`{list_objects}`" if list_objects else "the namespace's list operation"
     steps.append(
         f"{n+1}. Discover objects when no exact ref is in hand -> `{search}(namespace=..., query=...)` for "
         f"text/semantic lookup{find_tail}. Each namespace declares its OWN filters — read them from `{schema}` "
-        f"before searching.{get_tail} Respect cursor/limit; avoid broad scans unless the user asks."
+        f"before searching.{get_tail} Respect cursor/limit; avoid broad scans unless the user asks.\n"
+        f"   Accounts: a namespace whose `{schema}` shows an `account_id` field (in the object body or in "
+        "`ret.extra.schema.search.filters`) serves several connected accounts at once. Working with a particular "
+        f"account is two steps: LIST the namespace's connected accounts with {list_op} — each row pairs the machine "
+        "half (`account_id`, `ref`) with the human half (`label`, plus the raw address / workspace / display name) — "
+        "then TARGET the chosen account by passing that row's `account_id` (or `ref`) in the filter or payload key "
+        "the schema names. Speak to the user only in the human name; when the request is about one particular "
+        "account and the user has not named it, ask, listing the candidates by their human labels. Pass ids only "
+        "from list rows — an id is opaque and comes from the table, never from memory or construction. A request "
+        "that spans accounts may stay un-targeted; the platform fans out across the eligible accounts."
     )
     steps.append(
         f"{n+2}. Run a provider verb on an object (send, forward, download, upload, ...) -> `{action}`. "
@@ -193,9 +204,10 @@ def named_services_bridge_instructions(
         )
     steps.append(
         f"{n+5 if not pull else n+6}. A call reporting missing grants or a forbidden operation names what needs "
-        "consent — explain it to the user and relay any reason and connection link the error carries; when the error "
-        "says an account choice is required, resend the same call with the account id chosen from the candidates it "
-        "lists. Retrying blindly changes nothing."
+        "consent — explain it to the user and relay any reason and connection link the error carries. When the "
+        "result asks for an account choice, it carries the same account rows as the list — resolve by the human "
+        "label (asking the user when they have not named the account) and resend with that `account_id`. Retrying "
+        "blindly changes nothing."
     )
     steps.append(
         f"{n+6 if not pull else n+7}. If a namespace/ref is visible but no bound tool lists that namespace, explain "
