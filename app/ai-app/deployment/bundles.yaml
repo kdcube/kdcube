@@ -173,27 +173,44 @@ bundles:
               - kdcube:role:super-admin
               delegable_permissions:
               - mail:send
-            - grant: slack:read
-              label: Read connected Slack
-              description: List channels, search messages/files, read channel history, and download files through Slack accounts
-                connected to KDCube.
-              delegable_roles:
-              - kdcube:role:registered
-              - kdcube:role:paid
-              - kdcube:role:privileged
-              - kdcube:role:super-admin
-              delegable_permissions:
-              - slack:read
-            - grant: slack:write
-              label: Write connected Slack
-              description: Post messages and upload files through Slack accounts connected to KDCube.
-              delegable_roles:
-              - kdcube:role:registered
-              - kdcube:role:paid
-              - kdcube:role:privileged
-              - kdcube:role:super-admin
-              delegable_permissions:
-              - slack:write
+            # Slack is a single provider, so it uses its OWN real claims (the
+            # exact capabilities the Slack API needs), not an invented namespace
+            # claim. These match SLACK_CONNECTED_ACCOUNT_CLAIMS.
+            - grant: slack:search
+              label: Search Slack
+              description: Search messages and files through connected Slack accounts.
+              delegable_roles: [kdcube:role:registered, kdcube:role:paid, kdcube:role:privileged, kdcube:role:super-admin]
+              delegable_permissions: [slack:search]
+            - grant: slack:channels
+              label: List Slack channels
+              description: List channels and workspaces through connected Slack accounts.
+              delegable_roles: [kdcube:role:registered, kdcube:role:paid, kdcube:role:privileged, kdcube:role:super-admin]
+              delegable_permissions: [slack:channels]
+            - grant: slack:history
+              label: Read Slack history
+              description: Read channel message history through connected Slack accounts.
+              delegable_roles: [kdcube:role:registered, kdcube:role:paid, kdcube:role:privileged, kdcube:role:super-admin]
+              delegable_permissions: [slack:history]
+            - grant: slack:files:read
+              label: Read Slack files
+              description: Download files through connected Slack accounts.
+              delegable_roles: [kdcube:role:registered, kdcube:role:paid, kdcube:role:privileged, kdcube:role:super-admin]
+              delegable_permissions: [slack:files:read]
+            - grant: slack:files:write
+              label: Upload Slack files
+              description: Upload files through connected Slack accounts.
+              delegable_roles: [kdcube:role:registered, kdcube:role:paid, kdcube:role:privileged, kdcube:role:super-admin]
+              delegable_permissions: [slack:files:write]
+            - grant: slack:post
+              label: Post to Slack
+              description: Post messages through connected Slack accounts.
+              delegable_roles: [kdcube:role:registered, kdcube:role:paid, kdcube:role:privileged, kdcube:role:super-admin]
+              delegable_permissions: [slack:post]
+            - grant: slack:assistant:search
+              label: Slack assistant search
+              description: Inspect Slack assistant search availability through connected Slack accounts.
+              delegable_roles: [kdcube:role:registered, kdcube:role:paid, kdcube:role:privileged, kdcube:role:super-admin]
+              delegable_permissions: [slack:assistant:search]
             resources:
             - resource: '*'
               label: All platform and application APIs
@@ -696,37 +713,40 @@ bundles:
                         label: About Slack
                         description: Explain the Slack namespace and connected-account model.
                         grants:
-                        - slack:read
+                        - named_services:use
                       capabilities:
                         operation: provider.capabilities
                         label: Slack capabilities
                         description: Read provider capabilities for connected Slack workspaces.
                         grants:
-                        - slack:read
+                        - named_services:use
                       list:
                         operation: object.list
                         label: List Slack
                         description: List connected Slack accounts, or channels when filters.kind is channels.
                         grants:
-                        - slack:read
+                        - named_services:use
+                        - slack:channels
                       schema:
                         operation: object.schema
                         label: Slack schema
                         description: Read the Slack object schema and ref format.
                         grants:
-                        - slack:read
+                        - named_services:use
                       search:
                         operation: object.search
                         label: Search Slack
                         description: Search Slack messages/files through connected Slack accounts.
                         grants:
-                        - slack:read
+                        - named_services:use
+                        - slack:search
                       get:
                         operation: object.get
                         label: Read Slack object
                         description: Read Slack account/channel/file objects by ref.
                         grants:
-                        - slack:read
+                        - named_services:use
+                        - slack:history
                       action:
                         operation: object.action
                         label: Slack action
@@ -734,11 +754,13 @@ bundles:
                         operations:
                           object.action:
                             label: Slack action
-                            description: Run a bounded Slack action. post_message/upload_file require slack:write; download_file/assistant_search_info
-                              require slack:read.
+                            description: Run a bounded Slack action. post_message needs slack:post; upload_file needs slack:files:write; download_file needs slack:files:read; assistant_search_info needs slack:assistant:search.
                             grants:
-                            - slack:read
-                            - slack:write
+                            - named_services:use
+                            - slack:post
+                            - slack:files:write
+                            - slack:files:read
+                            - slack:assistant:search
                       call:
                         label: Generic Slack call
                         description: Generic Slack namespace call with per-operation grants.
@@ -747,38 +769,44 @@ bundles:
                             label: About Slack
                             description: Explain the Slack namespace and connected-account model.
                             grants:
-                            - slack:read
+                            - named_services:use
                           provider.capabilities:
                             label: Slack capabilities
                             description: Read provider capabilities for connected Slack workspaces.
                             grants:
-                            - slack:read
+                            - named_services:use
                           object.list:
                             label: List Slack
                             description: List connected Slack accounts or channels.
                             grants:
-                            - slack:read
+                            - named_services:use
+                            - slack:channels
                           object.schema:
                             label: Slack schema
                             description: Read the Slack object schema and ref format.
                             grants:
-                            - slack:read
+                            - named_services:use
                           object.search:
                             label: Search Slack
                             description: Search Slack messages/files through connected Slack accounts.
                             grants:
-                            - slack:read
+                            - named_services:use
+                            - slack:search
                           object.get:
                             label: Read Slack object
                             description: Read Slack account/channel/file objects by ref.
                             grants:
-                            - slack:read
+                            - named_services:use
+                            - slack:history
                           object.action:
                             label: Slack action
                             description: Post messages, upload files, download files, or inspect Slack assistant search availability.
                             grants:
-                            - slack:read
-                            - slack:write
+                            - named_services:use
+                            - slack:post
+                            - slack:files:write
+                            - slack:files:read
+                            - slack:assistant:search
             - resource: '*/api/integrations/bundles/*/*/user-memories@2026-06-26/public/mcp/memories*'
               identity_scope: grantor_identity_family
               tools:
