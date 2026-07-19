@@ -148,6 +148,12 @@ Config ([config/bundles.template.yaml](config/bundles.template.yaml)):
 - `surfaces.as_provider.bundle.default_chat: true` — the reactive chat surface.
 - `surfaces.as_consumer.default_agent: lg-solution` + `agents.lg-solution` /
   `agents.lg-react`, each a `simple_model_pick` provider on its own role.
+- `agents.lg-react.additional_instructions` — the administrator's customization,
+  appended LAST in lg-react's system prompt inside the SDK's admin-customization
+  HARD-OVERRIDE envelope (the same convention ReAct agents honor). The full
+  system-prompt composition — block order, the named-services block, and where
+  tool docs live — is
+  [docs/agents/lg-react-system-prompt.md](docs/agents/lg-react-system-prompt.md).
 - `tools.mode` — lg-react's tools seam (plain | mcp | both).
 - `enabled.api.public.telegram_webhook.POST` + `integrations.telegram.default`.
 
@@ -175,6 +181,7 @@ entrypoint.py (BUNDLE_ID, DEFAULT_AGENT_ID, the AGENTS registry, roles, schemas,
   == platform/stream_solution.py + stream_prebuilt.py (the two adapters)
   == interface/README.md + interface/ported-langgraph-agents.openapi.yaml
   == README.md + docs/README.md + docs/arch/README.md + docs/storage/README.md
+  == docs/agents/lg-react-system-prompt.md (system-prompt block order + config keys)
   == docs/integrations/admin-integrational-homework.md
   == tests/ (dispatch, identity, storage, capabilities, both stream adapters,
              tools_mcp, telegram, interface contract) + the dated journal entry

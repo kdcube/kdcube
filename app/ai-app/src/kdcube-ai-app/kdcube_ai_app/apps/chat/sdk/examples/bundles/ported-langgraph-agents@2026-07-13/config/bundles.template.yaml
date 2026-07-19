@@ -115,6 +115,11 @@ bundles:
                 # limit. Budget = narration + ONE complete payload-bearing call.
                 model:
                   max_tokens: 16384
+                # Agent-admin customization — the administrator's voice, appended
+                # LAST in lg-react's system prompt inside the SDK's
+                # [START/END AGENT ADMIN CUSTOMIZATION - HARD OVERRIDE] envelope
+                # (the same convention ReAct agents honor). Empty = no block.
+                additional_instructions: ''
                 capability_provider: simple_model_pick
                 capabilities:
                   models:

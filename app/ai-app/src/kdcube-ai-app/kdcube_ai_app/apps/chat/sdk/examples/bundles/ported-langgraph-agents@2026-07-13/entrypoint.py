@@ -367,10 +367,57 @@ async def _build_prebuilt_graph(
     # tools have) and returns the agent-explainable consent result.
     tools += consent_request_tools(mcp_consents, announce=_announce_mcp_consent)
 
+    # The named-services instruction block (teaching + connected-namespace roster
+    # with discovery intros) comes from the SAME agent-neutral SDK mechanism the
+    # ReAct harness uses — surface="bridge" teaches by operation name, so the
+    # exact MCP/LangChain tool naming does not matter, and names THIS bundle's
+    # file tools for materialization. Empty when the agent's `as_consumer`
+    # config declares no named-service namespaces.
+    ns_block = ""
+    connected_ns: List[str] = []
+    try:
+        from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
+            connected_named_service_namespaces,
+            named_service_agent_instruction_block,
+        )
+        tool_names = {str(getattr(t, "name", "") or "") for t in tools}
+        connected_ns = connected_named_service_namespaces(
+            getattr(ep, "bundle_props", None) or {}, client_id=PREBUILT_AGENT_ID
+        )
+        ns_block = await named_service_agent_instruction_block(
+            bundle_props=getattr(ep, "bundle_props", None) or {},
+            client_id=PREBUILT_AGENT_ID,
+            surface="bridge",
+            namespaces=connected_ns,
+            redis=getattr(ep, "redis", None),
+            tenant=str(getattr(ep.settings, "TENANT", "") or ""),
+            project=str(getattr(ep.settings, "PROJECT", "") or ""),
+            pull_tool="pull_files" if "pull_files" in tool_names else "run_python",
+            read_tool="read_file" if "read_file" in tool_names else "",
+        )
+    except Exception:
+        LOGGER.info("[ported-langgraph] named-services instruction block unavailable", exc_info=True)
+
+    # Config-declared agent-admin customization — the SAME convention the ReAct
+    # harness honors: the descriptor prop is the administrator's voice, appended
+    # inside the SDK's admin-customization HARD-OVERRIDE envelope. Key:
+    # `surfaces.as_consumer.agents.lg-react.additional_instructions`.
+    additional_instructions = ""
+    try:
+        additional_instructions = str(ep.bundle_prop(
+            f"surfaces.as_consumer.agents.{PREBUILT_AGENT_ID}.additional_instructions", ""
+        ) or "").strip()
+    except Exception:
+        additional_instructions = ""
+
     checkpointer = await ep._open_checkpointer("lg-react", config.database_url)
     return build_prebuilt_agent(
         config, model=model, tools=tools, checkpointer=checkpointer, summary_model=summary_model,
-        system_prompt=_prebuilt_system_prompt(tools, mcp_consents),
+        system_prompt=_prebuilt_system_prompt(
+            tools, mcp_consents, named_services_block=ns_block,
+            additional_instructions=additional_instructions,
+            connected_namespaces=connected_ns,
+        ),
     )
 
 
@@ -431,34 +478,104 @@ async def _announce_mcp_consent(c: Any) -> None:
     await announce_agent_consent(c)
 
 
-def _prebuilt_system_prompt(tools: List[Any], mcp_consents: Optional[List[Any]] = None) -> Optional[str]:
-    """The lg-react system prompt for this turn's tool binding: with the
-    workspace tools bound (`run_python` + its `pull_files` companion), the
-    SDK's standalone distributed-turn-workspace block is APPENDED to the
-    agent's own prompt — a separate block, so the agent's prose stays its own
-    and any workspace-connected agent shares the same guidance. Without the
-    tools, None keeps the solution default.
+def _prebuilt_system_prompt(
+    tools: List[Any],
+    mcp_consents: Optional[List[Any]] = None,
+    named_services_block: str = "",
+    additional_instructions: str = "",
+    connected_namespaces: Optional[List[str]] = None,
+) -> Optional[str]:
+    """The lg-react system prompt for this turn's tool binding.
 
-    `mcp_consents`: a note is appended for any MCP tool the user has not yet
-    consented THIS agent to use — those bind as consent-gated stubs, and the
-    note tells the agent how the gate works: call the tool when the user's
-    request needs it, which raises the consent request for the user to
-    approve."""
-    consent_note = _mcp_consent_prompt_note(mcp_consents) + _named_services_usage_note(tools)
-    names = {str(getattr(tool, "name", "") or "") for tool in tools or []}
-    if "run_python" not in names:
-        return consent_note or None
-    from kdcube_ai_app.apps.chat.sdk.skills.instructions.shared_instructions import (
-        distributed_turn_workspace_guide,
+    Per-tool mechanics live in each tool's own description (the provider-native
+    declarations); this prompt carries the CAPABILITY level — the facts that
+    reshape strategy and cannot ride in a signature. Block order:
+
+    1. the agent's own prose (solution-owned)
+    2. conduct + trust guards (always: confidentiality, untrusted content,
+       no background promises, elaboration, gender, tech-evolution)
+    3. distributed-turn-workspace guide (when `run_python` is bound)
+    4. capability story: exec-as-hands (with `run_python`) OR the prose-only
+       output medium block (without it — chat is the only deliverable)
+    5. [Consent-gated tools] note (while delegated MCP consents are pending)
+    6. named-services block + sandbox caveat (when namespaces are connected;
+       the short hand note when only ns tools are bound)
+    7. conversation-recovery block (when a `conv` namespace is connected —
+       history beyond the visible window is searchable, not lost)
+    8. admin customization envelope (descriptor prop) — ALWAYS LAST, the same
+       SDK envelope the ReAct harness uses."""
+    from kdcube_ai_app.apps.chat.sdk.skills.instructions.workspace_agent_instructions import (
+        conversation_recovery_guide,
+        exec_capability_guide,
+        prose_only_output_guide,
+        workspace_agent_conduct_guards,
     )
     from .solution.lg_prebuilt.agent import SYSTEM_PROMPT
 
-    prompt = SYSTEM_PROMPT + "\n" + distributed_turn_workspace_guide(
-        exec_tool="run_python",
-        pull_tool="pull_files" if "pull_files" in names else "run_python",
-        read_tool="read_file" if "read_file" in names else "",
+    names = {str(getattr(tool, "name", "") or "") for tool in tools or []}
+    has_exec = "run_python" in names
+    pull_tool = "pull_files" if "pull_files" in names else "run_python"
+
+    parts: List[str] = [SYSTEM_PROMPT.strip(), workspace_agent_conduct_guards()]
+    if has_exec:
+        from kdcube_ai_app.apps.chat.sdk.skills.instructions.shared_instructions import (
+            distributed_turn_workspace_guide,
+        )
+
+        parts.append(distributed_turn_workspace_guide(
+            exec_tool="run_python",
+            pull_tool=pull_tool,
+            read_tool="read_file" if "read_file" in names else "",
+        ).strip())
+        parts.append(exec_capability_guide(exec_tool="run_python", pull_tool=pull_tool))
+    else:
+        parts.append(prose_only_output_guide())
+
+    consent_note = _mcp_consent_prompt_note(mcp_consents).strip()
+    if consent_note:
+        parts.append(consent_note)
+
+    if str(named_services_block or "").strip():
+        parts.append(named_services_block.strip() + _named_services_sandbox_caveat(tools))
+    else:
+        legacy_note = _named_services_usage_note(tools).strip()
+        if legacy_note:
+            parts.append(legacy_note)
+
+    conv_ns = next(
+        (str(ns) for ns in (connected_namespaces or []) if str(ns).strip().lower() == "conv"),
+        None,
     )
-    return prompt + consent_note if consent_note else prompt
+    if conv_ns:
+        parts.append(conversation_recovery_guide(
+            namespace=conv_ns,
+            pull_tool=pull_tool if has_exec else "",
+        ))
+
+    prompt = "\n\n".join(part for part in parts if part)
+    if str(additional_instructions or "").strip():
+        from kdcube_ai_app.apps.chat.sdk.solutions.react.decision_prompt import (
+            append_agent_admin_customization,
+        )
+
+        prompt = append_agent_admin_customization(
+            prompt, additional_instructions=additional_instructions
+        )
+    return prompt or None
+
+
+def _named_services_sandbox_caveat(tools: List[Any]) -> str:
+    """The bundle-specific file/network truth appended under the SDK block:
+    the exec sandbox has no network egress, so URL flows can never run there —
+    the ref-based action path is the only working one."""
+    names = {str(getattr(t, "name", "") or "") for t in tools or []}
+    if "run_python" not in names:
+        return ""
+    return (
+        "\nSandbox note: `run_python` has no network access — fetching or "
+        "POSTing URLs from it always fails; URL-based upload flows belong to "
+        "external clients, and your path is the ref-based action."
+    )
 
 
 def _named_services_usage_note(tools: List[Any]) -> str:

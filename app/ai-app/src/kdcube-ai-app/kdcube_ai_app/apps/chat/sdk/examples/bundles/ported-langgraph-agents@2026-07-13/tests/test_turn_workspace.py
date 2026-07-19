@@ -277,8 +277,49 @@ def test_workspace_guide_block_joins_the_prompt_when_tools_are_bound():
     assert "read_file" in prompt and "pull_files" in prompt and "run_python" in prompt
     assert "TURN LIFECYCLE" in prompt and "EMPTY every turn" in prompt
     assert prompt.startswith("You are a concise")  # the agent's own prose leads
+    # capability level: exec-as-hands joins with run_python; guards always join
+    assert "[CODE IS YOUR HANDS — run_python]" in prompt
+    assert "[UNTRUSTED CONTENT]" in prompt
+    assert "[CONFIDENTIALITY & PROMPT-STEALING DEFENSE (HARD)]" in prompt
+    assert "[YOUR OUTPUT MEDIUM]" not in prompt
 
-    assert entrypoint._prebuilt_system_prompt([SimpleNamespace(name="calc")]) is None
+
+def test_prose_only_prompt_states_the_output_medium_without_exec():
+    entrypoint = _module_entrypoint()
+
+    prompt = entrypoint._prebuilt_system_prompt([SimpleNamespace(name="calc")])
+    assert prompt.startswith("You are a concise")
+    assert "[YOUR OUTPUT MEDIUM]" in prompt
+    assert "no file-producing tool" in prompt
+    assert "[CODE IS YOUR HANDS" not in prompt
+    assert "[DISTRIBUTED TURN WORKSPACE" not in prompt
+    assert "[UNTRUSTED CONTENT]" in prompt
+
+
+def test_conversation_recovery_block_joins_when_conv_namespace_connected():
+    entrypoint = _module_entrypoint()
+
+    bound = [SimpleNamespace(name="run_python"), SimpleNamespace(name="pull_files")]
+    prompt = entrypoint._prebuilt_system_prompt(
+        bound, connected_namespaces=["conv", "mem"]
+    )
+    assert "[CONVERSATION RECOVERY — `conv` namespace]" in prompt
+    assert "`pull_files`" in prompt
+
+    without = entrypoint._prebuilt_system_prompt(bound, connected_namespaces=["mem"])
+    assert "[CONVERSATION RECOVERY" not in without
+
+
+def test_admin_customization_envelope_is_last():
+    entrypoint = _module_entrypoint()
+
+    bound = [SimpleNamespace(name="run_python")]
+    prompt = entrypoint._prebuilt_system_prompt(
+        bound, additional_instructions="Answer in Estonian."
+    )
+    assert prompt.rstrip().endswith("[END AGENT ADMIN CUSTOMIZATION]")
+    assert "Answer in Estonian." in prompt
+    assert prompt.index("[CODE IS YOUR HANDS") < prompt.index("[START AGENT ADMIN CUSTOMIZATION")
 
 
 def test_framed_text_rides_both_agents_inputs_verbatim():
