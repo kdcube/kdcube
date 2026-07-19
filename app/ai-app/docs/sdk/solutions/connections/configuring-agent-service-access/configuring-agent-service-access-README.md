@@ -198,6 +198,16 @@ Semantics:
   bound read-only to an account that is itself write-capable still cannot write.
   The claims offered per account are that account's own approved claims (you
   cannot grant an agent a claim the account never approved).
+- **One source of truth for read/write on account-backed services.** For a
+  namespace that runs on a connected account (mail, Slack), read/write is *only*
+  the real provider claim resolved per account — there is no parallel
+  namespace-level `mail:read`/`slack:write` claim on the door. The connection's
+  `scopes` for such a namespace carry just `named_services:use` (door admission);
+  the door admits the operation and the per-account provider claim is the read/
+  write gate. Only namespaces with no account (conv, memories, tasks) carry a
+  namespace-level claim in `scopes`, because there is no per-account layer for
+  them. This is also what the proactive consent picker shows: the real per-account
+  provider claims, so the user can consent before the agent calls.
 
 Where the user sets it:
 

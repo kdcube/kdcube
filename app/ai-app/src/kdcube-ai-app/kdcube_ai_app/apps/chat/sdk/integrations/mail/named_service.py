@@ -91,13 +91,19 @@ ACTION_FORWARD = "forward"
 ACTION_REQUEST_UPLOAD = "request_upload"
 ACTION_DISCARD_UPLOAD = "discard_upload"
 
+# The door admits a mail operation on the umbrella `named_services:use` alone.
+# Read/write is NOT a namespace-level claim here — it is the REAL provider claim
+# (gmail:read / gmail:send) resolved PER ACCOUNT by the broker (see
+# MAIL_CONNECTED_ACCOUNT_REQUIREMENTS.claims_by_operation). One source of truth
+# for read/write: the per-account provider claim. The old namespace derivations
+# (mail:read / mail:send) are gone.
 MAIL_GRANT_HINTS = {
-    "object.list": ["mail:read"],
-    "object.search": ["mail:read"],
-    "object.get": ["mail:read"],
-    "object.action.download_attachments": ["mail:read"],
-    "object.action.send": ["mail:send"],
-    "object.action.forward": ["mail:read", "mail:send"],
+    "object.list": ["named_services:use"],
+    "object.search": ["named_services:use"],
+    "object.get": ["named_services:use"],
+    "object.action.download_attachments": ["named_services:use"],
+    "object.action.send": ["named_services:use"],
+    "object.action.forward": ["named_services:use"],
 }
 
 # Machine-readable connected-account requirements for catalog consumers (the

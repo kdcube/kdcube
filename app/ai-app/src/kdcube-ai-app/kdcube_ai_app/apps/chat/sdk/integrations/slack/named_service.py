@@ -98,14 +98,20 @@ ACTION_ASSISTANT_SEARCH_INFO = "assistant_search_info"
 ACTION_REQUEST_UPLOAD = "request_upload"
 ACTION_DISCARD_UPLOAD = "discard_upload"
 
+# The door admits a slack operation on the umbrella `named_services:use` alone.
+# Read/write is NOT a namespace-level claim here — it is the REAL provider claim
+# (slack:read / slack:write) resolved PER ACCOUNT by the broker (see
+# SLACK_CONNECTED_ACCOUNT_REQUIREMENTS.claims_by_operation). One source of truth
+# for read/write: the per-account provider claim. The old namespace derivations
+# are gone.
 SLACK_GRANT_HINTS = {
-    "object.list": ["slack:read"],
-    "object.search": ["slack:read"],
-    "object.get": ["slack:read"],
-    "object.action.download_file": ["slack:read"],
-    "object.action.assistant_search_info": ["slack:read"],
-    "object.action.post_message": ["slack:write"],
-    "object.action.upload_file": ["slack:write"],
+    "object.list": ["named_services:use"],
+    "object.search": ["named_services:use"],
+    "object.get": ["named_services:use"],
+    "object.action.download_file": ["named_services:use"],
+    "object.action.assistant_search_info": ["named_services:use"],
+    "object.action.post_message": ["named_services:use"],
+    "object.action.upload_file": ["named_services:use"],
 }
 
 SLACK_CONNECTED_ACCOUNT_CLAIMS = {
