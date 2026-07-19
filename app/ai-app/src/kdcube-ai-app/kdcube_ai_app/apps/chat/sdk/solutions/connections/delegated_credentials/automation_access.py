@@ -197,6 +197,44 @@ def _as_list(value: Any) -> list[str]:
     return out
 
 
+def normalize_account_scope(value: Any) -> dict[str, dict[str, tuple[str, ...]]]:
+    """Nested per-account claim binding: ``{provider: {account_id: (claims...)}}``.
+
+    For each provider the agent may reach, this names the exact connected
+    account(s) it may use AND, per account, the claims it may use on that
+    account — so "read+write from account 1, read-only from account 2" is
+    expressible independent of what each account is itself capable of.
+
+    - account key ``"*"`` = any account; a claim entry ``"*"`` (or an empty
+      claim list) = any claim the account supports.
+    - Accepts the legacy list form ``{provider: [account_ids]}`` and migrates
+      each account to ``("*",)`` (bound to those accounts for every claim), so
+      existing grants keep working unchanged.
+    - An absent provider key means no restriction (any account, any claim).
+    """
+    out: dict[str, dict[str, tuple[str, ...]]] = {}
+    for provider, entry in dict(value or {}).items():
+        pkey = _clean(provider)
+        if not pkey:
+            continue
+        accounts: dict[str, tuple[str, ...]] = {}
+        if isinstance(entry, Mapping):
+            for account_id, claims in entry.items():
+                akey = _clean(account_id)
+                if not akey:
+                    continue
+                cl = tuple(_as_list(claims))
+                accounts[akey] = cl or ("*",)
+        else:
+            for account_id in _as_list(entry):
+                akey = _clean(account_id)
+                if akey:
+                    accounts[akey] = ("*",)
+        if accounts:
+            out[pkey] = accounts
+    return out
+
+
 def _subject_from_user(user: Mapping[str, Any]) -> str:
     for key in ("user_id", "sub", "id"):
         value = _clean(user.get(key))
@@ -328,10 +366,12 @@ class AutomationAccessRecord:
     named_service_operations: Mapping[str, Mapping[str, tuple[str, ...]]] = field(
         default_factory=dict
     )
-    # Per-agent account binding: {provider_id: [account_ids or "*"]}. Which
-    # connected account(s) this client may use for a provider's claims. Absent
-    # provider key => "*" (any account), the default and the migration story.
-    account_scope: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    # Per-agent, per-account claim binding:
+    # {provider_id: {account_id: (claims...)}}. For a provider, which connected
+    # account(s) this client may use AND, per account, the exact claims it may
+    # use there. account "*" = any account; claim "*" (or empty) = any claim.
+    # Absent provider key => no restriction. See ``normalize_account_scope``.
+    account_scope: Mapping[str, Mapping[str, tuple[str, ...]]] = field(default_factory=dict)
     identity_scope: str = ""
     session_id: str = ""
     created_at: int = 0
@@ -368,11 +408,7 @@ class AutomationAccessRecord:
                 ).items()
                 if _clean(resource) and isinstance(namespaces, Mapping)
             },
-            account_scope={
-                _clean(provider): tuple(_as_list(accounts))
-                for provider, accounts in dict(value.get("account_scope") or {}).items()
-                if _clean(provider)
-            },
+            account_scope=normalize_account_scope(value.get("account_scope")),
             identity_scope=_clean(value.get("identity_scope")),
             session_id=_clean(value.get("session_id")),
             created_at=int(value.get("created_at") or 0),
@@ -401,7 +437,8 @@ class AutomationAccessRecord:
                 for resource, namespaces in self.named_service_operations.items()
             },
             "account_scope": {
-                provider: list(accounts) for provider, accounts in self.account_scope.items()
+                provider: {account_id: list(claims) for account_id, claims in accounts.items()}
+                for provider, accounts in self.account_scope.items()
             },
             "identity_scope": self.identity_scope,
             "session_id": self.session_id,
@@ -920,11 +957,10 @@ class AutomationAccessService:
             }
         identity_scope = next(iter(identity_scopes), "grantor")
 
-        # Per-agent account binding: {provider_id: [account_ids or "*"]}.
-        selected_account_scope: dict[str, list[str]] = {
-            _clean(provider): _as_list(list(accounts))
-            for provider, accounts in dict(account_scope or {}).items()
-            if _clean(provider)
+        # Per-agent, per-account claim binding: {provider: {account_id: [claims]}}.
+        selected_account_scope: dict[str, dict[str, list[str]]] = {
+            provider: {account_id: list(claims) for account_id, claims in accounts.items()}
+            for provider, accounts in normalize_account_scope(account_scope).items()
         }
 
         requested_client_id = _clean(client_id)
@@ -977,15 +1013,18 @@ class AutomationAccessService:
                                     if op_name not in current:
                                         current.append(op_name)
                                 target[ns] = current
-                # Merge the account binding per provider: union the account
-                # lists (a one-click grant accumulates; a REPLACE edit sends the
-                # full desired scope and overwrites, same as resource_grants).
-                for provider, held in existing.account_scope.items():
-                    merged_accounts = list(selected_account_scope.get(provider, []))
-                    for acct in held:
-                        if acct not in merged_accounts:
-                            merged_accounts.append(acct)
-                    selected_account_scope[provider] = merged_accounts
+                # Merge the account binding per provider AND per account: union
+                # the claim lists (a one-click grant accumulates; a REPLACE edit
+                # sends the full desired scope and overwrites, same as
+                # resource_grants).
+                for provider, held_accounts in existing.account_scope.items():
+                    target_accounts = selected_account_scope.setdefault(provider, {})
+                    for account_id, held_claims in held_accounts.items():
+                        merged_claims = list(target_accounts.get(account_id, []))
+                        for claim in held_claims:
+                            if claim not in merged_claims:
+                                merged_claims.append(claim)
+                        target_accounts[account_id] = merged_claims
         else:
             access_id = "aut_" + secrets.token_urlsafe(10)
             client_id = f"{AUTOMATION_CLIENT_PREFIX}:{access_id}"
@@ -1091,7 +1130,8 @@ class AutomationAccessService:
                 ).items()
             },
             account_scope={
-                provider: tuple(accounts) for provider, accounts in selected_account_scope.items()
+                provider: {account_id: tuple(claims) for account_id, claims in accounts.items()}
+                for provider, accounts in selected_account_scope.items()
             },
             identity_scope=identity_scope,
             session_id=session_id,
@@ -1222,11 +1262,11 @@ class AutomationAccessService:
                 "resource": cfg.resource,
                 "claims": sorted(required),
                 "client_id": client_id,
-                # The agent's per-provider account binding, so the native gate
-                # can bind it for the connected-account resolver (which account
-                # this agent may use per provider). Empty => any account.
+                # The agent's per-account claim binding, so the native gate can
+                # bind it for the connected-account resolver (which account +
+                # which claims this agent may use per provider). Empty => any.
                 "account_scope": {
-                    provider: list(accounts)
+                    provider: {account_id: list(claims) for account_id, claims in accounts.items()}
                     for provider, accounts in (record.account_scope.items() if record is not None else ())
                 },
             }
@@ -1327,10 +1367,9 @@ class AutomationAccessService:
         client = _clean(client_id)
         resource_value = _clean(resource)
         claim_list = _as_list(list(claims))
-        scope_update: dict[str, list[str]] = {
-            _clean(provider): _as_list(list(accounts))
-            for provider, accounts in dict(account_scope or {}).items()
-            if _clean(provider)
+        scope_update: dict[str, dict[str, list[str]]] = {
+            provider: {account_id: list(cl) for account_id, cl in accounts.items()}
+            for provider, accounts in normalize_account_scope(account_scope).items()
         }
         if not client or (not claim_list and not scope_update):
             return {"ok": False, "error": "delegated_access_requires_client_and_claims"}
@@ -1363,24 +1402,33 @@ class AutomationAccessService:
                     if claim not in merged:
                         merged.append(claim)
             resource_grants[key] = tuple(merged)
-        # Account binding edit, same merge/replace semantics per provider.
-        account_scope_out = {provider: tuple(accounts) for provider, accounts in record.account_scope.items()}
+        # Account binding edit, same merge/replace semantics per provider AND
+        # per account.
+        account_scope_out: dict[str, dict[str, tuple[str, ...]]] = {
+            provider: {account_id: tuple(cl) for account_id, cl in accounts.items()}
+            for provider, accounts in record.account_scope.items()
+        }
         for provider, accounts in scope_update.items():
             if replace:
-                account_scope_out[provider] = tuple(accounts)
+                account_scope_out[provider] = {a: tuple(cl) for a, cl in accounts.items()}
             else:
-                current = list(account_scope_out.get(provider, ()))
-                for acct in accounts:
-                    if acct not in current:
-                        current.append(acct)
-                account_scope_out[provider] = tuple(current)
+                target = dict(account_scope_out.get(provider, {}))
+                for account_id, cl in accounts.items():
+                    current = list(target.get(account_id, ()))
+                    for claim in cl:
+                        if claim not in current:
+                            current.append(claim)
+                    target[account_id] = tuple(current)
+                account_scope_out[provider] = target
         try:
             ttl = await self._redis.ttl(self._record_key(access_id))
         except Exception:
             ttl = 0
         record_dict = record.to_dict()
         record_dict["resource_grants"] = {res: list(vals) for res, vals in resource_grants.items()}
-        record_dict["account_scope"] = {p: list(a) for p, a in account_scope_out.items()}
+        record_dict["account_scope"] = {
+            p: {a: list(cl) for a, cl in accounts.items()} for p, accounts in account_scope_out.items()
+        }
         await self._redis.setex(
             self._record_key(access_id), max(60, int(ttl or 0) or 60), json.dumps(record_dict),
         )
@@ -1391,7 +1439,9 @@ class AutomationAccessService:
             "ok": True,
             "access_id": access_id,
             "resource_grants": {res: list(vals) for res, vals in resource_grants.items()},
-            "account_scope": {p: list(a) for p, a in account_scope_out.items()},
+            "account_scope": {
+                p: {a: list(cl) for a, cl in accounts.items()} for p, accounts in account_scope_out.items()
+            },
         }
 
     async def revoke_access(self, user: Mapping[str, Any], *, access_id: str) -> dict[str, Any]:

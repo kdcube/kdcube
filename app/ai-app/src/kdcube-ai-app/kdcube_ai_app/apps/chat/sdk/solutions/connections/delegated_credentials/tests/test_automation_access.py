@@ -1093,52 +1093,71 @@ async def test_external_client_edit_replaces_and_narrows():
 
 @pytest.mark.asyncio
 async def test_agent_grant_carries_account_scope_and_merges():
-    # The agent card carries account_scope {provider: [account_ids]}; a re-grant
-    # MERGES the account lists (one-click accumulate), replace overwrites.
+    # The agent card carries a per-account claim binding
+    # {provider: {account_id: [claims]}}; a re-grant MERGES (union) claims per
+    # account, replace overwrites — "read+write on one, read-only on another".
     service = _agent_service()
     resource = "https://example.test/mcp"
 
     created = await service.create_access(
         _AGENT_USER, label="a", client_id=_AGENT_CLIENT,
         resource_grants={resource: ["records:read"]},
-        account_scope={"google": ["acct-2"]},
+        account_scope={"google": {"acct-2": ["gmail:read"]}},
     )
-    assert created["access"]["account_scope"] == {"google": ["acct-2"]}
+    assert created["access"]["account_scope"] == {"google": {"acct-2": ["gmail:read"]}}
 
-    # Merge: add acct-3 -> both.
+    # Merge: add gmail:send on acct-2 and a new acct-3 -> union per account.
     merged = await service.create_access(
         _AGENT_USER, label="a", client_id=_AGENT_CLIENT,
         resource_grants={resource: ["records:read"]},
-        account_scope={"google": ["acct-3"]},
+        account_scope={"google": {"acct-2": ["gmail:send"], "acct-3": ["gmail:read"]}},
     )
-    assert sorted(merged["access"]["account_scope"]["google"]) == ["acct-2", "acct-3"]
+    assert sorted(merged["access"]["account_scope"]["google"]["acct-2"]) == ["gmail:read", "gmail:send"]
+    assert merged["access"]["account_scope"]["google"]["acct-3"] == ["gmail:read"]
 
-    # Replace (edit): narrow back to acct-2 only.
+    # Replace (edit): narrow back to acct-2 read-only.
     replaced = await service.create_access(
         _AGENT_USER, label="a", client_id=_AGENT_CLIENT,
         resource_grants={resource: ["records:read"]},
-        account_scope={"google": ["acct-2"]},
+        account_scope={"google": {"acct-2": ["gmail:read"]}},
         merge_existing=False,
     )
-    assert replaced["access"]["account_scope"] == {"google": ["acct-2"]}
+    assert replaced["access"]["account_scope"] == {"google": {"acct-2": ["gmail:read"]}}
+
+
+@pytest.mark.asyncio
+async def test_agent_grant_account_scope_accepts_legacy_list_form():
+    # Backward compat: the old {provider: [account_ids]} form migrates to
+    # {account_id: ["*"]} (bound to those accounts, any claim) — no breakage.
+    service = _agent_service()
+    resource = "https://example.test/mcp"
+    created = await service.create_access(
+        _AGENT_USER, label="a", client_id=_AGENT_CLIENT,
+        resource_grants={resource: ["records:read"]},
+        account_scope={"google": ["acct-2"]},
+    )
+    assert created["access"]["account_scope"] == {"google": {"acct-2": ["*"]}}
 
 
 def test_credential_view_reads_account_scope_and_resolves_allowed():
-    # The one canonical reader exposes account_scope; allowed_account_ids honors
-    # "*"/absent as no-restriction.
+    # The one canonical reader exposes the nested account_scope and the
+    # account_claim_scope accessor; absent provider -> None (no restriction).
     from types import SimpleNamespace
     from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.credential_view import (
         delegated_credential_view,
     )
     req = SimpleNamespace(state=SimpleNamespace(delegated_credential={
-        "credential": {"attrs": {"account_scope": {"google": ["acct-2"], "slack": ["*"]}}},
+        "credential": {"attrs": {"account_scope": {
+            "google": {"acct-2": ["gmail:read"]},
+            "slack": {"*": ["*"]},
+        }}},
         "grant_record": {},
     }))
     view = delegated_credential_view(req)
-    assert view.account_scope["google"] == ("acct-2",)
-    assert view.allowed_account_ids("google") == {"acct-2"}
-    assert view.allowed_account_ids("slack") is None   # "*" -> no restriction
-    assert view.allowed_account_ids("icloud") is None  # absent -> no restriction
+    assert view.account_scope["google"] == {"acct-2": ("gmail:read",)}
+    assert view.account_claim_scope("google") == {"acct-2": ("gmail:read",)}
+    assert view.account_claim_scope("slack") == {"*": ("*",)}  # any account, any claim
+    assert view.account_claim_scope("icloud") is None  # absent -> no restriction
 
 
 @pytest.mark.asyncio
@@ -1151,24 +1170,25 @@ async def test_external_client_edit_account_scope_merge_and_replace():
         grantor_subject="platform-user-1", client_id="claude",
         scopes=["records:read"], resource=resource, access_token="tokA",
     )
-    # Add account binding (merge).
+    # Add per-account claim binding (merge).
     added = await service.extend_client_access(
         _AGENT_USER, client_id="claude", resource=resource,
-        claims=[], account_scope={"google": ["acct-1"]},
+        claims=[], account_scope={"google": {"acct-1": ["gmail:read"]}},
     )
-    assert added["account_scope"] == {"google": ["acct-1"]}
-    # Merge a second account.
+    assert added["account_scope"] == {"google": {"acct-1": ["gmail:read"]}}
+    # Merge a claim on acct-1 and a second account.
     both = await service.extend_client_access(
         _AGENT_USER, client_id="claude", resource=resource,
-        claims=[], account_scope={"google": ["acct-2"]},
+        claims=[], account_scope={"google": {"acct-1": ["gmail:send"], "acct-2": ["gmail:read"]}},
     )
-    assert sorted(both["account_scope"]["google"]) == ["acct-1", "acct-2"]
-    # Replace (narrow) to acct-2 only.
+    assert sorted(both["account_scope"]["google"]["acct-1"]) == ["gmail:read", "gmail:send"]
+    assert both["account_scope"]["google"]["acct-2"] == ["gmail:read"]
+    # Replace (narrow) to acct-2 read-only.
     narrowed = await service.extend_client_access(
         _AGENT_USER, client_id="claude", resource=resource,
-        claims=[], account_scope={"google": ["acct-2"]}, replace=True,
+        claims=[], account_scope={"google": {"acct-2": ["gmail:read"]}}, replace=True,
     )
-    assert narrowed["account_scope"] == {"google": ["acct-2"]}
+    assert narrowed["account_scope"] == {"google": {"acct-2": ["gmail:read"]}}
 
 
 @pytest.mark.asyncio
@@ -1179,14 +1199,14 @@ async def test_agent_grant_state_exposes_account_scope_for_native_gate():
     await service.create_access(
         _AGENT_USER, label="a", client_id=_AGENT_CLIENT,
         resource_grants={door: ["named_services:use", "mail:read"]},
-        account_scope={"google": ["acct-2"]},
+        account_scope={"google": {"acct-2": ["gmail:read"]}},
     )
     state = await service.agent_namespace_grant_state(
         grantor_subject="platform-user-1", client_id=_AGENT_CLIENT,
         namespace="mail", operation="object.search",
     )
     assert state["governed"] is True
-    assert state["account_scope"] == {"google": ["acct-2"]}
+    assert state["account_scope"] == {"google": {"acct-2": ["gmail:read"]}}
 
 
 @pytest.mark.asyncio

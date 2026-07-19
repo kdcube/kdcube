@@ -158,52 +158,64 @@ send_gmail:
 Either way the axis the runtime resolves on is the **provider** — which is why
 the account binding below keys by provider, not by namespace.
 
-## Surface C — bind the agent to specific accounts (`account_scope`)
+## Surface C — bind the agent to specific accounts and permissions (`account_scope`)
 
 Surfaces A and B decide *whether* an agent may use a provider. `account_scope`
-decides *which of the user's connected accounts* it may use for that provider —
-so "read and write from account 1, read-only from account 2" is expressible.
+decides *which of the user's connected accounts* it may use AND, **per account,
+which claims** — so "read and write from account 1, read-only from account 2" is
+expressed directly on the grant, not left to the accounts' own capability.
+
+> Why per-account claims, not just per-account. An account's own claims are
+> *shared* — they are the account's capability for the user and for every agent.
+> If account 2 was connected with write (because the user or another agent needs
+> it), an agent merely *bound to* account 2 with a write claim could still write.
+> Restricting *this* agent to read-only on account 2 has to live on the grant.
 
 This is **not** descriptor config. It lives on the agent's grant record (the
 "Delegated by KDCube" card) and the user authors it in Connection Hub:
 
 ```text
-account_scope: { "<provider_id>": ["<account_id>", ...] }   # a list per provider
-              | { "<provider_id>": ["*"] }                   # any account (explicit)
-              |  (provider key absent)                       # any account (default)
+account_scope: { "<provider_id>": { "<account_id>": ["<claim>", ...] } }
+             |  { "<provider_id>": { "<account_id>": ["*"] } }   # any claim on that account
+             |  { "<provider_id>": { "*": ["*"] } }              # any account, any claim
+             |   (provider key absent)                           # any account, any claim (default)
 ```
 
 Semantics:
 
-- **Keyed by `provider_id`** — the universal axis the account broker resolves on
-  (a non-namespaced MCP tool and a named-service namespace both end at the same
-  `provider_id`). One binding governs every claim of that provider.
-- **Absent / `"*"` → any account.** Existing grants and single-account providers
-  keep working unchanged; a provider with exactly one connected account resolves
-  to it with no friction.
-- **Read/write granularity is free — the account's own claims do it.** The card
-  binds only *which account*. What that account may do is set when the user
-  connects it (its per-account claims: account 2 approved `gmail:read` only, so
-  an agent bound to account 2 simply cannot send). "Read+write from 1, read-only
-  from 2" = the accounts' own claims + the agent's account binding.
+- **Keyed by `provider_id`, then `account_id`** — provider is the universal axis
+  the account broker resolves on (a non-namespaced MCP tool and a named-service
+  namespace both end at the same `provider_id`); the per-account claim list is
+  the exact set this agent may use on that account.
+- **account `"*"` = any account; claim `"*"` (or absent provider) = any claim.**
+  Existing grants keep working unchanged: the legacy list form
+  `{provider: [account_ids]}` migrates to `{account_id: ["*"]}` (bound accounts,
+  any claim), and single-account providers resolve with no friction.
+- **The binding decides, not the account's capability.** An account may satisfy a
+  claim only when it is bound AND the binding covers that claim — so an agent
+  bound read-only to an account that is itself write-capable still cannot write.
+  The claims offered per account are that account's own approved claims (you
+  cannot grant an agent a claim the account never approved).
 
 Where the user sets it:
 
 - **At consent** — the chat consent card's account picker. A new agent's provider
-  claim presents the user's connected accounts; the user picks one or more (the
-  pick is written into `account_scope` as part of the one-click grant). Zero
-  connected accounts for the provider → connect one first, then pick.
+  claim presents the user's connected accounts, each with its own claim
+  checkboxes; the picks are written into `account_scope` as part of the one-click
+  grant. Zero connected accounts for the provider → connect one first, then pick.
 - **Later** — the Edit control on the agent's "Delegated by KDCube" card, same
-  picker, `replace` semantics (unchecking a provider clears its binding back to
-  any-account). Because the grant card is the live authority the guard resolves
-  each call, an edit applies on the agent's next call — no re-mint, no reconnect.
+  per-account checkboxes, `replace` semantics (leaving a provider untouched clears
+  its binding back to any-account). Because the grant card is the live authority
+  the guard resolves each call, an edit applies on the agent's next call — no
+  re-mint, no reconnect.
 
-Enforcement is one place — the account broker intersects the candidate accounts
-with the agent's allowed set before its 0/1/many decision; an explicit account
-outside the set is refused, naming the allowed one. It is applied uniformly on
-both the MCP-door path and the native named-service path, so the same binding
-holds however the claim is resolved. Per-claim given/pending state across all of
-this is the [Claim-Driven Consent](../claim-driven-consent/claim-driven-consent-README.md)
+Enforcement is one place — the account broker filters the candidate accounts to
+those the binding permits *for the claim being resolved* before its 0/1/many
+decision; an explicit account the binding does not cover for that claim is
+refused, naming the allowed one. It is applied uniformly on both the MCP-door
+path and the native named-service path, so the same binding holds however the
+claim is resolved. Per-claim given/pending state across all of this is the
+[Claim-Driven Consent](../claim-driven-consent/claim-driven-consent-README.md)
 surface.
 
 ## Canonical references — copy the shape from here
@@ -236,8 +248,9 @@ and Redis views are derived, never hand-edited.
 2. **Grant** — ask the agent to use the capability; the chat consent card
    appears with the claims and (if accounts exist) the account picker. Grant it;
    the card lands under *Delegated by KDCube* with an *agent* badge.
-3. **Scope** — connect a second account of the same provider with narrower
-   claims (e.g. read-only). Bind the agent to it via the picker; confirm reads
-   succeed and the write it cannot authorize is refused with the connect/upgrade
-   demand naming the allowed account. Re-bind to the fuller account via Edit and
-   confirm the write now succeeds on the next call.
+3. **Scope** — connect two accounts of the same provider, both write-capable. In
+   the picker, tick read+write on the first account and read-only on the second.
+   Confirm reads succeed on both, a write routes to the first account, and an
+   explicit write via the second is refused (naming the allowed account) — even
+   though the second account is itself write-capable. Re-tick write on the second
+   via Edit and confirm the write now succeeds on the next call.

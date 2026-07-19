@@ -99,9 +99,10 @@ export interface GrantAgentAccessArgs {
    *  (the user unchecked something). Default merges — one-click grants
    *  accumulate. */
   replace?: boolean;
-  /** Per-provider account binding: {provider_id: [account_ids or "*"]}. Which
-   *  connected account(s) this agent may use for a provider's claims. */
-  accountScope?: Record<string, string[]>;
+  /** Per-account claim binding: {provider_id: {account_id: [claims]}}. Which
+   *  connected account(s) this agent may use for a provider AND, per account,
+   *  the claims it may use there. */
+  accountScope?: Record<string, Record<string, string[]>>;
 }
 
 /** Grant a hosted agent (a "Delegated By KDCube" entity) access to a resource —

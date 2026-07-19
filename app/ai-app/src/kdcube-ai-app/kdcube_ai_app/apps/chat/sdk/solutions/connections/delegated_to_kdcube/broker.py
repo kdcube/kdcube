@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.adapters import (
     resolve_adapter,
@@ -58,19 +58,23 @@ class DelegatedToKdcubeBroker:
         claim: str,
         connector_app_id: str | None = None,
         account_id: str | None = None,
-        allowed_account_ids: set[str] | None = None,
+        account_claim_scope: Mapping[str, Any] | None = None,
         purpose: str = "",
         force_refresh: bool = False,
     ) -> ClaimResolution:
         """Resolve one provider claim.
 
-        ``allowed_account_ids`` is the calling AGENT's account binding for this
-        provider (`account_scope[provider_id]` on the agent grant): when a
-        concrete set, only those accounts may satisfy the claim — the candidate
-        list is intersected with it before the 0/1/many decision. ``None``, an
-        empty set, or a set containing ``"*"`` means no restriction (the default
-        and every non-agent turn). An explicit ``account_id`` must itself be in
-        the set.
+        ``account_claim_scope`` is the calling AGENT's per-account claim binding
+        for this provider (`account_scope[provider_id]` on the agent grant),
+        shaped ``{account_id: [claims]}``: for each connected account, the exact
+        claims this agent may use ON that account. The account key ``"*"`` means
+        any account; a claim entry ``"*"`` (or the whole binding being ``None`` /
+        empty) means any claim. An account may satisfy this claim only when it is
+        bound AND the binding covers ``claim`` — so "read+write from account 1,
+        read-only from account 2" is enforced here, independent of what each
+        account is itself capable of. ``None``/empty = no restriction (the
+        default and every non-agent turn). An explicit ``account_id`` must
+        itself be bound for this claim.
 
         ``force_refresh`` refreshes the credential even when its timestamps
         look valid — the live-401 retry path uses it when the provider
@@ -81,18 +85,36 @@ class DelegatedToKdcubeBroker:
         claim_key = as_str(claim)
         connector_key = as_str(connector_app_id)
         account_key = as_str(account_id)
-        # The agent's account binding for this provider. "*" (or empty/None)
-        # means any account — no restriction.
-        allowed = {a for a in (allowed_account_ids or set()) if a}
-        restrict = bool(allowed) and "*" not in allowed
-        if account_key and restrict and account_key not in allowed:
+        # The agent's per-account claim binding for this provider:
+        # {account_id: {claims}} where account "*" = any account and claim "*" =
+        # any claim. Empty/None => no restriction (any account, any claim).
+        scope = {
+            as_str(acc): {as_str(c) for c in (claims or ()) if as_str(c)}
+            for acc, claims in dict(account_claim_scope or {}).items()
+            if as_str(acc)
+        }
+        restrict = bool(scope)
+
+        def _binding_allows(aid: str) -> bool:
+            if not restrict:
+                return True
+            claims = scope.get(aid)
+            if claims is None:
+                claims = scope.get("*")
+            if claims is None:
+                return False  # the agent is not bound to this account
+            if not claim_key:
+                return True  # probe / connect hint: account membership is enough
+            return "*" in claims or claim_key in claims
+
+        if account_key and restrict and not _binding_allows(account_key):
             return self._needs_user_action(
                 reason=REASON_ACCOUNT_REQUIRED,
                 provider_id=provider_key,
                 claim=claim_key,
                 connector_app_id=connector_key,
                 account_id=account_key,
-                message=f"This agent may not use account {account_key} for {provider_key}.",
+                message=f"This agent may not use {claim_key or 'this provider'} on account {account_key}.",
             )
         provider = self.config.provider(provider_key)
         if not self.config.enabled or provider is None or not provider.enabled:
@@ -167,13 +189,13 @@ class DelegatedToKdcubeBroker:
             candidates = [
                 item for item in accounts
                 if item.connected and item.allows(claim_key) and (not connector_key or item.connector_app_id == connector_key)
-                and (not restrict or item.account_id in allowed)
+                and _binding_allows(item.account_id)
             ]
             if not candidates:
                 connected = [
                     item for item in accounts
                     if item.connected and (not connector_key or item.connector_app_id == connector_key)
-                    and (not restrict or item.account_id in allowed)
+                    and _binding_allows(item.account_id)
                 ]
                 if connected:
                     # Accounts exist but none has approved this claim: the fix

@@ -56,7 +56,7 @@ def build_delegated_client_credential(
     resource: str | None = None,
     resources: list[str] | tuple[str, ...] | None = None,
     resource_grants: Mapping[str, list[str] | tuple[str, ...]] | None = None,
-    account_scope: Mapping[str, list[str] | tuple[str, ...]] | None = None,
+    account_scope: Mapping[str, Mapping[str, list[str] | tuple[str, ...]]] | None = None,
     identity_scope: str = "",
     issued_at: int | None = None,
 ) -> CredentialEnvelope:
@@ -101,10 +101,16 @@ def build_delegated_client_credential(
             "scopes": list(scopes or []),
             "operations": operation_list,
             "resource_grants": cleaned_resource_grants,
+            # Per-account claim binding {provider: {account_id: [claims]}}, baked
+            # into the credential attrs so a refresh re-derives it with the card.
             "account_scope": {
-                str(provider).strip(): [str(a).strip() for a in (accounts or []) if str(a or "").strip()]
+                str(provider).strip(): {
+                    str(account_id).strip(): [str(c).strip() for c in (claims or ()) if str(c or "").strip()]
+                    for account_id, claims in dict(accounts or {}).items()
+                    if str(account_id or "").strip()
+                }
                 for provider, accounts in dict(account_scope or {}).items()
-                if str(provider or "").strip()
+                if str(provider or "").strip() and isinstance(accounts, Mapping)
             },
             "identity_scope": str(identity_scope or "grantor").strip() or "grantor",
         },

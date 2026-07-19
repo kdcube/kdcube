@@ -823,14 +823,14 @@ class SlackNamedServiceProvider(NamedServiceProvider):
         # which connected account may satisfy this claim. Unset / non-agent →
         # None → no restriction (unchanged).
         from kdcube_ai_app.apps.chat.sdk.solutions.connections.agent_account_scope import (
-            allowed_account_ids_for,
+            account_claim_scope_for,
         )
         return await client.ensure_claim(
             provider_id=SLACK_PROVIDER_ID,
             connector_app_id=SLACK_CONNECTOR_APP_ID,
             claim=claim,
             account_id=account_id or None,
-            allowed_account_ids=allowed_account_ids_for(SLACK_PROVIDER_ID),
+            account_claim_scope=account_claim_scope_for(SLACK_PROVIDER_ID),
         )
 
     def _consent_error(

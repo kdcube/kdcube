@@ -170,7 +170,7 @@ class DelegatedToKdcubeClient:
         claim: str,
         connector_app_id: str = "",
         account_id: str | None = None,
-        allowed_account_ids: set[str] | None = None,
+        account_claim_scope: Mapping[str, Any] | None = None,
         purpose: str = "",
         force_refresh: bool = False,
     ) -> ClaimResolution:
@@ -179,7 +179,7 @@ class DelegatedToKdcubeClient:
             connector_app_id=connector_app_id,
             claim=claim,
             account_id=account_id,
-            allowed_account_ids=allowed_account_ids,
+            account_claim_scope=account_claim_scope,
             purpose=purpose,
             force_refresh=force_refresh,
         )

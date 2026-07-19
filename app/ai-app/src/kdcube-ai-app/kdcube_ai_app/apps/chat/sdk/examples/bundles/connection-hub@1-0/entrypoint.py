@@ -1793,7 +1793,9 @@ class ConnectionHubEntrypoint(BaseEntrypoint):
         client_id = str(payload.get("client_id") or "").strip()
         resource = str(payload.get("resource") or "").strip()
         claims = _safe_list(payload.get("claims") or payload.get("scopes"))
-        # Per-provider account binding: {provider_id: [account_ids or "*"]}.
+        # Per-account claim binding: {provider_id: {account_id: [claims]}} (the
+        # legacy list form {provider_id: [account_ids]} is also accepted and
+        # migrated). create_access/extend_client_access normalize it.
         raw_scope = payload.get("account_scope")
         account_scope = dict(raw_scope) if isinstance(raw_scope, Mapping) and raw_scope else None
         if not resource or (not claims and not account_scope):

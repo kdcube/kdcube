@@ -132,9 +132,10 @@ export function DelegatedAccessPanel({ openParams }: { openParams?: Record<strin
   // the checkbox set keyed `${resource}:${claim}`.
   const [editingAccessId, setEditingAccessId] = useState<string | null>(null);
   const [editPicks, setEditPicks] = useState<Record<string, boolean>>({});
-  // Per-provider account binding being edited: {provider_id: [account_ids]}.
-  // A provider absent (or with no accounts checked) means "any account" (*).
-  const [editAccountScope, setEditAccountScope] = useState<Record<string, string[]>>({});
+  // Per-account claim binding being edited: {provider_id: {account_id: [claims]}}.
+  // A provider left untouched means "any account"; once any account is ticked,
+  // only the ticked accounts+claims are allowed.
+  const [editAccountScope, setEditAccountScope] = useState<Record<string, Record<string, string[]>>>({});
   // Catalog search: narrows the delegable-resource cards (labels, grants,
   // named-service rows) wherever the shared list renders.
   const [resourceQuery, setResourceQuery] = useState('');
@@ -305,24 +306,41 @@ export function DelegatedAccessPanel({ openParams }: { openParams?: Record<strin
     });
     setEditingAccessId(item.access_id);
     setEditPicks(picks);
-    // Seed the account binding from the record (a "*" entry means "any" — leave
-    // that provider unbound in the editor so no specific account is checked).
-    const scope: Record<string, string[]> = {};
-    Object.entries(item.account_scope || {}).forEach(([provider, ids]) => {
-      const concrete = (ids || []).filter((id) => id && id !== '*');
-      if (concrete.length) scope[provider] = concrete;
+    // Seed the per-account claim binding from the record. An account "*" (any
+    // account) stays unbound in the editor; a claim "*" (any claim) materializes
+    // into that account's own approved claims, all checked.
+    const scope: Record<string, Record<string, string[]>> = {};
+    Object.entries(item.account_scope || {}).forEach(([provider, accountsMap]) => {
+      const providerAccounts = providersWithAccounts.get(provider) || [];
+      const seeded: Record<string, string[]> = {};
+      Object.entries(accountsMap || {}).forEach(([accountId, claims]) => {
+        if (accountId === '*') return;
+        const supported = providerAccounts.find((a) => a.account_id === accountId)?.claims || [];
+        const list = (claims || []).includes('*')
+          ? [...supported]
+          : (claims || []).filter((claim) => supported.includes(claim));
+        if (list.length) seeded[accountId] = list;
+      });
+      if (Object.keys(seeded).length) scope[provider] = seeded;
     });
     setEditAccountScope(scope);
   };
-  const toggleEditAccount = (provider: string, accountId: string, checked: boolean) => {
-    setEditAccountScope((current) => {
-      const held = new Set(current[provider] || []);
-      if (checked) held.add(accountId); else held.delete(accountId);
+  // Toggle one claim on one account for a provider. An account with no claims
+  // drops out; a provider with no bound accounts drops out (=> any account).
+  const makeToggleAccountClaim = (
+    setScope: React.Dispatch<React.SetStateAction<Record<string, Record<string, string[]>>>>,
+  ) => (provider: string, accountId: string, claim: string, checked: boolean) => {
+    setScope((current) => {
+      const providerMap: Record<string, string[]> = { ...(current[provider] || {}) };
+      const held = new Set(providerMap[accountId] || []);
+      if (checked) held.add(claim); else held.delete(claim);
+      if (held.size) providerMap[accountId] = Array.from(held); else delete providerMap[accountId];
       const next = { ...current };
-      if (held.size) next[provider] = Array.from(held); else delete next[provider];
+      if (Object.keys(providerMap).length) next[provider] = providerMap; else delete next[provider];
       return next;
     });
   };
+  const toggleEditAccount = makeToggleAccountClaim(setEditAccountScope);
   // Providers with at least one connected account — the account-binding editor
   // only shows a provider the user actually has accounts for.
   const providersWithAccounts = useMemo(() => {
@@ -334,35 +352,37 @@ export function DelegatedAccessPanel({ openParams }: { openParams?: Record<strin
     });
     return byProvider;
   }, [accounts]);
+  // Human label for one connected account (falls back to the id).
+  const accountLabelById = useMemo(() => {
+    const map = new Map<string, string>();
+    accounts.forEach((account) => {
+      map.set(account.account_id, account.email || account.display_name || account.workspace || account.account_id);
+    });
+    return map;
+  }, [accounts]);
   // Which provider account-lists are expanded (the "+ choose" disclosure).
   const [expandedAccountProviders, setExpandedAccountProviders] = useState<Record<string, boolean>>({});
-  // Account binding chosen while granting a PENDING request (the consent card).
-  const [pendingAccountScope, setPendingAccountScope] = useState<Record<string, string[]>>({});
-  const togglePendingAccount = (provider: string, accountId: string, checked: boolean) => {
-    setPendingAccountScope((current) => {
-      const held = new Set(current[provider] || []);
-      if (checked) held.add(accountId); else held.delete(accountId);
-      const next = { ...current };
-      if (held.size) next[provider] = Array.from(held); else delete next[provider];
-      return next;
-    });
-  };
+  // Per-account claim binding chosen while granting a PENDING request (consent card).
+  const [pendingAccountScope, setPendingAccountScope] = useState<Record<string, Record<string, string[]>>>({});
+  const togglePendingAccount = makeToggleAccountClaim(setPendingAccountScope);
 
-  // The compact per-provider account picker: a disclosure per provider showing
+  // The per-account permission picker: a disclosure per provider showing
   // "<n>/<m> accounts" (or "any account" when unbound) so a large account list
-  // stays legible, expanding to a checkable list. Reused by the Edit blocks and
-  // the pending consent card.
+  // stays legible; expanding shows EACH connected account with its own approved
+  // claims as checkboxes — so "read+write on one account, read-only on another"
+  // is picked here. Reused by the Edit blocks and the pending consent card.
   const renderAccountScopePicker = (
-    scope: Record<string, string[]>,
-    onToggle: (provider: string, accountId: string, checked: boolean) => void,
+    scope: Record<string, Record<string, string[]>>,
+    onToggle: (provider: string, accountId: string, claim: string, checked: boolean) => void,
     who: string,
   ) => {
     if (!providersWithAccounts.size) return null;
     return (
       <div style={{ marginTop: 8 }}>
-        <div className="account-title">Which connected accounts may {who} use?</div>
+        <div className="account-title">Which accounts and permissions may {who} use?</div>
         {Array.from(providersWithAccounts.entries()).map(([provider, providerAccounts]) => {
-          const bound = (scope[provider] || []).filter((id) => id && id !== '*');
+          const providerScope = scope[provider] || {};
+          const boundCount = Object.keys(providerScope).filter((id) => id !== '*').length;
           const total = providerAccounts.length;
           const open = Boolean(expandedAccountProviders[provider]);
           return (
@@ -376,26 +396,43 @@ export function DelegatedAccessPanel({ openParams }: { openParams?: Record<strin
               <summary className="muted" style={{ cursor: 'pointer' }}>
                 {providers[provider]?.label || provider}
                 {' — '}
-                {bound.length ? `${bound.length}/${total} accounts` : 'any account'}
+                {boundCount ? `${boundCount}/${total} accounts` : 'any account'}
                 {open ? null : <span className="account-sub"> · + choose</span>}
               </summary>
-              <div className="resource-grants" style={{ marginTop: 6 }}>
-                {providerAccounts.map((account) => (
-                  <label className="grant-chip" key={account.account_id}>
-                    <input
-                      type="checkbox"
-                      checked={bound.includes(account.account_id)}
-                      onChange={(event) => onToggle(provider, account.account_id, event.target.checked)}
-                    />
-                    <span>{account.email || account.display_name || account.workspace || account.account_id}</span>
-                  </label>
-                ))}
+              <div style={{ marginTop: 6 }}>
+                {providerAccounts.map((account) => {
+                  const held = new Set(providerScope[account.account_id] || []);
+                  const supported = account.claims || [];
+                  return (
+                    <div key={account.account_id} style={{ marginTop: 6 }}>
+                      <div className="account-sub">
+                        {account.email || account.display_name || account.workspace || account.account_id}
+                      </div>
+                      {supported.length ? (
+                        <div className="resource-grants">
+                          {supported.map((claim) => (
+                            <label className="grant-chip" key={claim} title={grantOptionByName.get(claim)?.label || undefined}>
+                              <input
+                                type="checkbox"
+                                checked={held.has(claim)}
+                                onChange={(event) => onToggle(provider, account.account_id, claim, event.target.checked)}
+                              />
+                              <span>{claim}</span>
+                            </label>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="account-sub">No approved permissions on this account yet.</div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </details>
           );
         })}
         <div className="account-sub" style={{ marginTop: 4 }}>
-          Leave a provider unchecked to allow any of its accounts.
+          Tick the permissions {who} may use on each account. Leave a provider untouched to allow any of its accounts.
         </div>
       </div>
     );
@@ -702,7 +739,7 @@ export function DelegatedAccessPanel({ openParams }: { openParams?: Record<strin
                             : (Object.keys(item.account_scope || {}).length ? (
                             <div className="account-sub">
                               Accounts: {Object.entries(item.account_scope || {})
-                                .map(([provider, ids]) => `${providers[provider]?.label || provider} → ${(ids || []).includes('*') ? 'any' : ids.join(', ')}`)
+                                .map(([provider, accountsMap]) => `${providers[provider]?.label || provider} → ${Object.entries(accountsMap || {}).map(([accountId, claims]) => `${accountId === '*' ? 'any account' : (accountLabelById.get(accountId) || accountId)} (${(claims || []).includes('*') ? 'all' : (claims || []).join(', ')})`).join(', ')}`)
                                 .join('; ')}
                             </div>
                           ) : null)}
@@ -802,7 +839,7 @@ export function DelegatedAccessPanel({ openParams }: { openParams?: Record<strin
                     : (Object.keys(item.account_scope || {}).length ? (
                     <div className="account-sub">
                       Accounts: {Object.entries(item.account_scope || {})
-                        .map(([provider, ids]) => `${providers[provider]?.label || provider} → ${(ids || []).includes('*') ? 'any' : ids.join(', ')}`)
+                        .map(([provider, accountsMap]) => `${providers[provider]?.label || provider} → ${Object.entries(accountsMap || {}).map(([accountId, claims]) => `${accountId === '*' ? 'any account' : (accountLabelById.get(accountId) || accountId)} (${(claims || []).includes('*') ? 'all' : (claims || []).join(', ')})`).join(', ')}`)
                         .join('; ')}
                     </div>
                   ) : null)}

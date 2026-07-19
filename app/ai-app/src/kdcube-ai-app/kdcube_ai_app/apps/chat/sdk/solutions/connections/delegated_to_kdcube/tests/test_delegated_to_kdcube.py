@@ -471,23 +471,69 @@ async def test_broker_restricts_to_the_agents_allowed_accounts(monkeypatch):
 
     # Bound to acct-2 only -> the ambiguity is gone; it resolves to acct-2.
     bound = await broker.ensure_claim(
-        provider_id="google", claim="gmail:read", allowed_account_ids={"acct-2"},
+        provider_id="google", claim="gmail:read", account_claim_scope={"acct-2": ["*"]},
     )
     assert bound.ok is True and bound.account_id == "acct-2"
 
     # An explicit account_id OUTSIDE the allowed set is refused.
     denied = await broker.ensure_claim(
         provider_id="google", claim="gmail:read",
-        account_id="acct-1", allowed_account_ids={"acct-2"},
+        account_id="acct-1", account_claim_scope={"acct-2": ["*"]},
     )
     assert denied.ok is False and denied.error == "account_required"
 
     # "*" (or None) means any account -> unchanged ambiguity across both.
     any_account = await broker.ensure_claim(
-        provider_id="google", claim="gmail:read", allowed_account_ids={"*"},
+        provider_id="google", claim="gmail:read", account_claim_scope={"*": ["*"]},
     )
     assert any_account.ok is False and any_account.error == "account_required"
     assert [c["account_id"] for c in any_account.candidates] == ["acct-1", "acct-2"]
+
+
+@pytest.mark.asyncio
+async def test_broker_enforces_claims_per_account(monkeypatch):
+    # The core per-account-claims case: BOTH accounts can send (their own claims
+    # allow it), but the agent is bound read+write on acct-1 and read-only on
+    # acct-2. The binding — not the account's capability — decides.
+    _install_fake_storage(monkeypatch)
+    config = _sample_config()
+    store = DelegatedToKdcubeStore(user_id="user-1")
+    for account_id in ("acct-1", "acct-2"):
+        credential_id = credential_id_for(account_id)
+        await store.upsert_account(
+            ConnectedAccount(
+                account_id=account_id,
+                provider_id="google",
+                connector_app_id="gmail",
+                external_subject=f"sub-{account_id}",
+                claims=("gmail:read", "gmail:send"),  # both accounts CAN send
+                credential_id=credential_id,
+            )
+        )
+        await store.set_credential(credential_id, {"access_token": f"token-{account_id}"})
+
+    broker = DelegatedToKdcubeBroker(config=config, store=store)
+    scope = {"acct-1": ["gmail:read", "gmail:send"], "acct-2": ["gmail:read"]}
+
+    # Send resolves only to acct-1 (acct-2 is read-only for THIS agent), so the
+    # single candidate resolves without ambiguity.
+    send = await broker.ensure_claim(
+        provider_id="google", claim="gmail:send", account_claim_scope=scope,
+    )
+    assert send.ok is True and send.account_id == "acct-1"
+
+    # Sending explicitly via acct-2 is refused even though acct-2 itself can send.
+    send_acct2 = await broker.ensure_claim(
+        provider_id="google", claim="gmail:send", account_id="acct-2", account_claim_scope=scope,
+    )
+    assert send_acct2.ok is False and send_acct2.error == "account_required"
+
+    # Reading is allowed on both -> ambiguous across acct-1 and acct-2.
+    read = await broker.ensure_claim(
+        provider_id="google", claim="gmail:read", account_claim_scope=scope,
+    )
+    assert read.ok is False and read.error == "account_required"
+    assert [c["account_id"] for c in read.candidates] == ["acct-1", "acct-2"]
 
 
 @pytest.mark.asyncio
@@ -516,7 +562,7 @@ async def test_broker_bound_to_a_disconnected_account_needs_action(monkeypatch):
     await store.set_credential(cred2, {"access_token": "token-2"})
 
     result = await DelegatedToKdcubeBroker(config=config, store=store).ensure_claim(
-        provider_id="google", claim="gmail:read", allowed_account_ids={"acct-2"},
+        provider_id="google", claim="gmail:read", account_claim_scope={"acct-2": ["*"]},
     )
     assert result.ok is False
     # acct-2 is connected but lacks the claim -> claim upgrade on the allowed one.
@@ -524,10 +570,10 @@ async def test_broker_bound_to_a_disconnected_account_needs_action(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_client_wrapper_forwards_allowed_account_ids(monkeypatch):
+async def test_client_wrapper_forwards_account_claim_scope(monkeypatch):
     # Regression: the DelegatedToKdcubeClient facade must accept AND forward
-    # allowed_account_ids to the broker. It once dropped the kwarg, so every
-    # agent-scoped resolve through the facade raised TypeError at runtime.
+    # account_claim_scope to the broker. It once dropped the account binding, so
+    # every agent-scoped resolve through the facade raised TypeError at runtime.
     _install_fake_storage(monkeypatch)
     config = _sample_config()
     store = DelegatedToKdcubeStore(user_id="user-1")
@@ -551,14 +597,14 @@ async def test_client_wrapper_forwards_allowed_account_ids(monkeypatch):
 
     # Bound to acct-2 -> the facade forwards the restriction; no ambiguity.
     bound = await client.ensure_claim(
-        provider_id="google", claim="gmail:read", allowed_account_ids={"acct-2"},
+        provider_id="google", claim="gmail:read", account_claim_scope={"acct-2": ["*"]},
     )
     assert bound.ok is True and bound.account_id == "acct-2"
 
     # An explicit account outside the allowed set is still refused through the facade.
     denied = await client.ensure_claim(
         provider_id="google", claim="gmail:read",
-        account_id="acct-1", allowed_account_ids={"acct-2"},
+        account_id="acct-1", account_claim_scope={"acct-2": ["*"]},
     )
     assert denied.ok is False and denied.error == "account_required"
 
