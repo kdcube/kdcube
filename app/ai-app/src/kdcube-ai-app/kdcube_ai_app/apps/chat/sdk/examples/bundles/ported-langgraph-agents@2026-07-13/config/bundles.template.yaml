@@ -245,7 +245,7 @@ bundles:
                   #   resource: "*/api/integrations/bundles/*/*/kdcube-services@1-0/public/mcp/named_services*"
                   #   transport: streamable_http
                   #   delegated: true
-                  #   scopes: [named_services:use, slack:read, slack:write]
+                  #   scopes: [named_services:use]   # slack read/write is the real per-account claim, not a door scope
                   #
                   # Example 3 — WHOLE-SURFACE SHAPE: ONE delegated connection to
                   # the same named-services door serves ALL namespaces the grant's
@@ -267,7 +267,7 @@ bundles:
                   #   resource: "*/api/integrations/bundles/*/*/kdcube-services@1-0/public/mcp/named_services*"
                   #   transport: streamable_http
                   #   delegated: true
-                  #   scopes: [named_services:use, slack:read, slack:write, conv:read]
+                  #   scopes: [named_services:use, conv:read]   # conv is built-in; slack read/write is the real per-account claim
                   # - name: named_services_roster
                   #   kind: named_service
                   #   alias: named_services
