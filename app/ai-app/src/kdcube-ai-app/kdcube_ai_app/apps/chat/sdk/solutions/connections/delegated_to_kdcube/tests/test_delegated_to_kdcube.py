@@ -524,6 +524,46 @@ async def test_broker_bound_to_a_disconnected_account_needs_action(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_client_wrapper_forwards_allowed_account_ids(monkeypatch):
+    # Regression: the DelegatedToKdcubeClient facade must accept AND forward
+    # allowed_account_ids to the broker. It once dropped the kwarg, so every
+    # agent-scoped resolve through the facade raised TypeError at runtime.
+    _install_fake_storage(monkeypatch)
+    config = _sample_config()
+    store = DelegatedToKdcubeStore(user_id="user-1")
+    for account_id in ("acct-1", "acct-2"):
+        credential_id = credential_id_for(account_id)
+        await store.upsert_account(
+            ConnectedAccount(
+                account_id=account_id,
+                provider_id="google",
+                connector_app_id="gmail",
+                external_subject=f"sub-{account_id}",
+                claims=("gmail:read",),
+                credential_id=credential_id,
+            )
+        )
+        await store.set_credential(credential_id, {"access_token": f"token-{account_id}"})
+
+    client = connections.DelegatedToKdcubeClient(
+        broker=DelegatedToKdcubeBroker(config=config, store=store)
+    )
+
+    # Bound to acct-2 -> the facade forwards the restriction; no ambiguity.
+    bound = await client.ensure_claim(
+        provider_id="google", claim="gmail:read", allowed_account_ids={"acct-2"},
+    )
+    assert bound.ok is True and bound.account_id == "acct-2"
+
+    # An explicit account outside the allowed set is still refused through the facade.
+    denied = await client.ensure_claim(
+        provider_id="google", claim="gmail:read",
+        account_id="acct-1", allowed_account_ids={"acct-2"},
+    )
+    assert denied.ok is False and denied.error == "account_required"
+
+
+@pytest.mark.asyncio
 async def test_broker_resolves_tool_claim_policy_supplied_by_application(monkeypatch):
     _install_fake_storage(monkeypatch)
     config = _sample_config()
