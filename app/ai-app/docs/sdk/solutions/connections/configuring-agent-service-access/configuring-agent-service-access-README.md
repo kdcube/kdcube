@@ -8,6 +8,7 @@ updated_at: 2026-07-19
 keywords: ["account_scope", "delegated: true", "named_services", "named_services_roster", "scopes", "conv:read", "delegated_to_kdcube", "connector_apps", "allowed_claims", "consent_ui", "authority_provider", "resource_grants", "kdcube-agent", "per-account scoping", "bundles.yaml", "bundles.template.yaml"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/quickstart/explore-how-agents-connect-to-kdcube-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/mcp/platform-mcp-over-connection-hub-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/agent-acting-for-user/agent-acting-for-user-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-accounts/delegated-accounts-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/claim-driven-consent/claim-driven-consent-README.md

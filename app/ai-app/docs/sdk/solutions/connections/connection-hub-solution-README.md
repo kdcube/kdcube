@@ -505,6 +505,7 @@ grantor's full platform session.
 | Open Data Bus from Telegram or another non-browser actor | [Federated Data Bus Session Tokens](../../bundle/auth-bundle-federated-README.md) |
 | Understand delegated representatives, manual automation selection, and OAuth grants | [Delegated Connections](delegated-connections/delegated-connections-README.md) |
 | See and revoke access a user granted to automations and external clients | [Delegated Connections](delegated-connections/delegated-connections-README.md) |
+| Expose a KDCube app's services as one governed MCP door that both an external app and a resident agent use | [Platform MCP over Connection Hub](../mcp/platform-mcp-over-connection-hub-README.md) |
 | Configure an agent to use KDCube services and connected accounts, and scope it to specific accounts | [Configuring Agent Access To Services And Accounts](configuring-agent-service-access/configuring-agent-service-access-README.md) |
 | Connect Gmail/Slack/iCloud as delegated provider accounts | [Delegated Accounts](delegated-accounts/delegated-accounts-README.md) |
 | Connect a custom OAuth/OIDC service so KDCube tools can use the user's provider token | [Custom OAuth/OIDC Provider Accounts](delegated-accounts/custom-oauth-oidc-service-README.md) |
