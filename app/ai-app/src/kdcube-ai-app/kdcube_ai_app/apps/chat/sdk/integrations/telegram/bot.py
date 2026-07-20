@@ -474,12 +474,29 @@ async def edit_telegram_text_message(
 
 
 def _answer_texts_from_timeline(timeline: Mapping[str, Any]) -> list[str]:
+    # A turn has exactly ONE final answer to deliver. `finish_turn` persists
+    # the FULL completion history for a turn as `assistant.completion` blocks
+    # (react/layout.py:build_assistant_completion_blocks emits one such block
+    # per entry in `scratchpad.assistant_completion_attempts`, not just the
+    # final one — it exists for observability/audit of how the answer
+    # evolved across ReAct iterations) plus live `assistant.completion.attempt`
+    # blocks recorded per iteration while the loop is still drafting.
+    #
+    # This function used to collect EVERY block whose path/type mentioned
+    # "assistant.completion" (deduping only on exact text equality), so a turn
+    # that took N ReAct iterations to settle on its answer surfaced N (near-)
+    # duplicate texts, each rendered as its own Telegram message — the
+    # "response duplicated 3-7x back-to-back" defect. `.attempt` blocks are
+    # explicitly provisional and must never be treated as a deliverable
+    # answer; among the remaining candidates only the LAST one in timeline
+    # order is the actual final answer (build_assistant_completion_blocks
+    # always appends scratchpad.answer last), so keep just that one.
     blocks = timeline.get("blocks") if isinstance(timeline, Mapping) else None
     if not isinstance(blocks, list):
         return []
     turn_id = _timeline_turn_id(timeline)
-    texts: list[str] = []
-    seen: set[str] = set()
+    latest_text = ""
+    found = False
     for block in blocks:
         if not isinstance(block, Mapping):
             continue
@@ -489,6 +506,9 @@ def _answer_texts_from_timeline(timeline: Mapping[str, Any]) -> list[str]:
         block_type = str(block.get("type") or "")
         marker = str(block.get("marker") or "")
         if block_type.startswith("react.tool."):
+            continue
+        # Provisional/in-flight drafts are never the answer to deliver.
+        if block_type.endswith(".attempt") or ".attempt." in path:
             continue
         owner_turn_id = _path_turn_id(path)
         if turn_id and owner_turn_id and owner_turn_id != turn_id:
@@ -501,10 +521,10 @@ def _answer_texts_from_timeline(timeline: Mapping[str, Any]) -> list[str]:
         ):
             continue
         text = str(block.get("text") or "").strip()
-        if text and text not in seen:
-            seen.add(text)
-            texts.append(text)
-    return texts
+        if text:
+            latest_text = text
+            found = True
+    return [latest_text] if found and latest_text else []
 
 
 def _split_text_for_telegram(text: str, *, limit: int = TELEGRAM_SAFE_TEXT_LIMIT) -> list[str]:
