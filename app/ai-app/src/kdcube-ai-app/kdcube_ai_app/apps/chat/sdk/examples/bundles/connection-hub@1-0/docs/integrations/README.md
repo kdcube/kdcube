@@ -161,12 +161,15 @@ SDK includes:
   one `slack` namespace over connected Slack workspaces.
 
 External agents reach these namespaces through
-`kdcube-services@1-0/public/mcp/named_services`. Connection Hub grants
-`mail:read`/`mail:send` or `slack:read`/`slack:write` at the KDCube delegated
-layer, while the provider tool still enforces the connected-account provider
-claims such as `gmail:read`, `gmail:send`, `slack:search`, `slack:history`,
-`slack:files:read`, `slack:files:write`, and `slack:post` before calling the
-external provider.
+`kdcube-services@1-0/public/mcp/named_services`. Door admission is
+`named_services:use`; the per-operation claim is the **real provider claim**,
+consented per connected account. Slack is a single provider, so those claims
+are its own — `slack:search`, `slack:channels`, `slack:history`,
+`slack:files:read`, `slack:files:write`, `slack:post`, `slack:assistant:search`
+— the SAME tokens at the delegated layer and on the account. Mail spans
+providers (Gmail OAuth and IMAP/password), so it keeps a provider-agnostic
+`mail:read`/`mail:send` at the delegated layer, resolving to the real
+`gmail:read`/`gmail:send` per account.
 
 When a user creates manual automation access, the same named-service provider
 metadata appears under **Delegated by KDCube**:

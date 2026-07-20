@@ -25,7 +25,7 @@ service's claims:
   resource: "*/api/integrations/bundles/*/*/kdcube-services@1-0/public/mcp/named_services*"
   transport: streamable_http
   delegated: true
-  scopes: [named_services:use, slack:read, slack:write]
+  scopes: [named_services:use]   # Slack's real claims consent per account, not in scopes
 ```
 
 Properties:
@@ -53,7 +53,7 @@ companion `kind: named_service` entry declaring the consumed namespaces:
   resource: "*/api/integrations/bundles/*/*/kdcube-services@1-0/public/mcp/named_services*"
   transport: streamable_http
   delegated: true
-  scopes: [named_services:use, slack:read, slack:write, conv:read]
+  scopes: [named_services:use, conv:read]   # conv is internal (namespace claim); Slack's real claims consent per account
 
 - name: named_services_roster
   kind: named_service

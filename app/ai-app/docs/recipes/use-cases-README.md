@@ -98,7 +98,7 @@ scope upgrades · revocation · failure UX   structured denials with the fix
   show a reconnect card with the provider's real error.
 - **Every denial is structured:** reason, labeled account candidates, fix URL,
   retry hint.
-- **External agents get their own grants** (`mail:read`, `slack:write`) —
+- **External agents get their own grants** (`mail:read`, `mail:send`) —
   separate from provider claims, revocable, consent-snapshot-bound.
 
 Docs: [how agents connect to KDCube](quickstart/explore-how-agents-connect-to-kdcube-README.md) ·

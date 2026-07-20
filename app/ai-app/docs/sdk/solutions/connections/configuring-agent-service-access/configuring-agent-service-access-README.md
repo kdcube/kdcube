@@ -201,7 +201,7 @@ Semantics:
 - **One source of truth for read/write on account-backed services.** For a
   namespace that runs on a connected account (mail, Slack), read/write is *only*
   the real provider claim resolved per account — there is no parallel
-  namespace-level `mail:read`/`slack:write` claim on the door. The connection's
+  namespace-level `slack:read`/`slack:write` claim on the door. The connection's
   `scopes` for such a namespace carry just `named_services:use` (door admission);
   the door admits the operation and the per-account provider claim is the read/
   write gate. Only namespaces with no account (conv, memories, tasks) carry a

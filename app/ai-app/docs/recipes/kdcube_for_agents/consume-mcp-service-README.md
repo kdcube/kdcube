@@ -284,7 +284,7 @@ surface, claims naming the namespaces in play:
   resource: "*/api/integrations/bundles/*/*/kdcube-services@1-0/public/mcp/named_services*"
   transport: streamable_http
   delegated: true
-  scopes: [named_services:use, slack:read, slack:write]
+  scopes: [named_services:use]   # Slack's real claims consent per account (Delegated to KDCube), not in scopes
 ```
 
 Two consents chain here: the per-agent grant admits the agent into the KDCube

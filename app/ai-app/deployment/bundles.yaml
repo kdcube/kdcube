@@ -1286,7 +1286,7 @@ bundles:
                 #   resource: "*/api/integrations/bundles/*/*/kdcube-services@1-0/public/mcp/named_services*"
                 #   transport: streamable_http
                 #   delegated: true
-                #   scopes: [named_services:use, slack:read, slack:write]
+                #   scopes: [named_services:use]   # Slack's real claims consent per account, not in scopes
                 # WHOLE-SURFACE SHAPE — one delegated connection to the SAME door
                 # serves ALL namespaces the grant's scopes allow: one consent, one
                 # picker toggle; per-namespace control lives in `scopes`, and
@@ -1299,9 +1299,12 @@ bundles:
                 # Ships scoped to CONV only — the conversation namespace is
                 # built-in (served by kdcube-services), so it works on a fresh
                 # install with no extra setup. Provider namespaces (slack, mail)
-                # need their OAuth app configured in Connection Hub first, so add
-                # them here only after that: e.g. `slack:read, slack:write` or
-                # `mail:read` in `scopes` and the namespace under the roster.
+                # need their OAuth app configured in Connection Hub first; then
+                # declare the namespace under the roster. Account-backed claims
+                # (Slack's real `slack:search`/`slack:post`/…, mail's agnostic
+                # `mail:read`/`mail:send`) consent PER ACCOUNT in Connection Hub —
+                # they do NOT go in `scopes`. Only internal namespaces (conv,
+                # memories, tasks) carry a namespace claim like `conv:read` here.
                 - name: named_services
                   kind: mcp
                   server_id: named_services

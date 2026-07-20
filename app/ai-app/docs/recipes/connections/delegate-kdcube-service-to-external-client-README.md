@@ -181,7 +181,7 @@ outer consent
 inner named-service boundary
   mem.object.search    + memories:read
   task.object.search   + tasks:read
-  slack.object.action  + slack:write
+  slack.object.action  + slack:post
 ```
 
 The OAuth consent view displays the configured namespace/operation rows. The

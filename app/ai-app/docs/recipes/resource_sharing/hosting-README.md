@@ -105,8 +105,8 @@ signing secret unavailable); ask in chat instead.
 ```text
 [ ] The deployment's kdcube-services bundle configures
     conversations.file_download_secret in bundles.secrets.yaml.
-[ ] The connector consent includes the write grants (mail:send, slack:write)
-    for inbound; read grants (mail:read, slack:read) for outbound.
+[ ] The connector consent includes the write claims (mail:send, slack:files:write)
+    for inbound; read claims (mail:read, slack:files:read) for outbound.
 [ ] The connected provider account approved the matching claims
     (gmail:send, slack:files:write, slack:files:read, ...). Denials come back
     as needs_connected_account_consent with reason, candidates, and the

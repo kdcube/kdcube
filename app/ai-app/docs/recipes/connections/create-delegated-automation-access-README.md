@@ -144,9 +144,9 @@ KDCube named services MCP
       [x] object.search    memories:read
       [ ] object.upsert    memories:write
   [x] Slack
-      [x] object.search    slack:read
-      [ ] object.action    slack:write
-          Requires connected Slack claim: slack:post
+      [x] object.search    slack:search
+      [ ] object.action    slack:post
+          (the connected Slack account must have approved slack:post too)
 ```
 
 Selecting an operation also selects its declared KDCube grants and the common
@@ -160,7 +160,7 @@ identifiers:
     "*/kdcube-services@1-0/public/mcp/named_services*": [
       "named_services:use",
       "memories:read",
-      "slack:read"
+      "slack:search"
     ]
   },
   "named_service_operations": {

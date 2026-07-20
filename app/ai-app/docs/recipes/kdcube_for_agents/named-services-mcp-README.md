@@ -96,7 +96,7 @@ agent in Connection Hub (or from the chat consent demand, one click):
   resource: "*/api/integrations/bundles/*/*/kdcube-services@1-0/public/mcp/named_services*"
   transport: streamable_http
   delegated: true
-  scopes: [named_services:use, slack:read, slack:write]
+  scopes: [named_services:use]   # Slack's real claims consent per account (Delegated to KDCube), not in scopes
 ```
 
 `resource` must byte-match the deployment's configured delegated-resource id
@@ -380,16 +380,18 @@ Work with a connected Slack workspace:
      -> posted message metadata
 ```
 
-For integration namespaces, there are two authorization layers:
+For integration namespaces, authorization has two gates that share one claim
+vocabulary:
 
 ```text
-External MCP delegated grants:
-  slack:read / slack:write
-  authorize the agent to use the KDCube Slack namespace.
+Door admission (delegated grant):
+  named_services:use
+  admits the agent to the KDCube named-services boundary.
 
-Connected-account provider claims:
+Per-operation claim — the REAL Slack claim, at BOTH gates:
   slack:search / slack:history / slack:files:read / slack:post / ...
-  authorize KDCube to call Slack for the current platform user.
+  granted to the agent AND approved on the connected account.
+  One vocabulary, checked twice (Slack is a single provider).
 ```
 
 ## The Consent-Error Story

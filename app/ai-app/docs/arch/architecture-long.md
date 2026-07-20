@@ -411,7 +411,7 @@ delegated by KDCube
 ```
 
 Provider claims such as `gmail:send` authorize KDCube's use of a connected
-provider account. KDCube resource grants such as `mail:write` authorize an
+provider account. KDCube resource grants such as `mail:send` authorize an
 external client to enter a protected KDCube resource. They are two gates and
 must not be merged.
 

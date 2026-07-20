@@ -671,18 +671,22 @@ the Slack namespace boundary.
 https://<PUBLIC_HOST>/api/integrations/bundles/<TENANT>/<PROJECT>/kdcube-services@1-0/public/mcp/named_services
 ```
 
-This is the path for external agents such as Claude connectors. The MCP consent
-uses KDCube delegated grants:
+This is the path for external agents such as Claude connectors. Door admission
+is `named_services:use`; each operation then requires the **real Slack claim** it
+maps to — the SAME token the connected Slack account approves, so the delegated
+grant and the connected-account consent speak one vocabulary. Slack is a single
+provider, so its claims are its own real capabilities (never an invented
+`slack:read`/`slack:write` wrapper):
 
-| Delegated grant | Allows |
+| Slack claim | Operation it gates |
 | --- | --- |
-| `slack:read` | list connected Slack accounts/channels, search, read channel history, download visible files |
-| `slack:write` | post messages and upload files |
-
-Those delegated grants do not replace provider claims. The connected Slack
-account still needs the specific provider claims that match the operation:
-`slack:search`, `slack:channels`, `slack:history`, `slack:files:read`,
-`slack:files:write`, `slack:assistant:search`, or `slack:post`.
+| `slack:channels` | list connected accounts/channels (`object.list`) |
+| `slack:search` | search messages/files (`object.search`) |
+| `slack:history` | read channel history (`object.get`) |
+| `slack:files:read` | download visible files (`object.action` → `download_file`) |
+| `slack:files:write` | upload files (`object.action` → `upload_file`) |
+| `slack:post` | post messages (`object.action` → `post_message`) |
+| `slack:assistant:search` | inspect Slack assistant search (`object.action` → `assistant_search_info`) |
 
 The namespace supports:
 
