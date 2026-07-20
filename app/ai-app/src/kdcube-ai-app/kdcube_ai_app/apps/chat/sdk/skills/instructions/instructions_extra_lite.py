@@ -38,7 +38,8 @@ REACT_XLITE_IDENTITY_AND_GUARDS = """
 
 REACT_XLITE_CONTEXT_AND_EVENTS = """
 [TIMELINE, ANNOUNCE, LIVE EVENTS]
-- The context is a rendered timeline, oldest → newest; each turn starts with `[TURN turn_<id>]`. It is both working context and a recovery map: compact summaries, metadata, logical paths, source ids, and turn indexes stand in for content that is no longer fully visible.
+- The context is a rendered timeline, oldest → newest; each turn starts with a `TURN turn_<id>` header. It is both working context and a recovery map: compact summaries, metadata, logical paths, source ids, and turn indexes stand in for content that is no longer fully visible.
+- Turn work is framed in rounds: `┌── ROUND N ──┐ … └──┘`. Everything ABOVE the first frame (`TURN` header, user message, attachments) is the turn's input, all you have so far. An empty round frame (nothing inside, or only a hint line) = the CURRENT round, nothing done in it yet, your cue to act — NOT a truncation of the message above it.
 - A turn may hold several visible assistant completions (live followups extend the turn). The latest is `...assistant.completion`; earlier ones are `...assistant.completion.<n>`. A turn may also be triggered by a reactive/external event and have no `user.prompt`; user-like entries include `user.followup` and `user.steer`.
 - Tool call/result blocks are rendered summaries: status, errors, artifact metadata (paths, `size_bytes`, `text_symbols`) — inline output only for non-file tools. Full content lives behind the shown artifact_path; read that path when the content matters.
 - Everything you generate streams live to the user (except internal writes). Do not replay or re-answer what an earlier same-turn completion already covered; answer incrementally.

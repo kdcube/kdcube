@@ -606,6 +606,84 @@ def test_timeline_rendering_with_attachment_and_tool_blocks():
     assert doc_blocks, "Expected a document block for the PDF attachment"
 
 
+def test_empty_current_round_renders_self_explaining_hint():
+    """A live round with nothing in it yet (only react.round.start) must render
+    an in-band hint inside its frame, so the model does not misread the empty
+    box abutting the user prompt as a truncated message. Regression: the agent
+    reported the user's message as 'cut off' at the ROUND 1 frame."""
+    ctx = RuntimeCtx(turn_id="turn_empty", started_at="2026-02-09T00:00:00Z")
+    tl = Timeline(runtime=ctx)
+    tl.blocks.extend([
+        tl._block(type="turn.header", author="system", turn_id=ctx.turn_id, ts=ctx.started_at, text="[TURN turn_empty]"),
+        tl._block(
+            type="user.prompt",
+            author="user",
+            turn_id=ctx.turn_id,
+            ts=ctx.started_at,
+            path="conv:ar:turn_empty.user.prompt",
+            text="[USER MESSAGE]\ncan you look for last message in my gmail account",
+        ),
+        # the live current round — begins with round.start and nothing else yet
+        {
+            **tl._block(
+                type="react.round.start",
+                author="react",
+                turn_id=ctx.turn_id,
+                ts=ctx.started_at,
+                path="conv:ar:turn_empty.react.round.start.tc_0",
+                text="",
+                meta={"tool_call_id": "tc_0", "iteration": 0},
+            ),
+            "call_id": "tc_0",
+        },
+    ])
+
+    rendered = _run(tl.render(cache_last=True))
+    joined = "\n".join(b.get("text", "") for b in rendered if b.get("type") == "text")
+
+    assert "ROUND 1" in joined
+    assert "has not produced anything yet" in joined
+    # the user message and the round frame are both present and distinct
+    assert "gmail account" in joined
+    # the hint sits between the ROUND header and its footer
+    round_pos = joined.index("ROUND 1")
+    hint_pos = joined.index("has not produced anything yet")
+    footer_pos = joined.index("└", round_pos)
+    assert round_pos < hint_pos < footer_pos
+
+
+def test_non_empty_round_has_no_empty_hint():
+    """A round that produced content must NOT carry the empty-round hint."""
+    ctx = RuntimeCtx(turn_id="turn_busy", started_at="2026-02-09T00:00:00Z")
+    tl = Timeline(runtime=ctx)
+    tl.blocks.extend([
+        tl._block(type="turn.header", author="system", turn_id=ctx.turn_id, ts=ctx.started_at, text="[TURN turn_busy]"),
+        tl._block(
+            type="user.prompt", author="user", turn_id=ctx.turn_id, ts=ctx.started_at,
+            path="conv:ar:turn_busy.user.prompt", text="[USER MESSAGE]\nhello",
+        ),
+        {
+            **tl._block(
+                type="react.round.start", author="react", turn_id=ctx.turn_id, ts=ctx.started_at,
+                path="conv:ar:turn_busy.react.round.start.tc_0", text="",
+                meta={"tool_call_id": "tc_0", "iteration": 0},
+            ),
+            "call_id": "tc_0",
+        },
+        tl._block(
+            type="react.tool.call", author="agent", turn_id=ctx.turn_id, ts=ctx.started_at,
+            mime="application/json", path="conv:tc:turn_busy.tc_0.call",
+            text='{"tool_id":"web_tools.web_search","tool_call_id":"tc_0"}',
+            meta={"tool_call_id": "tc_0", "iteration": 0},
+        ),
+    ])
+
+    rendered = _run(tl.render(cache_last=True))
+    joined = "\n".join(b.get("text", "") for b in rendered if b.get("type") == "text")
+    assert "ROUND 1" in joined
+    assert "has not produced anything yet" not in joined
+
+
 def test_large_tool_result_is_rendered_as_preview_with_shape():
     ctx = RuntimeCtx(
         turn_id="turn_large",

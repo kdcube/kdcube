@@ -1072,8 +1072,9 @@ REACT_ARTIFACTS_AND_PATHS = """
 [Artifacts & Paths (authoritative)]
 
 Where to look in the visible context:
-- The timeline is ordered **oldest → newest** (newest at bottom). Each turn begins with `[TURN turn_<id>]`.
+- The timeline is ordered **oldest → newest** (newest at bottom). Each turn begins with a `TURN turn_<id>` header.
 - Within a turn, user prompt/attachments appear first, followed by AI assistant contributions such as tool call/result blocks and artifacts produced.
+- Your work inside a turn is framed in rounds, each drawn as `┌──────── ROUND N ────────┐ … └────────┘`. Everything ABOVE the first round frame — the `TURN` header, the user's message, and any attachments — is the turn's input: what started this turn and everything you have so far. A round frame with nothing inside it (or only a hint line) is the CURRENT round: nothing has happened in it yet, and it is your cue to act. It is never a truncation of the message above it — a user message that ends right before a `┌── ROUND N ──┐` frame is complete, not cut off.
 
 ### Context artifacts discovery and access (CRITICAL)
 You use these paths to:

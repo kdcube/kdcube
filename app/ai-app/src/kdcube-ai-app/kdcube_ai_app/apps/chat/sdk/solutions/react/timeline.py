@@ -5819,6 +5819,7 @@ class Timeline:
         out: List[Dict[str, Any]] = []
         current_round_id: Optional[str] = None
         current_round_accepts_external = False
+        current_round_open_len = 0
         round_idx = 0
         call_id_to_tool_id: Dict[str, str] = {}
         call_id_to_iteration: Dict[str, int] = {}
@@ -5829,6 +5830,15 @@ class Timeline:
         def _round_footer() -> str:
             return "└────────────────────────┘"
 
+        # An open round frame with no content inside is the CURRENT round: the
+        # turn's input sits ABOVE the first frame, and this frame is the model's
+        # cue to act — not a truncation of the message above it. Say so in-band
+        # so the model never misreads the empty box as a cut-off user prompt.
+        _EMPTY_ROUND_HINT = (
+            "  (this round has not produced anything yet — everything above is the "
+            "input you have so far this turn; decide and emit this round's action)"
+        )
+
         def _indent_text_block(val: str) -> str:
             if not val:
                 return val
@@ -5838,13 +5848,16 @@ class Timeline:
             nonlocal current_round_id, current_round_accepts_external
             if not current_round_id:
                 return
+            if len(out) <= current_round_open_len:
+                out.append({"type": "text", "text": _EMPTY_ROUND_HINT})
             out.append({"type": "text", "text": _round_footer()})
             current_round_id = None
             current_round_accepts_external = False
 
         def _open_round(round_id: str, *, idx: int) -> None:
-            nonlocal current_round_id, current_round_accepts_external
+            nonlocal current_round_id, current_round_accepts_external, current_round_open_len
             out.append({"type": "text", "text": _round_header(idx)})
+            current_round_open_len = len(out)
             current_round_id = round_id
             current_round_accepts_external = True
 

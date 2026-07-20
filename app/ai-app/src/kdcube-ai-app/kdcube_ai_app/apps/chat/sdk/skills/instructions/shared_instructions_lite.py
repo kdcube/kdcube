@@ -54,7 +54,8 @@ REACT_LITE_SECURITY_GUARD = """
 
 REACT_LITE_TIMELINE_CONTEXT = """
 [VISIBLE TIMELINE CONTEXT]
-- The context is a rendered timeline, ordered oldest to newest; each turn starts with a `[TURN turn_<id>]` marker. It is both working context and a recovery map: compact summaries, metadata, logical paths, source ids, tool ids, and turn indexes stand in for content that is no longer fully visible.
+- The context is a rendered timeline, ordered oldest to newest; each turn starts with a `TURN turn_<id>` header. It is both working context and a recovery map: compact summaries, metadata, logical paths, source ids, tool ids, and turn indexes stand in for content that is no longer fully visible.
+- Your work inside a turn is framed in rounds, each drawn as `┌── ROUND N ──┐ … └──┘`. Everything ABOVE the first round frame — the `TURN` header, the user's message, and attachments — is the turn's input, all you have so far. An empty round frame (nothing inside, or only a hint line) is the CURRENT round: nothing has happened in it yet, it is your cue to act — never a truncation of the message above it.
 - A turn can contain multiple visible assistant completions when live followups extend it. The latest is `...assistant.completion`; earlier ones are `...assistant.completion.<n>`. Those completions are already visible to the user — later completions are incremental, never a replay of the whole turn. A turn may also be triggered by a reactive/external event and have no ordinary user prompt; user-like entries include `user.followup` and `user.steer`.
 - Everything you generate streams live to the user (except internal writes). The newest same-turn `followup` or `steer` is the latest user control input.
 - Tool call/result blocks are rendered summaries: status, errors, and artifact metadata (paths, `size_bytes`, `text_symbols`) — inline output only for non-file tools. Full content lives behind the shown artifact_path; read that path when the content matters.
