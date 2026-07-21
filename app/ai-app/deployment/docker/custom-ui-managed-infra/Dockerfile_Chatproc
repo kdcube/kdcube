@@ -76,8 +76,17 @@ RUN npm install -g @anthropic-ai/claude-code \
 
 COPY --from=builder /opt/venv /opt/venv
 
-RUN python -m playwright install --with-deps chromium && \
-    chmod -R a+rX /opt/ms-playwright
+# Chromium/Playwright is only needed for document rendering. It dominates image
+# size, so make it opt-out via a build-arg. Default INSTALL_CHROMIUM=1 preserves
+# upstream behavior (browser installed); build with --build-arg INSTALL_CHROMIUM=0
+# for a slim, render-less image. Only an explicit "0" skips the install.
+ARG INSTALL_CHROMIUM=1
+RUN if [ "$INSTALL_CHROMIUM" != "0" ]; then \
+        python -m playwright install --with-deps chromium && \
+        chmod -R a+rX /opt/ms-playwright; \
+    else \
+        echo "INSTALL_CHROMIUM=0: skipping Chromium/Playwright install (slim image; set KDCUBE_DISABLE_DOC_RENDERING=1 at runtime)"; \
+    fi
 
 # Create non-root user
 RUN groupadd --gid 1000 appuser && \
