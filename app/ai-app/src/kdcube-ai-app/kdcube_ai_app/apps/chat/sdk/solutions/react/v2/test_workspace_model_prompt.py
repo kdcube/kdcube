@@ -96,6 +96,8 @@ def test_build_decision_system_text_explains_one_response_is_one_round():
     assert "artifact_path = Path(OUTPUT_DIR) / artifact_rel" in text
     assert "artifact_path.parent.mkdir(parents=True, exist_ok=True)" in text
     assert "Never call `open(artifact_rel, ...)`" in text
+    assert "preserved as a Python module body" in text
+    assert "top-level `await` enabled" in text
 
 
 def test_build_decision_system_text_has_no_stale_single_tool_limit_hint():

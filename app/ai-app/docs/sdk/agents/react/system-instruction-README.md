@@ -4,7 +4,7 @@ title: "React System Instruction"
 summary: "How React decision system instructions are composed, how to use extended and lite instruction bodies, and how to audit signal coverage."
 tags: ["sdk", "agents", "react", "instructions", "system-prompt", "lite", "configuration"]
 keywords: ["React system instruction", "React lite instructions", "instruction_body", "instruction_blocks", "default_lite_system_instruction", "React prompt composition", "signal coverage"]
-updated_at: 2026-07-20
+updated_at: 2026-07-22
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-caching-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-round-README.md
@@ -173,6 +173,45 @@ Available profiles:
 | `document` | Workspace plus rendering-tool guidance. |
 | `web` | Workspace plus web search/fetch guidance. |
 | `all_capabilities` | All lite blocks, including internal notes and durable user memory. Use only when those tools and policies are enabled. |
+
+### Exec Artifact Output Paths
+
+Every built-in instruction tier that exposes `exec_tools.execute_code_python`
+teaches the same two-part path contract:
+
+1. The action's `contract[].filepath` is an `OUTPUT_DIR`-relative string such
+   as `turn_<current>/files/report/report.xlsx`. Keep this `artifact_rel`
+   value relative.
+2. Generated code resolves that value under the runtime artifact root, creates
+   its parent, and passes the resolved path to the writer:
+
+```python
+from pathlib import Path
+
+artifact_rel = "turn_<current>/files/report/report.xlsx"
+artifact_path = Path(OUTPUT_DIR) / artifact_rel
+artifact_path.parent.mkdir(parents=True, exist_ok=True)
+wb.save(artifact_path)
+```
+
+The contract `filepath` must equal `artifact_rel` byte-for-byte. It is not the
+path passed directly to `open()`, `wb.save()`, or another writer. Writing
+`artifact_rel` directly would create a bare `turn_<current>/...` tree relative
+to the process working directory, where the artifact collector will not find
+the file.
+
+This rule lives in the full body's `CODEGEN_BEST_PRACTICES_V2` and
+`EXEC_SNIPPET_RULES`, the moderate `REACT_LITE_EXEC_TOOL`, and the extra-lite
+`REACT_XLITE_EXEC` block. The exec tool's parameter description repeats it, so
+the rule also survives the compact tool catalog. Named Lite and Extra-lite
+profiles without an effective exec tool intentionally omit their exec blocks.
+The legacy Full body is monolithic and retains its exec guidance. A fully
+custom body that hides the tool catalog must carry its own complete exec
+contract.
+
+Exec code itself is preserved as a Python module body and evaluated with
+top-level `await` enabled. Do not generate an event-loop runner or a separate
+`main()` entrypoint.
 
 ## The `blocks` Vocabulary
 
@@ -346,7 +385,7 @@ signals and tools exposed to the agent.
 | Internal conversation notes | User-invisible conversation anchors, not durable user memory. | `INTERNAL_NOTES_PRODUCER`, `INTERNAL_NOTES_CONSUMER`. | `REACT_LITE_INTERNAL_NOTES`; `all_capabilities` or explicit block. |
 | Durable user memory read | User-visible cross-conversation memory; current turn overrides memory. | `DURABLE_USER_MEMORY_POLICY`. | `REACT_LITE_DURABLE_USER_MEMORY_READ`; `all_capabilities` or explicit block. |
 | Durable user memory write | Durable memory write/proposal tools are neutral runtime bookkeeping; result-dependent success claims wait for the visible tool result. | `DURABLE_USER_MEMORY_POLICY`. | `REACT_LITE_DURABLE_USER_MEMORY_WRITE`; `all_capabilities` or explicit block. |
-| Exec/ISO runtime | Generated code runs in isolated runtime with `OUTPUT_DIR`/`OUT_DIR` contracts and capped stdout. | `CODEGEN_BEST_PRACTICES_V2`, `EXEC_SNIPPET_RULES`. | `REACT_LITE_EXEC_TOOL`; `workspace_exec`, `all_capabilities`, or explicit block. |
+| Exec/ISO runtime | Generated code is an async-capable module body. Contract `filepath` stays relative as `artifact_rel`; code writes `Path(OUTPUT_DIR) / artifact_rel` after creating its parent. Stdout is capped. | `CODEGEN_BEST_PRACTICES_V2`, `EXEC_SNIPPET_RULES`. | `REACT_LITE_EXEC_TOOL`; `workspace_exec`, `all_capabilities`, or explicit block. |
 | Rendering tools | Create renderer source first; renderer refs point to source, not final output. | `WORK_WITH_DOCUMENTS_AND_IMAGES`, source/citation guidance. | `REACT_LITE_RENDERING_TOOLS`; `document`, `all_capabilities`, or explicit block. |
 | Web tools | Search/fetch current external information; fetch decisive sources before precise claims. | Source/citation guidance plus tool catalog. | `REACT_LITE_WEB_TOOLS`; `web`, `all_capabilities`, or explicit block. |
 | Planning | Use plans for multi-step work and read latest plan handles when needed. | `REACT_PLANNING`. | `REACT_LITE_PLANNING`; workspace profiles except `core`. |
@@ -431,6 +470,8 @@ from kdcube_ai_app.apps.chat.sdk.skills.instructions.shared_instructions_lite im
 body = default_lite_system_instruction("workspace_exec")
 assert "include this block" not in body.lower()
 assert "EXEC TOOL" in body
+assert "artifact_path = Path(OUTPUT_DIR) / artifact_rel" in body
+assert "artifact_path.parent.mkdir(parents=True, exist_ok=True)" in body
 assert "DURABLE USER MEMORY - WRITE" not in body
 ```
 

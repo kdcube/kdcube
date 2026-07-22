@@ -41,6 +41,7 @@ def test_hard_signals_survive_distillation():
         "Path(OUTPUT_DIR) / artifact_rel",
         "artifact_path.parent",
         "byte-for-byte",
+        "top-level `await` enabled",
         "agent_io_tools.tool_call",
         "FLIP YOUR DEFAULT",
         # workspace hard rule
@@ -66,6 +67,7 @@ def test_exec_profile_keeps_contract_path_relative_but_writes_under_output_dir()
     assert "artifact_path = Path(OUTPUT_DIR) / artifact_rel" in text
     assert "artifact_path.parent.mkdir(parents=True, exist_ok=True)" in text
     assert "Never write `artifact_rel`" in text
+    assert "preserved as a Python module body" in text
 
 
 def test_git_mode_appends_addendum_after_workspace():

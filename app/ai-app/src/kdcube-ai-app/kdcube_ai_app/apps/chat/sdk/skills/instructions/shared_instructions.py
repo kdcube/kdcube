@@ -929,8 +929,9 @@ The <channel:summary> channel is allowed ONLY when action is complete or exit.
 """
 EXEC_SNIPPET_RULES = f"""
 >> EXEC SNIPPET RULES
-- `code` which you emit in channel:code is a SNIPPET inserted inside an async main(); do NOT generate boilerplate or your own main.
-- The snippet SHOULD use async operations (await where needed).
+- `code` emitted in channel:code is preserved as a Python module body and evaluated with top-level `await` enabled.
+  Do NOT generate runner boilerplate, your own `main()`, or an event-loop launcher.
+- The module body SHOULD use async operations (`await` where needed).
 - Do NOT import tools from the catalog; invoke tools via `await agent_io_tools.tool_call(...)`.
 - Only execution-enabled runtime tool handles are available in snippets. Do not call orchestration/job tools such
   as `automation_job.*` inside exec code; call them as top-level ReAct tools in their own round.

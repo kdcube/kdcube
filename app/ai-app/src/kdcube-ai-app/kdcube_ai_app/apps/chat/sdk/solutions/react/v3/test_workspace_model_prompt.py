@@ -379,6 +379,8 @@ def test_default_lite_system_instruction_workspace_exec_profile_adds_exec_guidan
     assert "artifact_path = Path(OUTPUT_DIR) / artifact_rel" in body
     assert "artifact_path.parent.mkdir(parents=True, exist_ok=True)" in body
     assert "process working directory" in body
+    assert "preserved as a Python module body" in body
+    assert "top-level `await` enabled" in body
 
 
 def test_multi_action_protocol_teaches_strategy_trait_contract():
