@@ -15,7 +15,9 @@ def telegram_command_kind_and_text(text: str) -> tuple[str, str]:
         return "", raw
     first, sep, rest = raw.partition(" ")
     command = first.split("@", 1)[0].strip().lower()
-    if command in {"/steer", "/s"}:
+    # `/stop` is a bare steer (empty text) — the "stop" control. `/stop <text>`, like
+    # `/steer <text>`, stops the turn and redirects with the trailing text.
+    if command in {"/steer", "/s", "/stop"}:
         return "steer", rest.strip() if sep else ""
     if command in {"/followup", "/f"}:
         return "followup", rest.strip() if sep else ""

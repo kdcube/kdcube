@@ -493,8 +493,14 @@ Mapping:
 /f <text>         -> event.user.followup
 /steer <text>     -> event.user.steer
 /s <text>         -> event.user.steer
+/stop [text]      -> event.user.steer
 anything else     -> event.user.prompt
 ```
+
+`/stop`, `/steer`, and `/s` may be sent with no text. An empty steer is the
+"stop" control: it carries no text and interrupts the running turn. With text,
+the steer both stops the turn and redirects it. Every other command needs text
+to produce an event.
 
 The SDK maps the command into the event type before calling
 `ChatIngressSubmitter.submit(...)`. Do not send a top-level text scalar as the

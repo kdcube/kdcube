@@ -184,8 +184,11 @@ def _telegram_external_events(
     def _timestamp() -> str:
         return datetime.utcnow().isoformat() + "Z"
 
-    if text:
-        normalized_type = str(text_event_type or "event.user.prompt").strip() or "event.user.prompt"
+    normalized_type = str(text_event_type or "event.user.prompt").strip() or "event.user.prompt"
+    # A steer may carry no text: an empty steer is the "stop" control. Mirror the web
+    # client, which allows an empty body only for event.user.steer; every other type
+    # still needs text to produce an event.
+    if text or normalized_type == "event.user.steer":
         event_suffix = normalized_type.rsplit(".", 1)[-1] or "prompt"
         event_id = f"telegram.{event_suffix}.{uuid.uuid4().hex[:12]}"
         events.append(

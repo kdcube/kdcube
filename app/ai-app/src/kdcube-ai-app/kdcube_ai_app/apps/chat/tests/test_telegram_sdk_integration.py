@@ -95,6 +95,11 @@ async def test_telegram_widget_auth_resolves_identity_through_configured_storage
 def test_telegram_submit_helpers_normalize_commands_roles_and_attachments():
     kind, text = telegram_command_kind_and_text("/followup add this")
     assert (kind, text) == ("followup", "add this")
+    # `/stop` is a bare steer (empty text) — the "stop" control.
+    assert telegram_command_kind_and_text("/stop") == ("steer", "")
+    assert telegram_command_kind_and_text("/steer") == ("steer", "")
+    # `/stop <text>` stops and redirects, like `/steer <text>`.
+    assert telegram_command_kind_and_text("/stop focus on X") == ("steer", "focus on X")
     assert role_to_user_type("admin") == UserType.EXTERNAL
     assert role_to_user_type("registered") == UserType.EXTERNAL
 

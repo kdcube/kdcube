@@ -295,6 +295,34 @@ async def test_telegram_handle_webhook_submit_path_does_not_take_conversation_lo
     assert lock_requests == []
 
 
+def test_telegram_external_events_allows_empty_steer_but_not_empty_prompt_or_followup():
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram import user_admin
+
+    # An empty steer is the "stop" control and must still produce an event.
+    steer = user_admin._telegram_external_events(
+        text="", attachments=[], turn_id="turn-1", text_event_type="event.user.steer",
+    )
+    assert len(steer) == 1
+    assert steer[0]["type"] == "event.user.steer"
+    assert steer[0]["event_source_id"] == "telegram.user.steer"
+    assert steer[0]["payload"]["event"] == {"text": ""}
+
+    # Every other type needs text; an empty followup/prompt produces no event.
+    assert user_admin._telegram_external_events(
+        text="", attachments=[], turn_id="turn-1", text_event_type="event.user.followup",
+    ) == []
+    assert user_admin._telegram_external_events(
+        text="", attachments=[], turn_id="turn-1", text_event_type="event.user.prompt",
+    ) == []
+
+    # A steer with text stops and redirects.
+    redirect = user_admin._telegram_external_events(
+        text="focus on X", attachments=[], turn_id="turn-1", text_event_type="event.user.steer",
+    )
+    assert redirect[0]["type"] == "event.user.steer"
+    assert redirect[0]["payload"]["event"] == {"text": "focus on X"}
+
+
 @pytest.mark.asyncio
 async def test_telegram_inline_run_react_turn_derives_external_event_type(tmp_path, monkeypatch):
     from kdcube_ai_app.apps.chat.sdk.integrations.telegram import TelegramUserAdminStorage
