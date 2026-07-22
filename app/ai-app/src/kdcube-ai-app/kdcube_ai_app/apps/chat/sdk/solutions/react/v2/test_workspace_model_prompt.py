@@ -92,6 +92,10 @@ def test_build_decision_system_text_explains_one_response_is_one_round():
     assert "This protocol is SINGLE-ACTION: exactly one tool call per response." in text
     assert "Exec tool DOES NOT have a `code` parameter." in text
     assert "Code goes only in `channel:code`." in text
+    assert 'artifact_rel = "turn_<current>/files/<scope>/<name>"' in text
+    assert "artifact_path = Path(OUTPUT_DIR) / artifact_rel" in text
+    assert "artifact_path.parent.mkdir(parents=True, exist_ok=True)" in text
+    assert "Never call `open(artifact_rel, ...)`" in text
 
 
 def test_build_decision_system_text_has_no_stale_single_tool_limit_hint():

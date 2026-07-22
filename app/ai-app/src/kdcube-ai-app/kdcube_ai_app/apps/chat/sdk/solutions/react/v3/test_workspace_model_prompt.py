@@ -327,7 +327,10 @@ def test_build_decision_system_text_includes_exec_guidance_only_when_lite_exec_b
     )
     assert "[EXEC TOOL]" in text
     assert "include this block only" not in text.lower()
-    assert "Write every contracted artifact to `Path(OUTPUT_DIR) / filepath`" in text
+    assert 'artifact_rel = "turn_<current>/files/<scope>/<name>"' in text
+    assert "artifact_path = Path(OUTPUT_DIR) / artifact_rel" in text
+    assert "artifact_path.parent.mkdir(parents=True, exist_ok=True)" in text
+    assert "Never write `artifact_rel` directly" in text
 
 
 def test_build_decision_system_text_can_hide_tool_catalog_but_keep_skill_gallery():
@@ -372,7 +375,10 @@ def test_default_lite_system_instruction_workspace_exec_profile_adds_exec_guidan
     body = default_lite_system_instruction("workspace_exec")
     assert "[EXEC TOOL]" in body
     assert "OUTPUT_DIR/" in body
-    assert "Write every contracted artifact to `Path(OUTPUT_DIR) / filepath`" in body
+    assert "Keep it relative in the action" in body
+    assert "artifact_path = Path(OUTPUT_DIR) / artifact_rel" in body
+    assert "artifact_path.parent.mkdir(parents=True, exist_ok=True)" in body
+    assert "process working directory" in body
 
 
 def test_multi_action_protocol_teaches_strategy_trait_contract():

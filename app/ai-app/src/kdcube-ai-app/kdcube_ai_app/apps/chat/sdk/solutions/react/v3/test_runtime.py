@@ -128,7 +128,9 @@ def test_compact_tool_catalog_preserves_semantic_kernel_parameter_docs():
                 "name": "contract",
                 "annotation": (
                     "array, Required non-empty list of artifact specs: "
-                    "[{filepath, description, visibility?}]"
+                    "[{filepath, description, visibility?}]. filepath remains relative in the action; "
+                    "code writes Path(OUTPUT_DIR) / artifact_rel after calling "
+                    "artifact_path.parent.mkdir(parents=True, exist_ok=True)"
                 ),
                 "default": None,
                 "required": True,
@@ -152,6 +154,9 @@ def test_compact_tool_catalog_preserves_semantic_kernel_parameter_docs():
 
     assert "contract:list — Required non-empty list of artifact specs" in rendered
     assert "[{filepath, description, visibility?}]" in rendered
+    assert "filepath remains relative in the action" in rendered
+    assert "Path(OUTPUT_DIR) / artifact_rel" in rendered
+    assert "artifact_path.parent.mkdir(parents=True, exist_ok=True)" in rendered
     assert "prog_name:str? — Short name used for UI labeling." in rendered
 
 

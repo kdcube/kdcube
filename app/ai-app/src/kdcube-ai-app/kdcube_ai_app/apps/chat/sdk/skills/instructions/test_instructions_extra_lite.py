@@ -38,7 +38,9 @@ def test_hard_signals_survive_distillation():
         "✓ [1]", "✗ [1]", "… [2]",
         # exec contract semantics
         "params.contract",
-        "BYTE-IDENTICAL",
+        "Path(OUTPUT_DIR) / artifact_rel",
+        "artifact_path.parent",
+        "byte-for-byte",
         "agent_io_tools.tool_call",
         "FLIP YOUR DEFAULT",
         # workspace hard rule
@@ -56,6 +58,14 @@ def test_hard_signals_survive_distillation():
     ]
     for signal in signals:
         assert signal in text, f"distillation lost signal: {signal!r}"
+
+
+def test_exec_profile_keeps_contract_path_relative_but_writes_under_output_dir():
+    text = default_extra_lite_system_instruction("workspace_exec")
+    assert "keep it relative in the action" in text
+    assert "artifact_path = Path(OUTPUT_DIR) / artifact_rel" in text
+    assert "artifact_path.parent.mkdir(parents=True, exist_ok=True)" in text
+    assert "Never write `artifact_rel`" in text
 
 
 def test_git_mode_appends_addendum_after_workspace():

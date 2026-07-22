@@ -913,9 +913,11 @@ The <channel:summary> channel is allowed ONLY when action is complete or exit.
   So to hand a file to the user or make it individually retrievable — ESPECIALLY any binary — it MUST be contracted,
   whether it sits under `git/projects/` or `files/`.
 - Contract entry = `{filepath, description, visibility?}`. Params: `contract` (REQUIRED), `prog_name`, optional `timeout_s`.
-  · `filepath`: the FULL OUTPUT_DIR-relative path, BYTE-IDENTICAL to the path your code writes (mismatch → `missing_file`,
-    bytes lost). Its prefix picks the namespace: `turn_<current>/git/projects/<scope>/…` (durable project state) or
-    `turn_<current>/files/<scope>/…` (deliverables / one-offs).
+  · `filepath`: the FULL OUTPUT_DIR-relative `artifact_rel` string. Keep it relative in the action; its prefix picks the
+    namespace: `turn_<current>/git/projects/<scope>/…` (durable project state) or
+    `turn_<current>/files/<scope>/…` (deliverables / one-offs). In code, write to
+    `artifact_path = Path(OUTPUT_DIR) / artifact_rel`. Contract `filepath` MUST equal `artifact_rel` byte-for-byte
+    (mismatch → `missing_file`, bytes lost). Never write `artifact_rel` directly relative to the process working directory.
   · `visibility`: `external` (default) = hosted AND delivered to the user (however the interface delivers);
     `internal` = hosted + pullable by you in later turns, but NOT shown to the user — use for reusable building blocks
     you still want to keep.
@@ -936,12 +938,23 @@ EXEC_SNIPPET_RULES = f"""
 - OUT_DIR is also available as `Path(OUTPUT_DIR)` if that is more convenient.
 - Do NOT assign, redefine, or shadow `OUTPUT_DIR` or `OUT_DIR`. They are provided by the runtime.
 - Do NOT substitute hard-coded paths such as `Path(\"/workspace/out\")` for `OUTPUT_DIR` / `OUT_DIR`.
+- REQUIRED output-path pattern (the same `artifact_rel` literal goes in the action contract):
+```python
+from pathlib import Path
+
+artifact_rel = "turn_<current>/files/<scope>/<name>"
+artifact_path = Path(OUTPUT_DIR) / artifact_rel
+artifact_path.parent.mkdir(parents=True, exist_ok=True)
+# Pass artifact_path to open(), wb.save(), image.save(), and other writers.
+```
+- Never call `open(artifact_rel, ...)`, `wb.save(artifact_rel)`, or create a bare `turn_<current>/...` tree relative to
+  the process working directory. Contract `filepath` is `artifact_rel`; the code write target is `artifact_path`.
 - Inputs are accessed by their OUTPUT_DIR-relative paths as shown in the visible context.
   - Look for artifact_path and its physical_path in the context.
 - Files - user attachments and files produced by you (assistant) or your code earlier must be read via
   their canonical physical path under OUTPUT_DIR, e.g. `Path(OUTPUT_DIR) / "turn_<id>/attachments/<filename>"`.
 - Example: `Path(OUTPUT_DIR) / "turn_<current>/files/report/report.xlsx"` for produced reports/artifacts, `Path(OUTPUT_DIR) / "turn_<current>/git/projects/project/src/app.py"` for durable project state, `turn_<id>/attachments/<filename>` for user attachments.
-- Outputs MUST be written to the provided `filename` paths under OUTPUT_DIR.
+- Outputs MUST be written under OUTPUT_DIR using the required path pattern above.
 - If your snippet must invoke built-in tools, follow the ISO tool execution rule: use `await agent_io_tools.tool_call(...)`. More details:
 {ISO_TOOL_EXECUTION_INSTRUCTION}
 - For repository/file exploration inside isolated exec, you MAY use Python-native traversal/search or `subprocess.run(...)` with local commands such as `bash -lc`, `find`, `grep`, or `rg` when available.
