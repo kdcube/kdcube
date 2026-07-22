@@ -406,6 +406,63 @@ async def test_pull_rejects_attachment_prefix_pull(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_pull_share_that_resolves_nothing_surfaces_the_real_problem(tmp_path):
+    """Regression: a share=true pull that resolved to nothing reported the
+    outcome as a bare `pulled: []`, so neither the model nor the UI step could
+    tell the share had failed or why. The result must name the failed share and
+    the unresolved ref, in-band, and last_tool_result must carry that diagnostic
+    (not an empty list) so the model receives the feedback too."""
+    outdir = tmp_path / "out"
+    runtime = RuntimeCtx(turn_id="turn_pull", outdir=str(outdir), workdir=str(tmp_path / "work"))
+    ctx = FakeBrowser(runtime)
+
+    class _Settings:
+        STORAGE_PATH = str(tmp_path)
+
+    import kdcube_ai_app.apps.chat.sdk.config as cfg
+    cfg.get_settings = lambda: _Settings()
+
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "params": {
+                    "paths": ["conv:fi:turn_prev.user.attachments/binaries"],
+                    "share": True,
+                }
+            }
+        },
+        "outdir": str(outdir),
+    }
+
+    # A hosting surface is present (react is not None); the share still cannot
+    # apply because nothing resolved to an exact shareable file.
+    out = await handle_react_pull(
+        react=object(), ctx_browser=ctx, state=state, tool_call_id="pull_share_empty"
+    )
+
+    # Model-facing: the tool-result payload names the failed share and the reason.
+    payload = _latest_payload(ctx)
+    assert payload["pulled"] == []
+    assert payload["share"]["delivered"] is False
+    assert payload["share"]["reason"] == "share_single_file_only"
+    assert payload["share"]["shareable_count"] == 0
+    assert payload["user_delivery"].startswith("none")
+    assert payload["invalid"]
+
+    # A notice also names the failed share so it is not silently dropped.
+    assert any(
+        b.get("type") == "react.notice"
+        and "share_single_file_only" in (b.get("text") or "")
+        for b in ctx.timeline.blocks
+    )
+
+    # UI/runtime-facing: last_tool_result is the diagnostic payload, not `[]`.
+    assert isinstance(out["last_tool_result"], dict)
+    assert out["last_tool_result"]["invalid"]
+    assert out["last_tool_result"]["share"]["delivered"] is False
+
+
+@pytest.mark.asyncio
 async def test_pull_without_share_names_the_share_fix_in_user_delivery(tmp_path):
     """Regression: a pull without share materializes locally only; the model
     used to claim the files were delivered ("in the Files tab") and the user

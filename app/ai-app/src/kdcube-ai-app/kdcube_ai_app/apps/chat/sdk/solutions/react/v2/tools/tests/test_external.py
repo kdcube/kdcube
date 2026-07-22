@@ -380,6 +380,115 @@ async def test_external_tool_declared_files_are_hosted_and_emitted(monkeypatch, 
 
 
 @pytest.mark.asyncio
+async def test_named_service_extra_wrapped_declared_files_are_registered(monkeypatch, tmp_path):
+    """Regression: a named service wraps the tool's own ``ret`` one level
+    deeper under ``extra`` (``ret={"attrs": {...}, "extra": {"artifact_type":
+    "files", ...}}``). The declared-file extractor descended only through
+    ``ret``/``output``, so the marker under ``extra`` went unseen: the files
+    were materialized on disk (so a same-turn slack send worked) but never
+    registered as conversation artifacts, so a later react.pull(share=true)
+    resolved nothing and delivered no file to the user."""
+    runtime = RuntimeCtx(turn_id="turn_exec", outdir=str(tmp_path), workdir=str(tmp_path), conversation_id="conv1")
+    ctx = FakeBrowser(runtime)
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "tool_id": "mail.download_attachments",
+                "params": {"object_ref": "mail:gmail:acct:message:m1"},
+            }
+        },
+        "outdir": str(tmp_path),
+        "workdir": str(tmp_path),
+    }
+    attachment = artifact_outdir_for(tmp_path) / "turn_exec" / "files" / "gmail-attachments" / "acct" / "m1" / "invoice.pdf"
+    attachment.parent.mkdir(parents=True, exist_ok=True)
+    attachment.write_bytes(b"%PDF-1.4\n")
+
+    async def _fake_execute_tool(**kwargs):
+        # The mail named service response shape: the declared-file marker and
+        # the files list live under ret.extra, not ret directly.
+        return {
+            "output": {
+                "ok": True,
+                "ret": {
+                    "attrs": {"action": "download_attachments"},
+                    "extra": {
+                        "artifact_type": "files",
+                        "files": [
+                            {
+                                "artifact_path": "conv:fi:turn_exec.files/gmail-attachments/acct/m1/invoice.pdf",
+                                "logical_path": "conv:fi:turn_exec.files/gmail-attachments/acct/m1/invoice.pdf",
+                                "physical_path": "turn_exec/files/gmail-attachments/acct/m1/invoice.pdf",
+                                "filename": "invoice.pdf",
+                                "mime_type": "application/pdf",
+                                "size_bytes": attachment.stat().st_size,
+                                "visibility": "external",
+                            },
+                        ],
+                    },
+                },
+            },
+            "summary": "",
+        }
+
+    class _Comm:
+        user_id = "u1"
+        user_type = "admin"
+        service = {
+            "tenant": "tenant1",
+            "project": "project1",
+            "user": "u1",
+            "user_type": "admin",
+            "conversation_id": "conv1",
+            "request_id": "req1",
+        }
+
+    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.external.execute_tool", _fake_execute_tool)
+
+    hosting = _HostingRecorder()
+    react = FakeReact(hosting_service=hosting, comm=_Comm())
+    react.tools_subsystem = None
+
+    out = await handle_external_tool(react=react, ctx_browser=ctx, state=state, tool_call_id="mail_files")
+
+    # The enveloped attachment is hosted and registered as a resolvable
+    # conversation artifact so a later react.pull can find it by ref.
+    assert len(hosting.host_calls) == 1
+    assert len(hosting.emit_calls) == 1
+    assert any(
+        b.get("type") == "react.tool.result"
+        and b.get("path") == "conv:fi:conv_conv1.turn_exec.files/gmail-attachments/acct/m1/invoice.pdf"
+        and (b.get("meta") or {}).get("hosted_uri") == "s3://bucket/invoice.pdf"
+        for b in ctx.timeline.blocks
+    )
+
+
+def test_declared_file_extractors_descend_into_named_service_extra_envelope():
+    """Both declared-file extractors must recognize the marker whether it sits
+    directly under ``ret`` or one level deeper under ``extra`` (the named
+    service envelope), and must not mistake a non-file ``extra`` for files."""
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.external import _declared_file_rows
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.events.policies import (
+        _declared_file_rows_from_result,
+    )
+
+    row = {
+        "type": "file",
+        "physical_path": "turn_x/files/gmail-attachments/a/m/invoice.pdf",
+        "filename": "invoice.pdf",
+        "mime": "application/pdf",
+    }
+    direct = {"artifact_type": "files", "files": [row]}
+    named_service = {"attrs": {"action": "download_attachments"}, "extra": direct}
+    non_file_extra = {"attrs": {"action": "noop"}, "extra": {"action": "noop"}}
+
+    for extract in (_declared_file_rows, _declared_file_rows_from_result):
+        assert len(extract(direct)) == 1
+        assert len(extract(named_service)) == 1
+        assert extract(non_file_extra) == []
+
+
+@pytest.mark.asyncio
 async def test_external_tool_internal_declared_files_keep_paths_without_hosting(monkeypatch, tmp_path):
     runtime = RuntimeCtx(turn_id="turn_exec", outdir=str(tmp_path), workdir=str(tmp_path), conversation_id="conv1")
     ctx = FakeBrowser(runtime)

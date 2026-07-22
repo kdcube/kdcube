@@ -1700,9 +1700,12 @@ async def test_integration_ret_envelope_declared_files_pipeline_hosted_and_emitt
 
     assert len(hosting.host_calls) == 1
     assert len(hosting.emit_calls) == 1
+    # The policy pipeline qualifies the artifact ref at creation (conv_<id>
+    # owner segment), matching the legacy producer, so the stored block path is
+    # one canonical dialect regardless of which producer emitted it.
     assert any(
         b.get("type") == "react.tool.result"
-        and b.get("path") == "conv:fi:turn_exec.files/gmail-attachments/acct/m1/invoice.pdf"
+        and b.get("path") == "conv:fi:conv_conv1.turn_exec.files/gmail-attachments/acct/m1/invoice.pdf"
         and (b.get("meta") or {}).get("visibility") == "external"
         for b in ctx.timeline.blocks
     )
