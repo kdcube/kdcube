@@ -1005,7 +1005,13 @@ class AccountingCalculator:
         for key_tuple, usage in result["groups"].items():
             user_id = usage.get("user_id")
             if user_id:
-                by_user[user_id] = {"total": usage}
+                # Surface a per-user request count (summed usage.requests) so the
+                # raw-scan path matches the aggregate path's event_count instead of
+                # leaving it unset/None.
+                by_user[user_id] = {
+                    "total": usage,
+                    "event_count": int(usage.get("requests", 0) or 0),
+                }
 
         # Add compact rollup per user (raw)
         for user_id in list(by_user.keys()):
@@ -1022,6 +1028,69 @@ class AccountingCalculator:
             by_user[user_id]["rollup"] = await self.usage_rollup_compact(user_query)
 
         return by_user
+
+    async def usage_for_user(
+            self,
+            *,
+            tenant_id: str,
+            project_id: str,
+            user_id: str,
+            date_from: str,
+            date_to: str,
+            app_bundle_id: Optional[str] = None,
+            service_types: Optional[List[str]] = None,
+            hard_file_limit: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        Spendings for a SINGLE user in given timeframe: {total, rollup, event_count}.
+
+        Prefers per-user daily aggregates (so a single user's spend matches exactly
+        what the cross-user view reports). Falls back to a user-scoped raw scan
+        (prefix-optimized via query.user_id, so it reads only this user's events)
+        whenever the aggregates do NOT cover this user with content -- i.e. when
+        there are no aggregates at all, OR aggregates exist for the project but not
+        for this user/window (e.g. recent usage not yet aggregated, or partial
+        aggregates). This prevents reporting "$0 / no spend" for a user who has
+        real raw events that simply haven't been rolled up yet.
+        """
+        # Fast path: reuse the per-user daily aggregates when they actually
+        # contain this user's usage.
+        try:
+            agg = await self._usage_by_user_with_aggregates(
+                tenant_id=tenant_id,
+                project_id=project_id,
+                date_from=date_from,
+                date_to=date_to,
+            )
+        except Exception:
+            logger.exception("[usage_for_user] aggregate path failed")
+            agg = None
+
+        if agg is not None:
+            data = agg.get(user_id)
+            if data and (data.get("rollup") or data.get("total")):
+                return data
+            # Aggregates exist but don't cover this user -> do not trust the empty
+            # result; fall through to the authoritative raw scan below.
+
+        # Fallback: user-scoped raw scan.
+        query = AccountingQuery(
+            tenant_id=tenant_id,
+            project_id=project_id,
+            user_id=user_id,
+            date_from=date_from,
+            date_to=date_to,
+            app_bundle_id=app_bundle_id,
+            service_types=service_types,
+            hard_file_limit=hard_file_limit,
+        )
+        usage = await self.query_usage(query)
+        rollup = await self.usage_rollup_compact(query)
+        return {
+            "total": usage.get("total", {}) or {},
+            "rollup": rollup,
+            "event_count": int(usage.get("event_count", 0) or 0),
+        }
 
     async def usage_all_users(
             self,
