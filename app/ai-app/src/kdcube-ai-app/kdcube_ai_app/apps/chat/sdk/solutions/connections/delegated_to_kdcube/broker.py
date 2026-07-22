@@ -69,13 +69,16 @@ class DelegatedToKdcubeBroker:
         for this provider (`account_scope[provider_id]` on the agent grant),
         shaped ``{account_id: [claims]}``: for each connected account, the exact
         claims this agent may use ON that account. The account key ``"*"`` means
-        any account; a claim entry ``"*"`` (or the whole binding being ``None`` /
-        empty) means any claim. An account may satisfy this claim only when it is
-        bound AND the binding covers ``claim`` — so "read+write from account 1,
-        read-only from account 2" is enforced here, independent of what each
-        account is itself capable of. ``None``/empty = no restriction (the
-        default and every non-agent turn). An explicit ``account_id`` must
-        itself be bound for this claim.
+        any account; a claim entry ``"*"`` means any claim. An account may
+        satisfy this claim only when it is bound AND the binding covers
+        ``claim`` — so "read+write from account 1, read-only from account 2" is
+        enforced here, independent of what each account is itself capable of.
+        ``None`` = no restriction — passed ONLY on non-agent turns (the user's
+        own trusted tools). An EMPTY mapping = a delegated (agent) turn with
+        nothing bound on this provider — default-closed: every account is
+        refused with the agent-grant reason until the user binds one. An agent
+        never inherits the accounts the user connected. An explicit
+        ``account_id`` must itself be bound for this claim.
 
         ``force_refresh`` refreshes the credential even when its timestamps
         look valid — the live-401 retry path uses it when the provider
@@ -88,13 +91,15 @@ class DelegatedToKdcubeBroker:
         account_key = as_str(account_id)
         # The agent's per-account claim binding for this provider:
         # {account_id: {claims}} where account "*" = any account and claim "*" =
-        # any claim. Empty/None => no restriction (any account, any claim).
+        # any claim. None => non-agent turn, no restriction. A mapping — even an
+        # EMPTY one — means a delegated caller: restrict, so an agent with no
+        # binding is refused (agent-grant reason) rather than silently allowed.
         scope = {
             as_str(acc): {as_str(c) for c in (claims or ()) if as_str(c)}
             for acc, claims in dict(account_claim_scope or {}).items()
             if as_str(acc)
         }
-        restrict = bool(scope)
+        restrict = account_claim_scope is not None
 
         def _binding_allows(aid: str) -> bool:
             if not restrict:

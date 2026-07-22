@@ -240,6 +240,8 @@ def render_consent_html(
     grantor_label: str = "",
     signout_action: str = "/oauth/logout",
     return_to: str = "",
+    connected_accounts: list | None = None,
+    seeded_account_scope: Mapping[str, Any] | None = None,
 ) -> str:
     esc = _html.escape
     tools = tools_for_scopes(req.scopes, config=config, resource=req.resource)
@@ -284,6 +286,81 @@ def render_consent_html(
 {namespace_rows}
 """
 
+    # Per-account access is granted SEPARATELY from the connection ceiling
+    # above, and the runtime is DEFAULT-CLOSED: a connected account this client
+    # is not explicitly bound to is not usable by it, whatever the ceiling
+    # says. Render the user's real connected accounts with per-claim
+    # checkboxes; the picks become the grant card's account_scope. Nothing
+    # pre-checked unless a prior card for this app seeded it (re-consent /
+    # DCR reconnect).
+    seeded: dict[str, dict[str, set]] = {}
+    for provider, accounts_map in dict(seeded_account_scope or {}).items():
+        seeded[str(provider)] = {
+            str(account_id): {str(claim) for claim in (claims or ())}
+            for account_id, claims in dict(accounts_map or {}).items()
+        }
+
+    def _account_checked(provider_id: str, account_id: str, claim: str) -> bool:
+        entry = seeded.get(provider_id) or {}
+        claims = entry.get(account_id)
+        if claims is None:
+            claims = entry.get("*")
+        if claims is None:
+            return False
+        return "*" in claims or claim in claims
+
+    accounts_by_provider: dict[str, list] = {}
+    for account in connected_accounts or []:
+        provider_id = str(account.get("provider_id") or "")
+        if provider_id:
+            accounts_by_provider.setdefault(provider_id, []).append(account)
+
+    if accounts_by_provider:
+        provider_blocks: list[str] = []
+        for provider_id, provider_accounts in accounts_by_provider.items():
+            rows: list[str] = []
+            for account in provider_accounts:
+                account_id = str(account.get("account_id") or "")
+                label = str(account.get("label") or account_id)
+                workspace = str(account.get("workspace") or "")
+                claims = [str(c) for c in (account.get("claims") or []) if str(c or "").strip()]
+                claim_boxes = "".join(
+                    f'<label class="tool" style="display:inline-flex;margin-right:10px">'
+                    f'<input type="checkbox" name="account_scope" '
+                    f'value="{esc(provider_id)}|{esc(account_id)}|{esc(claim)}"'
+                    f'{" checked" if _account_checked(provider_id, account_id, claim) else ""}> '
+                    f"<code>{esc(claim)}</code></label>"
+                    for claim in claims
+                ) or '<span class="desc">no approved permissions on this account yet</span>'
+                rows.append(
+                    f'<div class="namespace-row"><b>{esc(label)}</b>'
+                    f'{f"<span class=desc>{esc(workspace)}</span>" if workspace else ""}'
+                    f'<span class="grants">{claim_boxes}</span></div>'
+                )
+            provider_blocks.append(
+                f'    <section class="namespace-group">'
+                f'<div class="group-head"><b>{esc(provider_id)}</b>'
+                f"<span>{len(provider_accounts)}</span></div>\n"
+                + "\n".join(rows)
+                + "\n    </section>"
+            )
+        per_account_section = f"""
+    <p class="pick">Which of your connected accounts may this app use?</p>
+    <p class="desc">Nothing is granted until you tick it. The capabilities above are only the
+    ceiling — each connected account stays unusable by this app until you bind it here, per
+    account and per permission. You can change or revoke any of this later in Connection Hub
+    &#8594; Delegated by KDCube, and a call that needs more will ask then.</p>
+{"".join(provider_blocks)}
+"""
+    else:
+        per_account_section = """
+    <p class="pick">Your connected provider accounts:</p>
+    <p class="desc">This approval covers the capabilities above only. None of your connected
+    provider accounts is usable by this app until you grant it — per account and per
+    permission — in Connection Hub &#8594; Delegated by KDCube, or through the approval that
+    rises on the app's first use.</p>
+"""
+
     hidden_fields = [
         ("client_id", req.client_id),
         ("redirect_uri", req.redirect_uri),
@@ -298,7 +375,20 @@ def render_consent_html(
     hidden = "\n".join(
         f'    <input type="hidden" name="{esc(k)}" value="{esc(v)}">' for k, v in hidden_fields
     )
-    scope_list = ", ".join(esc(s) for s in req.scopes)
+    # The raw scope tokens teach the user nothing here — every scope is
+    # presented below as a labeled, narrowable capability row. The details
+    # block shows only the shape of the request: how many capabilities, in
+    # which families.
+    scope_families: list[str] = []
+    for token in req.scopes:
+        family = token.split(":", 1)[0] if ":" in token else token
+        if family and family not in scope_families:
+            scope_families.append(family)
+    scope_list = (
+        f"{len(req.scopes)} capabilities ({esc(', '.join(scope_families))}) — review and narrow below"
+        if req.scopes
+        else "none"
+    )
     account_value = grantor_label or grantor_subject or "current KDCube account"
     account_html = ""
     if grantor_subject or grantor_label:
@@ -370,6 +460,7 @@ def render_consent_html(
     .account strong {{ display: block; font-size: .92rem; margin-top: .12rem; color: var(--ink); }}
     .account code {{ display: inline-block; margin-top: .2rem; max-width: 100%; word-break: break-all; }}
     .account-form {{ margin: 0; flex: 0 0 auto; }}
+    .hub-link {{ color: var(--accent, #0f766e); font-weight: 600; text-decoration: underline; }}
     code, .scope {{ font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .82rem; }}
     code {{ background: var(--panel); border: 1px solid var(--line); padding: .06rem .32rem; border-radius: 5px; color: var(--ink); }}
     .badge {{ font-size: .68rem; padding: .12rem .45rem; border-radius: 999px; white-space: nowrap; font-weight: 600; }}
@@ -451,6 +542,7 @@ def render_consent_html(
     <p class="desc">These grants let the external client represent your KDCube account only when this resource later needs platform authority.</p>
 {edge_rows}
 {namespace_section}
+{per_account_section}
     <p class="pick">Select which capabilities to authorize for this connection:</p>
 {tool_rows}
     <div class="actions">

@@ -179,8 +179,8 @@ This is **not** descriptor config. It lives on the agent's grant record (the
 ```text
 account_scope: { "<provider_id>": { "<account_id>": ["<claim>", ...] } }
              |  { "<provider_id>": { "<account_id>": ["*"] } }   # any claim on that account
-             |  { "<provider_id>": { "*": ["*"] } }              # any account, any claim
-             |   (provider key absent)                           # any account, any claim (default)
+             |  { "<provider_id>": { "*": ["*"] } }              # any account, any claim (explicit)
+             |   (provider key absent)                           # NOTHING granted there (default)
 ```
 
 Semantics:
@@ -189,8 +189,16 @@ Semantics:
   the account broker resolves on (a non-namespaced MCP tool and a named-service
   namespace both end at the same `provider_id`); the per-account claim list is
   the exact set this agent may use on that account.
-- **account `"*"` = any account; claim `"*"` (or absent provider) = any claim.**
-  Existing grants keep working unchanged: the legacy list form
+- **Default-closed.** For a delegated caller (an external app or a
+  `kdcube-agent:*` client), an absent provider key means **no account access on
+  that provider**: the broker refuses with the agent-grant reason
+  (`agent_grant_required`) until the user binds an account. An agent never
+  inherits the accounts the user connected — the binding *is* the grant.
+  "Any account" exists only as the explicit `"*"` entry the user deliberately
+  sets. (Non-delegated turns — the user's own trusted tools running as the
+  user — carry no binding and are unrestricted; the second gate exists for
+  delegated callers.)
+- **account `"*"` = any account; claim `"*"` = any claim.** The legacy list form
   `{provider: [account_ids]}` migrates to `{account_id: ["*"]}` (bound accounts,
   any claim), and single-account providers resolve with no friction.
 - **The binding decides, not the account's capability.** An account may satisfy a
@@ -216,10 +224,10 @@ Where the user sets it:
   checkboxes; the picks are written into `account_scope` as part of the one-click
   grant. Zero connected accounts for the provider → connect one first, then pick.
 - **Later** — the Edit control on the agent's "Delegated by KDCube" card, same
-  per-account checkboxes, `replace` semantics (leaving a provider untouched clears
-  its binding back to any-account). Because the grant card is the live authority
-  the guard resolves each call, an edit applies on the agent's next call — no
-  re-mint, no reconnect.
+  per-account checkboxes, `replace` semantics (un-ticking a provider's accounts
+  clears its binding — back to nothing granted there). Because the grant card is
+  the live authority the guard resolves each call, an edit applies on the
+  agent's next call — no re-mint, no reconnect.
 
 Enforcement is one place — the account broker filters the candidate accounts to
 those the binding permits *for the claim being resolved* before its 0/1/many

@@ -63,8 +63,10 @@ def connection_hub_grant_url(
     missing claims pre-checked, one-click grant).
 
     ``account_id`` / ``account_claim`` focus a PER-ACCOUNT ask (the connected
-    account can do it, the agent is not bound): the card names the exact
-    account+claim to tick and pre-checks it.
+    account can do it, the agent is not bound): the card explains why the user
+    landed there, names the exact account+claim to tick, and opens that
+    provider's section — ticking is always the user's own action, nothing is
+    pre-checked.
 
     Openable outside the app origin — an external agent (Claude Code) relays
     it verbatim; the user signs in with their platform credentials and sees the

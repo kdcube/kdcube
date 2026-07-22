@@ -65,6 +65,7 @@ class GrantStore:
         grantor_authority: Optional[Dict[str, Any]] = None,
         delegation_edges: Optional[List[Dict[str, Any]]] = None,
         named_services: Optional[Dict[str, Any]] = None,
+        account_scope: Optional[Dict[str, Any]] = None,
     ) -> str:
         code = secrets.token_urlsafe(32)
         payload = {
@@ -80,6 +81,9 @@ class GrantStore:
             "grantor_authority": grantor_authority or {},
             "delegation_edges": list(delegation_edges or []),
             "named_services": named_services or {},
+            # Per-account claim picks made on the consent screen; carried to
+            # token exchange so the registry card is born with the binding.
+            "account_scope": dict(account_scope or {}),
         }
         await self._r.setex(self._key("code", code), self._auth_code_ttl, json.dumps(payload))
         return code
@@ -214,6 +218,10 @@ class GrantStore:
             grantor_authority=rec.get("grantor_authority") or {},
             delegation_edges=rec.get("delegation_edges") or [],
             named_services=rec.get("named_services") or {},
+            # Keep the registry-card pointer across rotations: without it the
+            # rotated record froze its scopes and RFC 7009 revocation could no
+            # longer find the card to retire.
+            registry_access_id=str(rec.get("registry_access_id") or "").strip(),
         )
 
     # ---------------------- access-token operation grant ----------------------

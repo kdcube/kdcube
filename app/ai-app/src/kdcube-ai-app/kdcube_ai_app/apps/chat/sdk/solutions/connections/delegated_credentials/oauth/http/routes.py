@@ -619,6 +619,10 @@ async def authorize(request: Request) -> Response:
     )
     if custom is not None:
         return custom
+    connected_accounts = await _connected_accounts_for_consent(subject)
+    seeded_account_scope = await _seed_account_scope_for_consent(
+        request, subject=subject, client_id=req.client_id, resource=req.resource, cfg=cfg,
+    )
     return HTMLResponse(
         render_consent_html(
             render_req,
@@ -632,8 +636,67 @@ async def authorize(request: Request) -> Response:
             grantor_label=_user_label(user or {}),
             signout_action=_logout_action(request),
             return_to=_return_to(request),
+            connected_accounts=connected_accounts,
+            seeded_account_scope=seeded_account_scope,
         )
     )
+
+
+async def _connected_accounts_for_consent(subject: str) -> list[dict]:
+    """The consenting user's connected provider accounts, for the consent
+    screen's per-account picker. Best-effort: an empty list renders the
+    text fallback, never an error."""
+    try:
+        from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.store import (
+            DelegatedToKdcubeStore,
+        )
+
+        accounts = await DelegatedToKdcubeStore(user_id=subject).list_accounts()
+    except Exception:
+        LOGGER.exception("[connection-hub.oauth] consent account listing failed")
+        return []
+    out: list[dict] = []
+    for item in accounts or []:
+        try:
+            out.append(
+                {
+                    "provider_id": str(item.provider_id or ""),
+                    "account_id": str(item.account_id or ""),
+                    "label": str(
+                        getattr(item, "display_name", "")
+                        or getattr(item, "external_subject", "")
+                        or item.account_id
+                    ),
+                    "workspace": str(getattr(item, "workspace", "") or ""),
+                    "claims": [str(c) for c in (item.claims or ()) if str(c or "").strip()],
+                }
+            )
+        except Exception:
+            continue
+    return [entry for entry in out if entry["provider_id"] and entry["account_id"]]
+
+
+async def _seed_account_scope_for_consent(
+    request, *, subject: str, client_id: str, resource: str, cfg
+) -> dict:
+    """Pre-check the picker from the client's existing card (re-consent) and
+    from a DCR sibling this consent will supersede."""
+    try:
+        from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.automation_access import (
+            AutomationAccessService,
+        )
+
+        store = get_grant_store(request)
+        tenant, project = oauth_tenant_project(request)
+        service = AutomationAccessService(
+            redis=store.redis, tenant=tenant, project=project, config=cfg, grant_store=store,
+        )
+        return await service.oauth_seed_account_scope(
+            grantor_subject=subject, client_id=client_id, resource=str(resource or ""),
+        )
+    except Exception:
+        LOGGER.exception("[connection-hub.oauth] consent account-scope seed failed")
+        return {}
 
 
 @router.post("/oauth/authorize/consent", include_in_schema=False)
@@ -741,6 +804,26 @@ async def authorize_consent(request: Request) -> Response:
     named_services = dict(resource_cfg.named_services or {}) if resource_cfg is not None else {}
     grantor_authority = _grantor_authority(user or {}, scopes=selected_scopes, inventory=inventory)
     delegation_edges = list(grantor_authority.get("delegation_edges") or [])
+    # Per-account claim picks from the consent screen: checkbox values are
+    # "provider|account_id|claim". They become the grant card's account_scope
+    # at token exchange — default-closed, so no pick = no account access.
+    account_scope: dict[str, dict[str, list[str]]] = {}
+    for entry in form.getlist("account_scope"):
+        parts = str(entry or "").split("|", 2)
+        if len(parts) != 3:
+            continue
+        provider, account_id, claim = (part.strip() for part in parts)
+        if not provider or not account_id or not claim:
+            continue
+        held = account_scope.setdefault(provider, {}).setdefault(account_id, [])
+        if claim not in held:
+            held.append(claim)
+    LOGGER.info(
+        "[connection-hub.oauth] consent approved client_id=%s scopes=%d tools=%d "
+        "account_scope_providers=%s",
+        req.client_id, len(selected_scopes), len(selected_operations),
+        sorted(account_scope.keys()) or "-",
+    )
     code = await store.create_auth_code(
         client_id=req.client_id,
         redirect_uri=req.redirect_uri,
@@ -753,6 +836,7 @@ async def authorize_consent(request: Request) -> Response:
         grantor_authority=grantor_authority,
         delegation_edges=delegation_edges,
         named_services=named_services,
+        account_scope=account_scope,
     )
     url = build_redirect(req.redirect_uri, {"code": code, "state": req.state, "iss": issuer})
     return RedirectResponse(url, status_code=302)
@@ -815,6 +899,7 @@ async def _issue_tokens(
     delegation_edges=None,
     named_services=None,
     refresh_token=None,
+    account_scope=None,
 ) -> JSONResponse:
     tenant, project = oauth_tenant_project(request)
     # This is the common credential envelope understood by the Connection Hub
@@ -921,6 +1006,7 @@ async def _issue_tokens(
             identity_scope=identity_scope,
             access_token=access_token,
             refresh_token=str(refresh_token or ""),
+            account_scope=account_scope,
         )
     except Exception:
         LOGGER.exception("[connection-hub.oauth] failed to record delegated grant client=%s", client_id)
@@ -969,6 +1055,7 @@ async def token(request: Request) -> Response:
             grantor_authority=payload.get("grantor_authority") or {},
             delegation_edges=payload.get("delegation_edges") or [],
             named_services=payload.get("named_services") or {},
+            account_scope=payload.get("account_scope") or None,
         )
 
     if grant_type == "refresh_token":
@@ -1018,3 +1105,71 @@ async def token(request: Request) -> Response:
         )
 
     return _token_error("unsupported_grant_type", f"unsupported grant_type: {grant_type}")
+
+
+@router.post("/oauth/revoke", include_in_schema=False)
+async def revoke(request: Request) -> Response:
+    """RFC 7009 token revocation. A client that disconnects can revoke its
+    refresh or access token here; the matching Connection Hub card is retired
+    with it (its other live token material dies too), so a clean disconnect
+    leaves no orphan card. Per the RFC, unknown tokens still return 200 —
+    revocation must be idempotent and non-probing."""
+    form = await request.form()
+    token = str(form.get("token") or "").strip()
+    # Arrival log FIRST: while verifying client disconnect behavior we need
+    # evidence of whether the client calls revocation at all.
+    LOGGER.info(
+        "[connection-hub.oauth] rfc7009 revoke called hint=%s client_id=%s token_present=%s",
+        str(form.get("token_type_hint") or "-"),
+        str(form.get("client_id") or "-"),
+        bool(token),
+    )
+    if not token:
+        return _token_error("invalid_request", "missing token")
+    store = get_grant_store(request)
+
+    card_pointer = ""
+    grantor_subject = ""
+    refresh_rec = await store.validate_refresh_token(token)
+    if refresh_rec is not None:
+        card_pointer = str(refresh_rec.get("registry_access_id") or "").strip()
+        grantor_subject = str(refresh_rec.get("sub") or "").strip()
+        await store.revoke_refresh_token(token)
+    else:
+        grant_rec = await store.get_access_grant_record(token)
+        if grant_rec is not None:
+            card_pointer = str(grant_rec.get("registry_access_id") or "").strip()
+            credential = grant_rec.get("credential") or {}
+            grantor_subject = str(credential.get("grantor_subject") or "").strip()
+            await store.revoke_access_grant(token)
+    LOGGER.info(
+        "[connection-hub.oauth] rfc7009 revoke resolved kind=%s card=%s subject_present=%s",
+        "refresh" if refresh_rec is not None else ("access" if card_pointer or grantor_subject else "unknown"),
+        card_pointer or "-",
+        bool(grantor_subject),
+    )
+
+    if card_pointer and grantor_subject:
+        try:
+            from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.automation_access import (
+                AutomationAccessService,
+            )
+
+            tenant, project = oauth_tenant_project(request)
+            service = AutomationAccessService(
+                redis=store.redis,
+                tenant=tenant,
+                project=project,
+                config=oauth_delegated_config(request),
+                grant_store=store,
+            )
+            await service.revoke_access({"user_id": grantor_subject}, access_id=card_pointer)
+            LOGGER.info(
+                "[connection-hub.oauth] rfc7009 revocation retired card=%s", card_pointer
+            )
+        except Exception:
+            LOGGER.exception(
+                "[connection-hub.oauth] rfc7009 card retirement failed card=%s", card_pointer
+            )
+    # 200 with an empty JSON body whether or not the token was known.
+    return JSONResponse({}, headers={"Cache-Control": "no-store", "Pragma": "no-cache"})

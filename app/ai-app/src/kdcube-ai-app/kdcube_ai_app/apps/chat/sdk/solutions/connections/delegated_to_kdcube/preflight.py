@@ -14,6 +14,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.connection_edges import D
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.client import DelegatedToKdcubeClient
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.models import (
     REASON_ACCOUNT_REQUIRED,
+    REASON_AGENT_GRANT_REQUIRED,
     REASON_CLAIM_UPGRADE_REQUIRED,
     REASON_CONNECT_REQUIRED,
     REASON_RECONNECT_REQUIRED,
@@ -186,6 +187,7 @@ _ACTION_LABELS = {
     REASON_CLAIM_UPGRADE_REQUIRED: "Approve access",
     REASON_RECONNECT_REQUIRED: "Reconnect account",
     REASON_ACCOUNT_REQUIRED: "Choose account",
+    REASON_AGENT_GRANT_REQUIRED: "Grant this agent access",
 }
 
 
@@ -284,6 +286,31 @@ def connected_account_consent_payload(
         agent_client_id=as_str(agent_client_id),
         agent_resource=as_str(agent_resource),
     )
+    if reason == REASON_AGENT_GRANT_REQUIRED and as_str(agent_client_id) and as_str(agent_resource):
+        # The provider side is FINE here — the account holds the claim; what is
+        # missing is THIS caller's per-account binding. Deep-link the agent's
+        # own grant card (Delegated by KDCube) with the exact account + claim
+        # focused, never the provider-connect tab (which would truthfully
+        # report "all set" and strand the user).
+        from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.consent_denial import (
+            connection_hub_grant_url,
+        )
+
+        focus_account = account_id
+        if not focus_account and len(candidates) == 1:
+            focus_account = as_str(candidates[0].get("account_id"))
+        grant_url = connection_hub_grant_url(
+            tenant=tenant,
+            project=project,
+            client_id=as_str(agent_client_id),
+            resource=as_str(agent_resource),
+            claims=[],  # the per-account claim is picked on the card, not the door
+            hub_bundle_id=connection_hub_bundle_id,
+            account_id=focus_account,
+            account_claim=claims[0] if claims else "",
+        )
+        if grant_url:
+            url = grant_url
     message = (
         consent_action_message(
             reason=reason,
