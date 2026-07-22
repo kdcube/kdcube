@@ -1160,10 +1160,13 @@ async def handle_webhook(entrypoint: Any, request: Any = None, **update) -> Dict
             "idempotency": claim,
         }
 
-    lock_key = _telegram_conversation_lock_key(entrypoint, summary)
-    turn_lock = _telegram_conversation_lock(lock_key)
-    await turn_lock.acquire()
-    lock_held = True
+    # Attachment hydration and chat-ingress submit run WITHOUT the per-conversation
+    # lock. Duplicate updates are already rejected by claim_telegram_update above, and
+    # turn admission is serialized by the conversation-state CAS inside
+    # process_chat_message. Holding the lock here would make a mid-turn followup/steer
+    # wait for the in-flight turn to finish (run_with_queued_telegram_delivery holds the
+    # same lock for the whole turn), so ingress would never see the conversation as busy
+    # and could never fold the event into the live turn.
     try:
         if summary.get("attachments"):
             log.info(
@@ -1184,30 +1187,41 @@ async def handle_webhook(entrypoint: Any, request: Any = None, **update) -> Dict
                 _attachment_log_items(list(summary.get("attachments") or [])),
             )
         submitted_turn = await submit_react_turn(entrypoint, summary=summary)
-        if submitted_turn is not None:
-            ingress = submitted_turn.get("ingress") if isinstance(submitted_turn.get("ingress"), dict) else {}
-            stage = "webhook-ack"
-            if submitted_turn.get("mode") == "submitted":
-                stage = (
-                    "telegram-continuation"
-                    if str(ingress.get("reason") or "").endswith("_accepted")
-                    and bool(ingress.get("is_continuation"))
-                    else "queued-react-turn" if submitted_turn.get("accepted") else "submit-rejected"
-                )
-            result_payload = {
-                "ok": True,
-                "accepted": bool(submitted_turn.get("accepted", True)),
-                "stage": stage,
-                "summary": _telegram_payload_summary(summary),
-                "react_turn": None,
-                "chat_ingress": submitted_turn,
-                "telegram_response": None,
-                "telegram_delivery": None,
-            }
-            turn_lock.release()
-            lock_held = False
-            await asyncio.to_thread(telegram_store.complete_telegram_update, update_id=update_id, result=result_payload)
-            return result_payload
+    except Exception as exc:
+        await asyncio.to_thread(telegram_store.fail_telegram_update, update_id=update_id, error=str(exc))
+        raise
+
+    if submitted_turn is not None:
+        ingress = submitted_turn.get("ingress") if isinstance(submitted_turn.get("ingress"), dict) else {}
+        stage = "webhook-ack"
+        if submitted_turn.get("mode") == "submitted":
+            stage = (
+                "telegram-continuation"
+                if str(ingress.get("reason") or "").endswith("_accepted")
+                and bool(ingress.get("is_continuation"))
+                else "queued-react-turn" if submitted_turn.get("accepted") else "submit-rejected"
+            )
+        result_payload = {
+            "ok": True,
+            "accepted": bool(submitted_turn.get("accepted", True)),
+            "stage": stage,
+            "summary": _telegram_payload_summary(summary),
+            "react_turn": None,
+            "chat_ingress": submitted_turn,
+            "telegram_response": None,
+            "telegram_delivery": None,
+        }
+        await asyncio.to_thread(telegram_store.complete_telegram_update, update_id=update_id, result=result_payload)
+        return result_payload
+
+    # Inline fallback (no chat_submitter available): this path bypasses the ingress CAS
+    # gate, so the per-conversation lock is the only serializer preventing two concurrent
+    # inline turns for one conversation from racing shared timeline/delivery state.
+    lock_key = _telegram_conversation_lock_key(entrypoint, summary)
+    turn_lock = _telegram_conversation_lock(lock_key)
+    await turn_lock.acquire()
+    lock_held = True
+    try:
         react_turn = await run_react_turn(entrypoint, summary=summary)
         telegram_delivery = None
         telegram_messages: list[Dict[str, Any]] = []

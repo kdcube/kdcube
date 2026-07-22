@@ -34,8 +34,7 @@ bundle telegram_webhook(...)
        - claim update_id for idempotency
        - hydrate Telegram files when needed
        - resolve registered/admin Telegram user
-       - acquire Telegram conversation lock
-       - call submit_react_turn(...)
+       - call submit_react_turn(...)   (no per-conversation lock)
             |
             v
             ChatIngressSubmitter.submit(...)
@@ -63,6 +62,13 @@ The fallback inline path `run_react_turn(...)` exists only for environments
 where `entrypoint.chat_submitter.submit` is not available or the SDK cannot
 submit a registered Telegram user to chat ingress. Reference bundles should use
 the submitter path.
+
+The submit path takes no per-conversation lock: chat ingress serializes turn
+admission, and a message that arrives while a turn is running is admitted as a
+followup/steer continuation into that turn. The inline fallback and
+`run_with_queued_telegram_delivery(...)` hold a per-conversation async lock
+across turn execution so concurrent turns of one conversation do not stream or
+finalize over each other.
 
 The Telegram payload can contain Telegram-specific ids and transport metadata.
 The effective ReAct runtime turn id is still the chat ingress

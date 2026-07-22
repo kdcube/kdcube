@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -197,6 +198,101 @@ async def test_telegram_submit_react_turn_sends_external_events(tmp_path, monkey
         "mime": "text/plain",
         "event": {"text": "hello from telegram"},
     }
+
+
+@pytest.mark.asyncio
+async def test_telegram_handle_webhook_submit_path_does_not_take_conversation_lock(tmp_path, monkeypatch):
+    """A mid-turn followup/steer must reach chat ingress while the turn is live.
+
+    run_with_queued_telegram_delivery holds the per-conversation lock for the whole
+    turn. If handle_webhook took the same lock on the submit path, the submit would
+    block until the turn finished; by then ingress no longer sees the conversation as
+    busy, so the event runs as a fresh turn instead of folding into the live one. The
+    submit path must therefore never request the conversation lock.
+    """
+    from kdcube_ai_app.apps.chat.ingress.ingress_core import IngressResult
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram import TelegramUserAdminStorage
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram import user_admin
+
+    storage = TelegramUserAdminStorage(tmp_path)
+    storage.upsert_user(
+        telegram_user_id="2002",
+        telegram_chat_id="1001",
+        telegram_username="elena",
+        kdcube_user_id="user-a",
+        role="registered",
+        conversation_id="conv-main",
+    )
+    user_admin.configure_telegram_user_admin(
+        storage_factory=lambda entrypoint: storage,
+        storage_root_or_error=lambda entrypoint: tmp_path,
+        bundle_id="test.telegram-lockfree",
+    )
+
+    async def _authority(_entrypoint=None, **kwargs):
+        return {
+            "actor_user_id": kwargs["actor_user_id"],
+            "storage_user_id": kwargs["actor_user_id"],
+            "economics_user_id": "user-a",
+            "platform_user_id": "user-a",
+            "platform_roles": ["kdcube:role:registered"],
+            "platform_permissions": ["chat:run"],
+            "identity_provider": "telegram",
+            "platform_authority_resolved": True,
+        }
+
+    monkeypatch.setattr(user_admin, "_telegram_platform_authority", _authority)
+
+    async def _submit(**kwargs):
+        return IngressResult(
+            ok=True,
+            conversation_id=kwargs["message_data"]["conversation_id"],
+            turn_id=kwargs["message_data"]["turn_id"],
+            session_id="conv-main",
+            user_type="registered",
+            reason="steer_accepted",
+            is_continuation=True,
+        )
+
+    entrypoint = SimpleNamespace(
+        BUNDLE_ID="test.telegram-lockfree",
+        chat_submitter=SimpleNamespace(submit=_submit),
+        comm_context=SimpleNamespace(
+            actor=SimpleNamespace(tenant_id="tenant-a", project_id="project-a"),
+            meta=SimpleNamespace(instance_id="telegram-test"),
+        ),
+    )
+
+    lock_requests: list[str] = []
+    real_lock = user_admin._telegram_conversation_lock
+
+    def _spy_lock(key):
+        lock_requests.append(key)
+        return real_lock(key)
+
+    monkeypatch.setattr(user_admin, "_telegram_conversation_lock", _spy_lock)
+
+    result = await asyncio.wait_for(
+        user_admin.handle_webhook(
+            entrypoint,
+            update_id="upd-lockfree",
+            message={
+                "message_id": 77,
+                "chat": {"id": 1001, "type": "private"},
+                "from": {"id": 2002, "username": "elena"},
+                "text": "/steer focus on X",
+            },
+        ),
+        timeout=5.0,
+    )
+
+    assert result["ok"] is True
+    assert result["accepted"] is True
+    assert result["stage"] == "telegram-continuation"
+    # The submit path must not request the per-conversation lock at all; a regression
+    # that re-wraps submit in the lock would record a request here (and, against a live
+    # turn holding it, deadlock).
+    assert lock_requests == []
 
 
 @pytest.mark.asyncio
