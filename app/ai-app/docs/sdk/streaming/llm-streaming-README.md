@@ -109,7 +109,7 @@ Important fields:
 - `role_models`
 - provider keys: `openai_api_key`, `claude_api_key`, `google_api_key`
 - custom endpoint fields: `custom_model_endpoint`,
-  `custom_model_api_key`, `custom_model_name`
+  `custom_model_api_key`, `custom_model_num_ctx`, `custom_model_overrides`
 - embedding fields
 - tenant/project/application bundle context
 

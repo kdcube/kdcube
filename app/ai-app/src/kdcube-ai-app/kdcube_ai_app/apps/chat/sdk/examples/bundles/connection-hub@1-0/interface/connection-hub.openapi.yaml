@@ -360,6 +360,59 @@ paths:
         "200":
           description: Soft-delete result.
 
+  /bundles/{tenant}/{project}/{bundle_id}/operations/dcr_allowlist_get:
+    get:
+      tags: [Authenticators]
+      summary: Read the OAuth dynamic-client-registration redirect allowlist.
+      description: >
+        Admin route. Returns the configured
+        `connections.delegated_credentials.oauth.dynamic_client_registration.allowed_redirect_uris`
+        list, the built-in defaults, and the effective list (defaults apply when
+        the configured list is empty). DCR runs before any user authenticates,
+        so this allowlist is what keeps a registered client's redirect pointed
+        at a known app callback or loopback only.
+      operationId: dcr_allowlist_get
+      x-kdcube-result-alias: dcr_allowlist_get
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/BundleId"
+      responses:
+        "200":
+          description: Configured, effective, and default DCR redirect URIs.
+
+  /bundles/{tenant}/{project}/{bundle_id}/operations/dcr_allowlist_set:
+    post:
+      tags: [Authenticators]
+      summary: Replace the OAuth dynamic-client-registration redirect allowlist.
+      description: >
+        Admin route. Replaces `allowed_redirect_uris` in the bundle props.
+        Every entry must be an absolute URI; `http` is accepted for loopback
+        hosts only (RFC 8252 — loopback entries match any port at enforcement
+        time). An empty list falls back to the built-in defaults.
+      operationId: dcr_allowlist_set
+      x-kdcube-result-alias: dcr_allowlist_set
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/BundleId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                data:
+                  type: object
+                  properties:
+                    allowed_redirect_uris:
+                      type: array
+                      items:
+                        type: string
+      responses:
+        "200":
+          description: Saved allowlist or validation error.
+
   /bundles/{tenant}/{project}/{bundle_id}/operations/connections_catalog:
     get:
       tags: [Connections]

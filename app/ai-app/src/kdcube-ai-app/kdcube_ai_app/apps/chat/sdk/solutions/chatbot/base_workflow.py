@@ -335,6 +335,27 @@ def _bool_or_none(value: Any) -> Optional[bool]:
     return None
 
 
+def _instruction_profile_runtime_options(
+    profile: Mapping[str, Any] | None,
+    *,
+    applied: bool,
+    include_tool_catalog: Optional[bool],
+    include_skill_gallery: Optional[bool],
+    configured_multi_action_mode: Any,
+) -> tuple[Optional[bool], Optional[bool], Any]:
+    """Apply runtime-only options carried by a selected instruction profile."""
+    mode = configured_multi_action_mode
+    if not applied or not isinstance(profile, Mapping):
+        return include_tool_catalog, include_skill_gallery, mode
+    if include_tool_catalog is None:
+        include_tool_catalog = _bool_or_none(profile.get("include_tool_catalog"))
+    if include_skill_gallery is None:
+        include_skill_gallery = _bool_or_none(profile.get("include_skill_gallery"))
+    if profile.get("multi_action_mode") is not None:
+        mode = str(profile.get("multi_action_mode")).strip() or "off"
+    return include_tool_catalog, include_skill_gallery, mode
+
+
 def _react_render_thinking(bundle_props: Dict[str, Any], settings: Any, *, agent_id: Any = None) -> bool:
     raw, _ = _react_config_lookup(bundle_props, "render_thinking", agent_id=agent_id)
     configured = _bool_or_none(raw)
@@ -807,6 +828,7 @@ class BaseWorkflow():
         self.answer_system_prompt = answer_system_prompt
         # Runtime context + context browser are constructed once per workflow instance
         settings = get_settings()
+        self._configured_multi_action_mode = settings.AI_REACT_AGENT_MULTI_ACTION
         runtime_max_tokens = _react_context_max_tokens(self.config, settings)
         runtime_agent_id = normalize_agent_id(getattr(getattr(self.comm_context, "event", None), "agent_id", None))
         runtime_max_iterations = _react_max_iterations(self.bundle_props, settings, agent_id=runtime_agent_id)
@@ -2752,6 +2774,7 @@ class BaseWorkflow():
                 SELECTION_CHANGE_MODEL,
                 USER_MODEL_TARGET_ROLE,
                 classify_selection_change,
+                configured_strong_model,
                 effective_selection_change_policy,
                 match_supported_model,
                 narrow_agent_skill_config,
@@ -2918,15 +2941,19 @@ class BaseWorkflow():
             # Turn-local: rebase agent_role_models from config FIRST so a
             # cleared/stale pick on a reused workflow falls back to the
             # configured default, then overlay the validated pick.
-            applied_model: Dict[str, str] | None = None
+            applied_model: Dict[str, Any] | None = None
             if runtime_ctx is not None:
                 try:
                     runtime_ctx.agent_role_models = _react_role_models(bundle_props, agent_id=agent_id)
-                    if matched_pick:
+                    effective_model = matched_pick or match_supported_model(
+                        configured_strong_model(bundle_props, agent_id), supported,
+                    )
+                    if effective_model:
                         runtime_ctx.agent_role_models = {
                             **runtime_ctx.agent_role_models,
-                            USER_MODEL_TARGET_ROLE: dict(matched_pick),
+                            USER_MODEL_TARGET_ROLE: dict(effective_model),
                         }
+                    if matched_pick:
                         applied_model = dict(matched_pick)
                 except Exception:
                     # Fail OPEN to the configured role model.
@@ -2992,6 +3019,9 @@ class BaseWorkflow():
                 denied_namespaces, denied_entries = disabled_namespace_maps(disabled)
                 if denied_namespaces:
                     set_denied_named_service_namespaces(denied_namespaces)
+                    if runtime_ctx is not None and "mem" in denied_namespaces:
+                        runtime_ctx.memory_hotset = []
+                        runtime_ctx.memory_hotset_error = None
                 if denied_entries:
                     set_denied_named_service_entries(denied_entries)
 
@@ -3041,6 +3071,7 @@ class BaseWorkflow():
                     story_snapshots_enabled: Optional[bool] = None,
                     include_tool_catalog: Optional[bool] = None,
                     include_skill_gallery: Optional[bool] = None,
+                    tool_catalog_detail: Optional[str] = None,
                     *,
                     comm_override: Optional[Any] = None,
                     comm_context_override: Optional[Any] = None,
@@ -3197,6 +3228,27 @@ class BaseWorkflow():
                         "instructions.blocks",
                         "instruction_blocks",
                     ))
+        include_tool_catalog, include_skill_gallery, effective_multi_action_mode = (
+            _instruction_profile_runtime_options(
+                _profile if isinstance(_profile, Mapping) else None,
+                applied=_profile_applied,
+                include_tool_catalog=include_tool_catalog,
+                include_skill_gallery=include_skill_gallery,
+                configured_multi_action_mode=getattr(
+                    self,
+                    "_configured_multi_action_mode",
+                    getattr(runtime_ctx, "multi_action_mode", "off"),
+                ),
+            )
+        )
+        if _profile_applied and tool_catalog_detail is None:
+            tool_catalog_detail = str(_profile.get("tool_catalog_detail") or "").strip() or None
+        if tool_catalog_detail is None:
+            tool_catalog_detail = str(
+                _first_react_prop("instructions.tool_catalog_detail") or "full"
+            ).strip().lower()
+        if tool_catalog_detail not in {"full", "compact"}:
+            tool_catalog_detail = "full"
         if include_tool_catalog is None:
             include_tool_catalog = _bool_or_none(_first_react_prop(
                 "instructions.include_tool_catalog",
@@ -3209,6 +3261,7 @@ class BaseWorkflow():
             include_tool_catalog = True
         if include_skill_gallery is None:
             include_skill_gallery = True
+        runtime_ctx.multi_action_mode = effective_multi_action_mode
 
         extra_instructions = str(additional_instructions or "").strip()
         custom_instruction_body = str(instruction_body or "").strip()
@@ -3260,6 +3313,7 @@ class BaseWorkflow():
                     f"blocks={len(custom_instruction_blocks)} "
                     f"include_tool_catalog={bool(include_tool_catalog)} "
                     f"include_skill_gallery={bool(include_skill_gallery)} "
+                    f"tool_catalog_detail={tool_catalog_detail} "
                     f"story_snapshots_enabled={effective_story_snapshots_enabled}",
                     level="INFO",
                 )
@@ -3281,6 +3335,7 @@ class BaseWorkflow():
             instruction_blocks=custom_instruction_blocks or None,
             include_tool_catalog=bool(include_tool_catalog),
             include_skill_gallery=bool(include_skill_gallery),
+            tool_catalog_detail=tool_catalog_detail,
         )
         try:
             self.logger.log(
@@ -3308,6 +3363,7 @@ class BaseWorkflow():
                     "story_snapshots_enabled": effective_story_snapshots_enabled,
                     "include_tool_catalog": bool(include_tool_catalog),
                     "include_skill_gallery": bool(include_skill_gallery),
+                    "tool_catalog_detail": tool_catalog_detail,
                 },
             )
         except Exception:

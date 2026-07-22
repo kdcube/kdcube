@@ -50,3 +50,23 @@ def test_child_registry_stays_lean_without_named_service_context():
     registry = make_registry(restored)
     assert "bundle_props" not in registry
     assert "client_id" not in registry
+
+
+def test_portable_spec_preserves_custom_model_serving_overrides():
+    spec = PortableSpec(
+        model_config=ModelConfigSpec(
+            custom_model_num_ctx=65536,
+            custom_model_overrides={
+                "qwen3:8b": {"num_ctx": 40960},
+                "mistral:7b-instruct-v0.2-q4_K_M": {"num_ctx": 32768},
+            },
+        )
+    )
+
+    restored = PortableSpec.from_json(spec.to_json())
+
+    assert restored.model_config.custom_model_num_ctx == 65536
+    assert restored.model_config.custom_model_overrides == {
+        "qwen3:8b": {"num_ctx": 40960},
+        "mistral:7b-instruct-v0.2-q4_K_M": {"num_ctx": 32768},
+    }

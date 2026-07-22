@@ -81,13 +81,29 @@ def test_resolve_item_handles_blocks_profiles_and_literals():
     assert "[ATTACHMENTS]" in composed and "literal rule" in composed
 
 
+def test_profile_expansion_can_drop_unavailable_capability_blocks():
+    text = default_extra_lite_system_instruction(
+        "all_capabilities",
+        exclude_blocks={
+            "REACT_XLITE_EXEC",
+            "REACT_XLITE_DOCUMENTS_RENDERING",
+            "REACT_XLITE_WEB",
+        },
+    )
+    assert "[EXEC — exec_tools.execute_code_python]" not in text
+    assert "[DOCUMENTS & RENDERING]" not in text
+    assert "[WEB]" not in text
+    assert "[IDENTITY & TRUST]" in text
+
+
 def test_decision_build_resolves_xlite_names_and_profiles():
+    exec_adapter = {"id": "exec_tools.execute_code_python", "doc": {}}
     via_body = build_decision_system_text(
-        adapters=[], multi_action_mode="on",
+        adapters=[exec_adapter], multi_action_mode="on",
         instruction_body=default_extra_lite_system_instruction("workspace_exec"),
     )
     via_blocks = build_decision_system_text(
-        adapters=[], multi_action_mode="on",
+        adapters=[exec_adapter], multi_action_mode="on",
         instruction_blocks=["xlite:workspace_exec"],
     )
     assert via_blocks == via_body

@@ -113,8 +113,12 @@ def test_build_decision_system_text_single_action_mode_uses_action_channel_wordi
     assert "Final answer shape (only when action is complete or exit)" in text
     assert "Goal, Outcome, Key facts, Refs" in text
     assert "Emit EXACTLY ONE <channel:action> per response" in text
-    assert "A turn is a sequence of rounds" in text
-    assert "There is no requirement to minimize rounds. The success criterion is CORRECT CAUSALITY" in text
+    assert "[SINGLE-ACTION CAUSALITY — HARD]" in text
+    assert "The runtime executes that action only after this response ends" in text
+    assert "[STRATEGY TRAITS — WHAT MAY SHARE A ROUND]" not in text
+    assert "exploration followed by exploitation" not in text
+    protocol = text[: text.index("[ReAct Action Module v3]")]
+    assert "multi-action" not in protocol.lower()
     assert "Use non-empty <channel:code> only immediately after an exec_tools.execute_code_python action" in text
     assert "After </channel:code>, STOP." not in text
 
@@ -227,9 +231,91 @@ def test_build_decision_system_text_composes_lite_blocks_without_optional_exec_g
     assert "[RENDERING TOOLS]" not in text
 
 
-def test_build_decision_system_text_includes_exec_guidance_only_when_lite_exec_block_selected():
+def test_effective_tool_selection_prunes_capability_instruction_blocks():
+    without_optional_tools = build_decision_system_text(
+        adapters=[],
+        infra_adapters=[],
+        instruction_blocks=["xlite:all_capabilities"],
+        include_tool_catalog=False,
+        include_skill_gallery=False,
+        multi_action_mode="off",
+    )
+    assert "[EXEC — exec_tools.execute_code_python]" not in without_optional_tools
+    assert "[DOCUMENTS & RENDERING]" not in without_optional_tools
+    assert "[WEB]" not in without_optional_tools
+
+    with_optional_tools = build_decision_system_text(
+        adapters=[
+            {"id": "exec_tools.execute_code_python", "doc": {}},
+            {"id": "rendering_tools.write_pdf", "doc": {}},
+            {"id": "web_tools.web_search", "doc": {}},
+        ],
+        infra_adapters=[],
+        instruction_blocks=["xlite:all_capabilities"],
+        include_tool_catalog=False,
+        include_skill_gallery=False,
+        multi_action_mode="off",
+    )
+    assert "[EXEC — exec_tools.execute_code_python]" in with_optional_tools
+    assert "[DOCUMENTS & RENDERING]" in with_optional_tools
+    assert "[WEB]" in with_optional_tools
+
+
+def test_extra_lite_single_action_prompt_has_no_fanout_strategy_teaching():
     text = build_decision_system_text(
         adapters=[],
+        infra_adapters=[],
+        instruction_blocks=["xlite:workspace"],
+        include_tool_catalog=False,
+        include_skill_gallery=False,
+        multi_action_mode="off",
+    )
+    lowered = text.lower()
+    assert "multi-action" not in lowered
+    assert "exploration" not in lowered
+    assert "exploitation" not in lowered
+    assert "strategy matrix" not in lowered
+
+
+def test_compact_tool_catalog_keeps_exact_ids_and_params_without_long_examples():
+    text = build_decision_system_text(
+        adapters=[
+            {
+                "id": "demo.search",
+                "is_async": True,
+                "doc": {
+                    "purpose": "Search a demo corpus. " + ("Long explanation. " * 80),
+                    "args": {
+                        "query": "Annotated[str, 'Search phrase']",
+                        "limit": "Annotated[int, 'Maximum rows'] (default=5)",
+                        "cursor": "Annotated[Optional[str], 'Pagination cursor'] (default=)",
+                    },
+                    "examples": [{"description": "large example", "code": "x" * 1000}],
+                },
+                "tool_traits": {"strategy": ["exploration"]},
+            }
+        ],
+        instruction_blocks=["REACT_XLITE_IDENTITY_AND_GUARDS"],
+        include_skill_gallery=False,
+        tool_catalog_detail="compact",
+        multi_action_mode="off",
+    )
+    assert "[AVAILABLE COMMON TOOLS] [COMPACT]" in text
+    assert "Parameter names, types, and descriptions below are exact." in text
+    assert "- demo.search [async]" in text
+    assert "query:str — Search phrase" in text
+    assert "limit:int=5 — Maximum rows" in text
+    assert "cursor:str? — Pagination cursor" in text
+    assert "Annotated[" not in text
+    assert "large example" not in text
+    assert "exploration" not in text.lower()
+    assert "exploitation" not in text.lower()
+    assert len(text) < 25_000
+
+
+def test_build_decision_system_text_includes_exec_guidance_only_when_lite_exec_block_selected():
+    text = build_decision_system_text(
+        adapters=[{"id": "exec_tools.execute_code_python", "doc": {}}],
         infra_adapters=[],
         workspace_implementation="custom",
         instruction_blocks=[

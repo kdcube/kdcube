@@ -99,6 +99,7 @@ class ReactSolverV2:
         instruction_blocks: Optional[List[str]] = None,
         include_tool_catalog: bool = True,
         include_skill_gallery: bool = True,
+        tool_catalog_detail: str = "full",
     ) -> None:
         self.svc = service
         if isinstance(logger, AgentLogger):
@@ -128,6 +129,7 @@ class ReactSolverV2:
             self.instruction_blocks = [str(item) for item in (instruction_blocks or []) if str(item or "").strip()]
         self.include_tool_catalog = bool(include_tool_catalog)
         self.include_skill_gallery = bool(include_skill_gallery)
+        self.tool_catalog_detail = str(tool_catalog_detail or "full").strip().lower()
         if self.ctx_browser is not None:
             try:
                 self.ctx_browser.add_external_event_hook(self.on_external_event)
@@ -689,19 +691,38 @@ class ReactSolverV2:
         self._last_handled_steer_seq = max(int(self._last_handled_steer_seq or 0), int(self._latest_steer_seq_seen or 0), int(visible_seq or 0))
         self._steer_interrupt_requested = False
         steer_text = str(self._latest_steer_text or "").strip()
-        state["steer_finalize_mode"] = True
-        state["steer_finalize_rounds_remaining"] = self._steer_finalize_round_limit()
         state["steer_finalize_seq"] = int(self._latest_steer_seq_seen or visible_seq or 0)
-        state["retry_decision"] = True
-        state["exit_reason"] = None
-        state["final_answer"] = None
         state["suggested_followups"] = []
-        state["last_decision"] = {
-            "action": "exit",
-            "final_answer": "",
-            "notes": "steer_finalize_pending",
-            "suggested_followups": [],
-        }
+        if steer_text:
+            # A textual steer asks the model to reorient or summarize, so keep
+            # the bounded model-assisted finalize path.
+            state["steer_finalize_mode"] = True
+            state["steer_finalize_rounds_remaining"] = self._steer_finalize_round_limit()
+            state["retry_decision"] = True
+            state["exit_reason"] = None
+            state["final_answer"] = None
+            state["last_decision"] = {
+                "action": "exit",
+                "final_answer": "",
+                "notes": "steer_finalize_pending",
+                "suggested_followups": [],
+            }
+        else:
+            # The composer's Stop button sends a blank steer. Cancellation must
+            # finish the turn without starting another potentially slow model
+            # generation merely to say that it stopped.
+            final_answer = self._build_default_steer_final_answer()
+            state["steer_finalize_mode"] = False
+            state.pop("steer_finalize_rounds_remaining", None)
+            state["retry_decision"] = False
+            state["exit_reason"] = "steer"
+            state["final_answer"] = final_answer
+            state["last_decision"] = {
+                "action": "exit",
+                "final_answer": final_answer,
+                "notes": "steer_stop",
+                "suggested_followups": [],
+            }
         state["steer_interrupt"] = {
             "sequence": int(self._latest_steer_seq_seen or 0),
             "text": steer_text,
@@ -709,7 +730,7 @@ class ReactSolverV2:
             "cancelled_phase": cancelled_phase,
         }
         self.log.log(
-            f"[react.v2] steer finalize mode: turn_id={self.scratchpad.turn_id} "
+            f"[react.v2] steer {'finalize' if steer_text else 'stop'} mode: turn_id={self.scratchpad.turn_id} "
             f"checkpoint={checkpoint} cancelled_phase={cancelled_phase or ''} "
             f"seq={self._latest_steer_seq_seen} text={steer_text!r}",
             level="INFO",
@@ -733,6 +754,7 @@ class ReactSolverV2:
                     "text": steer_text,
                     "cancelled_phase": cancelled_phase,
                     "finalize_rounds": int(state.get("steer_finalize_rounds_remaining") or 0),
+                    "immediate_stop": not bool(steer_text),
                 },
             )
         except Exception:
@@ -1807,6 +1829,27 @@ class ReactSolverV2:
             pass
         return "exit"
 
+    def _consume_decision_iteration(self, state: Dict[str, Any], *, iteration: int) -> None:
+        next_iteration = int(iteration) + 1
+        state["iteration"] = max(int(state.get("iteration") or 0), next_iteration)
+        budget_state = state.get("budget_state_v2")
+        if budget_state is not None:
+            try:
+                budget_state.decision_rounds_used = int(state["iteration"])
+            except Exception:
+                self.log.log(traceback.format_exc())
+
+    @staticmethod
+    def _decision_retry_available(
+        state: Dict[str, Any],
+        *,
+        retries: int,
+        iteration: int,
+    ) -> bool:
+        retry_limit = max(0, int(state.get("max_decision_retries") or 0))
+        iteration_limit = max(0, int(state.get("max_iterations") or 0))
+        return int(retries) < retry_limit and int(iteration) + 1 < iteration_limit
+
     def _clear_finalize_for_queued_followup(self, state: Dict[str, Any]) -> bool:
         """A steer only stops the CURRENT work; a followup is a valid way to continue the turn
         after a steer. So ANY queued followup supersedes the steer's finalize, regardless of
@@ -1857,6 +1900,7 @@ class ReactSolverV2:
                 phase="decision",
                 coro=self._decision_node_impl(state, iteration),
             )
+            self._consume_decision_iteration(state, iteration=iteration)
             if interrupted:
                 await self._enter_steer_finalize_mode(
                     state,
@@ -1965,6 +2009,7 @@ class ReactSolverV2:
                 instruction_blocks=self.instruction_blocks or None,
                 include_tool_catalog=self.include_tool_catalog,
                 include_skill_gallery=self.include_skill_gallery,
+                tool_catalog_detail=getattr(self, "tool_catalog_detail", "full"),
                 on_progress_delta=mainstream,
                 on_raw_delta=self._capture_active_generation_raw,
                 subscribers=subs,
@@ -2018,6 +2063,7 @@ class ReactSolverV2:
                         instruction_blocks=self.instruction_blocks or None,
                         include_tool_catalog=self.include_tool_catalog,
                         include_skill_gallery=self.include_skill_gallery,
+                        tool_catalog_detail=getattr(self, "tool_catalog_detail", "full"),
                     ),
                     render_params=render_params,
                     agent_fn=_decision_agent,
@@ -2116,7 +2162,7 @@ class ReactSolverV2:
             except Exception:
                 pass
             retries = int(state.get("decision_retries") or 0)
-            if retries < int(state.get("max_iterations") or 0):
+            if self._decision_retry_available(state, retries=retries, iteration=iteration):
                 state["decision_retries"] = retries + 1
                 state["retry_decision"] = True
                 decision["notes"] = "action_schema_error; retry action"
@@ -2177,7 +2223,7 @@ class ReactSolverV2:
                 except Exception:
                     pass
                 retries = int(state.get("decision_retries") or 0)
-                if retries < int(state.get("max_iterations") or 0):
+                if self._decision_retry_available(state, retries=retries, iteration=iteration):
                     state["decision_retries"] = retries + 1
                     state["retry_decision"] = True
                     decision = {"action": "call_tool", "notes": f"{validation_error}; retry decision"}
@@ -2278,7 +2324,7 @@ class ReactSolverV2:
                 except Exception:
                     pass
                 retries = int(state.get("decision_retries") or 0)
-                if retries < int(state.get("max_iterations") or 0):
+                if self._decision_retry_available(state, retries=retries, iteration=iteration):
                     state["decision_retries"] = retries + 1
                     state["retry_decision"] = True
                     decision["notes"] = "tool_not_allowed_in_react; retry decision"
@@ -2342,7 +2388,7 @@ class ReactSolverV2:
                         pass
                     state["session_log"].append(protocol_entry)
                     retries = int(state.get("decision_retries") or 0)
-                    if retries < int(state.get("max_iterations") or 0):
+                    if self._decision_retry_available(state, retries=retries, iteration=iteration):
                         state["decision_retries"] = retries + 1
                         state["retry_decision"] = True
                         decision["notes"] = "tool_call_invalid; retry decision"
@@ -2428,7 +2474,7 @@ class ReactSolverV2:
                     protocol_entry["ok"] = False
                     protocol_entry["violations"] = (protocol_entry.get("violations") or []) + (sig_issues or [])
                 retries = int(state.get("decision_retries") or 0)
-                if retries < int(state.get("max_iterations") or 0):
+                if self._decision_retry_available(state, retries=retries, iteration=iteration):
                     state["decision_retries"] = retries + 1
                     state["retry_decision"] = True
                     decision["notes"] = "tool_signature_red; retry decision"
@@ -2649,13 +2695,7 @@ class ReactSolverV2:
         else:
             state.pop("pending_tool_origin_iteration", None)
         state["last_decision"] = decision
-        state["iteration"] = iteration + 1
-        bs = state.get("budget_state_v2")
-        if bs is not None:
-            try:
-                bs.decision_rounds_used = int(state.get("iteration") or 0)
-            except Exception:
-                self.log.log(traceback.format_exc())
+        self._consume_decision_iteration(state, iteration=iteration)
         return state
 
     async def _tool_execution_node(self, state: Dict[str, Any]) -> Dict[str, Any]:

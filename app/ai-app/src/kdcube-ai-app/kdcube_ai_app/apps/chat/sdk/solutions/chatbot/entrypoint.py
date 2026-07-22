@@ -2028,8 +2028,9 @@ class BaseEntrypoint:
             changed = True
 
         # Locally served models: `services.llm.custom` is a reserved
-        # platform-interpreted prop — the endpoint configures the platform's
-        # own Config/model-router state, exactly like role_models. The
+        # platform-interpreted prop — the shared endpoint and optional
+        # per-model serving overrides configure the platform's own
+        # Config/model-router state, exactly like role_models. The
         # gateway key is NOT read here: it is a bundle secret
         # (services.llm.custom.api_key) resolved at the construction moment
         # by resolve_config_request_secrets.
@@ -2041,17 +2042,22 @@ class BaseEntrypoint:
                 or not self.config.use_custom_endpoint
             ):
                 self.config.custom_model_endpoint = endpoint
-                self.config.custom_model_name = str(
-                    custom_llm.get("model_name")
-                    or self.config.custom_model_name
-                    or "custom-model"
-                )
                 self.config.use_custom_endpoint = True
                 changed = True
-            num_ctx = int(custom_llm.get("num_ctx") or 0)
-            if num_ctx > 0 and getattr(self.config, "custom_model_num_ctx", None) != num_ctx:
+            try:
+                parsed_num_ctx = int(custom_llm.get("num_ctx") or 0)
+            except (TypeError, ValueError):
+                parsed_num_ctx = 0
+            num_ctx = parsed_num_ctx if parsed_num_ctx > 0 else None
+            if getattr(self.config, "custom_model_num_ctx", None) != num_ctx:
                 self.config.custom_model_num_ctx = num_ctx
                 changed = True
+            raw_models = custom_llm.get("model_overrides") or {}
+            if isinstance(raw_models, Mapping):
+                previous = dict(getattr(self.config, "custom_model_overrides", None) or {})
+                self.config.set_custom_model_overrides(raw_models)
+                if self.config.custom_model_overrides != previous:
+                    changed = True
 
         if changed and hasattr(self, "models_service"):
             self._rebuild_models_service()

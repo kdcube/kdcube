@@ -25,13 +25,14 @@ from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 class ModelPick:
     """The model-selection block: an admin-allowed list + the configured default.
 
-    Framework-neutral. Rows mirror the economics price-table shape
-    ``{model, provider, label}``. HOW a chosen pick is applied at runtime — which
-    role/channel it rebases — is the provider's ``apply_selection`` concern, not a
-    wire field: the wire response carries only ``{provider, model}``.
+    Framework-neutral. Rows use ``{model, provider, label}`` and may carry
+    admin-owned serving metadata such as ``num_ctx``. HOW a chosen pick is
+    applied at runtime — which role/channel it rebases — is the provider's
+    ``apply_selection`` concern. The saved user selection remains only
+    ``{provider, model}``.
     """
 
-    supported: List[Dict[str, str]] = field(default_factory=list)
+    supported: List[Dict[str, Any]] = field(default_factory=list)
     default: Optional[str] = None
 
 

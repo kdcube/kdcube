@@ -3,24 +3,25 @@
 """Models gateway — locally served models behind the platform's custom-model
 protocol.
 
-A standalone translator that lets the existing ``provider: custom`` role path
-(`CustomModelClient` in ``infra/service_hub/inventory.py``) serve from a local
-inference runtime — Ollama first — with ZERO changes to platform modules.
+A standalone translator used by the existing ``provider: custom`` role path
+(`CustomModelClient` in ``infra/service_hub/inventory.py``) to serve from a
+local inference runtime — Ollama first.
 
     CustomModelClient                 this gateway                Ollama
     -----------------                 ------------                ------
     POST /generate                    translate                   POST /api/chat
-      {"inputs":[{role,content}],  ─▶ messages/options         ─▶   {"model","messages",
-       "parameters":{...}}                                           "stream","options"}
+      {"model",                      ─▶ messages/options         ─▶ {"model","messages",
+       "inputs":[{role,content}],
+       "parameters":{...}}                                         "stream","options"}
     SSE data:{"delta": ...}        ◀─ per-chunk translate       ◀─ JSONL {"message":{...}}
     SSE data:{"final":true,          usage from                     {"done":true,
               "usage":{...}}         eval counts                     "prompt_eval_count",...}
     data: [DONE]
 
-The platform client transmits its model name (top-level ``model`` in the
-request); the gateway routes it to Ollama, so ONE gateway instance serves
-every locally pulled model. ``GATEWAY_MODEL`` is the fallback for requests
-that carry no model name.
+The platform client transmits the selected model (top-level ``model`` in the
+request); the gateway routes it to Ollama, so one gateway instance serves
+every locally pulled model. ``GATEWAY_MODEL`` is the fallback for direct
+requests that carry no model.
 
 Environment:
     GATEWAY_MODEL       fallback Ollama model tag for requests without a

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from types import SimpleNamespace
 
@@ -12,7 +13,10 @@ import pytest
 from kdcube_ai_app.apps.chat.sdk.runtime.skill_config import AgentSkillConfig
 from kdcube_ai_app.apps.chat.sdk.runtime.tool_config import AgentToolConfig
 from kdcube_ai_app.apps.chat.sdk.solutions.user_settings import agent_selection_key
-from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.base_workflow import BaseWorkflow
+from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.base_workflow import (
+    BaseWorkflow,
+    _instruction_profile_runtime_options,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.client_tools import (
     denied_named_service_namespaces,
     set_denied_named_service_namespaces,
@@ -165,6 +169,58 @@ async def test_apply_resets_stale_namespace_deny():
     assert denied_named_service_namespaces() == frozenset()
 
 
+@pytest.mark.asyncio
+async def test_disabling_memory_namespace_clears_preloaded_hotset():
+    rows = {
+        ("u1", "bundle@1-0", agent_selection_key("main")): _selection_row(
+            {"named_services": {"mem": True}}
+        ),
+    }
+    stub = _workflow_stub(pg_pool=_FakePool(rows))
+    stub.runtime_ctx.memory_hotset = [{"text": "must not leak into this turn"}]
+    stub.runtime_ctx.memory_hotset_error = "stale"
+
+    await BaseWorkflow.apply_user_agent_selection(stub, _tool_cfg(), AgentSkillConfig())
+
+    assert denied_named_service_namespaces() == frozenset({"mem"})
+    assert stub.runtime_ctx.memory_hotset == []
+    assert stub.runtime_ctx.memory_hotset_error is None
+
+
+def test_instruction_profile_runtime_options_make_extra_lite_single_action():
+    tools, skills, mode = _instruction_profile_runtime_options(
+        {
+            "include_tool_catalog": True,
+            "include_skill_gallery": False,
+            "multi_action_mode": "off",
+        },
+        applied=True,
+        include_tool_catalog=None,
+        include_skill_gallery=None,
+        configured_multi_action_mode="safe_fanout",
+    )
+    assert tools is True
+    assert skills is False
+    assert mode == "off"
+
+
+def test_instruction_profile_does_not_override_explicit_catalog_arguments():
+    tools, skills, mode = _instruction_profile_runtime_options(
+        {
+            "include_tool_catalog": False,
+            "include_skill_gallery": False,
+            "multi_action_mode": "off",
+        },
+        applied=True,
+        include_tool_catalog=True,
+        include_skill_gallery=True,
+        configured_multi_action_mode="safe_fanout",
+    )
+    assert tools is True
+    assert skills is True
+    assert mode == "off"
+
+
 # ── per-user model pick → strong decision role override ──────────────────────
 
 from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import (  # noqa: E402
@@ -177,6 +233,12 @@ _MODEL_PROPS = {
             "supported_models": [
                 {"model": "claude-sonnet-4-6", "provider": "anthropic", "label": "Sonnet 4.6"},
                 {"model": "claude-haiku-4-5-20251001", "provider": "anthropic", "label": "Haiku 4.5"},
+                {
+                    "model": "qwen3:8b",
+                    "provider": "custom",
+                    "label": "Qwen3 8B",
+                    "num_ctx": 40960,
+                },
             ],
         },
     },
@@ -221,6 +283,24 @@ async def test_model_pick_overrides_strong_decision_role():
 
 
 @pytest.mark.asyncio
+async def test_model_pick_carries_current_admin_context_window_to_runtime():
+    rows = {
+        ("u1", "bundle@1-0", agent_selection_key("main")): _selection_row_with_model(
+            {"provider": "custom", "model": "qwen3:8b", "num_ctx": 1},
+        ),
+    }
+    stub = _model_stub(rows)
+
+    await BaseWorkflow.apply_user_agent_selection(stub, _tool_cfg(), AgentSkillConfig())
+
+    assert stub.runtime_ctx.agent_role_models[USER_MODEL_TARGET_ROLE] == {
+        "provider": "custom",
+        "model": "qwen3:8b",
+        "num_ctx": 40960,
+    }
+
+
+@pytest.mark.asyncio
 async def test_stale_model_pick_falls_back_to_configured_default():
     rows = {
         ("u1", "bundle@1-0", agent_selection_key("main")): _selection_row_with_model(
@@ -231,7 +311,10 @@ async def test_stale_model_pick_falls_back_to_configured_default():
     await BaseWorkflow.apply_user_agent_selection(stub, _tool_cfg(), AgentSkillConfig())
     # Rebased from config; the stale pick added no override (and the stale
     # seeded map from a previous turn is gone).
-    assert USER_MODEL_TARGET_ROLE not in stub.runtime_ctx.agent_role_models
+    assert stub.runtime_ctx.agent_role_models[USER_MODEL_TARGET_ROLE] == {
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-6",
+    }
     assert "seeded" not in stub.runtime_ctx.agent_role_models
 
 
@@ -239,7 +322,30 @@ async def test_stale_model_pick_falls_back_to_configured_default():
 async def test_no_pick_resets_agent_role_models_to_config_base():
     stub = _model_stub({})
     await BaseWorkflow.apply_user_agent_selection(stub, _tool_cfg(), AgentSkillConfig())
-    assert stub.runtime_ctx.agent_role_models == {}
+    assert stub.runtime_ctx.agent_role_models == {
+        USER_MODEL_TARGET_ROLE: {
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-6",
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_configured_default_uses_its_current_picker_context_window():
+    props = copy.deepcopy(_MODEL_PROPS)
+    props["role_models"][USER_MODEL_TARGET_ROLE] = {
+        "provider": "custom",
+        "model": "qwen3:8b",
+    }
+    stub = _workflow_stub(pg_pool=_FakePool(), bundle_props=props)
+
+    await BaseWorkflow.apply_user_agent_selection(stub, _tool_cfg(), AgentSkillConfig())
+
+    assert stub.runtime_ctx.agent_role_models[USER_MODEL_TARGET_ROLE] == {
+        "provider": "custom",
+        "model": "qwen3:8b",
+        "num_ctx": 40960,
+    }
 
 
 @pytest.mark.asyncio

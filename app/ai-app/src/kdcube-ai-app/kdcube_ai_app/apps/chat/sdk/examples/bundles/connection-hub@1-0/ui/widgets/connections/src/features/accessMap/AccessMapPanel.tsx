@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useAppDispatch, useAppSelector } from '../../app/hooks';
 import { clearAccessMapError, loadAccessMap } from './accessMapSlice';
+import { DcrAllowlistCard } from '../dcrAllowlist/DcrAllowlistCard';
 import type { AccessMapNamespace, AccessMapResource } from '../../api/types';
 
 /** Read-only admin map of what this deployment delegates to external
@@ -8,7 +9,10 @@ import type { AccessMapNamespace, AccessMapResource } from '../../api/types';
  *  each namespace's operations with their GRANTS, the grant vocabulary
  *  itself, and the provider-backed connected-account claims beside it.
  *  Everything renders from live config (`config.connections.*`); changing
- *  it means editing the descriptor — this view is deliberately one-way. */
+ *  it means editing the descriptor — this view is deliberately one-way,
+ *  with ONE exception: the DCR redirect allowlist card is editable, because
+ *  connecting a new native client (a new loopback callback path) is a
+ *  runtime admin action, not a redeploy. */
 
 function GrantChips({ grants }: { grants: string[] }) {
   if (!grants.length) return null;
@@ -131,6 +135,8 @@ export function AccessMapPanel() {
           </div>
         ) : null}
       </section>
+
+      <DcrAllowlistCard />
 
       <section className="card">
         <div className="account-title"><strong>Grant vocabulary</strong></div>

@@ -39,6 +39,10 @@ Claude may not call tools that were not consented.
 
 3. External client probes the service
    KDCube replies that the service requires delegated credentials.
+   A client not pre-listed in public_clients registers itself via dynamic
+   client registration (DCR); registration is accepted only if the client's
+   redirect URI is on the DCR redirect allowlist
+   (dynamic_client_registration.allowed_redirect_uris).
 
 4. External client opens the KDCube consent URL
    User signs in to KDCube if needed.
@@ -297,6 +301,12 @@ service, tools, and identity scope.
 - Do not give the external client the user's browser cookie.
 - Do not issue admin/super-admin authority just because the grantor is admin.
 - Do not let the client select arbitrary grants or tools.
+- Do not accept dynamic client registration with un-allowlisted redirect URIs;
+  DCR runs before any user authenticates, so
+  `dynamic_client_registration.allowed_redirect_uris` is what keeps an
+  authorization code deliverable only to a known app callback or loopback.
+  Matching rules (RFC 8252 loopback any-port) are in
+  [OAuth Delegated Credential Protocol Adapter](../../sdk/solutions/connections/delegated-credentials/oauth-delegated-credential-protocol-adapter-README.md).
 - Do not bypass Connection Hub identity-scope resolution in product services.
 - Do not describe this as "MCP auth"; it is delegated credentials for a
   protected resource, and MCP is only the first resource family.

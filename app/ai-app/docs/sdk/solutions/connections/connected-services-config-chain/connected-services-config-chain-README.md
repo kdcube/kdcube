@@ -95,6 +95,8 @@ oauth:
   issuer: ""
   public_clients:                      # external OAuth apps (Claude Code) allowed to connect
     - { client_id: "…", redirect_uris: […] }
+  dynamic_client_registration:         # clients not pre-listed above register via DCR
+    allowed_redirect_uris: […]         # the only redirects a DCR client may register
   resources:                           # which MCP doors may be delegated at all
     - resource: "*/api/integrations/bundles/*/*/my-service@1-0/public/mcp/<door>*"
       label: "My service MCP"
@@ -102,7 +104,11 @@ oauth:
 ```
 
 The `resource` pattern here must byte-match the connection's `resource` in ⑤ and
-the door's URL in ③.
+the door's URL in ③. DCR runs before any user authenticates, so
+`allowed_redirect_uris` is the gate that keeps a registered client's redirect
+pointed at a known app callback or loopback only; matching rules (RFC 8252
+loopback any-port) are in
+[OAuth Delegated Credential Protocol Adapter](../delegated-credentials/oauth-delegated-credential-protocol-adapter-README.md).
 
 ## ③ The MCP door
 

@@ -488,7 +488,11 @@ def get_lite_instruction_block(name: str) -> str:
     return _BLOCKS[key].strip()
 
 
-def resolve_lite_item(item: str) -> str | None:
+def resolve_lite_item(
+    item: str,
+    *,
+    exclude_blocks: Iterable[str] | None = None,
+) -> str | None:
     """Resolve one config item to moderate (lite) text, or None if not lite.
 
     Mirrors ``resolve_extra_lite_item``: accepts block names (``REACT_LITE_*``)
@@ -498,24 +502,37 @@ def resolve_lite_item(item: str) -> str | None:
     profile expansion needs no ``workspace_implementation`` argument.
     """
     text = str(item or "").strip()
+    excluded = {str(name or "").strip() for name in (exclude_blocks or [])}
     if text in _BLOCKS:
+        if text in excluded:
+            return ""
         return _BLOCKS[text].strip()
     if text.lower().startswith("lite:"):
-        return default_lite_system_instruction(text.split(":", 1)[1])
+        return default_lite_system_instruction(
+            text.split(":", 1)[1],
+            exclude_blocks=excluded,
+        )
     return None
 
 
-def compose_lite_instruction_blocks(items: Iterable[str]) -> str:
+def compose_lite_instruction_blocks(
+    items: Iterable[str],
+    *,
+    exclude_blocks: Iterable[str] | None = None,
+) -> str:
     """Compose literal blocks and named lite blocks.
 
     If an item matches a registered block name, the registered block is used.
     Otherwise the item is treated as literal instruction text. This lets bundle
     config mix named blocks and inline custom fragments.
     """
+    excluded = {str(name or "").strip() for name in (exclude_blocks or [])}
     out: list[str] = []
     for item in items or []:
         text = str(item or "").strip()
         if not text:
+            continue
+        if text in excluded:
             continue
         out.append(get_lite_instruction_block(text) if text in _BLOCKS else text)
     return "\n\n".join(out).strip()
@@ -530,6 +547,7 @@ def default_lite_system_instruction(
     profile: str = "workspace",
     *,
     extra_blocks: Iterable[str] | None = None,
+    exclude_blocks: Iterable[str] | None = None,
 ) -> str:
     """Return a ready-to-use lightweight ReAct instruction body.
 
@@ -569,4 +587,4 @@ def default_lite_system_instruction(
     blocks = [*REACT_LITE_PROFILE_BLOCKS[key]]
     if extra_blocks:
         blocks.extend(extra_blocks)
-    return compose_lite_instruction_blocks(blocks)
+    return compose_lite_instruction_blocks(blocks, exclude_blocks=exclude_blocks)

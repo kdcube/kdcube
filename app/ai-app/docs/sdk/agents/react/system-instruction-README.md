@@ -201,6 +201,12 @@ the decision agent; `blocks` composes only the body between them. Full is not
 name-addressable block-by-block; it is the default, the `full` token, or a
 literal `body`.
 
+Named Lite and Extra Lite capability blocks are intersected with the effective
+per-turn tool selection. For example, exec, web, and rendering guidance is
+removed when those tools are disabled or absent. App-specific additions must
+follow the same rule; Workspace omits its canvas and memory guidance when `cnv`
+or `mem` is disabled.
+
 A whole profile in one token — the common case:
 
 ```yaml
@@ -252,8 +258,19 @@ react:
           blocks: [lite:all_capabilities]
         - id: extra-lite
           label: Extra Lite (local models)
+          multi_action_mode: "off"
+          include_skill_gallery: false
+          tool_catalog_detail: compact
           blocks: [xlite:workspace_exec]
 ```
+
+Profile runtime options apply together with the selected body: `multi_action_mode`
+can force the one-action protocol, `include_skill_gallery` and
+`include_tool_catalog` control the appended catalogs, and
+`tool_catalog_detail: compact` keeps exact effective tool IDs and parameter
+names while omitting long examples and repeated prose. The reference Extra Lite
+profile uses single-action mode, no skill gallery, and the compact tool catalog;
+the compact catalog also omits scheduling traits used only by multi-action mode.
 
 Or a complete hand-written body (highest priority, over `blocks`):
 

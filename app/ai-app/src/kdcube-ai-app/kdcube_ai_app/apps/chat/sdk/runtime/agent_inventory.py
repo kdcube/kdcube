@@ -377,7 +377,7 @@ def subagents_denied(
 def react_supported_models(
     bundle_props: Mapping[str, Any] | None,
     agent_id: str | None,
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     """The admin-allowed model list for this agent's react block.
 
     Config shape mirrors the economics price-table rows::
@@ -388,25 +388,39 @@ def react_supported_models(
               - model: claude-sonnet-4-6
                 provider: anthropic
                 label: Sonnet 4.6
+              - model: qwen3:8b
+                provider: custom
+                label: Qwen3 8B
+                num_ctx: 40960
 
     Empty/absent list means the per-user model choice stays invisible.
+    ``num_ctx`` is optional serving metadata. It is taken only from the
+    current admin-configured row; the user's stored pick remains
+    ``{provider, model}`` and cannot inject a context size.
     """
     for block in _react_agent_config_blocks(bundle_props, agent_id):
         raw = block.get("supported_models")
         if not isinstance(raw, list):
             continue
-        out: list[dict[str, str]] = []
+        out: list[dict[str, Any]] = []
         for row in raw:
             if not isinstance(row, Mapping):
                 continue
             model = _norm(row.get("model"))
             if not model:
                 continue
-            out.append({
+            entry: dict[str, Any] = {
                 "model": model,
                 "provider": _norm(row.get("provider")) or "anthropic",
                 "label": _norm(row.get("label")) or model,
-            })
+            }
+            try:
+                num_ctx = int(row.get("num_ctx") or 0)
+            except (TypeError, ValueError):
+                num_ctx = 0
+            if num_ctx > 0:
+                entry["num_ctx"] = num_ctx
+            out.append(entry)
         return out
     return []
 
@@ -455,6 +469,9 @@ def react_instruction_profiles(
                   description: The complete instruction set.
                 - id: extra-lite
                   label: Extra Lite (local models)
+                  multi_action_mode: "off"
+                  include_skill_gallery: false
+                  tool_catalog_detail: compact
                   blocks: ["xlite:workspace_exec"]
 
     Returns the WIRE-SAFE block — ``{options: [{id, label, description}],
@@ -540,7 +557,7 @@ def normalize_model_pick(pick: Any) -> dict[str, str] | None:
 def match_supported_model(
     pick: Any,
     supported: Sequence[Mapping[str, Any]] | None,
-) -> dict[str, str] | None:
+) -> dict[str, Any] | None:
     """The supported row a pick refers to, or None (stale/foreign pick).
 
     Matches on model id; when both sides carry a provider it must match too.
@@ -556,10 +573,17 @@ def match_supported_model(
         row_provider = _norm(row.get("provider"))
         if normalized["provider"] and row_provider and normalized["provider"] != row_provider:
             continue
-        return {
+        matched: dict[str, Any] = {
             "provider": row_provider or normalized["provider"] or "anthropic",
             "model": normalized["model"],
         }
+        try:
+            num_ctx = int(row.get("num_ctx") or 0)
+        except (TypeError, ValueError):
+            num_ctx = 0
+        if num_ctx > 0:
+            matched["num_ctx"] = num_ctx
+        return matched
     return None
 
 

@@ -24,6 +24,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.agent_capabilities import (
 _SUPPORTED = [
     {"model": "claude-sonnet-4-6", "provider": "anthropic", "label": "Sonnet 4.6"},
     {"model": "claude-haiku-4-5", "provider": "anthropic", "label": "Haiku 4.5"},
+    {"model": "qwen3:8b", "provider": "custom", "label": "Qwen3 8B", "num_ctx": 40960},
 ]
 
 
@@ -71,7 +72,10 @@ def test_capability_blocks_render_wire_fields():
     # NOT a bare id string — the picker reads default_model.model / .provider to
     # mark the default row, so a string would leave the "default" tag unrendered.
     assert fields["default_model"] == {"provider": "anthropic", "model": "claude-sonnet-4-6"}
-    assert [r["model"] for r in fields["supported_models"]] == ["claude-sonnet-4-6", "claude-haiku-4-5"]
+    assert [r["model"] for r in fields["supported_models"]] == [
+        "claude-sonnet-4-6", "claude-haiku-4-5", "qwen3:8b",
+    ]
+    assert fields["supported_models"][2]["num_ctx"] == 40960
     # A minimal agent declares no skills/subagents.
     assert fields["skills"] == [] and fields["subagents"] is None
     # A generic run-to-completion agent CANNOT consume the mid-turn affordances,
@@ -98,11 +102,15 @@ async def test_apply_selection_rebases_the_declared_role():
     prov = resolve_capability_provider(_bundle_props(), "main")
     ctx = types.SimpleNamespace(agent_role_models={})
     tc, sc = await prov.apply_selection(
-        selection={"model": {"provider": "anthropic", "model": "claude-haiku-4-5"}},
+        selection={"model": {"provider": "custom", "model": "qwen3:8b", "num_ctx": 1}},
         tool_config="TC", skill_config="SC", runtime_ctx=ctx,
     )
     # The pick rebases the declared role only.
-    assert ctx.agent_role_models["lg_solution_port.answer"] == {"provider": "anthropic", "model": "claude-haiku-4-5"}
+    assert ctx.agent_role_models["lg_solution_port.answer"] == {
+        "provider": "custom",
+        "model": "qwen3:8b",
+        "num_ctx": 40960,
+    }
     # No deny-lists -> configs pass through untouched.
     assert (tc, sc) == ("TC", "SC")
 

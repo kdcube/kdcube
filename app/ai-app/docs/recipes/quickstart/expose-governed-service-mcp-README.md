@@ -205,6 +205,8 @@ external callers) whitelist their client:
 oauth:
   public_clients:                                  # external apps (Claude Code) allowed to connect
     - { client_id: "<external-app>", redirect_uris: [...] }
+  dynamic_client_registration:                     # apps not pre-listed register via DCR
+    allowed_redirect_uris: [...]                   # the only redirects a DCR client may register
   resources:
     - resource: "*/api/integrations/bundles/*/*/my-service@1-0/public/mcp/ops*"
       label: "My service MCP"
@@ -212,7 +214,10 @@ oauth:
 ```
 
 The `resource` pattern must byte-match the door URL and the consumer's `resource`
-in Step 5.
+in Step 5. DCR runs before any user authenticates;
+`allowed_redirect_uris` keeps a registered client's redirect pointed at a known
+app callback or loopback only — matching rules are in
+[OAuth Delegated Credential Protocol Adapter](../../sdk/solutions/connections/delegated-credentials/oauth-delegated-credential-protocol-adapter-README.md).
 
 Door mechanics and the managed-credential guard in depth:
 [Expose an MCP Service from a KDCube App](../kdcube_for_agents/expose-mcp-service-README.md)

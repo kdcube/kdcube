@@ -18,7 +18,8 @@ class ModelConfigSpec:
     role_models: Optional[Dict[str, Dict[str, str]]] = None
     custom_model_endpoint: Optional[str] = None
     custom_model_api_key: Optional[str] = None
-    custom_model_name: Optional[str] = None
+    custom_model_num_ctx: Optional[int] = None
+    custom_model_overrides: Optional[Dict[str, Dict[str, Any]]] = None
     kb_search_endpoint: Optional[str] = None
     agentic_bundle_id: Optional[str] = None
     bundle_storage_url: Optional[str] = None

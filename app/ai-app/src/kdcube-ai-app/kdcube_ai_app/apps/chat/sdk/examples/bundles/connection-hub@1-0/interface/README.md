@@ -65,6 +65,8 @@ All are authenticated (`PlatformAuth`) and visibility-gated by
 | `authenticators_list` | GET | operations | List Connection Hub authenticator modules/configured rows and secret-reference status. Secret values are never returned. |
 | `authenticators_upsert` | POST | operations | Create/update a Postgres-backed authenticator metadata row. Accepts authenticator selector metadata, `role_providing`, and `secret_ref`; rejects secret values. |
 | `authenticators_remove` | POST | operations | Soft-delete a Postgres-backed authenticator metadata row. Descriptor-defined rows are not removed through this API. |
+| `dcr_allowlist_get` | GET | operations | Admin: read the OAuth dynamic-client-registration redirect allowlist (configured, effective, defaults). |
+| `dcr_allowlist_set` | POST | operations | Admin: replace the DCR redirect allowlist. Absolute URIs only; `http` restricted to loopback hosts; empty list falls back to defaults. |
 | `delegated_to_kdcube_catalog` | GET | operations | Catalog of providers → connector apps → user accounts, with connected/configured flags. |
 | `delegated_to_kdcube_start_oauth` | POST | operations | Begin OAuth for `provider` + `connector_app_id`; optional selected claims. Returns an authorize URL. |
 | `delegated_to_kdcube_connect_credential` | POST | operations | Store a non-OAuth credential, such as an iCloud app-specific password, as a user-scoped connected account delegated to KDCube. |

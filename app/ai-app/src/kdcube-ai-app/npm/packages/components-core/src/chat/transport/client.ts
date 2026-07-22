@@ -495,8 +495,8 @@ export async function fetchAgentCapabilities(
 }
 
 /** Merge-write partial selection toggles (deny-list; clamped server-side).
- *  A `model` key in the patch rides the body as its own field (a PICK, not a
- *  denial): `{provider, model}` sets, `null` clears; omitted keeps. */
+ *  `model` and `instructions` ride the body as their own PICK fields, not as
+ *  denial categories. A value sets, `null` clears, and omitted keeps. */
 export async function submitAgentSelectionUpdate(
   runtime: EngineRuntime,
   agentId: string,
@@ -504,7 +504,7 @@ export async function submitAgentSelectionUpdate(
   options: AgentSelectionWriteOptions = {},
 ): Promise<AgentSelectionUpdateResponse> {
   const { tenant, project } = requireScope(runtime)
-  const { model, ...disabled } = patch
+  const { model, instructions, ...disabled } = patch
   const apply = options.apply && options.apply !== 'now' ? options.apply : undefined
   const response = await fetch(operationsUrl(runtime, 'agent_selection_update', runtime.bundleId, tenant, project), {
     method: 'POST',
@@ -515,6 +515,7 @@ export async function submitAgentSelectionUpdate(
         agent: agentId,
         disabled,
         ...(model !== undefined ? { model } : {}),
+        ...(instructions !== undefined ? { instructions } : {}),
         ...(apply ? { apply } : {}),
         ...(options.conversationId ? { conversation_id: options.conversationId } : {}),
         ...(options.cachePolicy ? { cache_policy: options.cachePolicy } : {}),

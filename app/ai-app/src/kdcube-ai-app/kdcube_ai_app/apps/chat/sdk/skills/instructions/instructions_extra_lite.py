@@ -297,6 +297,7 @@ def resolve_extra_lite_item(
     item: str,
     *,
     workspace_implementation: str = "custom",
+    exclude_blocks: Iterable[str] | None = None,
 ) -> str | None:
     """Resolve one config item to extra-lite text, or None if not extra-lite.
 
@@ -305,24 +306,35 @@ def resolve_extra_lite_item(
     is passed to the profile expansion so ``xlite:<profile>`` honors git mode.
     """
     text = str(item or "").strip()
+    excluded = {str(name or "").strip() for name in (exclude_blocks or [])}
     if text in _BLOCKS:
+        if text in excluded:
+            return ""
         return _BLOCKS[text].strip()
     if text.lower().startswith("xlite:"):
         return default_extra_lite_system_instruction(
             text.split(":", 1)[1],
             workspace_implementation=workspace_implementation,
+            exclude_blocks=excluded,
         )
     return None
 
 
-def compose_extra_lite_instruction_blocks(items: Iterable[str]) -> str:
+def compose_extra_lite_instruction_blocks(
+    items: Iterable[str],
+    *,
+    exclude_blocks: Iterable[str] | None = None,
+) -> str:
     """Compose named extra-lite blocks, ``xlite:<profile>`` refs, and literal text."""
+    excluded = {str(name or "").strip() for name in (exclude_blocks or [])}
     out: list[str] = []
     for item in items or []:
         text = str(item or "").strip()
         if not text:
             continue
-        resolved = resolve_extra_lite_item(text)
+        if text in excluded:
+            continue
+        resolved = resolve_extra_lite_item(text, exclude_blocks=excluded)
         out.append(resolved if resolved is not None else text)
     return "\n\n".join(out).strip()
 
@@ -332,6 +344,7 @@ def default_extra_lite_system_instruction(
     *,
     workspace_implementation: str = "custom",
     extra_blocks: Iterable[str] | None = None,
+    exclude_blocks: Iterable[str] | None = None,
 ) -> str:
     """Return a ready-to-use extra-lite ReAct instruction body.
 
@@ -352,4 +365,7 @@ def default_extra_lite_system_instruction(
         blocks.insert(anchor, "REACT_XLITE_WORKSPACE_GIT_MODE")
     if extra_blocks:
         blocks.extend(extra_blocks)
-    return compose_extra_lite_instruction_blocks(blocks)
+    return compose_extra_lite_instruction_blocks(
+        blocks,
+        exclude_blocks=exclude_blocks,
+    )

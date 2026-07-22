@@ -18,7 +18,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.telegram import (
     extract_telegram_init_data_from_request,
     validate_telegram_init_data,
 )
-from kdcube_ai_app.apps.chat.sdk.config import get_secret, get_settings
+from kdcube_ai_app.apps.chat.sdk.config import get_secret, get_settings, set_bundle_prop
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.authenticators.models import RequestEnvelope
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_registry_config import (
     authority_registry_config,
@@ -1304,6 +1304,8 @@ class ConnectionHubEntrypoint(BaseEntrypoint):
                             "authenticators_list": {"visibility": {"user_types": []}},
                             "authenticators_upsert": {"visibility": {"user_types": []}},
                             "authenticators_remove": {"visibility": {"user_types": []}},
+                            "dcr_allowlist_get": {"visibility": {"user_types": []}},
+                            "dcr_allowlist_set": {"visibility": {"user_types": []}},
                             "request_authenticate": {"visibility": {"user_types": []}},
                             "email_accounts_status": {"visibility": {"user_types": []}},
                             "email_connect_app_password": {"visibility": {"user_types": []}},
@@ -3270,6 +3272,82 @@ class ConnectionHubEntrypoint(BaseEntrypoint):
         )
         await _invalidate_authenticator_selector_cache(self)
         return result
+
+    @api(method="GET", alias="dcr_allowlist_get", route="operations", **_api_visibility("dcr_allowlist_get"))
+    async def dcr_allowlist_get(
+        self,
+        request: Any = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        del kwargs
+        denied = _platform_admin_denied(self)
+        if denied:
+            return denied
+        cfg = _oauth_adapter_config(self, request)
+        dcr = cfg.get("dynamic_client_registration")
+        dcr_node = dcr if isinstance(dcr, Mapping) else {}
+        raw = dcr_node.get("allowed_redirect_uris")
+        configured = (
+            [str(item).strip() for item in raw if str(item or "").strip()]
+            if isinstance(raw, (list, tuple))
+            else []
+        )
+        return {
+            "ok": True,
+            # An empty configured list is not "deny all": the OAuth adapter falls
+            # back to the built-in defaults, so report the effective list too.
+            "allowed_redirect_uris": configured,
+            "effective_redirect_uris": configured or list(DEFAULT_DCR_REDIRECT_URIS),
+            "defaults": list(DEFAULT_DCR_REDIRECT_URIS),
+        }
+
+    @api(method="POST", alias="dcr_allowlist_set", route="operations", **_api_visibility("dcr_allowlist_set"))
+    async def dcr_allowlist_set(
+        self,
+        data: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        denied = _platform_admin_denied(self)
+        if denied:
+            return denied
+        payload = _payload(data, **kwargs)
+        raw = payload.get("allowed_redirect_uris")
+        if not isinstance(raw, (list, tuple)):
+            return {
+                "ok": False,
+                "error": "invalid_allowlist",
+                "message": "allowed_redirect_uris must be a list of redirect URIs.",
+            }
+        uris: list[str] = []
+        for item in raw:
+            uri = str(item or "").strip()
+            if not uri:
+                continue
+            parts = urlsplit(uri)
+            if not parts.scheme:
+                return {
+                    "ok": False,
+                    "error": "invalid_redirect_uri",
+                    "message": f"Not an absolute redirect URI: {uri}",
+                }
+            if parts.scheme == "http" and parts.hostname not in ("localhost", "127.0.0.1", "::1"):
+                return {
+                    "ok": False,
+                    "error": "insecure_redirect_uri",
+                    "message": f"http redirects are allowed for loopback hosts only: {uri}",
+                }
+            if uri not in uris:
+                uris.append(uri)
+        await set_bundle_prop(
+            "connections.delegated_credentials.oauth.dynamic_client_registration.allowed_redirect_uris",
+            uris,
+        )
+        return {
+            "ok": True,
+            "allowed_redirect_uris": uris,
+            "effective_redirect_uris": uris or list(DEFAULT_DCR_REDIRECT_URIS),
+            "defaults": list(DEFAULT_DCR_REDIRECT_URIS),
+        }
 
     @api(method="POST", alias="request_authenticate", route="public")
     async def request_authenticate(

@@ -1212,6 +1212,16 @@ REACT_SKILL_SELECTION_GUIDE = """
 
 # --- NOTE: retired memory-specific strategy wording; generic ReAct now refers to catalog/effective namespace traits. ---
 # - neutral = neither produces evidence a sibling needs nor consumes a sibling's unseen result. Durable memory write/proposal tools (`memory.record_memory`, `memory.confirm_memory`, `memory.retire_memory`) are neutral when the catalog marks them `strategy: neutral`.
+SINGLE_ACTION_CAUSALITY = """
+[SINGLE-ACTION CAUSALITY — HARD]
+- Emit exactly one action in each round. If more work is needed, continue in a later round.
+- The runtime executes that action only after this response ends. Its result becomes visible in the next round.
+- Never read, summarize, depend on, or claim the result of the action in the same response that emits it.
+- A tool result counts as successful only after its visible result record reports success. Satisfying a missing prerequisite does not retroactively make an earlier failed call succeed.
+- Complete only from information and successful results already visible before the current response began.
+"""
+
+
 ACTION_CAUSALITY_AND_STRATEGY = """
 [ROUND / ACTION CAUSALITY — CRITICAL STRATEGY RULE (HARD)]
 This block is about WHEN actions may share a round, not about how to format them. It is the strategic foundation; the rest of your protocol is the technique.

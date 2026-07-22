@@ -76,6 +76,7 @@ WORKFLOW_NAME = "kdcube_services"
 # scopes each link to its exact object and requester.
 CONV_FILE_DOWNLOAD_SECRET_KEY = "conversations.file_download_secret"
 STORAGE_WIDGET_SRC = "sdk://solutions/storage/ui.widget.storage"
+APP_CONFIG_WIDGET_SRC = "sdk://solutions/app_config/ui/widget"
 
 
 def _content_disposition(filename: str) -> str:
@@ -153,6 +154,21 @@ class KDCubeServicesEntrypoint(BaseEntrypoint):
                         "src_folder": STORAGE_WIDGET_SRC,
                         "build_command": WIDGET_BUILD_COMMAND,
                     },
+                    "app_config": {
+                        "enabled": True,
+                        "src_folder": APP_CONFIG_WIDGET_SRC,
+                        "build_command": WIDGET_BUILD_COMMAND,
+                        "shared_sources": {
+                            "components_core": {
+                                "src_folder": "npm://components-core/src",
+                                "target": "_shared/components-core",
+                            },
+                            "components_react": {
+                                "src_folder": "npm://components-react/src",
+                                "target": "_shared/components-react",
+                            },
+                        },
+                    },
                 },
             },
         }
@@ -175,6 +191,27 @@ class KDCubeServicesEntrypoint(BaseEntrypoint):
         return [
             "<div style=\"font-family:system-ui,sans-serif;padding:16px\">"
             "Bundle storage is served from sdk://solutions/storage/ui.widget.storage after build."
+            "</div>"
+        ]
+
+    @api(
+        alias="app_config_widget",
+        route="operations",
+        user_types=("privileged",),
+    )
+    @ui_widget(
+        icon={
+            "tailwind": "heroicons-outline:squares-2x2",
+            "lucide": "LayoutGrid",
+        },
+        alias="app_config",
+        user_types=("privileged",),
+    )
+    def app_config_widget(self, **kwargs):
+        del kwargs
+        return [
+            "<div style=\"font-family:system-ui,sans-serif;padding:16px\">"
+            "App Config is served from sdk://solutions/app_config/ui/widget after build."
             "</div>"
         ]
 

@@ -207,6 +207,7 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
   let profileUserId: string | null = null
   let streamId: string | null = null
   let sendQueue: Promise<void> = Promise.resolve()
+  let stopRequestedTurnId: string | null = null
   let disposed = false
   let loadAgentCapabilities: (opts?: { force?: boolean }) => Promise<void>
   let flushAgentSelection: () => Promise<void>
@@ -215,6 +216,10 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
   function applyAuthed(next: boolean) {
     authedRef = next
     setStatus({ authed: next })
+  }
+
+  function clearStopRequest(turnId?: string) {
+    if (!turnId || stopRequestedTurnId === turnId) stopRequestedTurnId = null
   }
 
   function promptLogin() {
@@ -259,6 +264,7 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
 
   const loadConversation = async (conversationId: string) => {
     const capabilitiesWereLoaded = getChat().capabilities.status !== 'idle'
+    stopRequestedTurnId = null
     dispatch(chatActions.setConversationLoadingId(conversationId))
     dispatch(chatActions.unlockInput())
     try {
@@ -284,6 +290,7 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
 
   const startNewChat = () => {
     const capabilitiesWereLoaded = getChat().capabilities.status !== 'idle'
+    stopRequestedTurnId = null
     discardAgentSelectionDraft()
     dispatch(chatActions.startNewConversation())
     dispatch(chatActions.setConversationId(runtime.createLocalId('conversation')))
@@ -505,11 +512,13 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
           /* A completing CHILD stays inside its thread — the main lane's
            * conversation list refresh is a parent-turn concern. */
           if (routeSubagentEnvelope('complete', env)) return
+          stopRequestedTurnId = null
           dispatch(chatActions.chatCompleted(env))
           void refreshConversationList()
         },
         onChatError: (env) => {
           if (routeSubagentEnvelope('error', env)) return
+          stopRequestedTurnId = null
           dispatch(chatActions.chatErrored(env))
         },
         onConversationStatus: (env) => dispatch(chatActions.convStatusUpdated(env)),
@@ -543,8 +552,13 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
     }
   }
 
-  const sendMessage = async (textOverride?: string, requestedReactiveEventType?: string) => {
+  const sendMessage = async (
+    textOverride?: string,
+    requestedReactiveEventType?: string,
+    expectedActiveTurnId?: string,
+  ) => {
     if (!authedRef) {
+      clearStopRequest(expectedActiveTurnId)
       promptLogin()
       return
     }
@@ -566,6 +580,10 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
       const activeTurn = findActiveTurn(snapshot.turns)
       const reactiveEventType = requestedReactiveEventType ?? (activeTurn ? 'event.user.followup' : 'event.user.prompt')
       const isSteer = reactiveEventType === 'event.user.steer'
+      if (isSteer && (!activeTurn || (expectedActiveTurnId && activeTurn.id !== expectedActiveTurnId))) {
+        clearStopRequest(expectedActiveTurnId)
+        return
+      }
       const isContinuation = Boolean(
         activeTurn && (
           reactiveEventType === 'event.user.followup' ||
@@ -617,6 +635,7 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
         } finally {
           setDryRun({ loading: false })
         }
+        if (isSteer) clearStopRequest(expectedActiveTurnId)
         return
       }
 
@@ -683,6 +702,7 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
         }))
         void refreshConversationList()
       } catch (error) {
+        if (isSteer) clearStopRequest(expectedActiveTurnId)
         const text = messageForError(error)
         if (/\b(401|403|unauthorized|forbidden)\b/i.test(text)) {
           applyAuthed(false)
@@ -754,7 +774,7 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
         dispatch(chatActions.capabilitiesSelectionSaved({
           disabled: response.selection?.disabled ?? {},
           model: response.selection?.model ?? null,
-        instructions: response.selection?.instructions ?? null,
+          instructions: response.selection?.instructions ?? null,
           pending: response.selection?.pending ?? null,
         }))
       }
@@ -802,7 +822,7 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
         dispatch(chatActions.capabilitiesSelectionSaved({
           disabled: response.selection?.disabled ?? {},
           model: response.selection?.model ?? null,
-        instructions: response.selection?.instructions ?? null,
+          instructions: response.selection?.instructions ?? null,
           pending: response.selection?.pending ?? null,
         }))
         if (pendingSelectionPatch) {
@@ -933,7 +953,10 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
       void sendMessage(textOverride, requestedReactiveEventType)
     },
     steer() {
-      void sendMessage('', 'event.user.steer')
+      const activeTurn = findActiveTurn(getChat().turns)
+      if (!activeTurn || stopRequestedTurnId === activeTurn.id) return
+      stopRequestedTurnId = activeTurn.id
+      void sendMessage('', 'event.user.steer', activeTurn.id)
     },
     loadConversation(conversationId) {
       void loadConversation(conversationId)
@@ -1035,6 +1058,7 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
     },
     dispose() {
       disposed = true
+      stopRequestedTurnId = null
       resetTransport()
       discardAgentSelectionDraft()
       statusListeners.clear()

@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint import BaseEntrypoint
+from kdcube_ai_app.infra.service_hub.inventory import Config
 
 
 class _EntrypointForPropsTest(BaseEntrypoint):
@@ -31,6 +32,12 @@ class _EntrypointForPropsTest(BaseEntrypoint):
 
     async def _ensure_ui_build(self):
         self.props_seen_by_ui_build = copy.deepcopy(self.bundle_props)
+
+    async def _publish_named_services_discovery(self):
+        return None
+
+    async def _ensure_public_content_indexes(self):
+        return None
 
 
 @pytest.mark.asyncio
@@ -111,3 +118,54 @@ def test_bundle_prop_model_overrides_rebuild_model_service():
     assert entrypoint.role_models_seen["answer_generator"]["model"] == "claude-test"
     assert entrypoint.embedding_seen["embedder_id"] == "openai-text-embedding-3-small"
     assert entrypoint.rebuild_count == 1
+
+
+def test_custom_model_props_support_shared_endpoint_with_per_model_context():
+    entrypoint = _EntrypointForPropsTest.__new__(_EntrypointForPropsTest)
+    entrypoint.bundle_props = {
+        "services": {
+            "llm": {
+                "custom": {
+                    "endpoint": "http://models-gateway/generate",
+                    "num_ctx": 65536,
+                    "model_overrides": {
+                        "qwen3:8b": {"num_ctx": 40960},
+                        "mistral:7b-instruct-v0.2-q4_K_M": {"num_ctx": 32768},
+                        "ignored-empty-profile": {},
+                    },
+                }
+            }
+        }
+    }
+    entrypoint.config = Config.__new__(Config)
+    entrypoint.config.custom_model_endpoint = ""
+    entrypoint.config.custom_model_num_ctx = None
+    entrypoint.config.custom_model_overrides = {}
+    entrypoint.config.use_custom_endpoint = False
+    entrypoint.models_service = object()
+    entrypoint.rebuild_count = 0
+
+    def _rebuild_models_service():
+        entrypoint.rebuild_count += 1
+
+    entrypoint._rebuild_models_service = _rebuild_models_service
+
+    entrypoint._apply_bundle_props_overrides()
+
+    assert entrypoint.config.custom_model_endpoint == "http://models-gateway/generate"
+    assert entrypoint.config.custom_model_num_ctx == 65536
+    assert entrypoint.config.custom_model_overrides == {
+        "qwen3:8b": {"num_ctx": 40960},
+        "mistral:7b-instruct-v0.2-q4_K_M": {"num_ctx": 32768},
+    }
+    assert entrypoint.rebuild_count == 1
+
+    entrypoint._apply_bundle_props_overrides()
+    assert entrypoint.rebuild_count == 1
+
+    del entrypoint.bundle_props["services"]["llm"]["custom"]["model_overrides"]
+    del entrypoint.bundle_props["services"]["llm"]["custom"]["num_ctx"]
+    entrypoint._apply_bundle_props_overrides()
+    assert entrypoint.config.custom_model_overrides == {}
+    assert entrypoint.config.custom_model_num_ctx is None
+    assert entrypoint.rebuild_count == 2

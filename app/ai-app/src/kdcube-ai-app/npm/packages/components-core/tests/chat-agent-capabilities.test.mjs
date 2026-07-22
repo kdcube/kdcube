@@ -7,6 +7,7 @@ import {
   chatReducer,
   initialState,
   mergeSelectionPatches,
+  submitAgentSelectionUpdate,
   toolGroupState,
   toolGroupTogglePatch,
   toolTogglePatch,
@@ -187,4 +188,63 @@ test('isModelPicked matches on model id and compatible provider', () => {
   assert.equal(isModelPicked({ provider: '', model: 'claude-sonnet-4-6' }, row), true)
   assert.equal(isModelPicked({ provider: 'openai', model: 'claude-sonnet-4-6' }, row), false)
   assert.equal(isModelPicked(null, row), false)
+})
+
+test('instruction profile pick: merge, optimistic state, and save reconcile', () => {
+  assert.equal(
+    mergeSelectionPatches({ instructions: 'lite' }, { tools: { web_tools: true } }).instructions,
+    'lite',
+  )
+  assert.equal(
+    mergeSelectionPatches({ instructions: 'lite' }, { instructions: null }).instructions,
+    null,
+  )
+
+  let state = chatReducer(initialState, chatActions.capabilitiesPatchApplied({ instructions: 'lite' }))
+  assert.equal(state.capabilities.instructions, 'lite')
+  assert.equal(state.capabilities.dirty, true)
+  state = chatReducer(state, chatActions.capabilitiesSelectionSaved({ disabled: {}, instructions: 'lite' }))
+  assert.equal(state.capabilities.instructions, 'lite')
+  assert.equal(state.capabilities.dirty, false)
+})
+
+test('selection transport sends instructions as a pick, not inside disabled', async () => {
+  const originalFetch = globalThis.fetch
+  let submitted = null
+  globalThis.fetch = async (_url, init) => {
+    submitted = JSON.parse(String(init?.body || '{}'))
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => ({
+        ok: true,
+        agent: 'main',
+        selection: { disabled: { tools: { web_tools: true } }, instructions: 'lite' },
+      }),
+    }
+  }
+  const runtime = {
+    baseUrl: 'https://example.invalid',
+    tenant: 'tenant',
+    project: 'project',
+    bundleId: 'workspace@1-0',
+    agentId: 'main',
+    credentials: 'include',
+    authHeaders: async (base) => new Headers(base),
+    clientTimezone: () => ({ tz: 'UTC', utcOffsetMin: 0 }),
+  }
+
+  try {
+    await submitAgentSelectionUpdate(runtime, 'main', {
+      tools: { web_tools: true },
+      instructions: 'lite',
+    }, { conversationId: 'conv-1' })
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+
+  assert.equal(submitted.data.instructions, 'lite')
+  assert.deepEqual(submitted.data.disabled, { tools: { web_tools: true } })
+  assert.equal(Object.hasOwn(submitted.data.disabled, 'instructions'), false)
 })

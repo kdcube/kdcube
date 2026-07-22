@@ -444,7 +444,21 @@ Rules:
   development derives it from the mounted Connection Hub public operation URL.
 - `public_clients[*].redirect_uris` configures known public clients.
 - `dynamic_client_registration.allowed_redirect_uris` constrains pre-auth
-  dynamic client registration.
+  dynamic client registration. Registration runs before any user has
+  authenticated, so this allowlist is the defense that keeps an attacker from
+  registering a "client" whose redirect points at their own server: a stolen
+  authorization code can only be delivered to a known app callback or to the
+  user's own machine.
+- Redirect URI matching follows RFC 8252: loopback redirects (`localhost`,
+  `127.0.0.1`, `::1`) match on **any port**, because a native client binds a
+  dynamic local port for its callback — but scheme, host, and path must match
+  an allowlisted entry exactly. All non-loopback redirects must match exactly,
+  including the port. Implementation: `redirect_uri_allowed()` in
+  `kdcube_ai_app/apps/chat/sdk/solutions/connections/delegated_credentials/oauth/clients.py`.
+- Practical consequence for native MCP clients: an entry like
+  `http://localhost/callback` admits `http://localhost:52791/callback`, but not
+  `http://localhost:52791/auth/callback` — a client whose callback uses a
+  different loopback *path* needs its own allowlist entry with that exact path.
 - Redirect URI fields are descriptor lists, not comma-separated strings.
 - Tenant and project come from `assembly.yaml -> context.tenant` and
   `context.project`.

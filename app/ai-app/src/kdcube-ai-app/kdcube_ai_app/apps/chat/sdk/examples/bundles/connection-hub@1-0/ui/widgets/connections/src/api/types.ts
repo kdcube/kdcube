@@ -444,3 +444,12 @@ export interface DelegatedAccessMapResult {
   providers?: AccessMapProvider[];
   unknown_grants?: string[];
 }
+
+export interface DcrAllowlistResult {
+  ok?: boolean;
+  error?: string;
+  message?: string;
+  allowed_redirect_uris?: string[];
+  effective_redirect_uris?: string[];
+  defaults?: string[];
+}

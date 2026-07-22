@@ -6,6 +6,7 @@ export default defineConfig({
     'chat/index': 'src/chat/index.tsx',
     'canvas/index': 'src/canvas/index.ts',
     'scene/index': 'src/scene/index.ts',
+    'apps-config/index': 'src/apps-config/index.tsx',
   },
   format: ['esm'],
   dts: true,
@@ -24,5 +25,6 @@ export default defineConfig({
     '@kdcube/components-core/chat',
     '@kdcube/components-core/scene',
     '@kdcube/components-core/canvas',
+    '@kdcube/components-core/apps-config',
   ],
 })

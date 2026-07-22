@@ -82,9 +82,10 @@ def test_build_decision_system_text_explains_one_response_is_one_round():
     assert "For call_tool rounds, omit `channel:summary` entirely" in text
     assert "For complete/exit rounds, include exactly one `channel:summary`" in text
     assert "Use non-empty `channel:code` only immediately after an `exec_tools.execute_code_python` action" in text
-    assert "A turn is a sequence of rounds" in text
-    assert "There is no requirement to minimize rounds. The success criterion is CORRECT CAUSALITY" in text
-    assert "if action B's success or content depends on action A's result, A and B cannot share a round" in text
+    assert "[SINGLE-ACTION CAUSALITY — HARD]" in text
+    assert "The runtime executes that action only after this response ends" in text
+    assert "[STRATEGY TRAITS — WHAT MAY SHARE A ROUND]" not in text
+    assert "if action B's success or content depends on action A's result" not in text
     assert "include multiple JSON objects or fenced JSON blocks inside the single `channel:action` instance" in text
     assert "Final answer shape (only when action is complete or exit)" in text
     assert "Goal, Outcome, Key facts, Refs" in text

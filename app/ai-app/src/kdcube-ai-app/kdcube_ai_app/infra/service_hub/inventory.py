@@ -14,7 +14,7 @@ from uuid import uuid4
 import aiohttp
 import requests
 import time
-from typing import Optional, Any, Dict, List, AsyncIterator, Callable, Awaitable, TypedDict, Union, Literal
+from typing import Optional, Any, Dict, List, AsyncIterator, Callable, Awaitable, TypedDict, Union, Literal, Mapping
 
 from pydantic import BaseModel, Field
 from langchain_core.embeddings import Embeddings
@@ -549,11 +549,11 @@ class ConfigRequest(BaseModel):
     # {"classifier":{"provider":"openai","model":"o3-mini"}, ...}
     role_models: Optional[Dict[str, Dict[str, str]]] = None
 
-    # Optional custom model endpoint (for your HF-style endpoint)
+    # Optional shared custom-model endpoint and exact-model serving overrides.
     custom_model_endpoint: Optional[str] = None
     custom_model_api_key: Optional[str] = None
-    custom_model_name: Optional[str] = None
     custom_model_num_ctx: Optional[int] = None
+    custom_model_overrides: Optional[Dict[str, Dict[str, Any]]] = None
 
     # KB
     kb_search_endpoint: Optional[str] = None
@@ -646,8 +646,8 @@ class Config:
         # custom endpoint support (for CustomModelClient)
         self.custom_model_endpoint = os.getenv("CUSTOM_MODEL_ENDPOINT", "")
         self.custom_model_api_key = os.getenv("CUSTOM_MODEL_API_KEY", "")
-        self.custom_model_name = os.getenv("CUSTOM_MODEL_NAME", "custom-model")
         self.custom_model_num_ctx = int(os.getenv("CUSTOM_MODEL_NUM_CTX", "0") or 0) or None
+        self.custom_model_overrides: Dict[str, Dict[str, Any]] = {}
         self.use_custom_endpoint = bool(self.custom_model_endpoint)
 
         # KB
@@ -662,6 +662,24 @@ class Config:
         self.ai_bundle_spec: Optional[BundleSpec] = None
 
     # ----- embedding config -----
+    def set_custom_model_overrides(self, models: Mapping[str, Any] | None) -> None:
+        """Normalize per-model serving overrides for the shared custom endpoint."""
+        normalized: Dict[str, Dict[str, Any]] = {}
+        for raw_name, raw_config in (models or {}).items():
+            name = str(raw_name or "").strip()
+            if not name or not isinstance(raw_config, Mapping):
+                continue
+            config: Dict[str, Any] = {}
+            try:
+                num_ctx = int(raw_config.get("num_ctx") or 0)
+            except (TypeError, ValueError):
+                num_ctx = 0
+            if num_ctx > 0:
+                config["num_ctx"] = num_ctx
+            if config:
+                normalized[name] = config
+        self.custom_model_overrides = normalized
+
     def set_embedder(self, embedder_id: str, custom_endpoint: str | None = None):
         if embedder_id not in EMBEDDERS:
             raise ValueError(f"Unknown embedder: {embedder_id}")
@@ -822,10 +840,11 @@ def create_workflow_config(config_request: ConfigRequest) -> Config:
     # custom endpoint
     if config_request.custom_model_endpoint:
         cfg.custom_model_endpoint = config_request.custom_model_endpoint
-        cfg.custom_model_name = config_request.custom_model_name or "custom-model"
         cfg.use_custom_endpoint = True
     if config_request.custom_model_num_ctx:
         cfg.custom_model_num_ctx = int(config_request.custom_model_num_ctx)
+    if config_request.custom_model_overrides is not None:
+        cfg.set_custom_model_overrides(config_request.custom_model_overrides)
     # The key applies regardless of where the endpoint comes from: the
     # endpoint may arrive later via bundle props (services.llm.custom), while
     # the door-resolved key must not be dropped on that path.
@@ -874,7 +893,7 @@ async def _build_model_service_from_env() -> "ModelServiceBase":
 # Provider-aware router (lazy, cached)
 # =========================
 class ModelRouter:
-    """Creates/returns clients on demand; caches by (provider, model)."""
+    """Creates clients on demand and caches by effective routing settings."""
     def __init__(self, config: Config):
         self.config = config
         self.logger = AgentLogger("ModelRouter", config.log_level)
@@ -891,7 +910,15 @@ class ModelRouter:
         role_models = call_context.get("role_models") if isinstance(call_context, dict) else None
         return role_models if isinstance(role_models, dict) else {}
 
-    def _effective_role_spec(self, role: str) -> Dict[str, str]:
+    @staticmethod
+    def _positive_int(value: Any) -> Optional[int]:
+        try:
+            parsed = int(value or 0)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _effective_role_spec(self, role: str) -> Dict[str, Any]:
         base = dict(self.config.ensure_role(role) or {})
         override = self._request_role_models().get(role)
         if isinstance(override, str):
@@ -900,7 +927,11 @@ class ModelRouter:
             return base
         provider = str(override.get("provider") or base.get("provider") or self.config.default_llm_model["provider"])
         model = str(override.get("model") or base.get("model") or self.config.default_llm_model["model_name"])
-        return {"provider": provider, "model": model}
+        spec: Dict[str, Any] = {"provider": provider, "model": model}
+        num_ctx = self._positive_int(override.get("num_ctx")) or self._positive_int(base.get("num_ctx"))
+        if num_ctx:
+            spec["num_ctx"] = num_ctx
+        return spec
 
     def _mk_openai(self, model: str, temperature: float) -> ChatOpenAI:
         from kdcube_ai_app.apps.chat.sdk.config import get_settings
@@ -912,13 +943,21 @@ class ModelRouter:
             stream_usage=True
         )
 
-    def _mk_custom(self, model: str, temperature: float):
+    def _custom_num_ctx(self, model: str, requested: Any = None) -> Optional[int]:
+        model_config = (getattr(self.config, "custom_model_overrides", None) or {}).get(model, {})
+        return (
+            self._positive_int(requested)
+            or self._positive_int(model_config.get("num_ctx"))
+            or self._positive_int(getattr(self.config, "custom_model_num_ctx", None))
+        )
+
+    def _mk_custom(self, model: str, temperature: float, *, num_ctx: Any = None):
         return CustomModelClient(
             endpoint=self.config.custom_model_endpoint,
             api_key=self.config.custom_model_api_key,
             model_name=model,
             temperature=temperature,
-            num_ctx=getattr(self.config, "custom_model_num_ctx", None),
+            num_ctx=self._custom_num_ctx(model, num_ctx),
         )
     def _mk_anthropic(self):
         if self._anthropic_client:
@@ -968,7 +1007,8 @@ class ModelRouter:
             return None
 
         provider, model = spec["provider"], spec["model"]
-        key = (provider, model, role, round(temperature, 3))
+        custom_num_ctx = self._custom_num_ctx(model, spec.get("num_ctx")) if provider == "custom" else None
+        key = (provider, model, role, round(temperature, 3), custom_num_ctx)
 
         if key in self._cache:
             return self._cache[key]
@@ -985,7 +1025,7 @@ class ModelRouter:
                     "Provider 'custom' has no endpoint configured: set the app prop "
                     "services.llm.custom.endpoint (bundles.yaml) to the model gateway URL"
                 )
-            client = self._mk_custom(model, temperature)
+            client = self._mk_custom(model, temperature, num_ctx=custom_num_ctx)
         else:
             raise ValueError(f"Unknown provider: {provider}")
 
@@ -3025,8 +3065,8 @@ class CustomModelClient:
             "max_new_tokens": 1024, "temperature": temperature, "top_p": 0.9,
             "min_p": None, "skip_cot": True, "fabrication_awareness": False, "prompt_mode": "default"
         }
-        # Serving context window (descriptor services.llm.custom.num_ctx).
-        # Sent per request; the gateway prefers it over its env default.
+        # The router resolves picker option -> exact-model service default ->
+        # shared service fallback before constructing this client.
         if num_ctx:
             self.default_params["num_ctx"] = int(num_ctx)
 
@@ -3053,9 +3093,8 @@ class CustomModelClient:
     def _prepare_payload(self, messages: List[BaseMessage], **kwargs) -> Dict[str, Any]:
         parameters = {**self.default_params, **kwargs}
         payload = {"inputs": self._convert_langchain_to_conversation(messages), "parameters": parameters}
-        # Transmit the model name so one gateway can serve several models
-        # (per-role/per-pick routing). Gateways without multi-model support
-        # ignore it and serve their configured model.
+        # Transmit the role/composer selection so one gateway can route every
+        # locally served model without a second model-name setting.
         if self.model_name:
             payload["model"] = self.model_name
         return payload

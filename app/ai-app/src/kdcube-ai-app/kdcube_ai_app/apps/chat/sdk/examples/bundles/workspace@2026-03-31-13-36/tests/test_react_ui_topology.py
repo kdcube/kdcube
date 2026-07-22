@@ -4,6 +4,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from kdcube_ai_app.apps.chat.sdk.runtime.dynamic_module_loader import load_dynamic_module_for_path
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.client_tools import (
+    set_denied_named_service_namespaces,
+)
 
 
 def _bundle_root() -> Path:
@@ -71,3 +74,41 @@ def test_web_context_keeps_web_ui_topology():
 
     assert "UI topology for this chat (web interface):" in instructions
     assert "Artifacts tab" in instructions
+
+
+def test_additional_instructions_omit_disabled_memory_and_canvas_namespaces():
+    module = _load_agents_main_module()
+    module.resolve_memory_react_additional_instructions = lambda *_args, **_kwargs: "[MEMORY CONTEXT]"
+    module.CANVAS_REACT_ADDITIONAL_INSTRUCTIONS = "[CANVAS CONTEXT]"
+    ctx = SimpleNamespace(
+        event=SimpleNamespace(source="ingress.web", event_source_id="chat.user.prompt"),
+        meta=SimpleNamespace(instance_id="web"),
+        request=SimpleNamespace(payload={"source": "web"}, external_events=[]),
+    )
+
+    set_denied_named_service_namespaces({"mem", "cnv"})
+    try:
+        instructions = module._resolve_react_additional_instructions(ctx)
+    finally:
+        set_denied_named_service_namespaces(None)
+
+    assert "UI topology for this chat (web interface):" in instructions
+    assert "[MEMORY CONTEXT]" not in instructions
+    assert "[CANVAS CONTEXT]" not in instructions
+
+
+def test_additional_instructions_keep_enabled_memory_and_canvas_namespaces():
+    module = _load_agents_main_module()
+    module.resolve_memory_react_additional_instructions = lambda *_args, **_kwargs: "[MEMORY CONTEXT]"
+    module.CANVAS_REACT_ADDITIONAL_INSTRUCTIONS = "[CANVAS CONTEXT]"
+    ctx = SimpleNamespace(
+        event=SimpleNamespace(source="ingress.web", event_source_id="chat.user.prompt"),
+        meta=SimpleNamespace(instance_id="web"),
+        request=SimpleNamespace(payload={"source": "web"}, external_events=[]),
+    )
+
+    set_denied_named_service_namespaces(None)
+    instructions = module._resolve_react_additional_instructions(ctx)
+
+    assert "[MEMORY CONTEXT]" in instructions
+    assert "[CANVAS CONTEXT]" in instructions

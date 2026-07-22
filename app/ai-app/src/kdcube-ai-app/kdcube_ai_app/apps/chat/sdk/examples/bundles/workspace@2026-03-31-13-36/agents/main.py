@@ -16,6 +16,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.canvas.events.defaults import default
 from kdcube_ai_app.apps.chat.sdk.solutions.canvas.instructions import CANVAS_REACT_ADDITIONAL_INSTRUCTIONS
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.base_workflow import BaseWorkflow
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
+    denied_named_service_namespaces,
     named_service_agent_event_source_namespaces,
     named_service_agent_pull_namespaces,
     register_configured_named_service_artifact_rehosters,
@@ -112,11 +113,16 @@ def _resolve_react_additional_instructions(
     # The named-service teaching block + namespace roster (with intros) is composed
     # generically by the ReAct runtime for every bundle/agent that has named-services
     # connected; this bundle no longer injects its own bespoke roster here.
-    blocks = [
-        _resolve_react_ui_instructions(comm_context),
-        resolve_memory_react_additional_instructions(bundle_props or {}, client_id=client_id or "main"),
-        CANVAS_REACT_ADDITIONAL_INSTRUCTIONS,
-    ]
+    denied_namespaces = denied_named_service_namespaces()
+    blocks = [_resolve_react_ui_instructions(comm_context)]
+    if "mem" not in denied_namespaces:
+        blocks.append(
+            resolve_memory_react_additional_instructions(
+                bundle_props or {}, client_id=client_id or "main"
+            )
+        )
+    if "cnv" not in denied_namespaces:
+        blocks.append(CANVAS_REACT_ADDITIONAL_INSTRUCTIONS)
     return "\n\n".join(block.strip() for block in blocks if str(block or "").strip())
 
 

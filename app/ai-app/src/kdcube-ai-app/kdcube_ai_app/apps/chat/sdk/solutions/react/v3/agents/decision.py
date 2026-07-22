@@ -25,6 +25,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.decision_prompt import (
 )
 from kdcube_ai_app.apps.chat.sdk.skills.instructions.shared_instructions import (
     ACTION_CAUSALITY_AND_STRATEGY,
+    SINGLE_ACTION_CAUSALITY,
     MULTI_ACTION_INDEPENDENCE_AND_GOOD_SHAPES,
 )
 
@@ -381,6 +382,7 @@ def build_decision_system_text(
     instruction_blocks: Optional[List[str]] = None,
     include_tool_catalog: bool = True,
     include_skill_gallery: bool = True,
+    tool_catalog_detail: str = "full",
     multi_action_mode: str = "off",
     skill_consumer: str = "solver.react.v2.decision.v2.strong",
     subagent_role: Optional[str] = None,
@@ -399,7 +401,6 @@ def build_decision_system_text(
         "\n"
         "Each JSON object may contain at most ONE tool_call object.\n"
         "Do NOT emit a sequence/array/list of tool calls inside one action JSON object.\n"
-        "When multi-action is enabled, emit each action in its own separate <channel:action> instance.\n"
     )
 
     if _multi_action_enabled(multi_action_mode):
@@ -412,6 +413,7 @@ def build_decision_system_text(
             "\n"
             "[HOW THE STRATEGY ABOVE LOOKS IN THIS PROTOCOL'S CHANNEL FORMAT]\n"
             "The block above is the strategy. This protocol's technique is channels: <channel:thinking>, <channel:action>, <channel:code>, optional <channel:summary>. Each action you emit lives in its own <channel:action> instance. When the strategy permits multi-action, repeat <channel:action>; when not, emit one <channel:action> and stop.\n"
+            "When multi-action is enabled, emit each action in its own separate <channel:action> instance.\n"
             "Allowed (multi-action, both independent, both consume a source visible BEFORE this round):\n"
             "<channel:thinking>...short status for the round...</channel:thinking>\n"
             "<channel:action>```json {{ \"action\":\"call_tool\", \"tool_call\":{{\"tool_id\":\"rendering_tools.write_pdf\", \"params\":{{\"path\":\"turn_<current>/files/report/report.pdf\", \"content\":\"ref:conv:fi:conv_<conversation_id>.turn_<earlier>.files/report/report.md\"}}}} }} ```</channel:action>\n"
@@ -484,10 +486,10 @@ def build_decision_system_text(
             "CRITICAL: you are the agent which must form output in a custom protocol you must obey. This is not similar to tool calling protocol.\n"
             "CRITICAL: This protocol is SINGLE-ACTION. Emit EXACTLY ONE <channel:action> per response. Emitting more than one action in the same response is a gross protocol violation.\n"
             "\n"
-            f"{ACTION_CAUSALITY_AND_STRATEGY.strip()}\n"
+            f"{SINGLE_ACTION_CAUSALITY.strip()}\n"
             "\n"
-            "[HOW THE STRATEGY ABOVE LOOKS IN THIS PROTOCOL'S CHANNEL FORMAT]\n"
-            "The block above is the strategy. This protocol's technique is channels: <channel:thinking>, <channel:action>, <channel:code>, optional <channel:summary>. Single-action mode enforces the strategy structurally — exactly one <channel:action>. You only need to make sure you do not REFERENCE this round's action result anywhere in this same response (not in `thinking`, not in `notes`, not in `final_answer`, not in code).\n"
+            "[HOW SINGLE-ACTION CAUSALITY LOOKS IN THIS PROTOCOL]\n"
+            "The protocol uses <channel:thinking>, <channel:action>, <channel:code>, and optional <channel:summary>. Emit exactly one <channel:action>, then stop. Do not reference that action's result anywhere in the same response (not in `thinking`, `notes`, `final_answer`, or code).\n"
             "Allowed (one action, no result claim in same response):\n"
             "<channel:thinking>Creating the Excel file...</channel:thinking>\n"
             "<channel:action>```json {{ \"action\":\"call_tool\", \"tool_call\":{{\"tool_id\":\"exec_tools.execute_code_python\", \"params\":{{...}}}} }} ```</channel:action>\n"
@@ -563,6 +565,7 @@ def build_decision_system_text(
         instruction_blocks=instruction_blocks,
         include_tool_catalog=include_tool_catalog,
         include_skill_gallery=include_skill_gallery,
+        tool_catalog_detail=tool_catalog_detail,
         subagent_role=subagent_role,
     )
     extra_instructions = str(additional_instructions or "").strip()
@@ -591,6 +594,7 @@ async def react_decision_stream_v2(
     instruction_blocks: Optional[List[str]] = None,
     include_tool_catalog: bool = True,
     include_skill_gallery: bool = True,
+    tool_catalog_detail: str = "full",
     multi_action_mode: str = "off",
     on_progress_delta=None,
     on_raw_delta=None,
@@ -608,6 +612,7 @@ async def react_decision_stream_v2(
         instruction_blocks=instruction_blocks,
         include_tool_catalog=include_tool_catalog,
         include_skill_gallery=include_skill_gallery,
+        tool_catalog_detail=tool_catalog_detail,
         multi_action_mode=multi_action_mode,
         skill_consumer=agent_name,
         subagent_role=subagent_role,

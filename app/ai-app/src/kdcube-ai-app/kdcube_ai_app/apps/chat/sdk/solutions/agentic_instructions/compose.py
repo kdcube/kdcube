@@ -48,6 +48,7 @@ def compose_instruction_body(
     *,
     workspace_implementation: str = "custom",
     full_body_provider: Optional[Callable[[], str]] = None,
+    exclude_blocks: Optional[Iterable[str]] = None,
 ) -> str:
     """Compose a config token list into one instruction body (order-preserving).
 
@@ -57,10 +58,13 @@ def compose_instruction_body(
     """
     if isinstance(items, str):
         items = [items]
+    excluded = {str(name or "").strip() for name in (exclude_blocks or [])}
     resolved: list[str] = []
     for item in items or []:
         text = str(item or "").strip()
         if not text:
+            continue
+        if text in excluded:
             continue
         low = text.lower()
         if low == "full" or low.startswith("full:"):
@@ -68,11 +72,15 @@ def compose_instruction_body(
             if body:
                 resolved.append(body)
             continue
-        xlite = resolve_extra_lite_item(text, workspace_implementation=workspace_implementation)
+        xlite = resolve_extra_lite_item(
+            text,
+            workspace_implementation=workspace_implementation,
+            exclude_blocks=excluded,
+        )
         if xlite is not None:
             resolved.append(xlite)
             continue
-        lite = resolve_lite_item(text)
+        lite = resolve_lite_item(text, exclude_blocks=excluded)
         if lite is not None:
             resolved.append(lite)
             continue
