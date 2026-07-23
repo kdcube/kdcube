@@ -64,7 +64,7 @@ Multiple providers mean multiple isolated chat engines.
 | `Chat` / `ChatShell` | Reference React chat UI over the engine view model. |
 
 `bundleId` is the current field name in the TypeScript config and backend API. In
-app-builder language, treat it as the app id/version.
+builder language, treat it as the app id/version.
 
 ## Canvas
 

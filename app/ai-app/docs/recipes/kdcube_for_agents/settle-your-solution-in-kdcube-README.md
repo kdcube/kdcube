@@ -68,7 +68,8 @@ Use the rest of this recipe progressively:
   invariants.
 
 > Agent-following-steps == human-following-steps. This page is the instruction
-> set: give it to a coding agent (with the KDCube app-builder plugin) together
+> set: give it to a coding agent (with the KDCube plugin for Claude Code,
+> `kdcube@kdcube` from [github.com/kdcube/agent-plugins](https://github.com/kdcube/agent-plugins)) together
 > with the user's solution, and it produces a runnable app. Every step names
 > concrete files and symbols and ends in a verifiable checkpoint.
 

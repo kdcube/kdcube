@@ -66,7 +66,7 @@ The goal is to assemble product behavior from reusable KDCube blocks where the
 platform already owns the mechanics, and keep bundle code focused on product
 policy, route aliases, prompts, UI composition, and user-scope decisions.
 
-For the complete app-builder mind map before choosing a surface or subsystem,
+For the complete builder's mind map before choosing a surface or subsystem,
 read [What I Should Know Before Writing a KDCube App](../../../recipes/what-i-should-know-about-app-README.md).
 
 If you landed here directly, first read
