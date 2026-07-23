@@ -255,13 +255,31 @@ range aggregated before a new dimension was introduced regenerates cleanly.
 **Reported-cost rule** (shared with turn settlement): when pricing a rollup
 line, a price-table entry wins; a line without one is priced at the
 provider-reported cost accumulated in `spent.cost_usd` (e.g. runtimes that
-self-report spend). See `_compute_cost_estimate` in `opex/opex.py` and the
-same rule in `RateCalculator.calculate_turn_costs`.
+self-report spend). One implementation for every spend surface:
+[`infra/accounting/pricing.py`](../../src/kdcube-ai-app/kdcube_ai_app/infra/accounting/pricing.py)
+(`compute_cost_estimate`), the same rule as
+`RateCalculator.calculate_turn_costs`.
+
+**Derived spend-rollup index** (scale path): the aggregation routines also
+mirror each day's per-dimension totals and per-model lines into per-project
+tables (`spend_rollup_totals` / `spend_rollup_lines` /
+`spend_rollup_coverage`, DDL in the chatbot
+`deploy-kdcube-proj-schema.sql`), written only at aggregation time — never by
+the live turn path. The report endpoints serve a paged window from one indexed
+SQL query when the coverage markers show every day of the window is rolled up,
+and fall back to the file aggregates otherwise. The tables are derived and
+rebuildable: the files stay the source of truth, **Rebuild aggregates**
+repopulates them, and a price-table change is repriced by the same rebuild
+because tokens stay in the rows. See
+[`opex/spend_rollup.py`](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/opex/spend_rollup.py).
 
 Spend-report surfaces on top of this data:
 
 - `GET /api/opex/users` / `/agents` / `/apps` — per-dimension usage + true
-  per-model cost (admin).
+  per-model cost (admin). With `limit` they return a server-side
+  sorted/filtered page (`sort_by`, `order`, `offset`, `q`); `source` in the
+  response says whether the page came from the DB index (`rollup`) or the
+  file aggregates (`aggregates`).
 - `GET /api/economics/me/cost-breakdown` — the authenticated user's actual
   per-model spend (aggregates-only; `coverage` flags un-aggregated windows).
 - Economics admin dashboard **Cost Report** tab

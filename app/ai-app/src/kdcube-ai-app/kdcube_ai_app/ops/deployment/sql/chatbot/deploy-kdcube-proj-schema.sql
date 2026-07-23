@@ -1129,3 +1129,64 @@ DROP TRIGGER IF EXISTS trg_cp_ext_econ_events_updated_at ON <SCHEMA>.external_ec
 CREATE TRIGGER trg_cp_ext_econ_events_updated_at
   BEFORE UPDATE ON <SCHEMA>.external_economics_events
   FOR EACH ROW EXECUTE FUNCTION <SCHEMA>.update_updated_at();
+
+-- =========================================
+-- Spend rollup: derived reporting index over the accounting aggregates.
+-- Written ONLY by the aggregation routines (nightly cron, today-refresh,
+-- admin rebuild) at the moment they write the analytics JSON files — never by
+-- the live turn path. The files remain the source of truth; these tables are
+-- rebuildable from them at any time ("Rebuild aggregates" repopulates them),
+-- and a price-table change is repriced by the same rebuild because tokens
+-- stay in the rows. Daily granularity only: any report window is a SUM over
+-- days.
+-- =========================================
+
+-- One row per (day, dimension, principal): the page the Cost Report sorts.
+CREATE TABLE IF NOT EXISTS <SCHEMA>.spend_rollup_totals (
+  day              DATE NOT NULL,
+  dimension        TEXT NOT NULL CHECK (dimension IN ('user','agent','app')),
+  dim_id           TEXT NOT NULL,
+  input_tokens     BIGINT NOT NULL DEFAULT 0,
+  output_tokens    BIGINT NOT NULL DEFAULT 0,
+  embedding_tokens BIGINT NOT NULL DEFAULT 0,
+  events           BIGINT NOT NULL DEFAULT 0,
+  cost_usd         NUMERIC(16,6) NOT NULL DEFAULT 0,
+  computed_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (day, dimension, dim_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_spend_rollup_totals_dim_day
+  ON <SCHEMA>.spend_rollup_totals (dimension, day);
+
+-- Per-line detail (service/provider/model) behind each totals row: feeds the
+-- expandable by-model breakdown. Empty provider/model recorded as '' so the
+-- primary key stays total.
+CREATE TABLE IF NOT EXISTS <SCHEMA>.spend_rollup_lines (
+  day              DATE NOT NULL,
+  dimension        TEXT NOT NULL CHECK (dimension IN ('user','agent','app')),
+  dim_id           TEXT NOT NULL,
+  service          TEXT NOT NULL,
+  provider         TEXT NOT NULL DEFAULT '',
+  model            TEXT NOT NULL DEFAULT '',
+  input_tokens     BIGINT NOT NULL DEFAULT 0,
+  output_tokens    BIGINT NOT NULL DEFAULT 0,
+  embedding_tokens BIGINT NOT NULL DEFAULT 0,
+  requests         BIGINT NOT NULL DEFAULT 0,
+  cost_usd         NUMERIC(16,6) NOT NULL DEFAULT 0,
+  computed_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (day, dimension, dim_id, service, provider, model)
+);
+
+CREATE INDEX IF NOT EXISTS idx_spend_rollup_lines_dim_day
+  ON <SCHEMA>.spend_rollup_lines (dimension, day);
+
+-- Coverage marker: a (day, dimension) row exists once that day was rolled up,
+-- even when it had zero usage. The reader serves a window from SQL ONLY when
+-- every day of the window is covered; otherwise it falls back to the file
+-- aggregates. Distinguishes "no usage" from "never computed".
+CREATE TABLE IF NOT EXISTS <SCHEMA>.spend_rollup_coverage (
+  day         DATE NOT NULL,
+  dimension   TEXT NOT NULL CHECK (dimension IN ('user','agent','app')),
+  computed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (day, dimension)
+);

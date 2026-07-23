@@ -3,7 +3,7 @@
 
 # # kdcube_ai_app/apps/chat/ingress/opex/opex.py
 from typing import Optional, List
-import logging, asyncio, os, json
+import logging, asyncio, os, json, re, time
 
 from pydantic import BaseModel, Field
 from fastapi import Depends, HTTPException, Request, APIRouter, Query, FastAPI
@@ -14,6 +14,9 @@ from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.auth.AuthManager import RequireUser
 from kdcube_ai_app.auth.sessions import UserSession
 from kdcube_ai_app.infra.accounting.usage import price_table
+from kdcube_ai_app.infra.accounting.pricing import compute_cost_estimate
+from kdcube_ai_app.apps.chat.ingress.opex.paging import dimension_rows as _dimension_rows, page_dimension_rows as _page_dimension_rows
+from kdcube_ai_app.apps.chat.ingress.opex import spend_rollup
 from kdcube_ai_app.storage.storage import create_storage_backend
 from kdcube_ai_app.infra.accounting.calculator import (
     RateCalculator,
@@ -181,137 +184,51 @@ def _get_calculator(request: Request) -> RateCalculator:
     return calc
 
 def _compute_cost_estimate(rollup: List[dict]) -> dict:
-    """
-    Compute cost estimates from rollup data using price table.
-    Returns cost breakdown and total.
-
-    NOW SUPPORTS: llm, embedding, web_search
-    """
-    configuration = price_table()
-    llm_pricelist = configuration.get("llm", [])
-    emb_pricelist = configuration.get("embedding", [])
-    web_search_pricelist = configuration.get("web_search", [])  # NEW
-
+    """Price a rollup with the shared platform pricing (infra/accounting/pricing.py)."""
     config_str = get_settings().PLATFORM.ACCOUNTING.ACCOUNTING_SERVICES or "{}"
     try:
-        accounting_services_config = json.loads(config_str)
+        services_config = json.loads(config_str)
     except json.JSONDecodeError:
-        accounting_services_config = {}
+        services_config = {}
+    return compute_cost_estimate(rollup, services_config=services_config)
 
-    def _find_llm_price(provider: str, model: str):
-        for p in llm_pricelist:
-            if p.get("provider") == provider and p.get("model") == model:
-                return p
+
+# =============================================================================
+# Server-side sort / filter / paging over a priced dimension set
+# =============================================================================
+# Row building and filter/sort/slice live in paging.py (shared with the
+# spend-rollup reader). Endpoints return the paged shape ONLY when `limit` is
+# passed — calls without it keep the legacy full-set response. When the derived
+# spend_rollup table covers the window, pages come from one indexed SQL query;
+# otherwise the priced full set is computed from the file aggregates once and
+# briefly cached per window+dimension.
+
+_DIM_CACHE_TTL_SECONDS = 60
+_DIM_CACHE_MAX_ENTRIES = 32
+
+def _dim_cache_get(request: Request, cache_key: tuple) -> Optional[List[dict]]:
+    cache = getattr(request.app.state, "opex_dimension_cache", None)
+    if not cache:
         return None
-
-    def _find_emb_price(provider: str, model: str):
-        for p in emb_pricelist:
-            if p.get("provider") == provider and p.get("model") == model:
-                return p
+    entry = cache.get(cache_key)
+    if not entry:
         return None
-
-    def _find_web_search_price(provider: str, tier: str):
-        """Find web_search price entry by provider and tier."""
-        for p in web_search_pricelist:
-            if p.get("provider") == provider and p.get("tier") == tier:
-                return p
+    ts, rows = entry
+    if (time.monotonic() - ts) > _DIM_CACHE_TTL_SECONDS:
+        cache.pop(cache_key, None)
         return None
+    return rows
 
-    def _get_web_search_tier(provider: str) -> str:
-        """Get tier for web_search provider from config."""
-        web_search_config = accounting_services_config.get("web_search", {})
-        provider_config = web_search_config.get(provider, {})
-        defaults = {"brave": "base", "duckduckgo": "free"}
-        return provider_config.get("tier", defaults.get(provider, "free"))
 
-    total_cost = 0.0
-    breakdown = []
+def _dim_cache_put(request: Request, cache_key: tuple, rows: List[dict]) -> None:
+    cache = getattr(request.app.state, "opex_dimension_cache", None)
+    if cache is None:
+        cache = {}
+        request.app.state.opex_dimension_cache = cache
+    while len(cache) >= _DIM_CACHE_MAX_ENTRIES:
+        cache.pop(next(iter(cache)))
+    cache[cache_key] = (time.monotonic(), rows)
 
-    for item in rollup:
-        service = item.get("service")
-        provider = item.get("provider")
-        model = item.get("model")
-        spent = item.get("spent", {}) or {}
-
-        cost_usd = 0.0
-        tier = None  # for web_search
-        pr = {}
-        # Provider-REPORTED cost accumulated in the rollup (e.g. runtimes that
-        # self-report spend and have no price-table entry). Same rule as the
-        # settlement path in RateCalculator.calculate_turn_costs: a price-table
-        # entry wins; otherwise the reported cost is the ground truth.
-        direct_cost_usd = float(spent.get("cost_usd", 0.0) or 0.0)
-
-        if service == "llm":
-            pr = _find_llm_price(provider, model)
-            if pr:
-                input_cost = (float(spent.get("input", 0)) / 1_000_000.0) * float(pr.get("input_tokens_1M", 0.0))
-                output_cost = (float(spent.get("output", 0)) / 1_000_000.0) * float(pr.get("output_tokens_1M", 0.0))
-                cache_read_cost = (float(spent.get("cache_read", 0)) / 1_000_000.0) * float(pr.get("cache_read_tokens_1M", 0.0))
-
-                cache_write_cost = 0.0
-                cache_pricing = pr.get("cache_pricing")
-
-                if cache_pricing and isinstance(cache_pricing, dict):
-                    cache_5m_tokens = float(spent.get("cache_5m_write", 0))
-                    cache_1h_tokens = float(spent.get("cache_1h_write", 0))
-
-                    if cache_5m_tokens > 0:
-                        price_5m = float(cache_pricing.get("5m", {}).get("write_tokens_1M", 0.0))
-                        cache_write_cost += (cache_5m_tokens / 1_000_000.0) * price_5m
-
-                    if cache_1h_tokens > 0:
-                        price_1h = float(cache_pricing.get("1h", {}).get("write_tokens_1M", 0.0))
-                        cache_write_cost += (cache_1h_tokens / 1_000_000.0) * price_1h
-                else:
-                    cache_write_tokens = float(spent.get("cache_creation", 0))
-                    cache_write_price = float(pr.get("cache_write_tokens_1M", 0.0))
-                    cache_write_cost = (cache_write_tokens / 1_000_000.0) * cache_write_price
-
-                cost_usd = input_cost + output_cost + cache_write_cost + cache_read_cost
-            elif direct_cost_usd > 0:
-                cost_usd = direct_cost_usd
-
-        elif service == "embedding":
-            pr = _find_emb_price(provider, model)
-            if pr:
-                cost_usd = (float(spent.get("tokens", 0)) / 1_000_000.0) * float(pr.get("tokens_1M", 0.0))
-            elif direct_cost_usd > 0:
-                cost_usd = direct_cost_usd
-
-        elif service == "web_search":
-            # NEW: web_search cost calculation
-            tier = _get_web_search_tier(provider)
-            pr = _find_web_search_price(provider, tier)
-
-            if pr:
-                search_queries = float(spent.get("search_queries", 0))
-                cost_per_1k = float(pr.get("cost_per_1k_requests", 0.0))
-                cost_usd = (search_queries / 1000.0) * cost_per_1k
-
-        total_cost += cost_usd
-
-        # Include tier in breakdown for web_search
-        breakdown_item = {
-            "service": service,
-            "provider": provider,
-            "model": model,
-            "cost_usd": cost_usd,
-        }
-
-        if service == "web_search" and tier:
-            breakdown_item["tier"] = tier
-            breakdown_item["search_queries"] = spent.get("search_queries", 0)
-            breakdown_item["search_results"] = spent.get("search_results", 0)
-            if pr:
-                breakdown_item["cost_per_1k_requests"] = pr.get("cost_per_1k_requests", 0.0)
-
-        breakdown.append(breakdown_item)
-
-    return {
-        "total_cost_usd": total_cost,
-        "breakdown": breakdown
-    }
 
 # =============================================================================
 # API Endpoints
@@ -398,52 +315,79 @@ async def get_usage_by_user(
         app_bundle_id: Optional[str] = Query(None, description="App bundle ID"),
         service_types: Optional[str] = Query(None, description="Comma-separated service types"),
         hard_file_limit: Optional[int] = Query(None, description="Max files to scan"),
+        limit: Optional[int] = Query(None, ge=1, le=500, description="Page size; when set, the paged response shape is returned"),
+        offset: int = Query(0, ge=0, description="Page offset (paged shape only)"),
+        sort_by: str = Query("cost", description="cost|input_tokens|output_tokens|events|id (paged shape only)"),
+        order: str = Query("desc", description="desc|asc (paged shape only)"),
+        q: str = Query("", description="Id filter: comma/space-separated substrings (paged shape only)"),
         session: UserSession = Depends(auth_without_pressure())
 ):
     """
     Query usage broken down by user.
 
-    Returns:
+    Without `limit`: the legacy full-set shape
         - users: Dict of user_id -> {total, rollup}
         - total_users: Count of users
         - cost_estimate: Per-user cost estimates
+    With `limit`: the paged shape
+        - items: one page of {id, cost_usd, tokens..., events, by_model} rows
+        - total_count / total_cost_usd / total_events over the filtered set
     """
     try:
-        # TODO: get back when we have scheduled aggregates!
         calc = _get_calculator(request)
 
         service_types_list = None
         if service_types:
             service_types_list = [s.strip() for s in service_types.split(",")]
 
-        by_user = await calc.usage_by_user(
-            tenant_id=tenant,
-            project_id=project,
-            date_from=date_from,
-            date_to=date_to,
-            app_bundle_id=app_bundle_id,
-            service_types=service_types_list,
-            hard_file_limit=hard_file_limit
-        )
+        cacheable = limit is not None and not app_bundle_id and not service_types_list and not hard_file_limit
+        cache_key = ("user", tenant, project, date_from, date_to)
 
-        # Add cost estimates per user
-        user_costs = {}
-        for user_id, user_data in by_user.items():
-            if user_data.get("rollup"):
-                user_costs[user_id] = _compute_cost_estimate(user_data["rollup"])
+        # Derived spend-rollup index first: one indexed SQL query when the DB
+        # covers every day of the window; None falls through to the
+        # file-aggregate path.
+        if cacheable:
+            rollup_page = await spend_rollup.fetch_page(
+                tenant=tenant, project=project, dimension="user",
+                date_from=date_from, date_to=date_to,
+                sort_by=sort_by, order=order, limit=limit, offset=offset, q=q,
+            )
+            if rollup_page is not None:
+                return {"status": "ok", "dimension": "user", "source": "rollup", **rollup_page}
 
-        # END OF TODO: get back when we have scheduled aggregates!
-        # # MOCK
-        # by_user = dict()
-        # user_costs = dict()
-        # MOCK
+        rows = _dim_cache_get(request, cache_key) if cacheable else None
 
-        return {
-            "status": "ok",
-            "users": by_user,
-            "total_users": len(by_user),
-            "cost_estimate": user_costs
-        }
+        if rows is None:
+            by_user = await calc.usage_by_user(
+                tenant_id=tenant,
+                project_id=project,
+                date_from=date_from,
+                date_to=date_to,
+                app_bundle_id=app_bundle_id,
+                service_types=service_types_list,
+                hard_file_limit=hard_file_limit
+            )
+
+            # Add cost estimates per user
+            user_costs = {}
+            for user_id, user_data in by_user.items():
+                if user_data.get("rollup"):
+                    user_costs[user_id] = _compute_cost_estimate(user_data["rollup"])
+
+            if limit is None:
+                return {
+                    "status": "ok",
+                    "users": by_user,
+                    "total_users": len(by_user),
+                    "cost_estimate": user_costs
+                }
+
+            rows = _dimension_rows(by_user, user_costs)
+            if cacheable:
+                _dim_cache_put(request, cache_key, rows)
+
+        page = _page_dimension_rows(rows, sort_by=sort_by, order=order, limit=limit, offset=offset, q=q)
+        return {"status": "ok", "dimension": "user", "source": "aggregates", **page}
 
     except Exception as e:
         logger.exception(f"[get_usage_by_user] {tenant}/{project} failed")
@@ -458,15 +402,18 @@ async def get_usage_by_app(
         date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
         service_types: Optional[str] = Query(None, description="Comma-separated service types"),
         hard_file_limit: Optional[int] = Query(None, description="Max files to scan"),
+        limit: Optional[int] = Query(None, ge=1, le=500, description="Page size; when set, the paged response shape is returned"),
+        offset: int = Query(0, ge=0, description="Page offset (paged shape only)"),
+        sort_by: str = Query("cost", description="cost|input_tokens|output_tokens|events|id (paged shape only)"),
+        order: str = Query("desc", description="desc|asc (paged shape only)"),
+        q: str = Query("", description="Id filter: comma/space-separated substrings (paged shape only)"),
         session: UserSession = Depends(auth_without_pressure())
 ):
     """
     Query usage broken down by app (keyed by the app's technical bundle id).
 
-    Returns:
-        - apps: Dict of bundle_id -> {total, rollup, event_count}
-        - total_apps: Count of apps
-        - cost_estimate: Per-app cost estimates
+    Without `limit`: apps / total_apps / cost_estimate (full set).
+    With `limit`: the paged shape (items + totals over the filtered set).
     """
     try:
         calc = _get_calculator(request)
@@ -475,26 +422,52 @@ async def get_usage_by_app(
         if service_types:
             service_types_list = [s.strip() for s in service_types.split(",")]
 
-        by_app = await calc.usage_by_app(
-            tenant_id=tenant,
-            project_id=project,
-            date_from=date_from,
-            date_to=date_to,
-            service_types=service_types_list,
-            hard_file_limit=hard_file_limit,
-        )
+        cacheable = limit is not None and not service_types_list and not hard_file_limit
+        cache_key = ("app", tenant, project, date_from, date_to)
 
-        app_costs = {}
-        for b_id, app_data in by_app.items():
-            if app_data.get("rollup"):
-                app_costs[b_id] = _compute_cost_estimate(app_data["rollup"])
+        # Derived spend-rollup index first: one indexed SQL query when the DB
+        # covers every day of the window; None falls through to the
+        # file-aggregate path.
+        if cacheable:
+            rollup_page = await spend_rollup.fetch_page(
+                tenant=tenant, project=project, dimension="app",
+                date_from=date_from, date_to=date_to,
+                sort_by=sort_by, order=order, limit=limit, offset=offset, q=q,
+            )
+            if rollup_page is not None:
+                return {"status": "ok", "dimension": "app", "source": "rollup", **rollup_page}
 
-        return {
-            "status": "ok",
-            "apps": by_app,
-            "total_apps": len(by_app),
-            "cost_estimate": app_costs
-        }
+        rows = _dim_cache_get(request, cache_key) if cacheable else None
+
+        if rows is None:
+            by_app = await calc.usage_by_app(
+                tenant_id=tenant,
+                project_id=project,
+                date_from=date_from,
+                date_to=date_to,
+                service_types=service_types_list,
+                hard_file_limit=hard_file_limit,
+            )
+
+            app_costs = {}
+            for b_id, app_data in by_app.items():
+                if app_data.get("rollup"):
+                    app_costs[b_id] = _compute_cost_estimate(app_data["rollup"])
+
+            if limit is None:
+                return {
+                    "status": "ok",
+                    "apps": by_app,
+                    "total_apps": len(by_app),
+                    "cost_estimate": app_costs
+                }
+
+            rows = _dimension_rows(by_app, app_costs)
+            if cacheable:
+                _dim_cache_put(request, cache_key, rows)
+
+        page = _page_dimension_rows(rows, sort_by=sort_by, order=order, limit=limit, offset=offset, q=q)
+        return {"status": "ok", "dimension": "app", "source": "aggregates", **page}
 
     except Exception as e:
         logger.exception(f"[get_usage_by_app] {tenant}/{project} failed")
@@ -680,55 +653,78 @@ async def get_agent_usage(
         app_bundle_id: Optional[str] = Query(None, description="App bundle ID"),
         service_types: Optional[str] = Query(None, description="Comma-separated service types"),
         hard_file_limit: Optional[int] = Query(None, description="Max files to scan"),
+        limit: Optional[int] = Query(None, ge=1, le=500, description="Page size; when set, the paged response shape is returned"),
+        offset: int = Query(0, ge=0, description="Page offset (paged shape only)"),
+        sort_by: str = Query("cost", description="cost|input_tokens|output_tokens|events|id (paged shape only)"),
+        order: str = Query("desc", description="desc|asc (paged shape only)"),
+        q: str = Query("", description="Id filter: comma/space-separated substrings (paged shape only)"),
         session: UserSession = Depends(auth_without_pressure())
 ):
     """
     Query usage broken down by agent.
 
-    Returns:
-        - agents: Dict of agent_name -> {total, rollup}
-        - total_agents: Count of agents
-        - cost_estimate: Per-agent cost estimates
+    Without `limit`: agents / total_agents / cost_estimate (full set).
+    With `limit`: the paged shape (items + totals over the filtered set).
     """
     try:
-        # TODO: get back when we have scheduled aggregates!
         calc = _get_calculator(request)
 
         service_types_list = None
         if service_types:
             service_types_list = [s.strip() for s in service_types.split(",")]
 
-        by_agent = await calc.usage_by_agent(
-            tenant_id=tenant,
-            project_id=project,
-            date_from=date_from,
-            date_to=date_to,
-            user_id=user_id,
-            conversation_id=conversation_id,
-            turn_id=turn_id,
-            app_bundle_id=app_bundle_id,
-            service_types=service_types_list,
-            hard_file_limit=hard_file_limit
-        )
+        extra_filters = any([user_id, conversation_id, turn_id, app_bundle_id, service_types_list, hard_file_limit])
+        cacheable = limit is not None and not extra_filters
+        cache_key = ("agent", tenant, project, date_from, date_to)
 
-        # Add cost estimates per agent
-        agent_costs = {}
-        for agent_name, agent_data in by_agent.items():
-            if agent_data.get("rollup"):
-                agent_costs[agent_name] = _compute_cost_estimate(agent_data["rollup"])
-        # END OF TODO: get back when we have scheduled aggregates!
+        # Derived spend-rollup index first: one indexed SQL query when the DB
+        # covers every day of the window; None falls through to the
+        # file-aggregate path.
+        if cacheable:
+            rollup_page = await spend_rollup.fetch_page(
+                tenant=tenant, project=project, dimension="agent",
+                date_from=date_from, date_to=date_to,
+                sort_by=sort_by, order=order, limit=limit, offset=offset, q=q,
+            )
+            if rollup_page is not None:
+                return {"status": "ok", "dimension": "agent", "source": "rollup", **rollup_page}
 
-        # MOCK
-        # by_agent = dict()
-        # agent_costs = dict()
-        # MOCK
+        rows = _dim_cache_get(request, cache_key) if cacheable else None
 
-        return {
-            "status": "ok",
-            "agents": by_agent,
-            "total_agents": len(by_agent),
-            "cost_estimate": agent_costs
-        }
+        if rows is None:
+            by_agent = await calc.usage_by_agent(
+                tenant_id=tenant,
+                project_id=project,
+                date_from=date_from,
+                date_to=date_to,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                app_bundle_id=app_bundle_id,
+                service_types=service_types_list,
+                hard_file_limit=hard_file_limit
+            )
+
+            # Add cost estimates per agent
+            agent_costs = {}
+            for agent_name, agent_data in by_agent.items():
+                if agent_data.get("rollup"):
+                    agent_costs[agent_name] = _compute_cost_estimate(agent_data["rollup"])
+
+            if limit is None:
+                return {
+                    "status": "ok",
+                    "agents": by_agent,
+                    "total_agents": len(by_agent),
+                    "cost_estimate": agent_costs
+                }
+
+            rows = _dimension_rows(by_agent, agent_costs)
+            if cacheable:
+                _dim_cache_put(request, cache_key, rows)
+
+        page = _page_dimension_rows(rows, sort_by=sort_by, order=order, limit=limit, offset=offset, q=q)
+        return {"status": "ok", "dimension": "agent", "source": "aggregates", **page}
 
     except Exception as e:
         logger.exception(f"[get_agent_usage] {tenant}/{project} failed")

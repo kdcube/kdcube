@@ -127,18 +127,30 @@ interface OpexCostLine {
 
 type CostDimension = 'user' | 'agent' | 'app';
 
-type OpexUsageEntry = {
-    total?: Record<string, number | null>;
-    rollup?: Array<{ service: string; provider?: string | null; model?: string | null; spent?: Record<string, number> }>;
-    event_count?: number | null;
-};
+type CostSortBy = 'cost' | 'input_tokens' | 'output_tokens' | 'events' | 'id';
 
-interface OpexCostResponse {
+interface OpexPagedRow {
+    id: string;
+    cost_usd: number;
+    input_tokens: number;
+    output_tokens: number;
+    embedding_tokens: number;
+    events: number;
+    by_model: OpexCostLine[];
+}
+
+interface OpexCostPagedResponse {
     status: string;
-    users?: Record<string, OpexUsageEntry>;
-    agents?: Record<string, OpexUsageEntry>;
-    apps?: Record<string, OpexUsageEntry>;
-    cost_estimate: Record<string, { total_cost_usd: number; breakdown: OpexCostLine[] }>;
+    dimension: string;
+    source?: 'rollup' | 'aggregates';
+    total_count: number;
+    total_cost_usd: number;
+    total_events: number;
+    offset: number;
+    limit: number;
+    sort_by: string;
+    order: string;
+    items: OpexPagedRow[];
 }
 
 interface CostRow {
@@ -936,7 +948,12 @@ class EconomicsAPI {
     // price table, grouped by user, agent, or app. Actual per-model dollars —
     // a different number than the quota-equivalent view in User Budget
     // Breakdown and the absorbed shortfall in the absorption report, by design.
-    async getOpexCost(dimension: CostDimension, dateFrom: string, dateTo: string): Promise<OpexCostResponse> {
+    async getOpexCost(
+        dimension: CostDimension,
+        dateFrom: string,
+        dateTo: string,
+        opts: { sortBy: CostSortBy; order: 'asc' | 'desc'; limit: number; offset: number; q: string },
+    ): Promise<OpexCostPagedResponse> {
         const baseUrl = settings.getBaseUrl();
         const path = dimension === 'agent' ? 'agents' : dimension === 'app' ? 'apps' : 'users';
         const queryParams = new URLSearchParams({
@@ -944,6 +961,11 @@ class EconomicsAPI {
             project: settings.getDefaultProject(),
             date_from: dateFrom,
             date_to: dateTo,
+            sort_by: opts.sortBy,
+            order: opts.order,
+            limit: String(opts.limit),
+            offset: String(opts.offset),
+            q: opts.q,
         });
         const response = await this.fetchWithAuth(`${baseUrl}/api/opex/${path}?${queryParams}`);
         return response.json();
@@ -1792,25 +1814,24 @@ const EconomicsAdmin: React.FC = () => {
     const [loadingAbsorption, setLoadingAbsorption] = useState<boolean>(false);
 
     // Cost report — true per-model spend from the OPEX aggregates, grouped by
-    // user, agent, or app.
+    // user, agent, or app. Sort/filter/paging happen SERVER-side (the priced
+    // set is computed once per window and cached there); the browser only ever
+    // holds one page.
     const _todayIso = new Date().toISOString().slice(0, 10);
     const [costDim, setCostDim] = useState<CostDimension>('user');
     const [costFrom, setCostFrom] = useState<string>(_todayIso.slice(0, 8) + '01');
     const [costTo, setCostTo] = useState<string>(_todayIso);
     const [costFilter, setCostFilter] = useState<string>('');
+    const [costSort, setCostSort] = useState<CostSortBy>('cost');
+    const [costOrder, setCostOrder] = useState<'asc' | 'desc'>('desc');
+    const [costPageSize, setCostPageSize] = useState<number>(50);
+    const [costOffset, setCostOffset] = useState<number>(0);
     const [costRows, setCostRows] = useState<CostRow[]>([]);
+    const [costTotals, setCostTotals] = useState<{ count: number; costUsd: number; events: number }>({ count: 0, costUsd: 0, events: 0 });
+    const [costSource, setCostSource] = useState<'rollup' | 'aggregates' | null>(null);
     const [costLoaded, setCostLoaded] = useState<boolean>(false);
     const [loadingCost, setLoadingCost] = useState<boolean>(false);
     const [costExpanded, setCostExpanded] = useState<Record<string, boolean>>({});
-
-    // Comma/space-separated tokens; a row matches when any token is a
-    // case-insensitive substring of its id. Empty filter matches all.
-    const costFilterTokens = costFilter.split(/[\s,]+/).map((t) => t.trim().toLowerCase()).filter(Boolean);
-    const costRowsFiltered = costFilterTokens.length
-        ? costRows.filter((r) => costFilterTokens.some((t) => r.id.toLowerCase().includes(t)))
-        : costRows;
-    const costUserRows = costRowsFiltered.filter((r) => !r.system);
-    const costSystemRows = costDim === 'user' ? costRowsFiltered.filter((r) => r.system) : [];
     const [lineageRequestId, setLineageRequestId] = useState<string>('');
     const [lineageResult, setLineageResult] = useState<any | null>(null);
     const [loadingLineage, setLoadingLineage] = useState<boolean>(false);
@@ -2284,33 +2305,34 @@ const EconomicsAdmin: React.FC = () => {
         }
     };
 
-    const handleLoadCostReport = async (dim?: CostDimension) => {
-        const dimension = dim || costDim;
+    const handleLoadCostReport = async (over?: Partial<{ dim: CostDimension; sortBy: CostSortBy; order: 'asc' | 'desc'; pageSize: number; offset: number }>) => {
+        const dimension = over?.dim ?? costDim;
+        const sortBy = over?.sortBy ?? costSort;
+        const order = over?.order ?? costOrder;
+        const pageSize = over?.pageSize ?? costPageSize;
+        const offset = over?.offset ?? 0; // any control change resets to page 1 unless an explicit offset is given
         clearMessages();
         setLoadingCost(true);
         try {
-            const res = await api.getOpexCost(dimension, costFrom, costTo);
-            const entries = (dimension === 'agent' ? res.agents : dimension === 'app' ? res.apps : res.users) || {};
-            const estimates = res.cost_estimate || {};
-            const rows: CostRow[] = Object.keys(entries).map((id) => {
-                const e = entries[id] || {};
-                const total = (e.total || {}) as Record<string, number | null>;
-                const est = estimates[id];
-                return {
-                    id,
-                    system: dimension === 'user' && SYSTEM_PRINCIPAL_IDS.has(id),
-                    costUsd: Number(est?.total_cost_usd || 0),
-                    inputTokens: Number(total.input_tokens || 0),
-                    outputTokens: Number(total.output_tokens || 0),
-                    events: Number(e.event_count || 0),
-                    byModel: [...(est?.breakdown || [])].sort((a, b) => Number(b.cost_usd || 0) - Number(a.cost_usd || 0)),
-                };
+            const res = await api.getOpexCost(dimension, costFrom, costTo, {
+                sortBy, order, limit: pageSize, offset, q: costFilter.trim(),
             });
-            rows.sort((a, b) => b.costUsd - a.costUsd);
+            const rows: CostRow[] = (res.items || []).map((r) => ({
+                id: r.id,
+                system: dimension === 'user' && SYSTEM_PRINCIPAL_IDS.has(r.id),
+                costUsd: Number(r.cost_usd || 0),
+                inputTokens: Number(r.input_tokens || 0),
+                outputTokens: Number(r.output_tokens || 0),
+                events: Number(r.events || 0),
+                byModel: [...(r.by_model || [])].sort((a, b) => Number(b.cost_usd || 0) - Number(a.cost_usd || 0)),
+            }));
             setCostRows(rows);
+            setCostTotals({ count: Number(res.total_count || 0), costUsd: Number(res.total_cost_usd || 0), events: Number(res.total_events || 0) });
+            setCostSource(res.source || null);
+            setCostOffset(offset);
             setCostExpanded({});
             setCostLoaded(true);
-            if (!rows.length) setSuccess('No usage found for the selected window.');
+            if (!res.total_count) setSuccess('No usage found for the selected window and filter.');
         } catch (err) {
             setError((err as Error).message);
         } finally {
@@ -2320,7 +2342,20 @@ const EconomicsAdmin: React.FC = () => {
 
     const handleCostDimChange = (dim: CostDimension) => {
         setCostDim(dim);
-        if (costLoaded) void handleLoadCostReport(dim);
+        if (costLoaded) void handleLoadCostReport({ dim });
+    };
+
+    const handleCostSortChange = (sortBy: CostSortBy) => {
+        setCostSort(sortBy);
+        const order = sortBy === 'id' ? 'asc' : 'desc';
+        setCostOrder(order);
+        if (costLoaded) void handleLoadCostReport({ sortBy, order });
+    };
+
+    const handleCostPage = (direction: 1 | -1) => {
+        const next = Math.max(0, costOffset + direction * costPageSize);
+        if (next >= costTotals.count && direction === 1) return;
+        void handleLoadCostReport({ offset: next });
     };
 
     const handleRebuildAggregates = async () => {
@@ -2341,20 +2376,32 @@ const EconomicsAdmin: React.FC = () => {
         }
     };
 
-    const handleExportCostCsv = () => {
-        const rows = costRowsFiltered;
-        const header = `${costDim}_id,cost_usd,input_tokens,output_tokens,events`;
-        const lines = rows.map((r) =>
-            [r.id, r.costUsd.toFixed(6), r.inputTokens, r.outputTokens, r.events].join(','));
-        const blob = new Blob([[header, ...lines].join('\n')], { type: 'text/csv;charset=utf-8;' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `cost-by-${costDim}-${costFrom}-${costTo}.csv`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
+    const handleExportCostCsv = async () => {
+        clearMessages();
+        setLoadingCost(true);
+        try {
+            // Export the filtered set with the current sort, up to the server page cap.
+            const res = await api.getOpexCost(costDim, costFrom, costTo, {
+                sortBy: costSort, order: costOrder, limit: 500, offset: 0, q: costFilter.trim(),
+            });
+            const header = `${costDim}_id,cost_usd,input_tokens,output_tokens,events`;
+            const lines = (res.items || []).map((r) =>
+                [r.id, Number(r.cost_usd || 0).toFixed(6), r.input_tokens, r.output_tokens, r.events].join(','));
+            const blob = new Blob([[header, ...lines].join('\n')], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `cost-by-${costDim}-${costFrom}-${costTo}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+            if (res.total_count > 500) setSuccess(`Exported top 500 of ${res.total_count} rows (current sort).`);
+        } catch (err) {
+            setError((err as Error).message);
+        } finally {
+            setLoadingCost(false);
+        }
     };
 
     const handleExportAbsorptionCsv = async () => {
@@ -3636,7 +3683,7 @@ const EconomicsAdmin: React.FC = () => {
                                             <Button
                                                 variant="secondary"
                                                 onClick={handleExportCostCsv}
-                                                disabled={loadingCost || !costRowsFiltered.length}
+                                                disabled={loadingCost || !costTotals.count}
                                             >
                                                 Export CSV
                                             </Button>
@@ -3644,7 +3691,7 @@ const EconomicsAdmin: React.FC = () => {
                                     }
                                 />
                                 <CardBody className="flex min-h-0 flex-1 flex-col gap-2.5">
-                                    <div className="grid shrink-0 grid-cols-4 gap-2.5 max-w-3xl">
+                                    <div className="grid shrink-0 grid-cols-6 gap-2.5 max-w-5xl">
                                         <Select
                                             label="Group by"
                                             value={costDim}
@@ -3653,6 +3700,30 @@ const EconomicsAdmin: React.FC = () => {
                                             <option value="user">User</option>
                                             <option value="agent">Agent</option>
                                             <option value="app">App</option>
+                                        </Select>
+                                        <Select
+                                            label="Sort by"
+                                            value={costSort}
+                                            onChange={(e) => handleCostSortChange(e.target.value as CostSortBy)}
+                                        >
+                                            <option value="cost">Cost (high first)</option>
+                                            <option value="input_tokens">Input tokens</option>
+                                            <option value="output_tokens">Output tokens</option>
+                                            <option value="events">Events</option>
+                                            <option value="id">Id (A–Z)</option>
+                                        </Select>
+                                        <Select
+                                            label="Page size"
+                                            value={String(costPageSize)}
+                                            onChange={(e) => {
+                                                const size = parseInt(e.target.value, 10) || 50;
+                                                setCostPageSize(size);
+                                                if (costLoaded) void handleLoadCostReport({ pageSize: size });
+                                            }}
+                                        >
+                                            <option value="25">25</option>
+                                            <option value="50">50</option>
+                                            <option value="100">100</option>
                                         </Select>
                                         <Input
                                             label="From"
@@ -3680,23 +3751,24 @@ const EconomicsAdmin: React.FC = () => {
                                         <LoadingSpinner />
                                     ) : !costLoaded ? (
                                         <EmptyState message="Pick a grouping and window, then run the report." icon="🧾" />
-                                    ) : !costRowsFiltered.length ? (
+                                    ) : !costRows.length ? (
                                         <EmptyState message="No usage matches this window and filter." icon="🧾" />
                                     ) : (
                                         <>
                                             <div className="grid shrink-0 grid-cols-3 gap-2 max-w-xl">
                                                 <StatCard
                                                     label="Total spend"
-                                                    value={`$${costRowsFiltered.reduce((s, r) => s + r.costUsd, 0).toFixed(4)}`}
+                                                    value={`$${costTotals.costUsd.toFixed(4)}`}
+                                                    hint="filtered set"
                                                 />
                                                 <StatCard
                                                     label={costDim === 'user' ? 'Users' : costDim === 'agent' ? 'Agents' : 'Apps'}
-                                                    value={costDim === 'user' ? costUserRows.length : costRowsFiltered.length}
-                                                    hint={costSystemRows.length ? `+ ${costSystemRows.length} system` : undefined}
+                                                    value={costTotals.count}
                                                 />
                                                 <StatCard
                                                     label="Events"
-                                                    value={costRowsFiltered.reduce((s, r) => s + r.events, 0)}
+                                                    value={costTotals.events}
+                                                    hint={costSource === 'rollup' ? 'served from DB index' : costSource === 'aggregates' ? 'served from aggregates' : undefined}
                                                 />
                                             </div>
                                             <div className="min-h-0 flex-1 overflow-y-auto rounded-xl border border-[#E6F1F0]">
@@ -3711,15 +3783,8 @@ const EconomicsAdmin: React.FC = () => {
                                                         </tr>
                                                     </thead>
                                                     <tbody>
-                                                        {costUserRows.concat(costSystemRows).map((row, idx) => (
+                                                        {costRows.map((row) => (
                                                             <React.Fragment key={row.id}>
-                                                                {costSystemRows.length > 0 && idx === costUserRows.length && (
-                                                                    <tr className="border-b border-[#E6F1F0] bg-[#FBF7EF]">
-                                                                        <td colSpan={5} className="px-2.5 py-1 text-[10.5px] font-bold uppercase tracking-[0.1em] text-[#B07C1B]">
-                                                                            System principals — app runs without an attributed identity
-                                                                        </td>
-                                                                    </tr>
-                                                                )}
                                                                 <tr
                                                                     className="cursor-pointer border-b border-[#F0F6F5] hover:bg-[#FAFCFC]"
                                                                     onClick={() =>
@@ -3758,6 +3823,29 @@ const EconomicsAdmin: React.FC = () => {
                                                         ))}
                                                     </tbody>
                                                 </table>
+                                            </div>
+                                            <div className="flex shrink-0 items-center justify-between">
+                                                <span className="text-[11.5px] text-[#7A99B0]">
+                                                    {costTotals.count
+                                                        ? `${costOffset + 1}–${Math.min(costOffset + costRows.length, costTotals.count)} of ${costTotals.count}`
+                                                        : '0 rows'}
+                                                </span>
+                                                <div className="flex gap-1.5">
+                                                    <Button
+                                                        variant="secondary"
+                                                        onClick={() => handleCostPage(-1)}
+                                                        disabled={loadingCost || costOffset === 0}
+                                                    >
+                                                        ← Prev
+                                                    </Button>
+                                                    <Button
+                                                        variant="secondary"
+                                                        onClick={() => handleCostPage(1)}
+                                                        disabled={loadingCost || costOffset + costRows.length >= costTotals.count}
+                                                    >
+                                                        Next →
+                                                    </Button>
+                                                </div>
                                             </div>
                                         </>
                                     )}

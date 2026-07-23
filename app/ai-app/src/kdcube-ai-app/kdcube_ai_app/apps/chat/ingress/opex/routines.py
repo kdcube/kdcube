@@ -244,6 +244,38 @@ def _compute_next_run(now: datetime) -> datetime:
         return it.get_next(datetime)
 
 
+async def _update_spend_rollup(tenant: str, project: str, day: str) -> None:
+    """Write the day's derived spend-rollup rows (DB reporting index).
+
+    Skips silently when no Postgres pool is configured — the file aggregates
+    stay authoritative either way.
+    """
+    import json as _json
+
+    from kdcube_ai_app.apps.chat.ingress.resolvers import get_pg_pool
+    from kdcube_ai_app.apps.chat.ingress.opex import spend_rollup
+    from kdcube_ai_app.infra.accounting.calculator import RateCalculator
+
+    pool = await get_pg_pool()
+    if pool is None:
+        logger.info("[OPEX Aggregator] No PG pool; skipping spend-rollup for %s", day)
+        return
+
+    settings = get_settings()
+    backend = create_storage_backend(settings.STORAGE_PATH or "file:///tmp/kdcube_data")
+    calc = RateCalculator(backend, base_path="accounting", agg_base="analytics")
+
+    try:
+        services_config = _json.loads(settings.PLATFORM.ACCOUNTING.ACCOUNTING_SERVICES or "{}")
+    except Exception:
+        services_config = {}
+
+    await spend_rollup.upsert_day(
+        pool, tenant=tenant, project=project, day=day,
+        calc=calc, services_config=services_config,
+    )
+
+
 async def run_aggregation_range(start: date, end: date) -> None:
     """
     Run daily + monthly aggregation for each date in [start, end], inclusive.
@@ -332,6 +364,18 @@ async def _run_daily_and_monthly_for_date(run_date: date, *, recompute: bool = F
             "[OPEX Aggregator] Aggregation done for %s/%s on %s",
             tenant, project, run_date.isoformat()
         )
+
+        # Refresh the derived spend-rollup index from the aggregates just
+        # written. Failure here never fails aggregation: the files are the
+        # source of truth and the reader falls back to them.
+        try:
+            await _update_spend_rollup(tenant, project, date_str)
+        except Exception:
+            logger.exception(
+                "[OPEX Aggregator] spend-rollup update failed for %s/%s on %s "
+                "(reports fall back to file aggregates)",
+                tenant, project, date_str
+            )
 
     except Exception:
         logger.exception(
