@@ -4,7 +4,7 @@
 
 # KDCube
 
-**The open-source, self-hosted production runtime for AI applications.**
+**The open-source, self-hosted production runtime for AI applications and agents.**
 
 <p>
   <a href="https://github.com/kdcube/kdcube/actions/workflows/release-kdcube-platform.yml"><img src="https://img.shields.io/github/actions/workflow/status/kdcube/kdcube/release-kdcube-platform.yml?branch=main&label=build" alt="Build status"></a>
