@@ -236,6 +236,11 @@ def _compute_cost_estimate(rollup: List[dict]) -> dict:
         cost_usd = 0.0
         tier = None  # for web_search
         pr = {}
+        # Provider-REPORTED cost accumulated in the rollup (e.g. runtimes that
+        # self-report spend and have no price-table entry). Same rule as the
+        # settlement path in RateCalculator.calculate_turn_costs: a price-table
+        # entry wins; otherwise the reported cost is the ground truth.
+        direct_cost_usd = float(spent.get("cost_usd", 0.0) or 0.0)
 
         if service == "llm":
             pr = _find_llm_price(provider, model)
@@ -264,11 +269,15 @@ def _compute_cost_estimate(rollup: List[dict]) -> dict:
                     cache_write_cost = (cache_write_tokens / 1_000_000.0) * cache_write_price
 
                 cost_usd = input_cost + output_cost + cache_write_cost + cache_read_cost
+            elif direct_cost_usd > 0:
+                cost_usd = direct_cost_usd
 
         elif service == "embedding":
             pr = _find_emb_price(provider, model)
             if pr:
                 cost_usd = (float(spent.get("tokens", 0)) / 1_000_000.0) * float(pr.get("tokens_1M", 0.0))
+            elif direct_cost_usd > 0:
+                cost_usd = direct_cost_usd
 
         elif service == "web_search":
             # NEW: web_search cost calculation
@@ -439,6 +448,57 @@ async def get_usage_by_user(
     except Exception as e:
         logger.exception(f"[get_usage_by_user] {tenant}/{project} failed")
         raise HTTPException(status_code=500, detail=f"Failed to query user usage: {str(e)}")
+
+@router.get("/apps")
+async def get_usage_by_app(
+        request: Request,
+        tenant: str = Query(..., description="Tenant ID"),
+        project: str = Query(..., description="Project ID"),
+        date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
+        date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
+        service_types: Optional[str] = Query(None, description="Comma-separated service types"),
+        hard_file_limit: Optional[int] = Query(None, description="Max files to scan"),
+        session: UserSession = Depends(auth_without_pressure())
+):
+    """
+    Query usage broken down by app (keyed by the app's technical bundle id).
+
+    Returns:
+        - apps: Dict of bundle_id -> {total, rollup, event_count}
+        - total_apps: Count of apps
+        - cost_estimate: Per-app cost estimates
+    """
+    try:
+        calc = _get_calculator(request)
+
+        service_types_list = None
+        if service_types:
+            service_types_list = [s.strip() for s in service_types.split(",")]
+
+        by_app = await calc.usage_by_app(
+            tenant_id=tenant,
+            project_id=project,
+            date_from=date_from,
+            date_to=date_to,
+            service_types=service_types_list,
+            hard_file_limit=hard_file_limit,
+        )
+
+        app_costs = {}
+        for b_id, app_data in by_app.items():
+            if app_data.get("rollup"):
+                app_costs[b_id] = _compute_cost_estimate(app_data["rollup"])
+
+        return {
+            "status": "ok",
+            "apps": by_app,
+            "total_apps": len(by_app),
+            "cost_estimate": app_costs
+        }
+
+    except Exception as e:
+        logger.exception(f"[get_usage_by_app] {tenant}/{project} failed")
+        raise HTTPException(status_code=500, detail=f"Failed to query app usage: {str(e)}")
 
 @router.get("/conversation")
 async def get_conversation_usage(

@@ -222,9 +222,54 @@ Aggregates are written under:
 
 ```
 analytics/<tenant>/<project>/accounting/
+    daily/<YYYY>/<MM>/<DD>/{total,users,agents,apps}.json
+    monthly/<YYYY>/<MM>/{total,users,agents,apps}.json
+    yearly/<YYYY>/{total,users,agents,apps}.json
+    hourly/<YYYY>/<MM>/<DD>/<HH>/total.json
 ```
 
-OPEX endpoints in `src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/opex/opex.py` read from both raw and aggregated data.
+Three per-dimension file families exist: **users** (`user_id`), **agents**
+(`agent_name`), and **apps** (`apps.json`, keyed by the app's technical
+`bundle_id` from the event's `app_bundle_id`). Raw event files are read with
+bounded concurrency (`AccountingAggregator(read_concurrency=…)`, default 32).
+
+Two schedulers keep aggregates current (both in `opex/routines.py`, started by
+the opex lifespan):
+
+- **nightly** (`OPEX_AGG_CRON` / assembly `routines.opex.agg_cron`, default
+  03:00 Berlin) — aggregates *yesterday*, then folds the month.
+- **today-refresh** (`OPEX_TODAY_REFRESH_CRON` / assembly
+  `routines.opex.today_refresh_cron`, default hourly; `off` disables) —
+  recomputes *today* and refolds the month, so windows including the current
+  day are served from aggregates at most one interval stale instead of raw
+  scans per request.
+
+`RateCalculator.usage_by_user(...)` / `usage_by_app(...)` accept
+`aggregates_only=True`: latency-sensitive callers (user-facing dashboards)
+skip the raw-scan fallback — which reads every event file in the window — and
+report "window not aggregated" instead. `POST
+/api/opex/admin/run-aggregation-range` backfills a window synchronously and is
+resumable: a day is skipped only when **all** its dimension files exist, so a
+range aggregated before a new dimension was introduced regenerates cleanly.
+
+**Reported-cost rule** (shared with turn settlement): when pricing a rollup
+line, a price-table entry wins; a line without one is priced at the
+provider-reported cost accumulated in `spent.cost_usd` (e.g. runtimes that
+self-report spend). See `_compute_cost_estimate` in `opex/opex.py` and the
+same rule in `RateCalculator.calculate_turn_costs`.
+
+Spend-report surfaces on top of this data:
+
+- `GET /api/opex/users` / `/agents` / `/apps` — per-dimension usage + true
+  per-model cost (admin).
+- `GET /api/economics/me/cost-breakdown` — the authenticated user's actual
+  per-model spend (aggregates-only; `coverage` flags un-aggregated windows).
+- Economics admin dashboard **Cost Report** tab
+  (`apps/chat/ingress/control_plane/EconomicsDashboard.tsx`) — group by
+  user/agent/app, id filter, CSV export, and a **Rebuild aggregates** action
+  over `run-aggregation-range`. In the user grouping, recorded system
+  principals (e.g. events whose `user_id` is literally `bundle`) are listed
+  separately from people.
 
 See:
 

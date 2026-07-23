@@ -1637,6 +1637,189 @@ class AccountingCalculator:
 
         return result
 
+    async def _usage_by_dimension_with_aggregates(
+            self,
+            *,
+            tenant_id: str,
+            project_id: str,
+            date_from: str,
+            date_to: str,
+            filename: str,
+            list_key: str,
+            id_key: str,
+    ) -> Optional[Dict[str, Dict[str, Any]]]:
+        """
+        Generic aggregate walk for a per-<dimension> file family, using the
+        largest fully-covered buckets (yearly → monthly → daily), same walk
+        as the user/agent readers. Returns {id: {total, rollup, event_count}}
+        or None when no aggregate file contributed data (caller decides on
+        raw-scan fallback).
+        """
+        try:
+            df = _parse_iso_date(date_from)
+            dt = _parse_iso_date(date_to)
+        except Exception:
+            return None
+        if df > dt:
+            return None
+
+        from calendar import monthrange
+
+        totals: Dict[str, Dict[str, Any]] = {}
+        rollups: Dict[str, Dict[Tuple[str, str, str], Dict[str, int]]] = {}
+        events: Dict[str, int] = {}
+        any_data = False
+
+        def _merge_item(item: Dict[str, Any]) -> None:
+            nonlocal any_data
+            raw_id = item.get(id_key)
+            if not raw_id:
+                return
+            dim_id = str(raw_id)
+            any_data = True
+            if dim_id not in totals:
+                totals[dim_id] = _new_usage_acc()
+                rollups[dim_id] = {}
+                events[dim_id] = 0
+            _accumulate(totals[dim_id], item.get("total") or {})
+            events[dim_id] += int(item.get("event_count") or 0)
+            for r in item.get("rollup", []):
+                key = (r.get("service"), r.get("provider") or "", r.get("model") or "")
+                existing = rollups[dim_id].get(key)
+                if not existing:
+                    existing = _spent_seed(r.get("service") or "")
+                    rollups[dim_id][key] = existing
+                for k, v in (r.get("spent") or {}).items():
+                    existing[k] = int(existing.get(k, 0)) + int(v or 0)
+
+        async def _merge_file(path: str) -> bool:
+            try:
+                if await self.fs.exists_a(path):
+                    payload = json.loads(await self.fs.read_text_a(path))
+                    for item in payload.get(list_key, []):
+                        _merge_item(item)
+                    return True
+            except Exception:
+                pass
+            return False
+
+        base = f"{self.agg_base}/{tenant_id}/{project_id}/accounting"
+        year = df.year
+        while year <= dt.year:
+            if df <= date(year, 1, 1) and dt >= date(year, 12, 31):
+                if await _merge_file(f"{base}/yearly/{year:04d}/{filename}"):
+                    year += 1
+                    continue
+
+            month_start_idx = 1 if year > df.year else df.month
+            month_end_idx = 12 if year < dt.year else dt.month
+            for month in range(month_start_idx, month_end_idx + 1):
+                m_start = date(year, month, 1)
+                _, last_day = monthrange(year, month)
+                m_end = date(year, month, last_day)
+                if df <= m_start and dt >= m_end:
+                    if await _merge_file(f"{base}/monthly/{year:04d}/{month:02d}/{filename}"):
+                        continue
+                cur = max(df, m_start)
+                d1 = min(dt, m_end)
+                while cur <= d1:
+                    await _merge_file(
+                        f"{base}/daily/{cur.year:04d}/{cur.month:02d}/{cur.day:02d}/{filename}"
+                    )
+                    cur += timedelta(days=1)
+            year += 1
+
+        if not any_data:
+            return None
+
+        result: Dict[str, Dict[str, Any]] = {}
+        for dim_id in totals.keys():
+            breakdown = []
+            for (service, provider, model), spent in sorted(rollups[dim_id].items()):
+                breakdown.append(
+                    {
+                        "service": service,
+                        "provider": provider or None,
+                        "model": model or None,
+                        "spent": _serialize_spent(spent),
+                    }
+                )
+            result[dim_id] = {
+                "total": totals[dim_id],
+                "rollup": breakdown,
+                "event_count": events.get(dim_id, 0),
+            }
+        return result
+
+    async def usage_by_app(
+            self,
+            *,
+            tenant_id: str,
+            project_id: str,
+            date_from: str,
+            date_to: str,
+            service_types: Optional[List[str]] = None,
+            hard_file_limit: Optional[int] = None,
+            aggregates_only: bool = False,
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Spendings per app in a timeframe, keyed by the app's technical
+        bundle id (the event's app_bundle_id).
+
+        Prefers the per-app aggregate files (apps.json); falls back to a raw
+        scan grouped by app_bundle_id unless aggregates_only is set (the raw
+        scan reads every event file in the window).
+        """
+        try:
+            agg_res = await self._usage_by_dimension_with_aggregates(
+                tenant_id=tenant_id,
+                project_id=project_id,
+                date_from=date_from,
+                date_to=date_to,
+                filename="apps.json",
+                list_key="apps",
+                id_key="bundle_id",
+            )
+        except Exception:
+            logger.exception("[usage_by_app] aggregate path failed")
+            agg_res = None
+
+        if agg_res is not None:
+            return agg_res
+        if aggregates_only:
+            return {}
+
+        query = AccountingQuery(
+            tenant_id=tenant_id,
+            project_id=project_id,
+            date_from=date_from,
+            date_to=date_to,
+            service_types=service_types,
+            hard_file_limit=hard_file_limit,
+        )
+        result = await self.query_usage(query, group_by=["app_bundle_id"])
+
+        by_app: Dict[str, Dict[str, Any]] = {}
+        for _key, usage in result["groups"].items():
+            b_id = usage.get("app_bundle_id")
+            if b_id:
+                by_app[str(b_id)] = {
+                    "total": usage,
+                    "event_count": int(usage.get("requests", 0) or 0),
+                }
+        for b_id in list(by_app.keys()):
+            app_query = AccountingQuery(
+                tenant_id=tenant_id,
+                project_id=project_id,
+                date_from=date_from,
+                date_to=date_to,
+                app_bundle_id=b_id,
+                service_types=service_types,
+                hard_file_limit=hard_file_limit,
+            )
+            by_app[b_id]["rollup"] = await self.usage_rollup_compact(app_query)
+        return by_app
+
 
 # -----------------------------
 # RateCalculator (extends with time-series and async methods)

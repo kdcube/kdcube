@@ -117,3 +117,61 @@ def test_usage_by_user_aggregates_only_never_raw_scans(storage):
         tenant_id="t", project_id="p", date_from="2026-07-21", date_to="2026-07-21",
         aggregates_only=True))
     assert "alice" in res2 and res2["alice"]["rollup"]
+
+
+def _event_for_app(user, bundle_id, model, inp, out, ts, cost=None):
+    ev = _event(user, model, inp, out, ts)
+    ev["event_id"] = f"ev-{user}-{bundle_id}-{model}-{ts}"
+    ev["app_bundle_id"] = bundle_id
+    if cost is not None:
+        ev["usage"]["cost_usd"] = cost
+    return ev
+
+
+def test_day_scan_writes_per_app_aggregates(storage):
+    """The app dimension: events group by their app_bundle_id into apps.json,
+    and usage_by_app serves them from aggregates (keyed by the technical
+    bundle id)."""
+    from kdcube_ai_app.infra.accounting.calculator import RateCalculator
+
+    root, backend = storage
+    _write_raw(root, "t", "p", "2026.07.21", [
+        _event_for_app("alice", "news@2026-05-20-12-05", "claude-opus-4-8", 100, 10, "2026-07-21T08:00:00Z"),
+        _event_for_app("alice", "workspace@2026-03-31-13-36", "claude-sonnet-4-5", 200, 20, "2026-07-21T09:00:00Z"),
+        _event_for_app("bob", "news@2026-05-20-12-05", "claude-opus-4-8", 300, 30, "2026-07-21T10:00:00Z"),
+    ])
+    agg = AccountingAggregator(backend)
+    asyncio.run(agg.aggregate_daily_for_project(tenant_id="t", project_id="p", day=date(2026, 7, 21)))
+
+    apps = json.loads((root / "analytics/t/p/accounting/daily/2026/07/21/apps.json").read_text())
+    assert apps["dimension"] == "app"
+    by_id = {a["bundle_id"]: a for a in apps["apps"]}
+    assert set(by_id) == {"news@2026-05-20-12-05", "workspace@2026-03-31-13-36"}
+    assert by_id["news@2026-05-20-12-05"]["event_count"] == 2
+    assert by_id["news@2026-05-20-12-05"]["total"]["input_tokens"] == 400
+
+    calc = RateCalculator(backend, base_path="accounting", agg_base="analytics")
+    res = asyncio.run(calc.usage_by_app(
+        tenant_id="t", project_id="p", date_from="2026-07-21", date_to="2026-07-21",
+        aggregates_only=True))
+    assert set(res) == {"news@2026-05-20-12-05", "workspace@2026-03-31-13-36"}
+    assert res["news@2026-05-20-12-05"]["event_count"] == 2
+
+
+def test_cost_estimate_uses_reported_cost_without_price_entry():
+    """A rollup line whose model has no price-table entry but carries reported
+    cost (spent.cost_usd — e.g. a self-reporting runtime) must be priced at the
+    reported amount, matching the settlement path — not $0."""
+    from kdcube_ai_app.apps.chat.ingress.opex.opex import _compute_cost_estimate
+
+    rollup = [
+        {"service": "llm", "provider": "anthropic", "model": "unknown",
+         "spent": {"input": 1000, "output": 100, "cost_usd": 0.305}},
+        {"service": "llm", "provider": "nobody", "model": "no-price-no-cost",
+         "spent": {"input": 1000, "output": 100}},
+    ]
+    est = _compute_cost_estimate(rollup)
+    by_model = {b["model"]: b["cost_usd"] for b in est["breakdown"]}
+    assert by_model["unknown"] == 0.305
+    assert by_model["no-price-no-cost"] == 0.0
+    assert abs(est["total_cost_usd"] - 0.305) < 1e-9
