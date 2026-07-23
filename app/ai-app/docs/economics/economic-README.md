@@ -5,18 +5,80 @@ summary: "Authoritative economics model and runtime enforcement rules."
 tags: ["economics", "model", "runtime", "control-plane"]
 keywords: ["plans", "wallets", "funding split", "rate limits", "charging", "project scope"]
 see_also:
-  - repo:kdcube-ai-app/app/ai-app/docs/economics/eco-test-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/economic-enforcement-engine-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/economics-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/economics-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/economics-usage.md
   - repo:kdcube-ai-app/app/ai-app/docs/economics/eco-admin-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/economics/eco-kickoff-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/economics/economic-enforcement-engine-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/eco-test-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/operational-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/stripe-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/rate-limit-simulation-playbook.md
+  - repo:kdcube-ai-app/app/ai-app/docs/accounting/accounting-README.md
 ---
 # Economics Model (Control Plane)
 
 This document is the authoritative description of the current economics model and how it is enforced at runtime.
 It replaces the older usage notes and reflects the production app flow and control‑plane schema.
 
-Runtime entrypoint:
-- [entrypoint_with_economic.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/chatbot/entrypoint_with_economic.py)
+## Code map
+
+Where each mechanism described below lives (paths under
+`src/kdcube-ai-app/kdcube_ai_app/`):
+
+- [entrypoint_with_economic.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/chatbot/entrypoint_with_economic.py) —
+  the economics-aware chat entrypoint: pre-run estimate → admit → reserve,
+  post-run accounting → settle, for every chat turn.
+- [enforcement.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/infra/economics/enforcement.py) —
+  **`EconomicsGuard`**: the same enforcement as an async context manager for any
+  accountable flow (API operation, background job, standalone search). Entry:
+  estimate → resolve plan/funding → admit → reserve → bind accounting; exit:
+  aggregate → settle.
+- [funding_flow.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/infra/economics/funding_flow.py) —
+  the unified funding split: estimate, reservation, `settle_plan_funding`.
+- [settlement_allocation.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/infra/economics/settlement_allocation.py) —
+  the plan-first / wallet-overflow settlement split and shortfall tagging.
+- [limiter.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/infra/economics/limiter.py) —
+  `UserEconomicsRateLimiter`: quota admission (tokens, requests, concurrency).
+- [quota_lock.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/infra/economics/quota_lock.py) —
+  distributed admit→reserve serialization so concurrent turns cannot
+  double-spend quota headroom.
+- [plan_resolution.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/infra/economics/plan_resolution.py) —
+  `resolve_plan_id` and `subscription_is_active` (the shared plan-resolution
+  rules documented below).
+- [defaults.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/infra/economics/defaults.py) —
+  `DEFAULT_QUOTA_POLICIES`, the built-in plan baseline the descriptor overlays.
+- [descriptor.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/infra/economics/descriptor.py) —
+  runtime reader of the economics descriptor (`reservation.chat`,
+  `price_tables`, reference service).
+- [usage.py](../../src/kdcube-ai-app/kdcube_ai_app/infra/accounting/usage.py) —
+  `price_table()` / `DEFAULT_PRICE_TABLE` and the USD↔reference-token
+  conversion used for reservations and quota units.
+- [project_budget.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/infra/economics/project_budget.py) /
+  [subscription_budget.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/infra/economics/subscription_budget.py) —
+  project and subscription budget limiters (holds, ledgers, absorption).
+- [subscription.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/infra/economics/subscription.py) —
+  subscription periods, top-ups, rollovers (`SubscriptionManager`).
+- [user_budget.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/infra/economics/user_budget.py) —
+  the quota-equivalent budget breakdown behind the user billing widget.
+- [economics_seed.py](../../src/kdcube-ai-app/kdcube_ai_app/ops/deployment/economics/economics_seed.py) —
+  deploy-time seeder: descriptor → control-plane rows (see the seeding flow
+  below).
+
+## Related economics docs
+
+- [economic-enforcement-engine-README.md](./economic-enforcement-engine-README.md) — the enforcement engine deep dive: `EconomicsSubject`, admission/reservation/settlement lifecycle, `[economics.enforcement]` tracing.
+- [economics-descriptor-README.md](./economics-descriptor-README.md) — the `economics.yaml` descriptor: seeded vs runtime-read sections, `price_tables`, `reservation`, plans.
+- [economics-events-README.md](./economics-events-README.md) — the SSE events (`rate_limit.*`, snapshots, absorption) clients render.
+- [economics-usage.md](./economics-usage.md) — Redis key map and where money truth lives (PostgreSQL) vs fast counters (Redis).
+- [eco-admin-README.md](./eco-admin-README.md) — admin operations: plans, overrides, budgets, absorption report.
+- [eco-kickoff-README.md](./eco-kickoff-README.md) — funding-source and plan model orientation.
+- [eco-test-README.md](./eco-test-README.md) — how to verify enforcement behavior end to end.
+- [operational-README.md](./operational-README.md) — request lineage and operational checks.
+- [stripe-README.md](./stripe-README.md) — external subscriptions, checkout, webhooks.
+- [rate-limit-simulation-playbook.md](./rate-limit-simulation-playbook.md) — simulating limits before changing them.
+- [../accounting/accounting-README.md](../accounting/accounting-README.md) — the usage events economics consumes: tracking decorators, storage, aggregation, pricing.
 
 ## Scope
 
@@ -163,7 +225,8 @@ Global quota counters use the sentinel `__project__` in the bundle-id slot of Re
 Seeding flow:
 
 - Plan quotas are **seeded at deploy time** from the economics descriptor
-  (`deployment/economics.yaml`) by the postgres-setup job (see
+  (`deployment/economics.yaml`) by the postgres-setup job via
+  [economics_seed.py](../../src/kdcube-ai-app/kdcube_ai_app/ops/deployment/economics/economics_seed.py) (see
   [economics-descriptor-README.md](./economics-descriptor-README.md)).
 - The mandatory plans (`anonymous`/`free`/`wallet`/`admin`) have a built-in baseline
   (`DEFAULT_QUOTA_POLICIES`, the single source shared with the seeder); descriptor entries
@@ -284,7 +347,7 @@ from rollover.
 
 Maintenance entry points:
 
-- `SubscriptionManager.sweep_due_subscription_rollovers(...)`
+- [`SubscriptionManager.sweep_due_subscription_rollovers(...)`](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/infra/economics/subscription.py)
 - Control plane endpoint: `POST /subscriptions/rollover/sweep`
 - Reservation reaper: `POST /subscriptions/reservations/reap-all`
 
@@ -315,9 +378,11 @@ Key tables:
 
 ## Accounting and Costing
 
-Accounting events are emitted by service wrappers (LLM calls, web search, etc.).
+Accounting events are emitted by service wrappers (LLM calls, web search, etc.) —
+see [accounting-README.md](../accounting/accounting-README.md) for the tracking
+decorators, storage, and aggregation.
 Events are aggregated per turn and priced in USD from **each model's own**
-price-table entry — the actual dollar cost is reference-independent. The reference
+[price-table](../../src/kdcube-ai-app/kdcube_ai_app/infra/accounting/usage.py) entry — the actual dollar cost is reference-independent. The reference
 model then converts that USD into the **token unit** for the token-denominated
 surface (the RL quota).
 
