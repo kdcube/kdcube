@@ -63,9 +63,8 @@ _storage_factory: Callable[[Any], Any] | None = None
 _storage_root_or_error: Callable[[Any], Any] | None = None
 _migrate_telegram_user_to_kdcube_scope: Callable[..., Any] | None = None
 _CONFIGS: Dict[str, Dict[str, Any]] = {}
-_conversation_locks_guard = threading.Lock()
-_conversation_locks: dict[str, asyncio.Lock] = {}
-_admission_locks: dict[str, asyncio.Lock] = {}
+_inline_turn_locks_guard = threading.Lock()
+_inline_turn_locks: dict[str, asyncio.Lock] = {}
 
 
 def configure_telegram_user_admin(
@@ -286,7 +285,7 @@ def _scope_prefix(entrypoint: Any) -> str:
     return f"{tenant or 'tenant'}:{project or 'project'}"
 
 
-def _telegram_conversation_lock_key(entrypoint: Any, summary: Dict[str, Any]) -> str:
+def _telegram_inline_turn_lock_key(entrypoint: Any, summary: Dict[str, Any]) -> str:
     chat_id = str(summary.get("chat_id") or "unknown").strip()
     telegram_user_id = str(summary.get("user_id") or chat_id or "anonymous").strip()
     conversation_id = str(summary.get("conversation_id") or "").strip()
@@ -304,24 +303,13 @@ def _telegram_conversation_lock_key(entrypoint: Any, summary: Dict[str, Any]) ->
     return f"{_scope_prefix(entrypoint)}:{conversation_id or f'telegram_chat_{chat_id}'}"
 
 
-def _telegram_conversation_lock(key: str) -> asyncio.Lock:
+def _telegram_inline_turn_lock(key: str) -> asyncio.Lock:
     loop_key = f"{id(asyncio.get_running_loop())}:{key}"
-    with _conversation_locks_guard:
-        lock = _conversation_locks.get(loop_key)
+    with _inline_turn_locks_guard:
+        lock = _inline_turn_locks.get(loop_key)
         if lock is None:
             lock = asyncio.Lock()
-            _conversation_locks[loop_key] = lock
-        return lock
-
-
-def _telegram_admission_lock(key: str) -> asyncio.Lock:
-    """Serialize webhook preparation and ingress admission, not turn execution."""
-    loop_key = f"{id(asyncio.get_running_loop())}:{key}"
-    with _conversation_locks_guard:
-        lock = _admission_locks.get(loop_key)
-        if lock is None:
-            lock = asyncio.Lock()
-            _admission_locks[loop_key] = lock
+            _inline_turn_locks[loop_key] = lock
         return lock
 
 
@@ -1098,7 +1086,6 @@ async def run_with_queued_telegram_delivery(entrypoint: Any, *, runner: Any) -> 
         or getattr(getattr(comm_context, "routing", None), "turn_id", "")
         or ""
     ).strip()
-    lock_key = _telegram_conversation_lock_key(entrypoint, telegram_meta)
     stream_enabled = bool(
         _telegram_definition_prop(entrypoint, "stream_activity", True, integration_id=integration_id)
         and _telegram_definition_prop(entrypoint, "send_responses", True, integration_id=integration_id)
@@ -1106,29 +1093,28 @@ async def run_with_queued_telegram_delivery(entrypoint: Any, *, runner: Any) -> 
     stream_show_progress = bool(
         _telegram_definition_prop(entrypoint, "stream_activity_display", True, integration_id=integration_id)
     )
-    async with _telegram_conversation_lock(lock_key):
-        async with TelegramActivityStreamer(
-            comm=getattr(entrypoint, "comm", None),
-            bot_token=await _bot_token_value(entrypoint, integration_id=integration_id),
-            chat_id=chat_id,
-            turn_id=turn_id,
-            enabled=stream_enabled,
-            show_progress=stream_show_progress,
-        ) as telegram_streamer:
-            result = await runner()
-        if not isinstance(result, dict):
-            result = {}
-        delivery = await deliver_react_turn_to_telegram(
-            bundle_id=bundle_id,
-            bot_token=await _bot_token_value(entrypoint, integration_id=integration_id),
-            chat_id=chat_id,
-            update_id=update_id,
-            react_turn=result,
-            delivered_file_keys=telegram_streamer.delivered_file_keys() if telegram_streamer else set(),
-            progress_message_id=telegram_streamer.progress_message_id() if telegram_streamer else None,
-            progress_summary=telegram_streamer.progress_summary() if telegram_streamer else "",
-            send_responses=bool(_telegram_definition_prop(entrypoint, "send_responses", True, integration_id=integration_id)),
-        )
+    async with TelegramActivityStreamer(
+        comm=getattr(entrypoint, "comm", None),
+        bot_token=await _bot_token_value(entrypoint, integration_id=integration_id),
+        chat_id=chat_id,
+        turn_id=turn_id,
+        enabled=stream_enabled,
+        show_progress=stream_show_progress,
+    ) as telegram_streamer:
+        result = await runner()
+    if not isinstance(result, dict):
+        result = {}
+    delivery = await deliver_react_turn_to_telegram(
+        bundle_id=bundle_id,
+        bot_token=await _bot_token_value(entrypoint, integration_id=integration_id),
+        chat_id=chat_id,
+        update_id=update_id,
+        react_turn=result,
+        delivered_file_keys=telegram_streamer.delivered_file_keys() if telegram_streamer else set(),
+        progress_message_id=telegram_streamer.progress_message_id() if telegram_streamer else None,
+        progress_summary=telegram_streamer.progress_summary() if telegram_streamer else "",
+        send_responses=bool(_telegram_definition_prop(entrypoint, "send_responses", True, integration_id=integration_id)),
+    )
     result["telegram"] = {
         "queued_delivery": True,
         "chat_id": chat_id,
@@ -1175,31 +1161,30 @@ async def handle_webhook(entrypoint: Any, request: Any = None, **update) -> Dict
             "idempotency": claim,
         }
 
-    # Keep Telegram updates ordered through attachment hydration and ingress
-    # admission. This short lock is distinct from the execution/delivery lock:
-    # `/stop` must reach the shared ingress while the current turn is still live.
-    admission_key = _telegram_conversation_lock_key(entrypoint, summary)
+    # Webhook preparation and submission deliberately do not use a process-local
+    # conversation lock. Scaled replicas coordinate admission through shared chat
+    # ingress, conversation-state CAS, and the retained event lane. In particular,
+    # `/stop` must be able to reach ingress while the current turn is still live.
     try:
-        async with _telegram_admission_lock(admission_key):
-            if summary.get("attachments"):
-                log.info(
-                    "[%s] telegram attachments hydrate start | update_id=%s attachments=%s",
-                    bundle_id,
-                    update_id,
-                    _attachment_log_items(list(summary.get("attachments") or [])),
-                )
-                summary["attachments"] = await hydrate_telegram_attachments(
-                    attachments=list(summary.get("attachments") or []),
-                    bot_token=await _bot_token_value(entrypoint, integration_id=str(summary.get("integration_id") or "")),
-                    message_id=summary.get("message_id"),
-                )
-                log.info(
-                    "[%s] telegram attachments hydrate finished | update_id=%s attachments=%s",
-                    bundle_id,
-                    update_id,
-                    _attachment_log_items(list(summary.get("attachments") or [])),
-                )
-            submitted_turn = await submit_react_turn(entrypoint, summary=summary)
+        if summary.get("attachments"):
+            log.info(
+                "[%s] telegram attachments hydrate start | update_id=%s attachments=%s",
+                bundle_id,
+                update_id,
+                _attachment_log_items(list(summary.get("attachments") or [])),
+            )
+            summary["attachments"] = await hydrate_telegram_attachments(
+                attachments=list(summary.get("attachments") or []),
+                bot_token=await _bot_token_value(entrypoint, integration_id=str(summary.get("integration_id") or "")),
+                message_id=summary.get("message_id"),
+            )
+            log.info(
+                "[%s] telegram attachments hydrate finished | update_id=%s attachments=%s",
+                bundle_id,
+                update_id,
+                _attachment_log_items(list(summary.get("attachments") or [])),
+            )
+        submitted_turn = await submit_react_turn(entrypoint, summary=summary)
     except Exception as exc:
         await asyncio.to_thread(telegram_store.fail_telegram_update, update_id=update_id, error=str(exc))
         raise
@@ -1246,11 +1231,11 @@ async def handle_webhook(entrypoint: Any, request: Any = None, **update) -> Dict
         await asyncio.to_thread(telegram_store.complete_telegram_update, update_id=update_id, result=result_payload)
         return result_payload
 
-    # Inline fallback (no chat_submitter available): this path bypasses the ingress CAS
-    # gate, so the per-conversation lock is the only serializer preventing two concurrent
-    # inline turns for one conversation from racing shared timeline/delivery state.
-    lock_key = _telegram_conversation_lock_key(entrypoint, summary)
-    turn_lock = _telegram_conversation_lock(lock_key)
+    # Inline fallback (no chat_submitter available): this path runs entirely in the
+    # current process and bypasses shared ingress. Its local lock only protects two
+    # inline coroutines in this process; it is not a distributed conversation fence.
+    lock_key = _telegram_inline_turn_lock_key(entrypoint, summary)
+    turn_lock = _telegram_inline_turn_lock(lock_key)
     await turn_lock.acquire()
     lock_held = True
     try:

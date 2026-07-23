@@ -32,11 +32,9 @@ bundle telegram_webhook(...)
   -> telegram_user_admin.handle_webhook(entrypoint, **update)
        - summarize Telegram update
        - claim update_id for idempotency
-       - acquire short per-conversation admission lock
        - hydrate Telegram files when needed
        - resolve registered/admin Telegram user
        - call submit_react_turn(...)
-       - release admission lock before turn execution
             |
             v
             ChatIngressSubmitter.submit(...)
@@ -65,12 +63,13 @@ where `entrypoint.chat_submitter.submit` is not available or the SDK cannot
 submit a registered Telegram user to chat ingress. Reference bundles should use
 the submitter path.
 
-The submit path uses a short per-conversation admission lock around attachment
-hydration and `ChatIngressSubmitter.submit(...)`. This preserves Telegram update
-order without waiting for the current turn to finish. The separate execution
-lock belongs to the inline fallback and
-`run_with_queued_telegram_delivery(...)`; it prevents concurrent turns from
-streaming or finalizing over each other, but it never delays `/stop` admission.
+The submit path does not use a process-local conversation lock. Such a lock
+cannot order requests across processors or replicas. Shared chat ingress,
+conversation-state compare-and-set, and the retained Redis event lane own
+admission and turn-order correctness. Queued execution and delivery rely on that
+shared ownership as well. Only the explicitly inline fallback uses a local
+execution lock, because that fallback runs entirely inside one process and does
+not claim distributed coordination. No local lock gates `/stop` admission.
 
 `/stop` is normalized to the same `event.user.steer` event used by classic chat
 and passes through the same shared ingress and Redis lane. It is accepted only
