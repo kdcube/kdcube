@@ -65,6 +65,7 @@ _migrate_telegram_user_to_kdcube_scope: Callable[..., Any] | None = None
 _CONFIGS: Dict[str, Dict[str, Any]] = {}
 _conversation_locks_guard = threading.Lock()
 _conversation_locks: dict[str, asyncio.Lock] = {}
+_admission_locks: dict[str, asyncio.Lock] = {}
 
 
 def configure_telegram_user_admin(
@@ -184,8 +185,11 @@ def _telegram_external_events(
     def _timestamp() -> str:
         return datetime.utcnow().isoformat() + "Z"
 
-    if text:
-        normalized_type = str(text_event_type or "event.user.prompt").strip() or "event.user.prompt"
+    normalized_type = str(text_event_type or "event.user.prompt").strip() or "event.user.prompt"
+    # A steer may carry no text: an empty steer is the "stop" control. Mirror the web
+    # client, which allows an empty body only for event.user.steer; every other type
+    # still needs text to produce an event.
+    if text or normalized_type == "event.user.steer":
         event_suffix = normalized_type.rsplit(".", 1)[-1] or "prompt"
         event_id = f"telegram.{event_suffix}.{uuid.uuid4().hex[:12]}"
         events.append(
@@ -307,6 +311,17 @@ def _telegram_conversation_lock(key: str) -> asyncio.Lock:
         if lock is None:
             lock = asyncio.Lock()
             _conversation_locks[loop_key] = lock
+        return lock
+
+
+def _telegram_admission_lock(key: str) -> asyncio.Lock:
+    """Serialize webhook preparation and ingress admission, not turn execution."""
+    loop_key = f"{id(asyncio.get_running_loop())}:{key}"
+    with _conversation_locks_guard:
+        lock = _admission_locks.get(loop_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _admission_locks[loop_key] = lock
         return lock
 
 
@@ -1160,54 +1175,85 @@ async def handle_webhook(entrypoint: Any, request: Any = None, **update) -> Dict
             "idempotency": claim,
         }
 
+    # Keep Telegram updates ordered through attachment hydration and ingress
+    # admission. This short lock is distinct from the execution/delivery lock:
+    # `/stop` must reach the shared ingress while the current turn is still live.
+    admission_key = _telegram_conversation_lock_key(entrypoint, summary)
+    try:
+        async with _telegram_admission_lock(admission_key):
+            if summary.get("attachments"):
+                log.info(
+                    "[%s] telegram attachments hydrate start | update_id=%s attachments=%s",
+                    bundle_id,
+                    update_id,
+                    _attachment_log_items(list(summary.get("attachments") or [])),
+                )
+                summary["attachments"] = await hydrate_telegram_attachments(
+                    attachments=list(summary.get("attachments") or []),
+                    bot_token=await _bot_token_value(entrypoint, integration_id=str(summary.get("integration_id") or "")),
+                    message_id=summary.get("message_id"),
+                )
+                log.info(
+                    "[%s] telegram attachments hydrate finished | update_id=%s attachments=%s",
+                    bundle_id,
+                    update_id,
+                    _attachment_log_items(list(summary.get("attachments") or [])),
+                )
+            submitted_turn = await submit_react_turn(entrypoint, summary=summary)
+    except Exception as exc:
+        await asyncio.to_thread(telegram_store.fail_telegram_update, update_id=update_id, error=str(exc))
+        raise
+
+    if submitted_turn is not None:
+        ingress = submitted_turn.get("ingress") if isinstance(submitted_turn.get("ingress"), dict) else {}
+        stage = "webhook-ack"
+        if submitted_turn.get("mode") == "submitted":
+            ingress_reason = str(ingress.get("reason") or "")
+            if ingress_reason.startswith("active_turn_control_"):
+                stage = "telegram-control-noop"
+            elif ingress_reason.endswith("_accepted") and bool(ingress.get("is_continuation")):
+                stage = "telegram-continuation"
+            else:
+                stage = "queued-react-turn" if submitted_turn.get("accepted") else "submit-rejected"
+        result_payload = {
+            "ok": True,
+            "accepted": bool(submitted_turn.get("accepted", True)),
+            "stage": stage,
+            "summary": _telegram_payload_summary(summary),
+            "react_turn": None,
+            "chat_ingress": submitted_turn,
+            "telegram_response": None,
+            "telegram_delivery": None,
+        }
+        await asyncio.to_thread(telegram_store.complete_telegram_update, update_id=update_id, result=result_payload)
+        return result_payload
+
+    command_kind, _command_text = _telegram_command_kind_and_text(str(summary.get("text") or ""))
+    if command_kind == "steer":
+        # The inline fallback has no shared ingress/lane and therefore cannot
+        # implement the active-turn control contract. A no-op is safer than
+        # incorrectly starting a new turn for `/stop`.
+        result_payload = {
+            "ok": True,
+            "accepted": False,
+            "stage": "telegram-control-unavailable",
+            "summary": _telegram_payload_summary(summary),
+            "react_turn": None,
+            "chat_ingress": None,
+            "telegram_response": None,
+            "telegram_delivery": None,
+        }
+        await asyncio.to_thread(telegram_store.complete_telegram_update, update_id=update_id, result=result_payload)
+        return result_payload
+
+    # Inline fallback (no chat_submitter available): this path bypasses the ingress CAS
+    # gate, so the per-conversation lock is the only serializer preventing two concurrent
+    # inline turns for one conversation from racing shared timeline/delivery state.
     lock_key = _telegram_conversation_lock_key(entrypoint, summary)
     turn_lock = _telegram_conversation_lock(lock_key)
     await turn_lock.acquire()
     lock_held = True
     try:
-        if summary.get("attachments"):
-            log.info(
-                "[%s] telegram attachments hydrate start | update_id=%s attachments=%s",
-                bundle_id,
-                update_id,
-                _attachment_log_items(list(summary.get("attachments") or [])),
-            )
-            summary["attachments"] = await hydrate_telegram_attachments(
-                attachments=list(summary.get("attachments") or []),
-                bot_token=await _bot_token_value(entrypoint, integration_id=str(summary.get("integration_id") or "")),
-                message_id=summary.get("message_id"),
-            )
-            log.info(
-                "[%s] telegram attachments hydrate finished | update_id=%s attachments=%s",
-                bundle_id,
-                update_id,
-                _attachment_log_items(list(summary.get("attachments") or [])),
-            )
-        submitted_turn = await submit_react_turn(entrypoint, summary=summary)
-        if submitted_turn is not None:
-            ingress = submitted_turn.get("ingress") if isinstance(submitted_turn.get("ingress"), dict) else {}
-            stage = "webhook-ack"
-            if submitted_turn.get("mode") == "submitted":
-                stage = (
-                    "telegram-continuation"
-                    if str(ingress.get("reason") or "").endswith("_accepted")
-                    and bool(ingress.get("is_continuation"))
-                    else "queued-react-turn" if submitted_turn.get("accepted") else "submit-rejected"
-                )
-            result_payload = {
-                "ok": True,
-                "accepted": bool(submitted_turn.get("accepted", True)),
-                "stage": stage,
-                "summary": _telegram_payload_summary(summary),
-                "react_turn": None,
-                "chat_ingress": submitted_turn,
-                "telegram_response": None,
-                "telegram_delivery": None,
-            }
-            turn_lock.release()
-            lock_held = False
-            await asyncio.to_thread(telegram_store.complete_telegram_update, update_id=update_id, result=result_payload)
-            return result_payload
         react_turn = await run_react_turn(entrypoint, summary=summary)
         telegram_delivery = None
         telegram_messages: list[Dict[str, Any]] = []

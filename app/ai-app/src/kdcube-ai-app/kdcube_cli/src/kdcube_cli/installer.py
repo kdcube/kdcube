@@ -1184,6 +1184,21 @@ def telegram_get_webhook_info(bot_token: str) -> Dict[str, object]:
     return _telegram_api_call(bot_token, "getWebhookInfo")
 
 
+# Commands shown in the Telegram client's command menu. These mirror the
+# continuation commands the bot processes in `telegram_command_kind_and_text`
+# (apps/chat/sdk/integrations/telegram/chat_submit.py). Aliases (/s, /f) are
+# still parsed but omitted here to keep the menu compact.
+_TELEGRAM_BOT_COMMANDS = [
+    {"command": "stop", "description": "Stop the current turn"},
+    {"command": "steer", "description": "Steer the current turn (optionally add new focus)"},
+    {"command": "followup", "description": "Add to the current turn"},
+]
+
+
+def telegram_set_my_commands(bot_token: str, commands: List[Dict[str, str]]) -> Dict[str, object]:
+    return _telegram_api_call(bot_token, "setMyCommands", {"commands": json.dumps(commands)})
+
+
 def _upsert_telegram_identity_authenticator(ch_config: Dict[str, object]) -> None:
     identity = ch_config.setdefault("identity", {})
     if not isinstance(identity, dict):
@@ -1374,6 +1389,18 @@ def configure_telegram_companion(
         )
     else:
         console.print("[green]Telegram companion: webhook registered and verified.[/green]")
+    commands_result = telegram_set_my_commands(bot_token, _TELEGRAM_BOT_COMMANDS)
+    if commands_result.get("ok"):
+        console.print(
+            "[dim]Telegram companion: bot commands registered ("
+            + ", ".join(f"/{cmd['command']}" for cmd in _TELEGRAM_BOT_COMMANDS)
+            + ").[/dim]"
+        )
+    else:
+        console.print(
+            f"[yellow]Telegram companion: setMyCommands failed: "
+            f"{commands_result.get('description') or commands_result}[/yellow]"
+        )
     console.print(
         "[dim]Telegram Mini App URL (set as BotFather Main Mini App + menu button):[/dim] "
         + telegram_mini_app_url(external_https_url, tenant, project, host_bundle_id)

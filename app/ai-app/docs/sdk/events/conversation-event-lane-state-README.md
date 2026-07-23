@@ -157,7 +157,9 @@ was processed into the rendered context. The cursor is stored on the timeline so
 in-turn compaction does not lose the progress marker.
 
 Turn finalization runs after the handler is closed. After artifacts persist,
-ContextBrowser publishes one wake when unprocessed reactive lane work remains.
+ContextBrowser publishes one wake when unprocessed, promotable reactive lane
+work remains. An unconsumed `event.user.steer` is terminalized instead: it is
+bound to the turn that was active at ingress and cannot become a later turn.
 Then the Reader/Consumer is released:
 
 ```text
@@ -222,8 +224,9 @@ Core operations:
 
 Wake publication lives next to the state primitive. For initial reactive
 ingress the publisher is used inside the atomic lane-publish/queue-enqueue
-operation. For post-save handoff, the event already exists in the lane, so the
-publisher only enqueues the wake:
+operation. For post-save handoff, a promotable event already exists in the lane,
+so the publisher only enqueues the wake. Active-turn controls do not take this
+path:
 
 ```python
 from kdcube_ai_app.apps.chat.sdk.events.event_bus import (

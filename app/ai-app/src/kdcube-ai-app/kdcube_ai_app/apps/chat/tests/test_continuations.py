@@ -147,6 +147,14 @@ class _BusyConversationBrowser:
         del kwargs
         return True
 
+    async def get_conversation_state(self, **kwargs):
+        del kwargs
+        return {
+            "state": "in_progress",
+            "updated_at": "2026-03-16T00:00:00Z",
+            "meta": {"last_turn_id": "turn-active"},
+        }
+
     async def set_conversation_state(self, **kwargs):
         del kwargs
         return {
@@ -162,6 +170,14 @@ class _IdleConversationBrowser:
     async def conversation_exists(self, **kwargs):
         del kwargs
         return False
+
+    async def get_conversation_state(self, **kwargs):
+        del kwargs
+        return {
+            "state": "idle",
+            "updated_at": "2026-03-16T00:00:00Z",
+            "meta": {},
+        }
 
     async def set_conversation_state(self, **kwargs):
         del kwargs
@@ -1014,6 +1030,7 @@ async def test_busy_blank_explicit_steer_is_stored(_patch_ingress_dependencies):
     assert result.ok is True
     assert result.reason == "external_event_accepted"
     assert result.is_continuation is True
+    assert result.active_turn_id == "turn-active"
     assert len(queue.payloads) == 1
     assert queue.payloads[0]["kind"] == "external_event_lane_wakeup"
 
@@ -1025,3 +1042,102 @@ async def test_busy_blank_explicit_steer_is_stored(_patch_ingress_dependencies):
     assert events[0].task_payload["request"]["external_events"][0]["type"] == "event.user.steer"
     assert events[0].task_payload["continuation"]["is_continuation"] is True
     assert events[0].task_payload["continuation"]["target_turn_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_idle_blank_explicit_steer_is_a_noop(_patch_ingress_dependencies):
+    redis = _MiniRedis()
+    app = SimpleNamespace(state=SimpleNamespace(
+        redis_async=redis,
+        conversation_browser=_IdleConversationBrowser(),
+        conversation_store=_DummyConversationStore(),
+    ))
+    session = SimpleNamespace(
+        session_id="sess-1",
+        user_type=UserType.REGISTERED,
+        user_id="user-1",
+        username="user",
+        email="user@example.com",
+        fingerprint="fp-1",
+        roles=[],
+        permissions=[],
+        timezone="UTC",
+    )
+    queue = _QueueManagerCaptures(redis)
+
+    result = await process_chat_message(
+        app=app,
+        chat_queue_manager=queue,
+        chat_comm=_DummyRelay(),
+        session=session,
+        request_context=SimpleNamespace(user_utc_offset_min=None),
+        message_data={
+            "conversation_id": "conv-1",
+            "external_events": [_text_event("event.user.steer", "")],
+        },
+        message_text="",
+        ingress=IngressConfig(
+            transport="socket",
+            entrypoint="/socket.io/chat",
+            component="chat.socket",
+            instance_id="ingress-1",
+            stream_id="socket-1",
+        ),
+    )
+
+    assert result.ok is True
+    assert result.reason == "active_turn_control_no_active_turn"
+    assert result.is_continuation is True
+    assert result.queued_turn_id is None
+    assert queue.payloads == []
+    assert await _scoped_external_source(redis).read_since(0) == []
+
+
+@pytest.mark.asyncio
+async def test_stale_explicit_steer_cannot_stop_newer_active_turn(_patch_ingress_dependencies):
+    redis = _MiniRedis()
+    app = SimpleNamespace(state=SimpleNamespace(
+        redis_async=redis,
+        conversation_browser=_BusyConversationBrowser(),
+        conversation_store=_DummyConversationStore(),
+    ))
+    session = SimpleNamespace(
+        session_id="sess-1",
+        user_type=UserType.REGISTERED,
+        user_id="user-1",
+        username="user",
+        email="user@example.com",
+        fingerprint="fp-1",
+        roles=[],
+        permissions=[],
+        timezone="UTC",
+    )
+    queue = _QueueManagerCaptures(redis)
+
+    result = await process_chat_message(
+        app=app,
+        chat_queue_manager=queue,
+        chat_comm=_DummyRelay(),
+        session=session,
+        request_context=SimpleNamespace(user_utc_offset_min=None),
+        message_data={
+            "conversation_id": "conv-1",
+            "target_turn_id": "turn-old",
+            "external_events": [_text_event("event.user.steer", "")],
+        },
+        message_text="",
+        ingress=IngressConfig(
+            transport="socket",
+            entrypoint="/socket.io/chat",
+            component="chat.socket",
+            instance_id="ingress-1",
+            stream_id="socket-1",
+        ),
+    )
+
+    assert result.ok is True
+    assert result.reason == "active_turn_control_target_mismatch"
+    assert result.active_turn_id == "turn-active"
+    assert result.target_turn_id == "turn-old"
+    assert queue.payloads == []
+    assert await _scoped_external_source(redis).read_since(0) == []

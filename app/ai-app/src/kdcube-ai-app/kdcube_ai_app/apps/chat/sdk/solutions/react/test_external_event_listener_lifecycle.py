@@ -15,6 +15,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.events.listener import (
     run_live_external_event_listener_loop,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.proto import RuntimeCtx
+from kdcube_ai_app.apps.chat.sdk.events.event_bus.state import EventLaneState
 
 
 class _Log:
@@ -205,3 +206,97 @@ async def test_refresh_rejection_supersedes_even_when_replacement_names_same_tur
     )
 
     assert owner_lost == [("owner_lease_refresh_rejected", owner)]
+
+
+@pytest.mark.asyncio
+async def test_post_save_expires_unconsumed_steer_instead_of_waking_new_turn() -> None:
+    event = SimpleNamespace(
+        message_id="event-steer",
+        kind="external_event",
+        payload={"event": {"type": "event.user.steer", "reactive": True}},
+        task_payload={},
+        active_turn_id_at_ingress="turn_current",
+        owner_turn_id=None,
+        target_turn_id=None,
+        consumed_at=None,
+        promoted_at=None,
+        failed_at=None,
+        created_at=1.0,
+    )
+    marked: list[tuple[str, str]] = []
+
+    class _Source:
+        tenant = "tenant"
+        project = "project"
+        user_id = "user"
+        conversation_id = "conversation"
+        agent_id = "default.react.agent"
+
+        async def read_since(self, _cursor, *, limit=None):
+            del limit
+            return [event]
+
+        async def mark_consumed_event(self, *, message_id, turn_id):
+            marked.append((message_id, turn_id))
+            event.consumed_at = 2.0
+            return event
+
+    class _Orchestrator:
+        async def state(self):
+            return EventLaneState(handler_turn_id="turn_current", handler_status="closed")
+
+    class _Publisher:
+        async def publish_for_event(self, **_kwargs):
+            raise AssertionError("a steer must not be handed off as a new-turn wake")
+
+    runtime = RuntimeCtx(
+        conversation_id="conversation",
+        turn_id="turn_current",
+        external_event_source=_Source(),
+        external_event_wake_publisher=_Publisher(),
+    )
+    browser = ContextBrowser(runtime_ctx=runtime)
+    browser._external_event_orchestrator = _Orchestrator()
+    browser._timeline = SimpleNamespace(last_external_event_id="")
+
+    assert await browser.post_save_external_event_handoff() is False
+    assert marked == [("event-steer", "turn_current")]
+
+
+@pytest.mark.asyncio
+async def test_new_turn_expires_steer_fenced_to_previous_turn() -> None:
+    event = SimpleNamespace(
+        message_id="event-steer",
+        kind="external_event",
+        payload={"event": {"type": "event.user.steer", "reactive": True}},
+        task_payload={},
+        active_turn_id_at_ingress="turn_old",
+        owner_turn_id=None,
+        target_turn_id=None,
+        consumed_at=None,
+        promoted_at=None,
+        failed_at=None,
+        created_at=1.0,
+    )
+    marked: list[tuple[str, str]] = []
+
+    class _Source:
+        async def mark_consumed_event(self, *, message_id, turn_id):
+            marked.append((message_id, turn_id))
+            event.consumed_at = 2.0
+            return event
+
+    class _Orchestrator:
+        async def state(self):
+            return EventLaneState(handler_turn_id="turn_new", handler_status="open")
+
+    runtime = RuntimeCtx(
+        conversation_id="conversation",
+        turn_id="turn_new",
+        external_event_source=_Source(),
+    )
+    browser = ContextBrowser(runtime_ctx=runtime)
+    browser._external_event_orchestrator = _Orchestrator()
+
+    assert await browser._filter_unprocessed_external_events([event]) == []
+    assert marked == [("event-steer", "turn_old")]

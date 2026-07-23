@@ -17,6 +17,7 @@ from kdcube_ai_app.apps.chat.sdk.event_identity import (
     normalize_agent_id,
     safe_event_lane_part,
 )
+from kdcube_ai_app.apps.chat.sdk.events.semantics import event_is_active_turn_control
 from kdcube_ai_app.infra.namespaces import REDIS, ns_key
 
 logger = logging.getLogger(__name__)
@@ -580,6 +581,20 @@ class RedisConversationExternalEventSource:
                 if latest.stream_id:
                     await self._ack_stream_event(str(latest.stream_id))
                 continue
+            if event_is_active_turn_control(latest):
+                if latest.stream_id:
+                    await self._ack_stream_event(str(latest.stream_id))
+                logger.info(
+                    "[external_events.claim] skipped non-promotable active-turn control "
+                    "conversation=%s claimant=%s event_id=%s seq=%s active_turn=%s owner_turn=%s",
+                    self.conversation_id,
+                    claimant_id,
+                    latest.message_id,
+                    latest.sequence,
+                    latest.active_turn_id_at_ingress,
+                    latest.owner_turn_id,
+                )
+                return None
             if await self._has_live_owner_for_event(latest):
                 if latest.stream_id:
                     await self._ack_stream_event(str(latest.stream_id))
@@ -645,6 +660,21 @@ class RedisConversationExternalEventSource:
                 if latest.stream_id:
                     await self._advance_promotion_cursor(str(latest.stream_id))
                 await self.release_claim(message_id=item.message_id, claimant_id=claimant_id)
+                continue
+            if event_is_active_turn_control(latest):
+                if latest.stream_id:
+                    await self._advance_promotion_cursor(str(latest.stream_id))
+                await self.release_claim(message_id=item.message_id, claimant_id=claimant_id)
+                logger.info(
+                    "[external_events.claim] skipped non-promotable active-turn control "
+                    "conversation=%s claimant=%s event_id=%s seq=%s active_turn=%s owner_turn=%s",
+                    self.conversation_id,
+                    claimant_id,
+                    latest.message_id,
+                    latest.sequence,
+                    latest.active_turn_id_at_ingress,
+                    latest.owner_turn_id,
+                )
                 continue
             if await self._has_live_owner_for_event(latest):
                 await self.release_claim(message_id=item.message_id, claimant_id=claimant_id)
@@ -789,6 +819,35 @@ class RedisConversationExternalEventSource:
             )
             await self._maybe_cleanup_retention()
         return updated
+
+    async def mark_consumed_event(self, *, message_id: str, turn_id: str) -> Optional[ConversationExternalEvent]:
+        """Terminalize one lane event without advancing the promotion cursor.
+
+        Exact terminalization is used for turn-bound controls. Advancing the
+        global cursor here could skip older, unrelated work that is still
+        eligible for promotion.
+        """
+        event = await self.get_event(message_id)
+        if event is None:
+            return None
+        if event.consumed_at is not None or event.promoted_at is not None or event.failed_at is not None:
+            return event
+        event.consumed_at = time.time()
+        event.consumed_by_turn_id = str(turn_id or "")
+        await self._write_event(event)
+        if event.stream_id:
+            await self._ack_stream_event(str(event.stream_id))
+        await self.redis.delete(self.claim_key(message_id))
+        logger.info(
+            "[external_events.consumed.exact] conversation=%s turn_id=%s event_id=%s kind=%s seq=%s",
+            self.conversation_id,
+            turn_id,
+            event.message_id,
+            event.kind,
+            event.sequence,
+        )
+        await self._maybe_cleanup_retention()
+        return event
 
     async def get_owner(self) -> Optional[TimelineOwnerLease]:
         raw = await self.redis.get(self.owner_key)

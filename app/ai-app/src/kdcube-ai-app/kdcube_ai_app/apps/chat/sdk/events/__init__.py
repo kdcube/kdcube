@@ -43,6 +43,11 @@ from kdcube_ai_app.apps.chat.sdk.events.external import (
     ExternalEventMaterializationCtx,
     ExternalEventMaterializationResult,
 )
+from kdcube_ai_app.apps.chat.sdk.events.semantics import (
+    active_turn_control_target,
+    event_is_active_turn_control,
+    event_semantic_type,
+)
 
 __all__ = [
     "EVENT_SOURCE_ATTR",
@@ -74,6 +79,9 @@ __all__ = [
     "get_event_source_declaration",
     "get_event_source_reader_declaration",
     "get_event_source_resolver_declaration",
+    "active_turn_control_target",
+    "event_is_active_turn_control",
+    "event_semantic_type",
     "normalize_agent_id",
     "resolve_event_source_specs",
     "safe_event_lane_part",

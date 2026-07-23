@@ -89,12 +89,16 @@ Check what the programmable chat menu button currently opens:
 curl "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getChatMenuButton"
 ```
 
-Register bot commands:
+Register bot commands. The CLI companion setup (`configure_telegram_companion`)
+registers these automatically via `setMyCommands`; run this only to set them
+manually. The commands mirror the continuation commands the bot processes
+(`/stop`, `/steer`, `/followup`; the `/s` and `/f` aliases are parsed but not
+listed in the menu):
 
 ```bash
 curl -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setMyCommands" \
   -H "Content-Type: application/json" \
-  -d '{"commands":[{"command":"start","description":"Start the assistant"},{"command":"help","description":"Show help"},{"command":"settings","description":"Open settings"}]}'
+  -d '{"commands":[{"command":"stop","description":"Stop the current turn"},{"command":"steer","description":"Steer the current turn (optionally add new focus)"},{"command":"followup","description":"Add to the current turn"}]}'
 ```
 
 Test:
@@ -105,6 +109,10 @@ Test:
 3. Use the Connect tab to link this Telegram account to the signed-in KDCube account.
 4. Return to Telegram and send another message.
 5. Confirm the message runs as telegram_<id> with projected KDCube authority.
+6. While that turn is streaming, send `/stop`; confirm the same turn stops and
+   no additional turn is created.
+7. Send `/stop` while the conversation is idle; confirm it is acknowledged and
+   no turn starts.
 ```
 
 Visible Mini App surfaces:

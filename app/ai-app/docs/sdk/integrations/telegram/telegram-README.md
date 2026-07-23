@@ -392,7 +392,6 @@ Telegram update
   -> summarize_telegram_update(update)
   -> hydrate_telegram_attachments(...)
   -> bundle resolves Telegram user, role, conversation_id
-  -> acquire per-conversation Telegram turn lock
   -> telegram_command_kind_and_text(text)
   -> raw_attachments_from_telegram(attachments)
   -> ChatIngressSubmitter.submit(...)
@@ -494,8 +493,20 @@ Mapping:
 /f <text>         -> event.user.followup
 /steer <text>     -> event.user.steer
 /s <text>         -> event.user.steer
+/stop [text]      -> event.user.steer
 anything else     -> event.user.prompt
 ```
+
+`/stop`, `/steer`, and `/s` may be sent with no text. An empty steer is the
+"stop" control: it carries no text and interrupts the running turn. With text,
+the steer both stops the turn and redirects it. Every other command needs text
+to produce an event.
+
+The command does not invoke Telegram-specific cancellation. It emits the exact
+protocol event `event.user.steer` through `ChatIngressSubmitter`, just like the
+classic chat client. The shared ingress binds it to the active turn. If the
+conversation is idle, the command is acknowledged as a no-op and no turn is
+queued; an unconsumed steer is never promoted into future work.
 
 The SDK maps the command into the event type before calling
 `ChatIngressSubmitter.submit(...)`. Do not send a top-level text scalar as the
@@ -682,9 +693,12 @@ Two bundle properties control this behavior:
 When `turn_id` is provided, the streamer ignores activity whose
 `conversation.turn_id` belongs to another turn. This matters because the relay
 channel is conversation-scoped: two overlapping turns in one Telegram
-conversation must not write progress into each other's cards. The webhook and
-queued-delivery helpers also use a per-conversation async lock so Telegram
-turns for the same conversation are processed and finalized in order.
+conversation must not write progress into each other's cards. The inline
+fallback and the queued-delivery helper hold a per-conversation async lock
+across turn execution, so two Telegram turns for one conversation do not stream
+or finalize concurrently. The webhook submit path does not take this lock; a
+message that arrives while a turn is running is submitted to chat ingress, which
+admits it as a followup/steer continuation into the running turn.
 
 ## Mini App Auth
 

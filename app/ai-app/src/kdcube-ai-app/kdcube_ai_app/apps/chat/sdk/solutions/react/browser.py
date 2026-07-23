@@ -43,6 +43,10 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.events import (
     stamp_event_identity_many,
 )
 from kdcube_ai_app.apps.chat.sdk.events.event_bus.exceptions import ExternalEventLaneTurnSuperseded
+from kdcube_ai_app.apps.chat.sdk.events.semantics import (
+    active_turn_control_target,
+    event_is_active_turn_control,
+)
 from kdcube_ai_app.apps.chat.sdk.events.event_bus.orchestrator import ConversationEventBusOrchestrator
 from kdcube_ai_app.apps.chat.sdk.events.event_bus.state import (
     event_id,
@@ -364,6 +368,22 @@ class ContextBrowser:
             for event in events or []:
                 if getattr(event, "consumed_at", None) is not None:
                     continue
+                if event_is_active_turn_control(event):
+                    target_turn_id = active_turn_control_target(event)
+                    current_turn_id = str(self._runtime_ctx.turn_id or "").strip()
+                    if target_turn_id and target_turn_id != current_turn_id:
+                        continue
+                    await source.mark_consumed_event(
+                        message_id=str(getattr(event, "message_id", "") or ""),
+                        turn_id=target_turn_id or current_turn_id,
+                    )
+                    self.log.log(
+                        f"[timeline.external]: expired unconsumed active-turn control at close "
+                        f"conversation={self._runtime_ctx.conversation_id} turn_id={current_turn_id} "
+                        f"event_id={getattr(event, 'message_id', '')}",
+                        "INFO",
+                    )
+                    continue
                 if not event_is_reactive(event):
                     continue
                 if timestamp_lte(event_timestamp(event), state.last_processed_reactive_event_timestamp):
@@ -677,10 +697,34 @@ class ContextBrowser:
         last_ts = str(getattr(state, "last_processed_event_timestamp", "") or "") if state is not None else ""
         last_event_id = str(getattr(state, "last_processed_event_id", "") or "") if state is not None else ""
         skipped = 0
+        current_turn_id = str(self._runtime_ctx.turn_id or "").strip()
         for event in events or []:
             if getattr(event, "consumed_at", None) is not None:
                 skipped += 1
                 continue
+            if event_is_active_turn_control(event):
+                target_turn_id = active_turn_control_target(event)
+                if target_turn_id and current_turn_id and target_turn_id != current_turn_id:
+                    if self.external_event_source is not None:
+                        try:
+                            await self.external_event_source.mark_consumed_event(
+                                message_id=str(getattr(event, "message_id", "") or ""),
+                                turn_id=target_turn_id,
+                            )
+                        except Exception:
+                            self.log.log(
+                                "[timeline.external]: failed to expire stale active-turn control\n"
+                                + traceback.format_exc(),
+                                "ERROR",
+                            )
+                    skipped += 1
+                    self.log.log(
+                        f"[timeline.external]: skipped stale active-turn control "
+                        f"conversation={self._runtime_ctx.conversation_id} current_turn={current_turn_id} "
+                        f"target_turn={target_turn_id} event_id={getattr(event, 'message_id', '')}",
+                        "INFO",
+                    )
+                    continue
             ts = event_timestamp(event)
             eid = event_id(event)
             already_processed = False

@@ -54,7 +54,9 @@ from kdcube_cli.installer import (
     _prune_foreign_platform_login,
     apply_telegram_companion,
     telegram_mini_app_url,
+    telegram_set_my_commands,
     telegram_webhook_url,
+    _TELEGRAM_BOT_COMMANDS,
     _connection_hub_provider_config,
     apply_runtime_secrets_to_file_descriptors,
     build_ui_url,
@@ -4311,6 +4313,32 @@ def test_telegram_webhook_and_mini_app_urls():
     )
     mini_app = telegram_mini_app_url("https://runtime.example.com", "demo", "proj", "workspace@2026-03-31-13-36")
     assert mini_app.endswith("/public/widgets/telegram_miniapp")
+
+
+def test_telegram_bot_commands_are_valid_and_registered(monkeypatch):
+    import re
+    from kdcube_cli import installer
+
+    # These are the continuation commands the bot processes; they show in the
+    # Telegram client menu. Each must satisfy Telegram's setMyCommands format.
+    assert [c["command"] for c in _TELEGRAM_BOT_COMMANDS] == ["stop", "steer", "followup"]
+    for cmd in _TELEGRAM_BOT_COMMANDS:
+        assert re.fullmatch(r"[a-z0-9_]{1,32}", cmd["command"])
+        assert 1 <= len(cmd["description"]) <= 256
+
+    captured: dict = {}
+
+    def _fake_call(bot_token, method, params=None, timeout=15):
+        captured["method"] = method
+        captured["params"] = params
+        return {"ok": True}
+
+    monkeypatch.setattr(installer, "_telegram_api_call", _fake_call)
+    result = telegram_set_my_commands("123:ABC", _TELEGRAM_BOT_COMMANDS)
+
+    assert result == {"ok": True}
+    assert captured["method"] == "setMyCommands"
+    assert json.loads(captured["params"]["commands"]) == _TELEGRAM_BOT_COMMANDS
 
 
 def test_apply_telegram_companion_generates_topology():
