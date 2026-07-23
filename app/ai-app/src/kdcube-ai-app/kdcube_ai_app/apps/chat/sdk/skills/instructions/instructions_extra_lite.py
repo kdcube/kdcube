@@ -178,12 +178,12 @@ REACT_XLITE_DOCUMENTS_RENDERING = """
 REACT_XLITE_EXEC = """
 [EXEC — exec_tools.execute_code_python]
 - The ONLY code-execution tool. Code goes ONLY in `<channel:code>` immediately after its exec action (code in JSON params = protocol violation; the tool has NO `code` param). The action needs `params.contract` and `params.prog_name` (optional `timeout_s`); an exec without both contract and code does not run. No `<channel:summary>` in exec rounds.
-- The snippet is inserted inside an async runtime function: no boilerplate, no own `main()`, use `await` where needed. `OUTPUT_DIR` is the artifact root; `OUT_DIR = Path(OUTPUT_DIR)`. Never assign/shadow/replace them or hard-code roots like `/workspace/out`.
+- Code is preserved as a Python module body and evaluated with top-level `await` enabled: no runner boilerplate, no own `main()` or event-loop launcher; use `await` where needed. `OUTPUT_DIR` is the artifact root; `OUT_DIR = Path(OUTPUT_DIR)`. Never assign/shadow/replace them or hard-code roots like `/workspace/out`.
 - Inputs: physical OUTPUT_DIR-relative paths from visible context (`turn_<id>/attachments/<name>`, `turn_<id>/files/...`, `turn_<id>/git/projects/...`). Data your code depends on must be visible in full or locally materialized FIRST (`react.read` for text context, `react.pull` for files). A visible input that is volatile (someone may have changed it since) or where the user asks for freshness → re-acquire it (re-read / re-fetch) before coding against it. If generating against an SDK/framework/test contract: confirm exact symbols from visible current docs/tests/source before coding — skills are orientation, not proof of API names; read the smallest decisive evidence set (the exact tests + one doc/source/example) before the first write. Prefer the smallest implementation that satisfies the confirmed contract; validate early, extend after.
 - Code is input-driven: read existing artifacts from disk (or `ctx_tools.fetch_ctx`) instead of re-printing their content into the program; embed content in code only when programmatic reuse is error-prone AND the content is fully visible. Generate only what does not already exist in context — projections/translations to target formats, never re-generated copies.
 - `react.*` tools do NOT exist inside exec. Never import tool modules — invoke an execution-enabled tool with `await agent_io_tools.tool_call(fn=<handle>, params={...}, call_reason=..., tool_id=...)`. Orchestration/job tools (`automation_job.*`) are never callable from exec — top-level rounds only. `ctx_tools.fetch_ctx` in code supports ONLY `conv:ar:`/`conv:tc:`/`conv:so:` (use `payload`; web rows `content or text`).
 - Sandbox: NO network; no reads/writes outside OUTPUT_DIR; subprocess allowed only local + non-interactive (`bash -lc`, `find`, `grep`, `rg` when available; handle missing commands, fall back to Python). Runtime namespace resolvers return exec-local paths ({ok, error, ret:{physical_path, access, browseable}}) invalid outside exec; `ok=False` = blocker; emit discovered descendants as logical refs (resolver input ref + relative path) into an OUTPUT_DIR file or short user.log note for later `react.read`.
-- CONTRACT = the EXHAUSTIVE list of files the harness KEEPS (each must exist and be non-empty after the run). Entry: `{filepath, description, visibility?}`. `filepath` = FULL OUTPUT_DIR-relative path, BYTE-IDENTICAL to what the code writes (mismatch → `missing_file`, bytes lost), under `turn_<current>/git/projects/<scope>/...` or `turn_<current>/files/<scope>/...`. `visibility`: `external` (default) = delivered to the user; `internal` = hosted for your later turns only. `description` = telegraphic semantic+structural inventory ("2 tables (monthly sales, YoY delta); 1 line chart; entities: ACME, Q1–Q4").
+- CONTRACT = the EXHAUSTIVE list of files the harness KEEPS (each must exist and be non-empty after the run). Entry: `{filepath, description, visibility?}`. `filepath` = FULL OUTPUT_DIR-relative `artifact_rel` string under `turn_<current>/git/projects/<scope>/...` or `turn_<current>/files/<scope>/...`; keep it relative in the action. Code MUST `from pathlib import Path`, use `artifact_path = Path(OUTPUT_DIR) / artifact_rel`, call `artifact_path.parent.mkdir(parents=True, exist_ok=True)`, and pass `artifact_path` to every writer. Contract `filepath` MUST equal `artifact_rel` byte-for-byte (mismatch → `missing_file`, bytes lost). Never write `artifact_rel` or create `turn_<current>/...` relative to process cwd. `visibility`: `external` (default) = delivered to the user; `internal` = hosted for later turns only. `description` = telegraphic semantic+structural inventory ("2 tables (monthly sales, YoY delta); 1 line chart; entities: ACME, Q1–Q4").
 - Persistence is two-path: `git/projects/` tree = committed wholesale each turn (routine project SOURCE needs no contract); EVERYTHING else survives ONLY via contract — `files/...` has no git. FLIP YOUR DEFAULT: contract EVERY standalone file the code writes (image, chart, dataset, spreadsheet, PDF, export) — there is no "just an intermediate" bucket; unsure → contract it. CANONICAL TRAP: charts embedded into an Excel/PDF — the embedded bytes are copies; each standalone image must ALSO be contracted (one entry each; `internal` for reusable building blocks).
 - Authoritative results go in contracted files, not stdout — you only get a capped `Program log (tail)`; print/`logging.getLogger("user")` only short status, counts, file pointers. Listings/search results → structured files (`listing.json`, `matches.json`); edits → `.diff`/`.patch` artifact. Multiple artifacts in one snippet should be INDEPENDENT (not built from each other) so review can catch errors before they snowball. No dead code or unused variables; brief plan comment first for complex code. Split large results into multiple contracted files, never to dodge runtime limits.
 """
@@ -293,28 +293,48 @@ def get_extra_lite_instruction_block(name: str) -> str:
     return _BLOCKS[key].strip()
 
 
-def resolve_extra_lite_item(item: str) -> str | None:
+def resolve_extra_lite_item(
+    item: str,
+    *,
+    workspace_implementation: str = "custom",
+    exclude_blocks: Iterable[str] | None = None,
+) -> str | None:
     """Resolve one config item to extra-lite text, or None if not extra-lite.
 
     Accepts block names (``REACT_XLITE_*``) and whole profiles as
-    ``xlite:<profile>`` (e.g. ``xlite:workspace_exec``).
+    ``xlite:<profile>`` (e.g. ``xlite:workspace_exec``). ``workspace_implementation``
+    is passed to the profile expansion so ``xlite:<profile>`` honors git mode.
     """
     text = str(item or "").strip()
+    excluded = {str(name or "").strip() for name in (exclude_blocks or [])}
     if text in _BLOCKS:
+        if text in excluded:
+            return ""
         return _BLOCKS[text].strip()
     if text.lower().startswith("xlite:"):
-        return default_extra_lite_system_instruction(text.split(":", 1)[1])
+        return default_extra_lite_system_instruction(
+            text.split(":", 1)[1],
+            workspace_implementation=workspace_implementation,
+            exclude_blocks=excluded,
+        )
     return None
 
 
-def compose_extra_lite_instruction_blocks(items: Iterable[str]) -> str:
+def compose_extra_lite_instruction_blocks(
+    items: Iterable[str],
+    *,
+    exclude_blocks: Iterable[str] | None = None,
+) -> str:
     """Compose named extra-lite blocks, ``xlite:<profile>`` refs, and literal text."""
+    excluded = {str(name or "").strip() for name in (exclude_blocks or [])}
     out: list[str] = []
     for item in items or []:
         text = str(item or "").strip()
         if not text:
             continue
-        resolved = resolve_extra_lite_item(text)
+        if text in excluded:
+            continue
+        resolved = resolve_extra_lite_item(text, exclude_blocks=excluded)
         out.append(resolved if resolved is not None else text)
     return "\n\n".join(out).strip()
 
@@ -324,6 +344,7 @@ def default_extra_lite_system_instruction(
     *,
     workspace_implementation: str = "custom",
     extra_blocks: Iterable[str] | None = None,
+    exclude_blocks: Iterable[str] | None = None,
 ) -> str:
     """Return a ready-to-use extra-lite ReAct instruction body.
 
@@ -344,4 +365,7 @@ def default_extra_lite_system_instruction(
         blocks.insert(anchor, "REACT_XLITE_WORKSPACE_GIT_MODE")
     if extra_blocks:
         blocks.extend(extra_blocks)
-    return compose_extra_lite_instruction_blocks(blocks)
+    return compose_extra_lite_instruction_blocks(
+        blocks,
+        exclude_blocks=exclude_blocks,
+    )

@@ -118,6 +118,33 @@ interface BudgetAbsorptionRow {
     events: number;
 }
 
+interface OpexCostLine {
+    service: string;
+    provider?: string | null;
+    model?: string | null;
+    cost_usd: number;
+}
+
+interface OpexCostByUserResponse {
+    status: string;
+    users: Record<string, {
+        total?: Record<string, number | null>;
+        rollup?: Array<{ service: string; provider?: string | null; model?: string | null; spent?: Record<string, number> }>;
+        event_count?: number | null;
+    }>;
+    total_users: number;
+    cost_estimate: Record<string, { total_cost_usd: number; breakdown: OpexCostLine[] }>;
+}
+
+interface CostByUserRow {
+    userId: string;
+    costUsd: number;
+    inputTokens: number;
+    outputTokens: number;
+    events: number;
+    byModel: OpexCostLine[];
+}
+
 interface CreditReservationView {
     reservation_id: string;
     bundle_id: string | null;
@@ -889,6 +916,22 @@ class EconomicsAPI {
             `${this.getFullUrl('/app-budget/absorption-report')}?${queryParams}`
         );
         return response.text();
+    }
+
+    // True spend per user from the OPEX aggregates, priced live from the
+    // descriptor price table. Actual per-model dollars — a different number
+    // than the quota-equivalent view in User Budget Breakdown and the absorbed
+    // shortfall in the absorption report, by design.
+    async getOpexCostByUser(dateFrom: string, dateTo: string): Promise<OpexCostByUserResponse> {
+        const baseUrl = settings.getBaseUrl();
+        const queryParams = new URLSearchParams({
+            tenant: settings.getDefaultTenant(),
+            project: settings.getDefaultProject(),
+            date_from: dateFrom,
+            date_to: dateTo,
+        });
+        const response = await this.fetchWithAuth(`${baseUrl}/api/opex/users?${queryParams}`);
+        return response.json();
     }
 
     async getRequestLineage(requestId: string): Promise<any> {
@@ -1715,6 +1758,15 @@ const EconomicsAdmin: React.FC = () => {
     const [absorptionDays, setAbsorptionDays] = useState<string>('90');
     const [absorptionItems, setAbsorptionItems] = useState<BudgetAbsorptionRow[]>([]);
     const [loadingAbsorption, setLoadingAbsorption] = useState<boolean>(false);
+
+    // Cost by user — true per-model spend from the OPEX aggregates.
+    const _todayIso = new Date().toISOString().slice(0, 10);
+    const [costFrom, setCostFrom] = useState<string>(_todayIso.slice(0, 8) + '01');
+    const [costTo, setCostTo] = useState<string>(_todayIso);
+    const [costRows, setCostRows] = useState<CostByUserRow[]>([]);
+    const [costLoaded, setCostLoaded] = useState<boolean>(false);
+    const [loadingCost, setLoadingCost] = useState<boolean>(false);
+    const [costExpanded, setCostExpanded] = useState<Record<string, boolean>>({});
     const [lineageRequestId, setLineageRequestId] = useState<string>('');
     const [lineageResult, setLineageResult] = useState<any | null>(null);
     const [loadingLineage, setLoadingLineage] = useState<boolean>(false);
@@ -2188,6 +2240,53 @@ const EconomicsAdmin: React.FC = () => {
         }
     };
 
+    const handleLoadCostByUser = async () => {
+        clearMessages();
+        setLoadingCost(true);
+        try {
+            const res = await api.getOpexCostByUser(costFrom, costTo);
+            const users = res.users || {};
+            const estimates = res.cost_estimate || {};
+            const rows: CostByUserRow[] = Object.keys(users).map((uid) => {
+                const u = users[uid] || {};
+                const total = (u.total || {}) as Record<string, number | null>;
+                const est = estimates[uid];
+                return {
+                    userId: uid,
+                    costUsd: Number(est?.total_cost_usd || 0),
+                    inputTokens: Number(total.input_tokens || 0),
+                    outputTokens: Number(total.output_tokens || 0),
+                    events: Number(u.event_count || 0),
+                    byModel: [...(est?.breakdown || [])].sort((a, b) => Number(b.cost_usd || 0) - Number(a.cost_usd || 0)),
+                };
+            });
+            rows.sort((a, b) => b.costUsd - a.costUsd);
+            setCostRows(rows);
+            setCostExpanded({});
+            setCostLoaded(true);
+            if (!rows.length) setSuccess('No usage found for the selected window.');
+        } catch (err) {
+            setError((err as Error).message);
+        } finally {
+            setLoadingCost(false);
+        }
+    };
+
+    const handleExportCostByUserCsv = () => {
+        const header = 'user_id,cost_usd,input_tokens,output_tokens,events';
+        const lines = costRows.map((r) =>
+            [r.userId, r.costUsd.toFixed(6), r.inputTokens, r.outputTokens, r.events].join(','));
+        const blob = new Blob([[header, ...lines].join('\n')], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `cost-by-user-${costFrom}-${costTo}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+    };
+
     const handleExportAbsorptionCsv = async () => {
         clearMessages();
         setLoadingAbsorption(true);
@@ -2581,6 +2680,7 @@ const EconomicsAdmin: React.FC = () => {
         { id: 'updateTier', label: 'Override Tier Limits for User' },
         { id: 'lookup', label: 'Lookup Balance' },
         { id: 'quotaBreakdown', label: 'User Budget Breakdown' },
+        { id: 'costByUser', label: 'Cost by User' },
         { id: 'quotaPolicies', label: 'Plan Limits' },
         { id: 'reservation', label: 'Reservation Floors' },
         { id: 'budgetPolicies', label: 'Project Budget Policies' },
@@ -3441,6 +3541,124 @@ const EconomicsAdmin: React.FC = () => {
                                         )}
                                     </div>
                                 )}
+                        </div>
+                    )}
+
+                    {/* Cost by User — true per-model spend from OPEX aggregates */}
+                    {viewMode === 'costByUser' && (
+                        <div className="flex h-full min-h-0 flex-col gap-3">
+                            <Card className="flex min-h-0 flex-1 flex-col">
+                                <CardHeader
+                                    title="Cost by user"
+                                    subtitle="Actual spend priced per model from the live price table. User Budget Breakdown shows quota-equivalent dollars; the absorption report shows absorbed shortfall — three different numbers by design."
+                                    action={
+                                        <div className="flex gap-1.5">
+                                            <Button variant="secondary" onClick={handleLoadCostByUser} disabled={loadingCost}>
+                                                {loadingCost ? 'Loading…' : 'Run report'}
+                                            </Button>
+                                            <Button
+                                                variant="secondary"
+                                                onClick={handleExportCostByUserCsv}
+                                                disabled={loadingCost || !costRows.length}
+                                            >
+                                                Export CSV
+                                            </Button>
+                                        </div>
+                                    }
+                                />
+                                <CardBody className="flex min-h-0 flex-1 flex-col gap-2.5">
+                                    <div className="grid shrink-0 grid-cols-2 gap-2.5 max-w-md">
+                                        <Input
+                                            label="From"
+                                            type="date"
+                                            value={costFrom}
+                                            max={costTo || undefined}
+                                            onChange={(e) => setCostFrom(e.target.value)}
+                                        />
+                                        <Input
+                                            label="To"
+                                            type="date"
+                                            value={costTo}
+                                            min={costFrom || undefined}
+                                            onChange={(e) => setCostTo(e.target.value)}
+                                        />
+                                    </div>
+
+                                    {loadingCost ? (
+                                        <LoadingSpinner />
+                                    ) : !costLoaded ? (
+                                        <EmptyState message="Pick a window and run the report." icon="🧾" />
+                                    ) : !costRows.length ? (
+                                        <EmptyState message="No usage in this window." icon="🧾" />
+                                    ) : (
+                                        <>
+                                            <div className="grid shrink-0 grid-cols-3 gap-2 max-w-xl">
+                                                <StatCard
+                                                    label="Total spend"
+                                                    value={`$${costRows.reduce((s, r) => s + r.costUsd, 0).toFixed(4)}`}
+                                                />
+                                                <StatCard label="Users" value={costRows.length} />
+                                                <StatCard
+                                                    label="Events"
+                                                    value={costRows.reduce((s, r) => s + r.events, 0)}
+                                                />
+                                            </div>
+                                            <div className="min-h-0 flex-1 overflow-y-auto rounded-xl border border-[#E6F1F0]">
+                                                <table className="w-full text-[12px]">
+                                                    <thead className="sticky top-0 z-10 bg-[#F6FAFA] border-b border-[#E6F1F0] text-[10.5px] font-bold tracking-[0.1em] uppercase text-[#7A99B0]">
+                                                        <tr>
+                                                            <th className="px-2.5 py-1.5 text-left">User</th>
+                                                            <th className="px-2.5 py-1.5 text-right">Cost (USD)</th>
+                                                            <th className="px-2.5 py-1.5 text-right">Input tokens</th>
+                                                            <th className="px-2.5 py-1.5 text-right">Output tokens</th>
+                                                            <th className="px-2.5 py-1.5 text-right">Events</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {costRows.map((row) => (
+                                                            <React.Fragment key={row.userId}>
+                                                                <tr
+                                                                    className="cursor-pointer border-b border-[#F0F6F5] hover:bg-[#FAFCFC]"
+                                                                    onClick={() =>
+                                                                        setCostExpanded((prev) => ({ ...prev, [row.userId]: !prev[row.userId] }))
+                                                                    }
+                                                                >
+                                                                    <td className="px-2.5 py-1.5 font-mono text-[11.5px] text-[#0D1E2C]">
+                                                                        <span className="mr-1 inline-block w-3 text-[#7A99B0]">
+                                                                            {costExpanded[row.userId] ? '▾' : '▸'}
+                                                                        </span>
+                                                                        {row.userId}
+                                                                    </td>
+                                                                    <td className="px-2.5 py-1.5 text-right font-mono font-semibold text-[#0D1E2C]">
+                                                                        ${row.costUsd.toFixed(4)}
+                                                                    </td>
+                                                                    <td className="px-2.5 py-1.5 text-right font-mono text-[#3A5672]">{row.inputTokens.toLocaleString()}</td>
+                                                                    <td className="px-2.5 py-1.5 text-right font-mono text-[#3A5672]">{row.outputTokens.toLocaleString()}</td>
+                                                                    <td className="px-2.5 py-1.5 text-right font-mono text-[#3A5672]">{row.events.toLocaleString()}</td>
+                                                                </tr>
+                                                                {costExpanded[row.userId] &&
+                                                                    row.byModel.map((line, i) => (
+                                                                        <tr key={`${row.userId}-${i}`} className="border-b border-[#F0F6F5] bg-[#FAFCFC]">
+                                                                            <td className="py-1 pl-9 pr-2.5 font-mono text-[11px] text-[#3A5672]">
+                                                                                {line.service}
+                                                                                {line.provider ? ` · ${line.provider}` : ''}
+                                                                                {line.model ? ` · ${line.model}` : ''}
+                                                                            </td>
+                                                                            <td className="px-2.5 py-1 text-right font-mono text-[11px] text-[#3A5672]">
+                                                                                ${Number(line.cost_usd || 0).toFixed(4)}
+                                                                            </td>
+                                                                            <td colSpan={3}></td>
+                                                                        </tr>
+                                                                    ))}
+                                                            </React.Fragment>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </>
+                                    )}
+                                </CardBody>
+                            </Card>
                         </div>
                     )}
 

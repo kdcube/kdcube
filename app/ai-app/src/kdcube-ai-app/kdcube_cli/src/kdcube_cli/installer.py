@@ -15,7 +15,7 @@ import tempfile
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Mapping, Optional, Set, Tuple
 from urllib.parse import unquote, urlparse, urlsplit, urlunsplit
 
 from rich.console import Console
@@ -615,6 +615,58 @@ def _ensure_connection_hub_cognito_provider(
     )
 
 
+def _ensure_connection_hub_simple_provider(
+    bundles_data: Dict[str, object],
+    *,
+    id_token_header_name: str,
+    auth_token_cookie_name: str,
+    id_token_cookie_name: str,
+    masqueraded_token_cookie_name: str,
+) -> None:
+    """Write the SimpleIDP platform authority provider into the Connection Hub descriptor.
+
+    SimpleIDP is a platform-managed token authority: the verifier validates the
+    browser's platform token directly, so the provider carries verifier
+    configuration only and declares no grants or entrypoints.
+
+    The user-store path is not part of the descriptor: the runtime pins it so
+    every service reads the same file.
+    """
+    connection_hub = _ensure_bundle_item(bundles_data, "connection-hub@1-0")
+    config = connection_hub.get("config")
+    if not isinstance(config, dict):
+        config = {}
+        connection_hub["config"] = config
+    authenticator: Dict[str, object] = {
+        "id_token_header_name": id_token_header_name,
+        "cookie": {
+            "auth_token_cookie_name": auth_token_cookie_name,
+            "id_token_cookie_name": id_token_cookie_name,
+            "masqueraded_token_cookie_name": masqueraded_token_cookie_name,
+        },
+    }
+    _set_nested(
+        config,
+        ["authority_registry", "authorities", "kdcube.platform", "label"],
+        "KDCube platform authority",
+    )
+    _set_nested(
+        config,
+        ["authority_registry", "authorities", "kdcube.platform", "platform"],
+        True,
+    )
+    _set_nested(
+        config,
+        ["authority_registry", "authorities", "kdcube.platform", "providers", _SIMPLE_PLATFORM_PROVIDER_ID],
+        {
+            "type": "simple_idp",
+            "enabled": True,
+            "label": "Local SimpleIDP platform identity",
+            "authenticator": authenticator,
+        },
+    )
+
+
 def _bundle_session_default_grants() -> Dict[str, object]:
     """Default and assignable platform grants for a bundle-session provider."""
     return {
@@ -759,6 +811,40 @@ def _ensure_connection_hub_bundle_session_provider(
 
 # Provider key the cognito auth type writes under the platform authority.
 _COGNITO_PLATFORM_PROVIDER_ID = "cognito"
+
+# Provider key the simple auth type writes under the platform authority.
+_SIMPLE_PLATFORM_PROVIDER_ID = "simple"
+
+# Development credential seeded into every SimpleIDP store (DEFAULT_SIMPLE_IDP_USERS).
+_SIMPLE_DEV_ADMIN_TOKEN = "test-admin-token-123"
+
+
+def _simple_browser_token(assembly_data: Dict[str, object]) -> str:
+    """Browser token declared under frontend.config.auth, or "" when unset.
+
+    Only `simple` uses this block. The other auth types clear it, so a token set
+    for `simple` does not survive a switch away and back.
+    """
+    value = _get_nested(assembly_data, "frontend", "config", "auth", "token")
+    return value.strip() if isinstance(value, str) and value.strip() else ""
+
+
+
+def _service_declared_idp_stores(services_block: object) -> Dict[str, str]:
+    """Map service name -> SimpleIDP store path declared under platform.services."""
+    declared: Dict[str, str] = {}
+    if not isinstance(services_block, dict):
+        return declared
+    for service_name, service_cfg in services_block.items():
+        if not isinstance(service_cfg, dict):
+            continue
+        idp_cfg = service_cfg.get("idp")
+        if not isinstance(idp_cfg, dict):
+            continue
+        path = idp_cfg.get("idp_db_path")
+        if isinstance(path, str) and path.strip():
+            declared[str(service_name)] = path.strip()
+    return declared
 
 
 def _find_bundle_item(payload: Dict[str, object] | None, bundle_id: str) -> Optional[Dict[str, object]]:
@@ -3793,7 +3879,7 @@ def gather_configuration(
                 ui_port = str(
                     _get_nested(assembly_data, "ports", "ui")
                     or env_main.entries.get("KDCUBE_UI_PORT", (None, None))[1]
-                    or "5174"
+                    or "5173"
                 ).strip()
                 if ui_port in ("80", "443"):
                     proxy_domain = "localhost"
@@ -3860,17 +3946,103 @@ def gather_configuration(
             _set_nested(assembly_data, ["auth", "proxy_login", "http_urlbase"], http_urlbase)
 
     if auth_provider == "simple":
+        auth_block_simple = _get_nested(assembly_data, "auth")
+        auth_block_simple = auth_block_simple if isinstance(auth_block_simple, dict) else {}
+        registry_simple = _get_nested(
+            bundles_data,
+            "connection-hub@1-0",
+            "config",
+            "authority_registry",
+            "authorities",
+            "kdcube.platform",
+            "providers",
+            _SIMPLE_PLATFORM_PROVIDER_ID,
+            "authenticator",
+        )
+        registry_simple = registry_simple if isinstance(registry_simple, dict) else {}
+        registry_simple_cookie = (
+            registry_simple.get("cookie") if isinstance(registry_simple.get("cookie"), dict) else {}
+        )
+
+        def _simple_pick(*candidates: object) -> str:
+            for candidate in candidates:
+                if isinstance(candidate, str) and candidate.strip():
+                    return candidate.strip()
+            return ""
+
+        _ensure_connection_hub_simple_provider(
+            bundles_data,
+            id_token_header_name=_simple_pick(
+                auth_block_simple.get("id_token_header_name"),
+                registry_simple.get("id_token_header_name"),
+            )
+            or "X-ID-Token",
+            auth_token_cookie_name=_simple_pick(
+                auth_block_simple.get("auth_token_cookie_name"),
+                registry_simple_cookie.get("auth_token_cookie_name"),
+            )
+            or "__Secure-LATC",
+            id_token_cookie_name=_simple_pick(
+                auth_block_simple.get("id_token_cookie_name"),
+                registry_simple_cookie.get("id_token_cookie_name"),
+            )
+            or "__Secure-LITC",
+            masqueraded_token_cookie_name=_simple_pick(
+                auth_block_simple.get("masqueraded_token_cookie_name"),
+                registry_simple_cookie.get("masqueraded_token_cookie_name"),
+            )
+            or "__Secure-LMTC",
+        )
         _set_nested(assembly_data, ["auth", "idp"], "simple")
-        _set_nested(assembly_data, ["auth", "authenticators", "connection_hub", "enabled"], False)
-        _delete_nested(assembly_data, ["auth", "connection_hub"])
-        # The frontend derives authType from assembly.auth; drop a stale override.
-        _delete_nested(assembly_data, ["frontend", "config", "auth"])
+        _set_nested(
+            assembly_data,
+            ["auth", "connection_hub"],
+            {
+                "bundle_id": "connection-hub@1-0",
+                "authority_id": "kdcube.platform",
+                "provider_id": _SIMPLE_PLATFORM_PROVIDER_ID,
+            },
+        )
+        _set_nested(
+            assembly_data,
+            ["auth", "authenticators", "connection_hub"],
+            {"enabled": True, "app_id": "connection-hub@1-0", "operation": "request_authenticate"},
+        )
         _prune_foreign_platform_login(
             bundles_data,
             connection_hub_bundle_id="connection-hub@1-0",
             authority_id="kdcube.platform",
-            keep_provider_ids=set(),
+            keep_provider_ids={_SIMPLE_PLATFORM_PROVIDER_ID},
             keep_bootstrap_rules=False,
+        )
+        # The store path is pinned by the runtime, so per-service declarations are
+        # dead config; drop them rather than leave a key that no longer applies.
+        for service_name in _service_declared_idp_stores(
+            _get_nested(assembly_data, "platform", "services")
+        ):
+            _delete_nested(assembly_data, ["platform", "services", service_name, "idp", "idp_db_path"])
+        for legacy_path in (
+            # Token transport now belongs to the Connection Hub provider, which was
+            # seeded from these values above and is read ahead of the assembly.
+            ["auth", "id_token_header_name"],
+            ["auth", "auth_token_cookie_name"],
+            ["auth", "id_token_cookie_name"],
+            ["auth", "masqueraded_token_cookie_name"],
+            # Cognito-only settings; the proxy_login inputs stay in .env.proxylogin,
+            # which the delegated branch reads when reconciling back to that type.
+            ["auth", "jwks_cache_ttl_seconds"],
+            ["auth", "cognito"],
+            ["auth", "providers"],
+            ["auth", "proxy_login"],
+        ):
+            _delete_nested(assembly_data, legacy_path)
+        # Write the browser auth block explicitly rather than letting the frontend
+        # builder substitute a token that appears nowhere in the descriptor.
+        _set_nested(assembly_data, ["frontend", "config", "auth", "authType"], "simple")
+        _set_nested(
+            assembly_data,
+            ["frontend", "config", "auth", "token"],
+            _simple_browser_token(assembly_data) or _SIMPLE_DEV_ADMIN_TOKEN,
         )
 
     # Optional Telegram companion, offered for every auth type. The browser login

@@ -902,7 +902,10 @@ class MailNamedServiceProvider(NamedServiceProvider):
             account_claim_scope_for,
         )
         scope = account_claim_scope_for(GMAIL_PROVIDER_ID)
-        if scope:
+        # None = non-agent turn (no filter). A mapping — even an EMPTY one —
+        # is a delegated caller's binding: an agent with nothing bound sees no
+        # accounts, and the empty set below mints the agent-grant consent.
+        if scope is not None:
             def _binding_allows(account_id: str) -> bool:
                 claims = scope.get(account_id)
                 if claims is None:

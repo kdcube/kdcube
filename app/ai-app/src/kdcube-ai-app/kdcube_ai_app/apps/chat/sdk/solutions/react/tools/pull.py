@@ -462,22 +462,46 @@ async def handle_react_pull(*, react: Any = None, ctx_browser: Any, state: Dict[
     _qualify_row_refs(missing)
 
     shared: List[str] = []
+    # Explicit share outcome so a failed/skipped share is legible to the model
+    # (in the tool-result payload) instead of vanishing into a bare `pulled: []`.
+    share_result: Optional[Dict[str, Any]] = None
     if share_requested:
         shareable = _shareable_file_rows(pulled)
         folder_pulled = any(isinstance(r, Mapping) and r.get("logical_root") for r in pulled)
         if react is None or outdir is None:
-            pass  # no hosting surface in this context; deliver is a no-op
+            share_result = {
+                "delivered": False,
+                "reason": "no_delivery_surface",
+                "message": (
+                    "share was requested but this run has no file-hosting surface; no file was "
+                    "delivered to the user. Do not claim delivery."
+                ),
+            }
         elif len(shareable) != 1 or folder_pulled:
-            # share delivers exactly one file. A folder/subtree pull or a multi-file pull is not shared.
+            # share delivers exactly one file. A folder/subtree pull, a multi-file
+            # pull, or a pull that resolved to nothing is not shared.
+            detail = "a folder/subtree" if folder_pulled else f"{len(shareable)} shareable file(s)"
+            hint = (
+                "the refs did not resolve to an exact file (see 'missing'/'invalid')"
+                if not shareable and not folder_pulled
+                else "pull the one exact file ref with share=true"
+            )
+            message = (
+                "share delivers a single file and was not applied: this pull resolved to "
+                f"{detail}. To share, {hint}."
+            )
+            share_result = {
+                "delivered": False,
+                "reason": "share_single_file_only",
+                "shareable_count": len(shareable),
+                "folder_pulled": bool(folder_pulled),
+                "message": message,
+            }
             notice_block(
                 ctx_browser=ctx_browser,
                 tool_call_id=tool_call_id,
                 code="react.pull.share_single_file_only",
-                message=(
-                    "share delivers a single file and was not applied: this pull resolved to "
-                    f"{'a folder/subtree' if folder_pulled else f'{len(shareable)} files'}. "
-                    "To share, pull the one exact file ref with share=true."
-                ),
+                message=message,
                 rel="result",
             )
         else:
@@ -506,16 +530,48 @@ async def handle_react_pull(*, react: Any = None, ctx_browser: Any, state: Dict[
                 )
                 if logical_path:
                     shared.append(logical_path)
+                    share_result = {"delivered": True, "shared": list(shared)}
             except Exception:
                 LOGGER.exception("react.pull share failed for %s", logical_path or physical_path)
+                message = (
+                    f"share hosting/delivery raised for '{logical_path or physical_path}'; the file "
+                    "was NOT delivered to the user. Do not claim delivery; retry or report the failure."
+                )
+                share_result = {
+                    "delivered": False,
+                    "reason": "share_failed",
+                    "logical_path": logical_path,
+                    "physical_path": physical_path,
+                    "message": message,
+                }
+                notice_block(
+                    ctx_browser=ctx_browser,
+                    tool_call_id=tool_call_id,
+                    code="react.pull.share_failed",
+                    message=message,
+                    rel="result",
+                )
+
+    errors = list(namespace_errors) + list(rehost_result.get("errors") or [])
 
     payload = {
         "requested": requested_paths,
         "pulled": pulled,
     }
+    if share_requested:
+        payload["share"] = share_result or {
+            "delivered": False,
+            "reason": "not_shared",
+            "message": "share was requested but no file was delivered to the user.",
+        }
     if shared:
         payload["shared"] = shared
         payload["user_delivery"] = "delivered to the user as downloadable file(s): " + ", ".join(shared)
+    elif share_requested:
+        # share was asked for but nothing was delivered — say why, in-band, so the
+        # model does not falsely claim the user received a file.
+        reason_msg = (share_result or {}).get("message") or "share was requested but no file was delivered."
+        payload["user_delivery"] = "none — " + reason_msg
     elif pulled:
         payload["user_delivery"] = (
             "none — these files are local reference material for this turn; the user received no file from this call. "
@@ -523,11 +579,15 @@ async def handle_react_pull(*, react: Any = None, ctx_browser: Any, state: Dict[
             "To send a pulled file to another service, pass its logical_path/physical_path in that action's "
             "file field (e.g. attachment_paths, file_ref)."
         )
+    else:
+        payload["user_delivery"] = (
+            "none — nothing resolved for this pull; the user received no file. "
+            "See 'missing'/'invalid' for the refs that did not resolve to an exact file."
+        )
     if missing:
         payload["missing"] = missing
     if invalid:
         payload["invalid"] = invalid
-    errors = list(namespace_errors) + list(rehost_result.get("errors") or [])
     if errors:
         payload["errors"] = errors
     payload = _json_safe_value(payload)
@@ -542,5 +602,21 @@ async def handle_react_pull(*, react: Any = None, ctx_browser: Any, state: Dict[
             "tool_call_id": tool_call_id,
         },
     })
-    state["last_tool_result"] = payload.get("pulled", []) if isinstance(payload, dict) else []
+    # The client/UI step and the model's runtime view both read last_tool_result.
+    # On a clean pull it stays the `pulled` list (unchanged contract). When the
+    # pull did not cleanly deliver what was asked — nothing resolved, refs were
+    # missing/invalid, an error occurred, or a requested share was not delivered
+    # — surface the full diagnostic payload instead of a bare `[]`.
+    clean_pull = bool(
+        pulled
+        and not missing
+        and not invalid
+        and not errors
+        and (not share_requested or bool(shared))
+    )
+    state["last_tool_result"] = (
+        (payload.get("pulled", []) if isinstance(payload, dict) else [])
+        if clean_pull
+        else payload
+    )
     return state

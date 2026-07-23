@@ -193,6 +193,8 @@ export interface AgentSupportedModel {
   model: string
   provider: string
   label: string
+  /** Optional admin-owned context-window override; not part of the saved pick. */
+  num_ctx?: number
 }
 
 /** One admin-declared instruction-set option (id-based; resolution is the

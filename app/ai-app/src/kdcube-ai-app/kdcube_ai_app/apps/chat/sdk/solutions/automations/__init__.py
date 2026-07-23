@@ -15,6 +15,7 @@ from .executions_storage import AutomationExecutionsStorage
 from .storage import AUTOMATION_STATUSES, AutomationStorage
 from .due import WORK_KIND_AUTOMATION_EXECUTION_DUE, configure_due_automations, enqueue_due_automations, handle_job
 from .operations import WORK_KIND_AUTOMATION_RUN_NOW, configure_automation_operations
+from .system_jobs import enqueue_job_as_identity
 from .common import (
     extract_automation_execution_context,
     extract_automation_execution_context_from_scope,
@@ -32,6 +33,7 @@ __all__ = [
     "configure_automation_operations",
     "downloadable_execution_artifacts",
     "enqueue_due_automations",
+    "enqueue_job_as_identity",
     "execution_artifacts",
     "execution_completed_at",
     "execution_for_agent",

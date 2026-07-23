@@ -182,11 +182,19 @@ items:
               simple:
                 type: simple_idp
                 enabled: true
+                label: Local SimpleIDP platform identity
                 authenticator:
-                  type: simple_idp_token
+                  id_token_header_name: X-ID-Token
                   cookie:
                     auth_token_cookie_name: __Secure-LATC
+                    id_token_cookie_name: __Secure-LITC
+                    masqueraded_token_cookie_name: __Secure-LMTC
 ```
+
+The user store is not declared here. Every service reads
+`/config/idp_users.json`, pinned by the runtime. The browser credential is
+declared in `assembly.yaml` under `frontend.config.auth.token` and must exist in
+that store.
 
 Expected browser/server behavior:
 

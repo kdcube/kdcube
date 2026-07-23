@@ -1446,22 +1446,42 @@ bundles:
           # - model: qwen3.6:35b
           #   provider: custom
           #   label: Qwen3.6 35B (local)
+          #   num_ctx: 65536
           # - model: qwen3:8b
           #   provider: custom
           #   label: Qwen3 8B (local, fast)
+          #   num_ctx: 40960
+          # - model: mistral:7b-instruct-v0.2-q4_K_M
+          #   provider: custom
+          #   label: Mistral 7B Instruct v0.2 (local)
+          #   num_ctx: 32768
           # Users pick an instruction set per conversation alongside the model:
           # `full` is the platform default body; `extra-lite` is the distilled
           # set sized for serving-constrained local models (pairs with the
           # provider: custom entries above).
+          # A profile's `blocks` compose the instruction body in the order given.
+          # One unified vocabulary: `full` (the complete default set; monolithic),
+          # `lite:<profile>` / `xlite:<profile>` (a whole moderate/extra-lite
+          # profile in one token), single `REACT_LITE_*` / `REACT_XLITE_*` blocks,
+          # or literal text. A profile with no `blocks` uses the full default set.
+          # Profiles: core · workspace · workspace_exec · document · web · all_capabilities.
           instruction_profiles:
             default: full
             options:
             - id: full
               label: Full
               description: The complete battle-proven instruction set.
+            - id: lite
+              label: Lite (moderate)
+              description: Full-signal moderate set at ~40% of the full size.
+              blocks:
+              - lite:all_capabilities
             - id: extra-lite
               label: Extra Lite (local models)
-              description: Distilled instruction set sized for locally served models.
+              description: Distilled single-action instruction set for locally served models.
+              multi_action_mode: "off"
+              include_skill_gallery: false
+              tool_catalog_detail: compact
               blocks:
               - xlite:workspace_exec
           additional_instructions: '[KDCUBE DOC LINKS]
@@ -1498,15 +1518,21 @@ bundles:
       # Local model serving (pairs with the commented `provider: custom` picker
       # entries above): the models gateway forwards custom-provider calls to
       # this endpoint. `host.docker.internal` reaches the host's Ollama from
-      # the dockerized gateway; `num_ctx` caps the local context window. The
-      # api key, if the endpoint needs one, is the bundle secret
+      # the dockerized proc. Context precedence is picker option `num_ctx`,
+      # then `model_overrides.<exact-tag>.num_ctx`, then the shared `num_ctx`.
+      # Model identity comes from role/composer selection and is sent per
+      # request. The api key, if the endpoint needs one, is the bundle secret
       # `services.llm.custom.api_key`.
       # services:
       #   llm:
       #     custom:
       #       endpoint: http://host.docker.internal:11500/generate
-      #       model_name: qwen3.6:35b
       #       num_ctx: 65536
+      #       model_overrides:
+      #         qwen3:8b:
+      #           num_ctx: 40960
+      #         mistral:7b-instruct-v0.2-q4_K_M:
+      #           num_ctx: 32768
       telemetry_sink:
         endpoint_url: https://<PUBLIC_HOST>/api/integrations/bundles/<TENANT>/<PROJECT>/kdcube.stats@2026-05-20-12-05/public/ingest
         auth_header: X-Telemetry-Token

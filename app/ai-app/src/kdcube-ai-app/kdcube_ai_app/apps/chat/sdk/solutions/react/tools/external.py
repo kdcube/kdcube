@@ -185,10 +185,13 @@ def _declared_file_rows(output: Any) -> List[Dict[str, Any]]:
     The marker may sit on the result envelope itself or inside its `ret`
     payload; integration tools commonly return
     `{"ok": ..., "artifact_type": "files", "ret": {"files": [...]}}`,
-    so the marker level and the `files` list may be one level apart.
+    so the marker level and the `files` list may be one level apart. Named
+    services wrap the tool's own `ret` one level deeper under `extra`
+    (`{"attrs": {...}, "extra": {"artifact_type": "files", ...}}`), so the
+    marker may also sit inside `extra`.
     """
     data = output
-    for _ in range(3):
+    for _ in range(4):
         if isinstance(data, str):
             try:
                 data = json.loads(data)
@@ -206,6 +209,9 @@ def _declared_file_rows(output: Any) -> List[Dict[str, Any]]:
             return [dict(row) for row in candidate if _looks_like_declared_file(row)]
         if "ret" in data:
             data = data.get("ret")
+            continue
+        if "extra" in data:
+            data = data.get("extra")
             continue
         return []
     return []

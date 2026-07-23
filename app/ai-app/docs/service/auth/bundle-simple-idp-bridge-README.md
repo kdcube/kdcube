@@ -63,20 +63,44 @@ Gateway -> SimpleIDP -> UserSession
 
 The platform auth provider must be SimpleIDP:
 
+`assembly.yaml` selects the provider:
+
 ```yaml
 auth:
-  idp: "simple"
-  auth_token_cookie_name: "__Secure-LATC"
-  id_token_cookie_name: "__Secure-LITC"
-
-services:
-  idp:
-    idp_db_path: "/config/idp_users.json"
+  type: simple
+  idp: simple
+  connection_hub:
+    bundle_id: connection-hub@1-0
+    authority_id: kdcube.platform
+    provider_id: simple
 ```
 
-The same descriptor-derived `idp_db_path` must be mounted into every service
-that authenticates through SimpleIDP and every bundle runtime that registers
-SimpleIDP users.
+`bundles.yaml` carries the provider under
+`connection-hub@1-0.config.authority_registry.authorities.kdcube.platform.providers`:
+
+```yaml
+simple:
+  type: simple_idp
+  enabled: true
+  authenticator:
+    cookie:
+      auth_token_cookie_name: __Secure-LATC
+      id_token_cookie_name: __Secure-LITC
+```
+
+## User Store
+
+The store is `/config/idp_users.json` for every service and every bundle runtime
+that registers SimpleIDP users. The path is pinned by the runtime: neither the
+Connection Hub provider nor `platform.services.<service>.idp.idp_db_path`
+configures it, and the CLI removes the latter when it is present.
+
+The JSON file holds the users. Redis holds only a cache-version counter keyed by
+a hash of the path, so a service reading a different file would not see users
+registered elsewhere even while observing the same version counter.
+
+`register_simple_idp_user()` writes to this store when called without an explicit
+path.
 
 For SimpleIDP, the auth token and ID token cookies can carry the same opaque
 platform token. The cookie names come from the selected platform authority
@@ -86,7 +110,6 @@ provider:
 |---|---|
 | `authenticator.cookie.auth_token_cookie_name` | Access/auth token cookie consumed by the gateway. |
 | `authenticator.cookie.id_token_cookie_name` | Identity token cookie consumed by the gateway. |
-| `services.idp.idp_db_path` | JSON registry path used by SimpleIDP. |
 
 ## Bundle Endpoint
 

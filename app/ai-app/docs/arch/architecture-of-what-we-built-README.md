@@ -17,6 +17,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-journey-and-handling-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/comm/conversation-event-bus-and-data-bus-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/agent-acting-for-user/agent-acting-for-user-README.md
 ---
 # Architecture Of What We Built
 
@@ -229,8 +230,11 @@ connection edge.
 Connected accounts and delegated access point in opposite directions:
 
 - **delegated to KDCube:** trusted tools use a user's external provider account;
-- **delegated by KDCube:** an external automation receives bounded KDCube
-  resource/operation access.
+- **delegated by KDCube:** a delegate — an external automation or an in-app
+  agent — receives bounded KDCube access through a server-side grant keyed to its
+  client identity (`kdcube-agent:<app>:<agent>` for an agent) plus resources and
+  claims, scoped per connected account. Guards accept only that client id, and an
+  agent does not inherit the accounts the user connected.
 
 Bearer tokens are handles. Managed guards load server-side grant/session
 records; product code does not derive authority by decoding token bodies.
@@ -265,7 +269,10 @@ trusted resolver applies bound tenant/project/user/authority
 In split Docker, the executor has no network and does not receive platform
 storage roots, app storage, descriptors, or provider credentials. Approved
 tools execute in the trusted supervisor under carried identity and grants.
-Other profiles provide different isolation strengths.
+Other profiles provide different isolation strengths. Placement is per tool and
+the profile is per agent: a tool declares whether it runs in the trusted
+supervisor, a subprocess, or the isolated executor, layered under the
+operator-selected ceiling.
 
 ## Storage Ownership
 

@@ -47,6 +47,8 @@ from kdcube_cli.installer import (
     TELEGRAM_SECRET_STEM,
     apply_bundle_session_auth,
     _ensure_connection_hub_cognito_provider,
+    _ensure_connection_hub_simple_provider,
+    _service_declared_idp_stores,
     _ensure_cors_allow_origin,
     _origin_from_url,
     _prune_foreign_platform_login,
@@ -3883,19 +3885,34 @@ def test_reconcile_to_cognito_removes_bundle_session_login_artifacts():
     assert "telegram.kdcube_ref" in authorities
 
 
-def test_reconcile_to_simple_removes_all_platform_login_providers():
+def test_reconcile_to_simple_removes_bundle_session_login_artifacts():
     bundles = _polluted_bundle_session_bundles()
 
+    _ensure_connection_hub_simple_provider(
+        bundles,
+        id_token_header_name="X-ID-Token",
+        auth_token_cookie_name="__Secure-LATC",
+        id_token_cookie_name="__Secure-LITC",
+        masqueraded_token_cookie_name="__Secure-LMTC",
+    )
     _prune_foreign_platform_login(
         bundles,
         connection_hub_bundle_id="connection-hub@1-0",
         authority_id="kdcube.platform",
-        keep_provider_ids=set(),
+        keep_provider_ids={"simple"},
         keep_bootstrap_rules=False,
     )
 
     authorities = _ch_authorities(bundles)
-    assert authorities["kdcube.platform"]["providers"] == {}
+    platform_providers = authorities["kdcube.platform"]["providers"]
+    # simple is a full platform authority provider, and it replaces the
+    # bundle-session login provider rather than leaving the authority empty.
+    assert platform_providers["simple"]["type"] == "simple_idp"
+    assert platform_providers["simple"]["enabled"] is True
+    assert "workspace_google_session" not in platform_providers
+    # It is a platform-managed token authority: verifier config only, no policy.
+    assert "grants" not in platform_providers["simple"]
+    assert "entrypoints" not in platform_providers["simple"]
     assert "google.accounts" not in authorities
     assert "bootstrap_rules" not in authorities["kdcube.platform"]["grants"]
     assert authorities["kdcube.platform"]["grants"]["subjects"] == {
@@ -3903,6 +3920,39 @@ def test_reconcile_to_simple_removes_all_platform_login_providers():
     }
     assert "consent_ui" not in bundles["bundles"]["items"][0]["config"]["connections"]["delegated_credentials"]["oauth"]
     assert "telegram.kdcube_ref" in authorities
+
+
+def test_service_declared_idp_stores_are_reported_for_cleanup():
+    # The runtime pins the store path, so these declarations are dead config the
+    # simple branch removes rather than values it has to reconcile.
+    services = {
+        "ingress": {"idp": {"idp_db_path": "/kdcube-storage/a.json"}},
+        "proc": {"idp": {"idp_db_path": "/kdcube-storage/b.json"}},
+        "metrics": {"idp": {"idp_db_path": ""}},
+    }
+
+    declared = _service_declared_idp_stores(services)
+
+    assert declared == {"ingress": "/kdcube-storage/a.json", "proc": "/kdcube-storage/b.json"}
+    assert _service_declared_idp_stores({}) == {}
+
+
+def test_simple_provider_never_declares_a_store_path():
+    # The store path is pinned by the runtime; exposing it in the descriptor would
+    # let two services be pointed at different user sets.
+    bundles = _polluted_bundle_session_bundles()
+
+    _ensure_connection_hub_simple_provider(
+        bundles,
+        id_token_header_name="X-ID-Token",
+        auth_token_cookie_name="__Secure-LATC",
+        id_token_cookie_name="__Secure-LITC",
+        masqueraded_token_cookie_name="__Secure-LMTC",
+    )
+
+    authenticator = _ch_authorities(bundles)["kdcube.platform"]["providers"]["simple"]["authenticator"]
+    assert "idp_db_path" not in authenticator
+    assert authenticator["cookie"]["auth_token_cookie_name"] == "__Secure-LATC"
 
 
 def test_reconcile_drops_empty_platform_grants():

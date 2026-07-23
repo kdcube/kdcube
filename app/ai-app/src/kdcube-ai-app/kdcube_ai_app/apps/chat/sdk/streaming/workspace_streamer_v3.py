@@ -460,27 +460,28 @@ def _strip_structured_fences(text: str) -> str:
     s = text.strip()
     if not s.startswith("```"):
         return s
-    nl = s.find("\n")
-    if nl < 0:
-        return ""
+    s = s[3:]
+    end = s.rfind("```")
+    if end >= 0:
+        s = s[:end]
     # Models may put content on the opening fence line after the language
     # tag (```json { ... ) — that content is part of the body, not the
     # fence. The streaming layer already accepted it; dropping it here
     # (e.g. the opening brace) broke otherwise-valid JSON post hoc.
-    first_line = s[3:nl].strip()
+    first_line, separator, remainder = s.partition("\n")
+    first_line = first_line.strip()
     inline = ""
     if first_line:
-        head, _, tail = first_line.partition(" ")
-        if head.isalnum():
-            inline = tail.strip()
+        parts = first_line.split(None, 1)
+        if parts[0].isalnum():
+            inline = parts[1].strip() if len(parts) > 1 else ""
         else:
             inline = first_line
-    s = s[nl + 1:]
-    end = s.rfind("```")
-    if end >= 0:
-        s = s[:end]
-    if inline:
+    s = remainder if separator else ""
+    if inline and s:
         s = inline + "\n" + s
+    elif inline:
+        s = inline
     return s.strip()
 
 

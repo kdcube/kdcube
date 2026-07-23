@@ -86,6 +86,8 @@ class ContextBrowser:
         self._external_lease_token: str = ""
         self._external_event_orchestrator: Optional[ConversationEventBusOrchestrator] = None
         self._external_event_listener_requested: bool = False
+        # Hook registration and a phase watcher can request startup concurrently.
+        self._external_event_lifecycle_lock = asyncio.Lock()
         self._external_apply_lock = asyncio.Lock()
         self._last_external_event_reader_result: Dict[str, Any] = {}
         self._external_event_lane_superseded: Optional[ExternalEventLaneTurnSuperseded] = None
@@ -220,6 +222,12 @@ class ContextBrowser:
         await self.start_external_event_listener()
 
     async def start_external_event_listener(self) -> None:
+        async with self._external_event_lifecycle_lock:
+            await self._start_external_event_listener_locked()
+
+    async def _start_external_event_listener_locked(self) -> None:
+        if not self._external_event_listener_requested or self._external_event_lane_superseded is not None:
+            return
         source = self.external_event_source
         if source is None or self._timeline is None:
             self.log.log(
@@ -239,7 +247,7 @@ class ContextBrowser:
         if self._external_event_task and not self._external_event_task.done():
             if self._external_listener_turn_id == turn_id:
                 return
-            await self.stop_external_event_listener()
+            await self._stop_external_event_listener_locked()
         self._external_listener_id = self._external_listener_id or f"listener_{uuid.uuid4().hex[:8]}"
         self._external_listener_turn_id = turn_id
         self._external_event_stop = asyncio.Event()
@@ -436,6 +444,12 @@ class ContextBrowser:
             return None
 
     async def stop_external_event_listener(self) -> None:
+        # Prevent an already-scheduled start task from starting after terminal cleanup.
+        self._external_event_listener_requested = False
+        async with self._external_event_lifecycle_lock:
+            await self._stop_external_event_listener_locked()
+
+    async def _stop_external_event_listener_locked(self) -> None:
         task = self._external_event_task
         stop_evt = self._external_event_stop
         self._external_event_task = None

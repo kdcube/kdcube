@@ -957,12 +957,19 @@ class AccountingCalculator:
             app_bundle_id: Optional[str] = None,
             service_types: Optional[List[str]] = None,
             hard_file_limit: Optional[int] = None,
+            aggregates_only: bool = False,
     ) -> Dict[str, Dict[str, Any]]:
         """
         Spendings per user in given timeframe.
 
         When possible, uses daily per-user aggregates; otherwise falls back
         to raw scan.
+
+        ``aggregates_only=True`` skips the raw-scan fallback and returns {}
+        when no aggregates cover the window. The raw scan reads every event
+        file in the window sequentially — minutes on object storage — so
+        latency-sensitive callers (user-facing dashboards) opt out of it and
+        surface "window not aggregated" instead.
         """
         # use_aggregates = (
         #     app_bundle_id is None
@@ -985,6 +992,9 @@ class AccountingCalculator:
 
             if agg_res is not None:
                 return agg_res
+
+        if aggregates_only:
+            return {}
 
         # ----- fallback: existing raw-scan implementation -----
         query = AccountingQuery(

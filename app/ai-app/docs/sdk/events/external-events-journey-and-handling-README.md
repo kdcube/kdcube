@@ -615,6 +615,13 @@ handler turn, the runtime marks the current turn as superseded by storing an
 the current event-read/fold boundary when possible and is always rechecked at
 `finish_turn` before answer emission and persistence.
 
+The lease token fences one listener incarnation. A different token is owner
+replacement even when its diagnostic `turn_id` is the same; turn id alone does
+not authorize a stale listener to continue. Within one ReAct turn,
+`ContextBrowser` serializes listener start and stop so its hook-registration and
+phase-watcher paths cannot acquire competing owner tokens, and terminal cleanup
+prevents an already-scheduled start from creating a late listener.
+
 This makes late execution idempotent at the turn boundary. A delayed old turn
 can wake back up after a newer turn has reclaimed the lane, but it cannot use
 that late wakeup to publish a final answer or make the stale turn the committed

@@ -4,7 +4,7 @@ title: "React System Instruction"
 summary: "How React decision system instructions are composed, how to use extended and lite instruction bodies, and how to audit signal coverage."
 tags: ["sdk", "agents", "react", "instructions", "system-prompt", "lite", "configuration"]
 keywords: ["React system instruction", "React lite instructions", "instruction_body", "instruction_blocks", "default_lite_system_instruction", "React prompt composition", "signal coverage"]
-updated_at: 2026-05-17
+updated_at: 2026-07-22
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-caching-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-round-README.md
@@ -174,41 +174,90 @@ Available profiles:
 | `web` | Workspace plus web search/fetch guidance. |
 | `all_capabilities` | All lite blocks, including internal notes and durable user memory. Use only when those tools and policies are enabled. |
 
-## Compose Blocks Directly
+### Exec Artifact Output Paths
 
-Use `instruction_blocks` when the bundle wants a selected set of named lite
-blocks plus custom literal blocks. Named blocks are resolved from
-`shared_instructions_lite.py`; unknown strings are treated as literal
-instruction text.
+Every built-in instruction tier that exposes `exec_tools.execute_code_python`
+teaches the same two-part path contract:
+
+1. The action's `contract[].filepath` is an `OUTPUT_DIR`-relative string such
+   as `turn_<current>/files/report/report.xlsx`. Keep this `artifact_rel`
+   value relative.
+2. Generated code resolves that value under the runtime artifact root, creates
+   its parent, and passes the resolved path to the writer:
 
 ```python
-tool_config = agent_tool_config_from_bundle_props(
-    self.bundle_props,
-    "main",
-    bundle_root=BUNDLE_ROOT,
-)
-react = self.build_react(
-    scratchpad=scratchpad,
-    mod_tools_spec=tool_config.tool_specs,
-    instruction_blocks=[
-        "REACT_LITE_IDENTITY",
-        "REACT_LITE_SECURITY_GUARD",
-        "REACT_LITE_TIMELINE_CONTEXT",
-        "REACT_LITE_ANNOUNCE",
-        "REACT_LITE_EXTERNAL_EVENTS",
-        "REACT_LITE_DECISION_LOOP",
-        "REACT_LITE_TOOL_USE_BASE",
-        "REACT_LITE_PATHS_AND_NAMESPACES",
-        "REACT_LITE_REACT_READ_RECOVERY",
-        "REACT_LITE_WORKSPACE_BASE",
-        "REACT_LITE_FILES_VS_OUTPUTS",
-        "REACT_LITE_FINALIZATION",
-        "[BUNDLE-SPECIFIC RULES]\nAnswer only from the visible docs and fetched sources.",
-    ],
-)
+from pathlib import Path
+
+artifact_rel = "turn_<current>/files/report/report.xlsx"
+artifact_path = Path(OUTPUT_DIR) / artifact_rel
+artifact_path.parent.mkdir(parents=True, exist_ok=True)
+wb.save(artifact_path)
 ```
 
-The same fields can be provided through bundle config:
+The contract `filepath` must equal `artifact_rel` byte-for-byte. It is not the
+path passed directly to `open()`, `wb.save()`, or another writer. Writing
+`artifact_rel` directly would create a bare `turn_<current>/...` tree relative
+to the process working directory, where the artifact collector will not find
+the file.
+
+This rule lives in the full body's `CODEGEN_BEST_PRACTICES_V2` and
+`EXEC_SNIPPET_RULES`, the moderate `REACT_LITE_EXEC_TOOL`, and the extra-lite
+`REACT_XLITE_EXEC` block. The exec tool's parameter description repeats it, so
+the rule also survives the compact tool catalog. Named Lite and Extra-lite
+profiles without an effective exec tool intentionally omit their exec blocks.
+The legacy Full body is monolithic and retains its exec guidance. A fully
+custom body that hides the tool catalog must carry its own complete exec
+contract.
+
+Exec code itself is preserved as a Python module body and evaluated with
+top-level `await` enabled. Do not generate an event-loop runner or a separate
+`main()` entrypoint.
+
+## The `blocks` Vocabulary
+
+A `blocks` list (in `instruction_blocks` or a profile's `blocks`) is composed
+into the instruction body by
+`kdcube_ai_app.apps.chat.sdk.solutions.agentic_instructions.compose_instruction_body`
+— an agent-neutral composer, reached from ReAct through
+`decision_prompt.normalize_instruction_blocks`. **Each item is resolved
+independently and all are joined with a blank line in the exact order listed.**
+One vocabulary spans the three tiers:
+
+| Token | Resolves to | Notes |
+| --- | --- | --- |
+| `full` | the agent's complete default body | Monolithic (not capability-scoped). Any suffix — `full:workspace_exec` — is ignored. A profile with no `blocks` also uses the full default. |
+| `lite:<profile>` | a whole **moderate** profile body | Profiles below. `blocks: [lite:workspace_exec]` == listing that profile's `REACT_LITE_*` blocks. |
+| `xlite:<profile>` | a whole **extra-lite** profile body | Same profile names, for serving-constrained models. |
+| `REACT_LITE_*` | a single moderate block | From `shared_instructions_lite.py`. |
+| `REACT_XLITE_*` | a single extra-lite block | From `instructions_extra_lite.py`. |
+| anything else | literal instruction text | Used verbatim — e.g. a `[BUNDLE-SPECIFIC RULES]` fragment. |
+
+Profiles (for `lite:` and `xlite:`): `core`, `workspace`, `workspace_exec`,
+`document`, `web`, `all_capabilities`.
+
+The runtime protocol is always prepended and the tool/skill catalogs appended by
+the decision agent; `blocks` composes only the body between them. Full is not
+name-addressable block-by-block; it is the default, the `full` token, or a
+literal `body`.
+
+Named Lite and Extra Lite capability blocks are intersected with the effective
+per-turn tool selection. For example, exec, web, and rendering guidance is
+removed when those tools are disabled or absent. App-specific additions must
+follow the same rule; Workspace omits its canvas and memory guidance when `cnv`
+or `mem` is disabled.
+
+A whole profile in one token — the common case:
+
+```yaml
+react:
+  instructions:
+    blocks:
+      - lite:all_capabilities        # the whole moderate set
+    include_tool_catalog: true
+    include_skill_gallery: true
+```
+
+A selected set of blocks plus a custom fragment:
 
 ```yaml
 react:
@@ -224,13 +273,45 @@ react:
       - REACT_LITE_PATHS_AND_NAMESPACES
       - REACT_LITE_REACT_READ_RECOVERY
       - REACT_LITE_WORKSPACE_BASE
-      - REACT_LITE_FILES_VS_OUTPUTS
+      - REACT_LITE_PROJECTS_AND_FILES
       - REACT_LITE_FINALIZATION
+      - "[BUNDLE-SPECIFIC RULES]\nAnswer only from the visible docs and fetched sources."
     include_tool_catalog: true
     include_skill_gallery: true
 ```
 
-Or as a complete body:
+A user-pickable set of sizes via instruction profiles (the picker shows one per
+conversation, next to the model picker):
+
+```yaml
+react:
+  default_agent:
+    instruction_profiles:
+      default: full
+      options:
+        - id: full
+          label: Full
+          description: The complete battle-proven instruction set.
+        - id: lite
+          label: Lite (moderate)
+          blocks: [lite:all_capabilities]
+        - id: extra-lite
+          label: Extra Lite (local models)
+          multi_action_mode: "off"
+          include_skill_gallery: false
+          tool_catalog_detail: compact
+          blocks: [xlite:workspace_exec]
+```
+
+Profile runtime options apply together with the selected body: `multi_action_mode`
+can force the one-action protocol, `include_skill_gallery` and
+`include_tool_catalog` control the appended catalogs, and
+`tool_catalog_detail: compact` keeps exact effective tool IDs and parameter
+names while omitting long examples and repeated prose. The reference Extra Lite
+profile uses single-action mode, no skill gallery, and the compact tool catalog;
+the compact catalog also omits scheduling traits used only by multi-action mode.
+
+Or a complete hand-written body (highest priority, over `blocks`):
 
 ```yaml
 react:
@@ -246,7 +327,25 @@ react:
 ```
 
 `react.instructions.*` and `config.react.instructions.*` are both accepted by
-`build_react`. A complete `body` has priority over `blocks`.
+`build_react`; an instruction profile the user picked overrides the agent-level
+`instructions`. A complete `body` has priority over `blocks`.
+
+The equivalent Python call:
+
+```python
+react = self.build_react(
+    scratchpad=scratchpad,
+    mod_tools_spec=tool_config.tool_specs,
+    instruction_blocks=["lite:workspace_exec"],   # or ["full"], or a block list
+    include_tool_catalog=True,
+    include_skill_gallery=True,
+)
+```
+
+> Direction: `solutions/agentic_instructions` is the seam for externally-managed,
+> versioned instruction sets. A block/profile named here will resolve, in time,
+> from a managed store (id + version) rather than only from the in-tree
+> registries — with no change to how `blocks` is written in config.
 
 ## Signal Coverage
 
@@ -279,14 +378,14 @@ signals and tools exposed to the agent.
 | Skills | Load detailed skill instructions through `sk:<skill_id>` when needed. | `REACT_SKILL_SELECTION_GUIDE`. | `REACT_LITE_SKILLS`; all profiles. |
 | Workspace mental model | React uses timeline/logical paths plus current-turn artifact root, not arbitrary host fs. | `get_workspace_implementation_guide(...)`, exec/path guidance. | `REACT_LITE_WORKSPACE_BASE`; all profiles. |
 | Artifact tree | Physical materialized shape for exec/code: current turn and pulled older turns under artifact root; logs stay in runtime metadata root. | Workspace guide, `EXEC_SNIPPET_RULES`. | `REACT_LITE_WORKSPACE_BASE`; all profiles. |
-| `git/projects/` vs `files/` | `git/projects/<scope>` is durable workspace/project state; `files/<scope>` is produced artifacts. | Workspace guide plus realm refs docs. | `REACT_LITE_FILES_VS_OUTPUTS`; all profiles. |
+| `git/projects/` vs `files/` | `git/projects/<scope>` is durable workspace/project state; `files/<scope>` is produced artifacts. | Workspace guide plus realm refs docs. | `REACT_LITE_PROJECTS_AND_FILES`; all profiles. |
 | Pull/checkout | Pull historical `conv:fi:` refs, then checkout maintained `git/projects/<scope>` into current workspace before editing. | Workspace guide. | `REACT_LITE_WORKSPACE_PULL_CHECKOUT`; workspace profiles except `core`. |
 | Patching | Patch current-turn text files, not old refs; omit displayed line prefixes. | Operating/workspace guide. | `REACT_LITE_PATCHING`; workspace profiles except `core`. |
 | `react.write` artifacts | Write user-visible/canvas and internal artifacts with correct `git/projects/`, `files/`, or `git/snapshots/` placement. | Operating guide, internal notes blocks. | `REACT_LITE_REACT_WRITE_ARTIFACTS`; workspace profiles except `core`. |
 | Internal conversation notes | User-invisible conversation anchors, not durable user memory. | `INTERNAL_NOTES_PRODUCER`, `INTERNAL_NOTES_CONSUMER`. | `REACT_LITE_INTERNAL_NOTES`; `all_capabilities` or explicit block. |
 | Durable user memory read | User-visible cross-conversation memory; current turn overrides memory. | `DURABLE_USER_MEMORY_POLICY`. | `REACT_LITE_DURABLE_USER_MEMORY_READ`; `all_capabilities` or explicit block. |
 | Durable user memory write | Durable memory write/proposal tools are neutral runtime bookkeeping; result-dependent success claims wait for the visible tool result. | `DURABLE_USER_MEMORY_POLICY`. | `REACT_LITE_DURABLE_USER_MEMORY_WRITE`; `all_capabilities` or explicit block. |
-| Exec/ISO runtime | Generated code runs in isolated runtime with `OUTPUT_DIR`/`OUT_DIR` contracts and capped stdout. | `CODEGEN_BEST_PRACTICES_V2`, `EXEC_SNIPPET_RULES`. | `REACT_LITE_EXEC_TOOL`; `workspace_exec`, `all_capabilities`, or explicit block. |
+| Exec/ISO runtime | Generated code is an async-capable module body. Contract `filepath` stays relative as `artifact_rel`; code writes `Path(OUTPUT_DIR) / artifact_rel` after creating its parent. Stdout is capped. | `CODEGEN_BEST_PRACTICES_V2`, `EXEC_SNIPPET_RULES`. | `REACT_LITE_EXEC_TOOL`; `workspace_exec`, `all_capabilities`, or explicit block. |
 | Rendering tools | Create renderer source first; renderer refs point to source, not final output. | `WORK_WITH_DOCUMENTS_AND_IMAGES`, source/citation guidance. | `REACT_LITE_RENDERING_TOOLS`; `document`, `all_capabilities`, or explicit block. |
 | Web tools | Search/fetch current external information; fetch decisive sources before precise claims. | Source/citation guidance plus tool catalog. | `REACT_LITE_WEB_TOOLS`; `web`, `all_capabilities`, or explicit block. |
 | Planning | Use plans for multi-step work and read latest plan handles when needed. | `REACT_PLANNING`. | `REACT_LITE_PLANNING`; workspace profiles except `core`. |
@@ -315,7 +414,7 @@ Minimum baseline for most React agents:
 - `REACT_LITE_PATHS_AND_NAMESPACES`
 - `REACT_LITE_REACT_READ_RECOVERY`
 - `REACT_LITE_WORKSPACE_BASE`
-- `REACT_LITE_FILES_VS_OUTPUTS`
+- `REACT_LITE_PROJECTS_AND_FILES`
 - `REACT_LITE_FINALIZATION`
 - tool catalog enabled when tools are exposed
 - skill catalog enabled when skills are exposed
@@ -371,6 +470,8 @@ from kdcube_ai_app.apps.chat.sdk.skills.instructions.shared_instructions_lite im
 body = default_lite_system_instruction("workspace_exec")
 assert "include this block" not in body.lower()
 assert "EXEC TOOL" in body
+assert "artifact_path = Path(OUTPUT_DIR) / artifact_rel" in body
+assert "artifact_path.parent.mkdir(parents=True, exist_ok=True)" in body
 assert "DURABLE USER MEMORY - WRITE" not in body
 ```
 

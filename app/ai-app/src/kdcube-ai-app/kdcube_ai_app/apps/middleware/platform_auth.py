@@ -25,6 +25,18 @@ def normalize_platform_auth_provider(value: str) -> str:
     return aliases.get(provider, provider or "simple")
 
 
+def _connection_hub_provider(settings: Any) -> str:
+    """Provider the Connection Hub registry resolves, or "" when it resolves none."""
+    try:
+        config = settings.connection_hub_platform_auth_config()
+    except Exception:
+        logger.debug("Connection Hub platform provider lookup failed", exc_info=True)
+        return ""
+    if not isinstance(config, Mapping):
+        return ""
+    return str(config.get("auth_provider") or "").strip().lower()
+
+
 def platform_authenticator_descriptor(settings: Any | None = None) -> dict[str, Any]:
     """Normalize the descriptor for the platform role-providing authority.
 
@@ -66,12 +78,28 @@ def platform_authenticator_descriptor(settings: Any | None = None) -> dict[str, 
             }
 
     descriptor_provider = str(getattr(settings, "AUTH_PROVIDER", "") or "").strip().lower()
+    source = ""
+    if descriptor_provider:
+        # AUTH_PROVIDER is populated from the Connection Hub provider whenever no
+        # env var supplied it, so a provider resolved there is what selected this
+        # authenticator. Reporting `auth.idp` for every case hid that distinction.
+        if str(os.getenv("AUTH_PROVIDER", "") or "").strip():
+            source = "env:AUTH_PROVIDER"
+        elif _connection_hub_provider(settings):
+            source = "auth.connection_hub"
+        else:
+            source = "auth.idp"
     if not descriptor_provider:
         descriptor_provider = str(settings.plain("auth.idp", default="") or "").strip().lower()
+        if descriptor_provider:
+            source = "auth.idp"
     if not descriptor_provider:
         descriptor_provider = str(settings.plain("auth.type", default="") or "").strip().lower()
+        if descriptor_provider:
+            source = "auth.type"
     if not descriptor_provider:
         descriptor_provider = "simple"
+        source = "default"
     provider = normalize_platform_auth_provider(descriptor_provider)
     trusted_providers = list(getattr(settings.AUTH, "COGNITO_TRUSTED_PROVIDERS", None) or [])
     if provider == "cognito" and len(trusted_providers) > 1:
@@ -80,7 +108,7 @@ def platform_authenticator_descriptor(settings: Any | None = None) -> dict[str, 
         "authenticator_id": f"kdcube.{provider}",
         "authority_id": "kdcube.platform",
         "provider": provider,
-        "source": "auth.idp",
+        "source": source or "auth.idp",
     }
 
 
@@ -147,9 +175,18 @@ def create_platform_auth_manager(
 
     from kdcube_ai_app.apps.middleware.simple_idp import SimpleIDP
 
-    logger.info("Using SimpleIDP for %s platform authentication", service_label)
+    idp_db_path = str(getattr(settings.AUTH.IDP.local, "IDP_DB_PATH", "") or "").strip() or None
+    logger.info(
+        "Using SimpleIDP for %s platform authentication idp_db_path=%s",
+        service_label,
+        idp_db_path or "<default>",
+    )
     return with_authenticator_metadata(
-        SimpleIDP(send_validation_error_details=send_validation_error_details, service_user_token=os.getenv("SERVICE_USER_TOKEN")),
+        SimpleIDP(
+            send_validation_error_details=send_validation_error_details,
+            service_user_token=os.getenv("SERVICE_USER_TOKEN"),
+            idp_db_path=idp_db_path,
+        ),
         descriptor,
     )
 

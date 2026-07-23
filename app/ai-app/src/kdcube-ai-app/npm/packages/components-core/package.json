@@ -28,6 +28,10 @@
     "./canvas": {
       "types": "./dist/canvas/index.d.ts",
       "import": "./dist/canvas/index.js"
+    },
+    "./apps-config": {
+      "types": "./dist/apps-config/index.d.ts",
+      "import": "./dist/apps-config/index.js"
     }
   },
   "scripts": {

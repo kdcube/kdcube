@@ -14,8 +14,15 @@ downstream of the door through a generic transport with no HTTP request.
 Whoever HAS the agent's credential sets the binding into this contextvar at the
 boundary — the door bridge from `request.state.delegated_credential`; a native
 agent gate from the same view — and the resolver reads back the per-account
-claim map for the provider it is resolving. Unset / non-agent turns resolve to
-None (no restriction), so the default behavior is unchanged.
+claim map for the provider it is resolving.
+
+Default-closed for delegated callers: when an agent identity is bound for the
+turn and the provider has NO binding entry, the resolver receives an EMPTY
+mapping — "agent turn, nothing granted on this provider" — and the broker
+denies with the agent-grant reason until the user binds an account. Only
+non-agent turns (no delegated identity — the user's own trusted tools) resolve
+to None, meaning no restriction. An agent never inherits the accounts the user
+connected; the binding is the grant.
 """
 
 from __future__ import annotations
@@ -71,11 +78,14 @@ def clear_agent_account_scope() -> None:
 
 def set_agent_identity(*, client_id: str = "", resource: str = "") -> None:
     """Bind the current agent's delegated identity (its
-    ``kdcube-agent:<app>:<agent>`` client id and the delegated-resource id its
-    grant is keyed under). Empty values clear the field."""
+    ``kdcube-agent:<app>:<agent>`` or ``dcr-…`` client id and the
+    delegated-resource id its grant is keyed under). The client id alone is
+    enough to mark the turn as a delegated (agent) turn — and with it the
+    default-closed account binding; the resource additionally lets a claim
+    miss deep-link the exact grant card. An empty client id clears the field."""
     cid = str(client_id or "").strip()
     res = str(resource or "").strip()
-    _AGENT_IDENTITY.set({"client_id": cid, "resource": res} if (cid and res) else {})
+    _AGENT_IDENTITY.set({"client_id": cid, "resource": res} if cid else {})
 
 
 def agent_identity() -> dict:
@@ -87,10 +97,16 @@ def agent_identity() -> dict:
 def account_claim_scope_for(provider_id: str) -> dict[str, tuple[str, ...]] | None:
     """The current agent's per-account claim binding for ``provider_id`` —
     ``{account_id: (claims...)}`` (account "*" = any account, claim "*" = any
-    claim), or None for no restriction (absent provider)."""
+    claim).
+
+    Returns None ONLY on a non-agent turn (no delegated identity bound): the
+    user's own trusted tools are unrestricted. On an agent turn with no binding
+    entry for this provider it returns an EMPTY mapping — default-closed: the
+    agent is bound to no account there, and the broker denies with the
+    agent-grant reason until the user grants one."""
     entry = _ACCOUNT_SCOPE.get().get(str(provider_id or "").strip())
     if not entry:
-        return None
+        return {} if _AGENT_IDENTITY.get() else None
     return {
         str(account_id).strip(): tuple(claims)
         for account_id, claims in dict(entry).items()

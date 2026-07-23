@@ -19,6 +19,7 @@ picker by declaring::
                 supported:
                   - { model: claude-sonnet-4-6, provider: anthropic, label: Sonnet 4.6 }
                   - { model: claude-haiku-4-5,  provider: anthropic, label: Haiku 4.5 }
+                  - { model: qwen3:8b, provider: custom, label: Qwen3 8B, num_ctx: 40960 }
 
 The per-user (per-conversation) pick is applied to
 ``runtime_ctx.agent_role_models[<role>]``; the model router overlays that onto
@@ -43,19 +44,26 @@ from kdcube_ai_app.apps.chat.sdk.runtime.agent_capabilities.registry import (
 PROVIDER_KIND = "simple_model_pick"
 
 
-def _normalize_supported(raw: Any) -> List[Dict[str, str]]:
-    out: List[Dict[str, str]] = []
+def _normalize_supported(raw: Any) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
     for row in raw or []:
         if not isinstance(row, Mapping):
             continue
         model = str(row.get("model") or "").strip()
         if not model:
             continue
-        out.append({
+        entry: Dict[str, Any] = {
             "model": model,
             "provider": str(row.get("provider") or "").strip() or "anthropic",
             "label": str(row.get("label") or "").strip() or model,
-        })
+        }
+        try:
+            num_ctx = int(row.get("num_ctx") or 0)
+        except (TypeError, ValueError):
+            num_ctx = 0
+        if num_ctx > 0:
+            entry["num_ctx"] = num_ctx
+        out.append(entry)
     return out
 
 
@@ -68,7 +76,7 @@ class SimpleModelPickProvider:
         self,
         *,
         role: str,
-        supported: List[Dict[str, str]],
+        supported: List[Dict[str, Any]],
         default: Optional[str] = None,
         bundle_props: Any = None,
         agent_id: str = "",

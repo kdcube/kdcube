@@ -142,7 +142,8 @@ Connection Hub Delegated Connection Protocol Adapter
   served by connection-hub@1-0 public oauth operation
         |
         | returns authorization endpoint, token endpoint,
-        | registration endpoint, scopes, and resource metadata
+        | registration endpoint, revocation endpoint,
+        | scopes, and resource metadata
         v
 OAuth Client Registration
   static public client or dynamic client registration
@@ -372,9 +373,15 @@ OAuth rows follow these rules:
 
 - one row per `(grantor, client, resource)` — reconsent widens the same row
   and keeps the first-approval timestamp; refresh rotation updates the row's
-  live token material;
+  live token material, preserves the row's per-account binding
+  (`account_scope`), and stamps `last_issued_at` (the staleness signal for a
+  disconnect orphan);
 - the row's label is the client's DCR registration name, so users see
   "Claude", not a `dcr-…` id;
+- a fresh consent from a NEW `dcr-…` registration supersedes the old row
+  (same grantor + resource, matching redirect origin — the app's stable
+  identity across re-registrations): the account binding carries over and the
+  stale row is revoked, so DCR reconnects never pile up rows;
 - the row expires with the refresh-token TTL, so a connection whose refresh
   token can no longer be used disappears on its own;
 - registry writes never fail token issuance.
@@ -386,6 +393,9 @@ manual  -> the bound platform session is logged out
 oauth   -> the refresh token is deleted (no new access tokens)
            AND the current access-grant binding is deleted
            (managed guards reject the bearer in flight)
+client  -> RFC 7009 POST /oauth/revoke with the client's own token
+           revokes it AND retires the row, so a clean disconnect
+           leaves no orphan card
 ```
 
 Public listings never expose token material — only metadata (label, source,

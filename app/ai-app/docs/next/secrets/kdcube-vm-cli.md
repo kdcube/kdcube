@@ -84,7 +84,7 @@ Host:
 
 ## Ports
 Expose only required ports to host:
-- UI: 5174
+- UI: 5173
 - Ingress: 8010
 - Optional: pgadmin, metrics
 

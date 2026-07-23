@@ -322,6 +322,15 @@ def platform_authority_auth_config(provider_result: Mapping[str, Any] | None) ->
             "provider": provider,
             "authority": _dict(result.get("authority")),
         }
+    if provider_type in {"simple_idp", "simple-idp", "simple"}:
+        # The store path is not configurable: the runtime pins it so every service
+        # reads the same file. See SIMPLE_IDP_STORE_PATH.
+        return {
+            "auth_provider": "simple",
+            **_token_transport_config(provider),
+            "provider": provider,
+            "authority": _dict(result.get("authority")),
+        }
     return {}
 
 

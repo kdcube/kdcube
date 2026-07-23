@@ -8,6 +8,7 @@ updated_at: 2026-07-18
 keywords: ["KDCube app architecture", "as provider", "as consumer", "app surfaces", "named service", "scene", "default chat"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/arch/security-and-trust-model-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/agent-acting-for-user/agent-acting-for-user-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/arch/architecture-of-what-we-built-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-write-bundle-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-descriptor-README.md
@@ -222,6 +223,11 @@ delegated KDCube credentials. Connected external accounts point the other way:
 they let trusted KDCube tools call services such as mail or Slack for the
 current user. Do not merge these two delegation directions.
 
+A hosted or in-app agent is a delegated-by client in its own right: its account
+access is a per-agent grant, scoped per connected account and per claim, and
+independent of which accounts the user connected. See
+[Agents Acting For The User](../sdk/solutions/connections/agent-acting-for-user/agent-acting-for-user-README.md).
+
 ## Define Execution And Data Boundaries
 
 The app decides which code is trusted and which work requires isolation.
@@ -232,7 +238,7 @@ trusted app/tool code
 
 generated or untrusted code
   receives a sparse materialized workspace
-  runs in the selected execution profile
+  runs in a per-agent execution profile, under the operator ceiling
   reaches approved tools through the trusted supervisor boundary
 ```
 
@@ -240,6 +246,11 @@ Model-proposed refs and paths are untrusted locators. Trusted runtime resolvers
 bind tenant/project/user/authority before returning bytes. This requester versus
 resolver distinction matters more than asking the model to remember a tenant
 filter.
+
+Placement is per tool — a tool declares whether it runs trusted, in a
+subprocess, or in the isolated executor — and privileged side-effects cross the
+boundary by reference: the trusted side holds the credentials, performs the
+operation, and returns a bounded result.
 
 Storage is also explicit. App filesystem storage, artifact storage, user
 settings, conversation records, connected-account secrets, and Redis runtime

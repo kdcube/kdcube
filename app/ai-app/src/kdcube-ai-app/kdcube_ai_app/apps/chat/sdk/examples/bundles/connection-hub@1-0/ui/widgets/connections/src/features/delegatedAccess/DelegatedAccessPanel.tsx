@@ -143,8 +143,8 @@ export function DelegatedAccessPanel({ openParams }: { openParams?: Record<strin
   const [editingAccessId, setEditingAccessId] = useState<string | null>(null);
   const [editPicks, setEditPicks] = useState<Record<string, boolean>>({});
   // Per-account claim binding being edited: {provider_id: {account_id: [claims]}}.
-  // A provider left untouched means "any account"; once any account is ticked,
-  // only the ticked accounts+claims are allowed.
+  // Default-closed: a provider with nothing ticked grants NO account to this
+  // client; only the ticked accounts+claims are allowed.
   const [editAccountScope, setEditAccountScope] = useState<Record<string, Record<string, string[]>>>({});
   // Catalog search: narrows the delegable-resource cards (labels, grants,
   // named-service rows) wherever the shared list renders.
@@ -352,7 +352,8 @@ export function DelegatedAccessPanel({ openParams }: { openParams?: Record<strin
     setEditAccountScope(seedAccountScopeFromRecord(item));
   };
   // Toggle one claim on one account for a provider. An account with no claims
-  // drops out; a provider with no bound accounts drops out (=> any account).
+  // drops out; a provider with no bound accounts drops out (=> nothing granted
+  // there — the runtime is default-closed for delegated callers).
   const makeToggleAccountClaim = (
     setScope: React.Dispatch<React.SetStateAction<Record<string, Record<string, string[]>>>>,
   ) => (provider: string, accountId: string, claim: string, checked: boolean) => {
@@ -423,20 +424,34 @@ export function DelegatedAccessPanel({ openParams }: { openParams?: Record<strin
   useEffect(() => {
     if (!pendingGrant) { seededPendingFor.current = null; return; }
     if (seededPendingFor.current === pendingGrant.clientId) return;
-    if (!accounts.length || !items.length) return; // wait for the registry + accounts
+    if (!accounts.length) return; // wait for the account list
     const existing = items.find(
       (record) => (record.client_id || '') === pendingGrant.clientId
         && !!record.account_scope && Object.keys(record.account_scope).length > 0,
     );
     seededPendingFor.current = pendingGrant.clientId;
+    // Guided per-account ask: the denial named the exact account + claim. Open
+    // that provider's section so the user lands on the checkboxes — but tick
+    // NOTHING: granting is always the user's explicit decision. The guide
+    // block names the account and claim to tick.
+    if (pendingGrant.accountId && pendingGrant.accountClaim) {
+      const account = accounts.find((item) => (item.account_id || '') === pendingGrant.accountId);
+      const provider = account?.provider_id || '';
+      if (provider) {
+        setExpandedAccountProviders((current) => ({ ...current, [provider]: true }));
+      }
+    }
+    // Restore only what this agent was ALREADY granted before (re-consent) —
+    // that is existing state, not a new pre-tick.
     if (existing) setPendingAccountScope(seedAccountScopeFromRecord(existing));
   }, [pendingGrant, items, accounts, seedAccountScopeFromRecord]);
 
   // The per-account permission picker: a disclosure per provider showing
-  // "<n>/<m> accounts" (or "any account" when unbound) so a large account list
-  // stays legible; expanding shows EACH connected account with its own approved
-  // claims as checkboxes — so "read+write on one account, read-only on another"
-  // is picked here. Reused by the Edit blocks and the pending consent card.
+  // "<n>/<m> accounts" (or "no accounts yet" when unbound) so a large account
+  // list stays legible; expanding shows EACH connected account with its own
+  // approved claims as checkboxes — so "read+write on one account, read-only on
+  // another" is picked here. Reused by the Edit blocks and the pending consent
+  // card.
   const renderAccountScopePicker = (
     scope: Record<string, Record<string, string[]>>,
     onToggle: (provider: string, accountId: string, claim: string, checked: boolean) => void,
@@ -462,7 +477,7 @@ export function DelegatedAccessPanel({ openParams }: { openParams?: Record<strin
               <summary className="muted" style={{ cursor: 'pointer' }}>
                 {providers[provider]?.label || provider}
                 {' — '}
-                {boundCount ? `${boundCount}/${total} accounts` : 'any account'}
+                {boundCount ? `${boundCount}/${total} accounts` : 'no accounts yet'}
                 {open ? null : <span className="account-sub"> · + choose</span>}
               </summary>
               <div style={{ marginTop: 6 }}>
@@ -498,7 +513,7 @@ export function DelegatedAccessPanel({ openParams }: { openParams?: Record<strin
           );
         })}
         <div className="account-sub" style={{ marginTop: 4 }}>
-          Tick the permissions {who} may use on each account. Leave a provider untouched to allow any of its accounts.
+          Tick the permissions {who} may use on each account. Nothing is granted until you tick it — a provider with no ticks gives {who} no account access there.
         </div>
       </div>
     );
@@ -518,7 +533,8 @@ export function DelegatedAccessPanel({ openParams }: { openParams?: Record<strin
     } else {
       // The account binding is a per-client (not per-resource) edit, so send it
       // once with the first resource; `replace` makes the submitted scope
-      // authoritative (an unchecked provider clears its binding -> any account).
+      // authoritative (an unchecked provider clears its binding -> nothing
+      // granted there; the runtime is default-closed for delegated callers).
       const accountScope = editAccountScope;
       let first = true;
       for (const [resource, claims] of Object.entries(kept)) {
@@ -655,9 +671,23 @@ export function DelegatedAccessPanel({ openParams }: { openParams?: Record<strin
       </p>
       {pendingGrant.accountClaim ? (
         <div className="notice" style={{ marginTop: 0, marginBottom: 12 }}>
-          This agent needs <code>{pendingGrant.accountClaim}</code> on{' '}
-          <strong>{pendingAccountLabel || 'the account below'}</strong>. Tick it under
-          that account below, then <strong>Grant access</strong>.
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>Why you are here</div>
+          <div style={{ marginBottom: 8 }}>
+            This agent tried to use <code>{pendingGrant.accountClaim}</code> on{' '}
+            <strong>{pendingAccountLabel || 'your connected account'}</strong> and was stopped —
+            nothing was done. Your account allows it, but this agent has not been granted it.
+            You decide here what it may use.
+          </div>
+          <ol style={{ margin: 0, paddingLeft: 18 }}>
+            <li>
+              Below, under the opened provider, find{' '}
+              <strong>{pendingAccountLabel || 'the account you want to allow'}</strong> —
+              or any other account you prefer.
+            </li>
+            <li>Tick <code>{pendingGrant.accountClaim}</code> on that account. Tick only what you want to allow.</li>
+            <li>Press <strong>Grant access</strong>.</li>
+            <li>Go back and retry the request — it will use exactly what you granted.</li>
+          </ol>
         </div>
       ) : null}
       <ul className="accounts">

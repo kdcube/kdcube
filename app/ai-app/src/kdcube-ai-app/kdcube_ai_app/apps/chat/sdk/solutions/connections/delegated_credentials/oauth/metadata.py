@@ -41,6 +41,10 @@ def authorization_server_metadata(
         # RFC 7591 dynamic client registration — Claude.ai self-registers here
         # when the connector is added without an OAuth Client ID.
         "registration_endpoint": registration_endpoint or f"{issuer}/oauth/register",
+        # RFC 7009 token revocation — a disconnecting client revokes its token
+        # here, which also retires its Connection Hub card (no orphan).
+        "revocation_endpoint": f"{issuer}/oauth/revoke",
+        "revocation_endpoint_auth_methods_supported": ["none"],
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "response_types_supported": ["code"],
         "code_challenge_methods_supported": ["S256"],

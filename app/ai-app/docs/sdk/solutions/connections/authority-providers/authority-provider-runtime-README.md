@@ -78,6 +78,10 @@ authority_registry:
           type: cognito
           enabled: true
           authenticator: ...
+        simple:
+          type: simple_idp
+          enabled: true
+          authenticator: ...
         workspace_google_session:
           type: bundle_session_login
           enabled: true
@@ -285,6 +289,65 @@ Configured SimpleIDP user/token
   -> SimpleIDP verifier resolves kdcube.platform subject
   -> /profile verifies the platform session server-side
 ```
+
+Descriptor selection:
+
+```yaml
+auth:
+  type: simple
+  idp: simple
+  connection_hub:
+    bundle_id: connection-hub@1-0
+    authority_id: kdcube.platform
+    provider_id: simple
+```
+
+- Connection Hub owns provider details under
+  `authority_registry.authorities.kdcube.platform.providers.simple`.
+- The runtime maps that provider into `SimpleIDP`.
+- The provider carries verifier configuration only. It declares no `grants`,
+  `entrypoints`, or `issuer`.
+
+```yaml
+providers:
+  simple:
+    type: simple_idp
+    enabled: true
+    label: Local SimpleIDP platform identity
+    authenticator:
+      id_token_header_name: X-ID-Token
+      cookie:
+        auth_token_cookie_name: __Secure-LATC
+        id_token_cookie_name: __Secure-LITC
+        masqueraded_token_cookie_name: __Secure-LMTC
+```
+
+The user store is not part of the descriptor. Every service reads
+`/config/idp_users.json`, pinned by the runtime and not configurable per
+service or per provider. The JSON file holds the users; Redis holds only a
+cache-version counter keyed by a hash of the path, so services resolving
+different paths, or the same path on unshared volumes, would keep separate user
+sets.
+
+The browser credential is declared in `assembly.yaml`:
+
+```yaml
+frontend:
+  config:
+    auth:
+      authType: simple
+      token: test-admin-token-123
+```
+
+`kdcube init` and `kdcube config apply --auth-type simple` write this block,
+defaulting `token` to the development administrator seeded into every store
+(`DEFAULT_SIMPLE_IDP_USERS`). The token must exist in the store to authenticate.
+The other auth types clear the block, so a token set here does not survive a
+switch away and back.
+
+`frontend.config` is public browser configuration served by
+`/api/cp-frontend-config`. The seeded development token grants
+`kdcube:role:super-admin`.
 
 Use this only when the deployment intentionally wants a simple platform identity
 registry, usually local development, demos, or embedded test surfaces. Production

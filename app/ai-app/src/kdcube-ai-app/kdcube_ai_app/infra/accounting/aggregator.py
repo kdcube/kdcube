@@ -49,6 +49,7 @@ NOTES:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import date, datetime, timedelta, timezone
@@ -87,10 +88,15 @@ class AccountingAggregator:
         *,
         raw_base: str = "accounting",
         agg_base: str = "analytics",
+        read_concurrency: int = 32,
     ):
         self.fs = storage_backend
         self.raw_base = raw_base.strip("/")
         self.agg_base = agg_base.strip("/")
+        # Raw events are one JSON file each; a day's aggregation is latency-bound
+        # on object storage when files are read one-by-one. Reads are batched with
+        # this bound instead (accumulation stays sequential).
+        self.read_concurrency = max(1, int(read_concurrency))
 
     # -------------------------------------------------------------------------
     # Internal helpers
@@ -102,6 +108,24 @@ class AccountingAggregator:
         except Exception:
             logger.debug("list_dir failed for %s", path, exc_info=True)
             return []
+
+    async def _read_events_bounded(self, paths: List[str]) -> List[Dict[str, Any]]:
+        """Read + parse raw event files with bounded concurrency, preserving the
+        input order. Unreadable/unparseable files are skipped (logged at debug),
+        matching the previous sequential behavior."""
+        sem = asyncio.Semaphore(self.read_concurrency)
+
+        async def _one(p: str) -> Optional[Dict[str, Any]]:
+            async with sem:
+                try:
+                    raw = await self.fs.read_text_a(p)
+                    return json.loads(raw)
+                except Exception:
+                    logger.debug("Skipping unreadable event %s", p, exc_info=True)
+                    return None
+
+        results = await asyncio.gather(*(_one(p) for p in paths))
+        return [ev for ev in results if ev is not None]
 
     async def _iter_raw_event_paths_for_day(
         self,
@@ -303,14 +327,8 @@ class AccountingAggregator:
         agent_rollups: Dict[str, Dict[Tuple[str, str, str], Dict[str, int]]] = {}
         agent_event_counts: Dict[str, int] = {}
 
-        for p in paths:
-            try:
-                raw = await self.fs.read_text_a(p)
-                ev = json.loads(raw)
-            except Exception:
-                logger.debug("Skipping unreadable event %s", p, exc_info=True)
-                continue
-
+        events = await self._read_events_bounded(paths)
+        for ev in events:
             usage = _extract_usage(ev)
             # Even if usage is missing, we still count the event
             event_count_daily += 1

@@ -135,6 +135,10 @@ connections:
           redirect_uris:
             - https://claude.ai/api/mcp/auth_callback
             - http://localhost/callback
+      dynamic_client_registration:
+        allowed_redirect_uris:
+          - https://claude.ai/api/mcp/auth_callback
+          - http://localhost/callback
       capabilities:
         - grant: memories:read
           label: Read KDCube memories

@@ -529,6 +529,26 @@ def test_supported_models_agent_key_wins_over_default():
     assert rows[0]["provider"] == "anthropic"  # default provider fill
 
 
+def test_supported_models_preserve_admin_context_window_for_runtime_matching():
+    props = _props_with_models(agent_level=False)
+    props["react"]["default_agent"]["supported_models"].append({
+        "model": "qwen3:8b",
+        "provider": "custom",
+        "label": "Qwen3 8B",
+        "num_ctx": "40960",
+    })
+
+    rows = react_supported_models(props, "main")
+    assert rows[-1]["num_ctx"] == 40960
+    assert match_supported_model(
+        {"provider": "custom", "model": "qwen3:8b", "num_ctx": 1}, rows,
+    ) == {
+        "provider": "custom",
+        "model": "qwen3:8b",
+        "num_ctx": 40960,
+    }
+
+
 def test_configured_strong_model_resolution():
     props = _props_with_models(agent_level=False)
     assert configured_strong_model(props, "main") == {

@@ -43,6 +43,25 @@ interface Subscription {
     stripe_subscription_id: string | null;
 }
 
+interface CostBreakdownLine {
+    service: string;
+    provider?: string | null;
+    model?: string | null;
+    cost_usd: number;
+}
+
+interface CostBreakdown {
+    status: string;
+    user_id: string;
+    date_from: string;
+    date_to: string;
+    total_cost_usd: number;
+    by_model: CostBreakdownLine[];
+    tokens: { input_tokens: number; output_tokens: number; embedding_tokens: number };
+    event_count: number;
+    coverage: 'aggregates' | 'no_aggregates';
+}
+
 interface QuotaBreakdown {
     user_id: string;
     role?: string | null;
@@ -343,6 +362,12 @@ class BillingAPI {
         return response.json();
     }
 
+    // Actual per-model spend (aggregates-only on the server — always fast).
+    async getCostBreakdown(): Promise<CostBreakdown> {
+        const response = await this.fetchWithAuth(this.getMeUrl('/cost-breakdown'));
+        return response.json();
+    }
+
     async listSubscriptionPlans(): Promise<{ plans: SubscriptionPlan[] }> {
         const response = await this.fetchWithAuth(this.getMeUrl('/subscription-plans'));
         return response.json();
@@ -534,6 +559,7 @@ const UserBillingDashboard: React.FC = () => {
     const [error, setError] = useState<string | null>(null);
 
     const [breakdown, setBreakdown] = useState<QuotaBreakdown | null>(null);
+    const [costBreakdown, setCostBreakdown] = useState<CostBreakdown | null>(null);
     const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
     const [subscription, setSubscription] = useState<Subscription | null>(null);
 
@@ -556,12 +582,14 @@ const UserBillingDashboard: React.FC = () => {
         setLoading(true);
         setError(null);
         try {
-            const [brk, pData, subData] = await Promise.all([
+            const [brk, cost, pData, subData] = await Promise.all([
                 api.getBudgetBreakdown().catch(() => null),
+                api.getCostBreakdown().catch(() => null),
                 api.listSubscriptionPlans().catch(() => ({ plans: [] })),
                 api.getSubscription().catch(() => ({ subscription: null }))
             ]);
             if (brk) setBreakdown(brk);
+            setCostBreakdown(cost);
             if (pData) setPlans(pData.plans);
             if (subData) setSubscription(subData.subscription);
         } catch (err: any) {
@@ -864,6 +892,56 @@ const UserBillingDashboard: React.FC = () => {
                                     </div>
                                 </div>
                             </Card>
+
+                            {/* Actual spend this month — per-model dollars from the live
+                                price table. The quota meters above are quota-equivalent
+                                units for enforcement; the two differ by design. */}
+                            {costBreakdown && (
+                                <Card className="p-4">
+                                    <h3 className="mb-3 text-sm font-semibold uppercase tracking-wider text-gray-500">Actual Spend (This Month)</h3>
+                                    {costBreakdown.coverage === 'no_aggregates' ? (
+                                        <div className="rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                                            Spend reports for this window are not aggregated yet. Check back shortly.
+                                        </div>
+                                    ) : (
+                                        <>
+                                            <div className="text-xl font-bold">${(costBreakdown.total_cost_usd || 0).toFixed(4)}</div>
+                                            <div className="mb-4 text-sm text-gray-500">
+                                                {costBreakdown.date_from} — {costBreakdown.date_to} · priced per model at actual rates
+                                            </div>
+                                            <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                                                <WalletMetric label="Input tokens" value={formatCount(costBreakdown.tokens?.input_tokens)} />
+                                                <WalletMetric label="Output tokens" value={formatCount(costBreakdown.tokens?.output_tokens)} />
+                                                <WalletMetric label="Calls" value={formatCount(costBreakdown.event_count)} />
+                                            </div>
+                                            {costBreakdown.by_model.length > 0 && (
+                                                <div className="overflow-hidden rounded-xl border border-gray-100">
+                                                    <table className="w-full text-sm">
+                                                        <thead className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wider text-gray-400">
+                                                            <tr>
+                                                                <th className="px-4 py-2">Model</th>
+                                                                <th className="px-4 py-2 text-right">Cost</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {costBreakdown.by_model.map((line, i) => (
+                                                                <tr key={i} className="border-t border-gray-100">
+                                                                    <td className="px-4 py-2 text-gray-700">
+                                                                        {line.model || line.provider || line.service}
+                                                                        {line.model && line.provider ? <span className="ml-1 text-xs text-gray-400">· {line.provider}</span> : null}
+                                                                    </td>
+                                                                    <td className="px-4 py-2 text-right font-medium text-gray-900">${Number(line.cost_usd || 0).toFixed(4)}</td>
+                                                                </tr>
+                                                            ))}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            )}
+                                        </>
+                                    )}
+                                </Card>
+                            )}
+
                             {breakdown.subscription_balance?.has_subscription && (
                                 <Card className="p-4">
                                     <h3 className="mb-3 text-sm font-semibold uppercase tracking-wider text-gray-500">Subscription Balance</h3>

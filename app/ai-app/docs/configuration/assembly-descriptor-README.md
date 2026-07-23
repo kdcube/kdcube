@@ -316,6 +316,13 @@ development auth proxy path or a custom SPA route prefix. `auth.turnstile_develo
 is still read from the `auth` section and is published as
 `auth.turnstileDevelopmentToken` when it is non-placeholder.
 
+`auth.type: simple` is the one mode with a browser credential in this section.
+`kdcube init` and `kdcube config apply --auth-type simple` write
+`frontend.config.auth.authType` and `frontend.config.auth.token`, defaulting the
+token to the development administrator seeded into the SimpleIDP store. The
+other auth types clear the whole block, so a token set for `simple` does not
+survive a switch away and back.
+
 If `frontend.config.auth.authType` is omitted, it is derived from top-level
 auth: `auth.type: simple` emits browser `authType: simple`, `auth.type:
 cognito` emits `authType: cognito`, and `auth.type: delegated` emits

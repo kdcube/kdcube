@@ -1238,14 +1238,14 @@ class ExecTools:
             "- MOST COMMON MISTAKE: you render chart PNGs, embed them into an Excel/PDF, and contract ONLY the workbook —\n"
             "  embedding copies the bytes INTO the document, but each standalone PNG is a SEPARATE file that vanishes\n"
             "  unless contracted. Contract the workbook AND every chart image (one entry each; visibility='internal' for\n"
-            "  reusable building blocks). The contract `filepath` MUST be byte-identical to the path your code writes to,\n"
-            "  or the file is reported missing and its bytes lost.\n"
+            "  reusable building blocks). Keep contract `filepath` relative. It MUST be byte-identical to the\n"
+            "  `artifact_rel` string used by the code, or the file is reported missing and its bytes lost.\n"
             "\n"
             "[INPUTS]\n"
             "- When called from React decision, the code is provided in <channel:code> (not in params).\n"
             "1) `contract` (list or JSON string, REQUIRED): list of output files specs with fields:\n"
-            "   - filepath (the FULL OUTPUT_DIR-relative path, NOT a bare name; MUST equal the path your code\n"
-            "     writes to). The project-vs-produced choice IS this prefix:\n"
+            "   - filepath (the FULL OUTPUT_DIR-relative `artifact_rel` string, NOT a bare name; it remains\n"
+            "     relative in the action). The project-vs-produced choice IS this prefix:\n"
             "     turn_<current>/git/projects/<scope>/... = durable workspace/project state;\n"
             "     turn_<current>/files/<scope>/... = produced deliverables / reports / one-off artifacts.\n"
             "   - description (what this file contains / why it was produced)\n"
@@ -1290,6 +1290,14 @@ class ExecTools:
             "- Write reports, test results, and other non-workspace deliverables to OUTPUT_DIR/turn_<current>/files/<scope>/.\n"
             "- Build paths like:\n"
             "  `Path(OUTPUT_DIR) / \"turn_<current>/git/projects/app/my_file.ext\"` or `Path(OUTPUT_DIR) / \"turn_<current>/files/report/report.txt\"`.\n"
+            "- REQUIRED output pattern:\n"
+            "  `from pathlib import Path`\n"
+            "  `artifact_rel = \"turn_<current>/files/<scope>/<name>\"`\n"
+            "  `artifact_path = Path(OUTPUT_DIR) / artifact_rel`\n"
+            "  `artifact_path.parent.mkdir(parents=True, exist_ok=True)`\n"
+            "  Pass `artifact_path` to open(), wb.save(), image.save(), and other writers. Put the same\n"
+            "  `artifact_rel` string in contract `filepath`. Never write `artifact_rel` directly or create\n"
+            "  a bare `turn_<current>/...` tree relative to the process working directory.\n"
             "- Use the exact current turn id shown in the runtime context.\n"
             "- Network access is disabled in the sandbox; any network calls will fail.\n"
             "- Read/write outside OUTPUT_DIR or the current workdir is not permitted.\n"
@@ -1315,7 +1323,15 @@ class ExecTools:
     )
     async def execute_code_python(
         self,
-        contract: Annotated[Any, "List or JSON string of artifact specs (filepath, description, optional visibility=external|internal) that you plan your future code to produce. filepath is the full OUTPUT_DIR-relative path your code writes to."],
+        contract: Annotated[
+            List[Dict[str, Any]],
+            "Required non-empty list of artifact specs: "
+            "[{filepath, description, visibility?}]. filepath is the full OUTPUT_DIR-relative "
+            "artifact_rel string kept relative in the action. Code must import Path from pathlib, set "
+            "artifact_path = Path(OUTPUT_DIR) / artifact_rel, call "
+            "artifact_path.parent.mkdir(parents=True, exist_ok=True), and write to "
+            "artifact_path; never write artifact_rel relative to cwd. visibility is external or internal.",
+        ],
         prog_name: Annotated[Optional[str], "Short name of the program for UI labeling."] = None,
         timeout_s: Annotated[Optional[int], "Execution timeout seconds (default: 600)."] = None,
     ) -> Annotated[dict, "Envelope: ok/artifacts/items/error/report_text."]:

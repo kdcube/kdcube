@@ -430,7 +430,8 @@ consent error instead of guessing, retrying, or a vague server error:
 error.code = needs_connected_account_consent            (status 403)
 error.details:
   reason               connect_required | claim_upgrade_required |
-                       reconnect_required | account_required
+                       reconnect_required | account_required |
+                       agent_grant_required
   retry_hint           true -> the same call succeeds after the user acts
                        (for account_required: when resent with account_id)
   provider_id / connector_app_id / claims / account_id
@@ -450,6 +451,12 @@ reconnect_required      the stored credential no longer works — the user
                         reconnects that account
 account_required        several accounts match — resend the SAME call with
                         account_id set to one of candidates[].account_id
+agent_grant_required    the account is connected and holds the claim, but THIS
+                        caller has no per-account binding for it
+                        (default-closed) — connection_hub_url opens the
+                        CALLER'S grant card (Delegated by KDCube), where the
+                        user ticks the claim for the account of their choice;
+                        never a reconnect, never the provider-connect tab
 ```
 
 Account selection is symmetric across integration namespaces (`mail`, `slack`):

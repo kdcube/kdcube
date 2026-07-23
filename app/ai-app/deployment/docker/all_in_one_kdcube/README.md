@@ -130,7 +130,7 @@ If you use the CLI installer, it pre‑creates `./logs/chat-ingress` and
 - Ingress API: `8010`
 - Processor API: `8020`
 - Metrics: `8090` (bound to localhost)
-- Web UI: `${KDCUBE_UI_PORT}` (default `5174` in sample env)
+- Web UI: `${KDCUBE_UI_PORT}` (default `5173` in sample env)
 - OpenResty: `80` / `443`
 
 ## Bundles

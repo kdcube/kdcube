@@ -227,12 +227,18 @@ in two layers:
 1. **Platform-interpreted paths** — applied by the platform itself
    (`_apply_bundle_props_overrides`, internal; do not override it):
    `role_models` into `config.set_role_models(...)`, `embedding` into
-   `config.set_embedding(...)`, and `services.llm.custom` (the locally
-   served models / models gateway endpoint) into the Config's custom-model
-   state — rebuilding the models service when config changed, so the model
-   router hands out clients built from the fresh state. The per-user model
-   pick then overlays `role_models` per turn through the request's bundle
-   call context; it never touches the durable props.
+   `config.set_embedding(...)`, and `services.llm.custom` (the shared locally
+   served-model gateway endpoint, shared context fallback, and exact-model
+   `model_overrides`) into the Config's custom-model state — rebuilding the
+   models service when config changed, so the model router hands out clients
+   built from the fresh state. Model identity comes from `role_models` or the
+   per-user composer pick and is sent to the gateway per request; there is no
+   second `model_name` setting in `services.llm.custom`. The per-user pick
+   overlays `role_models` per turn through the request's bundle call context;
+   it never touches the durable props. A model option may also declare
+   `num_ctx`. The router resolves context size as picker option, then the
+   exact-model service default, then the shared service fallback. The stored
+   user preference remains only `{provider, model}`.
 2. **Bundle-specific application** — the public template hook:
 
    ```python

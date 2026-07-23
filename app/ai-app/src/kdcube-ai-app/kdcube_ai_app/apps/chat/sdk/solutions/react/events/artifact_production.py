@@ -13,6 +13,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.harness.workspace.references import (
     CONVERSATION_FILE_REF_PREFIX,
     normalize_physical_path,
     physical_path_to_logical_path,
+    qualify_conversation_ref,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
     build_artifact_binary_block,
@@ -470,6 +471,13 @@ async def emit_policy_artifact_blocks(
                     artifact_path = _format_sources_pool_path(sids)
             except Exception:
                 pass
+        # Qualify at creation: a conversation-scoped ref carries its
+        # conv_<conversation_id> owner segment at birth, matching the legacy
+        # producer, so every stored block path is one canonical dialect
+        # regardless of which producer emitted it. Idempotent, and a no-op on
+        # non-conversation refs (e.g. a hosted rn/uri).
+        _conv_id = str(getattr(getattr(ctx_browser, "runtime_ctx", None), "conversation_id", "") or "").strip()
+        artifact_path = qualify_conversation_ref(artifact_path, _conv_id)
 
         edited = detect_edit(
             timeline=getattr(ctx_browser, "timeline", None),

@@ -19,6 +19,7 @@ except Exception:  # pragma: no cover - non-POSIX fallback
     fcntl = None
 
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
+from kdcube_ai_app.apps.chat.sdk.config_scopes import SIMPLE_IDP_STORE_PATH
 from kdcube_ai_app.infra.redis.client import get_async_redis_client
 from kdcube_ai_app.storage.observed_redis_locks import observed_redis_lock_async
 
@@ -52,7 +53,7 @@ DEFAULT_SIMPLE_IDP_USERS: Dict[str, Dict[str, Any]] = {
 
 
 def _default_idp_path() -> str:
-    return get_settings().AUTH.IDP.local.IDP_DB_PATH or "./idp_users.json"
+    return get_settings().AUTH.IDP.local.IDP_DB_PATH or SIMPLE_IDP_STORE_PATH
 
 
 def _copy_users(users: Mapping[str, Mapping[str, Any]]) -> Dict[str, Dict[str, Any]]:

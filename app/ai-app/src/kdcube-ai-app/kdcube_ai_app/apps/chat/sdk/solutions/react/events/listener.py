@@ -100,8 +100,13 @@ async def run_live_external_event_listener_loop(
                 lease_token=lease_token,
             )
             if refreshed is None:
+                current_owner = None
+                try:
+                    current_owner = await source.get_owner()
+                except Exception:
+                    pass
                 if on_owner_lost is not None:
-                    on_owner_lost("owner_lease_refresh_rejected", None)
+                    on_owner_lost("owner_lease_refresh_rejected", current_owner)
                 log.log("[timeline.external]: owner lease refresh rejected; stopping listener", "INFO")
                 break
             current_owner = await source.get_owner()

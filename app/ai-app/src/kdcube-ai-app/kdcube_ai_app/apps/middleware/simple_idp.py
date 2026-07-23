@@ -9,6 +9,7 @@ from typing import Dict, Optional
 
 from kdcube_ai_app.auth.AuthManager import AuthManager, User, AuthenticationError
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
+from kdcube_ai_app.apps.chat.sdk.config_scopes import SIMPLE_IDP_STORE_PATH
 from kdcube_ai_app.apps.middleware.simple_idp_registry import (
     DEFAULT_SIMPLE_IDP_USERS,
     SimpleIDPRegistry,
@@ -17,7 +18,7 @@ from kdcube_ai_app.apps.middleware.simple_idp_registry import (
 
 
 # Simple user database - stored as JSON file
-IDP_DB_PATH = get_settings().AUTH.IDP.local.IDP_DB_PATH or "./idp_users.json"
+IDP_DB_PATH = get_settings().AUTH.IDP.local.IDP_DB_PATH or SIMPLE_IDP_STORE_PATH
 
 # Default users
 DEFAULT_USERS = DEFAULT_SIMPLE_IDP_USERS

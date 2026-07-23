@@ -807,10 +807,12 @@ def _declared_file_rows_from_result(value: Any) -> list[dict[str, Any]]:
     payload; integration tools commonly return
     `{"ok": ..., "artifact_type": "files", "ret": {"files": [...]}}`,
     so the marker level and the `files` list may be one level apart. A raw
-    tool response wraps that envelope one level deeper under `output`.
+    tool response wraps that envelope one level deeper under `output`, and
+    named services wrap the tool's own `ret` one level deeper under `extra`
+    (`{"attrs": {...}, "extra": {"artifact_type": "files", ...}}`).
     """
     data = value
-    for _ in range(3):
+    for _ in range(4):
         if isinstance(data, str):
             try:
                 data = json.loads(data)
@@ -831,6 +833,9 @@ def _declared_file_rows_from_result(value: Any) -> list[dict[str, Any]]:
             continue
         if "output" in data:
             data = data.get("output")
+            continue
+        if "extra" in data:
+            data = data.get("extra")
             continue
         return []
     return []

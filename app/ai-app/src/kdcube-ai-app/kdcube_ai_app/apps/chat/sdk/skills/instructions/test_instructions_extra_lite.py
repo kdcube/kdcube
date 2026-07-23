@@ -38,7 +38,10 @@ def test_hard_signals_survive_distillation():
         "✓ [1]", "✗ [1]", "… [2]",
         # exec contract semantics
         "params.contract",
-        "BYTE-IDENTICAL",
+        "Path(OUTPUT_DIR) / artifact_rel",
+        "artifact_path.parent",
+        "byte-for-byte",
+        "top-level `await` enabled",
         "agent_io_tools.tool_call",
         "FLIP YOUR DEFAULT",
         # workspace hard rule
@@ -56,6 +59,15 @@ def test_hard_signals_survive_distillation():
     ]
     for signal in signals:
         assert signal in text, f"distillation lost signal: {signal!r}"
+
+
+def test_exec_profile_keeps_contract_path_relative_but_writes_under_output_dir():
+    text = default_extra_lite_system_instruction("workspace_exec")
+    assert "keep it relative in the action" in text
+    assert "artifact_path = Path(OUTPUT_DIR) / artifact_rel" in text
+    assert "artifact_path.parent.mkdir(parents=True, exist_ok=True)" in text
+    assert "Never write `artifact_rel`" in text
+    assert "preserved as a Python module body" in text
 
 
 def test_git_mode_appends_addendum_after_workspace():
@@ -81,13 +93,29 @@ def test_resolve_item_handles_blocks_profiles_and_literals():
     assert "[ATTACHMENTS]" in composed and "literal rule" in composed
 
 
+def test_profile_expansion_can_drop_unavailable_capability_blocks():
+    text = default_extra_lite_system_instruction(
+        "all_capabilities",
+        exclude_blocks={
+            "REACT_XLITE_EXEC",
+            "REACT_XLITE_DOCUMENTS_RENDERING",
+            "REACT_XLITE_WEB",
+        },
+    )
+    assert "[EXEC — exec_tools.execute_code_python]" not in text
+    assert "[DOCUMENTS & RENDERING]" not in text
+    assert "[WEB]" not in text
+    assert "[IDENTITY & TRUST]" in text
+
+
 def test_decision_build_resolves_xlite_names_and_profiles():
+    exec_adapter = {"id": "exec_tools.execute_code_python", "doc": {}}
     via_body = build_decision_system_text(
-        adapters=[], multi_action_mode="on",
+        adapters=[exec_adapter], multi_action_mode="on",
         instruction_body=default_extra_lite_system_instruction("workspace_exec"),
     )
     via_blocks = build_decision_system_text(
-        adapters=[], multi_action_mode="on",
+        adapters=[exec_adapter], multi_action_mode="on",
         instruction_blocks=["xlite:workspace_exec"],
     )
     assert via_blocks == via_body

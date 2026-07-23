@@ -47,6 +47,17 @@ def _registry():
                             },
                         },
                     },
+                    "simple": {
+                        "type": "simple_idp",
+                        "authenticator": {
+                            "id_token_header_name": "X-ID-Token",
+                            "cookie": {
+                                "auth_token_cookie_name": "__Secure-LATC",
+                                "id_token_cookie_name": "__Secure-LITC",
+                                "masqueraded_token_cookie_name": "__Secure-LMTC",
+                            },
+                        },
+                    },
                     "workspace_google_session": {
                         "type": "bundle_session_login",
                         "entrypoints": {
@@ -118,6 +129,7 @@ def test_authority_provider_instances_flatten_configured_instances():
         for row in rows
     ] == [
         ("kdcube.platform", "cognito", "multi-cognito", True),
+        ("kdcube.platform", "simple", "simple_idp", True),
         ("kdcube.platform", "workspace_google_session", "bundle_session_login", True),
         ("telegram.kdcube_ref", "telegram_bot_init_data", "telegram_init_data", False),
         ("google.accounts", "google_oidc", "google_id_token", False),
@@ -175,6 +187,25 @@ def test_platform_authority_auth_config_normalizes_bundle_session_provider():
     assert config["auth_token_cookie_name"] == "__Secure-SESSION-AUTH"
     assert config["id_token_cookie_name"] == "__Secure-SESSION-ID"
     assert config["masqueraded_token_cookie_name"] == "__Secure-SESSION-MASK"
+
+
+def test_platform_authority_auth_config_normalizes_simple_idp_provider():
+    resolved = resolve_platform_authority_provider(
+        _registry(),
+        authority_id="kdcube.platform",
+        provider_id="simple",
+    )
+
+    config = platform_authority_auth_config(resolved)
+
+    assert config["auth_provider"] == "simple"
+    assert config["id_token_header_name"] == "X-ID-Token"
+    assert config["auth_token_cookie_name"] == "__Secure-LATC"
+    assert config["masqueraded_token_cookie_name"] == "__Secure-LMTC"
+    # Platform-managed token authorities carry verifier configuration only.
+    assert "grants" not in config["provider"]
+    # The user store is pinned by the runtime, never taken from the descriptor.
+    assert "idp_db_path" not in config
 
 
 def test_resolve_authority_provider_instance_by_consent_entrypoint():

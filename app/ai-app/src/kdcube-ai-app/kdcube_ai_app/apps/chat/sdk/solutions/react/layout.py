@@ -3,6 +3,7 @@
 
 # kdcube_ai_app/apps/chat/sdk/runtime/solution/react/v2/layout.py
 
+import ast
 import difflib
 import json
 import datetime
@@ -2250,9 +2251,13 @@ def build_tools_block(
         tool_catalog: Optional[List[Dict[str, Any]]],
         *,
         header: str,
+        detail: str = "full",
 ) -> str:
     if not tool_catalog:
         return ""
+
+    if str(detail or "full").strip().lower() == "compact":
+        return build_compact_tools_block(tool_catalog, header=header)
 
     # Derived roster: a completeness check the model can verify against
     # ("keep reading until you have seen N"), generated from the catalog it
@@ -2405,6 +2410,233 @@ def build_tools_block(
     return "\n".join([l for l in lines if l is not None])
 
 
+def _compact_catalog_text(value: Any, *, limit: int) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _annotation_node_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        prefix = _annotation_node_name(node.value)
+        return f"{prefix}.{node.attr}" if prefix else node.attr
+    return ""
+
+
+def _compact_annotation_node(node: ast.AST) -> str:
+    type_aliases = {
+        "array": "list",
+        "boolean": "bool",
+        "integer": "int",
+        "number": "float",
+        "string": "str",
+    }
+    if isinstance(node, ast.Name):
+        return type_aliases.get(node.id, node.id)
+    if isinstance(node, ast.List):
+        values = [
+            str(item.value)
+            for item in node.elts
+            if isinstance(item, ast.Constant) and isinstance(item.value, str)
+        ]
+        non_null = [value for value in values if value not in {"null", "None", "NoneType"}]
+        if len(non_null) == 1 and len(non_null) + 1 == len(values):
+            return f"{type_aliases.get(non_null[0], non_null[0])}?"
+        if values:
+            return " | ".join(type_aliases.get(value, value) for value in values)
+    if isinstance(node, ast.Subscript):
+        name = _annotation_node_name(node.value).removeprefix("typing.")
+        items = list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
+        if name == "Annotated" and items:
+            return _compact_annotation_node(items[0])
+        if name == "Optional" and items:
+            return f"{_compact_annotation_node(items[0]).rstrip('?')}?"
+        if name == "Union" and items:
+            rendered = [_compact_annotation_node(item) for item in items]
+            non_null = [item for item in rendered if item not in {"None", "NoneType"}]
+            if len(non_null) + 1 == len(rendered) and len(non_null) == 1:
+                return f"{non_null[0].rstrip('?')}?"
+    text = ast.unparse(node).replace("typing.", "")
+    for suffix in (" | None", " | NoneType"):
+        if text.endswith(suffix):
+            return f"{text[:-len(suffix)].strip().rstrip('?')}?"
+    return text
+
+
+def _compact_annotation_text(value: Any) -> str:
+    """Render a complete type while discarding ``Annotated`` documentation."""
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if text.startswith("<class '") and text.endswith("'>"):
+        return text[8:-2].removeprefix("builtins.")
+    try:
+        node = ast.parse(text, mode="eval").body
+        # Some legacy docs use ``type, description``. A valid tuple here still
+        # means its first item is the type, not that the parameter accepts a tuple.
+        if isinstance(node, ast.Tuple) and node.elts:
+            node = node.elts[0]
+        rendered = _compact_annotation_node(node).strip()
+        if rendered:
+            return rendered
+    except (SyntaxError, ValueError):
+        pass
+
+    # Last-resort compatibility for unquoted ``type, description`` strings.
+    depth = 0
+    quote = ""
+    escaped = False
+    for index, char in enumerate(text):
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\" and quote:
+            escaped = True
+            continue
+        if char in {"'", '"'}:
+            if quote == char:
+                quote = ""
+            elif not quote:
+                quote = char
+            continue
+        if quote:
+            continue
+        if char in "[({":
+            depth += 1
+        elif char in "])}":
+            depth = max(0, depth - 1)
+        elif char == "," and depth == 0:
+            text = text[:index].strip()
+            break
+    return text or "any"
+
+
+def _compact_annotation_parts(value: Any) -> Tuple[str, str]:
+    """Return a compact type plus the parameter documentation it carries."""
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    try:
+        node = ast.parse(text, mode="eval").body
+        type_node = node
+        description_nodes: List[ast.AST] = []
+        if isinstance(node, ast.Tuple) and node.elts:
+            type_node = node.elts[0]
+            description_nodes = list(node.elts[1:])
+        elif isinstance(node, ast.Subscript):
+            name = _annotation_node_name(node.value).removeprefix("typing.")
+            items = list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
+            if name == "Annotated" and items:
+                type_node = items[0]
+                description_nodes = list(items[1:])
+
+        descriptions: List[str] = []
+        for item in description_nodes:
+            if isinstance(item, ast.Constant) and isinstance(item.value, str):
+                rendered = item.value
+            else:
+                rendered = ast.unparse(item)
+            rendered = re.sub(r"\s+", " ", str(rendered or "")).strip()
+            if rendered:
+                descriptions.append(rendered)
+        return _compact_annotation_node(type_node).strip() or "any", " ".join(descriptions)
+    except (SyntaxError, ValueError):
+        pass
+
+    # Semantic Kernel metadata uses ``type, description``. Split only at a
+    # top-level comma so commas inside generic types remain part of the type.
+    depth = 0
+    quote = ""
+    escaped = False
+    for index, char in enumerate(text):
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\" and quote:
+            escaped = True
+            continue
+        if char in {"'", '"'}:
+            if quote == char:
+                quote = ""
+            elif not quote:
+                quote = char
+            continue
+        if quote:
+            continue
+        if char in "[({":
+            depth += 1
+        elif char in "])}":
+            depth = max(0, depth - 1)
+        elif char == "," and depth == 0:
+            arg_type = _compact_annotation_text(text[:index].strip())
+            description = re.sub(r"\s+", " ", text[index + 1 :]).strip()
+            return arg_type, description
+    return _compact_annotation_text(text), ""
+
+
+def _compact_arg_spec(arg_name: Any, arg_info: Any) -> str:
+    name = str(arg_name or "").strip()
+    if isinstance(arg_info, str):
+        raw = str(arg_info or "").strip()
+        default_match = re.search(r"\s+\(default=(.*?)\)\s*$", raw)
+        suffix = ""
+        if default_match:
+            default_val = default_match.group(1)
+            suffix = f"={default_val}" if default_val else "?"
+            raw = raw[:default_match.start()].strip()
+        arg_type, description = _compact_annotation_parts(raw)
+        if arg_type.endswith("?") and suffix == "?":
+            suffix = ""
+        spec = f"{name}:{arg_type}{suffix}"
+        return f"{spec} — {description}" if description else spec
+    if isinstance(arg_info, dict):
+        arg_type = arg_info.get("type") or arg_info.get("anyOf") or "any"
+        suffix = f"={arg_info['default']}" if "default" in arg_info else ""
+        spec = f"{name}:{_compact_annotation_text(arg_type)}{suffix}"
+        description = re.sub(r"\s+", " ", str(arg_info.get("description") or "")).strip()
+        return f"{spec} — {description}" if description else spec
+    return f"{name}:{_compact_annotation_text(arg_info)}"
+
+
+def build_compact_tools_block(
+    tool_catalog: Optional[List[Dict[str, Any]]],
+    *,
+    header: str,
+) -> str:
+    """Render the exact effective tools without full prose/examples schemas."""
+    tools = [tool for tool in (tool_catalog or []) if isinstance(tool, dict)]
+    if not tools:
+        return ""
+    roster_ids = [str(tool.get("id") or "unknown") for tool in tools]
+    lines = [
+        f"{header} [COMPACT]",
+        f"This catalog: {len(roster_ids)} tools - {', '.join(roster_ids)}.",
+        "Only these tool ids are callable. Parameter names, types, and descriptions below are exact.",
+    ]
+    for tool in tools:
+        tool_id = str(tool.get("id") or "unknown")
+        async_suffix = " [async]" if tool.get("is_async") else ""
+        lines.append(f"- {tool_id}{async_suffix}")
+        purpose = _compact_catalog_text(tool.get("purpose"), limit=240)
+        if purpose:
+            lines.append(f"  purpose: {purpose}")
+        args = tool.get("args")
+        if isinstance(args, dict) and args:
+            lines.append("  params:")
+            for name, info in args.items():
+                lines.append(f"    - {_compact_arg_spec(name, info)}")
+        namespaces = tool.get("namespaces_applicable")
+        if isinstance(namespaces, list) and namespaces:
+            lines.append("  namespaces: " + ", ".join(str(item) for item in namespaces))
+        constraints = tool.get("constraints")
+        if isinstance(constraints, str):
+            constraints = [constraints]
+        if isinstance(constraints, list) and constraints:
+            constraint = _compact_catalog_text(constraints[0], limit=180)
+            if constraint:
+                lines.append(f"  constraint: {constraint}")
+    return "\n".join(lines)
+
+
 def format_tool_signature(
         tool_id: str,
         params: Dict[str, Any],
@@ -2463,6 +2695,7 @@ def build_instruction_catalog_block(
         react_tools: Optional[List[Dict[str, Any]]] = None,
         include_skill_gallery: bool = True,
         skill_tool_catalog: Optional[List[Dict[str, Any]]] = None,
+        tool_catalog_detail: str = "full",
 ) -> str:
     from kdcube_ai_app.apps.chat.sdk.tools import tools_insights
     tools_list: List[Dict[str, Any]] = []
@@ -2556,13 +2789,25 @@ def build_instruction_catalog_block(
         ]
 
         parts_tools: List[str] = []
-        react_block = build_tools_block(react_only, header="[AVAILABLE REACT TOOLS]")
+        react_block = build_tools_block(
+            react_only,
+            header="[AVAILABLE REACT TOOLS]",
+            detail=tool_catalog_detail,
+        )
         if react_block:
             parts_tools.append(react_block)
-        common_block = build_tools_block(common, header="[AVAILABLE COMMON TOOLS]")
+        common_block = build_tools_block(
+            common,
+            header="[AVAILABLE COMMON TOOLS]",
+            detail=tool_catalog_detail,
+        )
         if common_block:
             parts_tools.append(common_block)
-        exec_block = build_tools_block(exec_only, header="[TOOLS AVAILABLE ONLY IN CODE SNIPPET]")
+        exec_block = build_tools_block(
+            exec_only,
+            header="[TOOLS AVAILABLE ONLY IN CODE SNIPPET]",
+            detail=tool_catalog_detail,
+        )
         if exec_block:
             parts_tools.append(exec_block)
         tool_block = "\n\n".join([p for p in parts_tools if p.strip()])

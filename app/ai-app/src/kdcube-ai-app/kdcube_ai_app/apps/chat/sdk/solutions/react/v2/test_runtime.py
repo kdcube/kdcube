@@ -90,6 +90,41 @@ def test_validate_decision_rejects_final_answer_with_notes():
     assert "notes empty" in message
 
 
+def test_exec_contract_object_is_reported_as_invalid_shape():
+    solver = _solver_stub()
+    decision = {
+        "action": "call_tool",
+        "tool_call": {
+            "tool_id": "exec_tools.execute_code_python",
+            "params": {
+                "contract": {
+                    "filepath": "turn_1/files/report.xlsx",
+                    "description": "Spreadsheet",
+                },
+                "prog_name": "build_report",
+            },
+        },
+    }
+
+    verdict = solver._validate_tool_call_protocol(
+        tool_call=decision["tool_call"],
+        adapters_by_id={
+            "exec_tools.execute_code_python": {
+                "id": "exec_tools.execute_code_python",
+                "doc": {"args": {"contract": {}, "prog_name": {}}},
+            }
+        },
+    )
+
+    assert verdict["ok"] is False
+    assert [item["code"] for item in verdict["violations"]] == ["invalid_contract"]
+    assert "non-empty list" in solver._protocol_violation_message(
+        code="invalid_contract",
+        state={},
+        decision=decision,
+    )
+
+
 def test_route_after_decision_exits_when_exit_reason_is_set():
     solver = _solver_stub()
     state = {
@@ -123,6 +158,82 @@ async def test_decision_node_short_circuits_when_exit_reason_is_set():
 
 
 @pytest.mark.asyncio
+async def test_decision_node_charges_each_early_retry_to_iteration_budget():
+    solver = _solver_stub()
+    seen_iterations = []
+
+    async def _impl(state, iteration):
+        seen_iterations.append(iteration)
+        state["retry_decision"] = True
+        state["last_decision"] = {"action": "call_tool"}
+        return state
+
+    solver._decision_node_impl = _impl
+    budget_state = SimpleNamespace(decision_rounds_used=0)
+    state = {
+        "iteration": 0,
+        "max_iterations": 15,
+        "max_decision_retries": 2,
+        "budget_state_v2": budget_state,
+    }
+
+    await solver._decision_node(state)
+    assert state["iteration"] == 1
+    assert budget_state.decision_rounds_used == 1
+    assert solver._route_after_decision(state) == "decision"
+
+    await solver._decision_node(state)
+    assert seen_iterations == [0, 1]
+    assert state["iteration"] == 2
+    assert budget_state.decision_rounds_used == 2
+
+
+def test_decision_retry_uses_repair_limit_and_remaining_iteration_budget():
+    solver = _solver_stub()
+    state = {"max_decision_retries": 2, "max_iterations": 15}
+
+    assert solver._decision_retry_available(state, retries=0, iteration=0) is True
+    assert solver._decision_retry_available(state, retries=1, iteration=1) is True
+    assert solver._decision_retry_available(state, retries=2, iteration=2) is False
+    assert solver._decision_retry_available(state, retries=0, iteration=14) is False
+
+
+@pytest.mark.asyncio
+async def test_invalid_decision_repairs_stop_after_configured_limit():
+    solver = _solver_stub()
+    seen_iterations = []
+
+    async def _impl(state, iteration):
+        seen_iterations.append(iteration)
+        retries = int(state.get("decision_retries") or 0)
+        if solver._decision_retry_available(state, retries=retries, iteration=iteration):
+            state["decision_retries"] = retries + 1
+            state["retry_decision"] = True
+            state["last_decision"] = {"action": "call_tool"}
+        else:
+            state["retry_decision"] = False
+            state["last_decision"] = {"action": "exit"}
+        return state
+
+    solver._decision_node_impl = _impl
+    state = {
+        "iteration": 0,
+        "max_iterations": 15,
+        "decision_retries": 0,
+        "max_decision_retries": 2,
+    }
+
+    while True:
+        await solver._decision_node(state)
+        if solver._route_after_decision(state) == "exit":
+            break
+
+    assert seen_iterations == [0, 1, 2]
+    assert state["iteration"] == 3
+    assert state["decision_retries"] == 2
+
+
+@pytest.mark.asyncio
 async def test_tool_execution_node_drains_external_events_after_execute(monkeypatch):
     solver = _solver_stub()
     calls = {"drain": 0}
@@ -148,7 +259,7 @@ async def test_tool_execution_node_drains_external_events_after_execute(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_tool_execution_node_short_circuits_on_pending_steer(monkeypatch):
+async def test_tool_execution_node_stops_immediately_on_pending_blank_steer(monkeypatch):
     solver = _solver_stub()
     solver._steer_interrupt_requested = True
     solver._latest_steer_seq_seen = 7
@@ -179,15 +290,17 @@ async def test_tool_execution_node_short_circuits_on_pending_steer(monkeypatch):
     state = {"last_decision": {"tool_call": {"tool_id": "web_tools.web_search"}}}
     out = await solver._tool_execution_node(state)
 
-    assert out.get("exit_reason") is None
-    assert out["final_answer"] is None
-    assert out["retry_decision"] is True
-    assert out["steer_finalize_mode"] is True
+    assert out["exit_reason"] == "steer"
+    assert out["final_answer"] == "Stopped at your request. I preserved the progress made so far."
+    assert out["retry_decision"] is False
+    assert out["steer_finalize_mode"] is False
+    assert "steer_finalize_rounds_remaining" not in out
+    assert solver._route_after_decision(out) == "exit"
     assert marks["count"] == 1
 
 
 @pytest.mark.asyncio
-async def test_decision_node_short_circuits_on_pending_steer_before_decision():
+async def test_decision_node_stops_immediately_on_pending_blank_steer_before_decision():
     solver = _solver_stub()
     solver._steer_interrupt_requested = True
     solver._latest_steer_seq_seen = 3
@@ -214,10 +327,11 @@ async def test_decision_node_short_circuits_on_pending_steer_before_decision():
 
     out = await solver._decision_node(state)
 
-    assert out.get("exit_reason") is None
-    assert out["final_answer"] is None
-    assert out["retry_decision"] is True
-    assert out["steer_finalize_mode"] is True
+    assert out["exit_reason"] == "steer"
+    assert out["final_answer"] == "Stopped at your request. I preserved the progress made so far."
+    assert out["retry_decision"] is False
+    assert out["steer_finalize_mode"] is False
+    assert "steer_finalize_rounds_remaining" not in out
 
 
 @pytest.mark.asyncio

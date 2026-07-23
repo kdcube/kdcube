@@ -67,7 +67,7 @@ ports:
   ingress: "8010"  # CHAT_APP_PORT
   proc: "8020"     # CHAT_PROCESSOR_PORT
   metrics: "8090"
-  ui: "5174"        # local/default public HTTP proxy port unless ports.proxy_http overrides it
+  ui: "5173"        # local/default public HTTP proxy port unless ports.proxy_http overrides it
   ui_ssl: "443"     # legacy/default public HTTPS proxy port unless ports.proxy_https overrides it
   # proxy_http: "80"   # optional explicit public HTTP proxy port
   # proxy_https: "443" # optional explicit public HTTPS proxy port
@@ -332,7 +332,7 @@ platform:
         clamav_port: 3310         # CLAMAV_PORT
 
       idp:
-        idp_db_path: ""                            # IDP_DB_PATH; absolute path to idp_users.json; leave empty to use default location
+        idp_db_path: ""                            # IDP_DB_PATH; absolute path to idp_users.json; leave empty to use default location. Under auth.type: simple the runtime pins /config/idp_users.json and this key is ignored (the CLI removes it)
         idp_import_enabled: false                  # IDP_IMPORT_ENABLED
         idp_import_run_at: "2026-02-22T07:00:00Z"  # IDP_IMPORT_RUN_AT; ISO timestamp; UTC assumed when no tz
         idp_import_script_path: ""                 # IDP_IMPORT_SCRIPT_PATH; absolute path to import_users.py

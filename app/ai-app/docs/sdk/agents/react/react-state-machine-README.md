@@ -89,8 +89,11 @@ Enforcement is ordered:
 Two invariants follow:
 
 - **Incremental and complete-response parsers agree on JSON container
-  boundaries.** A fence-dialect mismatch once produced a duplicated final
-  answer (fixed and regression-locked in `e9f05cec4`).
+  boundaries.** This includes JSON beginning on the opening fence line and a
+  complete fenced JSON wrapper emitted on one physical line.
+  Both shapes are locked in `streaming/test_fenced_action_parsing.py` because
+  disagreement here can otherwise turn one delivered answer into a retry and
+  a duplicate.
 - **Delivery facts determine retry behavior.** If an allowed final-answer
   lane already emitted and a post-stream check then fails,
   `_keep_and_stop_if_answer_streamed` finalizes with that exact emitted text.

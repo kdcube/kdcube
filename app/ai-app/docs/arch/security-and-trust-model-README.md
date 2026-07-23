@@ -12,6 +12,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/exec/README-iso-runtime.md
   - repo:kdcube-ai-app/app/ai-app/docs/exec/README-runtime-modes-builtin-tools.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/agent-acting-for-user/agent-acting-for-user-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/secrets-descriptor-README.md
 ---
 # Security And Trust Model
@@ -162,6 +163,11 @@ still accepts `combined` for legacy deployments; operators should not rely on
 an omitted or unrecognized strategy value to establish the stronger boundary.
 Fargate is a separate remote profile and must not be described as split Docker.
 
+The operator-selected profiles are a ceiling. Within that ceiling the isolation
+profile is chosen per agent, and each tool declares where it runs — the trusted
+supervisor process, a subprocess, or the isolated executor — so isolation is not
+a single global switch.
+
 For isolated execution, model-proposed paths and references are untrusted
 requests. A trusted resolver first binds the current tenant/project/user and
 authority, then materializes only selected bytes into a sparse workspace.
@@ -196,8 +202,15 @@ server-side providers or stores in the managed runtime path.
 Connected external accounts follow the same rule. Connection Hub stores a
 server-side credential record for the KDCube user. A trusted tool resolves the
 credential only after matching the current user, provider, requested claims,
-and operation. The token should not be placed in model context, generated
-source, browser configuration, or an executor workspace.
+and operation. For a hosted or in-app agent this is the first of two gates: the
+calling agent must also hold its own delegated-by grant (keyed to its client
+identity, `kdcube-agent:<app>:<agent>`) for that connected account and claim. The
+two lifecycles are independent — rotating a provider token does not touch the
+agent grant, and revoking either gate stops the tool immediately. Connecting an
+account does not authorize every agent, and an agent does not inherit the
+accounts the user connected. The token should not be placed in model context,
+generated source, browser configuration, or an executor workspace. See
+[Agents Acting For The User](../sdk/solutions/connections/agent-acting-for-user/agent-acting-for-user-README.md).
 
 ```text
 user consent -> Connection Hub record -> server-side credential store
@@ -274,6 +287,9 @@ KDCube provides:
   boundaries;
 - server-side secret and connected-account credential resolution in managed
   trusted services;
+- two-gate delegated access: a user's provider connection plus a per-agent grant
+  scoped per connected account and claim, so an agent's access is explicit and
+  independently revocable;
 - explicit guards and grants for protected application surfaces;
 - configurable generated-code isolation, including a split executor profile;
 - per-request and per-operation records where the corresponding subsystem is

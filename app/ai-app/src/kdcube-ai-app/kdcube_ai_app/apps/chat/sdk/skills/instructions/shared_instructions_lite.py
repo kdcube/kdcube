@@ -297,18 +297,19 @@ REACT_LITE_PATCHING = """
 REACT_LITE_EXEC_TOOL = """
 [EXEC TOOL]
 - `exec_tools.execute_code_python` is the ONLY code-execution tool. Code goes ONLY in `channel:code` immediately after its exec action — never inside JSON params (the tool has NO `code` param). The action needs `params.contract` and `params.prog_name` (optional `timeout_s`); an exec without both contract and code does not run. Do not emit `channel:summary` in exec rounds.
-- The snippet is inserted inside an async runtime function: no boilerplate, no own `main()`, use `await` where needed. `OUTPUT_DIR` is the artifact root; `OUT_DIR` is `Path(OUTPUT_DIR)`. Never redefine, shadow, or replace them; never hard-code roots like `/workspace/out`.
+- Code is preserved as a Python module body and evaluated with top-level `await` enabled: no runner boilerplate, no own `main()` or event-loop launcher; use `await` where needed. `OUTPUT_DIR` is the artifact root; `OUT_DIR` is `Path(OUTPUT_DIR)`. Never redefine, shadow, or replace them; never hard-code roots like `/workspace/out`.
 - Inputs are physical OUT_DIR-relative paths from visible context (`turn_<id>/attachments/<name>`, `turn_<id>/files/...`, `turn_<id>/git/projects/...`). Data your code depends on must be visible in full or locally materialized FIRST — `react.read` for text context, `react.pull` for files. A visible input that is volatile (someone may have changed it) or where the user asks for freshness: re-acquire it before coding against it.
 - Code is input-driven: read existing artifacts from disk (or `ctx_tools.fetch_ctx`) instead of re-printing their content into the program; embed content in code only when programmatic reuse is error-prone AND the content is fully visible. Generate only what does not already exist — projections/translations to target formats, never re-generated copies.
 - When generating against an SDK/framework/test contract: confirm exact symbols from visible current docs, tests, or source before coding — skills are orientation, not proof of API names. Read the smallest decisive evidence set (the exact tests plus one doc/source/example) before the first write. Prefer the smallest implementation that satisfies the confirmed contract; validate early, extend after. For complex code, start with a brief plan comment; no dead code or unused variables.
 - `react.*` tools do NOT exist inside exec. To invoke an execution-enabled catalog tool from code, use `await agent_io_tools.tool_call(fn=<handle>, params={...}, call_reason=..., tool_id=...)` — never import tool modules. Orchestration/job tools (`automation_job.*`) are never callable from exec; call them as top-level ReAct tools.
 - Inside exec, `ctx_tools.fetch_ctx` supports ONLY `conv:ar:`, `conv:tc:`, and `conv:so:` logical paths (not `conv:fi:`, `sk:`, `conv:su:`). It returns {path, mime, payload, text?/base64?}; use `payload` (parsed JSON for JSON mime). For source rows use `content or text`, content first.
 - Sandbox: network access is DISABLED — any network call fails. No reads/writes outside OUTPUT_DIR. Subprocesses are allowed only local and non-interactive (`bash -lc`, `find`, `grep`, `rg` when available); handle missing commands and fall back to Python. Do not assume secrets, descriptor files, bundle code roots, or bundle storage; privileged access goes through a documented supervisor-side tool.
-- CONTRACT = the EXHAUSTIVE list of files the harness KEEPS (each must exist and be non-empty after the run). Entry: `{filepath, description, visibility?}`. `filepath` is the FULL OUTPUT_DIR-relative path, BYTE-IDENTICAL to what the code writes (a mismatch reports `missing_file` and the bytes are lost), under `turn_<current>/git/projects/<scope>/...` or `turn_<current>/files/<scope>/...`. `visibility`: `external` (default) = delivered to the user; `internal` = hosted for your later turns only. `description` is a telegraphic semantic + structural inventory, e.g. "2 tables (monthly sales, YoY delta); 1 line chart; entities: ACME, Q1–Q4".
+- CONTRACT = the EXHAUSTIVE list of files the harness KEEPS (each must exist and be non-empty after the run). Entry: `{filepath, description, visibility?}`. `filepath` is the FULL OUTPUT_DIR-relative `artifact_rel` string under `turn_<current>/git/projects/<scope>/...` or `turn_<current>/files/<scope>/...`. Keep it relative in the action. In code use `artifact_path = Path(OUTPUT_DIR) / artifact_rel`; contract `filepath` MUST equal `artifact_rel` byte-for-byte (a mismatch reports `missing_file` and the bytes are lost). `visibility`: `external` (default) = delivered to the user; `internal` = hosted for your later turns only. `description` is a telegraphic semantic + structural inventory, e.g. "2 tables (monthly sales, YoY delta); 1 line chart; entities: ACME, Q1–Q4".
 - TWO persistence paths. (1) `turn_<current>/git/projects/...` = GIT: the whole tree is committed as this turn's snapshot and re-materialized next turn by pull/checkout of its `conv:fi:conv_<conversation_id>.turn_<id>.git/projects/...` ref — routine project SOURCE needs no contract. (2) the contract = HOSTING: each listed file gets its own downloadable/pullable handle, independent of git. `turn_<current>/files/...` has NO git — files there survive ONLY if contracted.
 - FLIP YOUR DEFAULT: contract EVERY standalone file your code writes (image, chart, dataset, spreadsheet, PDF, export) — there is no "just an intermediate" bucket. If a file exists on disk as its own file, the user or a later turn can ask for it, and it is LOST unless contracted. Unsure → contract it.
 - MOST COMMON MISTAKE: rendering chart images, embedding them into an Excel/PDF, and contracting only the workbook. Embedding copies bytes INTO the document; each standalone image is a separate file that vanishes unless contracted — one entry per image (`internal` for reusable building blocks).
-- Write every contracted artifact to `Path(OUTPUT_DIR) / filepath`.
+- REQUIRED write pattern: `from pathlib import Path`; `artifact_rel = "turn_<current>/files/<scope>/<name>"`; `artifact_path = Path(OUTPUT_DIR) / artifact_rel`; `artifact_path.parent.mkdir(parents=True, exist_ok=True)`; pass `artifact_path` to `open()`, `wb.save()`, image writers, and other save APIs. Put the same `artifact_rel` literal in contract `filepath`.
+- Never write `artifact_rel` directly, call `os.makedirs("turn_<current>/...")`, or create a bare turn tree relative to the process working directory.
 - Authoritative results go in contracted files, not stdout — you only get a capped `Program log (tail)`; print/`logging.getLogger("user")` only short status, counts, and file pointers. Listings/search results go to structured files (`listing.json`, `matches.json`); edits produce a `.diff`/`.patch` artifact. When one snippet produces several artifacts, keep them INDEPENDENT (not built from each other) so review can catch errors before they snowball. Split a large legitimate result into multiple contracted files — never to dodge runtime limits.
 """
 
@@ -488,17 +489,51 @@ def get_lite_instruction_block(name: str) -> str:
     return _BLOCKS[key].strip()
 
 
-def compose_lite_instruction_blocks(items: Iterable[str]) -> str:
+def resolve_lite_item(
+    item: str,
+    *,
+    exclude_blocks: Iterable[str] | None = None,
+) -> str | None:
+    """Resolve one config item to moderate (lite) text, or None if not lite.
+
+    Mirrors ``resolve_extra_lite_item``: accepts block names (``REACT_LITE_*``)
+    and whole profiles as ``lite:<profile>`` (e.g. ``lite:workspace_exec``), so
+    a moderate profile can be named in one config token instead of listing every
+    block. The lite workspace block carries the git-mode text inline, so the
+    profile expansion needs no ``workspace_implementation`` argument.
+    """
+    text = str(item or "").strip()
+    excluded = {str(name or "").strip() for name in (exclude_blocks or [])}
+    if text in _BLOCKS:
+        if text in excluded:
+            return ""
+        return _BLOCKS[text].strip()
+    if text.lower().startswith("lite:"):
+        return default_lite_system_instruction(
+            text.split(":", 1)[1],
+            exclude_blocks=excluded,
+        )
+    return None
+
+
+def compose_lite_instruction_blocks(
+    items: Iterable[str],
+    *,
+    exclude_blocks: Iterable[str] | None = None,
+) -> str:
     """Compose literal blocks and named lite blocks.
 
     If an item matches a registered block name, the registered block is used.
     Otherwise the item is treated as literal instruction text. This lets bundle
     config mix named blocks and inline custom fragments.
     """
+    excluded = {str(name or "").strip() for name in (exclude_blocks or [])}
     out: list[str] = []
     for item in items or []:
         text = str(item or "").strip()
         if not text:
+            continue
+        if text in excluded:
             continue
         out.append(get_lite_instruction_block(text) if text in _BLOCKS else text)
     return "\n\n".join(out).strip()
@@ -513,6 +548,7 @@ def default_lite_system_instruction(
     profile: str = "workspace",
     *,
     extra_blocks: Iterable[str] | None = None,
+    exclude_blocks: Iterable[str] | None = None,
 ) -> str:
     """Return a ready-to-use lightweight ReAct instruction body.
 
@@ -552,4 +588,4 @@ def default_lite_system_instruction(
     blocks = [*REACT_LITE_PROFILE_BLOCKS[key]]
     if extra_blocks:
         blocks.extend(extra_blocks)
-    return compose_lite_instruction_blocks(blocks)
+    return compose_lite_instruction_blocks(blocks, exclude_blocks=exclude_blocks)

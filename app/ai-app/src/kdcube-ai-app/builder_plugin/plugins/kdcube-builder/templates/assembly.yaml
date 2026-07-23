@@ -34,7 +34,7 @@ ports:
   ingress: "8010"
   proc: "8020"
   metrics: "8090"
-  ui: "5174"
+  ui: "5173"
   ui_ssl: "443"
   # proxy_http: "80"
   # proxy_https: "443"

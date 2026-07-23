@@ -28,6 +28,13 @@ def _descriptor_path(*, env_name: str, filename: str, default: str) -> Path:
     return Path(default)
 
 
+# SimpleIDP keeps its users in this file while Redis holds only a cache-version
+# counter keyed by a hash of the path. Two services resolving different paths, or
+# the same path on unshared volumes, would silently keep separate user sets, so
+# the location is pinned here instead of being configurable per service.
+SIMPLE_IDP_STORE_PATH = "/config/idp_users.json"
+
+
 # ─── YAML helpers ─────────────────────────────────────────────────────────────
 
 def _descriptor_cache_token(path: Path) -> tuple[str, int, int] | None:
@@ -531,6 +538,7 @@ class PlatformConfig(BaseModel):
 class IDPLocalConfig(BaseModel):
     """Local (simple-auth) identity provider settings."""
     IDP_DB_PATH: str | None = None
+    """Resolved SimpleIDP user store. Pinned to SIMPLE_IDP_STORE_PATH for `simple`."""
     IDP_IMPORT_ENABLED: bool = False
     IDP_IMPORT_RUN_AT: str | None = None
     IDP_IMPORT_SCRIPT_PATH: str | None = None

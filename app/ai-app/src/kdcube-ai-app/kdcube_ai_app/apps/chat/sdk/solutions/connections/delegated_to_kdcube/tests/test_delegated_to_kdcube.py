@@ -2160,3 +2160,72 @@ async def test_claim_coverage_decorates_namespace_policies_from_realm_requiremen
     # No slack account at all: the whole realm claim set is unmet.
     assert coverage["slack"]["covered"] is False
     assert "slack:history" in coverage["slack"]["unmet"]
+
+
+@pytest.mark.asyncio
+async def test_agent_with_empty_binding_is_default_closed(monkeypatch):
+    # The live regression (2026-07-22): Claude's grant card had NO per-account
+    # ticks at all, and the broker treated the empty binding as "no restriction"
+    # — the agent read Gmail on every connected account without any per-account
+    # consent. Default-closed: an EMPTY mapping (agent turn, nothing bound)
+    # must refuse with agent_grant_required naming the capable accounts. Only
+    # None (a non-agent turn) means no restriction.
+    _install_fake_storage(monkeypatch)
+    config = _sample_config()
+    store = DelegatedToKdcubeStore(user_id="user-1")
+    cred = credential_id_for("acct-1")
+    await store.upsert_account(
+        ConnectedAccount(
+            account_id="acct-1", provider_id="google", connector_app_id="gmail",
+            external_subject="sub", claims=("gmail:read", "gmail:send"),  # provider-capable
+            credential_id=cred,
+        )
+    )
+    await store.set_credential(cred, {"access_token": "t"})
+    broker = DelegatedToKdcubeBroker(config=config, store=store)
+
+    # Agent turn, nothing bound: refused, routed to the agent's grant card.
+    denied = await broker.ensure_claim(
+        provider_id="google", claim="gmail:read", account_claim_scope={},
+    )
+    assert denied.ok is False
+    assert denied.error == "agent_grant_required"
+    assert denied.retry_hint is True
+    assert [c["account_id"] for c in denied.candidates] == ["acct-1"]
+
+    # Explicit account target does not bypass the closed default.
+    explicit = await broker.ensure_claim(
+        provider_id="google", claim="gmail:read", account_id="acct-1", account_claim_scope={},
+    )
+    assert explicit.ok is False and explicit.error == "agent_grant_required"
+
+    # Non-agent turn (None): the user's own trusted tools stay unrestricted.
+    own = await broker.ensure_claim(
+        provider_id="google", claim="gmail:read", account_claim_scope=None,
+    )
+    assert own.ok is True
+
+
+def test_account_claim_scope_sentinel_distinguishes_agent_turns():
+    # account_claim_scope_for() must return {} (default-closed) on a delegated
+    # turn with no binding for the provider, and None (no restriction) only
+    # when no agent identity is bound.
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.agent_account_scope import (
+        account_claim_scope_for,
+        clear_agent_account_scope,
+        set_agent_account_scope,
+        set_agent_identity,
+    )
+
+    clear_agent_account_scope()
+    try:
+        assert account_claim_scope_for("google") is None  # non-agent turn
+
+        set_agent_identity(client_id="dcr-test", resource="res-1")
+        assert account_claim_scope_for("google") == {}  # agent turn, nothing bound
+
+        set_agent_account_scope({"google": {"acct-1": ["gmail:read"]}})
+        assert account_claim_scope_for("google") == {"acct-1": ("gmail:read",)}
+        assert account_claim_scope_for("slack") == {}  # other providers stay closed
+    finally:
+        clear_agent_account_scope()

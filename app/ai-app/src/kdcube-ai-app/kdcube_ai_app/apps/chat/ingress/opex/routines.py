@@ -203,6 +203,18 @@ def _get_cron_expression() -> str:
     return get_settings().OPEX_AGG_CRON
 
 
+def _get_today_refresh_cron() -> str:
+    """Cron for the intra-day today-refresh; '' means disabled.
+
+    Values like off/false/none/disabled (any case) disable it — including the
+    strings YAML produces when an unquoted `off`/`no` was parsed as a boolean.
+    """
+    raw = str(get_settings().OPEX_TODAY_REFRESH_CRON or "").strip()
+    if raw.lower() in ("", "off", "false", "no", "none", "disabled", "0"):
+        return ""
+    return raw
+
+
 def _bundle_cleanup_enabled() -> bool:
     return bool(get_settings().PLATFORM.APPLICATIONS.BUNDLE_CLEANUP_ENABLED)
 
@@ -247,12 +259,16 @@ async def run_aggregation_range(start: date, end: date) -> None:
         await _run_daily_and_monthly_for_date(current)
         current += timedelta(days=1)
 
-async def _run_daily_and_monthly_for_date(run_date: date) -> None:
+async def _run_daily_and_monthly_for_date(run_date: date, *, recompute: bool = False) -> None:
     """
     Compute daily aggregate for run_date and monthly aggregate for its month.
 
     Uses a Redis lock so only one instance per (tenant, project, date)
     actually does the work.
+
+    ``recompute=True`` re-aggregates even when the day's aggregate files exist —
+    the intra-day today-refresh needs it, because today's aggregate is partial
+    by definition and must be overwritten on every refresh.
     """
     agg = _get_aggregator()
     redis = await _get_agg_redis()
@@ -296,7 +312,7 @@ async def _run_daily_and_monthly_for_date(run_date: date) -> None:
             project_id=project,
             date_from=date_str,
             date_to=date_str,
-            skip_existing=True,
+            skip_existing=not recompute,
         )
 
         # Monthly
@@ -374,6 +390,54 @@ async def aggregation_scheduler_loop() -> None:
             next_run.isoformat(),
         )
         await _run_daily_and_monthly_for_date(run_date)
+
+
+async def today_refresh_scheduler_loop() -> None:
+    """
+    Intra-day refresh loop: re-aggregates TODAY (Berlin date) on its own cron
+    (routines.opex.today_refresh_cron / OPEX_TODAY_REFRESH_CRON, default hourly).
+
+    With this running, spend reports for windows that include the current day
+    are served from aggregates that are at most one refresh interval stale,
+    instead of raw-scanning today's per-event files on every request. Today's
+    aggregate is partial by definition, so each run recomputes it
+    (skip_existing=False) and refolds the month; the nightly run remains the
+    final word for a completed day. Shares the per-(tenant, project, date)
+    Redis lock with the nightly runner, so concurrent instances never duplicate
+    the work.
+    """
+    expr = _get_today_refresh_cron()
+    if not expr:
+        logger.info("[OPEX Today-Refresh] Disabled by configuration")
+        return
+    logger.info(
+        "[OPEX Today-Refresh] Scheduler loop started (tz=%s, cron=%s)",
+        ACCOUNTING_TZ, expr,
+    )
+
+    while True:
+        now = datetime.now(ACCOUNTING_TZ)
+        try:
+            next_run = croniter(expr, now).get_next(datetime)
+        except Exception:
+            logger.exception(
+                "[OPEX Today-Refresh] Invalid cron expression '%s', "
+                "falling back to '7 * * * *'", expr,
+            )
+            next_run = croniter("7 * * * *", now).get_next(datetime)
+
+        try:
+            await asyncio.sleep((next_run - now).total_seconds())
+        except asyncio.CancelledError:
+            logger.info("[OPEX Today-Refresh] Scheduler loop cancelled")
+            break
+
+        run_date = datetime.now(ACCOUNTING_TZ).date()
+        logger.info(
+            "[OPEX Today-Refresh] Refreshing aggregates for today %s",
+            run_date.isoformat(),
+        )
+        await _run_daily_and_monthly_for_date(run_date, recompute=True)
 
 
 async def _run_bundle_cleanup_once() -> None:

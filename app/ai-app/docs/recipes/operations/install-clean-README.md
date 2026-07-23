@@ -59,8 +59,10 @@ origin the browser loads the platform from: the local UI origin and any public
 URL you use. One client holds both.
 
 > The proxy publishes `ports.proxy_http`, falling back to `ports.ui`, then to
-> `80`. Staged defaults set `ports.ui` to **`5174`** and leave `ports.proxy_http`
-> unset, so the local UI origin is `http://localhost:5174`.
+> `80`. Staged defaults set `ports.ui` to **`5173`** and leave `ports.proxy_http`
+> unset, so the local UI origin is `http://localhost:5173`. `ports.ui` is a
+> per-runtime value — confirm yours in the staged `assembly.yaml`, or in what
+> `kdcube start` prints.
 
 Copy the client id (`…apps.googleusercontent.com`).
 
@@ -162,8 +164,8 @@ reports process/mount state, not per-bundle build outcomes):
 ```shell
 "$KDCUBE" info
 
-# 1) the UI actually answers — the real done-signal (port = ports.ui, 5174 by default):
-curl -s -o /dev/null -w "chat UI -> HTTP %{http_code}\n" http://localhost:5174/platform/chat  # want 200
+# 1) the UI actually answers — the real done-signal (port = ports.ui, 5173 by default):
+curl -s -o /dev/null -w "chat UI -> HTTP %{http_code}\n" http://localhost:5173/platform/chat  # want 200
 
 # 2) staged descriptors are the runtime authority:
 ls "$WORKDIR/config/"

@@ -21,10 +21,12 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+
 import secrets
 import time
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
+from urllib.parse import urlsplit
 
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_inventory import (
     AuthorityGrantInventory,
@@ -382,6 +384,10 @@ class AutomationAccessRecord:
     # refresh token and the current access-grant binding. Never public.
     refresh_token: str = ""
     access_token: str = ""
+    # Last token issuance (initial consent or refresh rotation) — staleness
+    # signal: a card whose last_issued_at is old is likely an orphan (the
+    # client disconnected without revoking).
+    last_issued_at: int = 0
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "AutomationAccessRecord":
@@ -417,6 +423,7 @@ class AutomationAccessRecord:
             source=_clean(value.get("source")) or ACCESS_SOURCE_MANUAL,
             refresh_token=_clean(value.get("refresh_token")),
             access_token=_clean(value.get("access_token")),
+            last_issued_at=int(value.get("last_issued_at") or 0),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -448,6 +455,7 @@ class AutomationAccessRecord:
             "source": self.source,
             "refresh_token": self.refresh_token,
             "access_token": self.access_token,
+            "last_issued_at": self.last_issued_at,
         }
 
     def to_public_dict(self) -> dict[str, Any]:
@@ -1284,6 +1292,7 @@ class AutomationAccessService:
         identity_scope: str = "",
         access_token: str = "",
         refresh_token: str = "",
+        account_scope: Mapping[str, Any] | None = None,
     ) -> AutomationAccessRecord | None:
         """Register (or update) an OAuth-flow delegated grant in the registry.
 
@@ -1292,6 +1301,17 @@ class AutomationAccessService:
         Hub and revoking it invalidates the CURRENT refresh token and access
         grant. One record per (grantor, client, resource): reconsent updates
         it instead of piling up rows.
+
+        ``account_scope`` carries the per-account claim picks from the consent
+        screen (initial consent). The card's EXISTING binding is always
+        preserved and merged — a refresh rotation (no picks) must never wipe
+        the user's per-account ticks, and a re-consent unions with them.
+
+        A fresh consent also SUPERSEDES sibling cards: a DCR client gets a new
+        ``dcr-…`` id on every reconnect, so the old card can never be used
+        again. Siblings (same grantor + resource, different dcr client whose
+        registered redirect origin matches this client's) donate their account
+        binding to the new card and are then revoked.
         """
         grantor = _clean(grantor_subject)
         client = _clean(client_id)
@@ -1302,6 +1322,7 @@ class AutomationAccessService:
         now = int(time.time())
         created_at = now
         existing_grants: list[str] = []
+        existing_account_scope: dict[str, dict[str, list[str]]] = {}
         existing_raw = await self._redis.get(self._record_key(access_id))
         if existing_raw is not None:
             try:
@@ -1309,8 +1330,28 @@ class AutomationAccessService:
                 created_at = int(existing_payload.get("created_at") or now)
                 existing_map = existing_payload.get("resource_grants") or {}
                 existing_grants = list(existing_map.get(resource_value or "*") or [])
+                existing_account_scope = {
+                    provider: {account_id: list(claims) for account_id, claims in accounts.items()}
+                    for provider, accounts in normalize_account_scope(
+                        existing_payload.get("account_scope")
+                    ).items()
+                }
             except Exception:
                 created_at = now
+        # Initial consent (not a refresh rotation): absorb superseded sibling
+        # cards BEFORE composing this card, so their binding carries over.
+        is_initial_consent = existing_raw is None
+        inherited_account_scope: dict[str, dict[str, list[str]]] = {}
+        superseded: list[AutomationAccessRecord] = []
+        if is_initial_consent:
+            try:
+                inherited_account_scope, superseded = await self._collect_oauth_siblings(
+                    grantor=grantor, client_id=client, resource=resource_value,
+                )
+            except Exception:
+                _LOGGER.exception(
+                    "[automation-access] sibling scan failed grantor=%s client=%s", grantor, client
+                )
         ttl = max(60, int(getattr(self._store, "refresh_ttl", None) or 86400))
         # MERGE with the card's current grants: the card is the authority the
         # guard resolves live, and a hub-side extension must survive token
@@ -1319,6 +1360,20 @@ class AutomationAccessService:
         for grant in existing_grants:
             if grant not in scope_list:
                 scope_list.append(grant)
+        # Account binding: consent picks ∪ this card's existing binding ∪ what a
+        # superseded sibling donated. Union per account claim list.
+        merged_account_scope: dict[str, dict[str, list[str]]] = {
+            provider: {account_id: list(claims) for account_id, claims in accounts.items()}
+            for provider, accounts in normalize_account_scope(account_scope).items()
+        }
+        for source_scope in (existing_account_scope, inherited_account_scope):
+            for provider, accounts in source_scope.items():
+                target = merged_account_scope.setdefault(provider, {})
+                for account_id, claims in accounts.items():
+                    held = target.setdefault(account_id, [])
+                    for claim in claims:
+                        if claim not in held:
+                            held.append(claim)
         record = AutomationAccessRecord(
             access_id=access_id,
             label=_clean(client_label) or client,
@@ -1327,18 +1382,155 @@ class AutomationAccessService:
             delegate_subject=integration_subject(grantor, client_id=client),
             operations=tuple(_as_list(list(operations))),
             resource_grants={resource_value or "*": tuple(scope_list)},
+            account_scope=normalize_account_scope(merged_account_scope),
             identity_scope=_clean(identity_scope),
             created_at=created_at,
             expires_at=now + ttl,
             source=ACCESS_SOURCE_OAUTH,
             refresh_token=_clean(refresh_token),
             access_token=_clean(access_token),
+            last_issued_at=now,
         )
         await self._redis.setex(self._record_key(access_id), ttl, json.dumps(record.to_dict()))
         await self._redis.sadd(self._index_key(grantor), access_id)
         await self._redis.expire(self._index_key(grantor), BUNDLE_SESSION_MAX_TTL_SECONDS)
+        _LOGGER.info(
+            "[automation-access] oauth grant recorded card=%s client=%s initial=%s "
+            "account_scope_providers=%s siblings_superseded=%d",
+            access_id, client, is_initial_consent,
+            sorted(merged_account_scope.keys()) or "-", len(superseded),
+        )
         await self.notify_change(grantor, action="granted", access=record.to_public_dict())
+        # Retire the superseded siblings AFTER the new card exists (revoke kills
+        # their refresh/access tokens and removes the card).
+        for old in superseded:
+            try:
+                await self.revoke_access(
+                    {"user_id": grantor}, access_id=old.access_id,
+                )
+                _LOGGER.info(
+                    "[automation-access] superseded oauth card %s (client=%s) by %s (client=%s)",
+                    old.access_id, old.client_id, access_id, client,
+                )
+            except Exception:
+                _LOGGER.exception(
+                    "[automation-access] failed to supersede card %s", old.access_id
+                )
         return record
+
+    async def oauth_seed_account_scope(
+        self,
+        *,
+        grantor_subject: str,
+        client_id: str,
+        resource: str,
+    ) -> dict[str, dict[str, list[str]]]:
+        """The account binding a consent screen should pre-check for this
+        client: the client's own existing card (re-consent) merged with what a
+        superseded DCR sibling would donate. Read-only — nothing is retired
+        here; supersession happens at token issuance."""
+        grantor = _clean(grantor_subject)
+        client = _clean(client_id)
+        if not grantor or not client:
+            return {}
+        seed: dict[str, dict[str, list[str]]] = {}
+        own_raw = await self._redis.get(
+            self._record_key(oauth_access_id(grantor, client, _clean(resource)))
+        )
+        sources: list[Mapping[str, Mapping[str, Any]]] = []
+        if own_raw is not None:
+            try:
+                own = AutomationAccessRecord.from_mapping(json.loads(own_raw))
+                sources.append(own.account_scope)
+            except Exception:
+                pass
+        try:
+            donated, _retire = await self._collect_oauth_siblings(
+                grantor=grantor, client_id=client, resource=_clean(resource),
+            )
+            sources.append(donated)
+        except Exception:
+            pass
+        for source_scope in sources:
+            for provider, accounts in source_scope.items():
+                target = seed.setdefault(str(provider), {})
+                for account_id, claims in dict(accounts).items():
+                    held = target.setdefault(str(account_id), [])
+                    for claim in claims:
+                        if claim not in held:
+                            held.append(str(claim))
+        return seed
+
+    async def _collect_oauth_siblings(
+        self,
+        *,
+        grantor: str,
+        client_id: str,
+        resource: str,
+    ) -> tuple[dict[str, dict[str, list[str]]], list[AutomationAccessRecord]]:
+        """Sibling cards a fresh OAuth consent supersedes: same grantor and
+        resource, a DIFFERENT dcr-registered client whose registered redirect
+        origin matches this client's. Returns (donated account binding, cards
+        to retire). Non-DCR clients (static ids like ``claude``) are keyed
+        stably and never pile up, so only ``dcr-…`` siblings are considered."""
+        if not client_id.startswith("dcr-"):
+            return {}, []
+        own_origins = await self._client_redirect_origins(client_id)
+        if not own_origins:
+            return {}, []
+        raw_ids = await self._redis.smembers(self._index_key(grantor))
+        access_ids = [
+            item.decode("utf-8") if isinstance(item, (bytes, bytearray)) else str(item)
+            for item in (raw_ids or [])
+        ]
+        donated: dict[str, dict[str, list[str]]] = {}
+        retire: list[AutomationAccessRecord] = []
+        for access_id in access_ids:
+            raw = await self._redis.get(self._record_key(access_id))
+            if raw is None:
+                continue
+            try:
+                candidate = AutomationAccessRecord.from_mapping(json.loads(raw))
+            except Exception:
+                continue
+            if candidate.source != ACCESS_SOURCE_OAUTH:
+                continue
+            if candidate.client_id == client_id or not candidate.client_id.startswith("dcr-"):
+                continue
+            if (resource or "*") not in candidate.resource_grants:
+                continue
+            their_origins = await self._client_redirect_origins(candidate.client_id)
+            if not (own_origins & their_origins):
+                continue
+            for provider, accounts in candidate.account_scope.items():
+                target = donated.setdefault(provider, {})
+                for account_id, claims in accounts.items():
+                    held = target.setdefault(account_id, [])
+                    for claim in claims:
+                        if claim not in held:
+                            held.append(claim)
+            retire.append(candidate)
+        return donated, retire
+
+    async def _client_redirect_origins(self, client_id: str) -> set[str]:
+        """The scheme+host origins of a registered client's redirect URIs —
+        the stable identity of the app across DCR re-registrations."""
+        store = self._store
+        if store is None or not hasattr(store, "get_client_record"):
+            return set()
+        try:
+            record = await store.get_client_record(client_id) or {}
+        except Exception:
+            return set()
+        origins: set[str] = set()
+        for uri in record.get("redirect_uris") or []:
+            try:
+                parts = urlsplit(str(uri))
+            except Exception:
+                continue
+            if parts.scheme and parts.hostname:
+                origins.add(f"{parts.scheme}://{parts.hostname}".lower())
+        return origins
 
     async def extend_client_access(
         self,

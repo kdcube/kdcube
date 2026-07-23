@@ -202,10 +202,18 @@ authority_registry:
 The consent renderer is presentation only. Connection Hub calls the configured
 bundle operation with a payload that includes `form_action`, `csrf_token`,
 `request.client_id`, `request.redirect_uri`, `request.scope`, `request.resource`,
-PKCE fields, selectable grants, and selectable tools. The rendered page should
-POST approve/deny to `form_action` and include those request fields as hidden
-inputs. Connection Hub re-validates the client, redirect, scopes, CSRF, selected
-grants, and selected tools before issuing anything.
+PKCE fields, selectable grants, and selectable tools. The built-in page also
+renders the consenting user's connected provider accounts with per-claim
+checkboxes (`account_scope` picks — nothing pre-checked on a first connect;
+default-closed, so an unticked account stays unusable by this client) and
+summarizes the requested scope as capability counts instead of raw scope
+tokens. The rendered page should POST approve/deny to `form_action` and
+include those request fields as hidden inputs. Connection Hub re-validates the
+client, redirect, scopes, CSRF, selected grants, and selected tools before
+issuing anything; account-scope picks land on the client's grant card at token
+issuance. A client can also revoke its own token at the RFC 7009
+`/oauth/revoke` endpoint (advertised in the server metadata), which retires
+its card with it.
 
 For resilience across custom renderers and browser/proxy behavior, Connection
 Hub can recover missing non-secret authorize parameters from the same-origin

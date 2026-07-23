@@ -444,7 +444,21 @@ Rules:
   development derives it from the mounted Connection Hub public operation URL.
 - `public_clients[*].redirect_uris` configures known public clients.
 - `dynamic_client_registration.allowed_redirect_uris` constrains pre-auth
-  dynamic client registration.
+  dynamic client registration. Registration runs before any user has
+  authenticated, so this allowlist is the defense that keeps an attacker from
+  registering a "client" whose redirect points at their own server: a stolen
+  authorization code can only be delivered to a known app callback or to the
+  user's own machine.
+- Redirect URI matching follows RFC 8252: loopback redirects (`localhost`,
+  `127.0.0.1`, `::1`) match on **any port**, because a native client binds a
+  dynamic local port for its callback — but scheme, host, and path must match
+  an allowlisted entry exactly. All non-loopback redirects must match exactly,
+  including the port. Implementation: `redirect_uri_allowed()` in
+  `kdcube_ai_app/apps/chat/sdk/solutions/connections/delegated_credentials/oauth/clients.py`.
+- Practical consequence for native MCP clients: an entry like
+  `http://localhost/callback` admits `http://localhost:52791/callback`, but not
+  `http://localhost:52791/auth/callback` — a client whose callback uses a
+  different loopback *path* needs its own allowlist entry with that exact path.
 - Redirect URI fields are descriptor lists, not comma-separated strings.
 - Tenant and project come from `assembly.yaml -> context.tenant` and
   `context.project`.
@@ -456,6 +470,47 @@ Rules:
 If route guarding or bypass policy must be configurable, use the existing
 gateway/ingress descriptor model instead of feature-specific hardcoded route
 lists.
+
+## Consent Screen: Per-Account Binding Picker
+
+The authorize page shows the consenting user's connected provider accounts,
+grouped per provider, each account with its own approved claims as checkboxes.
+The picks travel through the authorization code into the client's registry
+card as its per-account binding (`account_scope`). Nothing is pre-checked on a
+first connect — granting is always the user's explicit action; a re-consent
+pre-fills only what this client was already granted before. The details block
+summarizes the requested scope ("N capabilities (families)") instead of
+printing raw scope tokens: every scope is presented below as a labeled,
+narrowable row.
+
+Enforcement is default-closed for delegated callers: an account left unticked
+is not usable by this client even though the connection ceiling names the
+claim. The semantics live in
+[Configure Agent → Service Access](../configuring-agent-service-access/configuring-agent-service-access-README.md);
+a call that needs more raises `agent_grant_required` deep-linking the
+client's own grant card (Delegated by KDCube) with the exact account and claim
+named — never the provider-connect tab, whose state is not the problem.
+
+## Revocation And Card Lifecycle
+
+- **RFC 7009 revocation.** `POST /oauth/revoke` accepts the client's refresh
+  or access token (`token`, optional `token_type_hint`), revokes it, and
+  retires the pointed-to Connection Hub card together with its other live
+  token material. Unknown tokens still return 200 (idempotent, non-probing).
+  The `revocation_endpoint` is advertised in the RFC 8414 metadata, so a
+  disconnecting client that honors it leaves no orphan card.
+- **DCR sibling supersession.** A dynamically-registered client gets a new
+  `dcr-…` id on every reconnect, so its previous card could never be used
+  again. A fresh consent therefore supersedes sibling cards — same grantor and
+  resource, a different `dcr-…` client whose registered redirect ORIGIN
+  matches (the app's stable identity across re-registrations). The sibling
+  donates its per-account binding to the new card, then is revoked. Statically
+  registered client ids are keyed stably and never pile up.
+- **Refresh rotations preserve the card.** Re-registration on token issuance
+  merges the card's existing grants and per-account binding (a rotation never
+  wipes the user's ticks), and rotated refresh records keep the registry-card
+  pointer. Cards stamp `last_issued_at` on every issuance — a stale value
+  marks a disconnect orphan; cards also expire with the refresh-token TTL.
 
 ## Storage
 

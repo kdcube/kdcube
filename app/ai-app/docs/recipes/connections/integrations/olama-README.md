@@ -4,7 +4,7 @@ title: "Ollama Integration (Locally Served Models)"
 summary: "Recipe for serving a locally hosted model (Ollama) to KDCube agents through the models gateway: prerequisites, the custom-provider connector protocol, platform streaming and accounting, thinking-model handling, multimodal input, and descriptor wiring."
 status: active
 tags: ["recipes", "integrations", "local-models", "ollama", "custom-provider", "streaming", "models-gateway", "multimodal"]
-updated_at: 2026-07-16
+updated_at: 2026-07-21
 see_also:
   - repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/models_gateway/README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-transports-README.md
@@ -73,13 +73,15 @@ bound to the configured endpoint. That client speaks a small HTTP protocol:
 - request — `POST {endpoint}` with
 
   ```json
-  {"inputs": [{"role": "system|user|assistant", "content": "... or blocks"}],
+  {"model": "qwen3.6:35b",
+   "inputs": [{"role": "system|user|assistant", "content": "... or blocks"}],
    "parameters": {"max_new_tokens": 1024, "temperature": 0.7, "top_p": 0.9,
                    "stream": true}}
   ```
 
-  plus optional `Authorization: Bearer <key>`. The client does NOT transmit
-  a model name — the serving side owns model selection.
+  plus optional `Authorization: Bearer <key>`. The model comes from the
+  selected role or composer option; the endpoint is shared by every custom
+  model configured for the app.
 - non-stream response — `{"response": text, "usage": {...}, "id": ...}`;
 - stream — SSE `data: {"delta": "..."}` per chunk, one final event
   `data: {"final": true, "usage": {...}}`, then `data: [DONE]`.
@@ -95,7 +97,7 @@ that protocol on `/generate` and forwards to Ollama `/api/chat`:
 | `parameters.max_new_tokens` | `options.num_predict` |
 | `parameters.temperature` / `top_p` | `options.temperature` / `top_p` |
 | `parameters.stream` | `stream` |
-| — (gateway env `GATEWAY_MODEL`) | `model` |
+| top-level `model` (gateway env `GATEWAY_MODEL` only when absent) | `model` |
 | — (gateway env `GATEWAY_KEEP_ALIVE`, default 30m) | `keep_alive` |
 | — (gateway env `GATEWAY_THINK`, default off) | `think` (§4) |
 | `parameters.num_ctx` (descriptor `services.llm.custom.num_ctx`; gateway env `GATEWAY_NUM_CTX` as standalone fallback) | `options.num_ctx` |
@@ -109,12 +111,13 @@ customization ~60K), so the model receives the tail of its prompt, loses
 the channel protocol entirely, and answers as plain text that the platform
 cannot route. The only symptom is a
 `msg="truncating input prompt" limit=... prompt=...` WARN line in the
-Ollama server log. Set `num_ctx` in the app's `services.llm.custom`
-descriptor block above your largest prompt plus generation room (e.g.
-`65536` for qwen3.6:35b, which fits the KV cache in the same ~26 GiB the
-weights use on Apple silicon); the platform sends it per request and the
-gateway prefers it over its own `GATEWAY_NUM_CTX` env (the standalone-run
-fallback). Watch that log line when in doubt.
+Ollama server log. Set the shared fallback `num_ctx` in the app's
+`services.llm.custom` block above your largest prompt plus generation room.
+Override it under
+`services.llm.custom.model_overrides.<exact-model-tag>.num_ctx` when one model
+has a smaller supported context. The platform sends the effective value per request,
+and the gateway prefers it over `GATEWAY_NUM_CTX`, which is only the
+standalone-run fallback. Watch that log line when in doubt.
 
 Coming back, Ollama's JSONL chunks (`{"message":{"content": piece}}`) become
 SSE `{"delta": piece}` events, and the terminal chunk's
@@ -124,9 +127,9 @@ Legacy parameters from the historical models-hub protocol (`min_p`,
 `skip_cot`, `fabrication_awareness`, `prompt_mode`) are accepted and
 ignored.
 
-One gateway instance serves one model. A second model = a second gateway on
-another port, referenced by a second app's descriptor (or a different
-deployment profile).
+One gateway instance serves every model already pulled into its Ollama
+runtime. Each platform request names the selected model; `GATEWAY_MODEL` is
+used only by direct requests that omit it.
 
 Optional auth: set `GATEWAY_API_KEY` on the gateway and put the same value
 in the app's secrets (`services.llm.custom.api_key`, §6).
@@ -214,8 +217,12 @@ config:
     llm:
       custom:
         endpoint: http://host.docker.internal:11500/generate
-        model_name: qwen3.6:35b        # display/accounting label
-        num_ctx: 65536                 # serving window — size to your agent prompts (see §3)
+        num_ctx: 65536                 # shared serving-window fallback
+        model_overrides:
+          qwen3:8b:
+            num_ctx: 40960             # installed model's context limit
+          mistral:7b-instruct-v0.2-q4_K_M:
+            num_ctx: 32768             # exact-tag override
   # 2) offer it as a per-conversation composer pick (overrides role_models
   #    for the picking user only — nobody's defaults change)
   react:
@@ -224,7 +231,34 @@ config:
         - model: qwen3.6:35b
           provider: custom
           label: Qwen3.6 35B (local)
+          num_ctx: 65536
+        - model: qwen3:8b
+          provider: custom
+          label: Qwen3 8B (local, fast)
+          num_ctx: 40960
+        - model: mistral:7b-instruct-v0.2-q4_K_M
+          provider: custom
+          label: Mistral 7B Instruct v0.2 (local)
+          num_ctx: 32768
 ```
+
+There is deliberately no descriptor-level `model_name`. The selected
+`supported_models[].model` (or `role_models.<role>.model`) is the source of
+truth and is sent to the shared gateway on every call. The optional
+`model_overrides` map contains exceptions to the shared serving settings; it
+is not another model allowlist. `num_ctx` is the active context window in
+tokens: instructions, tool definitions, conversation/input, and generated
+continuation share it. Runtime precedence is the selected picker row's
+`num_ctx`, then the matching `model_overrides` value, then the shared custom
+service `num_ctx`. The saved user preference contains only `provider` and
+`model`; the runtime re-reads the current admin-configured row each turn.
+
+Mistral 7B Instruct v0.2 has a 32K context window. In the workspace ReAct
+agent, pair it with the **Extra Lite (local models)** instruction profile;
+the full profile can exceed that context before user content is added. The
+reference Extra Lite profile is single-action, omits the skill gallery, uses a
+compact effective-tool catalog, and removes exec/web/rendering plus Workspace
+memory/canvas teaching when the matching capability is disabled.
 
 Secret (only when the gateway sets `GATEWAY_API_KEY`) — in
 `bundles.secrets.yaml`:
@@ -266,6 +300,7 @@ config change.
 2. curl -s localhost:11500/health              gateway up; serving model named
 3. curl -sN localhost:11500/generate \
      -H 'Content-Type: application/json' -d '{
+       "model": "qwen3.6:35b",
        "inputs": [{"role":"user","content":"Say hi in one word."}],
        "parameters": {"stream": true, "max_new_tokens": 32}}'
                                                deltas, final usage, [DONE]
@@ -275,10 +310,10 @@ config change.
 
 ## 8. Current limits (recorded, not hidden)
 
-- The custom client does not transmit a model name; the gateway's
-  `GATEWAY_MODEL` is the source of truth. Keep `model_name` and the composer
-  label aligned with it when switching models.
-- One model per gateway instance.
+- A selected model must already be pulled in the Ollama runtime reached by the
+  gateway; an unknown tag fails the request rather than silently switching.
+- Per-model descriptor overrides currently cover `num_ctx`. Other generation
+  parameters remain request/tool policy rather than deployment model metadata.
 - Text + image input; no local embeddings through this path yet (the
   platform's custom-embeddings support is a separate seam).
 - Structured output is prompt-driven (no server-side JSON schema mode).

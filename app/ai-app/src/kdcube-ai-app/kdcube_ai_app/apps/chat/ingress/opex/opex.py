@@ -31,6 +31,7 @@ from the accounting system using the RateCalculator.
 """
 
 _scheduler_task: Optional[asyncio.Task] = None
+_today_refresh_task: Optional[asyncio.Task] = None
 _bundle_cleanup_task: Optional[asyncio.Task] = None
 _idp_import_task: Optional[asyncio.Task] = None
 logger = logging.getLogger("OPEX.API")
@@ -40,12 +41,15 @@ async def opex_lifespan(app: FastAPI):
     """
     Router lifespan: start scheduler on startup, stop it on shutdown.
     """
-    global _scheduler_task, _bundle_cleanup_task, _idp_import_task
+    global _scheduler_task, _today_refresh_task, _bundle_cleanup_task, _idp_import_task
 
     import kdcube_ai_app.apps.chat.ingress.opex.routines as routines
     if _scheduler_task is None:
         _scheduler_task = asyncio.create_task(routines.aggregation_scheduler_loop())
         logger.info("[OPEX Aggregator] Background scheduler task started")
+    if _today_refresh_task is None:
+        _today_refresh_task = asyncio.create_task(routines.today_refresh_scheduler_loop())
+        logger.info("[OPEX Today-Refresh] Background scheduler task started")
     component = (get_settings().GATEWAY_COMPONENT or "ingress").strip().lower()
     if component == "proc":
         if _bundle_cleanup_task is None:
@@ -68,6 +72,14 @@ async def opex_lifespan(app: FastAPI):
                 pass
             logger.info("[OPEX Aggregator] Background scheduler task stopped")
             _scheduler_task = None
+        if _today_refresh_task is not None:
+            _today_refresh_task.cancel()
+            try:
+                await _today_refresh_task
+            except asyncio.CancelledError:
+                pass
+            logger.info("[OPEX Today-Refresh] Background scheduler task stopped")
+            _today_refresh_task = None
         if _bundle_cleanup_task is not None:
             _bundle_cleanup_task.cancel()
             try:

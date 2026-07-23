@@ -235,6 +235,7 @@ payload into tool envelopes, named-service errors, and MCP results:
 | `claim_upgrade_required` | account exists, claim not approved | approve the claim | true |
 | `reconnect_required` | credential missing / unrefreshable / provider rejected it | reconnect the account | true |
 | `account_required` | several eligible accounts | pick an `account_id` and resend | true |
+| `agent_grant_required` | the account is connected and holds the claim, but THIS delegated caller has no per-account binding for it (default-closed) | tick the claim for an account on the caller's grant card (Delegated by KDCube) | true |
 | `claim_not_configured`, `connector_app_not_configured`, `claim_outside_connector_app` | operator configuration errors | admin action | false |
 
 `retry_hint` says whether retrying the same operation after the user
@@ -272,15 +273,24 @@ consent:
   candidates       labeled, for account_required
   url              Connection Hub widget deep-link
   action_label     Connect account / Approve access / Reconnect account /
-                   Choose account
+                   Choose account / Grant this agent access
 ```
 
-The `url` carries `tab=delegated_to_kdcube`, `provider_id`,
-`connector_app_id`, `claims`, and `account_id` query parameters. The
-Connection Hub widget turns them into a consent plan: a step list (account
-connected → access working → requested approvals as per-claim chips) with a
-single primary button for the first unmet step, and highlights the affected
-account card.
+For the connect-family reasons the `url` carries `tab=delegated_to_kdcube`,
+`provider_id`, `connector_app_id`, `claims`, and `account_id` query
+parameters. The Connection Hub widget turns them into a consent plan: a step
+list (account connected → access working → requested approvals as per-claim
+chips) with a single primary button for the first unmet step, and highlights
+the affected account card.
+
+`agent_grant_required` routes differently: the provider side is fine there,
+so the `url` deep-links the CALLER'S own grant card
+(`tab=delegated_by_kdcube`, with the agent client id, resource, and the asked
+account + claim named). The card explains why the user landed there and opens
+the provider's account section; the user ticks the claim for the account of
+their choice — nothing is pre-checked. It never points at the
+provider-connect tab, whose guided plan would truthfully report "all set" and
+strand the user.
 
 Consent is DEMAND-DRIVEN: which tools a turn needs only becomes clear as the
 agent works, so claim-gated tools stay in the agent's set and the consent

@@ -175,11 +175,22 @@ class NamedServicesMcpBridge:
         # Bind the calling agent's per-provider account scope so the shared
         # connected-account resolver can restrict which account satisfies a
         # provider claim (the agent's card names which account(s) per provider).
+        # The identity MUST be bound too, even when the card has no account
+        # bindings yet: a door caller is always a delegated caller, and the
+        # identity is what makes the resolver default-CLOSED (empty binding =
+        # nothing granted → agent-grant consent), instead of falling back to
+        # the non-agent "no restriction" path.
         from kdcube_ai_app.apps.chat.sdk.solutions.connections.agent_account_scope import (
             set_agent_account_scope,
+            set_agent_identity,
         )
 
-        set_agent_account_scope(delegated_credential_view(request).account_scope)
+        view = delegated_credential_view(request)
+        set_agent_account_scope(view.account_scope)
+        set_agent_identity(
+            client_id=view.client_id,
+            resource=view.resources[0] if view.resources else "",
+        )
         self._catalog = NamedServiceBoundaryCatalog(
             _named_service_catalog_config_from_request(request) or self._config
         )

@@ -1,0 +1,13 @@
+html, body, #root { height: 100%; margin: 0; }
+body { background: #f6f8f8; }
+#root { display: flex; }
+.apps-config { flex: 1 1 auto; min-height: 0; }
+.ac-boot {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #7a99b0;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-size: 13px;
+}

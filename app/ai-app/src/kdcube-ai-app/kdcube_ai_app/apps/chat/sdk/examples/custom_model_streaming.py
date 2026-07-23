@@ -11,7 +11,7 @@ Run/debug from IntelliJ like the other examples in this folder: the `cb` venv
 interpreter, working directory = this folder (so .env is found), source root
 app/ai-app/src/kdcube-ai-app on PYTHONPATH.
 
-Three stages, each isolating one link of the chain:
+Four stages, each isolating one link of the chain:
 
   1. gateway  — raw HTTP+SSE against the gateway, no SDK at all.
                 Fails => gateway or Ollama is the problem.
@@ -23,11 +23,15 @@ Three stages, each isolating one link of the chain:
                 No channel output (stage 2 fine) => the model does not follow
                 the <channel:...> protocol; the platform streams fine but the
                 UI has nothing recognized to show.
+  4. decision — the real react-v3 decision prompt using Workspace's Extra
+                Lite profile: xlite:workspace_exec, single-action protocol,
+                compact tool catalog, and no skill gallery.
 
-Config comes from .env in this folder (standalone idiom):
+    Config comes from .env in this folder (standalone idiom):
 
     CUSTOM_MODEL_ENDPOINT=http://localhost:11500/generate
-    CUSTOM_MODEL_NAME=qwen3.6:35b
+    CUSTOM_MODEL_NAME=mistral:7b-instruct-v0.2-q4_K_M
+    CUSTOM_MODEL_NUM_CTX=32768
     CUSTOM_MODEL_API_KEY=            # only when the gateway sets GATEWAY_API_KEY
 
 Note the host: outside docker it is localhost; inside the chat-proc container
@@ -41,6 +45,7 @@ import json
 import os
 
 import aiohttp
+from dotenv import load_dotenv
 
 from kdcube_ai_app.apps.chat.sdk.streaming.workspace_streamer_v3 import (
     ChannelSpec,
@@ -56,20 +61,21 @@ from kdcube_ai_app.infra.service_hub.inventory import (
 
 ROLE = "custom-model-test"
 
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+
 ENDPOINT = os.getenv("CUSTOM_MODEL_ENDPOINT", "http://localhost:11500/generate")
-MODEL_NAME = os.getenv("CUSTOM_MODEL_NAME", "qwen3.6:35b")
+MODEL_NAME = os.getenv("CUSTOM_MODEL_NAME", "mistral:7b-instruct-v0.2-q4_K_M")
+MODEL_NUM_CTX = int(os.getenv("CUSTOM_MODEL_NUM_CTX", "32768") or 32768)
 API_KEY = os.getenv("CUSTOM_MODEL_API_KEY", "")
 
 PROMPT = "Name three prime numbers and say why they are prime, briefly."
 
 
 def configure_env() -> ModelServiceBase:
-    from dotenv import find_dotenv, load_dotenv
-    load_dotenv(find_dotenv())
     req = ConfigRequest(
         custom_model_endpoint=ENDPOINT,
         custom_model_api_key=API_KEY or None,
-        custom_model_name=MODEL_NAME,
+        custom_model_num_ctx=MODEL_NUM_CTX,
         role_models={
             ROLE: {"provider": "custom", "model": MODEL_NAME},
         },
@@ -86,8 +92,14 @@ async def stage_1_gateway_raw() -> None:
     print("=" * 60)
 
     payload = {
+        "model": MODEL_NAME,
         "inputs": [{"role": "user", "content": PROMPT}],
-        "parameters": {"stream": True, "max_new_tokens": 200, "temperature": 0.3},
+        "parameters": {
+            "stream": True,
+            "max_new_tokens": 200,
+            "temperature": 0.3,
+            "num_ctx": MODEL_NUM_CTX,
+        },
     }
     headers = {"Content-Type": "application/json"}
     if API_KEY:
@@ -205,9 +217,10 @@ async def stage_3_react_channels(ms: ModelServiceBase) -> None:
 
 async def stage_4_react_decision(ms: ModelServiceBase) -> None:
     """The real react-v3 decision call: react_decision_stream_v2 builds the
-    same system instruction the react runtime builds (protocol + workspace
-    guide + tool catalog + admin customization) and streams the same
-    thinking/action/code/summary channels.
+    same system instruction the react runtime builds and streams the same
+    thinking/action/code/summary channels. This stage mirrors the Workspace
+    descriptor's ``extra-lite`` profile; ``build_decision_system_text``
+    resolves the profile token through the production instruction composer.
 
     REACT_PROMPT_PAD_TOKENS (env, default 0) pads the instruction with
     reference-note text to simulate a real deployment's prompt size (the
@@ -224,6 +237,12 @@ async def stage_4_react_decision(ms: ModelServiceBase) -> None:
 
     pad_tokens = int(os.getenv("REACT_PROMPT_PAD_TOKENS", "0") or 0)
     additional = None
+    instruction_profile = "extra-lite"
+    instruction_blocks = ["xlite:workspace_exec"]
+    workspace_implementation = "git"
+    multi_action_mode = "off"
+    tool_catalog_detail = "compact"
+    include_skill_gallery = False
     if pad_tokens:
         para = (
             "Reference note {i}: deployment conventions the agent must keep in "
@@ -235,15 +254,24 @@ async def stage_4_react_decision(ms: ModelServiceBase) -> None:
 
     build_kwargs = dict(
         adapters=[],
-        workspace_implementation="custom",
+        workspace_implementation=workspace_implementation,
         additional_instructions=additional,
-        multi_action_mode="on",
+        instruction_blocks=instruction_blocks,
+        multi_action_mode=multi_action_mode,
+        tool_catalog_detail=tool_catalog_detail,
+        include_skill_gallery=include_skill_gallery,
     )
     system_text = build_decision_system_text(**build_kwargs, skill_consumer=ROLE)
     est_tokens = len(system_text) // 4
 
     print("\n" + "=" * 60)
     print(f"STAGE 4: react_decision_stream_v2 — role={ROLE}")
+    print(
+        f"instruction profile: {instruction_profile} "
+        f"blocks={instruction_blocks} workspace={workspace_implementation} "
+        f"multi_action={multi_action_mode} catalog={tool_catalog_detail} "
+        f"skill_gallery={include_skill_gallery}"
+    )
     print(f"system instruction: {len(system_text)} chars ≈ {est_tokens} tokens"
           f" (pad={pad_tokens})")
     print("=" * 60)
@@ -261,18 +289,41 @@ async def stage_4_react_decision(ms: ModelServiceBase) -> None:
     log = out.get("log") or {}
     print(f"thinking :: {(out.get('internal_thinking') or '').strip()!r}")
     print(f"agent_response :: {out.get('agent_response')!r}")
-    print(f"error :: {log.get('error')!r} protocol_shape_error :: {log.get('protocol_shape_error')!r}")
+    parse_error = log.get("error")
+    shape_error = log.get("protocol_shape_error")
+    parsed_action = out.get("agent_response") or {}
+    print(f"error :: {parse_error!r} protocol_shape_error :: {shape_error!r}")
     print(f"raw length :: {len(full_raw)}")
-    followed_protocol = "<channel:" in (full_raw or "")
-    print(f"channel protocol followed :: {followed_protocol}")
-    if not followed_protocol and full_raw:
-        print("!! plain text came back — the serving window truncated the "
-              "instruction (check the Ollama server log) or the model "
-              "ignored the protocol.")
+    contains_channel_text = "<channel:" in full_raw
+    valid_decision = bool(parsed_action) and not parse_error and not shape_error
+    print(f"contains channel-looking text :: {contains_channel_text}")
+    print(f"valid decision protocol :: {valid_decision}")
+    if not valid_decision and full_raw:
+        print("\n--- INVALID RAW PREVIEW ---")
+        if len(full_raw) <= 3000:
+            print(full_raw)
+        else:
+            print(full_raw[:2000])
+            print("\n... [raw preview omitted] ...\n")
+            print(full_raw[-1000:])
+        if contains_channel_text:
+            print(
+                "!! Channel-looking text is not sufficient: the model did not "
+                "produce one parseable action. It may be echoing/paraphrasing "
+                "the instruction or violating the channel cardinality/schema."
+            )
+        else:
+            print(
+                "!! Plain text came back. Check the Ollama log for front "
+                "truncation; if the context fits, the model ignored the protocol."
+            )
     print("[stage 4] done")
 
 
 async def main():
+    print(f"Custom model: {MODEL_NAME}")
+    print(f"Gateway: {ENDPOINT}")
+    print(f"Context window: {MODEL_NUM_CTX} tokens")
     ms = configure_env()
     await stage_1_gateway_raw()
     await stage_2_client_astream(ms)

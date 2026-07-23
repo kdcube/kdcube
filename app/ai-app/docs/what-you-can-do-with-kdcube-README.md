@@ -17,6 +17,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/kdcube_for_agents/settle-your-solution-in-kdcube-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/how/how-to-construct-react-agent-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/agent-acting-for-user/agent-acting-for-user-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/sites/application-sites-README.md
 ---
@@ -247,8 +248,11 @@ implementations execute under the carried request identity, grants, provider
 claims, and economics context. In this split profile, credentials do not move
 into generated code.
 
-Other execution profiles provide different isolation strengths; `no network`
-is specifically a split-executor guarantee. Read
+Isolation is not one global switch: each tool declares where it runs — the
+trusted supervisor process, a subprocess, or the isolated executor — and the
+profile is selected per agent, under the operator-set ceiling. Other execution
+profiles provide different isolation strengths; `no network` is specifically a
+split-executor guarantee. Read
 [Tenant, Project, User, Authority, And Execution Boundaries](runtime/tenant-project-user-and-execution-boundaries-README.md)
 and [Isolated Execution](exec/README-iso-runtime.md).
 
@@ -269,6 +273,14 @@ user approves a script, CI job, or external agent client
 The first direction lets KDCube act through a user's external account. The
 second lets external automation act inside KDCube on the user's behalf. Neither
 is platform login.
+
+An in-app agent is itself a delegated-by client. Each agent is its own grantee
+(`kdcube-agent:<app>:<agent>`) and needs its own grant to a connected account,
+scoped per account and per claim — reading and sending are separate claims.
+Connecting an account does not authorize every agent to use it, and an agent does
+not inherit the accounts the user connected; revoking either the connection or
+the agent's grant stops the tool. See
+[Agents Acting For The User](sdk/solutions/connections/agent-acting-for-user/agent-acting-for-user-README.md).
 
 Connection Hub owns the authority/provider registry, connection edges,
 connected-account lifecycle, delegated credentials, consent, and runtime

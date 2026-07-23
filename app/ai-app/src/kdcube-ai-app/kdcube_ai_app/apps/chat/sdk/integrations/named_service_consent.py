@@ -20,6 +20,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.model
     CREDENTIAL_MISSING,
     CREDENTIAL_REVOKED,
     REASON_ACCOUNT_REQUIRED,
+    REASON_AGENT_GRANT_REQUIRED,
     REASON_CLAIM_UPGRADE_REQUIRED,
     REASON_CONNECT_REQUIRED,
     REASON_RECONNECT_REQUIRED,
@@ -80,6 +81,11 @@ CONSENT_ERROR_CONTRACT = {
             "Several connected accounts match. Resend the same call with account_id set to one of "
             "candidates[].account_id."
         ),
+        REASON_AGENT_GRANT_REQUIRED: (
+            "The connected account holds the claim, but THIS caller has not been granted it "
+            "on that account. Open connection_hub_url — the caller's own grant card — where the "
+            "user ticks the claim for the account of their choice, then retry."
+        ),
     },
     "fields": [
         "reason",
@@ -128,6 +134,13 @@ def _consent_instructions(
         if link_is_openable
         else "Ask the user to open Connection Hub in the KDCube app"
     )
+    if reason == REASON_AGENT_GRANT_REQUIRED:
+        return (
+            f"The {provider_label} account can do this, but THIS agent has not been granted "
+            f"{claim_text} on it. {link_part} — it opens this agent's own access card, where "
+            "the user decides which account to allow and ticks the claim — then retry this "
+            "exact call."
+        )
     if reason == REASON_ACCOUNT_REQUIRED:
         return (
             f"Several {provider_label} accounts match. Resend the SAME call with "
@@ -206,7 +219,16 @@ def resolution_consent_payload(
     connection_hub_bundle_id: str,
     tool_name: str,
 ) -> dict[str, Any]:
-    """Build the shipped Connection Hub consent payload for one failed resolution."""
+    """Build the shipped Connection Hub consent payload for one failed resolution.
+
+    The calling agent's delegated identity (bound at the door bridge / native
+    gate) rides along so an ``agent_grant_required`` denial deep-links THIS
+    agent's grant card instead of the provider-connect tab."""
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.agent_account_scope import (
+        agent_identity,
+    )
+
+    identity = agent_identity()
     return connected_account_consent_payload(
         tenant=ctx.tenant,
         project=ctx.project,
@@ -218,6 +240,8 @@ def resolution_consent_payload(
                 "failures": [resolution.to_dict(include_credential=False)],
             }
         ],
+        agent_client_id=as_str(identity.get("client_id")),
+        agent_resource=as_str(identity.get("resource")),
     )
 
 

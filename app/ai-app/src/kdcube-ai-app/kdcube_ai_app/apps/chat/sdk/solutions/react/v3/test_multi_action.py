@@ -269,6 +269,29 @@ async def test_decision_stream_parses_html_content_inside_structured_channel():
     assert tool_call["params"]["content"] == html
 
 
+@pytest.mark.asyncio
+async def test_decision_stream_parses_complete_action_on_one_fence_line():
+    raw = (
+        "<channel:thinking>Answering the user.</channel:thinking>"
+        '<channel:action>```json { "action": "complete", "notes": "", '
+        '"tool_call": null, "final_answer": "The answer already shown.", '
+        '"suggested_followups": [] } ```</channel:action>'
+        "<channel:code></channel:code>"
+    )
+
+    packet = await react_decision_stream_v2(
+        svc=_FakeDecisionService(raw, chunk_size=7),
+        agent_name="solver.react.v2.decision.v2.strong",
+        adapters=[],
+        multi_action_mode="off",
+        user_blocks=[{"type": "text", "text": "answer"}],
+    )
+
+    assert (packet["log"] or {}).get("error") is None
+    assert packet["agent_response"]["action"] == "complete"
+    assert packet["agent_response"]["final_answer"] == "The answer already shown."
+
+
 def test_parse_react_decision_bundle_ignores_literal_channel_mentions_in_thinking():
     raw = """
 <channel:thinking>
@@ -413,6 +436,29 @@ def test_keep_and_stop_uses_streamed_answer_for_schema_rejection():
     }
     assert state["retry_decision"] is False
     assert solver._streamed_final_answer_pending == ""
+
+
+def test_keep_and_stop_uses_streamed_answer_for_empty_validated_packet():
+    solver = _solver_stub()
+    state = {"retry_decision": True}
+
+    finalized = solver._keep_and_stop_if_answer_streamed(
+        decision={},
+        streamed_state={
+            "answer_streamed": True,
+            "answer_text": "The complete answer already shown to the user.",
+        },
+        state=state,
+        code="invalid_action:",
+    )
+
+    assert finalized == {
+        "action": "complete",
+        "notes": "",
+        "tool_call": None,
+        "final_answer": "The complete answer already shown to the user.",
+    }
+    assert state["retry_decision"] is False
 
 
 def test_parse_react_decision_bundle_from_multiple_fenced_blocks_in_single_channel():

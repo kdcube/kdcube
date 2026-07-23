@@ -38,11 +38,8 @@ from kdcube_ai_app.apps.chat.sdk.skills.instructions.shared_instructions import 
     REACT_PLANNING,
     REACT_SKILL_SELECTION_GUIDE,
 )
-from kdcube_ai_app.apps.chat.sdk.skills.instructions.shared_instructions_lite import (
-    compose_lite_instruction_blocks,
-)
-from kdcube_ai_app.apps.chat.sdk.skills.instructions.instructions_extra_lite import (
-    resolve_extra_lite_item,
+from kdcube_ai_app.apps.chat.sdk.solutions.agentic_instructions import (
+    compose_instruction_body,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.layout import (
     build_tool_catalog,
@@ -62,6 +59,12 @@ AGENT_ADMIN_CUSTOMIZATION_HEADER = """
 """
 
 AGENT_ADMIN_CUSTOMIZATION_FOOTER = "[END AGENT ADMIN CUSTOMIZATION]"
+
+_CAPABILITY_INSTRUCTION_BLOCKS = {
+    "exec": {"REACT_LITE_EXEC_TOOL", "REACT_XLITE_EXEC"},
+    "rendering": {"REACT_LITE_RENDERING_TOOLS", "REACT_XLITE_DOCUMENTS_RENDERING"},
+    "web": {"REACT_LITE_WEB_TOOLS", "REACT_XLITE_WEB"},
+}
 
 
 def head_tail_preview(text: str, limit: int = 220) -> tuple[str, str]:
@@ -111,23 +114,32 @@ You are the Decision module inside a ReAct loop.
 """.strip()
 
 
-def normalize_instruction_blocks(blocks: Optional[Iterable[str]]) -> str:
-    """Resolve named instruction blocks and join literal custom blocks.
+def normalize_instruction_blocks(
+    blocks: Optional[Iterable[str]],
+    *,
+    workspace_implementation: str = "custom",
+    module_label: str = "ReAct Action Module",
+    exclude_blocks: Optional[Iterable[str]] = None,
+) -> str:
+    """Resolve ReAct config instruction items into one body (order-preserving).
 
-    Names resolve from ``shared_instructions_lite.py`` (``REACT_LITE_*``) and
-    ``instructions_extra_lite.py`` (``REACT_XLITE_*`` blocks and
-    ``xlite:<profile>`` whole-profile refs); anything else is literal text.
+    Thin adapter over the agent-neutral
+    :func:`agentic_instructions.compose_instruction_body`: it injects the ReAct
+    default/full body as the ``full`` token's provider. The shared vocabulary is
+    ``full`` | ``lite:<profile>`` | ``xlite:<profile>`` | single
+    ``REACT_LITE_*``/``REACT_XLITE_*`` blocks | literal text. The runtime
+    protocol is always prepended and the tool/skill catalogs appended by the
+    decision agent; this composes only the body between them.
     """
-    if isinstance(blocks, str):
-        blocks = [blocks]
-    resolved: list[str] = []
-    for item in blocks or []:
-        text = str(item or "").strip()
-        if not text:
-            continue
-        xlite = resolve_extra_lite_item(text)
-        resolved.append(xlite if xlite is not None else text)
-    return compose_lite_instruction_blocks(resolved)
+    return compose_instruction_body(
+        blocks,
+        workspace_implementation=workspace_implementation,
+        exclude_blocks=exclude_blocks,
+        full_body_provider=lambda: build_default_decision_instruction_body(
+            module_label=module_label,
+            workspace_implementation=workspace_implementation,
+        ),
+    )
 
 
 def build_decision_instruction_body(
@@ -136,6 +148,7 @@ def build_decision_instruction_body(
     workspace_implementation: str = "custom",
     instruction_body: Optional[str] = None,
     instruction_blocks: Optional[Iterable[str]] = None,
+    exclude_blocks: Optional[Iterable[str]] = None,
 ) -> str:
     """Return the customizable body that follows the strict protocol.
 
@@ -148,13 +161,36 @@ def build_decision_instruction_body(
     body = str(instruction_body or "").strip()
     if body:
         return body
-    block_body = normalize_instruction_blocks(instruction_blocks)
+    block_body = normalize_instruction_blocks(
+        instruction_blocks,
+        workspace_implementation=workspace_implementation,
+        module_label=module_label,
+        exclude_blocks=exclude_blocks,
+    )
     if block_body:
         return block_body
     return build_default_decision_instruction_body(
         module_label=module_label,
         workspace_implementation=workspace_implementation,
     )
+
+
+def capability_instruction_exclusions(tool_ids: Iterable[str]) -> set[str]:
+    """Instruction blocks that must not survive the effective tool selection.
+
+    Profile names such as ``xlite:workspace_exec`` are admin conveniences, not
+    authority to advertise a tool the user disabled (or the app did not wire).
+    The effective adapter catalog is the authority for capability teaching.
+    """
+    ids = {str(tool_id or "").strip() for tool_id in (tool_ids or [])}
+    excluded: set[str] = set()
+    if "exec_tools.execute_code_python" not in ids:
+        excluded.update(_CAPABILITY_INSTRUCTION_BLOCKS["exec"])
+    if not any(tool_id.startswith("rendering_tools.") for tool_id in ids):
+        excluded.update(_CAPABILITY_INSTRUCTION_BLOCKS["rendering"])
+    if not any(tool_id.startswith("web_tools.") for tool_id in ids):
+        excluded.update(_CAPABILITY_INSTRUCTION_BLOCKS["web"])
+    return excluded
 
 
 def append_agent_admin_customization(
@@ -189,6 +225,7 @@ def compose_decision_system_text(
     instruction_blocks: Optional[Iterable[str]] = None,
     include_tool_catalog: bool = True,
     include_skill_gallery: bool = True,
+    tool_catalog_detail: str = "full",
     subagent_role: Optional[str] = None,
 ) -> str:
     """Compose a full ReAct decision system prompt.
@@ -196,24 +233,30 @@ def compose_decision_system_text(
     ``protocol`` is intentionally explicit and required. It is the non-
     customizable part: the runtime parser depends on it.
     """
+    infra_adapters = infra_adapters or []
+    adapters = adapters or []
+    availability_tool_catalog = build_tool_catalog(
+        adapters + infra_adapters,
+        exclude_tool_ids=[],
+    )
+    react_tool_catalog = get_react_tools_catalog(
+        subagent_role=subagent_role,
+    )
+    available_tool_ids = {
+        str(item.get("id") or "").strip()
+        for item in availability_tool_catalog + react_tool_catalog
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    }
     body = build_decision_instruction_body(
         module_label=module_label,
         workspace_implementation=workspace_implementation,
         instruction_body=instruction_body,
         instruction_blocks=instruction_blocks,
+        exclude_blocks=capability_instruction_exclusions(available_tool_ids),
     )
     parts = [str(protocol or "").strip(), body.strip()]
 
     if include_tool_catalog or include_skill_gallery:
-        infra_adapters = infra_adapters or []
-        adapters = adapters or []
-        availability_tool_catalog = build_tool_catalog(
-            adapters + infra_adapters,
-            exclude_tool_ids=[],
-        )
-        react_tool_catalog = get_react_tools_catalog(
-            subagent_role=subagent_role,
-        )
         tool_catalog = availability_tool_catalog if include_tool_catalog else []
         parts.append(
             build_instruction_catalog_block(
@@ -222,6 +265,7 @@ def compose_decision_system_text(
                 react_tools=react_tool_catalog if include_tool_catalog else [],
                 include_skill_gallery=include_skill_gallery,
                 skill_tool_catalog=availability_tool_catalog + react_tool_catalog,
+                tool_catalog_detail=tool_catalog_detail,
             ).strip()
         )
 
