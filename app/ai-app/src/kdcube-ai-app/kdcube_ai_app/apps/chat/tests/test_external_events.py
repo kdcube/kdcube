@@ -456,6 +456,71 @@ async def test_external_event_live_owner_defers_promotion_until_owner_releases()
 
 
 @pytest.mark.asyncio
+async def test_active_turn_control_is_never_promoted_and_does_not_block_following_work():
+    redis = _FakeRedis()
+    source = build_conversation_external_event_source(
+        redis=redis,
+        tenant="t1",
+        project="p1",
+        conversation_id="conv1",
+    )
+
+    steer_payload = _task_payload(task_id="task-steer", turn_id="turn-queued", text="")
+    steer_payload["request"]["external_events"] = [
+        {"type": "event.user.steer", "reactive": True, "payload": {"event": {"text": ""}}}
+    ]
+    steer = await source.publish(
+        kind="external_event",
+        explicit=True,
+        active_turn_id_at_ingress="turn-active",
+        source="ingress.telegram",
+        payload={"event": {"type": "event.user.steer", "reactive": True}},
+        task_payload=steer_payload,
+    )
+    lease = await source.acquire_owner(turn_id="turn-active", bundle_id="bundle.demo", listener_id="listener-1")
+
+    assert await source.claim_next_promotable(claimant_id="proc-1", min_idle_ms=1) is None
+    stored = await source.get_event(steer.message_id)
+    assert stored is not None
+    assert stored.promoted_at is None
+    assert stored.consumed_at is None
+
+    assert await source.release_owner(listener_id="listener-1", lease_token=lease.lease_token) is True
+    assert await source.claim_next_promotable(claimant_id="proc-2", min_idle_ms=1) is None
+
+    followup = await source.publish(
+        kind="external_event",
+        source="ingress.sse",
+        text="continue",
+        payload={"event": {"type": "event.user.followup", "reactive": True}},
+        task_payload=_task_payload(task_id="task-followup", turn_id="turn-next", text="continue"),
+    )
+    claimed = await source.claim_next_promotable(claimant_id="proc-3", min_idle_ms=1)
+    assert claimed is not None
+    assert claimed.message_id == followup.message_id
+
+
+@pytest.mark.asyncio
+async def test_mark_consumed_event_terminalizes_only_the_named_event():
+    redis = _FakeRedis()
+    source = build_conversation_external_event_source(
+        redis=redis,
+        tenant="t1",
+        project="p1",
+        conversation_id="conv1",
+    )
+    first = await source.publish(kind="external_event", source="test", text="first")
+    second = await source.publish(kind="external_event", source="test", text="second")
+
+    await source.mark_consumed_event(message_id=second.message_id, turn_id="turn-target")
+
+    first_stored = await source.get_event(first.message_id)
+    second_stored = await source.get_event(second.message_id)
+    assert first_stored is not None and first_stored.consumed_at is None
+    assert second_stored is not None and second_stored.consumed_by_turn_id == "turn-target"
+
+
+@pytest.mark.asyncio
 async def test_external_event_not_consumed_is_promoted_once():
     redis = _FakeRedis()
     source = build_conversation_external_event_source(

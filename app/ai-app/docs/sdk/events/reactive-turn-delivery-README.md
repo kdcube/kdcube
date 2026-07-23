@@ -151,7 +151,8 @@ if already_released and own_accounted:
 # otherwise a run-to-completion turn left the reservation dangling:
 release the consumer (→ none)
 mark the turn's own event consumed        # exactly-once
-re-wake any reactive event that landed during the turn  # queued followup → next turn
+re-wake promotable reactive work          # queued followup → next turn
+expire an unconsumed event.user.steer     # active-turn control, never future work
 ```
 
 The `already_released and own_accounted` state is *exactly* what a ReAct turn's
@@ -173,6 +174,10 @@ change what the composer *offers*, not what is delivered:
   **promoted to the next turn** by the finalize re-wake — it is not folded into
   the running turn. This is the "Queue for next turn" composer state. No agent
   code is required for the promotion; the door does it.
+
+`event.user.steer` is never included in that promotion. It controls only the
+turn that was active when ingress accepted it; if that turn does not consume
+the control before closing, the control expires.
 
 An agent that *can* consume mid-turn integrates the ReAct-style handler
 (open/close, `mark_consumed_up_to`) inside its own `execute_core`; see the recipe.

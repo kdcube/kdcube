@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+from kdcube_ai_app.apps.chat.sdk.events.semantics import event_semantic_type
 from kdcube_ai_app.apps.chat.sdk.solutions.react.events.core import event_source_id_for_external_kind
 
 
@@ -61,14 +62,12 @@ def recover_semantic_event_type(type_norm: Any, event: Any) -> str:
     norm = str(type_norm or "").strip().lower()
     if norm not in {"external_event", "external", ""}:
         return norm
-    payload = getattr(event, "payload", None)
-    accepted = payload.get("event") if isinstance(payload, dict) else None
-    nested = str((accepted or {}).get("type") or "").strip().lower() if isinstance(accepted, dict) else ""
-    if "steer" in nested:
+    semantic = event_semantic_type(event, fallback=norm)
+    if semantic == "event.user.steer":
         return "steer"
-    if "followup" in nested:
+    if semantic == "event.user.followup":
         return "followup"
-    return norm
+    return semantic
 
 
 def compute_reactive_iteration_credit_cap(*, runtime_ctx: Any, base_max_iterations: int) -> int:

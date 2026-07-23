@@ -12,6 +12,8 @@ import uuid
 from dataclasses import asdict, dataclass
 from typing import Any, Callable, Optional
 
+from kdcube_ai_app.apps.chat.sdk.events.semantics import event_is_active_turn_control
+
 
 _STATE_TTL_SECONDS = 7 * 24 * 3600
 _LOCK_TTL_SECONDS = 10
@@ -220,6 +222,8 @@ def wake_ignore_reason(event: Any, state: "EventLaneState") -> str:
         return "event_already_promoted"
     if getattr(event, "failed_at", None) is not None:
         return "event_failed"
+    if event_is_active_turn_control(event):
+        return "active_turn_control_not_promotable"
     if timestamp_lte(event_timestamp(event), state.last_processed_reactive_event_timestamp):
         return "wake_already_processed"
     if state.event_was_processed(event):

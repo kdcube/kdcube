@@ -33,6 +33,7 @@ from kdcube_ai_app.apps.chat.sdk.event_identity import (
     safe_event_object_path,
 )
 from kdcube_ai_app.apps.chat.sdk.events.event_bus import EventLaneWakePublisher
+from kdcube_ai_app.apps.chat.sdk.events.semantics import event_is_active_turn_control
 from kdcube_ai_app.infra.accounting.envelope import build_envelope_from_session
 from kdcube_ai_app.infra.gateway.rate_limiter import RateLimitError
 from kdcube_ai_app.infra.gateway.backpressure import BackpressureError
@@ -783,6 +784,14 @@ async def process_chat_message(
             error='Missing "external_events"',
             http_status=400,
         )
+    active_turn_control = any(event_is_active_turn_control(event) for event in external_events)
+    if active_turn_control:
+        # Active controls are live-lane signals even if a caller omitted the
+        # reactive flag. They are never ordinary queued conversation work.
+        for event in external_events:
+            if event_is_active_turn_control(event):
+                event["reactive"] = True
+        message_data["external_events"] = external_events
     first_reactive_or_first_event = _first_reactive_or_first_event(external_events)
     external_event_reactive = any(_external_event_is_reactive(event) for event in external_events)
     conversation_id = str(message_data.get("conversation_id") or "").strip()
@@ -1230,7 +1239,94 @@ async def process_chat_message(
 
         return None
 
-    if has_external_events and not external_event_reactive:
+    active_control_state_result: Optional[Dict[str, Any]] = None
+    if active_turn_control:
+        try:
+            current_state = await app.state.conversation_browser.get_conversation_state(
+                user_id=payload.user.user_id,
+                conversation_id=conversation_id,
+                bundle_id=payload.routing.bundle_id,
+                missing_as_idle=True,
+            )
+        except Exception as e:
+            logger.exception(
+                "active-turn control state lookup failed conversation=%s target_turn=%s",
+                conversation_id,
+                target_turn_id,
+            )
+            err = f"Conversation state lookup failed: {e}"
+            await chat_comm.emit_error(
+                svc,
+                conv,
+                error=err,
+                target_sid=ingress.stream_id,
+                session_id=session.session_id,
+            )
+            return IngressResult(
+                ok=False,
+                error_type="conversation_state_lookup_error",
+                error=err,
+                http_status=503,
+                reason="active_turn_control_state_unavailable",
+                is_continuation=True,
+                target_turn_id=target_turn_id,
+            )
+
+        current_state = current_state if isinstance(current_state, dict) else {}
+        state_name = str(current_state.get("state") or "idle").strip().lower()
+        state_meta = current_state.get("meta") if isinstance(current_state.get("meta"), dict) else {}
+        active_turn_id = str(state_meta.get("last_turn_id") or "").strip()
+        if state_name != "in_progress" or not active_turn_id:
+            logger.info(
+                "[ingress.external] ignored active-turn control without active turn "
+                "conversation=%s state=%s target_turn=%s",
+                conversation_id,
+                state_name,
+                target_turn_id,
+            )
+            return IngressResult(
+                ok=True,
+                task_id=task_id,
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                session_id=session.session_id,
+                user_type=session.user_type.value,
+                reason="active_turn_control_no_active_turn",
+                is_continuation=True,
+                active_turn_id=None,
+                target_turn_id=target_turn_id,
+                queued_turn_id=None,
+            )
+        if target_turn_id and target_turn_id != active_turn_id:
+            logger.info(
+                "[ingress.external] ignored stale active-turn control "
+                "conversation=%s active_turn=%s target_turn=%s",
+                conversation_id,
+                active_turn_id,
+                target_turn_id,
+            )
+            return IngressResult(
+                ok=True,
+                task_id=task_id,
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                session_id=session.session_id,
+                user_type=session.user_type.value,
+                reason="active_turn_control_target_mismatch",
+                is_continuation=True,
+                active_turn_id=active_turn_id,
+                target_turn_id=target_turn_id,
+                queued_turn_id=None,
+            )
+        active_control_state_result = {
+            "ok": False,
+            "error_type": "conversation_busy",
+            "error": "Conversation has an active turn.",
+            "updated_at": current_state.get("updated_at") or _iso(),
+            "current_turn_id": active_turn_id,
+        }
+
+    if has_external_events and not external_event_reactive and not active_turn_control:
         try:
             conv_exists = await app.state.conversation_browser.conversation_exists(
                 user_id=payload.user.user_id,
@@ -1400,36 +1496,40 @@ async def process_chat_message(
             )
 
     # --- Conversation lock + state ---
-    try:
-        conv_exists = await app.state.conversation_browser.conversation_exists(
-            user_id=payload.user.user_id,
-            conversation_id=conversation_id,
-            bundle_id=payload.routing.bundle_id,
-        )
-
-        set_res = await app.state.conversation_browser.set_conversation_state(
-            tenant=payload.actor.tenant_id,
-            project=payload.actor.project_id,
-            user_id=payload.user.user_id,
-            conversation_id=payload.routing.conversation_id,
-            new_state="in_progress",
-            by_instance=ingress.instance_id,
-            request_id=request_id,
-            last_turn_id=payload.routing.turn_id,
-            require_not_in_progress=True,
-            user_type=payload.user.user_type,
-            bundle_id=payload.routing.bundle_id,
-        )
-    except Exception as e:
-        conv_state_update_error = f"conversation state update failed: {e}"
-        logger.error(conv_state_update_error)
+    if active_control_state_result is not None:
         conv_exists = True
-        set_res = {"ok": False,
-                   "error": conv_state_update_error,
-                   "updated_at": _iso(),
-                   "current_turn_id": turn_id,
-                   "error_type": "conversation_state_update_error"
-                   }
+        set_res = active_control_state_result
+    else:
+        try:
+            conv_exists = await app.state.conversation_browser.conversation_exists(
+                user_id=payload.user.user_id,
+                conversation_id=conversation_id,
+                bundle_id=payload.routing.bundle_id,
+            )
+
+            set_res = await app.state.conversation_browser.set_conversation_state(
+                tenant=payload.actor.tenant_id,
+                project=payload.actor.project_id,
+                user_id=payload.user.user_id,
+                conversation_id=payload.routing.conversation_id,
+                new_state="in_progress",
+                by_instance=ingress.instance_id,
+                request_id=request_id,
+                last_turn_id=payload.routing.turn_id,
+                require_not_in_progress=True,
+                user_type=payload.user.user_type,
+                bundle_id=payload.routing.bundle_id,
+            )
+        except Exception as e:
+            conv_state_update_error = f"conversation state update failed: {e}"
+            logger.error(conv_state_update_error)
+            conv_exists = True
+            set_res = {"ok": False,
+                       "error": conv_state_update_error,
+                       "updated_at": _iso(),
+                       "current_turn_id": turn_id,
+                       "error_type": "conversation_state_update_error"
+                       }
 
     if not set_res.get("ok", True):
         active_turn = set_res.get("current_turn_id")

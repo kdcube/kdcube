@@ -201,14 +201,14 @@ async def test_telegram_submit_react_turn_sends_external_events(tmp_path, monkey
 
 
 @pytest.mark.asyncio
-async def test_telegram_handle_webhook_submit_path_does_not_take_conversation_lock(tmp_path, monkeypatch):
+async def test_telegram_handle_webhook_uses_short_admission_lock_not_execution_lock(tmp_path, monkeypatch):
     """A mid-turn followup/steer must reach chat ingress while the turn is live.
 
     run_with_queued_telegram_delivery holds the per-conversation lock for the whole
     turn. If handle_webhook took the same lock on the submit path, the submit would
     block until the turn finished; by then ingress no longer sees the conversation as
     busy, so the event runs as a fresh turn instead of folding into the live one. The
-    submit path must therefore never request the conversation lock.
+    submit path must therefore use only its short admission lock.
     """
     from kdcube_ai_app.apps.chat.ingress.ingress_core import IngressResult
     from kdcube_ai_app.apps.chat.sdk.integrations.telegram import TelegramUserAdminStorage
@@ -264,13 +264,20 @@ async def test_telegram_handle_webhook_submit_path_does_not_take_conversation_lo
     )
 
     lock_requests: list[str] = []
+    admission_lock_requests: list[str] = []
     real_lock = user_admin._telegram_conversation_lock
+    real_admission_lock = user_admin._telegram_admission_lock
 
     def _spy_lock(key):
         lock_requests.append(key)
         return real_lock(key)
 
+    def _spy_admission_lock(key):
+        admission_lock_requests.append(key)
+        return real_admission_lock(key)
+
     monkeypatch.setattr(user_admin, "_telegram_conversation_lock", _spy_lock)
+    monkeypatch.setattr(user_admin, "_telegram_admission_lock", _spy_admission_lock)
 
     result = await asyncio.wait_for(
         user_admin.handle_webhook(
@@ -293,6 +300,178 @@ async def test_telegram_handle_webhook_submit_path_does_not_take_conversation_lo
     # that re-wraps submit in the lock would record a request here (and, against a live
     # turn holding it, deadlock).
     assert lock_requests == []
+    assert len(admission_lock_requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_telegram_admission_lock_preserves_update_order_during_attachment_hydration(tmp_path, monkeypatch):
+    from kdcube_ai_app.apps.chat.ingress.ingress_core import IngressResult
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram import TelegramUserAdminStorage
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram import user_admin
+
+    storage = TelegramUserAdminStorage(tmp_path)
+    storage.upsert_user(
+        telegram_user_id="2002",
+        telegram_chat_id="1001",
+        telegram_username="elena",
+        kdcube_user_id="user-a",
+        role="registered",
+        conversation_id="conv-main",
+    )
+    user_admin.configure_telegram_user_admin(
+        storage_factory=lambda entrypoint: storage,
+        storage_root_or_error=lambda entrypoint: tmp_path,
+        bundle_id="test.telegram-ordered-admission",
+    )
+
+    async def _authority(_entrypoint=None, **kwargs):
+        return {
+            "actor_user_id": kwargs["actor_user_id"],
+            "storage_user_id": kwargs["actor_user_id"],
+            "economics_user_id": "user-a",
+            "platform_user_id": "user-a",
+            "platform_roles": ["kdcube:role:registered"],
+            "platform_permissions": ["chat:run"],
+            "identity_provider": "telegram",
+            "platform_authority_resolved": True,
+        }
+
+    first_hydration_started = asyncio.Event()
+    release_first_hydration = asyncio.Event()
+    submit_order: list[str] = []
+
+    async def _hydrate(*, attachments, **kwargs):
+        del kwargs
+        first_hydration_started.set()
+        await release_first_hydration.wait()
+        return list(attachments)
+
+    async def _bot_token(_entrypoint=None, *, integration_id=""):
+        del integration_id
+        return "telegram-token"
+
+    async def _submit(**kwargs):
+        submit_order.append(str(kwargs["ingress"].metadata["update_id"]))
+        return IngressResult(
+            ok=True,
+            conversation_id=kwargs["message_data"]["conversation_id"],
+            turn_id=kwargs["message_data"]["turn_id"],
+            session_id="conv-main",
+            user_type="registered",
+            reason="queued",
+            is_continuation=False,
+        )
+
+    monkeypatch.setattr(user_admin, "_telegram_platform_authority", _authority)
+    monkeypatch.setattr(user_admin, "hydrate_telegram_attachments", _hydrate)
+    monkeypatch.setattr(user_admin, "_bot_token_value", _bot_token)
+
+    entrypoint = SimpleNamespace(
+        BUNDLE_ID="test.telegram-ordered-admission",
+        chat_submitter=SimpleNamespace(submit=_submit),
+        comm_context=SimpleNamespace(
+            actor=SimpleNamespace(tenant_id="tenant-a", project_id="project-a"),
+            meta=SimpleNamespace(instance_id="telegram-test"),
+        ),
+    )
+
+    first = asyncio.create_task(user_admin.handle_webhook(
+        entrypoint,
+        update_id=101,
+        message={
+            "message_id": 81,
+            "chat": {"id": 1001, "type": "private"},
+            "from": {"id": 2002, "username": "elena"},
+            "document": {"file_id": "doc-1", "file_name": "first.txt", "mime_type": "text/plain"},
+        },
+    ))
+    await first_hydration_started.wait()
+    second = asyncio.create_task(user_admin.handle_webhook(
+        entrypoint,
+        update_id=102,
+        message={
+            "message_id": 82,
+            "chat": {"id": 1001, "type": "private"},
+            "from": {"id": 2002, "username": "elena"},
+            "text": "/stop",
+        },
+    ))
+    await asyncio.sleep(0)
+    assert submit_order == []
+
+    release_first_hydration.set()
+    await asyncio.gather(first, second)
+
+    assert submit_order == ["101", "102"]
+
+
+@pytest.mark.asyncio
+async def test_telegram_stop_without_active_turn_is_reported_as_control_noop(tmp_path, monkeypatch):
+    from kdcube_ai_app.apps.chat.ingress.ingress_core import IngressResult
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram import TelegramUserAdminStorage
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram import user_admin
+
+    storage = TelegramUserAdminStorage(tmp_path)
+    storage.upsert_user(
+        telegram_user_id="2002",
+        telegram_chat_id="1001",
+        telegram_username="elena",
+        kdcube_user_id="user-a",
+        role="registered",
+        conversation_id="conv-main",
+    )
+    user_admin.configure_telegram_user_admin(
+        storage_factory=lambda entrypoint: storage,
+        storage_root_or_error=lambda entrypoint: tmp_path,
+        bundle_id="test.telegram-stop-noop",
+    )
+
+    async def _authority(_entrypoint=None, **kwargs):
+        return {
+            "actor_user_id": kwargs["actor_user_id"],
+            "storage_user_id": kwargs["actor_user_id"],
+            "economics_user_id": "user-a",
+            "platform_user_id": "user-a",
+            "platform_roles": ["kdcube:role:registered"],
+            "platform_permissions": ["chat:run"],
+            "identity_provider": "telegram",
+            "platform_authority_resolved": True,
+        }
+
+    async def _submit(**kwargs):
+        return IngressResult(
+            ok=True,
+            conversation_id=kwargs["message_data"]["conversation_id"],
+            turn_id=kwargs["message_data"]["turn_id"],
+            session_id="conv-main",
+            user_type="registered",
+            reason="active_turn_control_no_active_turn",
+            is_continuation=True,
+        )
+
+    monkeypatch.setattr(user_admin, "_telegram_platform_authority", _authority)
+    entrypoint = SimpleNamespace(
+        BUNDLE_ID="test.telegram-stop-noop",
+        chat_submitter=SimpleNamespace(submit=_submit),
+        comm_context=SimpleNamespace(
+            actor=SimpleNamespace(tenant_id="tenant-a", project_id="project-a"),
+            meta=SimpleNamespace(instance_id="telegram-test"),
+        ),
+    )
+
+    result = await user_admin.handle_webhook(
+        entrypoint,
+        update_id=103,
+        message={
+            "message_id": 83,
+            "chat": {"id": 1001, "type": "private"},
+            "from": {"id": 2002, "username": "elena"},
+            "text": "/stop",
+        },
+    )
+
+    assert result["accepted"] is True
+    assert result["stage"] == "telegram-control-noop"
 
 
 def test_telegram_external_events_allows_empty_steer_but_not_empty_prompt_or_followup():

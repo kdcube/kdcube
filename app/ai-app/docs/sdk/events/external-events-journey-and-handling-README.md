@@ -645,8 +645,15 @@ Promotion now queues an `ExternalEventLaneWakeup`, not a copy of the request
 body. The processor resolves that wakeup back to the lane event before invoking
 the bundle.
 
-`steer` is not promoted after the active turn expires; it is a live control
-event.
+`event.user.steer` is an active-turn control, not queued conversation work.
+Ingress accepts it only while the conversation has an active turn and stamps
+the server-observed turn id onto the retained event. With no active turn it is
+an acknowledged no-op. A stale client target is also a no-op.
+
+The event remains `reactive=true` because the wake must notify the live lane.
+That flag does not make it promotable: proc acknowledges its wake without
+starting a turn, close-time handoff terminalizes an unconsumed steer, and a
+later turn rejects a steer fenced to an older turn.
 
 ## Non-Reactive Idle Events
 

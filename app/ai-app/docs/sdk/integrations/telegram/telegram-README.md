@@ -502,6 +502,12 @@ anything else     -> event.user.prompt
 the steer both stops the turn and redirects it. Every other command needs text
 to produce an event.
 
+The command does not invoke Telegram-specific cancellation. It emits the exact
+protocol event `event.user.steer` through `ChatIngressSubmitter`, just like the
+classic chat client. The shared ingress binds it to the active turn. If the
+conversation is idle, the command is acknowledged as a no-op and no turn is
+queued; an unconsumed steer is never promoted into future work.
+
 The SDK maps the command into the event type before calling
 `ChatIngressSubmitter.submit(...)`. Do not send a top-level text scalar as the
 authoritative request. The authoritative request is the plural

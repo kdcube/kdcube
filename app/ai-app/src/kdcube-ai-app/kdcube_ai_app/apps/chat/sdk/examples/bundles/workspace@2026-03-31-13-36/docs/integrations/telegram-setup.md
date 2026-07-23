@@ -109,6 +109,10 @@ Test:
 3. Use the Connect tab to link this Telegram account to the signed-in KDCube account.
 4. Return to Telegram and send another message.
 5. Confirm the message runs as telegram_<id> with projected KDCube authority.
+6. While that turn is streaming, send `/stop`; confirm the same turn stops and
+   no additional turn is created.
+7. Send `/stop` while the conversation is idle; confirm it is acknowledged and
+   no turn starts.
 ```
 
 Visible Mini App surfaces:

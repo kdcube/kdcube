@@ -32,9 +32,11 @@ bundle telegram_webhook(...)
   -> telegram_user_admin.handle_webhook(entrypoint, **update)
        - summarize Telegram update
        - claim update_id for idempotency
+       - acquire short per-conversation admission lock
        - hydrate Telegram files when needed
        - resolve registered/admin Telegram user
-       - call submit_react_turn(...)   (no per-conversation lock)
+       - call submit_react_turn(...)
+       - release admission lock before turn execution
             |
             v
             ChatIngressSubmitter.submit(...)
@@ -63,12 +65,18 @@ where `entrypoint.chat_submitter.submit` is not available or the SDK cannot
 submit a registered Telegram user to chat ingress. Reference bundles should use
 the submitter path.
 
-The submit path takes no per-conversation lock: chat ingress serializes turn
-admission, and a message that arrives while a turn is running is admitted as a
-followup/steer continuation into that turn. The inline fallback and
-`run_with_queued_telegram_delivery(...)` hold a per-conversation async lock
-across turn execution so concurrent turns of one conversation do not stream or
-finalize over each other.
+The submit path uses a short per-conversation admission lock around attachment
+hydration and `ChatIngressSubmitter.submit(...)`. This preserves Telegram update
+order without waiting for the current turn to finish. The separate execution
+lock belongs to the inline fallback and
+`run_with_queued_telegram_delivery(...)`; it prevents concurrent turns from
+streaming or finalizing over each other, but it never delays `/stop` admission.
+
+`/stop` is normalized to the same `event.user.steer` event used by classic chat
+and passes through the same shared ingress and Redis lane. It is accepted only
+for the currently active turn. With no active turn it is a successful no-op; it
+never queues a new turn. The inline fallback has no shared lane, so it does not
+attempt to emulate steer by starting an inline turn.
 
 The Telegram payload can contain Telegram-specific ids and transport metadata.
 The effective ReAct runtime turn id is still the chat ingress
