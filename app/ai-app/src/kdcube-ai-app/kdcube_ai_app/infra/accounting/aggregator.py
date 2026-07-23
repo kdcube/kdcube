@@ -109,11 +109,13 @@ class AccountingAggregator:
             logger.debug("list_dir failed for %s", path, exc_info=True)
             return []
 
-    async def _read_events_bounded(self, paths: List[str]) -> List[Dict[str, Any]]:
-        """Read + parse raw event files with bounded concurrency, preserving the
-        input order. Unreadable/unparseable files are skipped (logged at debug),
-        matching the previous sequential behavior."""
+    async def _iter_events_bounded(self, paths: List[str]):
+        """Yield parsed raw events, reading files with bounded concurrency in
+        chunks so memory stays bounded regardless of the day's event count.
+        Input order is preserved; unreadable/unparseable files are skipped
+        (logged at debug), matching the previous sequential behavior."""
         sem = asyncio.Semaphore(self.read_concurrency)
+        chunk_size = max(self.read_concurrency * 8, 256)
 
         async def _one(p: str) -> Optional[Dict[str, Any]]:
             async with sem:
@@ -124,8 +126,12 @@ class AccountingAggregator:
                     logger.debug("Skipping unreadable event %s", p, exc_info=True)
                     return None
 
-        results = await asyncio.gather(*(_one(p) for p in paths))
-        return [ev for ev in results if ev is not None]
+        for start in range(0, len(paths), chunk_size):
+            chunk = paths[start:start + chunk_size]
+            results = await asyncio.gather(*(_one(p) for p in chunk))
+            for ev in results:
+                if ev is not None:
+                    yield ev
 
     async def _iter_raw_event_paths_for_day(
         self,
@@ -332,8 +338,7 @@ class AccountingAggregator:
         app_rollups: Dict[str, Dict[Tuple[str, str, str], Dict[str, int]]] = {}
         app_event_counts: Dict[str, int] = {}
 
-        events = await self._read_events_bounded(paths)
-        for ev in events:
+        async for ev in self._iter_events_bounded(paths):
             usage = _extract_usage(ev)
             # Even if usage is missing, we still count the event
             event_count_daily += 1
