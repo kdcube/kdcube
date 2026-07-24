@@ -2085,6 +2085,12 @@ a { color: inherit; }
   color: var(--muted);
 }
 .k-menu-divider { margin: 6px 4px; border-top: 1px solid var(--line-soft); }
+.k-menu-subtitle {
+  padding: 4px 10px 2px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
 .k-menu-row { display: flex; align-items: stretch; gap: 2px; }
 /* Consent-banner spotlight: the tools a blocked capability needs, highlighted
    when the user chooses to turn them off instead of granting access. */

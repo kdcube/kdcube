@@ -434,6 +434,74 @@ function InstructionsSection({ vm }: ComposerMenuSectionContext) {
   )
 }
 
+/** Human copy for the presentation facets. Unknown facets render their raw
+ *  name/value — the server may declare facets this build predates. */
+const PRESENTATION_FACET_COPY: Record<string, { label: string; values: Record<string, string> }> = {
+  tool_catalog: {
+    label: 'Tool catalog',
+    values: {
+      full: 'Full descriptions with examples',
+      compact: 'Exact tool ids and parameters, short form',
+    },
+  },
+  skills_form: {
+    label: 'Skill instructions',
+    values: {
+      full: 'Complete skill guides',
+      compact: 'Condensed skill guides',
+    },
+  },
+}
+
+/** Radio-style value pick per declared presentation facet (how prompt
+ *  surfaces render — decoupled from WHICH instruction set is picked). The
+ *  active value is the user's pick, else the admin default (tagged);
+ *  choosing the default clears that facet's pick. Hidden when the agent
+ *  declares no facets. */
+function PresentationSection({ vm }: ComposerMenuSectionContext) {
+  const { inventory, presentation: picks, toggle, pending } = vm.capabilities
+  const facets = inventory?.presentation_facets ?? null
+  const names = facets ? Object.keys(facets) : []
+  if (!names.length) return null
+  const pendingPresentation = (pending && pending.presentation) || null
+  return (
+    <div>
+      <SectionTitle>Presentation</SectionTitle>
+      {names.map((facet) => {
+        const block = facets![facet]
+        const copy = PRESENTATION_FACET_COPY[facet]
+        const picked = picks?.[facet] ?? null
+        return (
+          <div key={facet}>
+            <div className="k-menu-subtitle">{copy?.label ?? facet}</div>
+            {(block.options ?? []).map((value) => {
+              const isDefaultValue = block.default === value
+              const active = picked ? picked === value : isDefaultValue
+              return (
+                <MenuRow
+                  key={`${facet}:${value}`}
+                  label={
+                    <>
+                      {copy?.values?.[value] ?? value}
+                      {isDefaultValue ? <span className="k-menu-tag">default</span> : null}
+                      {pendingPresentation?.[facet] === value ? <PendingTag /> : null}
+                    </>
+                  }
+                  checked={active ? 'on' : 'off'}
+                  onToggle={() => {
+                    if (active) return
+                    toggle({ presentation: { [facet]: value } })
+                  }}
+                />
+              )
+            })}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function SkillsSection({ inventory, disabled, toggle }: CapabilityRowsProps) {
   if (!inventory.skills.length) return null
   return (
@@ -1046,6 +1114,14 @@ function builtInSections(namespaceStyles: NamespaceStyleMap): ComposerMenuSectio
       render: (ctx: ComposerMenuSectionContext) =>
         ctx.vm.capabilities.inventory?.instruction_profiles?.options?.length
           ? <InstructionsSection {...ctx} />
+          : null,
+    },
+    {
+      id: 'presentation',
+      order: 8,
+      render: (ctx: ComposerMenuSectionContext) =>
+        Object.keys(ctx.vm.capabilities.inventory?.presentation_facets ?? {}).length
+          ? <PresentationSection {...ctx} />
           : null,
     },
     capabilitySection('skills', 10, (inv) => inv.skills.length > 0, SkillsSection),

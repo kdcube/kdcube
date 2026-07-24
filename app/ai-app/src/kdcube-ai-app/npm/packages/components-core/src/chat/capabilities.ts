@@ -211,6 +211,16 @@ export interface AgentInstructionProfiles {
   default?: string | null
 }
 
+/** One presentation facet's inventory: the pickable values + the admin default. */
+export interface AgentPresentationFacet {
+  options: string[]
+  default: string
+}
+
+/** The declared presentation facets (how prompt surfaces render — e.g.
+ *  `tool_catalog`, `skills_form`), keyed by facet name; absent = hidden. */
+export type AgentPresentationFacets = Record<string, AgentPresentationFacet>
+
 /** The user's single model pick (applies to the strong decision role). */
 export interface AgentModelPick {
   provider: string
@@ -238,6 +248,7 @@ export interface AgentSelectionPending {
   disabled?: AgentSelectionPatch
   model?: AgentModelPick | null
   instructions?: string | null
+  presentation?: Record<string, string> | null
   apply: 'next_conversation' | 'when_cold'
   since_conversation_id?: string
   created_at?: string
@@ -264,6 +275,8 @@ export interface AgentCapabilitiesInventory {
   conversation?: AgentConversationCaps | null
   /** Admin-declared instruction-set options; absent = the section is hidden. */
   instruction_profiles?: AgentInstructionProfiles | null
+  /** Declared presentation facets (tool catalog / skills form); absent = hidden. */
+  presentation_facets?: AgentPresentationFacets | null
 }
 
 /** The saved deny-list. Absent key/entry = enabled (full configured set). */
@@ -301,6 +314,9 @@ export interface AgentSelectionPatch {
    *  sets it, `null` clears back to the declared default; omitted keeps the
    *  stored pick. */
   instructions?: string | null
+  /** Presentation-facet PICKS: a facet map merges the named facets, `null`
+   *  clears every facet back to admin defaults; omitted keeps stored picks. */
+  presentation?: Record<string, string> | null
 }
 
 export type AgentCapabilitiesLoadStatus = 'idle' | 'loading' | 'ready' | 'error'
@@ -316,6 +332,8 @@ export interface AgentCapabilitiesState {
   model: AgentModelPick | null
   /** The user's instruction-profile pick; null = the declared default runs. */
   instructions: string | null
+  /** The user's presentation-facet picks; null = admin defaults render. */
+  presentation: Record<string, string> | null
   /** Effective cold-cache policy (user-held over admin default) + bounds. */
   cachePolicy: AgentCachePolicy | null
   /** A deferred change awaiting its trigger (badged in the menu). */
@@ -333,6 +351,7 @@ export const initialCapabilitiesState: AgentCapabilitiesState = {
   inventory: null,
   disabled: {},
   instructions: null,
+  presentation: null,
   model: null,
   cachePolicy: null,
   pending: null,
@@ -410,6 +429,11 @@ export function mergeSelectionPatches(
   else if (base.model !== undefined) out.model = base.model
   if (next.instructions !== undefined) out.instructions = next.instructions
   else if (base.instructions !== undefined) out.instructions = base.instructions
+  if (next.presentation !== undefined) {
+    out.presentation = next.presentation === null
+      ? null
+      : { ...(base.presentation ?? {}), ...next.presentation }
+  } else if (base.presentation !== undefined) out.presentation = base.presentation
   return out
 }
 

@@ -430,6 +430,7 @@ export interface AgentCapabilitiesResponse {
     disabled?: AgentSelectionDisabled
     model?: AgentModelPick | null
     instructions?: string | null
+    presentation?: Record<string, string> | null
     cache_policy?: Record<string, string>
     pending?: AgentSelectionPending | null
   }
@@ -446,6 +447,7 @@ export interface AgentSelectionUpdateResponse {
     disabled?: AgentSelectionDisabled
     model?: AgentModelPick | null
     instructions?: string | null
+    presentation?: Record<string, string> | null
     cache_policy?: Record<string, string>
     pending?: AgentSelectionPending | null
     updated_at?: string
@@ -504,7 +506,7 @@ export async function submitAgentSelectionUpdate(
   options: AgentSelectionWriteOptions = {},
 ): Promise<AgentSelectionUpdateResponse> {
   const { tenant, project } = requireScope(runtime)
-  const { model, instructions, ...disabled } = patch
+  const { model, instructions, presentation, ...disabled } = patch
   const apply = options.apply && options.apply !== 'now' ? options.apply : undefined
   const response = await fetch(operationsUrl(runtime, 'agent_selection_update', runtime.bundleId, tenant, project), {
     method: 'POST',
@@ -516,6 +518,7 @@ export async function submitAgentSelectionUpdate(
         disabled,
         ...(model !== undefined ? { model } : {}),
         ...(instructions !== undefined ? { instructions } : {}),
+        ...(presentation !== undefined ? { presentation } : {}),
         ...(apply ? { apply } : {}),
         ...(options.conversationId ? { conversation_id: options.conversationId } : {}),
         ...(options.cachePolicy ? { cache_policy: options.cachePolicy } : {}),

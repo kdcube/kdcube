@@ -391,6 +391,7 @@ const slice = createSlice({
         disabled: AgentSelectionDisabled
         model?: AgentModelPick | null
         instructions?: string | null
+        presentation?: Record<string, string> | null
         cachePolicy?: AgentCachePolicy | null
         pending?: AgentSelectionPending | null
       }>,
@@ -402,6 +403,7 @@ const slice = createSlice({
       state.capabilities.disabled = action.payload.disabled
       state.capabilities.model = action.payload.model ?? null
       state.capabilities.instructions = action.payload.instructions ?? null
+      state.capabilities.presentation = action.payload.presentation ?? null
       state.capabilities.cachePolicy = action.payload.cachePolicy ?? null
       state.capabilities.pending = action.payload.pending ?? null
       state.capabilities.dirty = false
@@ -423,6 +425,11 @@ const slice = createSlice({
       if (action.payload.instructions !== undefined) {
         state.capabilities.instructions = action.payload.instructions
       }
+      if (action.payload.presentation !== undefined) {
+        state.capabilities.presentation = action.payload.presentation === null
+          ? null
+          : { ...(state.capabilities.presentation ?? {}), ...action.payload.presentation }
+      }
       state.capabilities.dirty = true
       state.capabilities.saveError = null
     },
@@ -436,12 +443,14 @@ const slice = createSlice({
         disabled: AgentSelectionDisabled
         model?: AgentModelPick | null
         instructions?: string | null
+        presentation?: Record<string, string> | null
         pending?: AgentSelectionPending | null
       }>,
     ) {
       state.capabilities.disabled = action.payload.disabled
       state.capabilities.model = action.payload.model ?? null
       state.capabilities.instructions = action.payload.instructions ?? null
+      state.capabilities.presentation = action.payload.presentation ?? null
       if (action.payload.pending !== undefined) {
         state.capabilities.pending = action.payload.pending
       }

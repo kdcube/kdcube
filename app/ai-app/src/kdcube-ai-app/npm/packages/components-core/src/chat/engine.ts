@@ -750,6 +750,7 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
         disabled: response.selection?.disabled ?? {},
         model: response.selection?.model ?? null,
         instructions: response.selection?.instructions ?? null,
+          presentation: response.selection?.presentation ?? null,
         cachePolicy: response.cache_policy ?? null,
         pending: response.selection?.pending ?? null,
       }))
@@ -775,6 +776,7 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
           disabled: response.selection?.disabled ?? {},
           model: response.selection?.model ?? null,
           instructions: response.selection?.instructions ?? null,
+          presentation: response.selection?.presentation ?? null,
           pending: response.selection?.pending ?? null,
         }))
       }
@@ -823,6 +825,7 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
           disabled: response.selection?.disabled ?? {},
           model: response.selection?.model ?? null,
           instructions: response.selection?.instructions ?? null,
+          presentation: response.selection?.presentation ?? null,
           pending: response.selection?.pending ?? null,
         }))
         if (pendingSelectionPatch) {
