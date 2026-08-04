@@ -1,0 +1,38 @@
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: kdcube/kdcube-postgres-setup
+  tag: ""
+  pullPolicy: IfNotPresent
+
+postgres:
+  host: postgres-db
+  port: 5432
+  database: kdcube
+  ssl: "False"
+
+redis:
+  port: 6379
+
+existingPostgresSecret:
+  name: postgres-db-credentials
+  userKey: POSTGRES_USER
+  passwordKey: POSTGRES_PASSWORD
+
+bootstrap:
+  tenantId: TENANT_ID
+  projectId: PROJECT_ID
+
+job:
+  backoffLimit: 1
+  restartPolicy: Never
+  ttlSecondsAfterFinished: 3600
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi

@@ -1,0 +1,41 @@
+nameOverride: ""
+fullnameOverride: postgres-db
+
+image:
+  repository: pgvector/pgvector
+  tag: pg16
+  pullPolicy: IfNotPresent
+
+auth:
+  username: postgres
+  password: postgres
+  database: kdcube
+
+infra:
+  postgres:
+    password: ""
+
+postgres:
+  maxConnections: 200
+
+service:
+  type: ClusterIP
+  port: 5432
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: 1000m
+    memory: 2Gi
+
+persistence:
+  enabled: true
+  size: 20Gi
+  storageClassName: ""
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
