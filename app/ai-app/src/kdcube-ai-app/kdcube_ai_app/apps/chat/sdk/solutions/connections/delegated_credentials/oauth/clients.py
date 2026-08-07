@@ -145,19 +145,24 @@ def redirect_uri_allowed(client: Optional[PublicClient], uri: str) -> bool:
         return False
     if uri in client.redirect_uris:
         return True
-    if client.registration_kind == CLIENT_REGISTRATION_METADATA_DOCUMENT:
-        return False
     if client.application_type == "web":
         return False
     got = urlsplit(uri)
-    if got.hostname in _LOOPBACK_HOSTS:
-        for allowed in client.redirect_uris:
-            a = urlsplit(allowed)
-            if (
-                a.hostname in _LOOPBACK_HOSTS
-                and a.hostname == got.hostname
-                and a.scheme == got.scheme
-                and a.path == got.path
-            ):
-                return True
+    if got.hostname not in _LOOPBACK_HOSTS:
+        return False
+    # A metadata document is authored by the client, so an explicit port there
+    # is a constraint to honour. A portless loopback URI cannot pin the
+    # ephemeral port a native client binds at runtime (RFC 8252 section 7.3),
+    # which is the form Claude Code publishes.
+    document_client = client.registration_kind == CLIENT_REGISTRATION_METADATA_DOCUMENT
+    for allowed in client.redirect_uris:
+        a = urlsplit(allowed)
+        if (
+            a.hostname in _LOOPBACK_HOSTS
+            and a.hostname == got.hostname
+            and a.scheme == got.scheme
+            and a.path == got.path
+            and not (document_client and a.port is not None)
+        ):
+            return True
     return False

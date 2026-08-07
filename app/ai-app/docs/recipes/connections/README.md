@@ -10,6 +10,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/integrations/custom-oauth-oidc-service-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/integrations/google-service-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/integrations/mail-named-service-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/integrations/linkedin-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/integrations/slack-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/integrations/telegram-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/link-from-external-channel-README.md
@@ -36,6 +37,7 @@ are intentionally shorter and more task-oriented than the SDK architecture docs.
 | [Google Services (Gmail, Sheets)](integrations/google-service-README.md) | Users should connect their own Google account to KDCube, and KDCube tools/named services should act on Gmail or Sheets with connected-account claims. |
 | [Mail Named Service Over MCP](integrations/mail-named-service-README.md) | Connected Gmail/iCloud/Yahoo-style accounts should appear to external agents as one provider-neutral `mail` namespace through the generic named-services MCP surface. |
 | [Slack Integration](integrations/slack-README.md) | Users should connect their own Slack accounts or workspaces to KDCube, and KDCube tools should search or post through Slack with connected-account claims. |
+| [LinkedIn Integration](integrations/linkedin-README.md) | Users should connect their own LinkedIn account, and KDCube tools should publish posts, images, or comments as that member with connected-account claims. |
 | [Telegram Integration](integrations/telegram-README.md) | A bundle exposes a Telegram webhook and Mini App, and Telegram users should connect to KDCube through Connection Hub before using platform-backed features. |
 | [Link From External Channel](link-from-external-channel-README.md) | A user starts inside Telegram, Slack, WhatsApp, a partner app, or another runtime that already carries provider auth material, and must create a connection edge to their KDCube platform user. |
 | [Set Up A Platform Authority Provider](platform-authority/setup-platform-authority-README.md) | A deployment needs to choose and configure the platform authority method: Cognito/multi-Cognito, SimpleIDP, or bundle-hosted platform session. |

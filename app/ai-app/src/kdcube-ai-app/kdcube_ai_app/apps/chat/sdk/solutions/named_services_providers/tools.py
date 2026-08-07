@@ -1063,19 +1063,21 @@ async def object_schema(
     ] = "",
     schema_path: Annotated[
         str,
-        "Catalog path returned by an earlier catalog view, for example '/documents/comments'.",
+        "SELECTOR. Catalog path returned by an earlier catalog view, for example '/documents/comments'.",
     ] = "",
     schema_view: Annotated[
         str,
-        "Detail level: catalog, search, kind, operation, or full. Omit to infer it.",
+        "Pass 'full' for the whole schema. The other views — catalog, search, kind, "
+        "operation — are inferred from the selector you send, so leave this empty "
+        "and send that selector instead.",
     ] = "",
     schema_operation: Annotated[
         str,
-        "Exact operation id from the catalog/kind view, such as object.search or object.action:reply.",
+        "SELECTOR. Exact operation id from the catalog/kind view, such as object.search or object.action:reply.",
     ] = "",
     query: Annotated[
         str,
-        "Natural-language or lexical query over provider capabilities, not provider objects.",
+        "SELECTOR. Natural-language or lexical query over provider capabilities, not provider objects.",
     ] = "",
     search_mode: Annotated[
         str,
@@ -1090,6 +1092,10 @@ async def object_schema(
     "Named service response envelope with a catalog node, capability matches, kind, operation, or full schema.",
 ]:
     """Explore or search a provider capability schema, then expand one contract.
+
+    Send ONE selector per call — object_kind, object_ref, schema_path,
+    schema_operation, or query. They pick different views, so combining them is
+    refused rather than guessed.
 
     When upserting, honor each collection field's declared `update_strategy`: for `replace` send the
     full intended value, for `append`/`patch` send only the delta; scalar fields are set-if-provided.

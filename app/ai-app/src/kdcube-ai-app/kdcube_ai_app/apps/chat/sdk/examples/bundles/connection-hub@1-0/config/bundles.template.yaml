@@ -256,6 +256,18 @@ bundles:
               description: "Inspect Slack assistant search availability through connected Slack accounts."
               delegable_roles: ["kdcube:role:registered", "kdcube:role:paid", "kdcube:role:privileged", "kdcube:role:super-admin"]
               delegable_permissions: ["slack:assistant:search"]
+            # LinkedIn, same rule: its own real claims. linkedin:post covers
+            # posts and comments because both ride w_member_social.
+            - grant: "linkedin:profile"
+              label: "Read LinkedIn profile"
+              description: "Read the connected LinkedIn member's own profile."
+              delegable_roles: ["kdcube:role:registered", "kdcube:role:paid", "kdcube:role:privileged", "kdcube:role:super-admin"]
+              delegable_permissions: ["linkedin:profile"]
+            - grant: "linkedin:post"
+              label: "Post and comment on LinkedIn"
+              description: "Publish posts and comments through connected LinkedIn accounts."
+              delegable_roles: ["kdcube:role:registered", "kdcube:role:paid", "kdcube:role:privileged", "kdcube:role:super-admin"]
+              delegable_permissions: ["linkedin:post"]
             resources:
             - resource: "*"
               label: "All platform and application APIs"
@@ -1117,6 +1129,138 @@ bundles:
                             grants:
                             - "named_services:use"
                             - "slack:files:write"
+                  linkedin:
+                    label: "LinkedIn"
+                    description: "List connected LinkedIn accounts and publish posts and comments as the connected member. LinkedIn exposes no feed, message, or post-content reads to this integration."
+                    authority_id: "delegated_client"
+                    tools:
+                      about:
+                        operation: "provider.about"
+                        label: "About LinkedIn"
+                        description: "Explain the LinkedIn namespace and connected-account model."
+                        grants:
+                        - "named_services:use"
+                      capabilities:
+                        operation: "provider.capabilities"
+                        label: "LinkedIn capabilities"
+                        description: "Read provider capabilities for connected LinkedIn accounts."
+                        grants:
+                        - "named_services:use"
+                      schema:
+                        operation: "object.schema"
+                        label: "LinkedIn schema"
+                        description: "Read the LinkedIn object schema and ref format."
+                        grants:
+                        - "named_services:use"
+                      # object.list and object.get read KDCube connection
+                      # records or parse the ref; neither calls LinkedIn, so
+                      # neither carries a provider claim.
+                      list:
+                        operation: "object.list"
+                        label: "List LinkedIn accounts"
+                        description: "List connected LinkedIn accounts."
+                        grants:
+                        - "named_services:use"
+                      get:
+                        operation: "object.get"
+                        label: "Read LinkedIn object"
+                        description: "Read a connected account record or a published post's link."
+                        grants:
+                        - "named_services:use"
+                      action:
+                        operation: "object.action"
+                        label: "LinkedIn action"
+                        description: "Publish a post, publish a post with images, or comment on a post."
+                        operations:
+                          object.action.publish_post:
+                            label: "Publish LinkedIn post"
+                            description: "Publish a text post as the connected member."
+                            grants:
+                            - "named_services:use"
+                            - "linkedin:post"
+                          object.action.publish_image_post:
+                            label: "Publish LinkedIn post with images"
+                            description: "Publish a post carrying images as the connected member."
+                            grants:
+                            - "named_services:use"
+                            - "linkedin:post"
+                          object.action.add_comment:
+                            label: "Comment on LinkedIn post"
+                            description: "Add a comment to a LinkedIn post as the connected member."
+                            grants:
+                            - "named_services:use"
+                            - "linkedin:post"
+                          object.action.request_upload:
+                            label: "Stage LinkedIn image"
+                            description: "Mint a signed slot so image bytes reach KDCube without passing through model context."
+                            grants:
+                            - "named_services:use"
+                            - "linkedin:post"
+                          object.action.discard_upload:
+                            label: "Discard staged LinkedIn image"
+                            description: "Remove a staged image before it is used."
+                            grants:
+                            - "named_services:use"
+                            - "linkedin:post"
+                      call:
+                        label: "Generic LinkedIn call"
+                        description: "Generic LinkedIn namespace call with per-operation grants."
+                        operations:
+                          provider.about:
+                            label: "About LinkedIn"
+                            description: "Explain the LinkedIn namespace and connected-account model."
+                            grants:
+                            - "named_services:use"
+                          provider.capabilities:
+                            label: "LinkedIn capabilities"
+                            description: "Read provider capabilities for connected LinkedIn accounts."
+                            grants:
+                            - "named_services:use"
+                          object.list:
+                            label: "List LinkedIn accounts"
+                            description: "List connected LinkedIn accounts."
+                            grants:
+                            - "named_services:use"
+                          object.schema:
+                            label: "LinkedIn schema"
+                            description: "Read the LinkedIn object schema and ref format."
+                            grants:
+                            - "named_services:use"
+                          object.get:
+                            label: "Read LinkedIn object"
+                            description: "Read a connected account record or a published post's link."
+                            grants:
+                            - "named_services:use"
+                          object.action.publish_post:
+                            label: "Publish LinkedIn post"
+                            description: "Publish a text post as the connected member."
+                            grants:
+                            - "named_services:use"
+                            - "linkedin:post"
+                          object.action.publish_image_post:
+                            label: "Publish LinkedIn post with images"
+                            description: "Publish a post carrying images as the connected member."
+                            grants:
+                            - "named_services:use"
+                            - "linkedin:post"
+                          object.action.add_comment:
+                            label: "Comment on LinkedIn post"
+                            description: "Add a comment to a LinkedIn post as the connected member."
+                            grants:
+                            - "named_services:use"
+                            - "linkedin:post"
+                          object.action.request_upload:
+                            label: "Stage LinkedIn image"
+                            description: "Mint a signed slot so image bytes reach KDCube without passing through model context."
+                            grants:
+                            - "named_services:use"
+                            - "linkedin:post"
+                          object.action.discard_upload:
+                            label: "Discard staged LinkedIn image"
+                            description: "Remove a staged image before it is used."
+                            grants:
+                            - "named_services:use"
+                            - "linkedin:post"
           # Legacy connection-provider app registry. New per-user delegated
           # external credentials live under delegated_to_kdcube below.
         providers: {}
@@ -1275,6 +1419,34 @@ bundles:
                   - "search:read.mpim"
                   - "search:read.files"
                   - "search:read.users"
+            linkedin:
+              label: "LinkedIn"
+              adapter: "linkedin.oauth_member"
+              enabled: true
+              connector_apps:
+                demo:
+                  label: "KDCube LinkedIn"
+                  enabled: true
+                  client_id: "<LINKEDIN_OAUTH_CLIENT_ID>"
+                  client_secret_ref: "connections.delegated_to_kdcube.providers.linkedin.connector_apps.demo.client_secret"
+                  allowed_claims:
+                  - "linkedin:profile"
+                  - "linkedin:post"
+              claims:
+                linkedin:profile:
+                  label: "Read your LinkedIn profile"
+                  description: "Read the approving member's own LinkedIn name and email."
+                  provider_scopes:
+                  - "openid"
+                  - "profile"
+                  - "email"
+                # w_member_social covers posting AND commenting; LinkedIn has no
+                # separate comment scope outside Community Management API.
+                linkedin:post:
+                  label: "Post and comment on LinkedIn"
+                  description: "Publish posts and comments on LinkedIn as the approving member."
+                  provider_scopes:
+                  - "w_member_social"
             s1:
               label: "S1"
               adapter: "oidc.generic"

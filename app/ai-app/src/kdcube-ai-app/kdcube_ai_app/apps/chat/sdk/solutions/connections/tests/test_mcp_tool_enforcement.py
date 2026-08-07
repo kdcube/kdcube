@@ -57,6 +57,7 @@ def _resolver(monkeypatch, credential_by_claim):
             "connector_app_id": connector_app_id,
             "claim": claim,
             "tool_name": tool_name,
+            "account_id": kwargs.get("account_id", ""),
         })
         return credential_by_claim[claim]
 
@@ -114,6 +115,7 @@ async def test_all_claims_resolvable_returns_none(monkeypatch):
         "connector_app_id": "",
         "claim": "slack:search",
         "tool_name": "productivity_slack_search",
+        "account_id": "",
     }]
 
 
@@ -206,3 +208,49 @@ async def test_requirement_without_matching_operation_claims_is_skipped(monkeypa
     )
 
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_account_required_is_returned_when_tool_input_is_ambiguous(monkeypatch):
+    _view(monkeypatch)
+    _identity(monkeypatch)
+    _resolver(
+        monkeypatch,
+        {"slack:search": _failed_credential("slack:search", reason="account_required")},
+    )
+
+    async def _accounts_exist(**kwargs):
+        return None
+
+    monkeypatch.setattr(enforcement_mod, "connect_first_denial_for_identity", _accounts_exist)
+
+    result = await enforce_tool_requirements(
+        object(),
+        tool_name="productivity_slack_search",
+        operation="search",
+        requirements=[_SLACK_REQUIREMENT],
+    )
+
+    assert result is not None
+    assert result["consent"]["reason"] == "account_required"
+
+
+@pytest.mark.asyncio
+async def test_explicit_account_id_reaches_the_shared_resolver(monkeypatch):
+    _view(monkeypatch)
+    _identity(monkeypatch)
+    calls = _resolver(
+        monkeypatch,
+        {"slack:search": _ok_credential("slack:search")},
+    )
+
+    result = await enforce_tool_requirements(
+        object(),
+        tool_name="productivity_slack_search",
+        operation="search",
+        requirements=[_SLACK_REQUIREMENT],
+        account_id="slack-account-2",
+    )
+
+    assert result is None
+    assert calls[0]["account_id"] == "slack-account-2"

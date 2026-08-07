@@ -33,6 +33,11 @@ REASON_AGENT_GRANT_REQUIRED = "agent_grant_required"  # account IS provider-capa
                                                       # on it — fix on the agent's grant card
                                                       # (Delegated by KDCube), NOT the provider
                                                       # connection (Delegated to KDCube).
+REASON_AGENT_ACCOUNT_BINDING_REQUIRED = "agent_account_binding_required"
+                                                      # a NAMED account holds the claim, but this
+                                                      # caller has no per-account binding for it.
+                                                      # Same card as agent_grant_required, its
+                                                      # account picker; the connection is fine.
 
 # Reasons a USER can fix in Connection Hub (retryable after the fix). Operator
 # config errors (claim_not_configured, connector_app_not_configured,
@@ -44,6 +49,7 @@ USER_ACTIONABLE_REASONS = frozenset(
         REASON_RECONNECT_REQUIRED,
         REASON_ACCOUNT_REQUIRED,
         REASON_AGENT_GRANT_REQUIRED,
+        REASON_AGENT_ACCOUNT_BINDING_REQUIRED,
     }
 )
 
@@ -514,6 +520,8 @@ __all__ = [
     "REASON_CLAIM_UPGRADE_REQUIRED",
     "REASON_RECONNECT_REQUIRED",
     "REASON_ACCOUNT_REQUIRED",
+    "REASON_AGENT_GRANT_REQUIRED",
+    "REASON_AGENT_ACCOUNT_BINDING_REQUIRED",
     "USER_ACTIONABLE_REASONS",
     "CREDENTIAL_ACTIVE",
     "CREDENTIAL_EXPIRES_SOON",

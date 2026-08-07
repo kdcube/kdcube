@@ -4,7 +4,7 @@ title: "Namespace Services: Providers"
 summary: "Transport-neutral SDK concept for apps (bundles) and platform subsystems that publish namespace service provider surfaces: namespace ownership, object operations, resolvers, capabilities, relations, and integrations over API, MCP, Data Bus, or local adapters."
 status: current
 tags: ["sdk", "namespace-services", "named-service-provider", "services", "namespaces", "objects", "resolvers", "mcp", "api", "data-bus", "apps", "bundles"]
-updated_at: 2026-08-03
+updated_at: 2026-08-07
 keywords:
   [
     "named service provider",
@@ -759,6 +759,15 @@ Catalog consumers derive coverage/consent decoration from this block; the
 consent semantics themselves (demand-driven at the ATTEMPT, scoped claims,
 deep links) are owned by
 [Delegated Accounts](../solutions/connections/delegated-accounts/delegated-accounts-README.md).
+
+Provider operations that accept `account_id` pass that same selector through
+their requirement preflight and credential resolution. This keeps the
+authorization decision and provider mutation on one account: no selector with
+several eligible accounts returns `account_required`, while a named account
+outside the caller's binding returns the account-specific grant denial before
+provider I/O. Preserve these structured denials and their recovery URL; a
+provider adapter must not collapse them into a generic 403, choose an account,
+open Connection Hub, or replay the operation.
 
 ### Access Requirements (Internal Realms)
 

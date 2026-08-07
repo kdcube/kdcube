@@ -165,7 +165,9 @@ def build_named_services_mcp_app(
         title="Named service schema",
         description=(
             "Browse or search a progressive named-service capability schema, "
-            "then read one object kind, one exact operation, or the explicit full schema."
+            "then read one object kind, one exact operation, or the explicit full schema. "
+            "Send one selector per call — object_kind, object_ref, schema_path, "
+            "schema_operation, or query; combining them is refused rather than guessed."
         ),
         annotations=read_only_annotations(ToolAnnotations, title="Named service schema"),
         structured_output=False,
@@ -185,19 +187,25 @@ def build_named_services_mcp_app(
         ] = "",
         schema_path: Annotated[
             str,
-            Field(description="Optional recursive catalog path returned by an earlier schema call."),
+            Field(description="SELECTOR. Recursive catalog path returned by an earlier schema call."),
         ] = "",
         schema_view: Annotated[
             str,
-            Field(description="Optional detail level: catalog, search, kind, operation, or full."),
+            Field(
+                description=(
+                    "Pass 'full' for the whole schema. The other views — catalog, "
+                    "search, kind, operation — are inferred from the selector you "
+                    "send, so leave this empty and send that selector instead."
+                )
+            ),
         ] = "",
         schema_operation: Annotated[
             str,
-            Field(description="Exact operation id returned by catalog/kind, such as object.search or object.action:reply."),
+            Field(description="SELECTOR. Exact operation id returned by catalog/kind, such as object.search or object.action:reply."),
         ] = "",
         query: Annotated[
             str,
-            Field(description="Optional query over capability declarations, not provider objects."),
+            Field(description="SELECTOR. Query over capability declarations, not provider objects."),
         ] = "",
         search_mode: Annotated[
             str,

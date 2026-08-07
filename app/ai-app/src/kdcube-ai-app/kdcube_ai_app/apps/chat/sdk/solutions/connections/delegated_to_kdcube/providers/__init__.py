@@ -12,6 +12,9 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.provi
     GenericOIDCAdapter,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.providers.google import GoogleOAuthAdapter
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.providers.linkedin import (
+    LinkedInMemberAdapter,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.providers.slack import SlackUserTokenAdapter
 
 __all__ = [
@@ -19,5 +22,6 @@ __all__ = [
     "GenericOAuthAdapter",
     "GenericOIDCAdapter",
     "GoogleOAuthAdapter",
+    "LinkedInMemberAdapter",
     "SlackUserTokenAdapter",
 ]

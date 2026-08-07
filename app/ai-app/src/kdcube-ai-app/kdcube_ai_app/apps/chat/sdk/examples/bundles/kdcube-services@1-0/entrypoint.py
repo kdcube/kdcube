@@ -44,6 +44,9 @@ from kdcube_ai_app.apps.chat.sdk.integrations.sheets import (
     make_sheets_named_service_provider,
     parse_sheets_ref,
 )
+from kdcube_ai_app.apps.chat.sdk.integrations.linkedin import (
+    make_linkedin_named_service_provider,
+)
 from kdcube_ai_app.apps.chat.sdk.integrations.slack import make_slack_named_service_provider
 from kdcube_ai_app.apps.chat.sdk.integrations.slack.named_service import parse_slack_ref
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.relay import (
@@ -334,8 +337,13 @@ class KDCubeServicesEntrypoint(BaseEntrypoint):
             tools as slack_tools_module,
         )
 
+        from kdcube_ai_app.apps.chat.sdk.integrations.linkedin import (
+            tools as linkedin_tools_module,
+        )
+
         gmail_tools_module.bind_service(self)
         slack_tools_module.bind_service(self)
+        linkedin_tools_module.bind_service(self)
         bind_productivity_service(self)
         bind_docs_service(self)
         actor = getattr(self.comm_context, "actor", None)
@@ -391,6 +399,19 @@ class KDCubeServicesEntrypoint(BaseEntrypoint):
                 entrypoint=self,
                 bundle_id=self._named_services_bundle_id(),
                 file_url_factory=self._integration_file_url,
+                upload_slot_factory=self._integration_upload_slot,
+            )
+        )
+        # Write-only namespace: LinkedIn exposes no content reads, so no
+        # file_url_factory. Uploads still need a slot — outbound images must
+        # reach KDCube as staged bytes, not as base64 in model context.
+        providers.append(
+            make_linkedin_named_service_provider(
+                entrypoint=self,
+                bundle_id=self._named_services_bundle_id(),
+                staging_root_factory=lambda: staging_root(
+                    str(getattr(self.settings, "STORAGE_PATH", "") or "")
+                ),
                 upload_slot_factory=self._integration_upload_slot,
             )
         )

@@ -4,7 +4,8 @@ title: "Delegate A KDCube Service To An External Client"
 summary: "User-facing recipe for connecting Claude or another external client to a KDCube service through Connection Hub delegated credentials."
 status: active
 tags: ["recipes", "connections", "connection-hub", "delegated-credentials", "oauth", "claude", "mcp", "consent"]
-updated_at: 2026-08-01
+updated_at: 2026-08-07
+keywords: ["external MCP client", "delegated credential", "per-account binding", "account selection", "Connection Hub recovery", "resource grant"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/authenticated-mcp/authenticated-mcp-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/agent-acting-for-user/agent-acting-for-user-README.md
@@ -44,10 +45,15 @@ Claude may not call tools that were not consented.
 
 3. External client probes the service
    KDCube replies that the service requires delegated credentials.
-   A client not pre-listed in public_clients registers itself via dynamic
-   client registration (DCR); registration is accepted only if the client's
-   redirect URI is on the DCR redirect allowlist
-   (dynamic_client_registration.allowed_redirect_uris).
+   A client not pre-listed in public_clients identifies itself one of two ways,
+   and it chooses which:
+     - Client ID Metadata Document (CIMD): its client_id is an HTTPS URL that
+       serves the document declaring its callbacks. No KDCube registration
+       happens and the DCR redirect allowlist is not consulted; the published
+       document is the authority. This is the path Claude Code takes.
+     - Dynamic client registration (DCR): the client registers itself, and
+       registration is accepted only if its redirect URI is on the DCR redirect
+       allowlist (dynamic_client_registration.allowed_redirect_uris).
 
 4. External client opens the KDCube consent URL
    User signs in to KDCube if needed.
@@ -203,10 +209,21 @@ provider-account claims remain a second prerequisite under **Delegated to
 KDCube** — and the external client additionally needs a per-account binding
 (`account_scope`) on its own grant card. That binding is default-closed: the
 authorize screen offers the user's connected accounts with per-claim
-checkboxes (nothing pre-checked), and an account left unticked yields
-`agent_grant_required` at call time, deep-linking the client's card for the
-user to grant. The external MCP client gets a KDCube delegated credential,
-never the provider token.
+checkboxes (nothing pre-checked). With several eligible accounts and no
+selector, the call returns `account_required` with labeled candidates; the
+selected `account_id` is then used by both preflight and the provider
+operation. A missing caller binding returns `agent_grant_required`; when a
+concrete account is named, the connected-account adapter can specialize that
+condition to `agent_account_binding_required` so the exact account and claim
+are identified.
+
+Both binding denials return a Connection Hub URL for the caller's own card
+under **Delegated by KDCube**. In that URL, `resource` is the protected KDCube
+surface the client is calling, such as the productivity or named-services MCP
+surface; it is not a LinkedIn post, Slack channel, or other provider object.
+The client or host may present that URL to the user. KDCube does not open it or
+replay the failed operation automatically. The external MCP client gets a
+KDCube delegated credential, never the provider token.
 
 ## Identity Scope Choices
 

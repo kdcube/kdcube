@@ -61,6 +61,9 @@ export interface CreateDelegatedAccessArgs {
   resourceGrants: Record<string, string[]>;
   operations?: string[];
   namedServiceOperations: DelegatedAccessNamedServiceOperations;
+  /** Per-account binding {provider:{account_id:[claims]}}. Undefined preserves
+   *  an existing binding; {} explicitly restricts the caller to no accounts. */
+  accountScope?: Record<string, Record<string, string[]>>;
   ttlSeconds?: number;
 }
 
@@ -70,13 +73,16 @@ export const createDelegatedAccess = createAsyncThunk<
   { rejectValue: string }
 >(
   'delegatedAccess/create',
-  async ({ label, resourceGrants, operations, namedServiceOperations, ttlSeconds }, { rejectWithValue }) => {
+  async ({ label, resourceGrants, operations, namedServiceOperations, accountScope, ttlSeconds }, { rejectWithValue }) => {
     try {
       const res = await postOp<DelegatedAccessCreateResult>('delegated_access_create', {
         label,
         resource_grants: resourceGrants || {},
         operations: operations || [],
         named_service_operations: namedServiceOperations || {},
+        ...(accountScope !== undefined
+          ? { account_scope: accountScope }
+          : {}),
         ttl_seconds: ttlSeconds || undefined,
       });
       if (res?.ok === false) return rejectWithValue(resultError(res, 'Failed to create delegated access'));
@@ -126,7 +132,7 @@ export const grantAgentAccess = createAsyncThunk<
         ...(namedServiceOperations && Object.keys(namedServiceOperations).length
           ? { named_service_operations: namedServiceOperations }
           : {}),
-        ...(accountScope && Object.keys(accountScope).length
+        ...(accountScope !== undefined
           ? { account_scope: accountScope }
           : {}),
       });
@@ -144,6 +150,9 @@ export interface UpdateDelegatedAccessArgs {
   resourceGrants: Record<string, string[]>;
   operations?: string[];
   namedServiceOperations: DelegatedAccessNamedServiceOperations;
+  /** Per-account binding {provider:{account_id:[claims]}}. Undefined preserves
+   *  an existing binding; {} explicitly restricts the caller to no accounts. */
+  accountScope?: Record<string, Record<string, string[]>>;
 }
 
 /** Edit a manual automation IN PLACE — the card keeps its access_id/client_id,
@@ -156,7 +165,7 @@ export const updateDelegatedAccess = createAsyncThunk<
   { rejectValue: string }
 >(
   'delegatedAccess/update',
-  async ({ accessId, label, resourceGrants, operations, namedServiceOperations }, { rejectWithValue }) => {
+  async ({ accessId, label, resourceGrants, operations, namedServiceOperations, accountScope }, { rejectWithValue }) => {
     try {
       const res = await postOp<DelegatedAccessCreateResult>('delegated_access_update', {
         access_id: accessId,
@@ -164,6 +173,9 @@ export const updateDelegatedAccess = createAsyncThunk<
         resource_grants: resourceGrants || {},
         operations: operations || [],
         named_service_operations: namedServiceOperations || {},
+        ...(accountScope !== undefined
+          ? { account_scope: accountScope }
+          : {}),
       });
       if (res?.ok === false) return rejectWithValue(resultError(res, 'Failed to update delegated access'));
       return res || {};

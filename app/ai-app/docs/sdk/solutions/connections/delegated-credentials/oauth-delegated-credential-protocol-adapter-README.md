@@ -4,7 +4,7 @@ title: "OAuth Delegated Credential Protocol Adapter"
 summary: "How the OAuth2 protocol adapter resolves pre-registered, Client ID Metadata Document, and DCR clients, then issues and verifies least-privilege Connection Hub credentials."
 tags: ["sdk", "solutions", "connections", "delegated-credentials", "oauth", "mcp", "descriptor"]
 keywords: ["OAuth2 authorization server", "MCP protected resource", "Claude Code", "PKCE", "Client ID Metadata Document", "CIMD", "dynamic client registration", "tool consent", "live grant lookup", "operation csrf protection", "descriptor configuration"]
-updated_at: 2026-08-01
+updated_at: 2026-08-07
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/bundle-session-auth-README.md
@@ -295,12 +295,26 @@ registration endpoint:
 ```text
 /api/integrations/bundles/{tenant}/{project}/connection-hub@1-0/public/oauth
 /api/integrations/bundles/{tenant}/{project}/connection-hub@1-0/public/oauth/.well-known/oauth-authorization-server
+/api/integrations/bundles/{tenant}/{project}/connection-hub@1-0/public/oauth/.well-known/openid-configuration
 /api/integrations/bundles/{tenant}/{project}/connection-hub@1-0/public/oauth/.well-known/oauth-protected-resource?resource=<bundle-mcp-url>
 /api/integrations/bundles/{tenant}/{project}/connection-hub@1-0/public/oauth/authorize
 /api/integrations/bundles/{tenant}/{project}/connection-hub@1-0/public/oauth/authorize/consent
 /api/integrations/bundles/{tenant}/{project}/connection-hub@1-0/public/oauth/register
 /api/integrations/bundles/{tenant}/{project}/connection-hub@1-0/public/oauth/token
+/api/integrations/bundles/{tenant}/{project}/connection-hub@1-0/public/oauth/jwks
 ```
+
+The authorization-server document is served at both well-known locations. MCP
+clients fetch the OIDC one and treat a 404 there as fatal, so it stays and the
+document carries the fields OIDC discovery requires:
+
+- `jwks_uri` points at `/oauth/jwks`, which returns `{"keys": []}` and always
+  will. Access tokens are opaque (`kst1`), so there is no public key and no
+  client verifies a signature — the resource validates the token.
+- `subject_types_supported` is `["public"]`.
+- `id_token_signing_alg_values_supported` is present because the schema
+  requires it. No `id_token` is ever issued: `openid` is absent from
+  `scopes_supported`, so no client can request one.
 
 Stable root aliases such as `/.well-known/...` or `/oauth/...` may be added by
 gateway routing later, but those aliases route to Connection Hub. They do not
@@ -512,11 +526,19 @@ Rules:
   an allowlisted entry exactly. All non-loopback redirects must match exactly,
   including the port. Implementation: `redirect_uri_allowed()` in
   `kdcube_ai_app/apps/chat/sdk/solutions/connections/delegated_credentials/oauth/clients.py`.
-- CIMD callback matching is exact for every redirect URI, including loopback
-  ports. The metadata document must publish the concrete callback the client
-  sends. Web-client callbacks must use HTTPS. Native-client callbacks may use
+- CIMD callback matching honours what the document states. A published entry
+  that **names a port** must be matched exactly, including that port — the
+  document asserted a concrete callback, so it is held to it. A **portless**
+  loopback entry admits any port, because a native client cannot publish the
+  port it will bind at runtime; scheme, host, and path are still matched
+  exactly. Web-client callbacks must use HTTPS. Native-client callbacks may use
   HTTPS or HTTP on `localhost`, `127.0.0.1`, or `::1`; other schemes and
   duplicate callback entries are rejected before consent.
+- A CIMD document that omits `application_type` is read as a native client when
+  **every** redirect it publishes is an HTTP loopback URI. The OIDC default of
+  `web` would refuse those entries outright, and published documents of real
+  native clients omit the field. A document carrying any non-loopback HTTP
+  redirect still resolves to `web` and is still refused.
 - Practical consequence for native MCP clients: an entry like
   `http://localhost/callback` admits `http://localhost:52791/callback`, but not
   `http://localhost:52791/auth/callback` — a client whose callback uses a
@@ -597,9 +619,19 @@ Enforcement is default-closed for delegated callers: an account left unticked
 is not usable by this client even though the connection ceiling names the
 claim. The semantics live in
 [Configure Agent → Service Access](../configuring-agent-service-access/configuring-agent-service-access-README.md);
-a call that needs more raises `agent_grant_required` deep-linking the
-client's own grant card (Delegated by KDCube) with the exact account and claim
-named — never the provider-connect tab, whose state is not the problem.
+a call that needs more raises `agent_grant_required` in the delegated-account
+broker. When the operation names a concrete account, the client-facing adapter
+can specialize that result to `agent_account_binding_required`, preserving the
+exact account and claim. Both reasons deep-link the client's own grant card
+(Delegated by KDCube), never the provider-connect tab whose state is not the
+problem. The URL is recovery data for the host or external client to present;
+returning it does not open Connection Hub or replay the failed operation.
+
+Grant-card updates distinguish omission from an explicit empty map:
+`account_scope` omitted preserves existing account bindings, while
+`account_scope: {}` intentionally clears them. This lets an unrelated resource
+or claim edit leave account authority unchanged and still gives the user an
+explicit revoke-all operation.
 
 ## Revocation And Card Lifecycle
 
@@ -642,6 +674,32 @@ named — never the provider-connect tab, whose state is not the problem.
   mismatch denies the request; the runtime never falls back to the access or
   refresh token's older grant snapshot. Legacy records without a card pointer
   retain their snapshot contract.
+
+## External URLs Behind A Proxy
+
+OAuth callback, consent, upload, and recovery links must reflect the scheme the
+client used at the trusted edge.
+
+`X-Forwarded-Proto` is a trail rather than a single value: each proxy appends
+its own observation, and repeated headers arrive joined with `, `. The bundled
+OpenResty proxy therefore reads the **rightmost** element first — written by the
+proxy closest to it, the only one it can treat as trusted — and accepts that
+element only when it is exactly `http` or `https`. Anything else, including an
+empty or malformed list, falls back to the scheme that proxy received.
+
+An edge that appends rather than overwrites is handled by this rule, which
+matters because appending is the common behaviour: with a terminator in front,
+a client that sends `X-Forwarded-Proto` at all — even with the correct value —
+would otherwise produce a list that matches nothing, and generated links would
+silently drop to `http://`, signed upload URLs among them. Whatever the client
+writes lands to the left of the trusted proxy's value and is never read, so a
+client can neither inject a scheme nor raise one; the worst it can do is
+degrade its own links.
+
+Overwriting the header at the trusted edge remains the cleaner deployment, but
+it is no longer a precondition for correct links. Validation prevents malformed
+schemes from entering generated links; it is not trusted-proxy authentication by
+itself.
 
 ## Storage
 
@@ -696,6 +754,7 @@ deployment-specific store is required. The solution-level durability design note
 | Two workers rotate one refresh token concurrently | Current live authority is checked before rotation; one compare-and-rotate script wins and creates one replacement, while the stale request receives `invalid_grant`. |
 | OAuth shared state cannot be read or changed | OAuth routes and managed MCP/REST guards log the store operation and return `503 temporarily_unavailable`; they do not continue from guessed state. |
 | Refresh token is invalid or rotated | Token request fails with `invalid_grant`. |
+| Forwarded scheme is absent or not exactly `http`/`https` at the bundled proxy | Generated links use the scheme received by the proxy; arbitrary forwarded values are ignored. |
 
 ## What This Is Not
 
@@ -1071,3 +1130,16 @@ Use focused tests and one live connector test.
 26. The official MCP conformance runner is executed for the exact public
     surface before publishing an unqualified conformance claim; unsupported
     optional capabilities remain outside the claim.
+27. A provider tool's `account_id` reaches both requirement preflight and the
+    provider operation; two eligible accounts return `account_required`, and
+    resending with one candidate resolves that same account end to end.
+28. A named capable account outside the caller's binding returns
+    `agent_account_binding_required` with the account, claim, caller card, and
+    KDCube resource surface identified before provider I/O.
+29. Updating a grant without `account_scope` preserves existing bindings;
+    updating with `account_scope: {}` clears them.
+30. A manual automation recovery URL focuses the existing access card and the
+    affected resource/account/claim; it does not invoke a hosted-agent create
+    operation or change the grant automatically.
+31. Bundled proxy configuration accepts only `http` and `https` as forwarded
+    schemes and falls back to its received scheme for any other value.

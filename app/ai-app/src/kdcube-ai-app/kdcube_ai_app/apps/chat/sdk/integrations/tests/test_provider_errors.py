@@ -82,6 +82,25 @@ def test_scope_failure_is_credential_failure_but_generic_403_is_not():
     assert denied.credential_failure is False
 
 
+def test_scope_reason_embedded_in_provider_message_is_detected():
+    failure = provider_failure_from_payload(
+        {
+            "error": {
+                "status": "403",
+                "message": "Not enough permissions to access this resource",
+            }
+        },
+        provider_status=403,
+        provider="linkedin",
+        service="linkedin",
+        operation="posts.create",
+        fallback="LinkedIn post failed.",
+    )
+
+    assert failure.category == "scope_insufficient"
+    assert failure.credential_failure is True
+
+
 def test_slack_error_body_is_preserved_even_with_http_200():
     failure = provider_failure_from_payload(
         {"ok": False, "error": "invalid_auth"},

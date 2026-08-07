@@ -16,8 +16,10 @@ capabilities inventory), so the mapping stays unit-testable with faked stores.
 - ``ConnectedAccountStoreReader`` — connected accounts (external providers). A
   claim's state comes from the broker's per-claim resolution: a clean resolution
   is ``given``; any ``connect_required`` / ``claim_upgrade_required`` /
-  ``account_required`` / ``reconnect_required`` reason is ``pending`` (the user
-  must act); an unconfigured provider/claim is ``unavailable``.
+  ``account_required`` / ``agent_grant_required`` /
+  ``agent_account_binding_required`` / ``reconnect_required`` reason is
+  ``pending`` (the user must act); an unconfigured provider/claim is
+  ``unavailable``.
 """
 
 from __future__ import annotations
@@ -33,7 +35,12 @@ logger = logging.getLogger(__name__)
 
 # Broker reasons that mean "granted / usable now" vs "user must act".
 _PENDING_REASONS = {
-    "connect_required", "claim_upgrade_required", "account_required", "reconnect_required",
+    "connect_required",
+    "claim_upgrade_required",
+    "account_required",
+    "agent_grant_required",
+    "agent_account_binding_required",
+    "reconnect_required",
 }
 
 

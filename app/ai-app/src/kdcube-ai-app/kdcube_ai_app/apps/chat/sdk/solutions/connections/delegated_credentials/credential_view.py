@@ -105,10 +105,16 @@ class DelegatedCredentialView:
     def account_claim_scope(self, provider_id: str) -> Mapping[str, tuple[str, ...]] | None:
         """This client's per-account claim binding for ``provider_id`` —
         ``{account_id: (claims...)}`` (account "*" = any account, claim "*" =
-        any claim), or None for no restriction (absent provider)."""
+        any claim).
+
+        A delegated credential with no entry for this provider returns an
+        empty mapping: delegated account access is default-closed. ``None`` is
+        reserved for a request with no delegated credential, where the user's
+        own trusted tools are not narrowed by an agent binding.
+        """
         entry = self.account_scope.get(str(provider_id or "").strip())
         if not entry:
-            return None
+            return {} if self.present else None
         return {
             str(account_id).strip(): tuple(claims)
             for account_id, claims in dict(entry).items()

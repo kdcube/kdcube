@@ -47,6 +47,8 @@ def resolve_issuer(request: Request) -> str:
     return str(request.base_url).rstrip("/")
 
 
+# Served at both paths: MCP clients fetch the OIDC location and treat a 404
+# there as fatal, so the document carries the OIDC-required fields.
 @router.get(WELL_KNOWN_AS_PATH, include_in_schema=False)
 @router.get(WELL_KNOWN_OIDC_PATH, include_in_schema=False)
 async def well_known_authorization_server(request: Request) -> JSONResponse:
@@ -65,6 +67,12 @@ async def well_known_authorization_server(request: Request) -> JSONResponse:
             client_id_metadata_document_supported=cfg.client_id_metadata_documents.enabled,
         )
     )
+
+
+@router.get("/oauth/jwks", include_in_schema=False)
+async def oauth_jwks() -> JSONResponse:
+    """Empty key set: kst1 tokens are opaque, so no public key is published."""
+    return JSONResponse({"keys": []})
 
 
 @router.get(WELL_KNOWN_PR_PATH, include_in_schema=False)

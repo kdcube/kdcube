@@ -47,10 +47,15 @@ def test_authorization_server_metadata_required_fields():
     assert md["scopes_supported"] == []
 
 
-def test_authorization_server_metadata_omits_jwks_uri():
-    # Tokens are opaque (kst1) -> no asymmetric signing, so jwks_uri must be absent.
+def test_authorization_server_metadata_publishes_a_jwks_uri():
+    # Tokens are opaque (kst1), so the served key set is empty. The field is
+    # still required: the same document is served at the OIDC discovery path,
+    # and MCP clients reject a document without it before registering.
     md = authorization_server_metadata(ISSUER)
-    assert "jwks_uri" not in md
+    assert md["jwks_uri"] == f"{ISSUER}/oauth/jwks"
+
+    md = authorization_server_metadata(ISSUER, jwks_uri="https://hub.test/oauth/jwks")
+    assert md["jwks_uri"] == "https://hub.test/oauth/jwks"
 
 
 def test_protected_resource_metadata_points_at_as():
@@ -86,19 +91,25 @@ def test_well_known_authorization_server_served(client):
     )
 
 
-def test_well_known_openid_configuration_alias_served(client):
-    resp = client.get("/.well-known/openid-configuration")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data == authorization_server_metadata(
-        ISSUER,
-        service_name="KDCube",
-        logo_uri=TEST_ICON,
-        client_uri=TEST_WEBSITE,
-        icons=[TEST_ICON_DESCRIPTOR],
-        scopes_supported=["records:read"],
-        client_id_metadata_document_supported=True,
-    )
+def test_openid_configuration_serves_the_same_document(client):
+    # MCP clients fetch the OIDC location and treat a 404 there as fatal.
+    oidc = client.get("/.well-known/openid-configuration")
+    assert oidc.status_code == 200
+    assert oidc.json() == client.get("/.well-known/oauth-authorization-server").json()
+
+
+def test_document_carries_the_oidc_required_fields(client):
+    data = client.get("/.well-known/openid-configuration").json()
+    assert data["jwks_uri"] == f"{ISSUER}/oauth/jwks"
+    assert data["subject_types_supported"] == ["public"]
+    assert data["id_token_signing_alg_values_supported"] == ["RS256"]
+    # No id_token is issued: `openid` is not requestable.
+    assert "openid" not in data["scopes_supported"]
+    assert client.get("/oauth/jwks").json() == {"keys": []}
+
+
+def test_registration_endpoint_advertised(client):
+    data = client.get("/.well-known/oauth-authorization-server").json()
     assert data["registration_endpoint"] == f"{ISSUER}/oauth/register"
 
 

@@ -4,7 +4,7 @@ title: "Explore How Agents Connect To KDCube"
 summary: "A quickstart tour of the four ways a caller reaches a KDCube app's own services on the user's behalf — a resident agent over the public MCP door, a resident agent over the in-process named-services network, an external app over the public MCP door, and a hand-provisioned automation — and the one governance model they share: a per-caller grant, a two-consent chain to connected accounts with per-account claims, and live edit or immediate revoke from Connection Hub."
 status: active
 tags: ["quickstart", "connections", "connection-hub", "delegated-credentials", "agents", "automation", "mcp", "named-services", "consent", "governance"]
-updated_at: 2026-07-19
+updated_at: 2026-08-07
 keywords: ["resident agent", "external app", "automation", "delegated MCP", "named-services network", "account_scope", "per-account claims", "two-consent chain", "card-authority", "revoke", "kdcube-agent"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/configuring-agent-service-access/configuring-agent-service-access-README.md
@@ -106,6 +106,14 @@ shared across everyone who uses it, so it cannot restrict one caller). Revoking
 either consent stops the tool. Per-claim given/pending state across all of this is
 the [Claim-Driven Consent](../../sdk/solutions/connections/claim-driven-consent/claim-driven-consent-README.md)
 surface.
+
+Account choice is part of the operation, not a separate guess. If several
+eligible accounts remain and the call omits `account_id`, KDCube returns
+`account_required` with labeled candidates. Resending with one candidate uses
+that same account in preflight and in the provider call. A connected account
+outside this caller's binding returns a structured grant denial and a recovery
+URL for the caller's Connection Hub card; the host may show that URL, but the
+platform does not open it or retry the operation on the caller's behalf.
 
 ## Live edit and immediate revoke
 

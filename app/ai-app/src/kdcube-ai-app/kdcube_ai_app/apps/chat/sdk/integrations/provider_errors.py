@@ -27,6 +27,8 @@ _SCOPE_REASONS = {
     "INSUFFICIENTPERMISSIONS",
     "INSUFFICIENTSCOPE",
     "MISSINGSCOPE",
+    # LinkedIn's wording for a token that lacks the required OAuth scope.
+    "NOTENOUGHPERMISSIONS",
 }
 _CONFIG_REASONS = {
     "ACCESSNOTCONFIGURED",
@@ -41,6 +43,17 @@ def _text(value: Any) -> str:
 
 def _reason_key(value: Any) -> str:
     return re.sub(r"[^A-Z0-9]", "", _text(value).upper())
+
+
+def _contains_reason(values: set[str], reasons: set[str]) -> bool:
+    """Whether a normalized provider value names one known reason.
+
+    Some providers return a reason as a field, while others embed it in a
+    sentence (for example LinkedIn's ``Not enough permissions to access``).
+    Exact-only matching turns the latter into a generic 403 and skips the
+    connected-account refresh/reconnect path.
+    """
+    return any(reason and reason in value for value in values for reason in reasons)
 
 
 def _safe_message(value: Any, *, fallback: str) -> str:
@@ -186,11 +199,11 @@ def provider_failure_from_payload(
         _reason_key(provider_reason),
         _reason_key(message),
     }
-    if status == 401 or combined_keys.intersection(_AUTH_REASONS):
+    if status == 401 or _contains_reason(combined_keys, _AUTH_REASONS):
         category = "authorization_failed"
-    elif combined_keys.intersection(_SCOPE_REASONS):
+    elif _contains_reason(combined_keys, _SCOPE_REASONS):
         category = "scope_insufficient"
-    elif combined_keys.intersection(_CONFIG_REASONS):
+    elif _contains_reason(combined_keys, _CONFIG_REASONS):
         category = "provider_configuration_error"
     elif status == 403:
         category = "access_denied"

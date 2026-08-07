@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 
 import kdcube_ai_app.apps.chat.sdk.integrations.connected_accounts as ca
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube import models
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.models import (
     ClaimResolution,
 )
@@ -218,6 +219,28 @@ async def test_agent_binding_miss_routes_to_agent_card_not_connect(monkeypatch):
     # The agent-facing result is explainable and NOT re-routed as a connect demand.
     envelope = credential.error_envelope(where="mail.send")
     assert envelope["error"]["code"] == "agent_account_binding_required"
+    # Retrying after the user ticks the claim is the whole point of this demand.
+    # The block is rebuilt from a synthetic denial, so nothing else carries the
+    # broker's verdict into it - assert the field an MCP client actually reads,
+    # at the end of the translation the named-service door performs.
+    assert credential.error_payload["consent"]["retry_hint"] is True
+
+    from kdcube_ai_app.apps.chat.sdk.integrations.named_service_consent import (
+        tool_error_response,
+    )
+    from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.provider import (
+        NamedServiceRequest,
+    )
+
+    response = tool_error_response(
+        credential.error_envelope(where="mail.send"),
+        request=NamedServiceRequest(operation="object.action", namespace="mail"),
+        namespace="mail",
+        provider_identity={"provider_id": "mail", "namespace": "mail"},
+        default_code="mail_send_failed",
+        fallback_message="Mail could not be sent.",
+    )
+    assert response.error.details["retry_hint"] is True
 
 
 @pytest.mark.asyncio
@@ -371,3 +394,51 @@ async def test_config_errors_stay_tool_errors_without_a_banner(monkeypatch):
     assert credential.ok is False
     assert comm.events == []
     assert not props
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        models.REASON_CONNECT_REQUIRED,
+        models.REASON_CLAIM_UPGRADE_REQUIRED,
+        models.REASON_RECONNECT_REQUIRED,
+        models.REASON_ACCOUNT_REQUIRED,
+        models.REASON_AGENT_GRANT_REQUIRED,
+        models.REASON_AGENT_ACCOUNT_BINDING_REQUIRED,
+    ],
+)
+def test_every_reason_reads_as_a_sentence_without_a_provider_id(reason: str):
+    """The provider label carries no article; each branch supplies its own."""
+    from kdcube_ai_app.apps.chat.sdk.integrations.named_service_consent import (
+        _consent_instructions,
+    )
+
+    text = _consent_instructions(
+        reason=reason,
+        provider_id="",
+        claims=["slack:post"],
+        connection_hub_url="https://hub.example/card",
+    )
+    assert "the provider account" not in text
+    assert "the provider accounts" not in text
+
+
+def test_a_missing_account_binding_does_not_read_as_a_missing_connection():
+    """The account is connected and holds the claim; only the binding is absent.
+
+    Falling through to the connect-first wording sends the user to the provider
+    tab, where there is nothing to fix.
+    """
+    from kdcube_ai_app.apps.chat.sdk.integrations.named_service_consent import (
+        _consent_instructions,
+    )
+
+    text = _consent_instructions(
+        reason=models.REASON_AGENT_ACCOUNT_BINDING_REQUIRED,
+        provider_id="linkedin",
+        claims=["linkedin:post"],
+        connection_hub_url="https://hub.example/card",
+    )
+    assert "is connected and holds linkedin:post" in text
+    assert "not bound to it" in text
+    assert "No Linkedin account is connected" not in text

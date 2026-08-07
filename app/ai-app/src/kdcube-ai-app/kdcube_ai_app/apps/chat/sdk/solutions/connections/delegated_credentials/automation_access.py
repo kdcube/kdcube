@@ -212,7 +212,9 @@ def normalize_account_scope(value: Any) -> dict[str, dict[str, tuple[str, ...]]]
     - Accepts the legacy list form ``{provider: [account_ids]}`` and migrates
       each account to ``("*",)`` (bound to those accounts for every claim), so
       existing grants keep working unchanged.
-    - An absent provider key means no restriction (any account, any claim).
+    - An absent provider key remains absent. Enforcement interprets that shape
+      together with the caller identity: it is default-closed for a delegated
+      caller and unrestricted only for the user's own non-delegated turn.
     """
     out: dict[str, dict[str, tuple[str, ...]]] = {}
     for provider, entry in dict(value or {}).items():
@@ -372,7 +374,9 @@ class AutomationAccessRecord:
     # {provider_id: {account_id: (claims...)}}. For a provider, which connected
     # account(s) this client may use AND, per account, the exact claims it may
     # use there. account "*" = any account; claim "*" (or empty) = any claim.
-    # Absent provider key => no restriction. See ``normalize_account_scope``.
+    # An absent provider key is default-closed for delegated callers. The
+    # request boundary carries the delegated identity alongside this map so
+    # enforcement can distinguish it from a non-delegated user turn.
     account_scope: Mapping[str, Mapping[str, tuple[str, ...]]] = field(default_factory=dict)
     identity_scope: str = ""
     session_id: str = ""
@@ -966,6 +970,7 @@ class AutomationAccessService:
         identity_scope = next(iter(identity_scopes), "grantor")
 
         # Per-agent, per-account claim binding: {provider: {account_id: [claims]}}.
+        account_scope_provided = account_scope is not None
         selected_account_scope: dict[str, dict[str, list[str]]] = {
             provider: {account_id: list(claims) for account_id, claims in accounts.items()}
             for provider, accounts in normalize_account_scope(account_scope).items()
@@ -991,6 +996,17 @@ class AutomationAccessService:
                     existing = None
             if existing is not None:
                 created_at_override = existing.created_at or None
+                if not merge_existing and not account_scope_provided:
+                    # Replace only dimensions the caller actually submitted.
+                    # Omitted account_scope preserves the current binding;
+                    # an explicit {} below clears it.
+                    selected_account_scope = {
+                        provider: {
+                            account_id: list(claims)
+                            for account_id, claims in accounts.items()
+                        }
+                        for provider, accounts in existing.account_scope.items()
+                    }
             if existing is not None and merge_existing:
                 for resource_key, held in existing.resource_grants.items():
                     merged = list(selected_resource_grants.get(resource_key, []))
@@ -1798,11 +1814,16 @@ class AutomationAccessService:
         client = _clean(client_id)
         resource_value = _clean(resource)
         claim_list = _as_list(list(claims))
+        account_scope_provided = account_scope is not None
         scope_update: dict[str, dict[str, list[str]]] = {
             provider: {account_id: list(cl) for account_id, cl in accounts.items()}
             for provider, accounts in normalize_account_scope(account_scope).items()
         }
-        if not client or (not claim_list and not scope_update):
+        if not client or (
+            not claim_list
+            and not scope_update
+            and not (account_scope_provided and replace)
+        ):
             return {"ok": False, "error": "delegated_access_requires_client_and_claims"}
         access_id = oauth_access_id(grantor_subject, client, resource_value)
         raw = await self._redis.get(self._record_key(access_id))
@@ -1839,10 +1860,15 @@ class AutomationAccessService:
             provider: {account_id: tuple(cl) for account_id, cl in accounts.items()}
             for provider, accounts in record.account_scope.items()
         }
-        for provider, accounts in scope_update.items():
-            if replace:
-                account_scope_out[provider] = {a: tuple(cl) for a, cl in accounts.items()}
-            else:
+        if replace and account_scope_provided:
+            # The submitted map is the full desired binding. {} intentionally
+            # clears every account; omission preserves the existing binding.
+            account_scope_out = {
+                provider: {account_id: tuple(cl) for account_id, cl in accounts.items()}
+                for provider, accounts in scope_update.items()
+            }
+        elif account_scope_provided:
+            for provider, accounts in scope_update.items():
                 target = dict(account_scope_out.get(provider, {}))
                 for account_id, cl in accounts.items():
                     current = list(target.get(account_id, ()))

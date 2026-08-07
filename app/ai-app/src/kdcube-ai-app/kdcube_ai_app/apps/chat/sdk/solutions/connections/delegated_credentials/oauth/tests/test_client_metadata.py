@@ -476,3 +476,30 @@ def test_metadata_change_after_display_requires_fresh_consent():
     assert consent.status_code == 400
     assert consent.json()["error"] == "invalid_client_metadata"
     assert "restart authorization" in consent.json()["error_description"]
+
+
+def test_absent_application_type_infers_native_from_loopback_redirects():
+    """Claude Code's published document omits application_type and lists only
+    http loopback redirects; read as "web" those are refused outright."""
+    document = _document(redirect_uris=["http://localhost/callback", "http://127.0.0.1/callback"])
+    document.pop("application_type")
+
+    client = validate_client_metadata_document(CLIENT_ID, document)
+
+    assert client.application_type == "native"
+    assert client.redirect_uris == ("http://localhost/callback", "http://127.0.0.1/callback")
+
+
+def test_absent_application_type_does_not_admit_a_non_loopback_http_redirect():
+    document = _document(redirect_uris=["http://client.example.test/callback"])
+    document.pop("application_type")
+
+    with pytest.raises(ClientMetadataError):
+        validate_client_metadata_document(CLIENT_ID, document)
+
+
+def test_absent_application_type_with_https_redirects_stays_web():
+    document = _document(redirect_uris=["https://client.example.test/callback"])
+    document.pop("application_type")
+
+    assert validate_client_metadata_document(CLIENT_ID, document).application_type == "web"

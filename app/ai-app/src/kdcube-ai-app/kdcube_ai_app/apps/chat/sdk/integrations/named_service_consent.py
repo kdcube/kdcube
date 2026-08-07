@@ -20,6 +20,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.model
     CREDENTIAL_MISSING,
     CREDENTIAL_REVOKED,
     REASON_ACCOUNT_REQUIRED,
+    REASON_AGENT_ACCOUNT_BINDING_REQUIRED,
     REASON_AGENT_GRANT_REQUIRED,
     REASON_CLAIM_UPGRADE_REQUIRED,
     REASON_CONNECT_REQUIRED,
@@ -86,6 +87,11 @@ CONSENT_ERROR_CONTRACT = {
             "on that account. Open connection_hub_url — the caller's own grant card — where the "
             "user ticks the claim for the account of their choice, then retry."
         ),
+        REASON_AGENT_ACCOUNT_BINDING_REQUIRED: (
+            "The named account holds the claim, but this caller is not bound to use it. "
+            "Open connection_hub_url on the caller's grant card, approve the account claim, "
+            "then retry."
+        ),
     },
     "fields": [
         "reason",
@@ -123,7 +129,10 @@ def _consent_instructions(
     This surface has no chat banner: the consent loop is this response, the
     Connection Hub link, and a retry. The wording tells the agent exactly
     that — per reason, scoped to the attempted action's claims."""
-    provider_label = (provider_id[:1].upper() + provider_id[1:]) if provider_id else "the provider"
+    # No article in the fallback: every branch below supplies its own ("The
+    # {label} account", "No {label} account"), so "the provider" would read as
+    # "No the provider account".
+    provider_label = (provider_id[:1].upper() + provider_id[1:]) if provider_id else "provider"
     claim_text = ", ".join(claims) if claims else "the required access"
     # Only an ABSOLUTE URL is openable by the user this text reaches (an
     # external agent relays it verbatim, outside the app origin). A relative
@@ -140,6 +149,16 @@ def _consent_instructions(
             f"{claim_text} on it. {link_part} — it opens this agent's own access card, where "
             "the user decides which account to allow and ticks the claim — then retry this "
             "exact call."
+        )
+    if reason == REASON_AGENT_ACCOUNT_BINDING_REQUIRED:
+        # The account is connected AND holds the claim; only THIS caller's
+        # per-account binding is missing. Naming a connection problem here would
+        # send the user to the wrong tab.
+        return (
+            f"The named {provider_label} account is connected and holds {claim_text}, but THIS "
+            f"caller is not bound to it. {link_part} — it opens this caller's own access card; "
+            "tick the claim on that account and save, then retry this exact call. The provider "
+            "connection needs no change."
         )
     if reason == REASON_ACCOUNT_REQUIRED:
         return (

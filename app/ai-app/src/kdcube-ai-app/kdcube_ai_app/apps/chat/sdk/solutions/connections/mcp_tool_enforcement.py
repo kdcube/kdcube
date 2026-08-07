@@ -145,6 +145,7 @@ async def enforce_tool_requirements(
     tool_name: str,
     operation: str,
     requirements: Sequence[Mapping[str, Any]],
+    account_id: str = "",
     tenant: str = "",
     project: str = "",
     hub_bundle_id: str = "connection-hub@1-0",
@@ -158,7 +159,13 @@ async def enforce_tool_requirements(
     under the calling user's identity and the calling client's per-account
     binding (default-closed for delegated callers).
 
-    Returns ``None`` when every claim resolves - the tool body proceeds.
+    ``account_id`` is the account selector from the tool's own input. Passing
+    it here keeps preflight and the provider body on the same resolution: an
+    ambiguous call returns ``account_required``; resending that same call with
+    one candidate id resolves before provider work begins.
+
+    Returns ``None`` when every claim resolves for that account - the tool body
+    proceeds.
 
     On the FIRST unsatisfied provider the return value is a consent envelope
     (a dict the tool returns as its MCP result; the shared chat post-processor
@@ -207,6 +214,7 @@ async def enforce_tool_requirements(
                 connector_app_id=connector_app_id,
                 claim=claim,
                 tool_name=name,
+                account_id=_clean(account_id),
                 connection_hub_bundle_id=hub_bundle_id,
             )
             if not credential.ok:
@@ -214,7 +222,6 @@ async def enforce_tool_requirements(
                 break
         if failed is None:
             continue
-
         # Demand ordering, identical to the named-services door: with ZERO
         # usable accounts on the backing provider the CONNECT demand leads
         # (the guided plan ends in the agent-grant hand-off). The requirement

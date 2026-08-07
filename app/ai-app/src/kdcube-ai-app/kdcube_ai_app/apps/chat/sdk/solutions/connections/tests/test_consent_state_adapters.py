@@ -20,6 +20,13 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.consent_state_adapters im
     DelegatedGrantStoreReader,
     ConnectedAccountStoreReader,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube.models import (
+    REASON_AGENT_ACCOUNT_BINDING_REQUIRED,
+    USER_ACTIONABLE_REASONS,
+)
+from kdcube_ai_app.apps.chat.sdk.integrations.named_service_consent import (
+    CONSENT_ERROR_CONTRACT,
+)
 
 _CAPS = [
     {"grant": "memories:read", "label": "Read KDCube memories", "description": "Read notes.",
@@ -85,3 +92,22 @@ def test_connected_account_reason_maps_to_state():
     unavail = asyncio.run(ConnectedAccountStoreReader(resolve_unavail).claim_state(
         claim="x:y", provider_id="x", connector_app_id="", user={}))
     assert unavail["state"] == UNAVAILABLE
+
+
+def test_agent_account_binding_reason_is_actionable_on_every_consent_surface():
+    async def resolve(**kw):
+        return REASON_AGENT_ACCOUNT_BINDING_REQUIRED
+
+    state = asyncio.run(
+        ConnectedAccountStoreReader(resolve).claim_state(
+            claim="linkedin:post",
+            provider_id="linkedin",
+            connector_app_id="",
+            user={},
+        )
+    )
+
+    assert state["state"] == PENDING
+    assert state["grant_action"]["reason"] == REASON_AGENT_ACCOUNT_BINDING_REQUIRED
+    assert REASON_AGENT_ACCOUNT_BINDING_REQUIRED in USER_ACTIONABLE_REASONS
+    assert REASON_AGENT_ACCOUNT_BINDING_REQUIRED in CONSENT_ERROR_CONTRACT["reasons"]

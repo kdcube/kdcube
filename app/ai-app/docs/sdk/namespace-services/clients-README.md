@@ -4,7 +4,7 @@ title: "Namespace Services: Clients"
 summary: "How apps (bundles), agents, widgets, jobs, and external clients consume configured namespace service providers."
 status: design
 tags: ["sdk", "namespace-services", "clients", "tools", "resolvers", "apps", "bundles"]
-updated_at: 2026-08-03
+updated_at: 2026-08-07
 keywords:
   [
     "namespace service client",
@@ -570,13 +570,20 @@ Agent calls can cross two independent consent boundaries:
    named-service resource (`delegated_agent_grant`, managed under **Delegated
    by KDCube**).
 2. A provider-backed realm may additionally need the user's connected-account
-   claims (`needs_connected_account_consent`, managed under **Delegated to
-   KDCube**).
+   claim and this caller's per-account binding
+   (`needs_connected_account_consent`, managed across **Delegated to KDCube**
+   and the caller's card under **Delegated by KDCube**).
 
 The first missing boundary raises its structured consent demand at the tool
 attempt; there is no turn-start consent sweep. The agent never receives the
 external provider credential, and revoking either grant stops a call that needs
-both. The canonical model is
+both. When a call accepts `account_id`, the client passes the same selector to
+the requirement preflight and the provider operation. An omitted selector with
+several eligible accounts returns `account_required`; a missing caller binding
+returns `agent_grant_required` or, for a specifically named account,
+`agent_account_binding_required`. Recovery URLs are result data for a host or
+external client to present; they do not navigate or replay the call by
+themselves. The canonical model is
 [Agents Acting On Behalf Of The User](../solutions/connections/agent-acting-for-user/agent-acting-for-user-README.md);
 connected-account semantics are in
 [Delegated Accounts](../solutions/connections/delegated-accounts/delegated-accounts-README.md);

@@ -390,6 +390,23 @@ def _valid_redirect_uri(uri: str, application_type: str) -> bool:
     )
 
 
+def _all_http_loopback(redirects: Any) -> bool:
+    """Every entry is an http URI on a loopback host (and there is at least one)."""
+    if not isinstance(redirects, list) or not redirects:
+        return False
+    for uri in redirects:
+        if not isinstance(uri, str):
+            return False
+        try:
+            parsed = urlsplit(uri)
+            _port = parsed.port
+        except (TypeError, ValueError):
+            return False
+        if parsed.scheme.lower() != "http" or parsed.hostname not in _LOOPBACK_REDIRECT_HOSTS:
+            return False
+    return True
+
+
 def validate_client_metadata_document(client_id: str, document: Mapping[str, Any]) -> PublicClient:
     if not isinstance(document.get("client_id"), str) or document["client_id"] != client_id:
         raise ClientMetadataError(
@@ -407,8 +424,14 @@ def validate_client_metadata_document(client_id: str, document: Mapping[str, Any
             "invalid_client_metadata",
             "client metadata documents cannot contain shared client secrets",
         )
-    application_type = _metadata_text(document, "application_type") or "web"
-    application_type = application_type.lower()
+    application_type = _metadata_text(document, "application_type").lower()
+    if not application_type:
+        # Absent means "web" in OIDC registration semantics, and a web client
+        # may not use a plain-http redirect. A document whose redirects are ALL
+        # http loopback describes a native client; reading it as web rejects it
+        # outright (Claude Code publishes no application_type). Any non-loopback
+        # http redirect still lands on "web" and is refused below.
+        application_type = "native" if _all_http_loopback(document.get("redirect_uris")) else "web"
     if application_type not in {"native", "web"}:
         raise ClientMetadataError(
             "invalid_client_metadata",

@@ -24,6 +24,7 @@ def authorization_server_metadata(
     token_endpoint: str | None = None,
     revocation_endpoint: str | None = None,
     registration_endpoint: str | None = None,
+    jwks_uri: str | None = None,
     scopes_supported: Iterable[str] | None = None,
     service_name: str | None = None,
     logo_uri: str | None = None,
@@ -52,7 +53,16 @@ def authorization_server_metadata(
         "token_endpoint_auth_methods_supported": ["none"],
         "authorization_response_iss_parameter_supported": True,
         "scopes_supported": list(scopes_supported or []),
-        # jwks_uri intentionally omitted: tokens are opaque (kst1).
+        # The three fields below are required by OIDC discovery, which MCP
+        # clients apply to this document: it is also served at
+        # /.well-known/openid-configuration, and a client that gets a 404 or a
+        # document without them stops before registering (Claude Code CLI).
+        # jwks: empty and permanent — kst1 tokens are opaque.
+        # id_token: none is ever issued; `openid` is absent from
+        # scopes_supported, so no client can request one.
+        "jwks_uri": jwks_uri or f"{issuer}/oauth/jwks",
+        "subject_types_supported": ["public"],
+        "id_token_signing_alg_values_supported": ["RS256"],
     }
     if dynamic_client_registration_supported:
         # RFC 7591 remains available for clients that do not publish a Client

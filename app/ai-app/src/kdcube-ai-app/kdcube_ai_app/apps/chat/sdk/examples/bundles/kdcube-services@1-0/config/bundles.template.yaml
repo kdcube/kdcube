@@ -35,6 +35,13 @@ bundles:
                 connector_apps:
                   google: "gmail"
                   slack: "slack-demo"
+                  linkedin: "demo"
+        integrations:
+          linkedin:
+            # LinkedIn requires a dated version header on every /rest call and
+            # sunsets old versions. Raise this when LinkedIn retires the
+            # configured one; see the LinkedIn integration recipe.
+            api_version: "202601"
         ui:
           widgets:
             bundle_storage:

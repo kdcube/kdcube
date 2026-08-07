@@ -23,7 +23,7 @@ from ...services.productivity.google_sheets import (
 )
 
 
-EnforceTool = Callable[[str, str], Awaitable[dict[str, Any] | None]]
+EnforceTool = Callable[[str, str, str], Awaitable[dict[str, Any] | None]]
 
 
 SHEETS_PRODUCTIVITY_TOOLS: dict[str, dict[str, Any]] = {
@@ -219,7 +219,7 @@ def register_google_sheets_tools(
             ),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_sheets_search", "search")
+        denial = await _enforce("productivity_sheets_search", "search", account_id)
         if denial is not None:
             return denial
         return await sheets.execute(
@@ -255,7 +255,7 @@ def register_google_sheets_tools(
             ),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_sheets_describe", "describe")
+        denial = await _enforce("productivity_sheets_describe", "describe", account_id)
         if denial is not None:
             return denial
         return await sheets.execute(
@@ -314,7 +314,7 @@ def register_google_sheets_tools(
             ),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_sheets_read", "read")
+        denial = await _enforce("productivity_sheets_read", "read", account_id)
         if denial is not None:
             return denial
         return await sheets.execute(
@@ -372,7 +372,7 @@ def register_google_sheets_tools(
             ),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_sheets_update_values", "update")
+        denial = await _enforce("productivity_sheets_update_values", "update", account_id)
         if denial is not None:
             return denial
         return await sheets.execute(
@@ -438,7 +438,7 @@ def register_google_sheets_tools(
             ),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_sheets_append_rows", "append")
+        denial = await _enforce("productivity_sheets_append_rows", "append", account_id)
         if denial is not None:
             return denial
         return await sheets.execute(
@@ -485,7 +485,7 @@ def register_google_sheets_tools(
             ),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_sheets_clear_values", "clear")
+        denial = await _enforce("productivity_sheets_clear_values", "clear", account_id)
         if denial is not None:
             return denial
         return await sheets.execute(
@@ -542,7 +542,7 @@ def register_google_sheets_tools(
             ),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_sheets_create_spreadsheet", "create")
+        denial = await _enforce("productivity_sheets_create_spreadsheet", "create", account_id)
         if denial is not None:
             return denial
         return await sheets.execute(
@@ -596,7 +596,7 @@ def register_google_sheets_tools(
             ),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_sheets_add_tab", "create")
+        denial = await _enforce("productivity_sheets_add_tab", "create", account_id)
         if denial is not None:
             return denial
         return await sheets.execute(
@@ -661,7 +661,7 @@ def register_google_sheets_tools(
             ),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_sheets_update_tab", "update")
+        denial = await _enforce("productivity_sheets_update_tab", "update", account_id)
         if denial is not None:
             return denial
         return await sheets.execute(
@@ -708,7 +708,7 @@ def register_google_sheets_tools(
             ),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_sheets_delete_tab", "delete")
+        denial = await _enforce("productivity_sheets_delete_tab", "delete", account_id)
         if denial is not None:
             return denial
         return await sheets.execute(
@@ -805,7 +805,7 @@ def register_google_sheets_tools(
             ),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_sheets_format_range", "format")
+        denial = await _enforce("productivity_sheets_format_range", "format", account_id)
         if denial is not None:
             return denial
         return await sheets.execute(

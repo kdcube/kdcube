@@ -61,6 +61,19 @@ DOCS_COMMENT_TOOLS = {
     "productivity_docs_resolve_comment",
     "productivity_docs_delete_comment",
 }
+LINKEDIN_READ_TOOLS = {
+    "productivity_linkedin_profile",
+}
+# Reads KDCube's own connection records, calls no LinkedIn API, and takes no
+# account_id — so it declares no connected-account claim.
+LINKEDIN_DISCOVERY_TOOLS = {
+    "productivity_linkedin_accounts",
+}
+LINKEDIN_WRITE_TOOLS = {
+    "productivity_linkedin_post",
+    "productivity_linkedin_comment",
+    "productivity_linkedin_post_image",
+}
 ALL_TOOLS = {
     "productivity_slack_search",
     "productivity_mail_search",
@@ -70,6 +83,9 @@ ALL_TOOLS = {
     *DOCS_READ_TOOLS,
     *DOCS_WRITE_TOOLS,
     *DOCS_COMMENT_TOOLS,
+    *LINKEDIN_READ_TOOLS,
+    *LINKEDIN_DISCOVERY_TOOLS,
+    *LINKEDIN_WRITE_TOOLS,
 }
 
 
@@ -109,12 +125,20 @@ def test_every_tool_declares_provider_claims():
             name: ("google", ["docs:read", "docs:comment"])
             for name in DOCS_COMMENT_TOOLS
         },
+        **{name: ("linkedin", ["linkedin:profile"]) for name in LINKEDIN_READ_TOOLS},
+        # LinkedIn gates posts and comments on the same w_member_social scope.
+        **{name: ("linkedin", ["linkedin:post"]) for name in LINKEDIN_WRITE_TOOLS},
     }
     for name, (provider_id, claims) in expectations.items():
         requirements = module.tool_requirements(name)
         assert requirements, f"{name} declares no requirements"
         assert requirements[0]["provider_id"] == provider_id
         assert requirements[0]["claims"] == claims
+    # Account discovery must stay claim-free: resolving a connected-account
+    # claim here returns account_required once two accounts are connected, and
+    # the tool takes no account_id, so the denial could never be satisfied.
+    for name in LINKEDIN_DISCOVERY_TOOLS:
+        assert module.tool_requirements(name) == []
 
 
 @pytest.mark.asyncio

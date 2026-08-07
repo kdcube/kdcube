@@ -12,6 +12,18 @@ see_also:
 
 # LinkedIn Integration Docs
 
+The SDK carries **two independent LinkedIn layers**. Pick before reading:
+
+| Layer | Modules | OAuth owner | Docs |
+| --- | --- | --- | --- |
+| Connection Hub connected accounts | `rest_api.py`, `tools.py`, `named_service.py` | Connection Hub connector app | [LinkedIn Integration recipe](../../../recipes/connections/integrations/linkedin-README.md) |
+| Bundle-owned OAuth (legacy) | `accounts.py`, `settings.py`, `delivery.py` | The bundle itself | this folder |
+
+New work belongs on the Connection Hub layer: it gives agent tools, the
+productivity MCP door, the `linkedin` named-service namespace, and one consent
+model shared with Slack and Google. The legacy layer stays in place for
+`task-and-memo-app@1-0` and targets LinkedIn's deprecated `/v2` API.
+
 Use these docs in this order:
 
 - [LinkedIn SDK Integration](linkedin-README.md) — reusable KDCube SDK modules,

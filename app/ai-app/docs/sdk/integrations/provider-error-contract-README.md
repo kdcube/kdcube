@@ -103,6 +103,7 @@ headers, or an unredacted provider response body to the caller.
 | Provider rate-limits the call | Preserve `429` and `Retry-After`; mark retryable. |
 | Provider returns `5xx` | Mark unavailable and retryable. For mutations, assess whether the outcome is unknown. |
 | Timeout/connection failure | Set `provider_status: 0`, mark retryable, and set `outcome_unknown` for a mutation that may have been sent. |
+| Provider accepts a mutation but omits its required created-object identifier | Return an incomplete-response error with the real provider status and `outcome_unknown: true`; inspect/search before retrying. |
 | Local validation fails | Return a validation error with `outcome_unknown: false`; no provider call was made. |
 
 ## Server logging
@@ -128,7 +129,8 @@ rules:
 2. Record the stage before each side effect.
 3. Preserve any provider id or URL already returned.
 4. Set `outcome_unknown` when a timeout or provider failure leaves the outcome
-   ambiguous.
+   ambiguous, including a successful response that omits the identifier needed
+   to prove which object was created.
 5. Do not automatically replay an ambiguous mutation. Inspect by stable id or
    idempotency key first.
 

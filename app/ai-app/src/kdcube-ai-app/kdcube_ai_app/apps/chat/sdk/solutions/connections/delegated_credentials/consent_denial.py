@@ -24,6 +24,9 @@ from __future__ import annotations
 import logging
 from typing import Any, Mapping, Sequence
 
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.automation_access import (
+    AUTOMATION_CLIENT_PREFIX,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.credential_view import (
     delegated_credential_view,
 )
@@ -80,6 +83,29 @@ def connection_hub_grant_url(
     base = connection_hub_public_base_url()
     if not base or not tenant or not project or not client_id or not resource:
         return ""
+    # The pending pane's only save is delegated_agent_grant_create, which serves
+    # hosted agents and OAuth clients. A manual automation record is keyed by a
+    # random access_id that path cannot reach, so opening the pane would hand
+    # the user a save that always fails. Focus the existing card instead: the
+    # manual access is edited in place under its own update operation.
+    if client_id.startswith(f"{AUTOMATION_CLIENT_PREFIX}:"):
+        access_id = client_id.split(":", 2)[1]
+        query = {
+            "tab": "delegated_by_kdcube",
+            "manual_access_id": access_id,
+            "resource": resource,
+            "claims": ",".join(str(c) for c in claims if str(c or "").strip()),
+        }
+        if str(account_id or "").strip():
+            query["account_id"] = str(account_id).strip()
+        if str(account_claim or "").strip():
+            query["account_claim"] = str(account_claim).strip()
+        return (
+            f"{base}/api/integrations/bundles/"
+            f"{quote(str(tenant), safe='')}/{quote(str(project), safe='')}/"
+            f"{quote(hub_bundle_id, safe='')}/widgets/connections_settings?"
+            f"{urlencode(query)}"
+        )
     query: dict[str, str] = {
         "tab": "delegated_by_kdcube",
         "pending_agent_grant": "1",
@@ -138,11 +164,17 @@ def agent_grant_consent_denial(
     }
     view = delegated_credential_view(request)
     client_id = view.agent_client_id
-    # Any OTHER delegated client (an external app connected via OAuth — Claude
-    # Code) gets the SAME focused path: the hub deep link below lands on its
-    # card with the missing claims pre-checked.
+    # An external OAuth client (Claude Code) takes the SAME focused path: the
+    # deep link lands on its card with the missing claims pre-checked, and its
+    # record extends through extend_client_access.
+    #
+    # A manual automation client does not. Its record is keyed by a random
+    # access_id that the deterministic extend path cannot reach, so the pending
+    # pane's save would fail; it is edited by hand, which is how it is issued.
     external_client_id = "" if client_id else view.client_id
     resource = view.resource
+    # connection_hub_grant_url decides which client families reach the pending
+    # pane; an automation client lands on the tab instead.
     hub_url = connection_hub_grant_url(
         tenant=tenant,
         project=project,

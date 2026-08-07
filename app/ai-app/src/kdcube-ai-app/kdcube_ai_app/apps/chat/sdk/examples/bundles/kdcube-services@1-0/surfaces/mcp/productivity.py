@@ -49,6 +49,10 @@ from .productivity_docs import (
     DOCS_PRODUCTIVITY_TOOLS,
     register_google_docs_tools,
 )
+from .productivity_linkedin import (
+    LINKEDIN_PRODUCTIVITY_TOOLS,
+    register_linkedin_tools,
+)
 from .productivity_sheets import (
     SHEETS_PRODUCTIVITY_TOOLS,
     register_google_sheets_tools,
@@ -58,12 +62,14 @@ ConfigFactory = Callable[[], Mapping[str, Any]]
 
 PRODUCTIVITY_MCP_INSTRUCTIONS = """\
 This MCP server exposes productivity tools that run on the approving user's
-connected accounts (Slack, mail, Google Sheets, Google Docs). For Sheets, use
-search when the spreadsheet id is unknown, describe before structural changes,
-and pass the returned stable ids to read or write tools. For Docs, use search
-when the document id is unknown, get before editing, and pass the returned
-document id and text indices to the edit and comment tools. Each tool names the
-account access it needs. When a call reports a consent requirement, relay the reason
+connected accounts (Slack, mail, Google Sheets, Google Docs, LinkedIn). For
+Sheets, use search when the spreadsheet id is unknown, describe before
+structural changes, and pass the returned stable ids to read or write tools. For
+Docs, use search when the document id is unknown, get before editing, and pass
+the returned document id and text indices to the edit and comment tools. For
+LinkedIn, list accounts first when several may be connected, then publish; pass
+the returned post_urn to the comment tool. LinkedIn exposes no feed, message or
+post-content reads here. Each tool names the account access it needs. When a call reports a consent requirement, relay the reason
 and connection_hub_url to the user instead of retrying blindly:
 connect_required, claim_upgrade_required, and reconnect_required are fixed by
 the user at connection_hub_url; account_required is fixed by resending the
@@ -110,19 +116,7 @@ PRODUCTIVITY_TOOLS: dict[str, dict[str, Any]] = {
     },
     **SHEETS_PRODUCTIVITY_TOOLS,
     **DOCS_PRODUCTIVITY_TOOLS,
-    # TODO(productivity): LinkedIn - same declaration shape once the linkedin
-    # integration ships:
-    # "productivity_linkedin_search": {
-    #     "label": "Search LinkedIn",
-    #     "description": "Search through the user's connected LinkedIn account.",
-    #     "connections": {
-    #         "delegated_to_kdcube": {
-    #             "connected_accounts": [
-    #                 {"provider_id": "linkedin", "claims": ["linkedin:search"]},
-    #             ],
-    #         },
-    #     },
-    # },
+    **LINKEDIN_PRODUCTIVITY_TOOLS,
 }
 
 
@@ -188,13 +182,16 @@ def build_productivity_mcp_app(
             resource=view.resources[0] if view.resources else "",
         )
 
-    async def _enforce(tool_name: str, operation: str) -> dict[str, Any] | None:
+    async def _enforce(
+        tool_name: str, operation: str, account_id: str = ""
+    ) -> dict[str, Any] | None:
         _prepare()
         return await enforce_tool_requirements(
             request,
             tool_name=tool_name,
             operation=operation,
             requirements=tool_requirements(tool_name),
+            account_id=account_id,
             tenant=tenant_factory(),
             project=project_factory(),
         )
@@ -226,7 +223,7 @@ def build_productivity_mcp_app(
             ),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_slack_search", "search")
+        denial = await _enforce("productivity_slack_search", "search", account_id)
         if denial is not None:
             return denial
         return await slack.search_slack(query=query, count=count, account_id=account_id)
@@ -266,7 +263,7 @@ def build_productivity_mcp_app(
             ),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_mail_search", "search")
+        denial = await _enforce("productivity_mail_search", "search", account_id)
         if denial is not None:
             return denial
         return await gmail.search_gmail(
@@ -302,7 +299,7 @@ def build_productivity_mcp_app(
             ),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_mail_get", "get")
+        denial = await _enforce("productivity_mail_get", "get", account_id)
         if denial is not None:
             return denial
         return await gmail.read_gmail_message(
@@ -321,6 +318,12 @@ def build_productivity_mcp_app(
         mcp,
         service=GoogleDocsService(),
         enforce_tool=_enforce,
+    )
+
+    register_linkedin_tools(
+        mcp=mcp,
+        tool_annotations_type=ToolAnnotations,
+        enforce=_enforce,
     )
 
     return mcp

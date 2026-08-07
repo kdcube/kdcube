@@ -30,7 +30,7 @@ from ...services.productivity.google_docs import (
 )
 
 
-EnforceTool = Callable[[str, str], Awaitable[dict[str, Any] | None]]
+EnforceTool = Callable[[str, str, str], Awaitable[dict[str, Any] | None]]
 
 # The three claim bundles a Docs tool can require, in the SAME shape
 # application tool configs use (ToolClaimPolicy.from_tool_config). ``claims``
@@ -233,7 +233,7 @@ def register_google_docs_tools(
             ),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_docs_search", "search")
+        denial = await _enforce("productivity_docs_search", "search", account_id)
         if denial is not None:
             return denial
         return await docs.execute(
@@ -273,7 +273,7 @@ def register_google_docs_tools(
             ),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_docs_get", "get")
+        denial = await _enforce("productivity_docs_get", "get", account_id)
         if denial is not None:
             return denial
         return await docs.execute(
@@ -316,7 +316,7 @@ def register_google_docs_tools(
             ),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_docs_export", "export")
+        denial = await _enforce("productivity_docs_export", "export", account_id)
         if denial is not None:
             return denial
         return await docs.execute(
@@ -365,7 +365,7 @@ def register_google_docs_tools(
             ),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_docs_list_comments", "list_comments")
+        denial = await _enforce("productivity_docs_list_comments", "list_comments", account_id)
         if denial is not None:
             return denial
         return await docs.execute(
@@ -411,7 +411,7 @@ def register_google_docs_tools(
             ),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_docs_get_comment", "get_comment")
+        denial = await _enforce("productivity_docs_get_comment", "get_comment", account_id)
         if denial is not None:
             return denial
         return await docs.execute(
@@ -460,7 +460,7 @@ def register_google_docs_tools(
             ),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_docs_create", "create")
+        denial = await _enforce("productivity_docs_create", "create", account_id)
         if denial is not None:
             return denial
         return await docs.execute(
@@ -528,7 +528,7 @@ def register_google_docs_tools(
             ),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_docs_copy", "copy")
+        denial = await _enforce("productivity_docs_copy", "copy", account_id)
         if denial is not None:
             return denial
         return await docs.execute(
@@ -588,7 +588,7 @@ def register_google_docs_tools(
             ),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_docs_insert_text", "insert")
+        denial = await _enforce("productivity_docs_insert_text", "insert", account_id)
         if denial is not None:
             return denial
         return await docs.execute(
@@ -642,7 +642,7 @@ def register_google_docs_tools(
             ),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_docs_append_text", "append")
+        denial = await _enforce("productivity_docs_append_text", "append", account_id)
         if denial is not None:
             return denial
         return await docs.execute(
@@ -712,7 +712,7 @@ def register_google_docs_tools(
             ),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_docs_replace_text", "replace")
+        denial = await _enforce("productivity_docs_replace_text", "replace", account_id)
         if denial is not None:
             return denial
         return await docs.execute(
@@ -788,7 +788,7 @@ def register_google_docs_tools(
             ),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_docs_apply_text_style", "format")
+        denial = await _enforce("productivity_docs_apply_text_style", "format", account_id)
         if denial is not None:
             return denial
         return await docs.execute(
@@ -849,7 +849,7 @@ def register_google_docs_tools(
         ] = "",
     ) -> dict[str, Any]:
         denial = await _enforce(
-            "productivity_docs_insert_page_break", "insert"
+            "productivity_docs_insert_page_break", "insert", account_id
         )
         if denial is not None:
             return denial
@@ -916,7 +916,7 @@ def register_google_docs_tools(
             ),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_docs_embed_image", "insert")
+        denial = await _enforce("productivity_docs_embed_image", "insert", account_id)
         if denial is not None:
             return denial
         return await docs.execute(
@@ -982,7 +982,7 @@ def register_google_docs_tools(
             ),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_docs_import", "import")
+        denial = await _enforce("productivity_docs_import", "import", account_id)
         if denial is not None:
             return denial
         return await docs.execute(
@@ -1047,7 +1047,7 @@ def register_google_docs_tools(
             ),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_docs_create_comment", "comment")
+        denial = await _enforce("productivity_docs_create_comment", "comment", account_id)
         if denial is not None:
             return denial
         return await docs.execute(
@@ -1108,7 +1108,7 @@ def register_google_docs_tools(
             ),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_docs_reply_comment", "comment")
+        denial = await _enforce("productivity_docs_reply_comment", "comment", account_id)
         if denial is not None:
             return denial
         return await docs.execute(
@@ -1158,7 +1158,7 @@ def register_google_docs_tools(
             ),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_docs_resolve_comment", "comment")
+        denial = await _enforce("productivity_docs_resolve_comment", "comment", account_id)
         if denial is not None:
             return denial
         return await docs.execute(
@@ -1204,7 +1204,7 @@ def register_google_docs_tools(
             ),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_docs_delete_comment", "delete")
+        denial = await _enforce("productivity_docs_delete_comment", "delete", account_id)
         if denial is not None:
             return denial
         return await docs.execute(
@@ -1242,7 +1242,7 @@ def register_google_docs_tools(
             Field(description="Optional connected Google account id when several are available."),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_docs_get_structure", "get_structure")
+        denial = await _enforce("productivity_docs_get_structure", "get_structure", account_id)
         if denial is not None:
             return denial
         return await docs.execute(
@@ -1272,7 +1272,7 @@ def register_google_docs_tools(
             Field(description="Optional connected Google account id when several are available."),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_docs_list_tabs", "list_tabs")
+        denial = await _enforce("productivity_docs_list_tabs", "list_tabs", account_id)
         if denial is not None:
             return denial
         return await docs.execute(
@@ -1333,7 +1333,7 @@ def register_google_docs_tools(
             Field(description="Optional connected Google account id when several are available."),
         ] = "",
     ) -> dict[str, Any]:
-        denial = await _enforce("productivity_docs_batch_edit", "batch_edit")
+        denial = await _enforce("productivity_docs_batch_edit", "batch_edit", account_id)
         if denial is not None:
             return denial
         return await docs.execute(

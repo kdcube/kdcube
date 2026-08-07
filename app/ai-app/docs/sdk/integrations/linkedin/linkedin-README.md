@@ -12,6 +12,14 @@ see_also:
 
 # LinkedIn SDK Integration
 
+> **This page documents the bundle-owned OAuth layer**, which targets
+> LinkedIn's deprecated `/v2` endpoints (`ugcPosts`, `assets`). It remains in
+> use by `task-and-memo-app@1-0`.
+>
+> For new work use the Connection Hub layer (`rest_api.py`, `tools.py`,
+> `named_service.py`) over the versioned `/rest` API:
+> [LinkedIn Integration recipe](../../../recipes/connections/integrations/linkedin-README.md).
+
 The LinkedIn SDK integration contains reusable OAuth and publishing mechanics
 that bundles can import from:
 

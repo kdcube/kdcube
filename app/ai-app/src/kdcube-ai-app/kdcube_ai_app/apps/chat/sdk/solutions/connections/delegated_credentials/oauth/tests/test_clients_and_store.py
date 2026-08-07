@@ -502,3 +502,21 @@ async def test_real_redis_oauth_transitions_are_atomic() -> None:
             await redis.delete(*cleanup_keys)
         closer = getattr(redis, "aclose", None) or getattr(redis, "close")
         await closer()
+
+
+def test_metadata_document_portless_loopback_accepts_any_port():
+    """A native client cannot publish the ephemeral port it will bind, so a
+    portless loopback URI in the document matches any port (RFC 8252 7.3).
+    Claude Code publishes exactly this shape."""
+    client = PublicClient(
+        client_id="https://claude.ai/oauth/claude-code-client-metadata",
+        redirect_uris=("http://localhost/callback", "http://127.0.0.1/callback"),
+        registration_kind=CLIENT_REGISTRATION_METADATA_DOCUMENT,
+    )
+
+    assert redirect_uri_allowed(client, "http://localhost:3118/callback")
+    assert redirect_uri_allowed(client, "http://127.0.0.1:52341/callback")
+    # Host, scheme and path are still matched exactly.
+    assert not redirect_uri_allowed(client, "http://localhost:3118/other")
+    assert not redirect_uri_allowed(client, "https://localhost:3118/callback")
+    assert not redirect_uri_allowed(client, "http://client.example.test:3118/callback")

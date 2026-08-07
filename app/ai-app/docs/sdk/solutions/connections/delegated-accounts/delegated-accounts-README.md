@@ -1,10 +1,11 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-accounts/delegated-accounts-README.md
 title: "Delegated Provider Accounts"
-summary: "Delegated Connections subtype where KDCube stores user-granted external provider claims such as Gmail, Slack, and iCloud for automation and app actions."
+summary: "How KDCube stores user-granted external provider claims and resolves them through per-caller, per-account bindings for apps, agents, and automations."
 status: active
-tags: ["sdk", "connections", "connection-hub", "delegated-connections", "delegated-accounts", "oauth", "gmail", "slack", "icloud"]
-updated_at: 2026-07-12
+tags: ["sdk", "connections", "connection-hub", "delegated-connections", "delegated-accounts", "oauth", "gmail", "slack", "linkedin", "icloud"]
+updated_at: 2026-08-07
+keywords: ["connected provider account", "account_scope", "account_required", "agent_account_binding_required", "provider credential", "outcome_unknown", "Connection Hub deep link"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-connections/delegated-connections-README.md
@@ -112,6 +113,10 @@ Gmail
 
 Slack
   generic connections framework
+  OAuth through shared Connection Hub callback
+
+LinkedIn
+  Connection Hub connected-account adapter
   OAuth through shared Connection Hub callback
 
 Generic OAuth/OIDC
@@ -235,11 +240,13 @@ payload into tool envelopes, named-service errors, and MCP results:
 | `claim_upgrade_required` | account exists, claim not approved | approve the claim | true |
 | `reconnect_required` | credential missing / unrefreshable / provider rejected it | reconnect the account | true |
 | `account_required` | several eligible accounts | pick an `account_id` and resend | true |
-| `agent_grant_required` | the account is connected and holds the claim, but THIS delegated caller has no per-account binding for it (default-closed) | tick the claim for an account on the caller's grant card (Delegated by KDCube) | true |
+| `agent_grant_required` | capable accounts exist, but this delegated caller's default-closed binding does not cover the requested claim | tick the claim for an account on the caller's grant card (Delegated by KDCube) | true |
+| `agent_account_binding_required` | a concrete account was named and holds the claim, but this caller is not bound to use that claim on that account | tick the named claim on the named account in the caller's grant card | true |
 | `claim_not_configured`, `connector_app_not_configured`, `claim_outside_connector_app` | operator configuration errors | admin action | false |
 
 `retry_hint` says whether retrying the same operation after the user
-completes the Connection Hub action should succeed.
+completes the Connection Hub action should succeed. It is not an instruction
+for the runtime to open the URL or replay the operation automatically.
 
 ## Multiple Accounts
 
@@ -255,7 +262,22 @@ candidates: [{account_id, label, email, workspace, status, claims}]
 Chat, named services, and MCP clients render this as a real choice list and
 resend with the chosen `account_id`. Every provider tool accepts an optional
 `account_id` parameter, and successful results carry the `account_id` they
-used so multi-account output stays attributable.
+used so multi-account output stays attributable. Requirement preflight receives
+the same selector as the provider operation; selecting an account therefore
+cannot pass authorization for one account and execute against another.
+
+## Editing A Caller's Account Binding
+
+`account_scope` is the caller's full provider/account/claim binding. Update
+operations distinguish omission from an explicit empty map:
+
+```text
+account_scope omitted  -> preserve the caller's existing account bindings
+account_scope: {}      -> intentionally clear every account binding
+```
+
+This distinction prevents an unrelated grant edit from erasing working
+provider access while still allowing an explicit revoke-all operation.
 
 ## Consent Payload And Hub Deep-Link
 
@@ -283,14 +305,21 @@ list (account connected → access working → requested approvals as per-claim
 chips) with a single primary button for the first unmet step, and highlights
 the affected account card.
 
-`agent_grant_required` routes differently: the provider side is fine there,
-so the `url` deep-links the CALLER'S own grant card
-(`tab=delegated_by_kdcube`, with the agent client id, resource, and the asked
-account + claim named). The card explains why the user landed there and opens
-the provider's account section; the user ticks the claim for the account of
-their choice — nothing is pre-checked. It never points at the
+`agent_grant_required` and `agent_account_binding_required` route differently:
+the provider side is already capable, so the `url` deep-links the CALLER'S own
+grant card (`tab=delegated_by_kdcube`) with the client or manual access id,
+resource, and requested account/claim. `resource` is the protected KDCube
+surface through which the caller reaches the provider-backed service; it is
+not the provider account or provider object. The card explains why the user
+landed there and opens the provider's account section; the user ticks the
+claim for an account — nothing is pre-checked. It never points at the
 provider-connect tab, whose guided plan would truthfully report "all set" and
 strand the user.
+
+The payload only returns the URL. Hosted chat may render it as an action and an
+external MCP client may relay it to the user; a background automation can log
+or surface it through its own operator channel. Connection Hub does not open
+itself, change a grant, or replay the failed provider operation.
 
 Consent is DEMAND-DRIVEN: which tools a turn needs only becomes clear as the
 agent works, so claim-gated tools stay in the agent's set and the consent
@@ -332,3 +361,14 @@ refresh exactly the one the provider rejected. The Gmail and Slack tool
 suites run entirely under this runner; auth-class provider errors
 (HTTP 401/403, Slack `invalid_auth`/`token_revoked`/…) never reach users as
 raw API errors.
+
+## Unknown Mutation Outcomes
+
+A provider may return success without the identifier required to prove which
+post, comment, or other object was created. The integration returns a managed
+incomplete-response error with the real provider status and
+`outcome_unknown: true`. KDCube does not automatically replay that mutation;
+the caller must inspect or reconcile provider state before deciding whether to
+retry. This flag is not a provider-side idempotency key and cannot prevent an
+external client from ignoring the warning. The shared contract is
+[Provider Error And Observability Contract](../../../integrations/provider-error-contract-README.md).

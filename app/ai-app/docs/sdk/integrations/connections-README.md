@@ -1,31 +1,33 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/connections-README.md
 title: "Connections Framework (OAuth integrations)"
-summary: "A generic, registry-driven framework for letting a user connect external systems (Slack, Gmail, LinkedIn, …) to their account via OAuth in Settings, with user-scoped tokens — generalizing the per-integration accounts/settings pattern and feeding the named-service + canvas-pin context layer."
-status: design
-tags: ["sdk", "integrations", "connections", "oauth", "settings", "named-services", "pins"]
-keywords: ["connections framework", "oauth integration", "connect external system", "user settings connections", "connection provider registry", "slack integration", "user-scoped tokens", "external context pins"]
+summary: "The implemented registry, OAuth, account-store, and settings primitives used by Connection Hub to connect provider accounts while keeping credentials inside trusted server-side integration code."
+status: active
+tags: ["sdk", "integrations", "connections", "oauth", "connection-hub", "connected-accounts", "named-services"]
+updated_at: 2026-08-07
+keywords: ["connections framework", "OAuth integration", "ConnectionProvider registry", "ConnectionStore", "user-scoped credential", "connected account", "trusted credential resolver"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/email/email-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/email/email-external-prereq-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/providers-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-accounts/delegated-accounts-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/integrations/linkedin-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/search-operations-README.md
 ---
 
 # Connections Framework (OAuth integrations)
 
-> Status: **design**. This article locks the registry interface and data flow so
-> the implementation (extracting from `integrations/linkedin`) lands against a
-> fixed contract. It is not yet implemented.
-
 ## Goal
 
 Let a user open **Settings → Connections** and connect an external system —
 Slack, Gmail, LinkedIn, or any future one — to **their own account** via OAuth,
-once, with consent. A connection is user-scoped: it grants this user's agent the
-ability to read that system on their behalf, and nothing more. Connected systems
-then become **searchable, retrievable context** that can be pinned on the board
-next to internal objects (memories, tasks, conversations).
+once, with consent. The connection records the provider capability ceiling and
+keeps the provider credential in trusted server-side storage. It does not by
+itself grant every agent or external client access: delegated callers also pass
+the resource and per-account checks described in
+[Delegated Provider Accounts](../solutions/connections/delegated-accounts/delegated-accounts-README.md).
+When a named-service provider exists, connected systems can become searchable
+or actionable domain objects alongside internal realms.
 
 ## Two layers — keep them separate
 
@@ -43,12 +45,14 @@ next to internal objects (memories, tasks, conversations).
 ```
 
 - **Layer 1 (this framework)** answers *"is this user connected to system X, and
-  what is the token?"* — generalizes the email / linkedin / telegram pattern.
+  can trusted integration code resolve a credential for this authorized
+  operation?"* — generalizes the provider OAuth/account pattern.
 - **Layer 2 ([named services](../namespace-services/providers-README.md) +
   [canvas resolvers](../solutions/canvas/search-operations-README.md))** answers
   *"give me searchable / retrievable objects from system X."*
 
-They meet at one seam: a Layer-2 provider asks Layer 1 for the connected token.
+They meet at one seam: a Layer-2 provider asks Layer 1 for a credential handle
+inside trusted server-side code after current authority has been checked.
 An external system "appears on the pinboard" only when **both** exist. The layers
 ship independently — you can connect Slack (Layer 1) before any Slack context
 exists (Layer 2).
@@ -63,8 +67,8 @@ Provider TYPE        slack / gmail / telegram          CODE — a ConnectionProv
                                                         fetch_profile. NO credentials.
    └─ Client app(s)  "Acme Slack app" (client_id…)     ADMIN data — the platform's OAuth
         many per                                        application clients for that provider.
-        provider                                        Multiple per provider. Deploy-time
-                                                        config now; an admin view later.
+        provider                                        Multiple per provider. Descriptor-owned
+                                                        deployment configuration.
         └─ Account(s) alice @ workspace-A, B, …         USER data — a user connects an account
              many per                                   THROUGH a client app; the account
              user                                       records `app_id`; tokens user-scoped.
@@ -74,11 +78,9 @@ Provider TYPE        slack / gmail / telegram          CODE — a ConnectionProv
 - **Client app** (a.k.a. connector / application client) is **admin-managed data**:
   `{app_id, provider, label, client_id, client_secret, redirect_uri, scopes,
   enabled}`. There can be **many per provider**. The platform/admin keeps them.
-  - **Now**: deploy-time config in the connection-hub bundle —
+  - Deploy-time config in the connection-hub bundle —
     `connections.providers.<provider>.apps: [{app_id, label, client_id, scopes,
     enabled}]`, with `client_secret` + `oauth_state_secret` in bundle secrets.
-  - **Later**: an admin view (runtime CRUD) backed by a store; the contract and
-    account model don't change — only where the app records come from.
 - **Account** is user data: connected through one client app, so the account record
   carries `app_id` (needed to refresh the token with that app's credentials).
 
@@ -93,37 +95,30 @@ Provider TYPE        slack / gmail / telegram          CODE — a ConnectionProv
   request is clamped to the ceiling (asking for more requires the admin to widen the
   app); the granted scopes land on the account, and a consumer that needs more can
   re-consent (incremental authorization).
-- `connection.get_token(provider, account_id?)` → the account's token; the account's
-  `app_id` selects the app credentials for refresh.
-- Admin (later): `app.list/upsert/delete(provider, …)` to manage client apps at
-  runtime; deploy-time config is the read-only source until then.
+- Trusted credential resolution uses the account's `app_id` to select the app
+  credentials when refresh is required. Agents and external clients receive
+  operation results or structured consent demands, not this provider token.
 
-## What exists today, and the gap
+## What exists today
 
-`integrations/email`, `integrations/linkedin`, and `integrations/telegram` each
-implement the **same** shape, copied per provider:
+The generic `integrations/connections` package supplies the registry, client-app
+catalog, account store, OAuth flow, refresh path, and settings operations. Google
+and Slack use its built-in `ConnectionProvider` declarations. Provider-specific
+integrations such as LinkedIn retain adapters where their API or migration path
+requires one, while using the same connected-account broker and delegated-access
+contracts at the operation boundary.
 
-- `accounts.py` — an `AccountStore` (`upsert_account`, `set_tokens`,
-  `list_accounts`, `delete_account`, `consume_oauth_state`) plus
-  `build_<p>_authorize_url`, `exchange_<p>_code`, `fetch_<p>_profile`,
-  `<p>_client_id` / `<p>_client_secret` / `<p>_scopes`, `oauth_state_secret`.
-- `settings.py` — `configure_<p>_settings(...)`, then `status`, `start_oauth`,
-  `callback`, `disconnect` (+ Telegram-Mini-App variants).
-
-Account metadata lives under the bundle storage root; **tokens live as
-user-scoped KDCube secrets** (account records carry only a `has_token` flag).
-The OAuth callback uses the generic bundle route
+Account metadata lives under the bundle storage root; provider tokens live as
+user-scoped KDCube secrets and account records carry only a `has_token` flag.
+The OAuth callback uses a bundle route under
 `…/api/integrations/bundles/<tenant>/<project>/<bundle>/public/<alias>`.
-
-**The gap:** there is no unifying registry or single Settings UI — adding a
-provider means copying a module. This framework extracts the shared shape so a
-new provider is a *declaration*, not a copy.
 
 ## The framework
 
 ```
 integrations/connections/
   registry.py   ConnectionProvider interface + register()/resolve()
+  apps.py       descriptor-owned OAuth client-app catalog + secret lookup
   store.py      ConnectionStore  (provider-neutral; was *AccountStore)
                 keyed by (user_id, provider, account_id); tokens via user-secret API
   oauth.py      generic authorize-url / code-exchange / refresh, state-signed
@@ -143,10 +138,6 @@ class SlackConnection(ConnectionProvider):
     authorize_url = "https://slack.com/oauth/v2/authorize"
     token_url     = "https://slack.com/api/oauth.v2/access"
     scopes        = ["search:read"]
-    # Non-secret config + secret keys, resolved through entrypoint.bundle_prop /
-    # bundle-scoped secrets — same convention as email/linkedin.
-    config_prefix = "integrations.slack"          # .enabled / .client_id / .oauth.redirect_uri
-    secret_prefix = "integrations.slack"          # .client_secret / .oauth_state_secret
 
     async def fetch_profile(self, *, access_token: str) -> dict:
         """Identify the connected user → maps to the account record
@@ -154,14 +145,14 @@ class SlackConnection(ConnectionProvider):
         is THE USER's id in the external system (Slack user, LinkedIn `sub`,
         Gmail address); `workspace`/`team` is a separate dimension when present."""
 
-    # Optional provider-specific token handling (Slack returns authed_user +
-    # team; OAuth2 PKCE vs client_secret; token rotation). Defaults cover the
-    # standard authorization-code flow.
+    # Optional provider-specific token normalization and authorize parameters.
+    # Defaults cover the standard authorization-code flow.
 ```
 
 The registry resolves a provider by name for the generic settings ops. A
 provider with no class-level overrides gets the **standard authorization-code
-flow** for free.
+flow. OAuth client ids, secrets, redirect URIs, and per-app scope ceilings come
+from `apps.py` and descriptor-owned configuration, not the provider class.
 
 ### `ConnectionStore` — provider-neutral, user-scoped
 
@@ -183,8 +174,8 @@ Invariants:
 - `external_user_id` is the **connected user's id in the external system**, not an
   opaque blob; `workspace`/`team` is a separate field when the provider has one.
 - Tokens / refresh tokens live in the **user-secret API at USER scope**
-  (`users.<user_id>.secrets…`, i.e. `bundle_id=None`) — **not** per-bundle — so any
-  bundle acting for that user can resolve them. See *Connection scope* below.
+  (`users.<user_id>.secrets…`, i.e. `bundle_id=None`) — **not** in account
+  metadata or model-visible objects. See *Connection scope* below.
 - `consume_oauth_state` verifies the signed `state` (carries `user_id`,
   `account_id`, `provider`, `source`) — single-use, anti-CSRF.
 
@@ -267,7 +258,8 @@ with no canvas changes.
 
 | Piece | Where | Generic? |
 | --- | --- | --- |
-| OAuth URLs + scopes + config/secret prefixes | `ConnectionProvider` subclass | per-provider (small) |
+| OAuth URLs, defaults, and provider-specific token behavior | `ConnectionProvider` subclass | per-provider (small) |
+| OAuth client id, secret reference, redirect URI, and scope ceiling | descriptor client-app entry | per deployment |
 | `fetch_profile` → account fields | `ConnectionProvider` subclass | per-provider (small) |
 | Token storage, state signing, callback route | `connections/{store,oauth,settings}` | **generic** |
 | Settings → Connections row | registry-driven UI | **generic** |
@@ -291,42 +283,43 @@ One **Connections bundle** owns the lifecycle; other bundles consume.
         users.<user_id>.secrets.connections.<provider>… (token)   ← bundle_id=None
         + connection metadata (accounts list, per user)
                                  ▲
-            reads (same user) ───┴───────────────┬───────────────┐
+       trusted resolution ───────┴───────────────┬───────────────┐
         ┌──────────────────┐       ┌──────────────────┐   ┌──────────────────┐
-        │ task-tracker     │       │ workspace scene  │   │ any other bundle │
-        │ get_token(slack) │       │ SlackContextProv │   │ get_token(...)   │
+        │ guarded MCP tool │       │ named service    │   │ trusted app code │
+        │ provider call    │       │ provider call    │   │ provider call    │
         └──────────────────┘       └──────────────────┘   └──────────────────┘
 ```
 
 - **Owner writes at user scope.** The Connections bundle stores the token via the
-  user-secret API with `bundle_id=None` → `users.<user_id>.secrets…`. This is the
-  platform primitive that makes a secret readable by **any** bundle acting for that
-  user (the security boundary already restricts resolution to the *current request
-  user*, so it never crosses users).
-- **Consumers read, don't manage.** Other bundles call a thin SDK
-  (`connections.get_token(entrypoint, provider, user_id=…)` /
-  `connections.list_connections(...)`) that resolves the user-scoped secret +
-  metadata. They never run OAuth, never store tokens, never show a connect UI.
+  user-secret API with `bundle_id=None` → `users.<user_id>.secrets…`. User scope
+  lets trusted integration code find the user's account across bundle boundaries;
+  it is a storage scope, not delegated authority for every caller.
+- **Consumers resolve through the guard.** Named-service providers and plain MCP
+  tools declare their provider claims and resolve them under the current request
+  identity. The broker checks provider consent, the delegated caller's resource
+  grant, and its per-account binding before trusted code receives a credential.
+  Agents and external clients never receive the raw provider token.
 - **Centralized lifecycle.** Consent, refresh, and revoke live in one place (the
   owner) — a consumer always sees the current token, and disconnect cuts off every
   consumer at once.
-- **Governance (optional, later).** Default = any bundle for that user may read the
-  connection ("simply access"). If you later want *"only bundles the user granted
-  may use Slack,"* add a per-bundle **grant** record the owner checks — the store
-  and consent flow don't change, only an allow-list is consulted on read.
+- **Delegated governance is default-closed.** A connected account establishes what
+  the provider may allow. An agent, automation, or external MCP client also needs
+  an explicit caller grant and `account_scope` binding. Missing authority returns
+  a structured demand such as `agent_grant_required`,
+  `agent_account_binding_required`, or `account_required`.
 
 > This is why the framework's store/tokens are **user-scoped**, not per-bundle. A
 > bundle that only wants to *connect its own* account can still pass a `bundle_id`
 > for the legacy per-bundle scope, but the hub model is the default for shareable
 > connections.
 
-## Migration
+## Compatibility
 
-`integrations/email`, `integrations/linkedin`, `integrations/telegram` keep their
-public bundle-facing symbols but become **thin adapters** over
-`connections/` (their `accounts.py`/`settings.py` delegate to the generic store
-and settings ops; provider specifics move into a `ConnectionProvider`). No bundle
-route or config key needs to change during migration.
+Provider-specific integrations can retain their public bundle-facing symbols and
+adapt to the generic connected-account broker incrementally. The operation
+boundary remains the compatibility contract: the same provider claim, account
+selector, consent reason, and delegated account binding must be enforced whether
+the underlying provider uses the generic registry or a specialized adapter.
 
 ## Security & scope
 
@@ -335,16 +328,24 @@ route or config key needs to change during migration.
 - A connection is **explicit consent** by that user (the OAuth consent screen +
   the "Connect" action); disconnect deletes the account record and revokes the
   stored secret.
-- A Layer-2 provider may only use the **connecting user's** token, for that
-  user's requests — scope checks live in the provider/economics guard, not in the
-  store.
+- A Layer-2 provider resolves the **connecting user's** account under the current
+  request and delegated caller authority. Storage alone does not authorize use.
+- When multiple eligible accounts exist, `account_required` asks the caller to
+  choose. The selected `account_id` must be passed through preflight and provider
+  execution so both checks address the same account.
 
-## First step
+## Adding a provider
 
-1. Extract `connections/{registry,store,oauth,settings}` from `integrations/linkedin`
-   (the cleanest current copy).
-2. Add `SlackConnection` (`ConnectionProvider`) — connect only, no context yet.
-3. Add the **Settings → Connections** UI with Slack as the single live row.
+1. Implement and register a small `ConnectionProvider` for the provider's OAuth
+   mechanics and profile normalization.
+2. Declare one or more client apps in the connection-owner descriptor and place
+   each client secret behind its `*_ref`.
+3. Expose the provider through Connection Hub's catalog and verify connect,
+   refresh, disconnect, and multiple-account selection.
+4. For agent use, declare provider claims on a guarded MCP tool or named-service
+   provider and test provider consent plus the caller's per-account binding.
+5. Add a provider recipe under
+   `docs/recipes/connections/integrations/` with live-transport regression cases.
 
-That proves the consent/OAuth/token loop end-to-end. `SlackContextProvider`
-(Layer 2) follows once the connection works.
+The OAuth connection and the agent-facing domain surface remain separate. A
+provider can be connected before its named-service interface exists.

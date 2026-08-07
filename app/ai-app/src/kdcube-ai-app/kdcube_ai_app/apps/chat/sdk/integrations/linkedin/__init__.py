@@ -1,5 +1,34 @@
+"""LinkedIn integration.
+
+Two independent layers share this package:
+
+- ``accounts`` / ``settings``: bundle-owned OAuth over the legacy ``/v2`` API.
+- ``rest_api`` / ``tools`` / ``named_service``: Connection Hub connected
+  accounts over the versioned ``/rest`` API.
+"""
+
 from __future__ import annotations
 
+from .named_service import (
+    ACTION_ADD_COMMENT,
+    ACTION_DISCARD_UPLOAD,
+    ACTION_PUBLISH_IMAGE_POST,
+    ACTION_PUBLISH_POST,
+    ACTION_REQUEST_UPLOAD,
+    LINKEDIN_ACTIONS,
+    LINKEDIN_NAMESPACE,
+    LINKEDIN_SCHEMA_PROJECTION,
+    LinkedInNamedServiceProvider,
+    linkedin_named_service_spec,
+    make_linkedin_named_service_provider,
+    parse_linkedin_ref,
+)
+from .tools import (
+    LINKEDIN_POST_CLAIM,
+    LINKEDIN_PROFILE_CLAIM,
+    LINKEDIN_PROVIDER_ID,
+    LinkedInTools,
+)
 from .delivery import (
     LINKEDIN_POST_MAX_CHARS,
     format_post_text,
@@ -35,6 +64,22 @@ from .accounts import (
 )
 
 __all__ = [
+    "ACTION_ADD_COMMENT",
+    "ACTION_DISCARD_UPLOAD",
+    "ACTION_PUBLISH_IMAGE_POST",
+    "ACTION_PUBLISH_POST",
+    "ACTION_REQUEST_UPLOAD",
+    "LINKEDIN_ACTIONS",
+    "LINKEDIN_NAMESPACE",
+    "LINKEDIN_SCHEMA_PROJECTION",
+    "LINKEDIN_POST_CLAIM",
+    "LINKEDIN_PROFILE_CLAIM",
+    "LINKEDIN_PROVIDER_ID",
+    "LinkedInNamedServiceProvider",
+    "LinkedInTools",
+    "linkedin_named_service_spec",
+    "make_linkedin_named_service_provider",
+    "parse_linkedin_ref",
     "LINKEDIN_POST_MAX_CHARS",
     "format_post_text",
     "strip_markdown",

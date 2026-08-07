@@ -18,6 +18,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import get_current_user_identi
 from kdcube_ai_app.apps.chat.sdk.runtime.tool_module_bindings import get_bound_context
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.connection_edges import DEFAULT_CONNECTION_HUB_BUNDLE_ID
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube import (
+    REASON_AGENT_ACCOUNT_BINDING_REQUIRED,
     REASON_AGENT_GRANT_REQUIRED,
     REASON_RECONNECT_REQUIRED,
     ClaimResolution,
@@ -279,7 +280,7 @@ async def _announce_agent_grant_demand(
     # No agent_client_id passed -> mcp_consent_from_denial adds NO one-click grant
     # (that path is for resource claims). The deep link routes to the focused card.
     consent = mcp_consent_from_denial(
-        {"status": 403, "reason": "agent_account_binding_required"},
+        {"status": 403, "reason": REASON_AGENT_ACCOUNT_BINDING_REQUIRED},
         resource=resource,
         claims=[missing] if missing else [],
         connection_hub_url=hub_url,
@@ -287,6 +288,11 @@ async def _announce_agent_grant_demand(
     )
     consent.consent["kind"] = CONSENT_KIND_AGENT_GRANT
     consent.consent["agent_client_id"] = client_id
+    # The broker marks every user-fixable resolution retryable (`_user_action`).
+    # This block is rebuilt from a synthetic denial, so the flag is restated
+    # here; consent_details() reads it, and False would tell a caller that
+    # retrying after the grant is pointless.
+    consent.consent["retry_hint"] = True
     if hub_url:
         consent.consent["url"] = hub_url
     if account_label:
@@ -362,7 +368,7 @@ async def _announce_agent_grant_demand(
     # second banner.
     err = payload.get("error")
     if isinstance(err, dict):
-        err["code"] = "agent_account_binding_required"
+        err["code"] = REASON_AGENT_ACCOUNT_BINDING_REQUIRED
     return payload
 
 

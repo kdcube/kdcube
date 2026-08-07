@@ -1126,6 +1126,40 @@ async def test_agent_grant_carries_account_scope_and_merges():
 
 
 @pytest.mark.asyncio
+async def test_agent_replace_distinguishes_omitted_scope_from_explicit_clear():
+    service = _agent_service()
+    resource = "https://example.test/mcp"
+    await service.create_access(
+        _AGENT_USER,
+        label="a",
+        client_id=_AGENT_CLIENT,
+        resource_grants={resource: ["records:read"]},
+        account_scope={"google": {"acct-2": ["gmail:read"]}},
+    )
+
+    preserved = await service.create_access(
+        _AGENT_USER,
+        label="a",
+        client_id=_AGENT_CLIENT,
+        resource_grants={resource: ["records:read"]},
+        merge_existing=False,
+    )
+    assert preserved["access"]["account_scope"] == {
+        "google": {"acct-2": ["gmail:read"]}
+    }
+
+    cleared = await service.create_access(
+        _AGENT_USER,
+        label="a",
+        client_id=_AGENT_CLIENT,
+        resource_grants={resource: ["records:read"]},
+        account_scope={},
+        merge_existing=False,
+    )
+    assert cleared["access"].get("account_scope", {}) == {}
+
+
+@pytest.mark.asyncio
 async def test_agent_grant_account_scope_accepts_legacy_list_form():
     # Backward compat: the old {provider: [account_ids]} form migrates to
     # {account_id: ["*"]} (bound to those accounts, any claim) — no breakage.
@@ -1141,7 +1175,8 @@ async def test_agent_grant_account_scope_accepts_legacy_list_form():
 
 def test_credential_view_reads_account_scope_and_resolves_allowed():
     # The one canonical reader exposes the nested account_scope and the
-    # account_claim_scope accessor; absent provider -> None (no restriction).
+    # account_claim_scope accessor; a delegated caller is default-closed for
+    # an absent provider.
     from types import SimpleNamespace
     from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.credential_view import (
         delegated_credential_view,
@@ -1157,7 +1192,15 @@ def test_credential_view_reads_account_scope_and_resolves_allowed():
     assert view.account_scope["google"] == {"acct-2": ("gmail:read",)}
     assert view.account_claim_scope("google") == {"acct-2": ("gmail:read",)}
     assert view.account_claim_scope("slack") == {"*": ("*",)}  # any account, any claim
-    assert view.account_claim_scope("icloud") is None  # absent -> no restriction
+    assert view.account_claim_scope("icloud") == {}
+
+
+def test_credential_view_without_delegated_credential_has_no_account_restriction():
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.credential_view import (
+        DelegatedCredentialView,
+    )
+
+    assert DelegatedCredentialView().account_claim_scope("google") is None
 
 
 @pytest.mark.asyncio
@@ -1189,6 +1232,18 @@ async def test_external_client_edit_account_scope_merge_and_replace():
         claims=[], account_scope={"google": {"acct-2": ["gmail:read"]}}, replace=True,
     )
     assert narrowed["account_scope"] == {"google": {"acct-2": ["gmail:read"]}}
+
+    # An explicit empty map is a legitimate replacement: clear all account
+    # bindings while keeping the client's existing door grants.
+    cleared = await service.extend_client_access(
+        _AGENT_USER,
+        client_id="claude",
+        resource=resource,
+        claims=[],
+        account_scope={},
+        replace=True,
+    )
+    assert cleared["account_scope"] == {}
 
 
 @pytest.mark.asyncio
@@ -1337,6 +1392,32 @@ async def test_automation_access_update_replaces_grants_in_place_and_keeps_ident
     # The live card the guard resolves now carries the new grant.
     raw_record = next(iter(redis.values.values()))
     assert json.loads(raw_record)["resource_grants"] == {"https://example.test/mcp": ["records:write"]}
+
+
+@pytest.mark.asyncio
+async def test_automation_access_update_explicit_empty_scope_clears_binding():
+    service = _agent_service()
+    user = {
+        "user_id": "platform-user-1",
+        "roles": ["kdcube:role:super-admin"],
+        "permissions": ["records:read"],
+    }
+    created = await service.create_access(
+        user,
+        label="Nightly",
+        resource_grants={"https://example.test/mcp": ["records:read"]},
+        account_scope={"google": {"acct-2": ["gmail:read"]}},
+    )
+
+    updated = await service.update_access(
+        user,
+        access_id=created["access"]["access_id"],
+        resource_grants={"https://example.test/mcp": ["records:read"]},
+        account_scope={},
+    )
+
+    assert updated["ok"] is True
+    assert updated["access"].get("account_scope", {}) == {}
 
 
 @pytest.mark.asyncio

@@ -116,6 +116,7 @@ CSRF_PROTECTED_OPERATION_ALIASES = frozenset({
     "dcr_allowlist_set",
     "delegated_access_create",
     "delegated_access_revoke",
+    "delegated_access_update",
     "delegated_agent_grant_create",
     "delegated_to_kdcube_connect_credential",
     "delegated_to_kdcube_disconnect",
@@ -1706,6 +1707,7 @@ class ConnectionHubEntrypoint(BaseEntrypoint):
                     token_endpoint=f"{public_base}/token",
                     revocation_endpoint=f"{public_base}/revoke",
                     registration_endpoint=f"{public_base}/register",
+                    jwks_uri=f"{public_base}/jwks",
                     scopes_supported=parsed_cfg.supported_scopes(),
                     service_name=parsed_cfg.brand or "KDCube",
                     logo_uri=kdcube_icon_url(request=request, public_base_url=issuer),
@@ -1756,6 +1758,11 @@ class ConnectionHubEntrypoint(BaseEntrypoint):
             )
         if path == "authorize":
             return await oauth_authorize(request)
+        if path in {"jwks", ".well-known/jwks.json"}:
+            # Empty and permanent: kst1 tokens are opaque, so there is no
+            # public key to publish. The document exists because discovery
+            # advertises jwks_uri.
+            return JSONResponse({"keys": []})
 
         return JSONResponse(status_code=404, content={"error": "oauth_route_not_found", "path": path})
 
@@ -1856,9 +1863,17 @@ class ConnectionHubEntrypoint(BaseEntrypoint):
                 label=str(payload.get("label") or "").strip(),
                 resource_grants=dict(payload.get("resource_grants") or {}),
                 operations=_safe_list(payload.get("operations")),
+                # Both preserve absent vs empty: None leaves the dimension
+                # unrestricted, an empty mapping restricts to nothing.
+                # broker.py keys on `is not None`.
                 named_service_operations=(
                     dict(payload.get("named_service_operations") or {})
                     if "named_service_operations" in payload
+                    else None
+                ),
+                account_scope=(
+                    dict(payload.get("account_scope") or {})
+                    if "account_scope" in payload
                     else None
                 ),
                 ttl_seconds=payload.get("ttl_seconds"),
@@ -1941,8 +1956,8 @@ class ConnectionHubEntrypoint(BaseEntrypoint):
         # legacy list form {provider_id: [account_ids]} is also accepted and
         # migrated). create_access/extend_client_access normalize it.
         raw_scope = payload.get("account_scope")
-        account_scope = dict(raw_scope) if isinstance(raw_scope, Mapping) and raw_scope else None
-        if not resource or (not claims and not account_scope):
+        account_scope = dict(raw_scope) if isinstance(raw_scope, Mapping) else None
+        if not resource or (not claims and account_scope is None):
             return {"ok": False, "error": "delegated_agent_grant_requires_resource_and_claims"}
         if client_id and not client_id.startswith("kdcube-agent:"):
             # An EXTERNAL delegated client (an OAuth app — Claude Code): the

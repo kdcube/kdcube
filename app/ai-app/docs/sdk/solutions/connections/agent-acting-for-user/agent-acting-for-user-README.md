@@ -1,10 +1,11 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/agent-acting-for-user/agent-acting-for-user-README.md
 title: "Agents Acting On Behalf Of The User"
-summary: "How an agent — hosted inside KDCube or connecting from outside — calls KDCube services as the signed-in user: every agent is a per-agent Delegated-By-KDCube client entity, consent is granted per agent in Connection Hub, the consented grant's bound token is reused each turn, and a missing grant surfaces as a one-click consent demand in chat."
+summary: "How a hosted or external agent calls KDCube services under a user's delegated authority: resource grants are per caller, provider-account bindings are separately default-closed, and Connection Hub remains the live authority for both."
 status: active
 tags: ["sdk", "connections", "delegated-credentials", "agents", "mcp", "consent", "connection-hub", "governance"]
-updated_at: 2026-07-18
+updated_at: 2026-08-07
+keywords: ["agent delegated identity", "per-agent grant", "provider account binding", "account_scope", "Connection Hub recovery", "hosted agent consent"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/configuring-agent-service-access/configuring-agent-service-access-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/claim-driven-consent/claim-driven-consent-README.md
@@ -190,6 +191,18 @@ separate, per-call-checked layer and never authorizes an agent by itself. The
 gate applies only in agent turns and fails open where the catalog does not
 govern the namespace.
 
+For a provider-backed namespace, dispatch then checks the connected account's
+claim and this caller's `account_scope`. An operation's optional `account_id`
+is passed to both requirement preflight and provider credential resolution. If
+several eligible accounts remain unnamed, the result is `account_required`;
+if a capable account is outside this caller's binding, the result is
+`agent_grant_required` or the account-specific
+`agent_account_binding_required`. Those denials carry a URL for the caller's
+own Connection Hub card. Hosted chat can render the URL as an action, while an
+external or headless caller receives it as structured recovery data. Following
+the URL and retrying are explicit caller/user actions; neither happens
+automatically.
+
 The proactive counterpart — showing given/pending consent per claim in the
 capabilities picker before any call is attempted — is the claim-driven consent
 surface; see
@@ -208,6 +221,8 @@ surface; see
   connection's declared resource (its `resource`, falling back to `url`) must
   byte-match the deployment's configured delegated-resource id — commonly a
   wildcard pattern the guard matches request URLs against — so the grant's
-  creation, validation, and per-turn lookup all agree on one key.
+  creation, validation, and per-turn lookup all agree on one key. Here
+  `resource` means the protected KDCube API/MCP surface through which the
+  caller reaches a service, not an object inside the external provider.
 - **For how long** — grants carry a TTL (agent grants default to the delegated
   session ceiling) and re-consent refreshes the same record.
