@@ -34,6 +34,12 @@ bundles:
         oauth:
           public_base_url: https://<PUBLIC_HOST>
         delegated_credentials:
+          catalog:
+            active_cache_seconds: 300
+            version_cache_seconds: 3600
+          cards:
+            updating_marker_seconds: 15
+            revoked_tombstone_seconds: 60
           oauth:
             enabled: true
             brand: KDCube

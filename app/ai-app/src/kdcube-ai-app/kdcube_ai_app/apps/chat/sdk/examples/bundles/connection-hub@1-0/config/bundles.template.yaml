@@ -80,6 +80,22 @@ bundles:
             # Empty -> derived from the request host at runtime.
           public_base_url: "https://<PUBLIC_HOST>"
         delegated_credentials:
+            # Redis residency of the delegated-service catalog projections.
+            # These bound how long a cached document survives before a validated
+            # read-through; they never grant, extend, or revoke authority.
+          catalog:
+              # The ceiling every governed call intersects against. Expiry
+              # forces the read-through that repairs a corrupted entry.
+            active_cache_seconds: 300
+              # Immutable historical versions, read only to explain card drift.
+            version_cache_seconds: 3600
+            # Short fail-closed card markers.
+          cards:
+              # Must outlive a worst-case durable commit and stay short: a
+              # crashed mutation blocks that card until it expires.
+            updating_marker_seconds: 15
+              # Negative cache after revoke; revocation itself is durable.
+            revoked_tombstone_seconds: 60
           oauth:
             enabled: false
             brand: "KDCube"
