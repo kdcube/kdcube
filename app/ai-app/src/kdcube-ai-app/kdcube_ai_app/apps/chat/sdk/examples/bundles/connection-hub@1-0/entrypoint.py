@@ -65,6 +65,24 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.acc
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.automation_access import (
     AutomationAccessService,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cache_settings import (
+    DelegatedCacheSettings,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.catalog.publisher import (
+    ensure_delegated_catalog,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.catalog.resolver import (
+    DelegatedCatalogResolver,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.catalog.runtime_cache import (
+    DelegatedCatalogRuntimeCache,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.catalog.source import (
+    connections_from_props,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.catalog.store import (
+    BundleStorageDelegatedCatalogStore,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_to_kdcube import (
     RedisOAuthStateStore,
     DelegatedToKdcubeStore,
@@ -573,6 +591,21 @@ def _delegated_oauth_config_from_entrypoint(entrypoint: Any, request: Any) -> An
     return oauth_delegated_config(SimpleNamespace(state=state))
 
 
+def _delegated_catalog_resolver(entrypoint: Any, redis: Any) -> Any:
+    """Resolver over this bundle's registered catalog, or ``None`` when its
+    storage root is unavailable — card writes then fail closed."""
+    storage_root = entrypoint.bundle_storage_root()
+    if storage_root is None:
+        return None
+    tenant, project = _runtime_tenant_project(entrypoint)
+    connections = _connections_config(entrypoint)
+    return DelegatedCatalogResolver(
+        cache=DelegatedCatalogRuntimeCache(redis, tenant=tenant, project=project),
+        store=BundleStorageDelegatedCatalogStore(storage_root),
+        settings=DelegatedCacheSettings.from_connections(connections),
+    )
+
+
 def _automation_access_service(entrypoint: Any, request: Any) -> AutomationAccessService:
     tenant, project = _runtime_tenant_project(entrypoint)
     redis = getattr(entrypoint, "redis", None) or get_async_redis_client(get_settings().REDIS_URL)
@@ -581,6 +614,7 @@ def _automation_access_service(entrypoint: Any, request: Any) -> AutomationAcces
         tenant=tenant,
         project=project,
         config=_delegated_oauth_config_from_entrypoint(entrypoint, request),
+        catalog_resolver=_delegated_catalog_resolver(entrypoint, redis),
     )
 
 
@@ -1316,6 +1350,45 @@ class ConnectionHubEntrypoint(BaseEntrypoint):
             self._named_service_registry = registry
         return self._named_service_registry
 
+    async def on_app_deploy(self, **kwargs: Any) -> None:
+        """Publish the delegated-service catalog for this app generation.
+
+        The generation is ready only after the immutable version and the
+        complete active document are committed durably and in Redis. Request
+        paths never publish; they may only restore an expired projection.
+        """
+        await super().on_app_deploy(**kwargs)
+        props = kwargs.get("props")
+        if props is None:
+            props = getattr(self, "bundle_props", None)
+        storage_root = kwargs.get("storage_root") or self.bundle_storage_root()
+        if storage_root is None:
+            raise RuntimeError(
+                "[connection-hub] on_app_deploy: bundle storage is unavailable; "
+                "the delegated catalog cannot be published"
+            )
+        redis = kwargs.get("redis") or getattr(self, "redis", None)
+        if redis is None:
+            redis = get_async_redis_client(get_settings().REDIS_URL)
+        tenant = str(kwargs.get("tenant") or "").strip()
+        project = str(kwargs.get("project") or "").strip()
+        if not (tenant and project):
+            tenant, project = _runtime_tenant_project(self)
+
+        connections = connections_from_props(props)
+        result = await ensure_delegated_catalog(
+            connections=connections,
+            store=BundleStorageDelegatedCatalogStore(storage_root),
+            cache=DelegatedCatalogRuntimeCache(redis, tenant=tenant, project=project),
+            settings=DelegatedCacheSettings.from_connections(connections),
+            reason=str(kwargs.get("reason") or "app_deploy"),
+        )
+        LOGGER.info(
+            "[connection-hub] on_app_deploy: delegated catalog version=%s created=%s",
+            result.version,
+            result.created,
+        )
+
     async def on_bundle_load(self, **kwargs: Any) -> None:
         # BaseEntrypoint.on_bundle_load (via super) publishes named-service
         # discovery from _named_service_providers().
@@ -1863,11 +1936,11 @@ class ConnectionHubEntrypoint(BaseEntrypoint):
                 label=str(payload.get("label") or "").strip(),
                 resource_grants=dict(payload.get("resource_grants") or {}),
                 operations=_safe_list(payload.get("operations")),
-                # Both preserve absent vs empty: None leaves the dimension
-                # unrestricted, an empty mapping restricts to nothing.
-                # broker.py keys on `is not None`.
+                # Both preserve absent vs empty. An omitted selection keeps the
+                # record's own state; "*" is the full policy of the saved
+                # catalog, and {} allows no named-service operation.
                 named_service_operations=(
-                    dict(payload.get("named_service_operations") or {})
+                    payload.get("named_service_operations")
                     if "named_service_operations" in payload
                     else None
                 ),
@@ -1910,7 +1983,7 @@ class ConnectionHubEntrypoint(BaseEntrypoint):
                 access_id=str(payload.get("access_id") or "").strip(),
                 resource_grants=dict(payload.get("resource_grants") or {}),
                 named_service_operations=(
-                    dict(payload.get("named_service_operations") or {})
+                    payload.get("named_service_operations")
                     if "named_service_operations" in payload
                     else None
                 ),

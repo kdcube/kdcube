@@ -5,8 +5,7 @@
 
 Authority is reconstructable and non-secret: it is what a durable revision
 stores and what a Redis projection restores. Credential handles are live,
-bounded, and never part of durable history — restoring them from an immutable
-revision would defeat credential expiry.
+bounded, and never part of durable history.
 """
 
 from __future__ import annotations
@@ -57,11 +56,10 @@ def _normalized_namespace(value: Any) -> str:
 
 @dataclass(frozen=True)
 class NamedServiceSelection:
-    """The card's named-service authority as one of four unambiguous states.
+    """The card's named-service authority as one of four states.
 
-    ``unknown`` is a legacy-record condition only. Newly written cards always
-    carry ``all``, ``none``, or ``exact``, so an explicitly empty policy can
-    never be mistaken for an absent one.
+    ``unknown`` is a legacy-record condition only; newly written cards carry
+    ``all``, ``none``, or ``exact``.
     """
 
     kind: str
@@ -104,9 +102,8 @@ class NamedServiceSelection:
     def from_stored(cls, value: Any, *, present: bool) -> "NamedServiceSelection":
         """Parse the stored field.
 
-        ``present`` is the raw field's presence in the payload, supplied by the
-        caller. It is the only thing that separates an explicitly empty policy
-        from a legacy record, so it is never inferred from the value itself.
+        ``present`` is the raw field's presence in the payload; it separates an
+        explicitly empty policy from a legacy record.
         """
         if not present or value is None:
             return cls.unknown()
@@ -132,6 +129,33 @@ class NamedServiceSelection:
                 for resource, namespaces in self.operations.items()
             }
         return None
+
+    def union(self, other: "NamedServiceSelection") -> "NamedServiceSelection":
+        """Widest of the two selections.
+
+        A full or legacy-unknown side absorbs the other; two exact selections
+        merge per resource and namespace.
+        """
+        if self.is_all or self.is_unknown:
+            return self
+        if other.is_all or other.is_unknown:
+            return other
+        if self.is_none:
+            return other
+        if other.is_none:
+            return self
+        merged: dict[str, dict[str, list[str]]] = {
+            resource: {namespace: list(values) for namespace, values in namespaces.items()}
+            for resource, namespaces in self.operations.items()
+        }
+        for resource, namespaces in other.operations.items():
+            target = merged.setdefault(resource, {})
+            for namespace, values in namespaces.items():
+                held = target.setdefault(namespace, [])
+                for value in values:
+                    if value not in held:
+                        held.append(value)
+        return NamedServiceSelection.exact(merged)
 
     @property
     def is_all(self) -> bool:

@@ -59,6 +59,14 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.nam
     narrow_named_service_config,
     operation_grants as _named_service_operation_grants,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cards.model import (
+    NAMED_SERVICE_OPERATIONS_ALL,
+    CardRecordError,
+    NamedServiceSelection,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.catalog.resolver import (
+    CatalogUnavailable,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.boundary_policy import (
     NamedServiceBoundaryCatalog,
 )
@@ -349,6 +357,51 @@ async def read_agent_grant_record(
     return record
 
 
+def _selection_policy_argument(
+    selection: NamedServiceSelection,
+) -> dict[str, dict[str, list[str]]] | None:
+    """The narrowing argument ``named_service_policy_for_resource`` expects.
+
+    ``None`` keeps the full descriptor policy, an empty map narrows every
+    resource to nothing, and an exact map narrows to its entries. A legacy
+    record without an explicit selection keeps its prior full-policy meaning
+    until its next successful save writes one.
+    """
+    if selection.is_all or selection.is_unknown:
+        return None
+    if selection.is_none:
+        return {}
+    return {
+        resource: {namespace: list(values) for namespace, values in namespaces.items()}
+        for resource, namespaces in selection.operations.items()
+    }
+
+
+def _materialized_has_namespaces(named_services: Any) -> bool:
+    if not isinstance(named_services, Mapping):
+        return False
+    namespaces = named_services.get("namespaces")
+    return isinstance(namespaces, Mapping) and bool(namespaces)
+
+
+def _parse_named_service_selection(value: Mapping[str, Any]) -> NamedServiceSelection:
+    """Read the stored selection.
+
+    A stored ``{}`` is an explicit empty policy only when the materialized
+    boundary carries no namespaces; otherwise the record predates the encoding.
+    """
+    try:
+        selection = NamedServiceSelection.from_stored(
+            value.get("named_service_operations"),
+            present="named_service_operations" in value,
+        )
+    except CardRecordError:
+        return NamedServiceSelection.unknown()
+    if selection.is_none and _materialized_has_namespaces(value.get("named_services")):
+        return NamedServiceSelection.unknown()
+    return selection
+
+
 @dataclass(frozen=True)
 class AutomationAccessRecord:
     access_id: str
@@ -358,8 +411,11 @@ class AutomationAccessRecord:
     delegate_subject: str
     operations: tuple[str, ...]
     resource_grants: Mapping[str, tuple[str, ...]]
-    named_service_operations: Mapping[str, Mapping[str, tuple[str, ...]]] = field(
-        default_factory=dict
+    # Exact user-visible selection in one of four states. A newly written card
+    # always carries "*", {}, or an exact map; `unknown` is a legacy-record
+    # condition only.
+    named_service_operations: NamedServiceSelection = field(
+        default_factory=NamedServiceSelection.unknown
     )
     # Boundary tree for the named-service bridge, narrowed from the descriptor
     # by `named_service_operations`. Empty on cards written before this field;
@@ -374,6 +430,11 @@ class AutomationAccessRecord:
     # enforcement can distinguish it from a non-delegated user turn.
     account_scope: Mapping[str, Mapping[str, tuple[str, ...]]] = field(default_factory=dict)
     identity_scope: str = ""
+    # The catalog generation this card was last saved against. "*" and every
+    # exact selection are defined relative to it.
+    catalog_version: str = ""
+    # Monotonic per-card revision; rejects concurrent lost updates.
+    card_revision: int = 0
     session_id: str = ""
     created_at: int = 0
     expires_at: int = 0
@@ -402,17 +463,7 @@ class AutomationAccessRecord:
                 for key, grants in dict(value.get("resource_grants") or {}).items()
                 if _clean(key)
             },
-            named_service_operations={
-                _clean(resource): {
-                    _clean(namespace).lower().rstrip(":"): tuple(_as_list(operations))
-                    for namespace, operations in dict(namespaces or {}).items()
-                    if _clean(namespace)
-                }
-                for resource, namespaces in dict(
-                    value.get("named_service_operations") or {}
-                ).items()
-                if _clean(resource) and isinstance(namespaces, Mapping)
-            },
+            named_service_operations=_parse_named_service_selection(value),
             named_services=(
                 dict(value.get("named_services"))
                 if isinstance(value.get("named_services"), Mapping)
@@ -420,6 +471,8 @@ class AutomationAccessRecord:
             ),
             account_scope=normalize_account_scope(value.get("account_scope")),
             identity_scope=_clean(value.get("identity_scope")),
+            catalog_version=_clean(value.get("catalog_version")),
+            card_revision=int(value.get("card_revision") or 0),
             session_id=_clean(value.get("session_id")),
             created_at=int(value.get("created_at") or 0),
             expires_at=int(value.get("expires_at") or 0),
@@ -431,7 +484,7 @@ class AutomationAccessRecord:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "schema": AUTOMATION_ACCESS_SCHEMA,
             "access_id": self.access_id,
             "label": self.label,
@@ -440,19 +493,14 @@ class AutomationAccessRecord:
             "delegate_subject": self.delegate_subject,
             "operations": list(self.operations),
             "resource_grants": {key: list(value) for key, value in self.resource_grants.items()},
-            "named_service_operations": {
-                resource: {
-                    namespace: list(operations)
-                    for namespace, operations in namespaces.items()
-                }
-                for resource, namespaces in self.named_service_operations.items()
-            },
             "named_services": dict(self.named_services or {}),
             "account_scope": {
                 provider: {account_id: list(claims) for account_id, claims in accounts.items()}
                 for provider, accounts in self.account_scope.items()
             },
             "identity_scope": self.identity_scope,
+            "catalog_version": self.catalog_version,
+            "card_revision": self.card_revision,
             "session_id": self.session_id,
             "created_at": self.created_at,
             "expires_at": self.expires_at,
@@ -462,6 +510,10 @@ class AutomationAccessRecord:
             "access_token": self.access_token,
             "last_issued_at": self.last_issued_at,
         }
+        stored_selection = self.named_service_operations.to_stored()
+        if stored_selection is not None:
+            payload["named_service_operations"] = stored_selection
+        return payload
 
     def to_public_dict(self) -> dict[str, Any]:
         payload = self.to_dict()
@@ -471,7 +523,13 @@ class AutomationAccessRecord:
         # Derived from the descriptor and only consumed by the guard; the
         # selection (`named_service_operations`) is what surfaces render.
         payload.pop("named_services", None)
-        return {key: value for key, value in payload.items() if value not in ("", [], {})}
+        # The selection is retained verbatim: an explicit {} must not render as
+        # unrestricted, and "*" must survive a refetch.
+        selection = payload.pop("named_service_operations", None)
+        public = {key: value for key, value in payload.items() if value not in ("", [], {})}
+        if selection is not None:
+            public["named_service_operations"] = selection
+        return public
 
 
 class AutomationAccessService:
@@ -486,6 +544,7 @@ class AutomationAccessService:
         config: OAuthDelegatedClientConfig,
         grant_store: GrantStore | None = None,
         authority: Any | None = None,
+        catalog_resolver: Any | None = None,
         minter: Any | None = None,
         named_service_discovery: Any | None = None,
     ) -> None:
@@ -497,6 +556,24 @@ class AutomationAccessService:
         self._authority = authority
         self._minter = minter
         self._named_service_discovery = named_service_discovery
+        # Required by the operations that stamp a card. Read-only and
+        # credential-lifecycle operations do not need it.
+        self._catalog_resolver = catalog_resolver
+
+    async def _active_catalog_version(self) -> str:
+        """The generation a save is stamped with.
+
+        A card may not be written without naming the catalog its selection is
+        defined against, so an absent resolver fails closed rather than
+        producing an unstamped record.
+        """
+        if self._catalog_resolver is None:
+            raise CatalogUnavailable("catalog_resolver_not_configured")
+        active = await self._catalog_resolver.resolve_active()
+        version = _clean(getattr(active, "version", ""))
+        if not version:
+            raise CatalogUnavailable("active_catalog_version_missing")
+        return version
 
     def _key(self, suffix: str) -> str:
         return f"{self._tenant}:{self._project}:kdcube:delegated-access:{suffix}"
@@ -652,29 +729,26 @@ class AutomationAccessService:
 
     def _named_service_operation_selection(
         self,
-        value: Mapping[str, Any] | None,
-    ) -> dict[str, dict[str, list[str]]] | None:
+        value: Any,
+    ) -> NamedServiceSelection | None:
+        """Parse a submitted selection. ``None`` means the field was omitted."""
         if value is None:
             return None
+        if isinstance(value, str):
+            if _clean(value) != NAMED_SERVICE_OPERATIONS_ALL:
+                raise ValueError("named_service_operations must be '*' or an object")
+            return NamedServiceSelection.all()
         if not isinstance(value, Mapping):
             raise ValueError("named_service_operations must be an object")
-        out: dict[str, dict[str, list[str]]] = {}
         for resource, raw_namespaces in value.items():
-            resource_value = _clean(resource)
-            if not resource_value:
-                continue
-            if not isinstance(raw_namespaces, Mapping):
+            if _clean(resource) and not isinstance(raw_namespaces, Mapping):
                 raise ValueError(
-                    f"named_service_operations[{resource_value!r}] must be an object"
+                    f"named_service_operations[{_clean(resource)!r}] must be an object"
                 )
-            namespaces: dict[str, list[str]] = {}
-            for namespace, raw_operations in raw_namespaces.items():
-                namespace_value = _clean(namespace).lower().rstrip(":")
-                if not namespace_value:
-                    continue
-                namespaces[namespace_value] = _as_list(raw_operations)
-            out[resource_value] = namespaces
-        return out
+        try:
+            return NamedServiceSelection.exact(value)
+        except CardRecordError as exc:
+            raise ValueError(str(exc)) from exc
 
     # Delegators; the managed guard calls the same functions per request.
     @staticmethod
@@ -847,9 +921,9 @@ class AutomationAccessService:
                 "resources": admin_required,
             }
         cfg_by_resource = {cfg.resource: cfg for cfg in resource_configs}
-        if selected_named_service_operations is not None:
+        if selected_named_service_operations is not None and selected_named_service_operations.is_exact:
             unknown_selection_resources = sorted(
-                set(selected_named_service_operations) - set(selected_resources)
+                set(selected_named_service_operations.operations) - set(selected_resources)
             )
             if unknown_selection_resources:
                 return {
@@ -892,6 +966,7 @@ class AutomationAccessService:
         requested_client_id = _clean(client_id)
         access_source = ACCESS_SOURCE_MANUAL
         created_at_override: int | None = None
+        existing: AutomationAccessRecord | None = None
         if requested_client_id:
             # Deterministic per-agent grant: one record per (grantor, client,
             # resources). Re-consent MERGES into it — sequential one-click
@@ -901,7 +976,6 @@ class AutomationAccessService:
             access_id = agent_grant_access_id(grantor_subject, client_id, selected_resources)
             access_source = ACCESS_SOURCE_AGENT
             existing_raw = await self._redis.get(self._record_key(access_id))
-            existing: AutomationAccessRecord | None = None
             if existing_raw is not None:
                 try:
                     existing = AutomationAccessRecord.from_mapping(json.loads(existing_raw))
@@ -920,17 +994,10 @@ class AutomationAccessService:
                         }
                         for provider, accounts in existing.account_scope.items()
                     }
-                if (
-                    not merge_existing
-                    and selected_named_service_operations is None
-                    and existing.named_service_operations
-                ):
+                if not merge_existing and selected_named_service_operations is None:
                     # Same rule for the namespace narrowing: omitting it keeps
-                    # the record's, an explicit {} clears it.
-                    selected_named_service_operations = {
-                        resource: {ns: list(ops) for ns, ops in namespaces.items()}
-                        for resource, namespaces in existing.named_service_operations.items()
-                    }
+                    # the record's own state, including an explicit empty one.
+                    selected_named_service_operations = existing.named_service_operations
             if existing is not None and merge_existing:
                 for resource_key, held in existing.resource_grants.items():
                     merged = list(selected_resource_grants.get(resource_key, []))
@@ -944,23 +1011,13 @@ class AutomationAccessService:
                     for grant in grants_for_resource
                 ])
                 if selected_named_service_operations is not None:
-                    existing_narrowing = {
-                        res: {ns: list(ops) for ns, ops in namespaces.items()}
-                        for res, namespaces in existing.named_service_operations.items()
-                    }
-                    if not existing_narrowing:
-                        # The existing grant carried the FULL namespace policy;
-                        # full ⊇ any narrowing, so the merge stays full.
-                        selected_named_service_operations = None
-                    else:
-                        for res, namespaces in existing_narrowing.items():
-                            target = selected_named_service_operations.setdefault(res, {})
-                            for ns, ops in namespaces.items():
-                                current = list(target.get(ns, []))
-                                for op_name in ops:
-                                    if op_name not in current:
-                                        current.append(op_name)
-                                target[ns] = current
+                    # A one-click extension accumulates: the merged boundary is
+                    # the wider of what the card holds and what was submitted.
+                    selected_named_service_operations = (
+                        selected_named_service_operations.union(
+                            existing.named_service_operations
+                        )
+                    )
                 # Merge the account binding per provider AND per account: union
                 # the claim lists (a one-click grant accumulates; a REPLACE edit
                 # sends the full desired scope and overwrites, same as
@@ -977,6 +1034,25 @@ class AutomationAccessService:
             access_id = "aut_" + secrets.token_urlsafe(10)
             client_id = f"{AUTOMATION_CLIENT_PREFIX}:{access_id}"
 
+        # A create call that names no selection grants the full policy of the
+        # catalog it is saved against, and a legacy card resolves to the same
+        # explicit state on its next save.
+        if (
+            selected_named_service_operations is None
+            or selected_named_service_operations.is_unknown
+        ):
+            selected_named_service_operations = NamedServiceSelection.all()
+        try:
+            catalog_version = await self._active_catalog_version()
+        except CatalogUnavailable as exc:
+            return {
+                "ok": False,
+                "error": "delegated_catalog_unavailable",
+                "reason": exc.reason,
+                "retryable": True,
+                "status": 503,
+            }
+
         named_services: dict[str, Any] = {}
         for cfg in resource_configs:
             if isinstance(cfg.named_services, Mapping):
@@ -984,7 +1060,7 @@ class AutomationAccessService:
                     selected_policy = named_service_policy_for_resource(
                         named_services=cfg.named_services,
                         resource=cfg.resource,
-                        selection=selected_named_service_operations,
+                        selection=_selection_policy_argument(selected_named_service_operations),
                         grants=selected_resource_grants.get(cfg.resource, []),
                     )
                 except ValueError as exc:
@@ -1065,21 +1141,15 @@ class AutomationAccessService:
             delegate_subject=integration_subject(grantor_subject, client_id=client_id),
             operations=tuple(selected_operations),
             resource_grants={key: tuple(value) for key, value in selected_resource_grants.items()},
-            named_service_operations={
-                resource: {
-                    namespace: tuple(operations_for_namespace)
-                    for namespace, operations_for_namespace in namespaces.items()
-                }
-                for resource, namespaces in (
-                    selected_named_service_operations or {}
-                ).items()
-            },
+            named_service_operations=selected_named_service_operations,
             named_services=copy.deepcopy(named_services),
             account_scope={
                 provider: {account_id: tuple(claims) for account_id, claims in accounts.items()}
                 for provider, accounts in selected_account_scope.items()
             },
             identity_scope=identity_scope,
+            catalog_version=catalog_version,
+            card_revision=(existing.card_revision + 1) if existing is not None else 1,
             session_id=session_id,
             created_at=created_at,
             expires_at=expires_at,
@@ -1189,8 +1259,10 @@ class AutomationAccessService:
         if admin_required and not _is_platform_admin(user):
             return {"ok": False, "error": "delegated_access_resource_requires_admin", "resources": admin_required}
         cfg_by_resource = {cfg.resource: cfg for cfg in resource_configs}
-        if selected_named_service_operations is not None:
-            unknown = sorted(set(selected_named_service_operations) - set(selected_resources))
+        if selected_named_service_operations is not None and selected_named_service_operations.is_exact:
+            unknown = sorted(
+                set(selected_named_service_operations.operations) - set(selected_resources)
+            )
             if unknown:
                 return {"ok": False, "error": "delegated_access_unknown_named_service_resources", "resources": unknown}
         for resource_value, grants_for_resource in selected_resource_grants.items():
@@ -1216,12 +1288,22 @@ class AutomationAccessService:
                 "resources": selected_resources,
             }
         # Same absent-vs-empty rule as account_scope below: an omitted narrowing
-        # keeps the record's, an explicit {} clears it. A record storing no
-        # narrowing keeps None — the shape that means "unrestricted".
-        if selected_named_service_operations is None and existing.named_service_operations:
-            selected_named_service_operations = {
-                resource: {ns: list(ops) for ns, ops in namespaces.items()}
-                for resource, namespaces in existing.named_service_operations.items()
+        # keeps the record's own state, whatever it is. An explicitly empty
+        # policy is preserved as empty, never widened back to the full one.
+        if selected_named_service_operations is None:
+            selected_named_service_operations = existing.named_service_operations
+        if selected_named_service_operations.is_unknown:
+            # A legacy card becomes explicit on its first successful save.
+            selected_named_service_operations = NamedServiceSelection.all()
+        try:
+            catalog_version = await self._active_catalog_version()
+        except CatalogUnavailable as exc:
+            return {
+                "ok": False,
+                "error": "delegated_catalog_unavailable",
+                "reason": exc.reason,
+                "retryable": True,
+                "status": 503,
             }
         # Recompute the boundary tree here: the descriptor is available in this
         # process, the guard's is not.
@@ -1235,7 +1317,7 @@ class AutomationAccessService:
                     resource=cfg.resource,
                     # Same value the record stores below, so the tree and the
                     # selection it was derived from cannot disagree.
-                    selection=selected_named_service_operations,
+                    selection=_selection_policy_argument(selected_named_service_operations),
                     grants=selected_resource_grants.get(cfg.resource, []),
                 )
             except ValueError as exc:
@@ -1267,19 +1349,15 @@ class AutomationAccessService:
             delegate_subject=existing.delegate_subject,
             operations=tuple(selected_operations),
             resource_grants={key: tuple(value) for key, value in selected_resource_grants.items()},
-            named_service_operations={
-                resource: {
-                    namespace: tuple(ops)
-                    for namespace, ops in namespaces.items()
-                }
-                for resource, namespaces in (selected_named_service_operations or {}).items()
-            },
+            named_service_operations=selected_named_service_operations,
             named_services=copy.deepcopy(named_services),
             account_scope={
                 provider: {account_id: tuple(claims) for account_id, claims in accounts.items()}
                 for provider, accounts in selected_account_scope.items()
             },
             identity_scope=next(iter(identity_scopes), existing.identity_scope or "grantor"),
+            catalog_version=catalog_version,
+            card_revision=existing.card_revision + 1,
             session_id=existing.session_id,
             created_at=existing.created_at,
             expires_at=existing.expires_at,
@@ -1389,9 +1467,13 @@ class AutomationAccessService:
             if record is not None:
                 held = set(record.resource_grants.get(cfg.resource, ()))
                 granted = required.issubset(held)
-                narrowed = record.named_service_operations.get(cfg.resource)
-                if granted and narrowed:
-                    granted = op in set(narrowed.get(ns, ()))
+                selection = record.named_service_operations
+                if granted and selection.is_none:
+                    granted = False
+                elif granted and selection.is_exact:
+                    narrowed = selection.operations.get(cfg.resource)
+                    if narrowed:
+                        granted = op in set(narrowed.get(ns, ()))
             return {
                 "governed": True,
                 "granted": granted,
@@ -1451,6 +1533,14 @@ class AutomationAccessService:
         created_at = now
         existing_grants: list[str] = []
         existing_account_scope: dict[str, dict[str, list[str]]] = {}
+        # A refresh rotation must not widen the card: the named-service
+        # selection and its materialized boundary carry forward untouched.
+        existing_selection = NamedServiceSelection.unknown()
+        existing_named_services: dict[str, Any] = {}
+        # Token rotation is not an authority change: the card keeps the catalog
+        # generation it was last saved against and only advances its revision.
+        existing_catalog_version = ""
+        existing_card_revision = 0
         existing_raw = await self._redis.get(self._record_key(access_id))
         if existing_raw is not None:
             try:
@@ -1464,6 +1554,12 @@ class AutomationAccessService:
                         existing_payload.get("account_scope")
                     ).items()
                 }
+                existing_selection = _parse_named_service_selection(existing_payload)
+                existing_catalog_version = _clean(existing_payload.get("catalog_version"))
+                existing_card_revision = int(existing_payload.get("card_revision") or 0)
+                raw_named_services = existing_payload.get("named_services")
+                if isinstance(raw_named_services, Mapping):
+                    existing_named_services = copy.deepcopy(dict(raw_named_services))
             except Exception:
                 created_at = now
         # Initial consent (not a refresh rotation): absorb superseded sibling
@@ -1510,6 +1606,10 @@ class AutomationAccessService:
             delegate_subject=integration_subject(grantor, client_id=client),
             operations=tuple(_as_list(list(operations))),
             resource_grants={resource_value or "*": tuple(scope_list)},
+            named_service_operations=existing_selection,
+            named_services=existing_named_services,
+            catalog_version=existing_catalog_version,
+            card_revision=existing_card_revision + 1,
             account_scope=normalize_account_scope(merged_account_scope),
             identity_scope=_clean(identity_scope),
             created_at=created_at,

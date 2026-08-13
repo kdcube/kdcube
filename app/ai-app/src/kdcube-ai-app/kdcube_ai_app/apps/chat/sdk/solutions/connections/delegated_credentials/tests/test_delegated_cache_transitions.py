@@ -320,7 +320,7 @@ async def test_restore_installs_over_a_strictly_older_projection(card_cache):
     assert (await card_cache.read(ACCESS_ID)).card_revision == 8
 
 
-# -- per-grantor index (#222) -------------------------------------------------
+# -- per-grantor index --------------------------------------------------------
 
 
 @pytest.mark.asyncio

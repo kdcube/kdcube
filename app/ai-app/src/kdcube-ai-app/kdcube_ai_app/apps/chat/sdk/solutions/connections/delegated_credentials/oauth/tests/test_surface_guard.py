@@ -22,6 +22,9 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.aut
     AutomationAccessRecord,
     automation_record_key,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cards.model import (
+    NamedServiceSelection,
+)
 
 GUARD_RESOURCE = "http://testserver/guard"
 
@@ -266,7 +269,11 @@ def _live_card(
             if resource_grants is not None
             else {GUARD_RESOURCE: ("records:read",)}
         ),
-        named_service_operations=named_service_operations or {},
+        named_service_operations=(
+            NamedServiceSelection.exact(named_service_operations)
+            if named_service_operations
+            else NamedServiceSelection.unknown()
+        ),
         named_services=named_services or {},
         expires_at=int(time.time()) + 3600,
         source=ACCESS_SOURCE_OAUTH,

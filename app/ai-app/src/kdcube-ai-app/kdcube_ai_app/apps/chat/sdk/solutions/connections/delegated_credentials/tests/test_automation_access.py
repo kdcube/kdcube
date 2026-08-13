@@ -10,6 +10,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.catalog.resolver import (
+    CatalogUnavailable,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.automation_access import (
     AutomationAccessService,
 )
@@ -71,6 +74,22 @@ class _Authority:
     async def logout(self, *, session_id: str):
         self.logged_out.append(session_id)
         return True
+
+
+TEST_CATALOG_VERSION = "delegated_catalog_2026-08-11-10-30-00-123_d4e5f6a7b8c9"
+
+
+class _CatalogResolver:
+    """Resolves a fixed active catalog version; `unavailable` fails closed."""
+
+    def __init__(self, version: str = TEST_CATALOG_VERSION, unavailable: bool = False) -> None:
+        self.version = version
+        self.unavailable = unavailable
+
+    async def resolve_active(self):
+        if self.unavailable:
+            raise CatalogUnavailable("active_catalog_not_registered")
+        return SimpleNamespace(version=self.version)
 
 
 class _NamedServiceDiscovery:
@@ -255,6 +274,7 @@ async def test_automation_access_create_list_and_revoke():
     store = _Store()
     authority = _Authority()
     service = AutomationAccessService(
+        catalog_resolver=_CatalogResolver(),
         redis=redis,
         tenant="demo-tenant",
         project="demo-project",
@@ -352,6 +372,7 @@ async def test_resource_options_project_exact_named_service_and_provider_catalog
     )
     store = _Store()
     service = AutomationAccessService(
+        catalog_resolver=_CatalogResolver(),
         redis=_Redis(),
         tenant="demo-tenant",
         project="demo-project",
@@ -404,6 +425,7 @@ async def test_resource_options_project_exact_named_service_and_provider_catalog
 async def test_automation_access_persists_only_selected_named_service_operations():
     store = _Store()
     service = AutomationAccessService(
+        catalog_resolver=_CatalogResolver(),
         redis=_Redis(),
         tenant="demo-tenant",
         project="demo-project",
@@ -444,6 +466,7 @@ async def test_automation_access_persists_only_selected_named_service_operations
 @pytest.mark.asyncio
 async def test_automation_access_rejects_named_service_operation_without_its_grants():
     service = AutomationAccessService(
+        catalog_resolver=_CatalogResolver(),
         redis=_Redis(),
         tenant="demo-tenant",
         project="demo-project",
@@ -481,6 +504,7 @@ async def test_automation_access_rejects_named_service_operation_without_its_gra
 @pytest.mark.asyncio
 async def test_automation_access_rejects_non_delegable_grant():
     service = AutomationAccessService(
+        catalog_resolver=_CatalogResolver(),
         redis=_Redis(),
         tenant="demo-tenant",
         project="demo-project",
@@ -507,6 +531,7 @@ async def test_automation_access_rejects_non_delegable_grant():
 @pytest.mark.asyncio
 async def test_automation_access_requires_configured_resource_when_catalog_exists():
     service = AutomationAccessService(
+        catalog_resolver=_CatalogResolver(),
         redis=_Redis(),
         tenant="demo-tenant",
         project="demo-project",
@@ -544,6 +569,7 @@ async def test_automation_access_requires_configured_resource_when_catalog_exist
 @pytest.mark.asyncio
 async def test_automation_access_all_resources_is_admin_only():
     service = AutomationAccessService(
+        catalog_resolver=_CatalogResolver(),
         redis=_Redis(),
         tenant="demo-tenant",
         project="demo-project",
@@ -595,6 +621,7 @@ async def test_automation_access_all_resources_is_admin_only():
 @pytest.mark.asyncio
 async def test_automation_access_can_select_multiple_resources():
     service = AutomationAccessService(
+        catalog_resolver=_CatalogResolver(),
         redis=_Redis(),
         tenant="demo-tenant",
         project="demo-project",
@@ -653,6 +680,7 @@ async def test_oauth_grant_registers_lists_and_revokes():
         "permissions": [],
     }
     service = AutomationAccessService(
+        catalog_resolver=_CatalogResolver(),
         redis=redis,
         tenant="demo-tenant",
         project="demo-project",
@@ -784,6 +812,7 @@ async def test_live_sessions_receive_delegated_access_changes():
 
 def _agent_service():
     return AutomationAccessService(
+        catalog_resolver=_CatalogResolver(),
         redis=_Redis(),
         tenant="demo-tenant",
         project="demo-project",
@@ -957,6 +986,7 @@ def _named_services_agent_service():
         }
     )
     return AutomationAccessService(
+        catalog_resolver=_CatalogResolver(),
         redis=_Redis(), tenant="demo-tenant", project="demo-project",
         config=oauth_delegated_config(SimpleNamespace(state=state)),
         grant_store=_Store(), authority=_Authority(), minter=_minter,
@@ -1301,6 +1331,7 @@ async def test_disconnecting_an_account_clears_its_agent_bindings():
     were reconnected later."""
     redis = _Redis()
     service = AutomationAccessService(
+        catalog_resolver=_CatalogResolver(),
         redis=redis,
         tenant="demo-tenant",
         project="demo-project",
@@ -1360,6 +1391,7 @@ async def test_automation_access_update_replaces_grants_in_place_and_keeps_ident
     store = _Store()
     authority = _Authority()
     service = AutomationAccessService(
+        catalog_resolver=_CatalogResolver(),
         redis=redis, tenant="demo-tenant", project="demo-project",
         config=_config(), grant_store=store, authority=authority, minter=_minter,
     )
@@ -1429,6 +1461,7 @@ async def test_automation_access_update_guards_ownership_existence_and_empty():
     store = _Store()
     authority = _Authority()
     service = AutomationAccessService(
+        catalog_resolver=_CatalogResolver(),
         redis=redis, tenant="demo-tenant", project="demo-project",
         config=_config(), grant_store=store, authority=authority, minter=_minter,
     )
@@ -1459,6 +1492,7 @@ async def test_automation_access_update_replaces_named_service_operations_withou
     written."""
     store = _Store()
     service = AutomationAccessService(
+        catalog_resolver=_CatalogResolver(),
         redis=_Redis(), tenant="demo-tenant", project="demo-project",
         config=_named_services_config(), grant_store=store, authority=_Authority(),
         minter=_minter, named_service_discovery=_NamedServiceDiscovery({}),
@@ -1512,6 +1546,7 @@ async def test_automation_access_update_replaces_named_service_operations_withou
 async def test_automation_access_update_rejects_an_operation_its_grants_do_not_cover():
     """The selection is validated at save time."""
     service = AutomationAccessService(
+        catalog_resolver=_CatalogResolver(),
         redis=_Redis(), tenant="demo-tenant", project="demo-project",
         config=_named_services_config(), grant_store=_Store(), authority=_Authority(),
         minter=_minter, named_service_discovery=_NamedServiceDiscovery({}),
@@ -1540,6 +1575,7 @@ async def test_automation_access_update_omitting_the_narrowing_keeps_it():
     """Absent vs empty, same rule as account_scope: omitting the narrowing keeps
     the record's, an explicit {} widens to the full policy."""
     service = AutomationAccessService(
+        catalog_resolver=_CatalogResolver(),
         redis=_Redis(), tenant="demo-tenant", project="demo-project",
         config=_named_services_config(), grant_store=_Store(), authority=_Authority(),
         minter=_minter, named_service_discovery=_NamedServiceDiscovery({}),
@@ -1580,6 +1616,7 @@ async def test_agent_grant_replace_without_the_narrowing_keeps_it():
     """A replace edit that submits no narrowing (a rename) must not widen the
     agent's boundary."""
     service = AutomationAccessService(
+        catalog_resolver=_CatalogResolver(),
         redis=_Redis(), tenant="demo-tenant", project="demo-project",
         config=_named_services_config(), grant_store=_Store(), authority=_Authority(),
         minter=_minter, named_service_discovery=_NamedServiceDiscovery({}),
@@ -1608,6 +1645,7 @@ async def test_automation_access_update_empty_narrowing_clears_every_resource():
     """An explicit {} is the clear, and it reaches resources the caller did not
     name — the widget therefore omits the field when it has no selection."""
     service = AutomationAccessService(
+        catalog_resolver=_CatalogResolver(),
         redis=_Redis(), tenant="demo-tenant", project="demo-project",
         config=_named_services_config(), grant_store=_Store(), authority=_Authority(),
         minter=_minter, named_service_discovery=_NamedServiceDiscovery({}),

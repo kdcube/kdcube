@@ -21,6 +21,11 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.car
     CardUnavailable,
     DelegatedCardResolver,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cards.service import (
+    CardCommitFailed,
+    CardConflict,
+    DelegatedCardService,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cards.store import (
     BundleStorageDelegatedCardStore,
     CardStorageError,
@@ -33,12 +38,15 @@ __all__ = [
     "BundleStorageDelegatedCardStore",
     "CardAuthority",
     "CardCacheEntry",
+    "CardCommitFailed",
+    "CardConflict",
     "CardCredentialHandles",
     "CardCurrentPointer",
     "CardRecordError",
     "CardStorageError",
     "CardUnavailable",
     "DelegatedCardResolver",
+    "DelegatedCardService",
     "DelegatedCardRuntimeCache",
     "DelegatedCardStore",
     "NamedServiceSelection",

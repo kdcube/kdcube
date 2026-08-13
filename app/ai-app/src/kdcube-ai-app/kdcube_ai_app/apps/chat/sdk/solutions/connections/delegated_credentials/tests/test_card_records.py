@@ -46,7 +46,7 @@ def _authority(**overrides) -> CardAuthority:
     return CardAuthority(**base)
 
 
-# -- three-state named-service selection (#224) -------------------------------
+# -- three-state named-service selection --------------------------------------
 
 
 def test_absent_field_is_unknown_and_explicit_empty_is_none():
