@@ -124,3 +124,70 @@ async def test_named_service_operations_keep_their_absent_semantics(entrypoint):
         data={"label": "x", "resource_grants": {"res": ["named_services:use"]}},
     )
     assert entrypoint.service.calls[-1]["named_service_operations"] is None
+
+
+# -- save preconditions ---------------------------------------------------------
+
+
+def test_service_still_accepts_the_save_preconditions():
+    parameters = inspect.signature(AutomationAccessService.update_access).parameters
+    assert "expected_card_revision" in parameters
+    assert "expected_catalog_version" in parameters
+
+
+@pytest.mark.asyncio
+async def test_update_forwards_the_editor_preconditions(entrypoint):
+    await entrypoint.module.ConnectionHubEntrypoint.delegated_access_update(
+        entrypoint.instance,
+        data={
+            "access_id": "aut_1",
+            "resource_grants": {"res": ["named_services:use"]},
+            "expected_card_revision": 8,
+            "expected_catalog_version": "delegated_catalog_2026-08-14-10-00-00-000_abcdef012345",
+        },
+    )
+    call = entrypoint.service.calls[-1]
+    assert call["expected_card_revision"] == 8
+    assert call["expected_catalog_version"] == (
+        "delegated_catalog_2026-08-14-10-00-00-000_abcdef012345"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_revision_sent_as_a_string_is_accepted(entrypoint):
+    await entrypoint.module.ConnectionHubEntrypoint.delegated_access_update(
+        entrypoint.instance,
+        data={
+            "access_id": "aut_1",
+            "resource_grants": {"res": ["named_services:use"]},
+            "expected_card_revision": "8",
+        },
+    )
+    assert entrypoint.service.calls[-1]["expected_card_revision"] == 8
+
+
+@pytest.mark.asyncio
+async def test_absent_preconditions_stay_none(entrypoint):
+    await entrypoint.module.ConnectionHubEntrypoint.delegated_access_update(
+        entrypoint.instance,
+        data={"access_id": "aut_1", "resource_grants": {"res": ["named_services:use"]}},
+    )
+    call = entrypoint.service.calls[-1]
+    assert call["expected_card_revision"] is None
+    assert call["expected_catalog_version"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_malformed_revision_is_a_bad_request_not_a_conflict(entrypoint):
+    """A conflict means the editor is stale; a broken field is neither."""
+    result = await entrypoint.module.ConnectionHubEntrypoint.delegated_access_update(
+        entrypoint.instance,
+        data={
+            "access_id": "aut_1",
+            "resource_grants": {"res": ["named_services:use"]},
+            "expected_card_revision": "not-a-number",
+        },
+    )
+    assert result["ok"] is False
+    assert result["error"] == "invalid_delegated_access_request"
+    assert entrypoint.service.calls == []

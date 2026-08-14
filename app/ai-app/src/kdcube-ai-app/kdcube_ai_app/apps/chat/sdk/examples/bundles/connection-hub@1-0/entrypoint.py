@@ -203,6 +203,23 @@ def _payload(data: Optional[Mapping[str, Any]] = None, **kwargs: Any) -> Dict[st
     return merged
 
 
+def _expected_card_revision(payload: Mapping[str, Any]) -> Optional[int]:
+    """The revision the editor loaded. Absent means no precondition.
+
+    A malformed value raises rather than defaulting, so a bad request cannot
+    read as a stale-editor conflict.
+    """
+    if "expected_card_revision" not in payload:
+        return None
+    raw = payload.get("expected_card_revision")
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        raise ValueError("expected_card_revision must be an integer")
+
+
 def _bool(value: Any, default: bool = False) -> bool:
     if value is None:
         return default
@@ -2038,6 +2055,11 @@ class ConnectionHubEntrypoint(BaseEntrypoint):
                     else None
                 ),
                 label=str(payload.get("label") or "").strip() or None,
+                expected_card_revision=_expected_card_revision(payload),
+                expected_catalog_version=str(
+                    payload.get("expected_catalog_version") or ""
+                ).strip()
+                or None,
             )
         except ValueError as exc:
             return {"ok": False, "error": "invalid_delegated_access_request", "message": str(exc)}

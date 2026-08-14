@@ -1291,6 +1291,22 @@ code {
   accent-color: var(--kind);
 }
 
+/* Selected here, no longer offered by the service catalog: visible so the
+   operator can see what changed, inert because saving removes it. */
+.grant-chip-stale {
+  opacity: 0.7;
+  border-style: dashed;
+}
+
+.grant-chip-stale span:first-of-type {
+  text-decoration: line-through;
+}
+
+.grant-chip-stale:hover {
+  border-color: var(--line);
+  background: transparent;
+}
+
 .grant-chip span {
   min-width: 0;
   overflow-wrap: anywhere;

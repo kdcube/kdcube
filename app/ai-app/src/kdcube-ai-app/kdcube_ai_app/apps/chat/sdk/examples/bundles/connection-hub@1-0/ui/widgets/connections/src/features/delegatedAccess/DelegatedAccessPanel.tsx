@@ -8,6 +8,7 @@ import type {
   DelegatedAccessNamedServiceOperations,
   DelegatedAccessRecord,
   DelegatedAccessResourceOption,
+  DelegatedCatalogDrift,
   DelegatedToKdcubeAccount,
 } from '../../api/types';
 import {
@@ -415,6 +416,81 @@ function CountFold({ entries, noun }: { entries: string[]; noun: string }) {
       </button>
       {open ? <ChipRow entries={entries} /> : null}
     </span>
+  );
+}
+
+function driftLabel(row: { resource: string; namespace?: string; claim?: string; operation?: string }): string {
+  const parts = [doorAlias(row.resource) || row.resource];
+  if (row.namespace) parts.push(row.namespace);
+  parts.push(row.claim || row.operation || '');
+  return parts.filter(Boolean).join(' · ');
+}
+
+/** Backend-computed drift. The panel renders what the server decided; it never
+ *  compares catalogs itself. */
+function CatalogDriftNotice({ drift }: { drift?: DelegatedCatalogDrift }) {
+  if (!drift) return null;
+  if (drift.status === 'current' || drift.status === 'no_relevant_change') return null;
+
+  if (drift.status === 'unavailable') {
+    return (
+      <div className="notice" style={{ marginTop: 10, marginBottom: 10 }}>
+        <strong>Service access cannot be checked right now</strong>
+        <div>Editing is unavailable until the service catalog can be read again.</div>
+      </div>
+    );
+  }
+
+  const removed = [
+    ...(drift.removed?.resources || []),
+    ...(drift.removed?.claims || []),
+    ...(drift.removed?.outer_operations || []),
+    ...(drift.removed?.named_service_operations || []),
+  ];
+  const added = [
+    ...(drift.added?.claims || []),
+    ...(drift.added?.outer_operations || []),
+    ...(drift.added?.named_service_operations || []),
+  ];
+  if (!removed.length && !added.length && drift.status !== 'baseline_missing') return null;
+
+  return (
+    <div className="notice" style={{ marginTop: 10, marginBottom: 10 }}>
+      <strong>Service access changed since this grant was last saved</strong>
+      <details>
+        <summary>What changed</summary>
+        {removed.length ? (
+          <div>
+            <div className="card-field-label">No longer available</div>
+            <ul>
+              {removed.map((row) => (
+                <li key={`removed-${driftLabel(row)}`}>
+                  <code>{driftLabel(row)}</code> — already ineffective, removed when you save
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {added.length ? (
+          <div>
+            <div className="card-field-label">Newly available</div>
+            <ul>
+              {added.map((row) => (
+                <li key={`added-${driftLabel(row)}`}>
+                  <code>{driftLabel(row)}</code> — not granted; select it to allow
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {drift.status === 'baseline_missing' ? (
+          <div>
+            This grant predates the recorded service catalog, so newly available options
+            cannot be listed.
+          </div>
+        ) : null}
+      </details>
+    </div>
   );
 }
 
@@ -963,6 +1039,15 @@ export function DelegatedAccessPanel({ openParams }: { openParams?: Record<strin
     ]));
   };
 
+  /** Claims this card holds that the active catalog no longer offers, per the
+   *  backend's comparison. */
+  const withdrawnClaims = (item: DelegatedAccessRecord, resource: string): Set<string> => {
+    const rows = item.catalog_drift?.removed?.claims || [];
+    return new Set(
+      rows.filter((row) => row.resource === resource && row.claim).map((row) => row.claim as string),
+    );
+  };
+
   const saveEdit = async (item: DelegatedAccessRecord) => {
     const kept: Record<string, string[]> = {};
     Object.keys(item.resource_grants || {}).forEach((resource) => {
@@ -1001,6 +1086,10 @@ export function DelegatedAccessPanel({ openParams }: { openParams?: Record<strin
           ? keptNamedServiceOperations
           : undefined,
         accountScope: editAccountScope,
+        // What this editor was opened on. The server refuses the save when
+        // either moved.
+        expectedCardRevision: item.card_revision,
+        expectedCatalogVersion: item.catalog_drift?.current_version || item.catalog_version,
       })).unwrap().catch(() => undefined);
       clearEditState();
       void dispatch(loadDelegatedAccess());
@@ -1500,6 +1589,7 @@ export function DelegatedAccessPanel({ openParams }: { openParams?: Record<strin
                       ) : null}
                     </div>
                   ) : null}
+                  <CatalogDriftNotice drift={item.catalog_drift} />
                   {editing ? (
                     <label className="rename-row">
                       <span className="card-field-label">Name</span>
@@ -1522,16 +1612,29 @@ export function DelegatedAccessPanel({ openParams }: { openParams?: Record<strin
                             <div className="account-title">{resource === '*' ? 'all resources' : (doorAlias(resource) || resourceLabelFor(resource) || resource)}</div>
                             {resource !== '*' ? <DoorRef value={resource} /> : null}
                             <div className="resource-grants">
-                              {editableClaimsFor(item, resource).map((claim) => (
-                                <label className="grant-chip" key={`${resource}:${claim}`} title={grantOptionByName.get(claim)?.label || undefined}>
-                                  <input
-                                    type="checkbox"
-                                    checked={editPicks[`${resource}:${claim}`] === true}
-                                    onChange={(event) => toggleEditClaim(resource, claim, event.target.checked)}
-                                  />
-                                  <span>{claim}</span>
-                                </label>
-                              ))}
+                              {editableClaimsFor(item, resource).map((claim) => {
+                                const stale = withdrawnClaims(item, resource).has(claim);
+                                return (
+                                  <label
+                                    className={stale ? 'grant-chip grant-chip-stale' : 'grant-chip'}
+                                    key={`${resource}:${claim}`}
+                                    title={
+                                      stale
+                                        ? 'No longer offered by the service catalog — already ineffective, removed when you save'
+                                        : grantOptionByName.get(claim)?.label || undefined
+                                    }
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={editPicks[`${resource}:${claim}`] === true}
+                                      disabled={stale}
+                                      onChange={(event) => toggleEditClaim(resource, claim, event.target.checked)}
+                                    />
+                                    <span>{claim}</span>
+                                    {stale ? <span className="badge badge-warn">withdrawn</span> : null}
+                                  </label>
+                                );
+                              })}
                             </div>
                             {/* Namespace operations are stored per card and derived
                                 per request only for manual automations; the OAuth

@@ -155,6 +155,11 @@ export interface UpdateDelegatedAccessArgs {
   /** Per-account binding {provider:{account_id:[claims]}}. Undefined preserves
    *  an existing binding; {} explicitly restricts the caller to no accounts. */
   accountScope?: Record<string, Record<string, string[]>>;
+  /** What the editor loaded. The server refuses the save with 409 when either
+   *  moved, so choices made against an obsolete view cannot acknowledge a
+   *  newer catalog. */
+  expectedCardRevision?: number;
+  expectedCatalogVersion?: string;
 }
 
 /** Edit a manual automation IN PLACE — the card keeps its access_id/client_id,
@@ -167,7 +172,19 @@ export const updateDelegatedAccess = createAsyncThunk<
   { rejectValue: string }
 >(
   'delegatedAccess/update',
-  async ({ accessId, label, resourceGrants, operations, namedServiceOperations, accountScope }, { rejectWithValue }) => {
+  async (
+    {
+      accessId,
+      label,
+      resourceGrants,
+      operations,
+      namedServiceOperations,
+      accountScope,
+      expectedCardRevision,
+      expectedCatalogVersion,
+    },
+    { rejectWithValue },
+  ) => {
     try {
       const res = await postOp<DelegatedAccessCreateResult>('delegated_access_update', {
         access_id: accessId,
@@ -180,7 +197,16 @@ export const updateDelegatedAccess = createAsyncThunk<
         ...(accountScope !== undefined
           ? { account_scope: accountScope }
           : {}),
+        ...(expectedCardRevision !== undefined
+          ? { expected_card_revision: expectedCardRevision }
+          : {}),
+        ...(expectedCatalogVersion
+          ? { expected_catalog_version: expectedCatalogVersion }
+          : {}),
       });
+      // A precondition failure is not an error to show and forget: it carries
+      // the refreshed card the editor must reload.
+      if (res?.ok === false && res?.status === 409) return res;
       if (res?.ok === false) return rejectWithValue(resultError(res, 'Failed to update delegated access'));
       return res || {};
     } catch (e) {
@@ -272,8 +298,27 @@ const delegatedAccessSlice = createSlice({
         state.busy = true;
         state.error = '';
       })
-      .addCase(updateDelegatedAccess.fulfilled, (state, action: PayloadAction<DelegatedAccessCreateResult>) => {
+      .addCase(updateDelegatedAccess.fulfilled, (state, action) => {
         state.busy = false;
+        const accessId = action.meta.arg.accessId;
+        if (action.payload.revoked) {
+          state.items = state.items.filter((item) => item.access_id !== accessId);
+          if (state.issuedAccess?.access_id === accessId) {
+            state.issuedToken = '';
+            state.issuedHeader = '';
+            state.issuedAccess = undefined;
+          }
+          state.error =
+            action.payload.message ||
+            'Every selection on this card was withdrawn from the service catalog, so it was revoked.';
+          return;
+        }
+        if (action.payload.status === 409) {
+          // The card the server returned is the current one; the editor reopens
+          // on it instead of retrying against the view it had.
+          state.error =
+            'This access changed while you were editing it. The latest version is shown; review and save again.';
+        }
         if (action.payload.access) {
           const updated = action.payload.access;
           state.items = state.items.map((item) => (item.access_id === updated.access_id ? updated : item));

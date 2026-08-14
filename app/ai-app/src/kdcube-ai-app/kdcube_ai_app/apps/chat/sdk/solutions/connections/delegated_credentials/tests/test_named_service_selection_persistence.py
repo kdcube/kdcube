@@ -15,6 +15,7 @@ from test_automation_access import (
     _Authority,
     _minter,
     _named_services_config,
+    _named_services_connections,
     _NamedServiceDiscovery,
     _Redis,
     _Store,
@@ -72,7 +73,7 @@ USER = {"user_id": "platform-user-1", "roles": ["kdcube:role:registered"], "perm
 
 def _service(card_persistence) -> AutomationAccessService:
     return AutomationAccessService(
-        catalog_resolver=_CatalogResolver(),
+        catalog_resolver=_CatalogResolver(connections=_named_services_connections()),
         card_persistence=card_persistence,
         redis=_Redis(),
         tenant="demo-tenant",

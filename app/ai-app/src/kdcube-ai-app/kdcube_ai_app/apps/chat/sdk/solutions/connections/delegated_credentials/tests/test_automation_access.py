@@ -145,15 +145,33 @@ class _CatalogResolver:
         version: str = TEST_CATALOG_VERSION,
         unavailable: bool = False,
         connections: dict | None = None,
+        versions: dict[str, dict] | None = None,
     ) -> None:
         self.version = version
         self.unavailable = unavailable
         self.connections = connections or {}
+        # Registered historical generations, for drift comparison.
+        self.versions = dict(versions or {})
 
     async def resolve_active(self):
         if self.unavailable:
             raise CatalogUnavailable("active_catalog_not_registered")
         return SimpleNamespace(version=self.version, connections=self.connections)
+
+    async def resolve_version(self, version: str):
+        if self.unavailable:
+            raise CatalogUnavailable("cache_unavailable")
+        if version == self.version:
+            return SimpleNamespace(version=self.version, connections=self.connections)
+        if version in self.versions:
+            return SimpleNamespace(version=version, connections=self.versions[version])
+        return None
+
+    def advance(self, *, version: str, connections: dict) -> None:
+        """Publish a new generation, keeping the previous one resolvable."""
+        self.versions[self.version] = self.connections
+        self.version = version
+        self.connections = connections
 
 
 class _NamedServiceDiscovery:
@@ -183,55 +201,62 @@ async def _minter(_grantor_subject, _scopes, **kwargs):
     }
 
 
-def _config():
-    state = SimpleNamespace(
-        oauth_delegated_config={
-            "enabled": True,
-            "tenant": "demo-tenant",
-            "project": "demo-project",
-            "capabilities": [
-                {
-                    "grant": "kdcube:role:super-admin",
-                    "label": "Use all platform and application APIs",
-                    "delegable_roles": ["kdcube:role:super-admin"],
-                },
-                {
-                    "grant": "records:read",
-                    "label": "Read records",
-                    "delegable_roles": ["kdcube:role:registered"],
-                },
-                {
-                    "grant": "records:write",
-                    "label": "Write records",
-                    "delegable_permissions": ["records:write"],
-                },
-            ],
-            "resources": [
-                {
-                    "resource": "*",
-                    "label": "All platform and application APIs",
-                    "admin_only": True,
-                    "grants": ["kdcube:role:super-admin"],
-                },
-                {
-                    "resource": "https://example.test/mcp",
-                    "label": "Example MCP",
-                    "identity_scope": "grantor",
-                    "tools": {
-                        "records_export": {
-                            "label": "Export records",
-                            "grants": ["records:read"],
-                        },
-                        "records_upsert": {
-                            "label": "Upsert records",
-                            "grants": ["records:write"],
-                        },
+PLAIN_OAUTH = {
+        "enabled": True,
+        "tenant": "demo-tenant",
+        "project": "demo-project",
+        "capabilities": [
+            {
+                "grant": "kdcube:role:super-admin",
+                "label": "Use all platform and application APIs",
+                "delegable_roles": ["kdcube:role:super-admin"],
+            },
+            {
+                "grant": "records:read",
+                "label": "Read records",
+                "delegable_roles": ["kdcube:role:registered"],
+            },
+            {
+                "grant": "records:write",
+                "label": "Write records",
+                "delegable_permissions": ["records:write"],
+            },
+        ],
+        "resources": [
+            {
+                "resource": "*",
+                "label": "All platform and application APIs",
+                "admin_only": True,
+                "grants": ["kdcube:role:super-admin"],
+            },
+            {
+                "resource": "https://example.test/mcp",
+                "label": "Example MCP",
+                "identity_scope": "grantor",
+                "tools": {
+                    "records_export": {
+                        "label": "Export records",
+                        "grants": ["records:read"],
+                    },
+                    "records_upsert": {
+                        "label": "Upsert records",
+                        "grants": ["records:write"],
                     },
                 },
-            ],
-        }
+            },
+        ],
+}
+
+
+def _config():
+    return oauth_delegated_config(
+        SimpleNamespace(state=SimpleNamespace(oauth_delegated_config=PLAIN_OAUTH))
     )
-    return oauth_delegated_config(SimpleNamespace(state=state))
+
+
+def _connections() -> dict:
+    """The registered catalog body matching `_config`."""
+    return {"delegated_credentials": {"oauth": PLAIN_OAUTH}}
 
 
 NAMED_SERVICES_OAUTH = {
@@ -345,7 +370,7 @@ async def test_automation_access_create_list_and_revoke(card_persistence):
     store = _Store()
     authority = _Authority()
     service = AutomationAccessService(
-        catalog_resolver=_CatalogResolver(),
+        catalog_resolver=_CatalogResolver(connections=_connections()),
         card_persistence=card_persistence,
         redis=redis,
         tenant="demo-tenant",
@@ -443,7 +468,7 @@ async def test_resource_options_project_exact_named_service_and_provider_catalog
     )
     store = _Store()
     service = AutomationAccessService(
-        catalog_resolver=_CatalogResolver(),
+        catalog_resolver=_CatalogResolver(connections=_named_services_connections()),
         card_persistence=card_persistence,
         redis=_Redis(),
         tenant="demo-tenant",
@@ -497,7 +522,7 @@ async def test_resource_options_project_exact_named_service_and_provider_catalog
 async def test_automation_access_persists_only_selected_named_service_operations(card_persistence):
     store = _Store()
     service = AutomationAccessService(
-        catalog_resolver=_CatalogResolver(),
+        catalog_resolver=_CatalogResolver(connections=_named_services_connections()),
         card_persistence=card_persistence,
         redis=_Redis(),
         tenant="demo-tenant",
@@ -539,7 +564,7 @@ async def test_automation_access_persists_only_selected_named_service_operations
 @pytest.mark.asyncio
 async def test_automation_access_rejects_named_service_operation_without_its_grants(card_persistence):
     service = AutomationAccessService(
-        catalog_resolver=_CatalogResolver(),
+        catalog_resolver=_CatalogResolver(connections=_named_services_connections()),
         card_persistence=card_persistence,
         redis=_Redis(),
         tenant="demo-tenant",
@@ -578,7 +603,7 @@ async def test_automation_access_rejects_named_service_operation_without_its_gra
 @pytest.mark.asyncio
 async def test_automation_access_rejects_non_delegable_grant(card_persistence):
     service = AutomationAccessService(
-        catalog_resolver=_CatalogResolver(),
+        catalog_resolver=_CatalogResolver(connections=_connections()),
         card_persistence=card_persistence,
         redis=_Redis(),
         tenant="demo-tenant",
@@ -606,7 +631,7 @@ async def test_automation_access_rejects_non_delegable_grant(card_persistence):
 @pytest.mark.asyncio
 async def test_automation_access_requires_configured_resource_when_catalog_exists(card_persistence):
     service = AutomationAccessService(
-        catalog_resolver=_CatalogResolver(),
+        catalog_resolver=_CatalogResolver(connections=_connections()),
         card_persistence=card_persistence,
         redis=_Redis(),
         tenant="demo-tenant",
@@ -645,7 +670,7 @@ async def test_automation_access_requires_configured_resource_when_catalog_exist
 @pytest.mark.asyncio
 async def test_automation_access_all_resources_is_admin_only(card_persistence):
     service = AutomationAccessService(
-        catalog_resolver=_CatalogResolver(),
+        catalog_resolver=_CatalogResolver(connections=_connections()),
         card_persistence=card_persistence,
         redis=_Redis(),
         tenant="demo-tenant",
@@ -698,7 +723,7 @@ async def test_automation_access_all_resources_is_admin_only(card_persistence):
 @pytest.mark.asyncio
 async def test_automation_access_can_select_multiple_resources(card_persistence):
     service = AutomationAccessService(
-        catalog_resolver=_CatalogResolver(),
+        catalog_resolver=_CatalogResolver(connections=_connections()),
         card_persistence=card_persistence,
         redis=_Redis(),
         tenant="demo-tenant",
@@ -758,7 +783,7 @@ async def test_oauth_grant_registers_lists_and_revokes(card_persistence):
         "permissions": [],
     }
     service = AutomationAccessService(
-        catalog_resolver=_CatalogResolver(),
+        catalog_resolver=_CatalogResolver(connections=_connections()),
         card_persistence=card_persistence,
         redis=redis,
         tenant="demo-tenant",
@@ -891,7 +916,7 @@ async def test_live_sessions_receive_delegated_access_changes():
 
 def _agent_service(card_persistence):
     return AutomationAccessService(
-        catalog_resolver=_CatalogResolver(),
+        catalog_resolver=_CatalogResolver(connections=_connections()),
         card_persistence=card_persistence,
         redis=_Redis(),
         tenant="demo-tenant",
@@ -1172,6 +1197,182 @@ async def test_the_native_gate_refuses_a_namespace_the_catalog_dropped(card_pers
 
     assert state["governed"] is True and state["granted"] is False
     assert state["removed"]["ret"]["requested_capability"]["namespace"] == "mail"
+
+
+@pytest.mark.asyncio
+async def test_save_refuses_when_the_card_moved_under_the_editor(card_persistence):
+    service = _named_services_agent_service(card_persistence)
+    ns_resource = "*/kdcube-services@1-0/public/mcp/named_services*"
+    created = await service.create_access(
+        _AGENT_USER, label="manual",
+        resource_grants={ns_resource: ["named_services:use", "mail:read"]},
+    )
+    access_id = created["access"]["access_id"]
+
+    conflict = await service.update_access(
+        _AGENT_USER, access_id=access_id,
+        resource_grants={ns_resource: ["named_services:use"]},
+        expected_card_revision=int(created["access"]["card_revision"]) + 5,
+    )
+
+    assert conflict["ok"] is False
+    assert conflict["error"] == "delegated_access_precondition_failed"
+    assert conflict["status"] == 409
+    assert conflict["mismatched"]["card_revision"]["actual"] == created["access"]["card_revision"]
+    # The refreshed projection is what the editor reloads.
+    assert conflict["access"]["access_id"] == access_id
+    assert conflict["access"]["catalog_drift"]["status"] == "current"
+
+
+@pytest.mark.asyncio
+async def test_save_refuses_when_the_catalog_moved_under_the_editor(card_persistence):
+    service = _named_services_agent_service(card_persistence)
+    resolver = service._catalog_resolver
+    ns_resource = "*/kdcube-services@1-0/public/mcp/named_services*"
+    created = await service.create_access(
+        _AGENT_USER, label="manual",
+        resource_grants={ns_resource: ["named_services:use", "mail:read"]},
+    )
+
+    conflict = await service.update_access(
+        _AGENT_USER, access_id=created["access"]["access_id"],
+        resource_grants={ns_resource: ["named_services:use"]},
+        expected_catalog_version="delegated_catalog_2026-01-01-00-00-00-000_000000000000",
+    )
+
+    assert conflict["status"] == 409
+    assert conflict["mismatched"]["catalog_version"]["actual"] == resolver.version
+
+
+@pytest.mark.asyncio
+async def test_save_matching_the_expectations_proceeds(card_persistence):
+    service = _named_services_agent_service(card_persistence)
+    ns_resource = "*/kdcube-services@1-0/public/mcp/named_services*"
+    created = await service.create_access(
+        _AGENT_USER, label="manual",
+        resource_grants={ns_resource: ["named_services:use", "mail:read"]},
+    )
+
+    saved = await service.update_access(
+        _AGENT_USER, access_id=created["access"]["access_id"],
+        resource_grants={ns_resource: ["named_services:use", "mail:read"]},
+        label="Renamed",
+        expected_card_revision=int(created["access"]["card_revision"]),
+        expected_catalog_version=service._catalog_resolver.version,
+    )
+
+    assert saved["ok"] is True
+    assert saved["access"]["label"] == "Renamed"
+    assert saved["access"]["catalog_drift"]["status"] == "current"
+    assert saved["pruned"] == {"resources": [], "claims": [], "named_service_operations": []}
+
+
+@pytest.mark.asyncio
+async def test_save_prunes_a_withdrawn_operation_instead_of_refusing(card_persistence):
+    """The picker cannot render a withdrawn row, so Save removes it."""
+    service = _named_services_agent_service(card_persistence)
+    resolver = service._catalog_resolver
+    ns_resource = "*/kdcube-services@1-0/public/mcp/named_services*"
+    created = await service.create_access(
+        _AGENT_USER, label="manual",
+        resource_grants={ns_resource: ["named_services:use", "mail:read", "mail:send"]},
+        named_service_operations={ns_resource: {"mail": ["object.search", "object.action"]}},
+    )
+    assert created["ok"] is True
+
+    trimmed = copy.deepcopy(resolver.connections)
+    namespaces = trimmed["delegated_credentials"]["oauth"]["resources"][0]["named_services"]["namespaces"]
+    namespaces["mail"]["tools"].pop("action")
+    resolver.advance(version="delegated_catalog_2026-08-14-11-00-00-000_aaaaaaaaaaaa", connections=trimmed)
+
+    saved = await service.update_access(
+        _AGENT_USER, access_id=created["access"]["access_id"],
+        resource_grants={ns_resource: ["named_services:use", "mail:read", "mail:send"]},
+        named_service_operations={ns_resource: {"mail": ["object.search", "object.action"]}},
+    )
+
+    assert saved["ok"] is True
+    assert saved["pruned"]["named_service_operations"] == [
+        {"resource": ns_resource, "namespace": "mail", "operation": "object.action"}
+    ]
+    assert saved["access"]["named_service_operations"] == {ns_resource: {"mail": ["object.search"]}}
+    assert saved["access"]["catalog_drift"]["status"] == "current"
+
+
+@pytest.mark.asyncio
+async def test_save_revokes_a_card_pruning_leaves_without_authority(card_persistence):
+    service = _named_services_agent_service(card_persistence)
+    resolver = service._catalog_resolver
+    ns_resource = "*/kdcube-services@1-0/public/mcp/named_services*"
+    created = await service.create_access(
+        _AGENT_USER, label="manual",
+        resource_grants={ns_resource: ["named_services:use", "mail:read"]},
+    )
+    access_id = created["access"]["access_id"]
+
+    emptied = copy.deepcopy(resolver.connections)
+    emptied["delegated_credentials"]["oauth"]["resources"] = []
+    resolver.advance(version="delegated_catalog_2026-08-14-12-00-00-000_bbbbbbbbbbbb", connections=emptied)
+
+    saved = await service.update_access(
+        _AGENT_USER, access_id=access_id,
+        resource_grants={ns_resource: ["named_services:use", "mail:read"]},
+    )
+
+    assert saved["ok"] is True and saved["revoked"] is True
+    assert saved["pruned"]["resources"] == [ns_resource]
+    assert await service._load_record(access_id, grantor_subject="platform-user-1") is None
+
+
+@pytest.mark.asyncio
+async def test_listing_reports_drift_against_the_card_baseline(card_persistence):
+    """Listing explains a card against the generation it was saved under."""
+    service = _named_services_agent_service(card_persistence)
+    resolver = service._catalog_resolver
+    ns_resource = "*/kdcube-services@1-0/public/mcp/named_services*"
+    created = await service.create_access(
+        _AGENT_USER, label="agent", client_id=_AGENT_CLIENT,
+        resource_grants={ns_resource: ["mail:read", "named_services:use"]},
+    )
+    assert created["ok"] is True
+
+    listed = await service.list_access(_AGENT_USER)
+    assert listed["items"][0]["catalog_drift"]["status"] == "current"
+
+    trimmed = copy.deepcopy(resolver.connections)
+    namespaces = trimmed["delegated_credentials"]["oauth"]["resources"][0]["named_services"]["namespaces"]
+    namespaces["mail"]["tools"].pop("search")
+    resolver.advance(version="delegated_catalog_2026-08-14-10-00-00-000_ffffffffffff", connections=trimmed)
+
+    listed = await service.list_access(_AGENT_USER)
+    drift = listed["items"][0]["catalog_drift"]
+
+    assert drift["status"] == "changed"
+    assert drift["saved_version"] == TEST_CATALOG_VERSION
+    assert drift["current_version"] != TEST_CATALOG_VERSION
+    removed = drift["removed"]["named_service_operations"]
+    assert [row["operation"] for row in removed] == ["object.search"]
+    assert removed[0]["was_selected"] is True
+    assert removed[0]["effect"] == "denied_immediately"
+
+
+@pytest.mark.asyncio
+async def test_listing_disables_editing_when_the_comparison_cannot_be_made(card_persistence):
+    service = _named_services_agent_service(card_persistence)
+    ns_resource = "*/kdcube-services@1-0/public/mcp/named_services*"
+    assert (await service.create_access(
+        _AGENT_USER, label="agent", client_id=_AGENT_CLIENT,
+        resource_grants={ns_resource: ["mail:read", "named_services:use"]},
+    ))["ok"] is True
+    service._catalog_resolver.unavailable = True
+
+    listed = await service.list_access(_AGENT_USER)
+
+    assert listed["ok"] is True                      # the card is not hidden
+    assert listed["items"][0]["catalog_drift"] == {
+        "status": "unavailable",
+        "reason": "active_catalog_not_registered",
+    }
 
 
 @pytest.mark.asyncio
@@ -1491,7 +1692,7 @@ async def test_disconnecting_an_account_clears_its_agent_bindings(card_persisten
     were reconnected later."""
     redis = _Redis()
     service = AutomationAccessService(
-        catalog_resolver=_CatalogResolver(),
+        catalog_resolver=_CatalogResolver(connections=_connections()),
         card_persistence=card_persistence,
         redis=redis,
         tenant="demo-tenant",
@@ -1552,7 +1753,7 @@ async def test_automation_access_update_replaces_grants_in_place_and_keeps_ident
     store = _Store()
     authority = _Authority()
     service = AutomationAccessService(
-        catalog_resolver=_CatalogResolver(),
+        catalog_resolver=_CatalogResolver(connections=_connections()),
         card_persistence=card_persistence,
         redis=redis, tenant="demo-tenant", project="demo-project",
         config=_config(), grant_store=store, authority=authority, minter=_minter,
@@ -1624,7 +1825,7 @@ async def test_automation_access_update_guards_ownership_existence_and_empty(car
     store = _Store()
     authority = _Authority()
     service = AutomationAccessService(
-        catalog_resolver=_CatalogResolver(),
+        catalog_resolver=_CatalogResolver(connections=_connections()),
         card_persistence=card_persistence,
         redis=redis, tenant="demo-tenant", project="demo-project",
         config=_config(), grant_store=store, authority=authority, minter=_minter,
@@ -1658,7 +1859,7 @@ async def test_automation_access_update_replaces_named_service_operations_withou
     written."""
     store = _Store()
     service = AutomationAccessService(
-        catalog_resolver=_CatalogResolver(),
+        catalog_resolver=_CatalogResolver(connections=_named_services_connections()),
         card_persistence=card_persistence,
         redis=_Redis(), tenant="demo-tenant", project="demo-project",
         config=_named_services_config(), grant_store=store, authority=_Authority(),
@@ -1710,7 +1911,7 @@ async def test_automation_access_update_replaces_named_service_operations_withou
 async def test_automation_access_update_rejects_an_operation_its_grants_do_not_cover(card_persistence):
     """The selection is validated at save time."""
     service = AutomationAccessService(
-        catalog_resolver=_CatalogResolver(),
+        catalog_resolver=_CatalogResolver(connections=_named_services_connections()),
         card_persistence=card_persistence,
         redis=_Redis(), tenant="demo-tenant", project="demo-project",
         config=_named_services_config(), grant_store=_Store(), authority=_Authority(),
@@ -1740,7 +1941,7 @@ async def test_automation_access_update_omitting_the_narrowing_keeps_it(card_per
     """Absent vs empty, same rule as account_scope: omitting the narrowing keeps
     the record's, an explicit {} widens to the full policy."""
     service = AutomationAccessService(
-        catalog_resolver=_CatalogResolver(),
+        catalog_resolver=_CatalogResolver(connections=_named_services_connections()),
         card_persistence=card_persistence,
         redis=_Redis(), tenant="demo-tenant", project="demo-project",
         config=_named_services_config(), grant_store=_Store(), authority=_Authority(),
@@ -1782,7 +1983,7 @@ async def test_agent_grant_replace_without_the_narrowing_keeps_it(card_persisten
     """A replace edit that submits no narrowing (a rename) must not widen the
     agent's boundary."""
     service = AutomationAccessService(
-        catalog_resolver=_CatalogResolver(),
+        catalog_resolver=_CatalogResolver(connections=_named_services_connections()),
         card_persistence=card_persistence,
         redis=_Redis(), tenant="demo-tenant", project="demo-project",
         config=_named_services_config(), grant_store=_Store(), authority=_Authority(),
@@ -1812,7 +2013,7 @@ async def test_automation_access_update_empty_narrowing_clears_every_resource(ca
     """An explicit {} is the clear, and it reaches resources the caller did not
     name — the widget therefore omits the field when it has no selection."""
     service = AutomationAccessService(
-        catalog_resolver=_CatalogResolver(),
+        catalog_resolver=_CatalogResolver(connections=_named_services_connections()),
         card_persistence=card_persistence,
         redis=_Redis(), tenant="demo-tenant", project="demo-project",
         config=_named_services_config(), grant_store=_Store(), authority=_Authority(),

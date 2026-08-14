@@ -85,6 +85,13 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.car
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.catalog.resolver import (
     CatalogUnavailable,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.catalog.drift import (
+    card_drift,
+    drift_unavailable,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.catalog.reconcile import (
+    reconcile_selection,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.catalog.authorization import (
     CAPABILITY_NAMED_SERVICE_OPERATION,
     ActiveCatalogCapabilities,
@@ -710,6 +717,120 @@ class AutomationAccessService:
         )
         return [record_from_card(authority) for authority in authorities]
 
+    async def _save_precondition_conflict(
+        self,
+        *,
+        existing: AutomationAccessRecord,
+        active: Any,
+        expected_card_revision: int | None,
+        expected_catalog_version: str | None,
+    ) -> dict[str, Any] | None:
+        """``409`` with a refreshed projection when the editor's inputs moved.
+
+        Both preconditions are optional; a caller that sends neither keeps the
+        previous last-writer-wins behaviour.
+        """
+        mismatched: dict[str, Any] = {}
+        if expected_card_revision is not None and int(expected_card_revision) != int(
+            existing.card_revision
+        ):
+            mismatched["card_revision"] = {
+                "expected": int(expected_card_revision),
+                "actual": int(existing.card_revision),
+            }
+        expected_version = _clean(expected_catalog_version)
+        if expected_version and expected_version != _clean(getattr(active, "version", "")):
+            mismatched["catalog_version"] = {
+                "expected": expected_version,
+                "actual": _clean(getattr(active, "version", "")),
+            }
+        if not mismatched:
+            return None
+
+        refreshed = existing.to_public_dict()
+        try:
+            baseline, reason = await self._baseline_document(_clean(existing.catalog_version))
+            refreshed["catalog_drift"] = (
+                drift_unavailable(reason)
+                if reason
+                else card_drift(
+                    card=existing,
+                    active=active,
+                    baseline=baseline,
+                    baseline_confirmed_absent=baseline is None,
+                )
+            )
+        except Exception:
+            _LOGGER.warning(
+                "[automation-access] drift for conflict response failed card=%s",
+                existing.access_id,
+                exc_info=True,
+            )
+            refreshed["catalog_drift"] = drift_unavailable("catalog_unavailable")
+        return {
+            "ok": False,
+            "error": "delegated_access_precondition_failed",
+            "status": 409,
+            "mismatched": mismatched,
+            "access": refreshed,
+        }
+
+    async def _catalog_drift(
+        self, records: Iterable[AutomationAccessRecord]
+    ) -> dict[str, dict[str, Any]]:
+        """Drift per card: one active read, and one read per distinct baseline.
+
+        Listing explains cards; it never rewrites them, and an unreadable
+        comparison disables editing rather than hiding the card.
+        """
+        rows = list(records)
+        try:
+            active = await self._active_catalog()
+        except CatalogUnavailable as exc:
+            return {record.access_id: drift_unavailable(exc.reason) for record in rows}
+        except Exception:
+            _LOGGER.warning("[automation-access] active catalog unreadable", exc_info=True)
+            return {
+                record.access_id: drift_unavailable("catalog_unavailable") for record in rows
+            }
+
+        baselines: dict[str, tuple[Any, str]] = {}
+        out: dict[str, dict[str, Any]] = {}
+        for record in rows:
+            version = _clean(record.catalog_version)
+            if version and version == active.version:
+                out[record.access_id] = card_drift(
+                    card=record, active=active, baseline=active
+                )
+                continue
+            if version not in baselines:
+                baselines[version] = await self._baseline_document(version)
+            document, reason = baselines[version]
+            if reason:
+                out[record.access_id] = drift_unavailable(reason)
+                continue
+            out[record.access_id] = card_drift(
+                card=record,
+                active=active,
+                baseline=document,
+                baseline_confirmed_absent=document is None,
+            )
+        return out
+
+    async def _baseline_document(self, version: str) -> tuple[Any, str]:
+        """``(document, reason)``. No document and no reason is confirmed absence."""
+        if not version:
+            return None, ""
+        try:
+            return await self._catalog_resolver.resolve_version(version), ""
+        except CatalogUnavailable as exc:
+            return None, (exc.reason or "catalog_unavailable")
+        except Exception:
+            _LOGGER.warning(
+                "[automation-access] baseline unreadable version=%s", version, exc_info=True
+            )
+            return None, "catalog_unavailable"
+
     async def _active_catalog(self):
         """The registered catalog a governed decision is taken against."""
         if self._catalog_resolver is None:
@@ -946,7 +1067,12 @@ class AutomationAccessService:
                 "retryable": True,
                 "status": 503,
             }
-        records = [record.to_public_dict() for record in records_found]
+        drift_by_card = await self._catalog_drift(records_found)
+        records = []
+        for record in records_found:
+            item = record.to_public_dict()
+            item["catalog_drift"] = drift_by_card[record.access_id]
+            records.append(item)
 
         records.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
         return {
@@ -1339,6 +1465,8 @@ class AutomationAccessService:
         named_service_operations: Mapping[str, Any] | None = None,
         account_scope: Mapping[str, Any] | None = None,
         label: str | None = None,
+        expected_card_revision: int | None = None,
+        expected_catalog_version: str | None = None,
     ) -> dict[str, Any]:
         """Edit a MANUAL automation access IN PLACE: replace its grants while
         keeping the same access_id and token. The card is the guard's authority
@@ -1371,6 +1499,34 @@ class AutomationAccessService:
         if existing.source != ACCESS_SOURCE_MANUAL:
             return {"ok": False, "error": "delegated_access_not_editable"}
 
+        try:
+            active = await self._active_catalog()
+        except CatalogUnavailable as exc:
+            return {
+                "ok": False,
+                "error": "delegated_catalog_unavailable",
+                "reason": exc.reason,
+                "retryable": True,
+                "status": 503,
+            }
+        catalog_version = _clean(getattr(active, "version", ""))
+        if not catalog_version:
+            return {
+                "ok": False,
+                "error": "delegated_catalog_unavailable",
+                "reason": "active_catalog_version_missing",
+                "retryable": True,
+                "status": 503,
+            }
+        conflict = await self._save_precondition_conflict(
+            existing=existing,
+            active=active,
+            expected_card_revision=expected_card_revision,
+            expected_catalog_version=expected_catalog_version,
+        )
+        if conflict is not None:
+            return conflict
+
         # Validate the new grants with the SAME rules as create_access.
         selected_resource_grants = self._resource_grants(resource_grants)
         try:
@@ -1379,6 +1535,40 @@ class AutomationAccessService:
             )
         except ValueError as exc:
             return {"ok": False, "error": "invalid_named_service_operation_selection", "message": str(exc)}
+        # Resolved before pruning: pruning acts on the selection about to be
+        # persisted. Omitted keeps the record's own state; legacy becomes "*".
+        if selected_named_service_operations is None:
+            selected_named_service_operations = existing.named_service_operations
+        if selected_named_service_operations.is_unknown:
+            selected_named_service_operations = NamedServiceSelection.all()
+
+        # Submitting nothing is a client error; pruning to nothing is a revoke.
+        if not any(selected_resource_grants.values()):
+            return {"ok": False, "error": "delegated_access_requires_resource_grants"}
+
+        # Values absent from the active catalog are pruned, not rejected.
+        reconciled = reconcile_selection(
+            resource_grants=selected_resource_grants,
+            named_service_operations=selected_named_service_operations,
+            active=active,
+        )
+        if reconciled.empty:
+            # No authority survives: revoke rather than keep an empty card.
+            revoked = await self.revoke_access(user, access_id=access_id)
+            if not revoked.get("ok"):
+                return revoked
+            return {
+                "ok": True,
+                "revoked": True,
+                "access_id": access_id,
+                "pruned": reconciled.to_public_dict(),
+                "message": (
+                    "Every selection on this card was withdrawn from the delegated-service "
+                    "catalog, so the card was revoked instead of saved."
+                ),
+            }
+        selected_resource_grants = reconciled.resource_grants
+        selected_named_service_operations = reconciled.named_service_operations
         selected_resources = list(selected_resource_grants)
         if self._config.resources and not selected_resources:
             return {"ok": False, "error": "delegated_access_requires_resource_grants"}
@@ -1449,24 +1639,6 @@ class AutomationAccessService:
                 "ok": False,
                 "error": "delegated_access_resources_have_conflicting_identity_scopes",
                 "resources": selected_resources,
-            }
-        # Same absent-vs-empty rule as account_scope below: an omitted narrowing
-        # keeps the record's own state, whatever it is. An explicitly empty
-        # policy is preserved as empty, never widened back to the full one.
-        if selected_named_service_operations is None:
-            selected_named_service_operations = existing.named_service_operations
-        if selected_named_service_operations.is_unknown:
-            # A legacy card becomes explicit on its first successful save.
-            selected_named_service_operations = NamedServiceSelection.all()
-        try:
-            catalog_version = await self._active_catalog_version()
-        except CatalogUnavailable as exc:
-            return {
-                "ok": False,
-                "error": "delegated_catalog_unavailable",
-                "reason": exc.reason,
-                "retryable": True,
-                "status": 503,
             }
         # Recompute the boundary tree here: the descriptor is available in this
         # process, the guard's is not.
@@ -1541,7 +1713,9 @@ class AutomationAccessService:
                 "status": 503,
             }
         await self.notify_change(grantor_subject, action="updated", access=updated.to_public_dict())
-        return {"ok": True, "access": updated.to_public_dict()}
+        saved = updated.to_public_dict()
+        saved["catalog_drift"] = card_drift(card=updated, active=active, baseline=active)
+        return {"ok": True, "access": saved, "pruned": reconciled.to_public_dict()}
 
     async def agent_access_token(
         self,

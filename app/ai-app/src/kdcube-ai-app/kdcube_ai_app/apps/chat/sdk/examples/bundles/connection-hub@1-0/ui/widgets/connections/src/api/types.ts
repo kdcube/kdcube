@@ -134,6 +134,53 @@ export interface DelegatedAccessRecord {
   expires_at?: number;
   last_four?: string;
   source?: 'manual' | 'oauth' | string;
+  /** Monotonic revision; sent back on save so a stale editor is refused. */
+  card_revision?: number;
+  /** The catalog generation this card was last saved against. */
+  catalog_version?: string;
+  /** Backend-computed comparison with the active catalog. */
+  catalog_drift?: DelegatedCatalogDrift;
+}
+
+/** A capability the card selected that the active catalog no longer offers.
+ *  Already ineffective; save removes it. */
+export interface DelegatedDriftRemoval {
+  resource: string;
+  claim?: string;
+  operation?: string;
+  namespace?: string;
+  was_selected?: boolean;
+  effect?: 'denied_immediately' | string;
+}
+
+/** A capability the catalog gained since the card was saved. Never selected. */
+export interface DelegatedDriftAddition {
+  resource: string;
+  claim?: string;
+  operation?: string;
+  namespace?: string;
+  selected?: boolean;
+}
+
+export interface DelegatedCatalogDrift {
+  status: 'current' | 'changed' | 'no_relevant_change' | 'baseline_missing' | 'unavailable';
+  saved_version?: string;
+  current_version?: string;
+  /** Set when the card's baseline could not be read; additions are unknown. */
+  baseline_confirmed_absent?: boolean;
+  /** Set on `unavailable`: editing authority is disabled. */
+  reason?: string;
+  removed?: {
+    resources?: DelegatedDriftRemoval[];
+    claims?: DelegatedDriftRemoval[];
+    outer_operations?: DelegatedDriftRemoval[];
+    named_service_operations?: DelegatedDriftRemoval[];
+  };
+  added?: {
+    claims?: DelegatedDriftAddition[];
+    outer_operations?: DelegatedDriftAddition[];
+    named_service_operations?: DelegatedDriftAddition[];
+  };
 }
 
 export interface DelegatedAccessListResult {
@@ -153,6 +200,20 @@ export interface DelegatedAccessCreateResult {
   authorization_header?: string;
   error?: string;
   message?: string;
+  /** Set by save when reconciliation dropped withdrawn selections. */
+  pruned?: {
+    resources?: string[];
+    claims?: Array<{ resource: string; claim: string }>;
+    named_service_operations?: Array<{ resource: string; namespace: string; operation: string }>;
+  };
+  /** Set when reconciliation left no authority and the card was revoked. */
+  revoked?: boolean;
+  /** Set on a 409: which precondition did not hold. */
+  status?: number;
+  mismatched?: {
+    card_revision?: { expected: number; actual: number };
+    catalog_version?: { expected: string; actual: string };
+  };
 }
 
 export interface DelegatedAccessRevokeResult {
