@@ -43,21 +43,57 @@ class _Policy:
         return ""
 
 
-def _request(client_id: str, grants=None, account_scope=None):
+RESOURCE_PATTERN = (
+    "*/api/integrations/bundles/*/*/kdcube-services@1-0/public/mcp/named_services*"
+)
+
+
+def _bind_catalog(state, namespaces):
+    """A delegated call resolves the active catalog, so a test that reaches
+    dispatch states the generation it runs under."""
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.tests.helpers import (
+        bind_delegated_catalog,
+    )
+
+    bind_delegated_catalog(
+        SimpleNamespace(state=state),
+        {
+            "delegated_credentials": {
+                "oauth": {
+                    "enabled": True,
+                    "resources": [
+                        {
+                            "resource": RESOURCE_PATTERN,
+                            "grants": ["named_services:use"],
+                            "named_services": {"namespaces": namespaces},
+                        },
+                    ],
+                },
+            },
+        },
+    )
+
+
+def _request(
+    client_id: str,
+    grants=None,
+    account_scope=None,
+    *,
+    catalog_namespaces=None,
+):
     grants = list(grants or ["named_services:use", "slack:read"])
-    return SimpleNamespace(state=SimpleNamespace(delegated_credential={
+    request = SimpleNamespace(state=SimpleNamespace(delegated_credential={
         "credential": {"attrs": {"grants": grants}},
         "grant_record": {
             "client_id": client_id,
             "grants": [],
-            "resource_grants": {
-                "*/api/integrations/bundles/*/*/kdcube-services@1-0/public/mcp/named_services*": [
-                    *grants,
-                ],
-            },
+            "resource_grants": {RESOURCE_PATTERN: [*grants]},
             "account_scope": dict(account_scope or {}),
         },
     }))
+    if catalog_namespaces is not None:
+        _bind_catalog(request.state, catalog_namespaces)
+    return request
 
 
 def _bridge(m, request):
@@ -227,7 +263,11 @@ async def test_bounded_action_authorizes_the_exact_action_key(monkeypatch) -> No
         config=config,
         tenant="t",
         project="p",
-        request=_request("claude", ["named_services:use", "slack:post"]),
+        request=_request(
+            "claude",
+            ["named_services:use", "slack:post"],
+            catalog_namespaces=config["namespaces"],
+        ),
     )
     captured = {}
 
@@ -287,6 +327,7 @@ async def test_tool_call_rebinds_agent_account_scope_before_provider_call(monkey
             "kdcube-agent:ported-langgraph-agents@2026-07-13:lg-react",
             ["named_services:use"],
             account_scope={"slack": {"slack-1": ["slack:files:write"]}},
+            catalog_namespaces=config["namespaces"],
         ),
     )
 
@@ -344,6 +385,7 @@ async def test_account_scope_claim_satisfies_provider_backed_bridge_gate(monkeyp
             "kdcube-agent:ported-langgraph-agents@2026-07-13:lg-react",
             ["named_services:use"],
             account_scope={"slack": {"slack-1": ["slack:channels"]}},
+            catalog_namespaces=config["namespaces"],
         ),
     )
     captured = {}

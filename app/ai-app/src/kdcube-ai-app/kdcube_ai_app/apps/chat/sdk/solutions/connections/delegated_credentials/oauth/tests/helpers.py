@@ -49,6 +49,56 @@ def enable_delegated_client(app: FastAPI, *, issuer: str = "https://connector.ex
     }
 
 
+class _FixedCatalogResolver:
+    """Serves one registered catalog generation.
+
+    Publication, caching, and read-through have their own Redis-backed tests;
+    a guard test states the generation it is enforcing against.
+    """
+
+    def __init__(self, document, *, unavailable: str = "") -> None:
+        self._document = document
+        self._unavailable = unavailable
+
+    async def resolve_active(self):
+        if self._unavailable:
+            from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.catalog.resolver import (
+                CatalogUnavailable,
+            )
+
+            raise CatalogUnavailable(self._unavailable)
+        return self._document
+
+    async def resolve_version(self, version: str):
+        return self._document if version == self._document.version else None
+
+
+def bind_delegated_catalog(app, connections, *, unavailable: str = "", cards=None) -> None:
+    """Install the serving resolvers over a fixed catalog generation.
+
+    ``cards`` is the durable card store a cache miss reads through; without one
+    the guard resolves cards from the projection alone.
+    """
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.catalog.models import (
+        CatalogDocument,
+    )
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.serving import (
+        SERVING_RESOLVERS_ATTR,
+        DelegatedServingResolvers,
+    )
+
+    setattr(
+        app.state,
+        SERVING_RESOLVERS_ATTR,
+        DelegatedServingResolvers(
+            catalog=_FixedCatalogResolver(
+                CatalogDocument.build(connections or {}), unavailable=unavailable
+            ),
+            cards=cards,
+        ),
+    )
+
+
 def _clear_delegated_keys(*, tenant: str, project: str) -> None:
     """Drop delegated-access keys left by an earlier test in this namespace."""
     import os

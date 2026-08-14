@@ -579,6 +579,21 @@ def _parse_config(raw: Any, *, settings: Any | None = None) -> OAuthDelegatedCli
     )
 
 
+def oauth_delegated_config_from_connections(
+    connections: Mapping[str, Any] | None,
+) -> OAuthDelegatedClientConfig:
+    """Parse a ``connections`` mapping with the same reader request paths use.
+
+    The mapping comes from a registered catalog document, not from live props,
+    so this never consults request or app state.
+    """
+    node = connections if isinstance(connections, Mapping) else {}
+    delegated = node.get("delegated_credentials")
+    delegated = delegated if isinstance(delegated, Mapping) else {}
+    oauth = delegated.get("oauth")
+    return _parse_config(oauth if isinstance(oauth, Mapping) else {})
+
+
 def oauth_delegated_config(source: Any | None = None) -> OAuthDelegatedClientConfig:
     """Resolve OAuth delegated-credential config from app state or assembly.
 

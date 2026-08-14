@@ -256,12 +256,21 @@ class ConnectionHubProvider(ConnectionsProviderBase):
         service = self._automation_access_factory()
         if service is None:
             return {"governed": False}
-        return await service.agent_namespace_grant_state(
-            grantor_subject=user_id,
-            client_id=client_id,
-            namespace=namespace,
-            operation=operation,
+        from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.catalog.resolver import (
+            CatalogUnavailable,
         )
+
+        try:
+            return await service.agent_namespace_grant_state(
+                grantor_subject=user_id,
+                client_id=client_id,
+                namespace=namespace,
+                operation=operation,
+            )
+        except CatalogUnavailable as exc:
+            # Unknown current authority is unavailability, and the caller must
+            # be able to tell it from "nothing to gate".
+            return {"unavailable": exc.reason or "catalog_unavailable"}
 
     async def _refresh_tokens(
         self,

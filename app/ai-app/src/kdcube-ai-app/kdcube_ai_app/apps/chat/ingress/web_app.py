@@ -290,6 +290,20 @@ async def lifespan(app: FastAPI):
         )
     except Exception as e:
         logger.warning("Failed to install Connection Hub authentication surface: %s", e)
+
+    try:
+        from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.serving import (
+            install_delegated_serving_resolvers,
+        )
+
+        await install_delegated_serving_resolvers(
+            app,
+            redis=getattr(app.state, "redis_async", None),
+            tenant=settings.TENANT,
+            project=settings.PROJECT,
+        )
+    except Exception as e:
+        logger.warning("Failed to install delegated serving resolvers: %s", e)
     try:
         from kdcube_ai_app.apps.middleware.economics_role import EconomicsRoleResolver
         _econ_role_resolver = EconomicsRoleResolver(

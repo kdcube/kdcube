@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import uuid
@@ -133,16 +134,26 @@ TEST_CATALOG_VERSION = "delegated_catalog_2026-08-11-10-30-00-123_d4e5f6a7b8c9"
 
 
 class _CatalogResolver:
-    """Resolves a fixed active catalog version; `unavailable` fails closed."""
+    """Resolves a fixed active catalog generation; `unavailable` fails closed.
 
-    def __init__(self, version: str = TEST_CATALOG_VERSION, unavailable: bool = False) -> None:
+    ``connections`` is the catalog body a governed decision reads; tests that
+    only need a version to stamp leave it empty.
+    """
+
+    def __init__(
+        self,
+        version: str = TEST_CATALOG_VERSION,
+        unavailable: bool = False,
+        connections: dict | None = None,
+    ) -> None:
         self.version = version
         self.unavailable = unavailable
+        self.connections = connections or {}
 
     async def resolve_active(self):
         if self.unavailable:
             raise CatalogUnavailable("active_catalog_not_registered")
-        return SimpleNamespace(version=self.version)
+        return SimpleNamespace(version=self.version, connections=self.connections)
 
 
 class _NamedServiceDiscovery:
@@ -223,102 +234,109 @@ def _config():
     return oauth_delegated_config(SimpleNamespace(state=state))
 
 
+NAMED_SERVICES_OAUTH = {
+        "enabled": True,
+        "tenant": "demo-tenant",
+        "project": "demo-project",
+        "capabilities": [
+            {
+                "grant": grant,
+                "label": grant,
+                "delegable_roles": ["kdcube:role:registered"],
+            }
+            for grant in (
+                "named_services:use",
+                "mail:read",
+                "mail:send",
+                "slack:read",
+                "slack:write",
+            )
+        ],
+        "resources": [
+            {
+                "resource": "https://example.test/mcp/named-services",
+                "label": "Named services MCP",
+                "tools": {
+                    "named_services_call": {
+                        "label": "Named service call",
+                        "grants": ["named_services:use"],
+                    }
+                },
+                "named_services": {
+                    "namespaces": {
+                        "mail": {
+                            "label": "Mail",
+                            "description": "Connected mail accounts.",
+                            "authority_id": "delegated_client",
+                            "tools": {
+                                "search": {
+                                    "operation": "object.search",
+                                    "label": "Search mail",
+                                    "grants": ["mail:read"],
+                                },
+                                "action": {
+                                    "operation": "object.action",
+                                    "label": "Mail action",
+                                    "operations": {
+                                        "object.action": {
+                                            "label": "Mail action",
+                                            "grants": ["mail:read", "mail:send"],
+                                        }
+                                    },
+                                },
+                            },
+                        },
+                        "slack": {
+                            "label": "Slack",
+                            "description": "Connected Slack workspaces.",
+                            "authority_id": "delegated_client",
+                            "tools": {
+                                "search": {
+                                    "operation": "object.search",
+                                    "label": "Search Slack",
+                                    "grants": ["slack:read"],
+                                },
+                                "action": {
+                                    "operation": "object.action",
+                                    "label": "Slack action",
+                                    "operations": {
+                                        "object.action": {
+                                            "label": "Slack action",
+                                            "grants": ["slack:read", "slack:write"],
+                                        }
+                                    },
+                                },
+                                "call": {
+                                    "label": "Generic Slack call",
+                                    "operations": {
+                                        "object.search": {
+                                            "label": "Search Slack",
+                                            "grants": ["slack:read"],
+                                        },
+                                        "object.action": {
+                                            "label": "Slack action",
+                                            "grants": ["slack:read", "slack:write"],
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    }
+                },
+            }
+        ],
+}
+
+
 def _named_services_config():
-    state = SimpleNamespace(
-        oauth_delegated_config={
-            "enabled": True,
-            "tenant": "demo-tenant",
-            "project": "demo-project",
-            "capabilities": [
-                {
-                    "grant": grant,
-                    "label": grant,
-                    "delegable_roles": ["kdcube:role:registered"],
-                }
-                for grant in (
-                    "named_services:use",
-                    "mail:read",
-                    "mail:send",
-                    "slack:read",
-                    "slack:write",
-                )
-            ],
-            "resources": [
-                {
-                    "resource": "https://example.test/mcp/named-services",
-                    "label": "Named services MCP",
-                    "tools": {
-                        "named_services_call": {
-                            "label": "Named service call",
-                            "grants": ["named_services:use"],
-                        }
-                    },
-                    "named_services": {
-                        "namespaces": {
-                            "mail": {
-                                "label": "Mail",
-                                "description": "Connected mail accounts.",
-                                "authority_id": "delegated_client",
-                                "tools": {
-                                    "search": {
-                                        "operation": "object.search",
-                                        "label": "Search mail",
-                                        "grants": ["mail:read"],
-                                    },
-                                    "action": {
-                                        "operation": "object.action",
-                                        "label": "Mail action",
-                                        "operations": {
-                                            "object.action": {
-                                                "label": "Mail action",
-                                                "grants": ["mail:read", "mail:send"],
-                                            }
-                                        },
-                                    },
-                                },
-                            },
-                            "slack": {
-                                "label": "Slack",
-                                "description": "Connected Slack workspaces.",
-                                "authority_id": "delegated_client",
-                                "tools": {
-                                    "search": {
-                                        "operation": "object.search",
-                                        "label": "Search Slack",
-                                        "grants": ["slack:read"],
-                                    },
-                                    "action": {
-                                        "operation": "object.action",
-                                        "label": "Slack action",
-                                        "operations": {
-                                            "object.action": {
-                                                "label": "Slack action",
-                                                "grants": ["slack:read", "slack:write"],
-                                            }
-                                        },
-                                    },
-                                    "call": {
-                                        "label": "Generic Slack call",
-                                        "operations": {
-                                            "object.search": {
-                                                "label": "Search Slack",
-                                                "grants": ["slack:read"],
-                                            },
-                                            "object.action": {
-                                                "label": "Slack action",
-                                                "grants": ["slack:read", "slack:write"],
-                                            },
-                                        },
-                                    },
-                                },
-                            },
-                        }
-                    },
-                }
-            ],
-        }
+    return oauth_delegated_config(
+        SimpleNamespace(state=SimpleNamespace(oauth_delegated_config=NAMED_SERVICES_OAUTH))
     )
-    return oauth_delegated_config(SimpleNamespace(state=state))
+
+
+def _named_services_connections() -> dict:
+    """The registered catalog body matching `_named_services_config`."""
+    return {"delegated_credentials": {"oauth": NAMED_SERVICES_OAUTH}}
 
 
 @pytest.mark.asyncio
@@ -1047,8 +1065,11 @@ def _named_services_agent_service(card_persistence):
             ],
         }
     )
+    # The native gate reads the registered catalog, so the fixture publishes the
+    # same block it configures.
+    connections = {"delegated_credentials": {"oauth": state.oauth_delegated_config}}
     return AutomationAccessService(
-        catalog_resolver=_CatalogResolver(),
+        catalog_resolver=_CatalogResolver(connections=connections),
         card_persistence=card_persistence,
         redis=_Redis(), tenant="demo-tenant", project="demo-project",
         config=oauth_delegated_config(SimpleNamespace(state=state)),
@@ -1098,6 +1119,82 @@ async def test_agent_namespace_grant_state_governs_and_grants(card_persistence):
         grantor_subject="platform-user-1", client_id=_AGENT_CLIENT,
         namespace="calendar", operation="object.search",
     )) == {"governed": False}
+
+
+@pytest.mark.asyncio
+async def test_the_native_gate_refuses_an_operation_the_catalog_dropped(card_persistence):
+    """The card holds it; the deployment no longer offers it. Consent cannot
+    restore that, so the answer is a removal, not a pending grant."""
+    service = _named_services_agent_service(card_persistence)
+    ns_resource = "*/kdcube-services@1-0/public/mcp/named_services*"
+    claims = ["mail:read", "named_services:use"]
+    assert (await service.create_access(
+        _AGENT_USER, label="agent", client_id=_AGENT_CLIENT,
+        resource_grants={ns_resource: claims},
+    ))["ok"] is True
+
+    trimmed = copy.deepcopy(service._catalog_resolver.connections)
+    namespaces = trimmed["delegated_credentials"]["oauth"]["resources"][0]["named_services"]["namespaces"]
+    namespaces["mail"]["tools"].pop("search")
+    service._catalog_resolver.connections = trimmed
+
+    state = await service.agent_namespace_grant_state(
+        grantor_subject="platform-user-1", client_id=_AGENT_CLIENT,
+        namespace="mail", operation="object.search",
+    )
+
+    assert state["governed"] is True and state["granted"] is False
+    removed = state["removed"]
+    assert removed["error"]["code"] == "delegated_capability_no_longer_available"
+    path = removed["ret"]["requested_capability"]
+    assert path["namespace"] == "mail" and path["operation"] == "object.search"
+    assert path["surface"] == "named_service"
+    assert removed["ret"]["card_revision"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_the_native_gate_refuses_a_namespace_the_catalog_dropped(card_persistence):
+    service = _named_services_agent_service(card_persistence)
+    ns_resource = "*/kdcube-services@1-0/public/mcp/named_services*"
+    assert (await service.create_access(
+        _AGENT_USER, label="agent", client_id=_AGENT_CLIENT,
+        resource_grants={ns_resource: ["mail:read", "named_services:use"]},
+    ))["ok"] is True
+
+    trimmed = copy.deepcopy(service._catalog_resolver.connections)
+    trimmed["delegated_credentials"]["oauth"]["resources"][0]["named_services"]["namespaces"].pop("mail")
+    service._catalog_resolver.connections = trimmed
+
+    state = await service.agent_namespace_grant_state(
+        grantor_subject="platform-user-1", client_id=_AGENT_CLIENT,
+        namespace="mail", operation="object.search",
+    )
+
+    assert state["governed"] is True and state["granted"] is False
+    assert state["removed"]["ret"]["requested_capability"]["namespace"] == "mail"
+
+
+@pytest.mark.asyncio
+async def test_a_namespace_no_card_ever_held_stays_ungoverned(card_persistence):
+    """Nothing was delegated here, so there is nothing to refuse."""
+    service = _named_services_agent_service(card_persistence)
+
+    assert (await service.agent_namespace_grant_state(
+        grantor_subject="platform-user-1", client_id=_AGENT_CLIENT,
+        namespace="calendar", operation="object.search",
+    )) == {"governed": False}
+
+
+@pytest.mark.asyncio
+async def test_the_native_gate_fails_closed_when_the_catalog_is_unavailable(card_persistence):
+    service = _named_services_agent_service(card_persistence)
+    service._catalog_resolver.unavailable = True
+
+    with pytest.raises(CatalogUnavailable):
+        await service.agent_namespace_grant_state(
+            grantor_subject="platform-user-1", client_id=_AGENT_CLIENT,
+            namespace="mail", operation="object.search",
+        )
 
 
 @pytest.mark.asyncio

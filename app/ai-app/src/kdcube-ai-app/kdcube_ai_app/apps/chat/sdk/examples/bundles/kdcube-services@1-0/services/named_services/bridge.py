@@ -7,6 +7,20 @@ from typing import Any, Iterable, Mapping, Sequence
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.credential_view import (
     delegated_credential_view,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.catalog.authorization import (
+    CAPABILITY_NAMED_SERVICE_OPERATION,
+    ActiveCatalogCapabilities,
+    CapabilityRequest,
+    CardProvenance,
+    authorize_current_capability,
+    catalog_unavailable_denial,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.catalog.resolver import (
+    CatalogUnavailable,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.serving import (
+    delegated_serving_resolvers,
+)
 from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import (
     get_current_request_context,
     get_current_user_identity,
@@ -120,6 +134,14 @@ def _credential_grants_from_request(request: Any, *, required: Iterable[str] = (
     return available
 
 
+def _denial_code(denial: Mapping[str, Any]) -> str:
+    """Denials carry either a flat error string or a structured error object."""
+    error = denial.get("error")
+    if isinstance(error, Mapping):
+        return str(error.get("code") or "")
+    return str(error or "")
+
+
 def _delegated_grant_record(request: Any) -> dict[str, Any]:
     delegated = getattr(getattr(request, "state", None), "delegated_credential", None)
     if not isinstance(delegated, Mapping):
@@ -216,7 +238,15 @@ class NamedServicesMcpBridge:
             sorted(view.grants),
             _account_scope_summary(view.account_scope),
         )
-        catalog_config = _named_service_catalog_config_from_request(request) or self._config
+        # A card that carries a materialized tree is bounded by it, and an empty
+        # tree is that card's own boundary — falling back to the full descriptor
+        # there would widen what consent narrowed. A request with no delegated
+        # credential, or a card written before the field, runs on the descriptor.
+        catalog_config = (
+            _named_service_catalog_config_from_request(request)
+            if view.named_services_present
+            else self._config
+        )
         # The guarded service decides which connector app serves each provider
         # in auth scenarios (never a user pick): bind its declaration so realm
         # integrations and consent composers resolve it for this request.
@@ -292,6 +322,49 @@ class NamedServicesMcpBridge:
                 project=self._project,
             )
         return endpoint
+
+    async def _current_catalog_denial(
+        self, *, namespace: str, operation: str, tool_name: str
+    ) -> dict[str, Any] | None:
+        """Intersect the requested namespace operation with the active catalog.
+
+        The card's materialized tree proves the operation was selected under
+        the catalog generation the card was saved against; it does not prove
+        the deployment still offers it. Runs on the parsed request, never on a
+        tool name.
+        """
+        view = delegated_credential_view(self._request)
+        if not view.present:
+            # Not a delegated caller: the descriptor is the only boundary.
+            return None
+        resolvers = delegated_serving_resolvers(self._request)
+        if resolvers is None:
+            return catalog_unavailable_denial("delegated_serving_resolvers_absent")
+        try:
+            document = await resolvers.catalog.resolve_active()
+        except CatalogUnavailable as exc:
+            return catalog_unavailable_denial(exc.reason)
+        except Exception:
+            LOGGER.warning(
+                "[kdcube-services.named_services_mcp] active catalog unreadable", exc_info=True
+            )
+            return catalog_unavailable_denial("catalog_unavailable")
+        return authorize_current_capability(
+            catalog=ActiveCatalogCapabilities(document),
+            provenance=CardProvenance(
+                access_id=view.registry_access_id,
+                card_revision=view.card_revision,
+                catalog_version=view.catalog_version,
+            ),
+            request=CapabilityRequest(
+                kind=CAPABILITY_NAMED_SERVICE_OPERATION,
+                resource=view.resource,
+                surface="named_service",
+                outer_operation=tool_name,
+                namespace=namespace,
+                operation=operation,
+            ),
+        )
 
     async def _authorize(self, policy: NamespaceBoundaryPolicy, operation: str, tool_name: str) -> dict[str, Any] | None:
         if not policy.tool_configured(tool_name):
@@ -479,16 +552,20 @@ class NamedServicesMcpBridge:
             if op == OBJECT_ACTION and action_name
             else op
         )
-        denial = await self._authorize(
-            policy, authorization_operation, tool_name=tool_name
+        denial = await self._current_catalog_denial(
+            namespace=ns, operation=authorization_operation, tool_name=tool_name
         )
+        if denial is None:
+            denial = await self._authorize(
+                policy, authorization_operation, tool_name=tool_name
+            )
         if denial is not None:
             LOGGER.warning(
                 "[kdcube-services.named_services_mcp] denied tool=%s operation=%s namespace=%s error=%s missing_grants=%s available_grants=%s delegate=%s grantor=%s",
                 tool_name,
                 op,
                 ns,
-                denial.get("error") or "",
+                _denial_code(denial),
                 denial.get("missing_grants") or [],
                 denial.get("available_grants") or [],
                 trace.get("delegate_identity") or "",

@@ -299,6 +299,23 @@ async def test_an_expired_card_is_not_indexed_or_served(service, cache, store):
 
 
 @pytest.mark.asyncio
+async def test_read_through_does_not_re_cache_expired_authority(
+    service, cache, store, redis_client
+):
+    """Recovery restores authority, never resurrects it."""
+    await service.commit(
+        _authority(expires_at=NOW - 1), subject_hash=SUBJECT_HASH, expected_revision=0, now=NOW
+    )
+    await redis_client.delete(cache.card_key(ACCESS_ID))
+
+    resolver = DelegatedCardResolver(cache=cache, store=store)
+    assert await resolver.resolve(
+        subject_hash=SUBJECT_HASH, access_id=ACCESS_ID, now=NOW
+    ) is None
+    assert await redis_client.exists(cache.card_key(ACCESS_ID)) == 0
+
+
+@pytest.mark.asyncio
 async def test_a_damaged_projection_is_repaired_from_durable_state(service, store, cache, redis_client):
     """Unusable cache data must not read as a revoked card."""
     await service.commit(_authority(), subject_hash=SUBJECT_HASH, expected_revision=0, now=NOW)

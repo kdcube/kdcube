@@ -86,6 +86,12 @@ def connection_hub_auth_enabled() -> bool:
     return _bool(_authenticator_config().get("enabled"), default=False)
 
 
+def connection_hub_app_id() -> str:
+    """The descriptor-named Connection Hub app for this deployment."""
+    cfg = _authenticator_config()
+    return _str(cfg.get("app_id") or cfg.get("bundle_id")) or DEFAULT_CONNECTION_HUB_BUNDLE_ID
+
+
 def _first(*values: Any) -> str:
     for value in values:
         text = _str(value)
@@ -214,7 +220,7 @@ class ConnectionHubAuthenticationSurface:
             pg_pool=pg_pool,
             tenant=tenant,
             project=project,
-            bundle_id=_str(cfg.get("app_id") or cfg.get("bundle_id") or DEFAULT_CONNECTION_HUB_BUNDLE_ID),
+            bundle_id=connection_hub_app_id(),
             operation=_str(cfg.get("operation") or DEFAULT_CONNECTION_HUB_AUTH_OPERATION),
         )
 

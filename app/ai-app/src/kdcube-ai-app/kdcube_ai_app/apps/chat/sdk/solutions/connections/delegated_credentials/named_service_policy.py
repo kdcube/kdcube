@@ -47,6 +47,41 @@ def operation_grants(policy: Mapping[str, Any], fallback: Mapping[str, Any]) -> 
     )
 
 
+def configured_named_service_operations(
+    config: Mapping[str, Any] | None,
+) -> dict[str, set[str]]:
+    """``namespace -> operations`` a named-service descriptor configures.
+
+    Namespace keys are normalized the way a selection normalizes them;
+    operations keep the descriptor's own spelling.
+    """
+    namespaces = config.get("namespaces") if isinstance(config, Mapping) else None
+    if not isinstance(namespaces, Mapping):
+        return {}
+    out: dict[str, set[str]] = {}
+    for namespace, raw_policy in namespaces.items():
+        name = clean_text(namespace).lower().rstrip(":")
+        if not name or not isinstance(raw_policy, Mapping):
+            continue
+        operations = out.setdefault(name, set())
+        raw_tools = raw_policy.get("tools")
+        raw_tools = dict(raw_tools or {}) if isinstance(raw_tools, Mapping) else {}
+        for tool_name, raw_tool_policy in raw_tools.items():
+            if not isinstance(raw_tool_policy, Mapping):
+                continue
+            operation_policies = raw_tool_policy.get("operations")
+            if isinstance(operation_policies, Mapping) and operation_policies:
+                for operation in operation_policies:
+                    value = clean_text(operation)
+                    if value:
+                        operations.add(value)
+                continue
+            value = clean_text(raw_tool_policy.get("operation") or tool_name)
+            if value:
+                operations.add(value)
+    return out
+
+
 def narrow_named_service_config(
     *,
     config: Mapping[str, Any],
@@ -206,6 +241,7 @@ def named_service_policy_for_resource(
 __all__ = [
     "as_string_list",
     "clean_text",
+    "configured_named_service_operations",
     "merge_named_service_configs",
     "named_service_policy_for_resource",
     "narrow_named_service_config",

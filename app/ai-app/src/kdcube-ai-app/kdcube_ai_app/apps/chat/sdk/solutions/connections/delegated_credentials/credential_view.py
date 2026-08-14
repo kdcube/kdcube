@@ -39,6 +39,13 @@ def _as_list(value: Any) -> tuple[str, ...]:
     return ()
 
 
+def _as_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _normalize_account_scope(value: Any) -> dict[str, dict[str, tuple[str, ...]]]:
     """Nested per-account claim binding {provider: {account_id: (claims...)}}.
 
@@ -89,12 +96,19 @@ class DelegatedCredentialView:
     identity_scope: str = ""
     grantor_user_id: str = ""
     registry_access_id: str = ""
+    # Card provenance, for denials that must name which card and which catalog
+    # generation produced the stored selection.
+    card_revision: int = 0
+    catalog_version: str = ""
     resource_grants: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     grants: frozenset[str] = field(default_factory=frozenset)
     operations: tuple[str, ...] = ()
     tools: tuple[str, ...] = ()
     grantor_roles: tuple[str, ...] = ()
     named_services: Mapping[str, Any] = field(default_factory=dict)
+    # Whether the card carried a materialized boundary at all. An empty tree is
+    # a real boundary; a missing one is a card written before the field.
+    named_services_present: bool = False
     # Per-agent, per-account claim binding:
     # {provider_id: {account_id: (claims...)}}. For a provider, which connected
     # account(s) this client may use AND, per account, the claims it may use
@@ -241,6 +255,8 @@ class DelegatedCredentialView:
                 cred_attrs.get("grantor_subject") or cred_attrs.get("grantor_user_id") or ""
             ).strip(),
             registry_access_id=str(grant_record.get("registry_access_id") or "").strip(),
+            card_revision=_as_int(grant_record.get("card_revision")),
+            catalog_version=str(grant_record.get("catalog_version") or "").strip(),
             resource_grants=resource_grants,
             grants=frozenset(g for g in grants if g),
             operations=_as_list(grant_record.get("operations") or cred_attrs.get("operations")),
@@ -251,6 +267,7 @@ class DelegatedCredentialView:
                 if isinstance(grant_record.get("named_services"), Mapping)
                 else {}
             ),
+            named_services_present=isinstance(grant_record.get("named_services"), Mapping),
             account_scope=_normalize_account_scope(
                 grant_record.get("account_scope")
                 if isinstance(grant_record.get("account_scope"), Mapping)

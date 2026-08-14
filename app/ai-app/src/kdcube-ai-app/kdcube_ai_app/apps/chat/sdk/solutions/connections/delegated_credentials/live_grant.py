@@ -77,8 +77,8 @@ async def resolve_live_grant_card(
         try:
             entry = await cache.read(pointer)
         except CardCacheUnusable as exc:
-            # The guard has no durable source by design, so a damaged
-            # projection is unavailability, not a revoked card.
+            # Without a durable source a damaged projection cannot be repaired,
+            # so it is unavailability rather than a revoked card.
             raise LiveGrantCardError(exc.reason) from exc
         except Exception as exc:
             raise LiveGrantCardError("lookup_unavailable") from exc

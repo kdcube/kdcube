@@ -29,6 +29,22 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.liv
     LiveGrantCardError,
     resolve_live_grant_card,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.catalog.authorization import (
+    CAPABILITY_OUTER_OPERATION,
+    CAPABILITY_RESOURCE,
+    CAPABILITY_RESOURCE_CLAIM,
+    ActiveCatalogCapabilities,
+    CapabilityRequest,
+    CardProvenance,
+    authorize_current_capability,
+    catalog_unavailable_denial,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.catalog.resolver import (
+    CatalogUnavailable,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.serving import (
+    delegated_serving_resolvers,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_projection import (
     authority_has_platform_privilege,
 )
@@ -406,6 +422,92 @@ def _any_resource_matches(credential_resources: Iterable[str], request_resource:
     return any(_resource_matches(resource, request_resource) for resource in credential_resources)
 
 
+def _matched_credential_resource(
+    credential_resources: Iterable[str], request_resource: str
+) -> str:
+    """The card selector that admitted this request, for the denial path."""
+    for resource in credential_resources:
+        if _resource_matches(resource, request_resource):
+            return str(resource)
+    return ""
+
+
+async def _active_catalog(request: Request) -> tuple[ActiveCatalogCapabilities | None, str]:
+    """The active catalog, or the reason it could not be established.
+
+    Absent readers are a composition failure, not an absence of requirements:
+    the caller denies rather than proceeding uncontrolled.
+    """
+    resolvers = delegated_serving_resolvers(request)
+    if resolvers is None:
+        return None, "delegated_serving_resolvers_absent"
+    try:
+        document = await resolvers.catalog.resolve_active()
+    except CatalogUnavailable as exc:
+        return None, exc.reason
+    except Exception as exc:  # noqa: BLE001 - resolution failure is unavailability
+        LOGGER.warning(
+            "[connection-hub.oauth.guard] active catalog unreadable: %s", exc, exc_info=True
+        )
+        return None, "catalog_unavailable"
+    return ActiveCatalogCapabilities(document), ""
+
+
+def _card_provenance(grant_record: Mapping[str, Any] | None) -> CardProvenance:
+    record = grant_record if isinstance(grant_record, Mapping) else {}
+    try:
+        revision = int(record.get("card_revision") or 0)
+    except (TypeError, ValueError):
+        revision = 0
+    return CardProvenance(
+        access_id=str(record.get("registry_access_id") or "").strip(),
+        card_revision=revision,
+        catalog_version=str(record.get("catalog_version") or "").strip(),
+    )
+
+
+def _capability_denial_response(payload: Mapping[str, Any]) -> JSONResponse:
+    return JSONResponse(status_code=403, content=dict(payload))
+
+
+def _catalog_unavailable_response(reason: str) -> JSONResponse:
+    return JSONResponse(status_code=503, content=catalog_unavailable_denial(reason))
+
+
+def _capability_denial(
+    *,
+    catalog: ActiveCatalogCapabilities,
+    grant_record: Mapping[str, Any] | None,
+    kind: str,
+    resource: str,
+    request_resource: str,
+    surface: str,
+    claim: str = "",
+    outer_operation: str = "",
+) -> dict[str, Any] | None:
+    return authorize_current_capability(
+        catalog=catalog,
+        provenance=_card_provenance(grant_record),
+        request=CapabilityRequest(
+            kind=kind,
+            resource=resource,
+            request_resource=request_resource,
+            surface=surface,
+            claim=claim,
+            outer_operation=outer_operation,
+        ),
+    )
+
+
+def _rpc_capability_error(rpc_id: Any, payload: Mapping[str, Any]) -> JSONResponse:
+    """A removed capability inside a tool call, with its complete path.
+
+    The path travels as the message body because the caller must be able to see
+    which resource, namespace, and operation were refused.
+    """
+    return _rpc_tool_error(rpc_id, json.dumps(dict(payload), ensure_ascii=False))
+
+
 async def _default_grant_store(request: Request) -> GrantStore:
     override = getattr(request.app.state, "oauth_grant_store", None)
     if override is not None:
@@ -489,6 +591,10 @@ async def _live_grant_record(request: Any, grant_record: Optional[Dict[str, Any]
     attrs = attrs if isinstance(attrs, Mapping) else {}
     tenant, project = oauth_tenant_project(request)
     store = await _default_grant_store(request)
+    # A projection lost to eviction is not a revoked card: the committed
+    # revision restores it. Expired or revoked durable state still denies and
+    # is not re-cached.
+    resolvers = delegated_serving_resolvers(request)
     card = await resolve_live_grant_card(
         store.redis,
         tenant=tenant,
@@ -497,6 +603,7 @@ async def _live_grant_record(request: Any, grant_record: Optional[Dict[str, Any]
         expected_client_id=str(attrs.get("client_id") or ""),
         expected_grantor_subject=str(attrs.get("grantor_subject") or ""),
         expected_delegate_subject=str(credential.get("subject") or ""),
+        card_store=getattr(resolvers, "cards", None),
     )
     if card is None:
         LOGGER.info("[connection-hub.oauth.guard] registry card %s gone — binding treated as revoked", access_id)
@@ -533,9 +640,16 @@ async def _live_grant_record(request: Any, grant_record: Optional[Dict[str, Any]
         for provider, accounts in card.account_scope.items()
     }
     # The named-service boundary tree, narrowed from the descriptor when the
-    # card was written. Cards without it keep the bound snapshot.
-    if card.named_services:
+    # card was written. A card that carries the selection owns the boundary
+    # even when it is empty; only a pre-encoding card keeps the bound snapshot.
+    if not card.named_service_operations.is_unknown:
+        resolved["named_services"] = dict(card.named_services or {})
+    elif card.named_services:
         resolved["named_services"] = dict(card.named_services)
+    # Card provenance travels with the facts so a denial can name the card and
+    # the catalog generation its selection was saved against.
+    resolved["card_revision"] = int(card.card_revision or 0)
+    resolved["catalog_version"] = str(card.catalog_version or "")
     return resolved
 
 
@@ -991,7 +1105,43 @@ async def authorize_delegated_mcp_request(
         )
         return _json_response(403, "forbidden", "delegated credential resource mismatch")
 
-    available_grants = _credential_grants_for_resource(envelope, request_resource)
+    catalog, unavailable = await _active_catalog(request)
+    if catalog is None:
+        LOGGER.warning(
+            "[connection-hub.oauth.mcp_guard] denied reason=catalog_%s resource=%s",
+            unavailable,
+            request_resource,
+        )
+        return _catalog_unavailable_response(unavailable)
+
+    matched_resource = _matched_credential_resource(credential_resources, request_resource)
+    catalog_path = {
+        "catalog": catalog,
+        "grant_record": grant_record,
+        "resource": matched_resource,
+        "request_resource": request_resource,
+        "surface": "mcp",
+    }
+    removed = _capability_denial(kind=CAPABILITY_RESOURCE, **catalog_path)
+    if removed is not None:
+        LOGGER.info(
+            "[connection-hub.oauth.mcp_guard] denied reason=capability_removed path=%s resource=%s",
+            removed["ret"]["requested_capability"],
+            request_resource,
+        )
+        return _capability_denial_response(removed)
+
+    stored_grants = _credential_grants_for_resource(envelope, request_resource)
+    # Stored claims are reduced to what the current resource still permits.
+    available_grants = stored_grants & set(
+        catalog.resource_claims(
+            CapabilityRequest(
+                kind=CAPABILITY_RESOURCE_CLAIM,
+                resource=matched_resource,
+                request_resource=request_resource,
+            )
+        )
+    )
     tool_calls = extract_mcp_tool_calls(body)
     if not tool_calls:
         runtime = delegated_mcp_runtime_projection(request)
@@ -1016,6 +1166,17 @@ async def authorize_delegated_mcp_request(
         tool_policies = dict(policy.tool_policies or {})
 
     for rpc_id, tool_name in tool_calls:
+        removed = _capability_denial(
+            kind=CAPABILITY_OUTER_OPERATION, outer_operation=tool_name, **catalog_path
+        )
+        if removed is not None:
+            LOGGER.info(
+                "[connection-hub.oauth.mcp_guard] denied reason=capability_removed path=%s resource=%s",
+                removed["ret"]["requested_capability"],
+                request_resource,
+            )
+            return _rpc_capability_error(rpc_id, removed)
+
         tool_policy = tool_policies.get(tool_name)
         if tool_policies and tool_policy is None:
             return _rpc_tool_error(rpc_id, f"tool not allowed by endpoint policy: {tool_name}")
@@ -1025,6 +1186,16 @@ async def authorize_delegated_mcp_request(
                 return _rpc_tool_error(rpc_id, f"required role is missing for tool: {tool_name}")
             if tool_policy.permissions and not permissions.issuperset(tool_policy.permissions):
                 return _rpc_tool_error(rpc_id, f"required permission is missing for tool: {tool_name}")
+            for claim in sorted(set(tool_policy.grants or ()) & (stored_grants - available_grants)):
+                removed = _capability_denial(
+                    kind=CAPABILITY_RESOURCE_CLAIM, claim=claim, **catalog_path
+                )
+                LOGGER.info(
+                    "[connection-hub.oauth.mcp_guard] denied reason=capability_removed path=%s resource=%s",
+                    removed["ret"]["requested_capability"],
+                    request_resource,
+                )
+                return _rpc_capability_error(rpc_id, removed)
             if tool_policy.grants and not available_grants.issuperset(tool_policy.grants):
                 return _rpc_tool_error(rpc_id, f"required delegated grant is missing for tool: {tool_name}")
 
@@ -1083,7 +1254,68 @@ async def authorize_delegated_rest_request(
         return denial
 
     request_resource = _request_resource(request)
-    available_grants = _credential_grants_for_resource(envelope, request_resource)
+    operation_name = str(operation or "").strip()
+    catalog, unavailable = await _active_catalog(request)
+    if catalog is None:
+        REST_LOGGER.warning(
+            "[connection-hub.oauth.rest_guard] denied reason=catalog_%s resource=%s operation=%s",
+            unavailable,
+            request_resource,
+            operation_name,
+        )
+        return _catalog_unavailable_response(unavailable)
+
+    matched_resource = _matched_credential_resource(
+        _credential_resources(envelope), request_resource
+    )
+    catalog_path = {
+        "catalog": catalog,
+        "grant_record": grant_record,
+        "resource": matched_resource,
+        "request_resource": request_resource,
+        "surface": "rest",
+    }
+    removed = _capability_denial(kind=CAPABILITY_RESOURCE, **catalog_path)
+    if removed is None and operation_name:
+        removed = _capability_denial(
+            kind=CAPABILITY_OUTER_OPERATION, outer_operation=operation_name, **catalog_path
+        )
+    if removed is not None:
+        REST_LOGGER.info(
+            "[connection-hub.oauth.rest_guard] denied reason=capability_removed path=%s resource=%s",
+            removed["ret"]["requested_capability"],
+            request_resource,
+        )
+        return _capability_denial_response(removed)
+
+    stored_grants = _credential_grants_for_resource(envelope, request_resource)
+    # Stored claims are reduced to what the current resource still permits, so
+    # a claim removed from the catalog cannot satisfy an endpoint policy.
+    claim_ceiling = catalog.resource_claims(
+        CapabilityRequest(
+            kind=CAPABILITY_RESOURCE_CLAIM,
+            resource=matched_resource,
+            request_resource=request_resource,
+        )
+    )
+    available_grants = stored_grants & set(claim_ceiling)
+
+    def _claim_removed(required: Iterable[str]) -> dict[str, Any] | None:
+        """A required claim the card still carries but the catalog dropped."""
+        for claim in sorted(set(required) & (stored_grants - available_grants)):
+            return _capability_denial(
+                kind=CAPABILITY_RESOURCE_CLAIM, claim=claim, **catalog_path
+            )
+        return None
+
+    removed = _claim_removed(policy.grants or ())
+    if removed is not None:
+        REST_LOGGER.info(
+            "[connection-hub.oauth.rest_guard] denied reason=capability_removed path=%s resource=%s",
+            removed["ret"]["requested_capability"],
+            request_resource,
+        )
+        return _capability_denial_response(removed)
     if policy.grants and not available_grants.issuperset(policy.grants):
         REST_LOGGER.info(
             "[connection-hub.oauth.rest_guard] denied reason=missing_grant required=%s available=%s resource=%s operation=%s",
@@ -1098,7 +1330,6 @@ async def authorize_delegated_rest_request(
     if not operation_policies:
         operation_policies = dict(policy.operation_policies or {})
     selected_operation_grants = policy.selected_operation_grants or bool(operation_policies)
-    operation_name = str(operation or "").strip()
     operation_policy = operation_policies.get(operation_name)
     if operation_policies and operation_policy is None:
         REST_LOGGER.info(
@@ -1116,6 +1347,14 @@ async def authorize_delegated_rest_request(
             return _json_response(403, "forbidden", f"required role is missing for operation: {operation_name}")
         if operation_policy.permissions and not permissions.issuperset(operation_policy.permissions):
             return _json_response(403, "forbidden", f"required permission is missing for operation: {operation_name}")
+        removed = _claim_removed(operation_policy.grants or ())
+        if removed is not None:
+            REST_LOGGER.info(
+                "[connection-hub.oauth.rest_guard] denied reason=capability_removed path=%s resource=%s",
+                removed["ret"]["requested_capability"],
+                request_resource,
+            )
+            return _capability_denial_response(removed)
         if operation_policy.grants and not available_grants.issuperset(operation_policy.grants):
             REST_LOGGER.info(
                 "[connection-hub.oauth.rest_guard] denied reason=missing_operation_grant operation=%s required=%s available=%s resource=%s",

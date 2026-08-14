@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from starlette.requests import Request
 
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.authenticators.models import AuthenticatedRequest
@@ -26,14 +28,36 @@ class _GrantStore:
         return self.record
 
 
+PLATFORM_CONNECTIONS = {
+    "delegated_credentials": {
+        "oauth": {
+            "enabled": True,
+            "resources": [
+                {
+                    "resource": PLATFORM_RESOURCE_PATTERN,
+                    "grants": ["devops:deploy"],
+                    "tools": {"platform_admin_redeploy": {"grants": ["devops:deploy"]}},
+                },
+            ],
+        },
+    },
+}
+
+
 class _AppState:
-    def __init__(self, grant_record=None):
+    def __init__(self, grant_record=None, connections=None):
         self.oauth_grant_store = _GrantStore(grant_record)
+        if connections is not None:
+            from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.tests.helpers import (
+                bind_delegated_catalog,
+            )
+
+            bind_delegated_catalog(SimpleNamespace(state=self), connections)
 
 
 class _App:
-    def __init__(self, grant_record=None):
-        self.state = _AppState(grant_record)
+    def __init__(self, grant_record=None, connections=None):
+        self.state = _AppState(grant_record, connections)
 
 
 def _authority(
@@ -213,7 +237,7 @@ async def test_connection_hub_surface_accepts_delegated_bearer_for_platform_reso
         _request(
             {"Authorization": "Bearer automation-token"},
             path="/api/platform/admin/redeploy",
-            app=_App(grant_record),
+            app=_App(grant_record, connections=PLATFORM_CONNECTIONS),
         ),
         RequestContext(
             client_ip="127.0.0.1",

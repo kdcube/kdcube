@@ -43,6 +43,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oau
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.config import (
     OAuthDelegatedClientConfig,
+    oauth_delegated_config_from_connections,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.grants import (
     ACCESS_TOKEN_TTL_SECONDS,
@@ -83,6 +84,14 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.car
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.catalog.resolver import (
     CatalogUnavailable,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.catalog.authorization import (
+    CAPABILITY_NAMED_SERVICE_OPERATION,
+    ActiveCatalogCapabilities,
+    CapabilityRequest,
+    CardProvenance,
+    authorize_current_capability,
+    capability_denial,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.boundary_policy import (
     NamedServiceBoundaryCatalog,
@@ -700,6 +709,12 @@ class AutomationAccessService:
             subject_hash=_subject_key(grantor_subject), now=now
         )
         return [record_from_card(authority) for authority in authorities]
+
+    async def _active_catalog(self):
+        """The registered catalog a governed decision is taken against."""
+        if self._catalog_resolver is None:
+            raise CatalogUnavailable("catalog_resolver_not_configured")
+        return await self._catalog_resolver.resolve_active()
 
     async def _active_catalog_version(self) -> str:
         """The generation a save is stamped with.
@@ -1565,20 +1580,29 @@ class AutomationAccessService:
         operation: str,
     ) -> dict[str, Any]:
         """Whether an agent client holds the delegated-by grant a NATIVE
-        named-service call needs: the configured named-services resource that
-        publishes ``namespace``, the operation's declared grants plus the
-        resource's entry grants, checked against the agent's grant record
-        (claims AND, when the record narrowed operations, the narrowing).
+        named-service call needs.
 
-        Returns ``{"governed": False}`` when no configured resource publishes
-        the namespace (nothing to gate). Otherwise ``{"governed": True,
-        "granted": bool, "resource", "claims"}`` — ``claims`` is the full
-        required set, ready for the one-click grant payload."""
+        The ceiling is the registered catalog, not live props, so this answers
+        the same question the managed guard answers for the MCP door: the
+        catalog resource that publishes ``namespace``, the operation's declared
+        grants plus the resource's entry grants, intersected with the agent's
+        card.
+
+        Outcomes:
+
+            {"governed": False}                nothing publishes the namespace
+            {"governed": True, "granted": …}   the catalog offers it
+            {"removed": <structured denial>}   the card holds it, the catalog
+                                               no longer offers it
+            CatalogUnavailable                 current authority is unknown
+        """
         ns = _clean(namespace).lower().rstrip(":")
         op = _clean(operation)
         if not ns or not op:
             return {"governed": False}
-        for cfg in self._config.resources:
+        active = await self._active_catalog()
+        catalog = ActiveCatalogCapabilities(active)
+        for cfg in oauth_delegated_config_from_connections(active.connections).resources:
             named = cfg.named_services if isinstance(cfg.named_services, Mapping) else None
             raw_namespaces = named.get("namespaces") if named else None
             if not isinstance(raw_namespaces, Mapping):
@@ -1619,6 +1643,26 @@ class AutomationAccessService:
             )
             if record is not None and record.source != ACCESS_SOURCE_AGENT:
                 record = None
+            # The namespace survives, but the operation under it may not. A
+            # capability the catalog no longer offers is refused outright —
+            # consent cannot restore it.
+            removed = authorize_current_capability(
+                catalog=catalog,
+                provenance=CardProvenance(
+                    access_id=record.access_id if record is not None else "",
+                    card_revision=record.card_revision if record is not None else 0,
+                    catalog_version=record.catalog_version if record is not None else "",
+                ),
+                request=CapabilityRequest(
+                    kind=CAPABILITY_NAMED_SERVICE_OPERATION,
+                    resource=cfg.resource,
+                    surface="named_service",
+                    namespace=ns,
+                    operation=op,
+                ),
+            )
+            if removed is not None:
+                return {"governed": True, "granted": False, "removed": removed}
             granted = False
             if record is not None:
                 held = set(record.resource_grants.get(cfg.resource, ()))
@@ -1644,7 +1688,64 @@ class AutomationAccessService:
                     for provider, accounts in (record.account_scope.items() if record is not None else ())
                 },
             }
+        # Nothing in the active catalog publishes the namespace. A card that
+        # still carries it is a removed capability, not an ungoverned call: the
+        # user cannot consent their way back to something the deployment no
+        # longer offers.
+        removed = await self._removed_namespace_denial(
+            catalog=catalog,
+            grantor_subject=grantor_subject,
+            client_id=client_id,
+            namespace=ns,
+            operation=op,
+        )
+        if removed is not None:
+            return {"governed": True, "granted": False, "removed": removed}
         return {"governed": False}
+
+    async def _removed_namespace_denial(
+        self,
+        *,
+        catalog: "ActiveCatalogCapabilities",
+        grantor_subject: str,
+        client_id: str,
+        namespace: str,
+        operation: str,
+    ) -> dict[str, Any] | None:
+        """The structured denial for a namespace this agent's card still holds.
+
+        The card's materialized boundary is the expansion of its selection under
+        the catalog version it was saved against, so membership there is what
+        proves the capability was granted.
+        """
+        client = _clean(client_id)
+        for record in await self._list_active_records(grantor_subject):
+            if record.source != ACCESS_SOURCE_AGENT or _clean(record.client_id) != client:
+                continue
+            namespaces = (record.named_services or {}).get("namespaces")
+            if not isinstance(namespaces, Mapping):
+                continue
+            if not any(
+                _clean(name).lower().rstrip(":") == namespace for name in namespaces
+            ):
+                continue
+            resource = next(iter(record.resource_grants), "")
+            return capability_denial(
+                catalog=catalog,
+                provenance=CardProvenance(
+                    access_id=record.access_id,
+                    card_revision=record.card_revision,
+                    catalog_version=record.catalog_version,
+                ),
+                request=CapabilityRequest(
+                    kind=CAPABILITY_NAMED_SERVICE_OPERATION,
+                    resource=str(resource),
+                    surface="named_service",
+                    namespace=namespace,
+                    operation=operation,
+                ),
+            )
+        return None
 
     async def record_oauth_grant(
         self,

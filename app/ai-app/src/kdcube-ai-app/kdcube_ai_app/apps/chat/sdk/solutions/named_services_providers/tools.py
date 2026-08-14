@@ -560,6 +560,25 @@ def _endpoint(namespace: str) -> NamedServiceEndpoint | Dict[str, Any]:
     return NamedServiceEndpoint.from_provider_configs(provider_configs, namespace=base_ns)
 
 
+def _clean_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _gate_unavailable(reason: str, namespace: str, operation: str) -> Dict[str, Any]:
+    """Current authority could not be established: refuse, retryably.
+
+    An agent turn whose delegated boundary cannot be read must not proceed on
+    the connected-account boundary alone.
+    """
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.catalog.authorization import (
+        catalog_unavailable_denial,
+    )
+
+    payload = catalog_unavailable_denial(reason)
+    payload["ret"].update({"namespace": namespace, "operation": operation})
+    return payload
+
+
 async def _agent_grant_gate(base_ns: str, operation: str, tool_name: str) -> Dict[str, Any] | None:
     """The per-agent delegated-by gate for NATIVE named-service calls.
 
@@ -569,10 +588,18 @@ async def _agent_grant_gate(base_ns: str, operation: str, tool_name: str) -> Dic
     — `kdcube-agent:<app>:<agent>`, the same client entity a hosted MCP
     consumer is — must hold the user's delegated-by grant for it. Pending →
     the consent demand rises at THIS attempt (demand-driven per tool) and the
-    agent gets the explainable consent result. Applies only in agent turns;
-    fails OPEN on operational misses (no caller bound, hub unreachable,
-    ungoverned namespace) so non-agent surfaces and legacy deployments keep
-    their existing connected-account-only boundary."""
+    agent gets the explainable consent result.
+
+    Three outcomes are kept apart:
+
+        not an agent turn, or nothing publishes the namespace  -> open
+        the catalog no longer offers the capability            -> refuse, and
+                                                                  never ask for
+                                                                  consent
+        current authority cannot be established                -> refuse,
+                                                                  retryable
+    """
+    agent_turn = False
     try:
         from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import (
             get_current_request_context,
@@ -590,6 +617,7 @@ async def _agent_grant_gate(base_ns: str, operation: str, tool_name: str) -> Dic
             agent_id = ""
         if not user_id or not bundle_id or not agent_id:
             return None  # not an agent turn — this boundary does not apply
+        agent_turn = True
         from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import call_bundle_named_service
         from kdcube_ai_app.apps.chat.sdk.solutions.connections.connection_edges import (
             DEFAULT_CONNECTION_HUB_BUNDLE_ID,
@@ -617,8 +645,21 @@ async def _agent_grant_gate(base_ns: str, operation: str, tool_name: str) -> Dic
         value = getattr(result, "value", None)
         response = NamedServiceResponse.coerce(value) if value is not None else None
         if response is None or not response.ok:
-            return None
+            return _gate_unavailable("agent_grant_check_failed", base_ns, operation)
         state = dict(response.object or {})
+        unavailable = _clean_text(state.get("unavailable"))
+        if unavailable:
+            return _gate_unavailable(unavailable, base_ns, operation)
+        removed = state.get("removed")
+        if isinstance(removed, Mapping):
+            # The deployment no longer offers this capability. Consent cannot
+            # restore it, so no demand is raised.
+            LOGGER.warning(
+                "Named-service agent gate: capability no longer available\n"
+                "  namespace: %s\n  operation: %s\n  tool: %s",
+                base_ns, operation, tool_name,
+            )
+            return dict(removed)
         # Bind the agent's per-provider account scope for the connected-account
         # resolver — whether or not the call proceeds — so a granted native call
         # restricts to the account(s) this agent may use (parity with the MCP
@@ -713,8 +754,16 @@ async def _agent_grant_gate(base_ns: str, operation: str, tool_name: str) -> Dic
         )
         return consent.to_tool_result()
     except Exception:
-        LOGGER.info("Named-service agent gate unavailable; failing open.", exc_info=True)
-        return None
+        if not agent_turn:
+            # The boundary never applied: nothing was refused.
+            LOGGER.info("Named-service agent gate not applicable.", exc_info=True)
+            return None
+        LOGGER.warning(
+            "Named-service agent gate could not establish current authority\n"
+            "  namespace: %s\n  operation: %s",
+            base_ns, operation, exc_info=True,
+        )
+        return _gate_unavailable("agent_grant_check_unavailable", base_ns, operation)
 
 
 async def _call(
