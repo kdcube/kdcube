@@ -20,13 +20,24 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oau
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.automation_access import (
     ACCESS_SOURCE_OAUTH,
     AutomationAccessRecord,
-    automation_record_key,
+    card_authority_from_record,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cache_io import (
+    encode_cache_value,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cards.cache import (
+    DelegatedCardRuntimeCache,
+)
+
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cards.model import (
     NamedServiceSelection,
 )
 
 GUARD_RESOURCE = "http://testserver/guard"
+
+
+def _card_key(access_id: str) -> str:
+    return DelegatedCardRuntimeCache(None, tenant="home", project="demo").card_key(access_id)
 
 
 class _GrantStore:
@@ -281,16 +292,19 @@ def _live_card(
 
 
 def _store_live_card(redis: _Redis, card: AutomationAccessRecord) -> None:
-    redis.values[
-        automation_record_key("home", "demo", card.access_id)
-    ] = json.dumps(card.to_dict())
+    authority = card_authority_from_record(card)
+    redis.values[_card_key(card.access_id)] = encode_cache_value(
+        {
+            "kind": "card",
+            "card_revision": authority.card_revision,
+            "authority": authority.to_dict(),
+        }
+    )
 
 
 def test_managed_mcp_guard_fails_closed_when_live_card_is_malformed(monkeypatch):
     redis = _Redis()
-    redis.values[
-        automation_record_key("home", "demo", "oauth-access-1")
-    ] = "{"
+    redis.values[_card_key("oauth-access-1")] = "{"
     client = _client(
         monkeypatch,
         grant_record=_pointer_grant(),

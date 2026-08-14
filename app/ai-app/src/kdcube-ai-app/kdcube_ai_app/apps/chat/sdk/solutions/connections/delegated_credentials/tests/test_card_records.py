@@ -226,3 +226,85 @@ async def test_store_rejects_unsafe_path_segments(tmp_path):
     with pytest.raises(CardStorageError) as exc:
         await store.read_current(subject_hash=SUBJECT_HASH, access_id="../../escape")
     assert exc.value.reason == "access_id_invalid"
+
+
+# -- record <-> authority/handles conversion -----------------------------------
+
+
+def _record_with_secrets():
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.automation_access import (
+        AutomationAccessRecord,
+    )
+
+    return AutomationAccessRecord(
+        access_id="aut_abc123",
+        label="CI bot",
+        client_id="automation:abc",
+        grantor_subject="platform-user-1",
+        delegate_subject="integration:automation:abc",
+        operations=("named_services_schema",),
+        resource_grants={RESOURCE: ("slack:read",)},
+        named_service_operations=NamedServiceSelection.exact(EXACT),
+        named_services={"namespaces": {"slack": {}}},
+        identity_scope="grantor",
+        catalog_version="delegated_catalog_2026-08-11-10-30-00-123_d4e5f6a7b8c9",
+        card_revision=7,
+        session_id="sess-secret",
+        created_at=1_780_000_000,
+        expires_at=1_780_003_600,
+        last_four="9abc",
+        source="manual",
+        refresh_token="rt-secret",
+        access_token="at-secret",
+        last_issued_at=1_780_000_000,
+    )
+
+
+def test_authority_carries_no_credential_material():
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.automation_access import (
+        card_authority_from_record,
+        card_handles_from_record,
+    )
+
+    record = _record_with_secrets()
+    authority = card_authority_from_record(record)
+    handles = card_handles_from_record(record)
+
+    serialized = str(authority.to_dict())
+    for secret in ("rt-secret", "at-secret", "sess-secret"):
+        assert secret not in serialized
+
+    assert handles.access_token == "at-secret"
+    assert handles.refresh_token == "rt-secret"
+    assert handles.session_id == "sess-secret"
+
+
+def test_record_round_trips_through_the_split():
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.automation_access import (
+        card_authority_from_record,
+        card_handles_from_record,
+        record_from_card,
+    )
+
+    record = _record_with_secrets()
+    rebuilt = record_from_card(
+        card_authority_from_record(record), card_handles_from_record(record)
+    )
+    assert rebuilt == record
+
+
+def test_recombining_without_handles_yields_no_secrets():
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.automation_access import (
+        card_authority_from_record,
+        record_from_card,
+    )
+
+    record = _record_with_secrets()
+    restored = record_from_card(card_authority_from_record(record))
+
+    assert restored.access_token == ""
+    assert restored.refresh_token == ""
+    assert restored.session_id == ""
+    assert restored.resource_grants == record.resource_grants
+    assert restored.named_service_operations == record.named_service_operations
+    assert restored.card_revision == 7

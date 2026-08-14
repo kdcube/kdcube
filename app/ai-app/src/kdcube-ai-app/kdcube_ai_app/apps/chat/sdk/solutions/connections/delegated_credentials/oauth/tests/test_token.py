@@ -9,12 +9,17 @@ unit tests independent of the bundle-session authority.
 from __future__ import annotations
 
 import json
+import os
+import time
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.tests.helpers import mount_test_oauth_adapter
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.tests.helpers import (
+    bind_delegated_card_persistence,
+    mount_test_oauth_adapter,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.authority import (
     DELEGATED_CLIENT_CREDENTIAL_KIND,
 )
@@ -26,8 +31,21 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_registry import
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.pkce import make_s256_challenge
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.tests.test_clients_and_store import FakeRedis
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.tests.helpers import enable_delegated_client
-from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.automation_access import (
-    automation_record_key,
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cache_io import (
+    encode_cache_value,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cards.cache import (
+    DelegatedCardRuntimeCache,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cards.model import (
+    CardAuthority,
+    NamedServiceSelection,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cards.persistence import (
+    DurableCardPersistence,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cards.service import (
+    CardCommitFailed,
 )
 
 VERIFIER = "code-verifier-" + "z" * 60
@@ -38,15 +56,69 @@ async def _fake_minter(sub, scopes):
     return {"access_token": f"kst1.mock.{sub}", "expires_in": 3600}
 
 
+
+def _card_key(access_id: str) -> str:
+    return DelegatedCardRuntimeCache(None, tenant="home", project="demo").card_key(access_id)
+
+
+def _seed_live_card(
+    store,
+    refresh_record,
+    *,
+    operations=("records_export",),
+    resource_grants=None,
+) -> str:
+    """Establish the live card projection the refresh path reads.
+
+    The precondition here is a live card, not a persistence layer, so the test
+    states it directly.
+    """
+    credential = refresh_record.get("credential") or {}
+    access_id = str(refresh_record["registry_access_id"])
+    resource = str(refresh_record.get("resource") or "") or "*"
+    authority = CardAuthority(
+        access_id=access_id,
+        client_id=str(refresh_record.get("client_id") or ""),
+        grantor_subject=str(refresh_record.get("sub") or ""),
+        delegate_subject=str(credential.get("subject") or ""),
+        source="oauth",
+        card_revision=1,
+        operations=tuple(operations),
+        resource_grants=(
+            resource_grants if resource_grants is not None else {resource: ("records:read",)}
+        ),
+        named_service_operations=NamedServiceSelection.unknown(),
+        expires_at=int(time.time()) + 3600,
+    )
+    store.redis.values[_card_key(access_id)] = encode_cache_value(
+        {
+            "kind": "card",
+            "card_revision": authority.card_revision,
+            "authority": authority.to_dict(),
+        }
+    )
+    return access_id
+
+
 @pytest.fixture
-def ctx():
+def ctx(tmp_path):
+    if not os.environ.get("REDIS_URL"):
+        pytest.skip("REDIS_URL is not set; token issuance commits a delegated card")
+    import redis.asyncio as redis_asyncio
+
     app = FastAPI()
     enable_delegated_client(app)
     mount_test_oauth_adapter(app)
     store = GrantStore(FakeRedis(), tenant="home", project="demo")
     app.state.oauth_grant_store = store
     app.state.oauth_mint_access_token = _fake_minter
-    return TestClient(app), store
+    redis = redis_asyncio.from_url(os.environ["REDIS_URL"])
+    bind_delegated_card_persistence(app, redis=redis, storage_root=tmp_path)
+    # Entered as a context manager so every request in a test runs on the same
+    # event loop: the Redis client the card persistence holds cannot survive a
+    # per-request loop.
+    with TestClient(app) as client:
+        yield client, store
 
 
 async def _seed_code(store, *, redirect_uri="http://127.0.0.1:9000/callback", client_id="claude"):
@@ -121,6 +193,39 @@ async def test_authorization_code_exchange_succeeds(ctx):
 
 
 @pytest.mark.asyncio
+async def test_token_is_withheld_when_the_card_does_not_commit(ctx, monkeypatch):
+    client, store = ctx
+    code = await _seed_code(store)
+
+    async def failing_persist(self, *args, **kwargs):
+        raise CardCommitFailed("durable_commit_failed")
+
+    monkeypatch.setattr(DurableCardPersistence, "persist", failing_persist)
+
+    r = client.post("/oauth/token", data={
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": "http://127.0.0.1:9000/callback",
+        "client_id": "claude",
+        "code_verifier": VERIFIER,
+    })
+
+    assert r.status_code == 503
+    assert r.json()["error"] == "temporarily_unavailable"
+    # The code was consumed before the card commit was attempted, so the client
+    # re-consents rather than retrying this exchange.
+    replay = client.post("/oauth/token", data={
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": "http://127.0.0.1:9000/callback",
+        "client_id": "claude",
+        "code_verifier": VERIFIER,
+    })
+    assert replay.status_code == 400
+    assert replay.json()["error"] == "invalid_grant"
+
+
+@pytest.mark.asyncio
 async def test_exchange_fails_on_bad_verifier(ctx):
     client, store = ctx
     code = await _seed_code(store)
@@ -189,6 +294,7 @@ async def test_refresh_token_rotates_and_issues_new_access(ctx):
         "code_verifier": VERIFIER,
     }).json()
     rt = first["refresh_token"]
+    _seed_live_card(store, await store.validate_refresh_token(rt))
 
     r = client.post("/oauth/token", data={
         "grant_type": "refresh_token", "refresh_token": rt, "client_id": "claude",
@@ -221,11 +327,7 @@ async def test_refresh_token_keeps_old_token_when_live_card_lookup_is_unavailabl
     }).json()
     refresh_token = first["refresh_token"]
     refresh_record = await store.validate_refresh_token(refresh_token)
-    card_key = automation_record_key(
-        "home",
-        "demo",
-        refresh_record["registry_access_id"],
-    )
+    card_key = _card_key(_seed_live_card(store, refresh_record))
     original_get = store.redis.get
 
     async def failing_card_get(key):
@@ -259,12 +361,7 @@ async def test_refresh_token_rejects_malformed_live_card_without_rotation(ctx):
     }).json()
     refresh_token = first["refresh_token"]
     refresh_record = await store.validate_refresh_token(refresh_token)
-    card_key = automation_record_key(
-        "home",
-        "demo",
-        refresh_record["registry_access_id"],
-    )
-    store.redis.values[card_key] = "{"
+    store.redis.values[_card_key(refresh_record["registry_access_id"])] = "{"
 
     response = client.post("/oauth/token", data={
         "grant_type": "refresh_token",
@@ -290,17 +387,10 @@ async def test_refresh_token_applies_empty_live_grant_narrowing(ctx):
     }).json()
     refresh_token = first["refresh_token"]
     refresh_record = await store.validate_refresh_token(refresh_token)
-    card_key = automation_record_key(
-        "home",
-        "demo",
-        refresh_record["registry_access_id"],
+    resource = str(refresh_record.get("resource") or "") or "*"
+    _seed_live_card(
+        store, refresh_record, operations=(), resource_grants={resource: ()}
     )
-    card = json.loads(store.redis.values[card_key])
-    card["operations"] = []
-    card["resource_grants"] = {
-        resource: [] for resource in card["resource_grants"]
-    }
-    store.redis.values[card_key] = json.dumps(card)
 
     response = client.post("/oauth/token", data={
         "grant_type": "refresh_token",

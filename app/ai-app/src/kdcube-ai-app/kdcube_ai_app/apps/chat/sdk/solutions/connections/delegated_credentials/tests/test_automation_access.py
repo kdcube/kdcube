@@ -6,10 +6,18 @@
 from __future__ import annotations
 
 import json
+import os
+import uuid
 from types import SimpleNamespace
 
 import pytest
 
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cards.persistence import (
+    DurableCardPersistence,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cards.store import (
+    BundleStorageDelegatedCardStore,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.catalog.resolver import (
     CatalogUnavailable,
 )
@@ -75,6 +83,51 @@ class _Authority:
         self.logged_out.append(session_id)
         return True
 
+
+
+async def stored_card(
+    service: AutomationAccessService, access_id: str, *, grantor: str = "platform-user-1"
+) -> dict:
+    """The committed card, read through the persistence port."""
+    record = await service._load_record(access_id, grantor_subject=grantor)
+    assert record is not None, f"card {access_id} is not committed"
+    return record.to_dict()
+
+
+async def only_stored_card(
+    service: AutomationAccessService, *, grantor: str = "platform-user-1"
+) -> dict:
+    """The single committed card for a grantor."""
+    records = await service._list_active_records(grantor)
+    assert len(records) == 1, f"expected one card, found {len(records)}"
+    return records[0].to_dict()
+
+
+REDIS_URL = os.environ.get("REDIS_URL") or ""
+
+pytestmark = pytest.mark.skipif(
+    not REDIS_URL,
+    reason="REDIS_URL is not set; delegated-card persistence needs a real Redis",
+)
+
+
+@pytest.fixture
+async def card_persistence(tmp_path):
+    """Production card persistence: durable revisions plus a Redis projection."""
+    import redis.asyncio as redis_asyncio
+
+    client = redis_asyncio.from_url(REDIS_URL)
+    try:
+        await client.ping()
+    except Exception as exc:  # pragma: no cover - environment guard
+        pytest.skip(f"Redis at REDIS_URL is unreachable: {exc}")
+    yield DurableCardPersistence(
+        redis=client,
+        tenant=f"t-{uuid.uuid4().hex[:8]}",
+        project=f"p-{uuid.uuid4().hex[:8]}",
+        card_store=BundleStorageDelegatedCardStore(tmp_path),
+    )
+    await client.aclose()
 
 TEST_CATALOG_VERSION = "delegated_catalog_2026-08-11-10-30-00-123_d4e5f6a7b8c9"
 
@@ -269,12 +322,13 @@ def _named_services_config():
 
 
 @pytest.mark.asyncio
-async def test_automation_access_create_list_and_revoke():
+async def test_automation_access_create_list_and_revoke(card_persistence):
     redis = _Redis()
     store = _Store()
     authority = _Authority()
     service = AutomationAccessService(
         catalog_resolver=_CatalogResolver(),
+        card_persistence=card_persistence,
         redis=redis,
         tenant="demo-tenant",
         project="demo-project",
@@ -317,8 +371,7 @@ async def test_automation_access_create_list_and_revoke():
     assert [item["grant"] for item in listed["grant_options"]] == ["records:read"]
     assert listed["resources"][0]["operations"][0]["name"] == "records_export"
 
-    raw_record = next(iter(redis.values.values()))
-    assert json.loads(raw_record)["session_id"] == "session-1"
+    assert (await stored_card(service, created["access"]["access_id"]))["session_id"] == "session-1"
 
     revoked = await service.revoke_access(user, access_id=created["access"]["access_id"])
     assert revoked == {
@@ -339,7 +392,7 @@ async def test_automation_access_create_list_and_revoke():
 
 
 @pytest.mark.asyncio
-async def test_resource_options_project_exact_named_service_and_provider_catalogs():
+async def test_resource_options_project_exact_named_service_and_provider_catalogs(card_persistence):
     mail_requirement = {
         "provider_id": "google",
         "connector_app_id": "gmail",
@@ -373,6 +426,7 @@ async def test_resource_options_project_exact_named_service_and_provider_catalog
     store = _Store()
     service = AutomationAccessService(
         catalog_resolver=_CatalogResolver(),
+        card_persistence=card_persistence,
         redis=_Redis(),
         tenant="demo-tenant",
         project="demo-project",
@@ -422,10 +476,11 @@ async def test_resource_options_project_exact_named_service_and_provider_catalog
 
 
 @pytest.mark.asyncio
-async def test_automation_access_persists_only_selected_named_service_operations():
+async def test_automation_access_persists_only_selected_named_service_operations(card_persistence):
     store = _Store()
     service = AutomationAccessService(
         catalog_resolver=_CatalogResolver(),
+        card_persistence=card_persistence,
         redis=_Redis(),
         tenant="demo-tenant",
         project="demo-project",
@@ -464,9 +519,10 @@ async def test_automation_access_persists_only_selected_named_service_operations
 
 
 @pytest.mark.asyncio
-async def test_automation_access_rejects_named_service_operation_without_its_grants():
+async def test_automation_access_rejects_named_service_operation_without_its_grants(card_persistence):
     service = AutomationAccessService(
         catalog_resolver=_CatalogResolver(),
+        card_persistence=card_persistence,
         redis=_Redis(),
         tenant="demo-tenant",
         project="demo-project",
@@ -502,9 +558,10 @@ async def test_automation_access_rejects_named_service_operation_without_its_gra
 
 
 @pytest.mark.asyncio
-async def test_automation_access_rejects_non_delegable_grant():
+async def test_automation_access_rejects_non_delegable_grant(card_persistence):
     service = AutomationAccessService(
         catalog_resolver=_CatalogResolver(),
+        card_persistence=card_persistence,
         redis=_Redis(),
         tenant="demo-tenant",
         project="demo-project",
@@ -529,9 +586,10 @@ async def test_automation_access_rejects_non_delegable_grant():
 
 
 @pytest.mark.asyncio
-async def test_automation_access_requires_configured_resource_when_catalog_exists():
+async def test_automation_access_requires_configured_resource_when_catalog_exists(card_persistence):
     service = AutomationAccessService(
         catalog_resolver=_CatalogResolver(),
+        card_persistence=card_persistence,
         redis=_Redis(),
         tenant="demo-tenant",
         project="demo-project",
@@ -567,9 +625,10 @@ async def test_automation_access_requires_configured_resource_when_catalog_exist
 
 
 @pytest.mark.asyncio
-async def test_automation_access_all_resources_is_admin_only():
+async def test_automation_access_all_resources_is_admin_only(card_persistence):
     service = AutomationAccessService(
         catalog_resolver=_CatalogResolver(),
+        card_persistence=card_persistence,
         redis=_Redis(),
         tenant="demo-tenant",
         project="demo-project",
@@ -619,9 +678,10 @@ async def test_automation_access_all_resources_is_admin_only():
 
 
 @pytest.mark.asyncio
-async def test_automation_access_can_select_multiple_resources():
+async def test_automation_access_can_select_multiple_resources(card_persistence):
     service = AutomationAccessService(
         catalog_resolver=_CatalogResolver(),
+        card_persistence=card_persistence,
         redis=_Redis(),
         tenant="demo-tenant",
         project="demo-project",
@@ -670,7 +730,7 @@ class _OAuthStore(_Store):
 
 
 @pytest.mark.asyncio
-async def test_oauth_grant_registers_lists_and_revokes():
+async def test_oauth_grant_registers_lists_and_revokes(card_persistence):
     """An external client connecting via OAuth becomes a visible, revocable grant."""
     redis = _Redis()
     store = _OAuthStore()
@@ -681,6 +741,7 @@ async def test_oauth_grant_registers_lists_and_revokes():
     }
     service = AutomationAccessService(
         catalog_resolver=_CatalogResolver(),
+        card_persistence=card_persistence,
         redis=redis,
         tenant="demo-tenant",
         project="demo-project",
@@ -810,9 +871,10 @@ async def test_live_sessions_receive_delegated_access_changes():
     assert [e["action"] for e in relay.emitted] == ["granted", "revoked"]
 
 
-def _agent_service():
+def _agent_service(card_persistence):
     return AutomationAccessService(
         catalog_resolver=_CatalogResolver(),
+        card_persistence=card_persistence,
         redis=_Redis(),
         tenant="demo-tenant",
         project="demo-project",
@@ -828,8 +890,8 @@ _AGENT_USER = {"user_id": "platform-user-1", "roles": ["kdcube:role:registered"]
 
 
 @pytest.mark.asyncio
-async def test_create_access_with_agent_client_id_is_deterministic_and_stores_token():
-    service = _agent_service()
+async def test_create_access_with_agent_client_id_is_deterministic_and_stores_token(card_persistence):
+    service = _agent_service(card_persistence)
     created = await service.create_access(
         _AGENT_USER,
         label="lg-react (memories)",
@@ -856,15 +918,15 @@ async def test_create_access_with_agent_client_id_is_deterministic_and_stores_to
 
 
 @pytest.mark.asyncio
-async def test_reconsent_updates_one_record_and_preserves_created_at():
-    service = _agent_service()
+async def test_reconsent_updates_one_record_and_preserves_created_at(card_persistence):
+    service = _agent_service(card_persistence)
     first = await service.create_access(
         _AGENT_USER, label="lg-react", client_id=_AGENT_CLIENT,
         resource_grants={"https://example.test/mcp": ["records:read"]},
     )
     listed = await service.list_access(_AGENT_USER)
     assert len(listed["items"]) == 1
-    created_at = json.loads(next(iter(service._redis.values.values())))["created_at"]
+    created_at = (await only_stored_card(service))["created_at"]
 
     again = await service.create_access(
         _AGENT_USER, label="lg-react (relabeled)", client_id=_AGENT_CLIENT,
@@ -873,12 +935,12 @@ async def test_reconsent_updates_one_record_and_preserves_created_at():
     # Same deterministic access_id -> re-consent updates the SAME record, not a pile-up.
     assert again["access"]["access_id"] == first["access"]["access_id"]
     assert len((await service.list_access(_AGENT_USER))["items"]) == 1
-    assert json.loads(next(iter(service._redis.values.values())))["created_at"] == created_at
+    assert (await only_stored_card(service))["created_at"] == created_at
 
 
 @pytest.mark.asyncio
-async def test_agent_access_token_none_when_no_grant_or_scope_mismatch():
-    service = _agent_service()
+async def test_agent_access_token_none_when_no_grant_or_scope_mismatch(card_persistence):
+    service = _agent_service(card_persistence)
     await service.create_access(
         _AGENT_USER, label="lg-react", client_id=_AGENT_CLIENT,
         resource_grants={"https://example.test/mcp": ["records:read"]},
@@ -897,10 +959,10 @@ async def test_agent_access_token_none_when_no_grant_or_scope_mismatch():
 
 
 @pytest.mark.asyncio
-async def test_agent_regrant_MERGES_claims_never_replaces():
+async def test_agent_regrant_MERGES_claims_never_replaces(card_persistence):
     # Sequential one-click grants on the SAME resource must accumulate:
     # granting write after read keeps read (a replace would silently revoke it).
-    service = _agent_service()
+    service = _agent_service(card_persistence)
     writer = {**_AGENT_USER, "permissions": ["records:write"]}
     await service.create_access(
         writer, label="a", client_id=_AGENT_CLIENT,
@@ -919,10 +981,10 @@ async def test_agent_regrant_MERGES_claims_never_replaces():
 
 
 @pytest.mark.asyncio
-async def test_agent_regrant_with_merge_existing_false_REPLACES_the_record():
+async def test_agent_regrant_with_merge_existing_false_REPLACES_the_record(card_persistence):
     # The EDIT semantics: the user unchecked a claim; the submitted set becomes
     # the record exactly — the merge default would have kept the removed claim.
-    service = _agent_service()
+    service = _agent_service(card_persistence)
     writer = {**_AGENT_USER, "permissions": ["records:write"]}
     await service.create_access(
         writer, label="a", client_id=_AGENT_CLIENT,
@@ -941,7 +1003,7 @@ async def test_agent_regrant_with_merge_existing_false_REPLACES_the_record():
     assert len((await service.list_access(writer))["items"]) == 1
 
 
-def _named_services_agent_service():
+def _named_services_agent_service(card_persistence):
     from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.config import (
         oauth_delegated_config,
     )
@@ -987,6 +1049,7 @@ def _named_services_agent_service():
     )
     return AutomationAccessService(
         catalog_resolver=_CatalogResolver(),
+        card_persistence=card_persistence,
         redis=_Redis(), tenant="demo-tenant", project="demo-project",
         config=oauth_delegated_config(SimpleNamespace(state=state)),
         grant_store=_Store(), authority=_Authority(), minter=_minter,
@@ -994,12 +1057,12 @@ def _named_services_agent_service():
 
 
 @pytest.mark.asyncio
-async def test_agent_namespace_grant_state_governs_and_grants():
+async def test_agent_namespace_grant_state_governs_and_grants(card_persistence):
     # The NATIVE named-service gate's answer: which resource publishes the
     # namespace, the operation's required claims, and whether THIS agent holds
     # them — pending before the grant, granted after, ungoverned namespaces
     # impose no gate.
-    service = _named_services_agent_service()
+    service = _named_services_agent_service(card_persistence)
     ns_resource = "*/kdcube-services@1-0/public/mcp/named_services*"
 
     pending = await service.agent_namespace_grant_state(
@@ -1038,8 +1101,8 @@ async def test_agent_namespace_grant_state_governs_and_grants():
 
 
 @pytest.mark.asyncio
-async def test_manual_automation_keeps_random_client_and_no_stored_token():
-    service = _agent_service()
+async def test_manual_automation_keeps_random_client_and_no_stored_token(card_persistence):
+    service = _agent_service(card_persistence)
     created = await service.create_access(
         _AGENT_USER, label="Nightly", resource_grants={"https://example.test/mcp": ["records:read"]},
     )
@@ -1047,11 +1110,11 @@ async def test_manual_automation_keeps_random_client_and_no_stored_token():
     # token returned to the caller but NOT persisted in the record for reuse.
     assert created["access"]["client_id"].startswith("automation:")
     assert created["access"]["source"] == "manual"
-    assert json.loads(next(iter(service._redis.values.values()))).get("access_token", "") == ""
+    assert (await only_stored_card(service)).get("access_token", "") == ""
 
 
 @pytest.mark.asyncio
-async def test_external_client_card_extends_and_refresh_registration_merges():
+async def test_external_client_card_extends_and_refresh_registration_merges(card_persistence):
     # The card is the authority (the guard resolves it live): a hub-side
     # extension merges claims into an EXTERNAL client's existing card, an
     # unknown client is never created here, and the refresh-time
@@ -1061,7 +1124,7 @@ async def test_external_client_card_extends_and_refresh_registration_merges():
         oauth_access_id,
     )
 
-    service = _agent_service()
+    service = _agent_service(card_persistence)
     resource = "https://example.test/mcp"
 
     # Extension before any consent: nothing to extend.
@@ -1097,11 +1160,11 @@ async def test_external_client_card_extends_and_refresh_registration_merges():
 
 
 @pytest.mark.asyncio
-async def test_external_client_edit_replaces_and_narrows():
+async def test_external_client_edit_replaces_and_narrows(card_persistence):
     # The pointer/card design: editing an external client's card REPLACES its
     # resource grants exactly (narrowing allowed, read+write -> read). The
     # guard resolves the card live, so it applies on the client's next call.
-    service = _agent_service()
+    service = _agent_service(card_persistence)
     resource = "https://example.test/mcp"
 
     await service.record_oauth_grant(
@@ -1125,11 +1188,11 @@ async def test_external_client_edit_replaces_and_narrows():
 
 
 @pytest.mark.asyncio
-async def test_agent_grant_carries_account_scope_and_merges():
+async def test_agent_grant_carries_account_scope_and_merges(card_persistence):
     # The agent card carries a per-account claim binding
     # {provider: {account_id: [claims]}}; a re-grant MERGES (union) claims per
     # account, replace overwrites — "read+write on one, read-only on another".
-    service = _agent_service()
+    service = _agent_service(card_persistence)
     resource = "https://example.test/mcp"
 
     created = await service.create_access(
@@ -1159,8 +1222,8 @@ async def test_agent_grant_carries_account_scope_and_merges():
 
 
 @pytest.mark.asyncio
-async def test_agent_replace_distinguishes_omitted_scope_from_explicit_clear():
-    service = _agent_service()
+async def test_agent_replace_distinguishes_omitted_scope_from_explicit_clear(card_persistence):
+    service = _agent_service(card_persistence)
     resource = "https://example.test/mcp"
     await service.create_access(
         _AGENT_USER,
@@ -1193,10 +1256,10 @@ async def test_agent_replace_distinguishes_omitted_scope_from_explicit_clear():
 
 
 @pytest.mark.asyncio
-async def test_agent_grant_account_scope_accepts_legacy_list_form():
+async def test_agent_grant_account_scope_accepts_legacy_list_form(card_persistence):
     # Backward compat: the old {provider: [account_ids]} form migrates to
     # {account_id: ["*"]} (bound to those accounts, any claim) — no breakage.
-    service = _agent_service()
+    service = _agent_service(card_persistence)
     resource = "https://example.test/mcp"
     created = await service.create_access(
         _AGENT_USER, label="a", client_id=_AGENT_CLIENT,
@@ -1237,10 +1300,10 @@ def test_credential_view_without_delegated_credential_has_no_account_restriction
 
 
 @pytest.mark.asyncio
-async def test_external_client_edit_account_scope_merge_and_replace():
+async def test_external_client_edit_account_scope_merge_and_replace(card_persistence):
     # Gap #1 closed: an external client's card account binding is editable
     # (merge extends, replace narrows), same as its claims.
-    service = _agent_service()
+    service = _agent_service(card_persistence)
     resource = "https://example.test/mcp"
     await service.record_oauth_grant(
         grantor_subject="platform-user-1", client_id="claude",
@@ -1280,9 +1343,9 @@ async def test_external_client_edit_account_scope_merge_and_replace():
 
 
 @pytest.mark.asyncio
-async def test_agent_grant_state_exposes_account_scope_for_native_gate():
+async def test_agent_grant_state_exposes_account_scope_for_native_gate(card_persistence):
     # Gap #3 source: the native gate reads account_scope off AGENT_GRANT_CHECK.
-    service = _named_services_agent_service()
+    service = _named_services_agent_service(card_persistence)
     door = "*/kdcube-services@1-0/public/mcp/named_services*"
     await service.create_access(
         _AGENT_USER, label="a", client_id=_AGENT_CLIENT,
@@ -1298,12 +1361,12 @@ async def test_agent_grant_state_exposes_account_scope_for_native_gate():
 
 
 @pytest.mark.asyncio
-async def test_agent_binding_carries_the_card_pointer_for_live_resolution():
+async def test_agent_binding_carries_the_card_pointer_for_live_resolution(card_persistence):
     # Gap #2 fix: an agent bearer's binding is a POINTER onto its card
     # (registry_access_id = the card access_id), so the guard resolves the card
     # live and an edit (claims OR account_scope) applies to the reused agent
     # bearer on its next call — not only after a re-mint, matching OAuth.
-    service = _agent_service()
+    service = _agent_service(card_persistence)
     resource = "https://example.test/mcp"
     result = await service.create_access(
         _AGENT_USER, label="a", client_id=_AGENT_CLIENT,
@@ -1313,18 +1376,18 @@ async def test_agent_binding_carries_the_card_pointer_for_live_resolution():
     access_id = result["access"]["access_id"]
     assert access_id  # deterministic agent card id
     # The last bind carries the pointer to that exact card.
-    assert store_bound_pointer(service) == access_id
+    assert store_bound_pointer(card_persistence, service) == access_id
 
 
-def store_bound_pointer(service):
-    # The _agent_service()'s store is a fresh _Store; its last bind records
+def store_bound_pointer(card_persistence, service):
+    # The _agent_service(card_persistence)'s store is a fresh _Store; its last bind records
     # registry_access_id when the pointer was passed.
     bound = getattr(service._store, "bound", [])
     return bound[-1].get("registry_access_id") if bound else None
 
 
 @pytest.mark.asyncio
-async def test_disconnecting_an_account_clears_its_agent_bindings():
+async def test_disconnecting_an_account_clears_its_agent_bindings(card_persistence):
     """Disconnecting a connected account must drop it from every grant that
     binds it. Account ids are deterministic, so a binding left behind would
     silently revive - re-granting access nobody ticked - if the same account
@@ -1332,6 +1395,7 @@ async def test_disconnecting_an_account_clears_its_agent_bindings():
     redis = _Redis()
     service = AutomationAccessService(
         catalog_resolver=_CatalogResolver(),
+        card_persistence=card_persistence,
         redis=redis,
         tenant="demo-tenant",
         project="demo-project",
@@ -1358,7 +1422,7 @@ async def test_disconnecting_an_account_clears_its_agent_bindings():
     )
     assert result["pruned"] == 1 and access_id in result["grants"]
 
-    record = json.loads(redis.values[service._record_key(access_id)])
+    record = await stored_card(service, access_id)
     scope = record["account_scope"]
     # The disconnected account is gone; its provider survives with the sibling.
     assert "google_aaa" not in scope.get("google", {})
@@ -1371,7 +1435,7 @@ async def test_disconnecting_an_account_clears_its_agent_bindings():
     await service.prune_account_from_grants(
         grantor_subject="platform-user-1", provider_id="google", account_id="google_bbb",
     )
-    record = json.loads(redis.values[service._record_key(access_id)])
+    record = await stored_card(service, access_id)
     assert "google" not in record["account_scope"]
 
     # An account nobody bound is a no-op.
@@ -1382,7 +1446,7 @@ async def test_disconnecting_an_account_clears_its_agent_bindings():
 
 
 @pytest.mark.asyncio
-async def test_automation_access_update_replaces_grants_in_place_and_keeps_identity():
+async def test_automation_access_update_replaces_grants_in_place_and_keeps_identity(card_persistence):
     """Edit a manual automation IN PLACE: the grant set is replaced, the card
     (access_id/client_id) and its client-side token are kept, and no re-mint or
     re-bind happens — the guard resolves the card live, so the new scope applies
@@ -1392,6 +1456,7 @@ async def test_automation_access_update_replaces_grants_in_place_and_keeps_ident
     authority = _Authority()
     service = AutomationAccessService(
         catalog_resolver=_CatalogResolver(),
+        card_persistence=card_persistence,
         redis=redis, tenant="demo-tenant", project="demo-project",
         config=_config(), grant_store=store, authority=authority, minter=_minter,
     )
@@ -1425,13 +1490,14 @@ async def test_automation_access_update_replaces_grants_in_place_and_keeps_ident
     assert len(store.bound) == bound_before                 # NO re-mint / re-bind
 
     # The live card the guard resolves now carries the new grant.
-    raw_record = next(iter(redis.values.values()))
-    assert json.loads(raw_record)["resource_grants"] == {"https://example.test/mcp": ["records:write"]}
+    assert (await stored_card(service, access_id))["resource_grants"] == {
+        "https://example.test/mcp": ["records:write"]
+    }
 
 
 @pytest.mark.asyncio
-async def test_automation_access_update_explicit_empty_scope_clears_binding():
-    service = _agent_service()
+async def test_automation_access_update_explicit_empty_scope_clears_binding(card_persistence):
+    service = _agent_service(card_persistence)
     user = {
         "user_id": "platform-user-1",
         "roles": ["kdcube:role:super-admin"],
@@ -1456,12 +1522,13 @@ async def test_automation_access_update_explicit_empty_scope_clears_binding():
 
 
 @pytest.mark.asyncio
-async def test_automation_access_update_guards_ownership_existence_and_empty():
+async def test_automation_access_update_guards_ownership_existence_and_empty(card_persistence):
     redis = _Redis()
     store = _Store()
     authority = _Authority()
     service = AutomationAccessService(
         catalog_resolver=_CatalogResolver(),
+        card_persistence=card_persistence,
         redis=redis, tenant="demo-tenant", project="demo-project",
         config=_config(), grant_store=store, authority=authority, minter=_minter,
     )
@@ -1477,22 +1544,25 @@ async def test_automation_access_update_guards_ownership_existence_and_empty():
     assert missing["ok"] is False and missing["error"] == "delegated_access_not_found"
 
     intruder = {"user_id": "intruder", "roles": ["kdcube:role:registered"], "permissions": []}
+    # Loads are grantor-scoped, so another user's card is simply not visible.
+    # The response no longer distinguishes "exists but yours" from "absent".
     not_owned = await service.update_access(
         intruder, access_id=access_id, resource_grants={"https://example.test/mcp": ["records:read"]},
     )
-    assert not_owned["ok"] is False and not_owned["error"] == "delegated_access_not_owned"
+    assert not_owned["ok"] is False and not_owned["error"] == "delegated_access_not_found"
 
     empty = await service.update_access(owner, access_id=access_id, resource_grants={})
     assert empty["ok"] is False and empty["error"] == "delegated_access_requires_resource_grants"
 
 
 @pytest.mark.asyncio
-async def test_automation_access_update_replaces_named_service_operations_without_rebinding():
+async def test_automation_access_update_replaces_named_service_operations_without_rebinding(card_persistence):
     """Editing the namespace selection rewrites the card only; no binding is
     written."""
     store = _Store()
     service = AutomationAccessService(
         catalog_resolver=_CatalogResolver(),
+        card_persistence=card_persistence,
         redis=_Redis(), tenant="demo-tenant", project="demo-project",
         config=_named_services_config(), grant_store=store, authority=_Authority(),
         minter=_minter, named_service_discovery=_NamedServiceDiscovery({}),
@@ -1506,6 +1576,7 @@ async def test_automation_access_update_replaces_named_service_operations_withou
         named_service_operations={resource: {"slack": ["object.search"]}},
     )
     assert created["ok"] is True
+    access_id = created["access"]["access_id"]
     bound_before = len(store.bound)
 
     widened = await service.update_access(
@@ -1522,9 +1593,7 @@ async def test_automation_access_update_replaces_named_service_operations_withou
 
     # The tree the guard copies onto the request is recomputed from the
     # descriptor and now carries the added operation.
-    card = json.loads(next(
-        raw for key, raw in service._redis.values.items() if "automation" in key
-    ))
+    card = await stored_card(service, access_id)
     tools = card["named_services"]["namespaces"]["slack"]["tools"]
     assert set(tools["call"]["operations"]) == {"object.search", "object.action"}
 
@@ -1536,17 +1605,16 @@ async def test_automation_access_update_replaces_named_service_operations_withou
 
     assert cleared["access"]["named_service_operations"] == {resource: {}}
     assert len(store.bound) == bound_before
-    card = json.loads(next(
-        raw for key, raw in service._redis.values.items() if "automation" in key
-    ))
+    card = await stored_card(service, access_id)
     assert card["named_services"]["namespaces"] == {}
 
 
 @pytest.mark.asyncio
-async def test_automation_access_update_rejects_an_operation_its_grants_do_not_cover():
+async def test_automation_access_update_rejects_an_operation_its_grants_do_not_cover(card_persistence):
     """The selection is validated at save time."""
     service = AutomationAccessService(
         catalog_resolver=_CatalogResolver(),
+        card_persistence=card_persistence,
         redis=_Redis(), tenant="demo-tenant", project="demo-project",
         config=_named_services_config(), grant_store=_Store(), authority=_Authority(),
         minter=_minter, named_service_discovery=_NamedServiceDiscovery({}),
@@ -1571,11 +1639,12 @@ async def test_automation_access_update_rejects_an_operation_its_grants_do_not_c
 
 
 @pytest.mark.asyncio
-async def test_automation_access_update_omitting_the_narrowing_keeps_it():
+async def test_automation_access_update_omitting_the_narrowing_keeps_it(card_persistence):
     """Absent vs empty, same rule as account_scope: omitting the narrowing keeps
     the record's, an explicit {} widens to the full policy."""
     service = AutomationAccessService(
         catalog_resolver=_CatalogResolver(),
+        card_persistence=card_persistence,
         redis=_Redis(), tenant="demo-tenant", project="demo-project",
         config=_named_services_config(), grant_store=_Store(), authority=_Authority(),
         minter=_minter, named_service_discovery=_NamedServiceDiscovery({}),
@@ -1589,8 +1658,8 @@ async def test_automation_access_update_omitting_the_narrowing_keeps_it():
     )
     access_id = created["access"]["access_id"]
 
-    def _card():
-        raw = json.loads(service._redis.values[service._record_key(access_id)])
+    async def _card():
+        raw = await stored_card(service, access_id)
         namespaces = raw["named_services"]["namespaces"]
         return raw.get("named_service_operations"), sorted(
             namespaces.get("slack", {}).get("tools", {}).get("call", {}).get("operations", {})
@@ -1600,23 +1669,24 @@ async def test_automation_access_update_omitting_the_narrowing_keeps_it():
         user, access_id=access_id, resource_grants={resource: grants}, label="Renamed",
     )
     assert renamed["ok"] is True
-    assert _card() == ({resource: {"slack": ["object.search"]}}, ["object.search"])
+    assert await _card() == ({resource: {"slack": ["object.search"]}}, ["object.search"])
 
     await service.update_access(
         user, access_id=access_id, resource_grants={resource: grants},
         named_service_operations={},
     )
-    selection, operations = _card()
+    selection, operations = await _card()
     assert selection == {}
     assert operations == []
 
 
 @pytest.mark.asyncio
-async def test_agent_grant_replace_without_the_narrowing_keeps_it():
+async def test_agent_grant_replace_without_the_narrowing_keeps_it(card_persistence):
     """A replace edit that submits no narrowing (a rename) must not widen the
     agent's boundary."""
     service = AutomationAccessService(
         catalog_resolver=_CatalogResolver(),
+        card_persistence=card_persistence,
         redis=_Redis(), tenant="demo-tenant", project="demo-project",
         config=_named_services_config(), grant_store=_Store(), authority=_Authority(),
         minter=_minter, named_service_discovery=_NamedServiceDiscovery({}),
@@ -1641,11 +1711,12 @@ async def test_agent_grant_replace_without_the_narrowing_keeps_it():
 
 
 @pytest.mark.asyncio
-async def test_automation_access_update_empty_narrowing_clears_every_resource():
+async def test_automation_access_update_empty_narrowing_clears_every_resource(card_persistence):
     """An explicit {} is the clear, and it reaches resources the caller did not
     name — the widget therefore omits the field when it has no selection."""
     service = AutomationAccessService(
         catalog_resolver=_CatalogResolver(),
+        card_persistence=card_persistence,
         redis=_Redis(), tenant="demo-tenant", project="demo-project",
         config=_named_services_config(), grant_store=_Store(), authority=_Authority(),
         minter=_minter, named_service_discovery=_NamedServiceDiscovery({}),
@@ -1656,24 +1727,24 @@ async def test_automation_access_update_empty_narrowing_clears_every_resource():
     created = await service.create_access(user, label="all ops", resource_grants={resource: grants})
     access_id = created["access"]["access_id"]
 
-    def _namespaces():
-        raw = json.loads(service._redis.values[service._record_key(access_id)])
+    async def _namespaces():
+        raw = await stored_card(service, access_id)
         return sorted(raw["named_services"]["namespaces"])
 
     # No narrowing asked for: the full descriptor policy, which the bridge
     # still gates per operation against the card's grants.
-    assert _namespaces() == ["mail", "slack"]
+    assert await _namespaces() == ["mail", "slack"]
 
     await service.update_access(
         user, access_id=access_id, resource_grants={resource: grants}, label="Renamed",
     )
-    assert _namespaces() == ["mail", "slack"]        # omitted -> preserved
+    assert await _namespaces() == ["mail", "slack"]        # omitted -> preserved
 
     await service.update_access(
         user, access_id=access_id, resource_grants={resource: grants},
         named_service_operations={},
     )
-    assert _namespaces() == []               # explicit {} -> cleared
+    assert await _namespaces() == []               # explicit {} -> cleared
 
 
 def test_a_catalog_tool_whose_claim_was_never_declared_is_reported():

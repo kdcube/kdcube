@@ -49,7 +49,16 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oau
     tools_for_scopes,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.authority import build_delegated_client_credential
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cards.resolver import (
+    CardUnavailable,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cards.service import (
+    CardCommitFailed,
+    CardConflict,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.http.deps import (
+    AutomationAccessUnavailable,
+    get_automation_access,
     extract_bearer,
     get_access_token_minter,
     get_authenticate,
@@ -906,15 +915,7 @@ async def _seed_account_scope_for_consent(
     """Pre-check the picker from the client's existing card (re-consent) and
     from a DCR sibling this consent will supersede."""
     try:
-        from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.automation_access import (
-            AutomationAccessService,
-        )
-
-        store = get_grant_store(request)
-        tenant, project = oauth_tenant_project(request)
-        service = AutomationAccessService(
-            redis=store.redis, tenant=tenant, project=project, config=cfg, grant_store=store,
-        )
+        service = get_automation_access(request)
         return await service.oauth_seed_account_scope(
             grantor_subject=subject, client_id=client_id, resource=str(resource or ""),
         )
@@ -1240,10 +1241,7 @@ async def _issue_tokens(
     # KDCube tab) so the connection is visible and revocable. Registry write
     # failures must never fail token issuance.
     try:
-        from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.automation_access import (
-            AutomationAccessService,
-        )
-
+        service = get_automation_access(request)
         metadata_snapshot = dict(client_metadata or {})
         if not metadata_snapshot:
             client_record = await store.get_client_record(client_id) or {}
@@ -1275,13 +1273,6 @@ async def _issue_tokens(
             client_id, registered_name, sorted(metadata_snapshot.keys()),
             str(resource or ""), door_alias, client_label,
         )
-        service = AutomationAccessService(
-            redis=store.redis,
-            tenant=tenant,
-            project=project,
-            config=oauth_delegated_config(request),
-            grant_store=store,
-        )
         await service.record_oauth_grant(
             grantor_subject=sub,
             client_id=client_id,
@@ -1294,8 +1285,31 @@ async def _issue_tokens(
             refresh_token=str(refresh_token or ""),
             account_scope=account_scope,
         )
+    except (AutomationAccessUnavailable, CardUnavailable, CardConflict, CardCommitFailed) as exc:
+        # The card is the authority a governed call resolves; a token whose card
+        # was never committed would be denied as revoked on every use. Delegated
+        # authority is therefore handed over only after the card commits.
+        LOGGER.error(
+            "[connection-hub.oauth] token withheld: delegated card not committed "
+            "client=%s reason=%s",
+            client_id,
+            getattr(exc, "reason", type(exc).__name__),
+        )
+        return _token_error(
+            "temporarily_unavailable",
+            "The delegated access card could not be recorded; retry the request.",
+            status=503,
+        )
     except Exception:
-        LOGGER.exception("[connection-hub.oauth] failed to record delegated grant client=%s", client_id)
+        LOGGER.exception(
+            "[connection-hub.oauth] token withheld: delegated grant not recorded client=%s",
+            client_id,
+        )
+        return _token_error(
+            "temporarily_unavailable",
+            "The delegated access card could not be recorded; retry the request.",
+            status=503,
+        )
     return JSONResponse(
         {
             "access_token": access_token,
@@ -1472,18 +1486,7 @@ async def revoke(request: Request) -> Response:
 
     if card_pointer and grantor_subject:
         try:
-            from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.automation_access import (
-                AutomationAccessService,
-            )
-
-            tenant, project = oauth_tenant_project(request)
-            service = AutomationAccessService(
-                redis=store.redis,
-                tenant=tenant,
-                project=project,
-                config=oauth_delegated_config(request),
-                grant_store=store,
-            )
+            service = get_automation_access(request)
             await service.revoke_access({"user_id": grantor_subject}, access_id=card_pointer)
             LOGGER.info(
                 "[connection-hub.oauth] rfc7009 revocation retired card=%s", card_pointer

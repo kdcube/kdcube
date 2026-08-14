@@ -105,6 +105,20 @@ return 1
 """
 
 
+class CardCacheUnusable(RuntimeError):
+    """A cached card value exists but cannot be trusted.
+
+    Distinct from absence: absence is a definitive answer about authority,
+    while unusable data means the answer could not be determined. Callers with
+    a durable source repair it; callers without one report unavailability
+    rather than denying as if the card were gone.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
 @dataclass(frozen=True)
 class CardCacheEntry:
     kind: str
@@ -140,9 +154,17 @@ class DelegatedCardRuntimeCache:
         )
 
     async def read(self, access_id: str) -> CardCacheEntry | None:
-        payload = decode_cache_value(await self._redis.get(self.card_key(access_id)))
-        if payload is None:
+        """The cached state, or ``None`` when the key is absent.
+
+        Raises ``CardCacheUnusable`` when a value is present but cannot be
+        parsed, so a damaged projection is never mistaken for a revoked card.
+        """
+        raw = await self._redis.get(self.card_key(access_id))
+        if raw is None:
             return None
+        payload = decode_cache_value(raw)
+        if payload is None:
+            raise CardCacheUnusable("cached_card_not_decodable")
         kind = str(payload.get("kind") or "").strip()
         if kind == CARD_CACHE_KIND_UPDATING:
             return CardCacheEntry(
@@ -155,19 +177,15 @@ class DelegatedCardRuntimeCache:
                 kind=kind, card_revision=int(payload.get("card_revision") or 0)
             )
         if kind != CARD_CACHE_KIND_CARD:
-            _LOGGER.warning(
-                "[connection-hub.delegated-cards] discarding cached entry of unknown kind %r", kind
-            )
-            return None
+            raise CardCacheUnusable("cached_card_kind_unknown")
         try:
             authority = CardAuthority.from_mapping(payload.get("authority"))
         except CardRecordError as exc:
             _LOGGER.warning(
-                "[connection-hub.delegated-cards] discarding cached card %s: %s",
-                access_id,
-                exc.reason,
+                "[connection-hub.delegated-cards] unusable cached card %s: %s",
+                access_id, exc.reason,
             )
-            return None
+            raise CardCacheUnusable("cached_card_invalid") from exc
         return CardCacheEntry(
             kind=kind, authority=authority, card_revision=authority.card_revision
         )
@@ -309,5 +327,6 @@ __all__ = [
     "CARD_CACHE_KIND_REVOKED",
     "CARD_CACHE_KIND_UPDATING",
     "CardCacheEntry",
+    "CardCacheUnusable",
     "DelegatedCardRuntimeCache",
 ]

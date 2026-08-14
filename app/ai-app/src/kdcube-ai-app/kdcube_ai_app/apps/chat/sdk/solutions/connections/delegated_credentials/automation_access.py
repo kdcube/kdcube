@@ -25,6 +25,7 @@ import json
 import secrets
 import time
 from dataclasses import dataclass, field
+from dataclasses import replace as replace_fields
 from typing import Any, Iterable, Mapping
 from urllib.parse import urlsplit
 
@@ -60,9 +61,25 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.nam
     operation_grants as _named_service_operation_grants,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cards.model import (
+    CARD_STATE_ACTIVE,
     NAMED_SERVICE_OPERATIONS_ALL,
+    CardAuthority,
+    CardCredentialHandles,
     CardRecordError,
     NamedServiceSelection,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cards.cache import (
+    DelegatedCardRuntimeCache,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cards.store import (
+    subject_hash_for,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cards.resolver import (
+    CardUnavailable,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cards.service import (
+    CardCommitFailed,
+    CardConflict,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.catalog.resolver import (
     CatalogUnavailable,
@@ -261,7 +278,7 @@ def oauth_access_id(grantor_subject: str, client_id: str, resource: str = "") ->
 
 
 def _subject_key(subject: str) -> str:
-    return hashlib.sha256(subject.encode("utf-8")).hexdigest()
+    return subject_hash_for(subject)
 
 
 def _is_platform_admin(user: Mapping[str, Any]) -> bool:
@@ -342,14 +359,15 @@ async def read_agent_grant_record(
     if not grantor or not client:
         return None
     access_id = agent_grant_access_id(grantor, client, resources)
-    key = f"{_clean(tenant)}:{_clean(project)}:kdcube:delegated-access:automation:{access_id}"
-    raw = await redis.get(key)
-    if raw is None:
-        return None
+    cache = DelegatedCardRuntimeCache(redis, tenant=_clean(tenant), project=_clean(project))
     try:
-        record = AutomationAccessRecord.from_mapping(json.loads(raw))
+        entry = await cache.read(access_id)
     except Exception:
+        # A probe enriches a picker; it never denies on its own.
         return None
+    if entry is None or not entry.is_card or entry.authority is None:
+        return None
+    record = record_from_card(entry.authority)
     if record.source != ACCESS_SOURCE_AGENT:
         return None
     if record.expires_at and record.expires_at <= int(time.time()):
@@ -532,6 +550,78 @@ class AutomationAccessRecord:
         return public
 
 
+def card_authority_from_record(record: AutomationAccessRecord) -> CardAuthority:
+    """The record's non-secret authorization decision."""
+    return CardAuthority(
+        access_id=record.access_id,
+        client_id=record.client_id,
+        grantor_subject=record.grantor_subject,
+        delegate_subject=record.delegate_subject,
+        source=record.source,
+        label=record.label,
+        card_revision=record.card_revision,
+        catalog_version=record.catalog_version,
+        state=CARD_STATE_ACTIVE,
+        operations=tuple(record.operations),
+        resource_grants={key: tuple(value) for key, value in record.resource_grants.items()},
+        named_service_operations=record.named_service_operations,
+        named_services=copy.deepcopy(dict(record.named_services or {})),
+        account_scope={
+            provider: {account_id: tuple(claims) for account_id, claims in accounts.items()}
+            for provider, accounts in record.account_scope.items()
+        },
+        identity_scope=record.identity_scope,
+        created_at=record.created_at,
+        expires_at=record.expires_at,
+        last_issued_at=record.last_issued_at,
+        last_four=record.last_four,
+    )
+
+
+def card_handles_from_record(record: AutomationAccessRecord) -> CardCredentialHandles:
+    """The record's live, reusable credential material."""
+    return CardCredentialHandles(
+        access_id=record.access_id,
+        access_token=record.access_token,
+        refresh_token=record.refresh_token,
+        session_id=record.session_id,
+    )
+
+
+def record_from_card(
+    authority: CardAuthority,
+    handles: CardCredentialHandles | None = None,
+) -> AutomationAccessRecord:
+    """Recombine authority and handles into the record shape callers render."""
+    held = handles or CardCredentialHandles(access_id=authority.access_id)
+    return AutomationAccessRecord(
+        access_id=authority.access_id,
+        label=authority.label,
+        client_id=authority.client_id,
+        grantor_subject=authority.grantor_subject,
+        delegate_subject=authority.delegate_subject,
+        operations=tuple(authority.operations),
+        resource_grants={key: tuple(value) for key, value in authority.resource_grants.items()},
+        named_service_operations=authority.named_service_operations,
+        named_services=copy.deepcopy(dict(authority.named_services or {})),
+        account_scope={
+            provider: {account_id: tuple(claims) for account_id, claims in accounts.items()}
+            for provider, accounts in authority.account_scope.items()
+        },
+        identity_scope=authority.identity_scope,
+        catalog_version=authority.catalog_version,
+        card_revision=authority.card_revision,
+        session_id=held.session_id,
+        created_at=authority.created_at,
+        expires_at=authority.expires_at,
+        last_four=authority.last_four,
+        source=authority.source,
+        refresh_token=held.refresh_token,
+        access_token=held.access_token,
+        last_issued_at=authority.last_issued_at,
+    )
+
+
 class AutomationAccessService:
     """Create/list/revoke user-created delegated automation credentials."""
 
@@ -545,6 +635,7 @@ class AutomationAccessService:
         grant_store: GrantStore | None = None,
         authority: Any | None = None,
         catalog_resolver: Any | None = None,
+        card_persistence: Any | None = None,
         minter: Any | None = None,
         named_service_discovery: Any | None = None,
     ) -> None:
@@ -559,6 +650,56 @@ class AutomationAccessService:
         # Required by the operations that stamp a card. Read-only and
         # credential-lifecycle operations do not need it.
         self._catalog_resolver = catalog_resolver
+        # Policy depends on the persistence contract, not on how a card is
+        # stored. Composition of the durable implementation belongs to the
+        # caller that owns storage.
+        self._persistence = card_persistence
+
+    # -- card persistence -----------------------------------------------------
+    #
+    # Durable revisions are the source of truth; Redis holds the live
+    # projection and the bounded credential handles. Every raw record access
+    # goes through these three operations.
+
+    def _cards(self) -> Any:
+        if self._persistence is None:
+            raise CardUnavailable("card_persistence_not_configured")
+        return self._persistence
+
+    async def _load_record(
+        self, access_id: str, *, grantor_subject: str
+    ) -> AutomationAccessRecord | None:
+        loaded = await self._cards().load(
+            access_id, subject_hash=_subject_key(grantor_subject)
+        )
+        if loaded is None:
+            return None
+        authority, handles = loaded
+        return record_from_card(authority, handles)
+
+    async def _persist_record(
+        self, record: AutomationAccessRecord, *, expected_revision: int
+    ) -> None:
+        await self._cards().persist(
+            card_authority_from_record(record),
+            card_handles_from_record(record),
+            subject_hash=_subject_key(record.grantor_subject),
+            expected_revision=expected_revision,
+        )
+
+    async def _forget_record(self, record: AutomationAccessRecord) -> None:
+        await self._cards().forget(
+            card_authority_from_record(record),
+            subject_hash=_subject_key(record.grantor_subject),
+        )
+
+    async def _list_active_records(
+        self, grantor_subject: str, *, now: int | None = None
+    ) -> list[AutomationAccessRecord]:
+        authorities = await self._cards().list_active(
+            subject_hash=_subject_key(grantor_subject), now=now
+        )
+        return [record_from_card(authority) for authority in authorities]
 
     async def _active_catalog_version(self) -> str:
         """The generation a save is stamped with.
@@ -780,30 +921,17 @@ class AutomationAccessService:
             return {"ok": False, "error": "delegated_access_requires_authenticated_user"}
 
         now = int(time.time())
-        raw_ids = await self._redis.smembers(self._index_key(grantor_subject))
-        access_ids = [
-            item.decode("utf-8") if isinstance(item, (bytes, bytearray)) else str(item)
-            for item in (raw_ids or [])
-        ]
-        records: list[dict[str, Any]] = []
-        stale: list[str] = []
-        for access_id in access_ids:
-            raw = await self._redis.get(self._record_key(access_id))
-            if raw is None:
-                stale.append(access_id)
-                continue
-            try:
-                payload = json.loads(raw)
-            except Exception:
-                stale.append(access_id)
-                continue
-            record = AutomationAccessRecord.from_mapping(payload)
-            if record.expires_at and record.expires_at < now:
-                stale.append(access_id)
-                continue
-            records.append(record.to_public_dict())
-        if stale and hasattr(self._redis, "srem"):
-            await self._redis.srem(self._index_key(grantor_subject), *stale)
+        try:
+            records_found = await self._list_active_records(grantor_subject, now=now)
+        except CardUnavailable as exc:
+            return {
+                "ok": False,
+                "error": "delegated_cards_unavailable",
+                "reason": exc.reason,
+                "retryable": True,
+                "status": 503,
+            }
+        records = [record.to_public_dict() for record in records_found]
 
         records.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
         return {
@@ -975,12 +1103,18 @@ class AutomationAccessService:
             client_id = requested_client_id
             access_id = agent_grant_access_id(grantor_subject, client_id, selected_resources)
             access_source = ACCESS_SOURCE_AGENT
-            existing_raw = await self._redis.get(self._record_key(access_id))
-            if existing_raw is not None:
-                try:
-                    existing = AutomationAccessRecord.from_mapping(json.loads(existing_raw))
-                except Exception:
-                    existing = None
+            try:
+                existing = await self._load_record(
+                    access_id, grantor_subject=grantor_subject
+                )
+            except CardUnavailable as exc:
+                return {
+                    "ok": False,
+                    "error": "delegated_cards_unavailable",
+                    "reason": exc.reason,
+                    "retryable": True,
+                    "status": 503,
+                }
             if existing is not None:
                 created_at_override = existing.created_at or None
                 if not merge_existing and not account_scope_provided:
@@ -1160,9 +1294,18 @@ class AutomationAccessService:
             # unbound one; a manual automation keeps the token client-side only.
             access_token=access_token if access_source == ACCESS_SOURCE_AGENT else "",
         )
-        await self._redis.setex(self._record_key(access_id), expires_in, json.dumps(record.to_dict()))
-        await self._redis.sadd(self._index_key(grantor_subject), access_id)
-        await self._redis.expire(self._index_key(grantor_subject), BUNDLE_SESSION_MAX_TTL_SECONDS)
+        try:
+            await self._persist_record(
+                record, expected_revision=existing.card_revision if existing is not None else 0
+            )
+        except (CardUnavailable, CardConflict, CardCommitFailed) as exc:
+            return {
+                "ok": False,
+                "error": "delegated_card_not_committed",
+                "reason": getattr(exc, "reason", ""),
+                "retryable": True,
+                "status": 503,
+            }
         await self.notify_change(grantor_subject, action="created", access=record.to_public_dict())
 
         return {
@@ -1194,13 +1337,18 @@ class AutomationAccessService:
         access_id = _clean(access_id)
         if not access_id:
             return {"ok": False, "error": "delegated_access_requires_access_id"}
-        raw = await self._redis.get(self._record_key(access_id))
-        if raw is None:
-            return {"ok": False, "error": "delegated_access_not_found"}
         try:
-            existing = AutomationAccessRecord.from_mapping(json.loads(raw))
-        except Exception:
-            return {"ok": False, "error": "delegated_access_record_invalid"}
+            existing = await self._load_record(access_id, grantor_subject=grantor_subject)
+        except CardUnavailable as exc:
+            return {
+                "ok": False,
+                "error": "delegated_cards_unavailable",
+                "reason": exc.reason,
+                "retryable": True,
+                "status": 503,
+            }
+        if existing is None:
+            return {"ok": False, "error": "delegated_access_not_found"}
         if existing.grantor_subject != grantor_subject:
             return {"ok": False, "error": "delegated_access_not_owned"}
         # Only a manual automation card is edited here. Agent/OAuth cards edit
@@ -1366,7 +1514,17 @@ class AutomationAccessService:
             # Manual token stays client-side only; the record never holds it.
             access_token="",
         )
-        await self._redis.setex(self._record_key(access_id), remaining, json.dumps(updated.to_dict()))
+        del remaining
+        try:
+            await self._persist_record(updated, expected_revision=existing.card_revision)
+        except (CardUnavailable, CardConflict, CardCommitFailed) as exc:
+            return {
+                "ok": False,
+                "error": "delegated_card_not_committed",
+                "reason": getattr(exc, "reason", ""),
+                "retryable": True,
+                "status": 503,
+            }
         await self.notify_change(grantor_subject, action="updated", access=updated.to_public_dict())
         return {"ok": True, "access": updated.to_public_dict()}
 
@@ -1382,15 +1540,13 @@ class AutomationAccessService:
         the grant has expired. Keyed by the SAME deterministic access_id
         `create_access(client_id=…)` writes, so the per-turn resolver reuses the
         stored, already-bound token instead of minting an unbound one."""
-        record = await read_agent_grant_record(
-            self._redis,
-            tenant=self._tenant,
-            project=self._project,
+        record = await self._load_record(
+            agent_grant_access_id(grantor_subject, client_id, resources),
             grantor_subject=grantor_subject,
-            client_id=client_id,
-            resources=resources,
         )
-        if record is None or not record.access_token:
+        if record is None or record.source != ACCESS_SOURCE_AGENT:
+            return None
+        if not record.access_token:
             return None
         return {
             "access_token": record.access_token,
@@ -1455,14 +1611,14 @@ class AutomationAccessService:
                     continue
                 if _clean(tool_policy.get("operation") or "") == op:
                     required |= self._operation_grants({}, dict(tool_policy))
-            record = await read_agent_grant_record(
-                self._redis,
-                tenant=self._tenant,
-                project=self._project,
+            # A service method reads through its own persistence port; the
+            # standalone probe exists for callers that have no service.
+            record = await self._load_record(
+                agent_grant_access_id(grantor_subject, client_id, [cfg.resource]),
                 grantor_subject=grantor_subject,
-                client_id=client_id,
-                resources=[cfg.resource],
             )
+            if record is not None and record.source != ACCESS_SOURCE_AGENT:
+                record = None
             granted = False
             if record is not None:
                 held = set(record.resource_grants.get(cfg.resource, ()))
@@ -1541,30 +1697,26 @@ class AutomationAccessService:
         # generation it was last saved against and only advances its revision.
         existing_catalog_version = ""
         existing_card_revision = 0
-        existing_raw = await self._redis.get(self._record_key(access_id))
-        if existing_raw is not None:
-            try:
-                existing_payload = json.loads(existing_raw)
-                created_at = int(existing_payload.get("created_at") or now)
-                existing_map = existing_payload.get("resource_grants") or {}
-                existing_grants = list(existing_map.get(resource_value or "*") or [])
-                existing_account_scope = {
-                    provider: {account_id: list(claims) for account_id, claims in accounts.items()}
-                    for provider, accounts in normalize_account_scope(
-                        existing_payload.get("account_scope")
-                    ).items()
-                }
-                existing_selection = _parse_named_service_selection(existing_payload)
-                existing_catalog_version = _clean(existing_payload.get("catalog_version"))
-                existing_card_revision = int(existing_payload.get("card_revision") or 0)
-                raw_named_services = existing_payload.get("named_services")
-                if isinstance(raw_named_services, Mapping):
-                    existing_named_services = copy.deepcopy(dict(raw_named_services))
-            except Exception:
-                created_at = now
+        try:
+            existing_card = await self._load_record(access_id, grantor_subject=grantor)
+        except CardUnavailable:
+            existing_card = None
+        if existing_card is not None:
+            created_at = existing_card.created_at or now
+            existing_grants = list(
+                existing_card.resource_grants.get(resource_value or "*", ())
+            )
+            existing_account_scope = {
+                provider: {account_id: list(claims) for account_id, claims in accounts.items()}
+                for provider, accounts in existing_card.account_scope.items()
+            }
+            existing_selection = existing_card.named_service_operations
+            existing_catalog_version = existing_card.catalog_version
+            existing_card_revision = existing_card.card_revision
+            existing_named_services = copy.deepcopy(dict(existing_card.named_services or {}))
         # Initial consent (not a refresh rotation): absorb superseded sibling
         # cards BEFORE composing this card, so their binding carries over.
-        is_initial_consent = existing_raw is None
+        is_initial_consent = existing_card is None
         inherited_account_scope: dict[str, dict[str, list[str]]] = {}
         superseded: list[AutomationAccessRecord] = []
         if is_initial_consent:
@@ -1619,9 +1771,7 @@ class AutomationAccessService:
             access_token=_clean(access_token),
             last_issued_at=now,
         )
-        await self._redis.setex(self._record_key(access_id), ttl, json.dumps(record.to_dict()))
-        await self._redis.sadd(self._index_key(grantor), access_id)
-        await self._redis.expire(self._index_key(grantor), BUNDLE_SESSION_MAX_TTL_SECONDS)
+        await self._persist_record(record, expected_revision=existing_card_revision)
         _LOGGER.info(
             "[automation-access] oauth grant recorded card=%s client=%s initial=%s "
             "account_scope_providers=%s siblings_superseded=%d",
@@ -1706,21 +1856,13 @@ class AutomationAccessService:
         own_origins = await self._client_redirect_origins(client_id)
         if not own_origins:
             return {}, []
-        raw_ids = await self._redis.smembers(self._index_key(grantor))
-        access_ids = [
-            item.decode("utf-8") if isinstance(item, (bytes, bytearray)) else str(item)
-            for item in (raw_ids or [])
-        ]
+        try:
+            candidates = await self._list_active_records(grantor)
+        except CardUnavailable:
+            return {}, []
         donated: dict[str, dict[str, list[str]]] = {}
         retire: list[AutomationAccessRecord] = []
-        for access_id in access_ids:
-            raw = await self._redis.get(self._record_key(access_id))
-            if raw is None:
-                continue
-            try:
-                candidate = AutomationAccessRecord.from_mapping(json.loads(raw))
-            except Exception:
-                continue
+        for candidate in candidates:
             if candidate.source != ACCESS_SOURCE_OAUTH:
                 continue
             if candidate.client_id == client_id or not candidate.client_id.startswith("dcr-"):
@@ -1780,20 +1922,13 @@ class AutomationAccessService:
         if not subject or not provider or not account:
             return {"pruned": 0, "grants": []}
         try:
-            raw_ids = await self._redis.smembers(self._index_key(subject))
+            candidates = await self._list_active_records(subject)
         except Exception:
             return {"pruned": 0, "grants": []}
-        access_ids = [
-            item.decode("utf-8") if isinstance(item, (bytes, bytearray)) else str(item)
-            for item in (raw_ids or [])
-        ]
         pruned: list[str] = []
-        for access_id in access_ids:
+        for record in candidates:
+            access_id = record.access_id
             try:
-                raw = await self._redis.get(self._record_key(access_id))
-                if raw is None:
-                    continue
-                record = AutomationAccessRecord.from_mapping(json.loads(raw))
                 accounts = dict(record.account_scope.get(provider) or {})
                 if account not in accounts:
                     continue
@@ -1808,23 +1943,21 @@ class AutomationAccessService:
                     scope[provider] = {a: list(cl) for a, cl in accounts.items()}
                 else:
                     scope.pop(provider, None)
-                record_dict = record.to_dict()
-                record_dict["account_scope"] = scope
-                ttl = 0
-                try:
-                    ttl = await self._redis.ttl(self._record_key(access_id))
-                except Exception:
-                    ttl = 0
-                await self._redis.setex(
-                    self._record_key(access_id),
-                    max(60, int(ttl or 0) or 60),
-                    json.dumps(record_dict),
+                pruned_record = replace_fields(
+                    record,
+                    account_scope={
+                        p: {a: tuple(cl) for a, cl in bound.items()}
+                        for p, bound in scope.items()
+                    },
+                    card_revision=record.card_revision + 1,
+                )
+                await self._persist_record(
+                    pruned_record, expected_revision=record.card_revision
                 )
                 pruned.append(access_id)
-                await self.notify_change(subject, action="edited", access={
-                    k: v for k, v in record_dict.items()
-                    if k not in ("access_token", "refresh_token", "session_id")
-                })
+                await self.notify_change(
+                    subject, action="edited", access=pruned_record.to_public_dict()
+                )
             except Exception:
                 _LOGGER.warning(
                     "[connection_hub.disconnect] pruning account binding failed "
@@ -1881,14 +2014,19 @@ class AutomationAccessService:
         ):
             return {"ok": False, "error": "delegated_access_requires_client_and_claims"}
         access_id = oauth_access_id(grantor_subject, client, resource_value)
-        raw = await self._redis.get(self._record_key(access_id))
-        if raw is None:
+        try:
+            record = await self._load_record(access_id, grantor_subject=grantor_subject)
+        except CardUnavailable as exc:
+            return {
+                "ok": False,
+                "error": "delegated_cards_unavailable",
+                "reason": exc.reason,
+                "retryable": True,
+                "status": 503,
+            }
+        if record is None:
             return {"ok": False, "error": "delegated_access_unknown_client",
                     "message": "This client has no existing grant to extend; it connects via its own consent flow first."}
-        try:
-            record = AutomationAccessRecord.from_mapping(json.loads(raw))
-        except Exception:
-            return {"ok": False, "error": "delegated_access_record_unreadable"}
         # Claims must stay inside the deployment's delegable ceiling for the
         # resource when the catalog knows it.
         cfg = self._config.resource_config(resource_value) if resource_value else None
@@ -1932,27 +2070,32 @@ class AutomationAccessService:
                             current.append(claim)
                     target[account_id] = tuple(current)
                 account_scope_out[provider] = target
-        try:
-            ttl = await self._redis.ttl(self._record_key(access_id))
-        except Exception:
-            ttl = 0
-        record_dict = record.to_dict()
-        record_dict["resource_grants"] = {res: list(vals) for res, vals in resource_grants.items()}
-        record_dict["account_scope"] = {
-            p: {a: list(cl) for a, cl in accounts.items()} for p, accounts in account_scope_out.items()
-        }
         # A DCR client registers one fixed name (every Claude connector arrives
         # as "Claude"), so the user may rename the card to tell connections
         # apart. Empty/absent label leaves the current one untouched.
         new_label = _clean(label)
-        if new_label:
-            record_dict["label"] = new_label
-        await self._redis.setex(
-            self._record_key(access_id), max(60, int(ttl or 0) or 60), json.dumps(record_dict),
+        updated = replace_fields(
+            record,
+            resource_grants=resource_grants,
+            account_scope=account_scope_out,
+            label=new_label or record.label,
+            card_revision=record.card_revision + 1,
         )
-        await self.notify_change(grantor_subject, action="edited" if replace else "extended", access={
-            k: v for k, v in record_dict.items() if k not in ("access_token", "refresh_token", "session_id")
-        })
+        try:
+            await self._persist_record(updated, expected_revision=record.card_revision)
+        except (CardUnavailable, CardConflict, CardCommitFailed) as exc:
+            return {
+                "ok": False,
+                "error": "delegated_card_not_committed",
+                "reason": getattr(exc, "reason", ""),
+                "retryable": True,
+                "status": 503,
+            }
+        await self.notify_change(
+            grantor_subject,
+            action="edited" if replace else "extended",
+            access=updated.to_public_dict(),
+        )
         return {
             "ok": True,
             "access_id": access_id,
@@ -1969,12 +2112,25 @@ class AutomationAccessService:
         access_id_value = _clean(access_id)
         if not access_id_value:
             return {"ok": False, "error": "delegated_access_id_required"}
-        raw = await self._redis.get(self._record_key(access_id_value))
-        if raw is None:
+        try:
+            record = await self._load_record(
+                access_id_value, grantor_subject=grantor_subject
+            )
+        except CardUnavailable as exc:
+            return {
+                "ok": False,
+                "error": "delegated_cards_unavailable",
+                "reason": exc.reason,
+                "retryable": True,
+                "status": 503,
+            }
+        if record is None:
             return {"ok": True, "removed": False}
-        record = AutomationAccessRecord.from_mapping(json.loads(raw))
         if record.grantor_subject != grantor_subject:
             return {"ok": False, "error": "delegated_access_cross_user_access_denied"}
+        # The revoked revision commits before any credential cleanup, so a
+        # failure below cannot leave the card usable.
+        await self._forget_record(record)
         removed_session = False
         if record.session_id:
             from kdcube_ai_app.auth.bundle import get_bundle_session_authority
@@ -1989,9 +2145,6 @@ class AutomationAccessService:
             refresh_revoked = bool(await self._store.revoke_refresh_token(record.refresh_token))
         if record.access_token:
             await self._store.revoke_access_grant(record.access_token)
-        await self._redis.delete(self._record_key(access_id_value))
-        if hasattr(self._redis, "srem"):
-            await self._redis.srem(self._index_key(grantor_subject), access_id_value)
         await self.notify_change(grantor_subject, action="revoked", access_id=access_id_value)
         return {
             "ok": True,

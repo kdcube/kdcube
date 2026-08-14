@@ -296,3 +296,79 @@ async def test_an_expired_card_is_not_indexed_or_served(service, cache, store):
     assert await resolver.resolve(
         subject_hash=SUBJECT_HASH, access_id=ACCESS_ID, now=NOW
     ) is None
+
+
+@pytest.mark.asyncio
+async def test_a_damaged_projection_is_repaired_from_durable_state(service, store, cache, redis_client):
+    """Unusable cache data must not read as a revoked card."""
+    await service.commit(_authority(), subject_hash=SUBJECT_HASH, expected_revision=0, now=NOW)
+    await redis_client.set(cache.card_key(ACCESS_ID), "{truncated")
+
+    resolver = DelegatedCardResolver(cache=cache, store=store)
+    resolved = await resolver.resolve(
+        subject_hash=SUBJECT_HASH, access_id=ACCESS_ID, now=NOW
+    )
+    assert resolved is not None and resolved.card_revision == 1
+    # The projection was repaired, not left damaged.
+    assert (await cache.read(ACCESS_ID)).card_revision == 1
+
+
+@pytest.mark.asyncio
+async def test_a_damaged_projection_without_a_durable_source_is_unavailable(cache, redis_client):
+    """The guard path has no store: it must report unavailability, not denial."""
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cards.cache import (
+        CardCacheUnusable,
+    )
+
+    await redis_client.set(cache.card_key(ACCESS_ID), "{truncated")
+    with pytest.raises(CardCacheUnusable) as exc:
+        await cache.read(ACCESS_ID)
+    assert exc.value.reason == "cached_card_not_decodable"
+
+
+@pytest.mark.asyncio
+async def test_an_idle_long_lived_card_stays_listed_and_revocable(service, store, cache):
+    """An OAuth card idle past the old fixed index lifetime is still discoverable.
+
+    The index scores each card by its own expires_at, so nothing about one
+    card's lifetime, or about a week passing without writes, can hide another.
+    """
+    long_lived = _authority(revision=1, expires_at=NOW + 180 * 24 * 3600)
+    await service.commit(long_lived, subject_hash=SUBJECT_HASH, expected_revision=0, now=NOW)
+
+    eight_days_later = NOW + 8 * 24 * 3600
+    resolver = DelegatedCardResolver(cache=cache, store=store)
+    listed = await resolver.list_active(subject_hash=SUBJECT_HASH, now=eight_days_later)
+    assert [item.access_id for item in listed] == [ACCESS_ID]
+
+    pointer = await service.revoke(
+        subject_hash=SUBJECT_HASH, access_id=ACCESS_ID, expected_revision=1
+    )
+    assert pointer is not None and pointer.state == CARD_STATE_REVOKED
+    assert await resolver.list_active(subject_hash=SUBJECT_HASH, now=eight_days_later) == []
+
+
+@pytest.mark.asyncio
+async def test_a_short_card_expiring_does_not_hide_a_long_one(service, store, cache):
+    await service.commit(
+        _authority(expires_at=NOW + 60), subject_hash=SUBJECT_HASH, expected_revision=0, now=NOW
+    )
+    base = _authority()
+    long_lived = CardAuthority(
+        access_id="oauth-longlived",
+        client_id=base.client_id,
+        grantor_subject=base.grantor_subject,
+        delegate_subject=base.delegate_subject,
+        source="oauth",
+        card_revision=1,
+        resource_grants=base.resource_grants,
+        named_service_operations=base.named_service_operations,
+        created_at=NOW,
+        expires_at=NOW + 180 * 24 * 3600,
+    )
+    await service.commit(long_lived, subject_hash=SUBJECT_HASH, expected_revision=0, now=NOW)
+
+    later = NOW + 8 * 24 * 3600
+    resolver = DelegatedCardResolver(cache=cache, store=store)
+    listed = await resolver.list_active(subject_hash=SUBJECT_HASH, now=later)
+    assert [item.access_id for item in listed] == ["oauth-longlived"]

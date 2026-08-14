@@ -71,6 +71,12 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cac
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.catalog.publisher import (
     ensure_delegated_catalog,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cards.persistence import (
+    DurableCardPersistence,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cards.store import (
+    BundleStorageDelegatedCardStore,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.catalog.resolver import (
     DelegatedCatalogResolver,
 )
@@ -580,6 +586,15 @@ def _bind_delegated_client_request_config(entrypoint: Any, request: Any) -> Dict
             )
         except Exception:
             request.state.connections_delegated_config = None
+        # The delegated-access service is composed here because only the bundle
+        # knows its storage root and catalog. SDK request code receives the
+        # capability and never builds it. Lazy: most OAuth requests never touch
+        # it, and the frozen config keeps a later build consistent with what
+        # this request validated.
+        parsed = oauth_delegated_config(request)
+        request.state.automation_access_factory = (
+            lambda: _automation_access_service_for(entrypoint, parsed)
+        )
     return cfg
 
 
@@ -606,15 +621,45 @@ def _delegated_catalog_resolver(entrypoint: Any, redis: Any) -> Any:
     )
 
 
-def _automation_access_service(entrypoint: Any, request: Any) -> AutomationAccessService:
+def _delegated_card_persistence(entrypoint: Any, redis: Any) -> Any:
+    """Durable card persistence, or ``None`` when bundle storage is
+    unavailable — card operations then fail closed."""
+    storage_root = entrypoint.bundle_storage_root()
+    if storage_root is None:
+        return None
+    tenant, project = _runtime_tenant_project(entrypoint)
+    return DurableCardPersistence(
+        redis=redis,
+        tenant=tenant,
+        project=project,
+        card_store=BundleStorageDelegatedCardStore(storage_root),
+        settings=DelegatedCacheSettings.from_connections(_connections_config(entrypoint)),
+    )
+
+
+def _automation_access_service_for(entrypoint: Any, config: Any) -> AutomationAccessService:
+    """Build the service against an already-resolved delegated-client config.
+
+    The config is the request's authorization input, so it is frozen by the
+    caller rather than re-read here: bundle props are runtime-mutable, and a
+    later rebuild could otherwise act under a config the handler never
+    validated.
+    """
     tenant, project = _runtime_tenant_project(entrypoint)
     redis = getattr(entrypoint, "redis", None) or get_async_redis_client(get_settings().REDIS_URL)
     return AutomationAccessService(
         redis=redis,
         tenant=tenant,
         project=project,
-        config=_delegated_oauth_config_from_entrypoint(entrypoint, request),
+        config=config,
         catalog_resolver=_delegated_catalog_resolver(entrypoint, redis),
+        card_persistence=_delegated_card_persistence(entrypoint, redis),
+    )
+
+
+def _automation_access_service(entrypoint: Any, request: Any) -> AutomationAccessService:
+    return _automation_access_service_for(
+        entrypoint, _delegated_oauth_config_from_entrypoint(entrypoint, request)
     )
 
 

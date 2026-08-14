@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import time
 import re
 
 import pytest
@@ -34,6 +36,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oau
     GrantStore,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.tests.helpers import (
+    bind_delegated_card_persistence,
     enable_delegated_client,
     mount_test_oauth_adapter,
 )
@@ -273,7 +276,7 @@ async def _mint_access_token(sub, scopes):
     }
 
 
-def _route_client(document):
+def _route_client(document, *, card_storage_root=None):
     app = FastAPI()
     enable_delegated_client(app, issuer=ISSUER)
     app.state.oauth_delegated_config["client_id_metadata_documents"] = {
@@ -291,6 +294,18 @@ def _route_client(document):
     app.state.oauth_authenticate = _authenticate
     app.state.oauth_grant_store = GrantStore(FakeRedis(), tenant="home", project="demo")
     app.state.oauth_mint_access_token = _mint_access_token
+    if card_storage_root is not None:
+        # Token issuance commits a delegated card, so a test that exchanges a
+        # code needs the capability a bundle binds in production.
+        if not os.environ.get("REDIS_URL"):
+            pytest.skip("REDIS_URL is not set; token issuance commits a delegated card")
+        import redis.asyncio as redis_asyncio
+
+        bind_delegated_card_persistence(
+            app,
+            redis=redis_asyncio.from_url(os.environ["REDIS_URL"]),
+            storage_root=card_storage_root,
+        )
     return TestClient(app), calls
 
 
@@ -356,9 +371,52 @@ def test_metadata_client_rejects_mismatched_document_identity():
     assert response.json()["error"] == "invalid_client_metadata"
 
 
-def test_metadata_client_survives_code_refresh_and_revocation_lifecycle():
-    client, _calls = _route_client(_document())
+
+def _seed_live_card(store, refresh_record) -> None:
+    """The live card projection the refresh path reads."""
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cache_io import (
+        encode_cache_value,
+    )
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cards.cache import (
+        DelegatedCardRuntimeCache,
+    )
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cards.model import (
+        CardAuthority,
+        NamedServiceSelection,
+    )
+
+    credential = refresh_record.get("credential") or {}
+    access_id = str(refresh_record["registry_access_id"])
+    resource = str(refresh_record.get("resource") or "") or "*"
+    authority = CardAuthority(
+        access_id=access_id,
+        client_id=str(refresh_record.get("client_id") or ""),
+        grantor_subject=str(refresh_record.get("sub") or ""),
+        delegate_subject=str(credential.get("subject") or ""),
+        source="oauth",
+        card_revision=1,
+        operations=tuple(refresh_record.get("operations") or ()),
+        resource_grants={resource: tuple(refresh_record.get("scopes") or ())},
+        named_service_operations=NamedServiceSelection.unknown(),
+        expires_at=int(time.time()) + 3600,
+    )
+    cache = DelegatedCardRuntimeCache(None, tenant="home", project="demo")
+    store.redis.values[cache.card_key(access_id)] = encode_cache_value(
+        {"kind": "card", "card_revision": 1, "authority": authority.to_dict()}
+    )
+
+
+def test_metadata_client_survives_code_refresh_and_revocation_lifecycle(tmp_path):
+    client, _calls = _route_client(_document(), card_storage_root=tmp_path)
     store = client.app.state.oauth_grant_store
+    # Entered as a context manager so every request runs on the same event
+    # loop: the Redis client the card persistence holds cannot survive a
+    # per-request loop.
+    with client:
+        _run_metadata_client_lifecycle(client, store)
+
+
+def _run_metadata_client_lifecycle(client, store):
     shown = client.get(
         "/oauth/authorize",
         params=_authorize_params(),
@@ -403,6 +461,7 @@ def test_metadata_client_survives_code_refresh_and_revocation_lifecycle():
     assert refresh_record["client_metadata"]["client_name"] == (
         "Example desktop client"
     )
+    _seed_live_card(store, refresh_record)
 
     refreshed = client.post(
         "/oauth/token",

@@ -24,11 +24,13 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cac
     DelegatedCacheSettings,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cards.cache import (
+    CardCacheEntry,
+    CardCacheUnusable,
     DelegatedCardRuntimeCache,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cards.model import (
-    CARD_STATE_ACTIVE,
     CardAuthority,
+    authority_is_usable,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cards.store import (
     BundleStorageDelegatedCardStore,
@@ -63,8 +65,16 @@ class DelegatedCardResolver:
     ) -> CardAuthority | None:
         moment = int(now if now is not None else time.time())
 
+        entry: CardCacheEntry | None = None
         try:
             entry = await self._cache.read(access_id)
+        except CardCacheUnusable:
+            # Unusable cache data is not authority: fall through to the durable
+            # revision, which also repairs the projection.
+            _LOGGER.warning(
+                "[connection-hub.delegated-cards] unusable projection card=%s; reading durable",
+                access_id,
+            )
         except CardStorageError:
             raise
         except Exception as exc:
@@ -79,7 +89,7 @@ class DelegatedCardResolver:
                 return None
             authority = entry.authority
             if authority is not None:
-                return authority if self._usable(authority, moment) else None
+                return authority if authority_is_usable(authority, moment) else None
 
         return await self._restore(subject_hash=subject_hash, access_id=access_id, moment=moment)
 
@@ -96,7 +106,7 @@ class DelegatedCardResolver:
             return None
 
         _, authority = current
-        if not self._usable(authority, moment):
+        if not authority_is_usable(authority, moment):
             # Expired or revoked durable state denies and is never re-cached.
             return None
 
@@ -167,7 +177,7 @@ class DelegatedCardResolver:
             if current is None:
                 continue
             _, authority = current
-            if not self._usable(authority, moment):
+            if not authority_is_usable(authority, moment):
                 continue
             await self._cache.index_add(
                 subject_hash=subject_hash,
@@ -187,11 +197,6 @@ class DelegatedCardResolver:
                 exc_info=True,
             )
 
-    @staticmethod
-    def _usable(authority: CardAuthority, moment: int) -> bool:
-        if authority.state != CARD_STATE_ACTIVE:
-            return False
-        return authority.expires_at > moment
 
 
 __all__ = ["CardUnavailable", "DelegatedCardResolver"]

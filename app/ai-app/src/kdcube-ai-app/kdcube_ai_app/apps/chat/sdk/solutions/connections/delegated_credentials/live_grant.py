@@ -5,21 +5,27 @@
 
 from __future__ import annotations
 
-import json
+import hashlib
 import time
-from typing import Any, Mapping
+from typing import Any
 
-from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.automation_access import (
-    ACCESS_SOURCE_AGENT,
-    ACCESS_SOURCE_MANUAL,
-    ACCESS_SOURCE_OAUTH,
-    AUTOMATION_ACCESS_SCHEMA,
-    AutomationAccessRecord,
-    automation_record_key,
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cards.cache import (
+    CardCacheUnusable,
+    DelegatedCardRuntimeCache,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cards.model import (
+    CARD_STATE_ACTIVE,
+    CardAuthority,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cards.resolver import (
+    CardUnavailable,
+    DelegatedCardResolver,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.credential_view import (
     resource_matches,
 )
+
+ACCESS_SOURCES = ("manual", "oauth", "agent")
 
 
 class LiveGrantCardError(RuntimeError):
@@ -46,48 +52,56 @@ async def resolve_live_grant_card(
     expected_client_id: str = "",
     expected_grantor_subject: str = "",
     expected_delegate_subject: str = "",
-) -> AutomationAccessRecord | None:
+    card_store: Any = None,
+) -> CardAuthority | None:
     """Return the current valid card, None when revoked/expired, or raise.
 
     A pointer-bearing token has no snapshot fallback. Store failures, malformed
-    records, and binding mismatches are authorization failures.
+    records, and binding mismatches are authorization failures. A card whose
+    Redis projection is missing is restored from its durable revision when a
+    card store and the binding's grantor are both available.
     """
 
     pointer = _required_text(access_id, "access_id_missing")
-    try:
-        raw = await redis.get(automation_record_key(tenant, project, pointer))
-    except Exception as exc:
-        raise LiveGrantCardError("lookup_unavailable") from exc
-    if raw is None:
+    cache = DelegatedCardRuntimeCache(redis, tenant=tenant, project=project)
+    grantor = str(expected_grantor_subject or "").strip()
+    subject_hash = hashlib.sha256(grantor.encode("utf-8")).hexdigest() if grantor else ""
+
+    if card_store is not None and subject_hash:
+        resolver = DelegatedCardResolver(cache=cache, store=card_store)
+        try:
+            record = await resolver.resolve(subject_hash=subject_hash, access_id=pointer)
+        except CardUnavailable as exc:
+            raise LiveGrantCardError(exc.reason) from exc
+    else:
+        try:
+            entry = await cache.read(pointer)
+        except CardCacheUnusable as exc:
+            # The guard has no durable source by design, so a damaged
+            # projection is unavailability, not a revoked card.
+            raise LiveGrantCardError(exc.reason) from exc
+        except Exception as exc:
+            raise LiveGrantCardError("lookup_unavailable") from exc
+        if entry is None:
+            return None
+        if entry.is_updating:
+            raise LiveGrantCardError("card_updating")
+        if entry.is_revoked:
+            return None
+        record = entry.authority
+
+    if record is None:
         return None
-    try:
-        payload = json.loads(raw)
-    except Exception as exc:
-        raise LiveGrantCardError("malformed_json") from exc
-    if not isinstance(payload, Mapping):
-        raise LiveGrantCardError("record_not_object")
-    if str(payload.get("schema") or "").strip() != AUTOMATION_ACCESS_SCHEMA:
-        raise LiveGrantCardError("schema_mismatch")
-    if not isinstance(payload.get("resource_grants"), Mapping):
-        raise LiveGrantCardError("resource_grants_invalid")
-    if not isinstance(payload.get("operations"), list):
-        raise LiveGrantCardError("operations_invalid")
-    for field_name in ("account_scope", "named_service_operations", "named_services"):
-        value = payload.get(field_name)
-        if value is not None and not isinstance(value, Mapping):
-            raise LiveGrantCardError(f"{field_name}_invalid")
-    try:
-        record = AutomationAccessRecord.from_mapping(payload)
-    except Exception as exc:
-        raise LiveGrantCardError("record_invalid") from exc
 
     _required_text(record.client_id, "client_id_missing")
     _required_text(record.grantor_subject, "grantor_subject_missing")
     _required_text(record.delegate_subject, "delegate_subject_missing")
     if record.access_id != pointer:
         raise LiveGrantCardError("access_id_mismatch")
-    if record.source not in {ACCESS_SOURCE_MANUAL, ACCESS_SOURCE_OAUTH, ACCESS_SOURCE_AGENT}:
+    if record.source not in ACCESS_SOURCES:
         raise LiveGrantCardError("source_invalid")
+    if record.state != CARD_STATE_ACTIVE:
+        return None
     if record.expires_at <= 0:
         raise LiveGrantCardError("expiry_missing")
     if record.expires_at <= int(time.time()):
@@ -106,7 +120,7 @@ async def resolve_live_grant_card(
 
 
 def live_grants_for_resource(
-    record: AutomationAccessRecord,
+    record: CardAuthority,
     resource: str,
 ) -> tuple[str, ...] | None:
     """Return the live grant union for a resource, preserving an empty grant."""

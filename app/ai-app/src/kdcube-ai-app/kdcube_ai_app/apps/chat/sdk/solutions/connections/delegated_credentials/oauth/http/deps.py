@@ -162,6 +162,29 @@ def get_grant_store(request: Request) -> Any:
     return GrantStore(redis, tenant, project)
 
 
+class AutomationAccessUnavailable(RuntimeError):
+    """No delegated-access capability was bound to this request."""
+
+
+def get_automation_access(request: Request) -> Any:
+    """The delegated-access service the hosting app bound to this request.
+
+    Request code consumes the capability; composing it belongs to the app that
+    owns card storage and the delegated catalog. An unbound request fails
+    closed rather than building a service with unknown storage.
+    """
+    factory = getattr(getattr(request, "state", None), "automation_access_factory", None)
+    if not callable(factory):
+        # A host that mounts the router instead of calling the handlers binds
+        # the capability once, at application scope.
+        factory = getattr(
+            getattr(request.app, "state", None), "automation_access_factory", None
+        )
+    if not callable(factory):
+        raise AutomationAccessUnavailable("automation_access_not_bound")
+    return factory()
+
+
 def get_access_token_minter(request: Request) -> Callable[[str, list], Awaitable[dict]]:
     """Returns ``async (sub, scopes) -> {access_token, expires_in}``."""
     fn = getattr(request.app.state, "oauth_mint_access_token", None)

@@ -15,6 +15,7 @@ section, updating marker, ordered commit — belongs to the card service.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import pathlib
 import re
@@ -51,6 +52,11 @@ _REVISION_NAME_PATTERN = re.compile(
 
 class CardStorageError(DurableStorageError):
     """Durable card storage could not be read or written."""
+
+
+def subject_hash_for(grantor_subject: str) -> str:
+    """The storage scope a grantor's cards live under."""
+    return hashlib.sha256(str(grantor_subject or "").encode("utf-8")).hexdigest()
 
 
 def validated_subject_hash(subject_hash: str) -> str:
@@ -223,5 +229,6 @@ __all__ = [
     "REVISIONS_DIRNAME",
     "validated_access_id",
     "validated_revision_name",
+    "subject_hash_for",
     "validated_subject_hash",
 ]

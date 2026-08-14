@@ -329,6 +329,13 @@ class CardCredentialHandles:
         return not (self.access_token or self.refresh_token or self.session_id)
 
 
+def authority_is_usable(authority: "CardAuthority", moment: int) -> bool:
+    """Whether this authority may still be served at ``moment``."""
+    if authority.state != CARD_STATE_ACTIVE:
+        return False
+    return authority.expires_at > moment
+
+
 def card_revision_name(*, card_revision: int, content_hash: str, updated_at: datetime) -> str:
     """Timestamp-first, ordered, verifiable immutable revision object name."""
     return (
@@ -416,5 +423,6 @@ __all__ = [
     "CardCurrentPointer",
     "CardRecordError",
     "NamedServiceSelection",
+    "authority_is_usable",
     "card_revision_name",
 ]
