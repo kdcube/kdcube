@@ -117,6 +117,11 @@ export interface DelegatedAccessResourceOption {
 
 export type DelegatedAccessNamedServiceOperations = Record<string, Record<string, string[]>>;
 
+/** The stored selection as the server returns it, verbatim. `"*"` means every
+ *  operation the acknowledged catalog offers; a map is an exact choice; an
+ *  empty map is an explicit "nothing". Agent grants carry the wildcard. */
+export type DelegatedAccessStoredNamedServices = '*' | DelegatedAccessNamedServiceOperations;
+
 export interface DelegatedAccessRecord {
   access_id: string;
   label?: string;
@@ -124,7 +129,7 @@ export interface DelegatedAccessRecord {
   delegate_subject?: string;
   operations?: string[];
   resource_grants?: Record<string, string[]>;
-  named_service_operations?: DelegatedAccessNamedServiceOperations;
+  named_service_operations?: DelegatedAccessStoredNamedServices;
   /** Per-account claim binding: {provider_id: {account_id: [claims]}}. For a
    *  provider, which connected account(s) this client may use AND, per account,
    *  the claims it may use there. account "*" = any account; claim "*" = any. */

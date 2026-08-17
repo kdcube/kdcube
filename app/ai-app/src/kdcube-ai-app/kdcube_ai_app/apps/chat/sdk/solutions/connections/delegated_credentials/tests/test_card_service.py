@@ -389,3 +389,85 @@ async def test_a_short_card_expiring_does_not_hide_a_long_one(service, store, ca
     resolver = DelegatedCardResolver(cache=cache, store=store)
     listed = await resolver.list_active(subject_hash=SUBJECT_HASH, now=later)
     assert [item.access_id for item in listed] == ["oauth-longlived"]
+
+
+# -- interruption windows ---------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_revision_written_without_becoming_current_is_not_authority(
+    service, store, cache, monkeypatch
+):
+    """The pointer is the commit point, not the revision file.
+
+    An interruption between ``write_revision`` and ``advance_current`` leaves an
+    orphan revision on disk; it must never be served.
+    """
+    await service.commit(_authority(), subject_hash=SUBJECT_HASH, expected_revision=0, now=NOW)
+
+    async def _boom(**kwargs):
+        raise OSError("interrupted before the pointer advanced")
+
+    monkeypatch.setattr(store, "advance_current", _boom)
+    with pytest.raises(CardCommitFailed):
+        await service.commit(
+            _authority(revision=2), subject_hash=SUBJECT_HASH, expected_revision=1, now=NOW
+        )
+    monkeypatch.undo()
+
+    # The orphan revision exists, and the pointer still names the committed one.
+    revisions = await store.list_revision_names(
+        subject_hash=SUBJECT_HASH, access_id=ACCESS_ID
+    )
+    assert len(revisions) == 2
+    current = await store.read_current_authority(
+        subject_hash=SUBJECT_HASH, access_id=ACCESS_ID
+    )
+    assert current[1].card_revision == 1
+
+    assert await cache.read(ACCESS_ID) is None
+    resolver = DelegatedCardResolver(cache=cache, store=store)
+    resolved = await resolver.resolve(
+        subject_hash=SUBJECT_HASH, access_id=ACCESS_ID, now=NOW
+    )
+    assert resolved.card_revision == 1
+
+
+@pytest.mark.asyncio
+async def test_a_committed_revision_is_restored_after_the_projection_write_fails(
+    service, store, cache, redis_client, monkeypatch
+):
+    """Durable commit is the point of no return.
+
+    When the projection write fails after it, read-through must restore the NEW
+    revision — never the superseded one.
+    """
+    await service.commit(_authority(), subject_hash=SUBJECT_HASH, expected_revision=0, now=NOW)
+
+    async def _boom(*args, **kwargs):
+        raise ConnectionError("projection write failed")
+
+    monkeypatch.setattr(cache, "commit_projection", _boom)
+    with pytest.raises(ConnectionError):
+        await service.commit(
+            _authority(revision=2), subject_hash=SUBJECT_HASH, expected_revision=1, now=NOW
+        )
+    monkeypatch.undo()
+
+    current = await store.read_current_authority(
+        subject_hash=SUBJECT_HASH, access_id=ACCESS_ID
+    )
+    assert current[1].card_revision == 2
+
+    # The marker outlives the failure; readers fail closed until it expires.
+    resolver = DelegatedCardResolver(cache=cache, store=store)
+    with pytest.raises(CardUnavailable) as exc:
+        await resolver.resolve(subject_hash=SUBJECT_HASH, access_id=ACCESS_ID, now=NOW)
+    assert exc.value.reason == "card_updating"
+
+    # The marker expires; read-through resolves the committed revision.
+    await redis_client.delete(cache.card_key(ACCESS_ID))
+    resolved = await resolver.resolve(
+        subject_hash=SUBJECT_HASH, access_id=ACCESS_ID, now=NOW
+    )
+    assert resolved.card_revision == 2

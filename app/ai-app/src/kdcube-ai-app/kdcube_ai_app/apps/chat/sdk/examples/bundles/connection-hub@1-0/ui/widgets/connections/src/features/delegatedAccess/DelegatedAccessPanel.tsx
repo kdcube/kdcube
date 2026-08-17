@@ -419,6 +419,24 @@ function CountFold({ entries, noun }: { entries: string[]; noun: string }) {
   );
 }
 
+/** The stored selection has three forms and only one of them is a map. A
+ *  wildcard names no operations to list — it means whatever the acknowledged
+ *  catalog offers — so it yields no rows here and the caller says so in words. */
+function isWildcardNamedServices(
+  selection: DelegatedAccessRecord['named_service_operations'],
+): boolean {
+  return typeof selection === 'string';
+}
+
+function namedServiceRows(
+  selection: DelegatedAccessRecord['named_service_operations'],
+): string[] {
+  if (!selection || isWildcardNamedServices(selection)) return [];
+  return Object.values(selection as DelegatedAccessNamedServiceOperations)
+    .flatMap((namespaces) => Object.entries(namespaces || {}))
+    .map(([namespace, operations]) => `${namespace} (${(operations || []).join(', ')})`);
+}
+
 function driftLabel(row: { resource: string; namespace?: string; claim?: string; operation?: string }): string {
   const parts = [doorAlias(row.resource) || row.resource];
   if (row.namespace) parts.push(row.namespace);
@@ -804,16 +822,23 @@ export function DelegatedAccessPanel({ openParams }: { openParams?: Record<strin
     });
     setEditingAccessId(item.access_id);
     setEditPicks(picks);
+    // A wildcard names no operations to seed. Leaving the editor empty makes
+    // the save omit the field, which preserves the stored policy instead of
+    // narrowing the card to nothing.
     setEditNamedServiceOperations(
-      Object.fromEntries(
-        Object.entries(item.named_service_operations || {})
-          .map(([resource, namespaces]) => [
-            resource,
-            Object.fromEntries(
-              Object.entries(namespaces || {}).map(([ns, ops]) => [ns, [...(ops || [])]]),
-            ),
-          ]),
-      ),
+      isWildcardNamedServices(item.named_service_operations)
+        ? {}
+        : Object.fromEntries(
+          Object.entries(
+            (item.named_service_operations || {}) as DelegatedAccessNamedServiceOperations,
+          )
+            .map(([resource, namespaces]) => [
+              resource,
+              Object.fromEntries(
+                Object.entries(namespaces || {}).map(([ns, ops]) => [ns, [...(ops || [])]]),
+              ),
+            ]),
+        ),
     );
     setEditAccountScope(seedAccountScopeFromRecord(item));
     setEditLabel(item.label || '');
@@ -1451,12 +1476,10 @@ export function DelegatedAccessPanel({ openParams }: { openParams?: Record<strin
                                   </Field>
                                 </Fragment>
                               ))}
-                              {item.named_service_operations && Object.keys(item.named_service_operations).length ? (
+                              {namedServiceRows(item.named_service_operations).length ? (
                                 <Field label="Services">
                                   <CountFold
-                                    entries={Object.values(item.named_service_operations)
-                                      .flatMap((namespaces) => Object.entries(namespaces))
-                                      .map(([namespace, operations]) => `${namespace} (${operations.join(', ')})`)}
+                                    entries={namedServiceRows(item.named_service_operations)}
                                     noun="service"
                                   />
                                 </Field>
@@ -1685,11 +1708,10 @@ export function DelegatedAccessPanel({ openParams }: { openParams?: Record<strin
                         <Field label="Operations"><CountFold entries={item.operations} noun="operation" /></Field>
                       ) : null}
                       {(() => {
-                        // A grant can carry an EMPTY namespace map; render the
-                        // row only when it actually names services.
-                        const services = Object.values(item.named_service_operations || {})
-                          .flatMap((namespaces) => Object.entries(namespaces))
-                          .map(([namespace, operations]) => `${namespace} (${operations.join(', ')})`);
+                        // A grant can carry an EMPTY namespace map, or a
+                        // wildcard that names none; render the row only when it
+                        // actually names services.
+                        const services = namedServiceRows(item.named_service_operations);
                         return services.length ? (
                           <Field label="Services"><CountFold entries={services} noun="service" /></Field>
                         ) : null;

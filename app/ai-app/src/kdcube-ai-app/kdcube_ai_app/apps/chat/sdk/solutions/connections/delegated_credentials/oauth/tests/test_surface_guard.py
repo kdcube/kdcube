@@ -44,6 +44,9 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.car
     BundleStorageDelegatedCardStore,
     subject_hash_for,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.serving import (
+    SERVING_RESOLVERS_ATTR,
+)
 
 GUARD_RESOURCE = "http://testserver/guard"
 
@@ -1301,3 +1304,53 @@ async def test_unreadable_durable_state_is_unavailability_not_a_denial(
 
     assert response.status_code == 503
     assert response.json()["error"] == "temporarily_unavailable"
+
+
+def test_a_capability_the_catalog_still_offers_keeps_the_consent_path(monkeypatch):
+    """A card that never held a capability is not a withdrawn capability.
+
+    Collapsing the two would answer "no longer available" to someone who only
+    has to grant it, and consent is not offered for a withdrawn capability.
+    """
+    client = _client(
+        monkeypatch,
+        grant_record={"operations": [], "credential": _authority()},
+    )
+
+    response = client.post(
+        "/guard", json=_rpc_tool_call(), headers={"Authorization": "Bearer reader"},
+    )
+
+    assert response.status_code == 200
+    result = response.json()["result"]
+    assert result["isError"] is True
+    text = result["content"][0]["text"]
+    assert "not consented" in text
+    assert "delegated_capability_no_longer_available" not in text
+
+
+def test_a_removed_capability_denial_reads_no_historical_catalog(monkeypatch):
+    """Governed execution intersects with the active catalog and nothing else."""
+    client = _client(
+        monkeypatch,
+        connections=_connections_without(resource=False),
+        grant_record={"operations": ["records_export"], "credential": _authority()},
+    )
+    resolvers = getattr(client.app.state, SERVING_RESOLVERS_ATTR)
+    catalog = resolvers.catalog
+    reads: list[str] = []
+    original = catalog.resolve_version
+
+    async def _counted(version: str):
+        reads.append(version)
+        return await original(version)
+
+    catalog.resolve_version = _counted
+
+    response = client.post(
+        "/guard", json=_rpc_tool_call(), headers={"Authorization": "Bearer reader"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "delegated_capability_no_longer_available"
+    assert reads == []
