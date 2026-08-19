@@ -4,10 +4,10 @@ import type {
   DelegatedAccessCreateResult,
   DelegatedAccessGrantOption,
   DelegatedAccessListResult,
-  DelegatedAccessNamedServiceOperations,
   DelegatedAccessRecord,
   DelegatedAccessResourceOption,
   DelegatedAccessRevokeResult,
+  DelegatedAccessStoredNamedServices,
 } from '../../api/types';
 
 export interface DelegatedAccessState {
@@ -60,7 +60,9 @@ export interface CreateDelegatedAccessArgs {
   label: string;
   resourceGrants: Record<string, string[]>;
   operations?: string[];
-  namedServiceOperations: DelegatedAccessNamedServiceOperations;
+  /** `"*"` when every operation the current catalog offers for the selected
+   *  resources is ticked, an exact map otherwise, {} for nothing. */
+  namedServiceOperations: DelegatedAccessStoredNamedServices;
   /** Per-account binding {provider:{account_id:[claims]}}. Undefined preserves
    *  an existing binding; {} explicitly restricts the caller to no accounts. */
   accountScope?: Record<string, Record<string, string[]>>;
@@ -149,9 +151,10 @@ export interface UpdateDelegatedAccessArgs {
   label: string;
   resourceGrants: Record<string, string[]>;
   operations?: string[];
-  /** Namespace narrowing {resource:{namespace:[operation]}}. Undefined preserves
-   *  the record's; {} narrows every resource to nothing. */
-  namedServiceOperations?: DelegatedAccessNamedServiceOperations;
+  /** Namespace narrowing {resource:{namespace:[operation]}}, or `"*"` when the
+   *  operator ticked every operation the current catalog offers. Undefined
+   *  preserves the record's; {} narrows every resource to nothing. */
+  namedServiceOperations?: DelegatedAccessStoredNamedServices;
   /** Per-account binding {provider:{account_id:[claims]}}. Undefined preserves
    *  an existing binding; {} explicitly restricts the caller to no accounts. */
   accountScope?: Record<string, Record<string, string[]>>;

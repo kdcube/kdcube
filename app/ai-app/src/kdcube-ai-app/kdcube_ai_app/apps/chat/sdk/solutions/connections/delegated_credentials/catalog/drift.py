@@ -50,7 +50,10 @@ class _CatalogView:
         self._config = oauth_delegated_config_from_connections(document.connections)
 
     def resource(self, resource: str) -> Any:
-        return self._config.resource_config(resource)
+        # A card selector, so the all-resource row answers only a card that
+        # holds it: otherwise a withdrawn door reads as still offered and its
+        # claims are reported "already ineffective" while they still work.
+        return self._config.card_selector_config(resource)
 
     def claims(self, resource: str) -> set[str] | None:
         """``None`` when the resource declares no claim ceiling."""
@@ -80,12 +83,16 @@ class _CatalogView:
         return configured_named_service_operations(block)
 
 
-def _selected_named_service_operations(card: Any) -> dict[str, dict[str, set[str]]]:
+def selected_named_service_operations(card: Any) -> dict[str, dict[str, set[str]]]:
     """``resource -> namespace -> operations`` the card selected.
 
     An exact selection says it directly. A wildcard or a pre-encoding card is
     read from the materialized boundary, which is that selection expanded under
     the catalog version the card was saved against.
+
+    Derived, never authority. Drift computes against it, and the public card
+    projection carries it so a surface can render a wildcard card's actual
+    coverage instead of an empty picker.
     """
     selection = card.named_service_operations
     out: dict[str, dict[str, set[str]]] = {}
@@ -119,7 +126,7 @@ def _removed(
     outer_operations: list[dict[str, Any]] = []
     named_service_operations: list[dict[str, Any]] = []
 
-    selected_inner = _selected_named_service_operations(card)
+    selected_inner = selected_named_service_operations(card)
     selected_outer = {_clean(name) for name in (card.operations or ()) if _clean(name)}
 
     for raw_resource, grants in card.resource_grants.items():
@@ -289,4 +296,5 @@ __all__ = [
     "EFFECT_DENIED",
     "card_drift",
     "drift_unavailable",
+    "selected_named_service_operations",
 ]

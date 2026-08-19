@@ -49,12 +49,20 @@ def operation_grants(policy: Mapping[str, Any], fallback: Mapping[str, Any]) -> 
 
 def configured_named_service_operations(
     config: Mapping[str, Any] | None,
+    *,
+    grants: Iterable[str] | None = None,
 ) -> dict[str, set[str]]:
     """``namespace -> operations`` a named-service descriptor configures.
 
     Namespace keys are normalized the way a selection normalizes them;
     operations keep the descriptor's own spelling.
+
+    With ``grants``, only operations those claims authorize are returned. A
+    boundary materialized from a wildcard is the descriptor tree unfiltered —
+    the claim check happens per call — so anything turning a boundary back into
+    a storable selection has to apply that filter itself.
     """
+    available = set(as_string_list(list(grants))) if grants is not None else None
     namespaces = config.get("namespaces") if isinstance(config, Mapping) else None
     if not isinstance(namespaces, Mapping):
         return {}
@@ -71,15 +79,53 @@ def configured_named_service_operations(
                 continue
             operation_policies = raw_tool_policy.get("operations")
             if isinstance(operation_policies, Mapping) and operation_policies:
-                for operation in operation_policies:
+                for operation, raw_operation_policy in operation_policies.items():
                     value = clean_text(operation)
-                    if value:
-                        operations.add(value)
+                    if not value:
+                        continue
+                    if available is not None:
+                        required = operation_grants(
+                            dict(raw_operation_policy)
+                            if isinstance(raw_operation_policy, Mapping)
+                            else {},
+                            dict(raw_tool_policy),
+                        )
+                        if not required.issubset(available):
+                            continue
+                    operations.add(value)
                 continue
             value = clean_text(raw_tool_policy.get("operation") or tool_name)
-            if value:
-                operations.add(value)
+            if not value:
+                continue
+            if available is not None and not operation_grants(
+                dict(raw_tool_policy), {}
+            ).issubset(available):
+                continue
+            operations.add(value)
     return out
+
+
+def boundary_permits_operation(
+    named_services: Mapping[str, Any] | None,
+    *,
+    namespace: str,
+    operation: str,
+) -> bool:
+    """Whether a card's materialized boundary covers one inner operation.
+
+    The boundary is the card's selection already expanded under the catalog
+    version it was saved against, so it answers every stored state without
+    re-deriving one: an exact map narrowed it, ``{}`` produced an empty tree,
+    and ``"*"`` produced the expansion of that generation — which is why a
+    wildcard card does not gain operations added later.
+
+    An absent boundary is not an empty one. A pre-encoding record carries no
+    tree and is not decided here; its caller owns that compatibility path.
+    """
+    offered = configured_named_service_operations(named_services)
+    return clean_text(operation) in offered.get(
+        clean_text(namespace).lower().rstrip(":"), set()
+    )
 
 
 def narrow_named_service_config(
@@ -240,6 +286,7 @@ def named_service_policy_for_resource(
 
 __all__ = [
     "as_string_list",
+    "boundary_permits_operation",
     "clean_text",
     "configured_named_service_operations",
     "merge_named_service_configs",

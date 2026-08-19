@@ -55,7 +55,9 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oau
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.named_service_policy import (
     as_string_list,
+    boundary_permits_operation,
     clean_text,
+    configured_named_service_operations,
     merge_named_service_configs,
     named_service_policy_for_resource,
     narrow_named_service_config,
@@ -88,6 +90,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cat
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.catalog.drift import (
     card_drift,
     drift_unavailable,
+    selected_named_service_operations,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.catalog.reconcile import (
     reconcile_selection,
@@ -99,6 +102,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cat
     CardProvenance,
     authorize_current_capability,
     capability_denial,
+    card_boundary_denial,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.boundary_policy import (
     NamedServiceBoundaryCatalog,
@@ -411,6 +415,46 @@ def _selection_policy_argument(
     }
 
 
+def _inherited_selection(
+    existing: "AutomationAccessRecord",
+    grants_by_resource: Mapping[str, Iterable[str]] | None = None,
+) -> NamedServiceSelection:
+    """The selection an edit that never mentioned it carries forward.
+
+    A wildcard is bound to the catalog version the card was saved against, so
+    an unrelated edit must not re-pin it to the current one: it is frozen into
+    the exact set it already means. The materialized boundary is that expansion
+    by construction, so freezing needs no historical catalog document and works
+    even when the referenced version is gone.
+
+    An explicitly submitted ``"*"`` does not come through here — that one is
+    consent to everything the current catalog shows.
+    """
+    selection = existing.named_service_operations
+    if not selection.is_all:
+        return selection
+    # Filtered by the claims THIS save persists, not the ones the record used to
+    # hold: a wildcard boundary is the descriptor tree unfiltered, an exact
+    # selection may only name what the card can actually invoke, and an edit
+    # that widens claims must not lose the namespaces those claims just opened.
+    held = dict(grants_by_resource) if grants_by_resource is not None else dict(existing.resource_grants)
+    frozen: dict[str, dict[str, list[str]]] = {}
+    for resource, grants in held.items():
+        offered = configured_named_service_operations(
+            existing.named_services, grants=list(grants or ())
+        )
+        per_namespace = {
+            namespace: sorted(operations)
+            for namespace, operations in offered.items()
+            if operations
+        }
+        if per_namespace:
+            frozen[resource] = per_namespace
+    if not frozen:
+        return NamedServiceSelection.none()
+    return NamedServiceSelection.exact(frozen)
+
+
 def _materialized_has_namespaces(named_services: Any) -> bool:
     if not isinstance(named_services, Mapping):
         return False
@@ -563,6 +607,21 @@ class AutomationAccessRecord:
         public = {key: value for key, value in payload.items() if value not in ("", [], {})}
         if selection is not None:
             public["named_service_operations"] = selection
+        # Derived, never authority: the selection expanded under the version the
+        # card was saved against. "*" and a pre-encoding record name no
+        # operations, so without this a surface can only render them as an empty
+        # picker — indistinguishable from an explicit {}.
+        effective = {
+            resource: {
+                namespace: sorted(operations)
+                for namespace, operations in namespaces.items()
+                if operations
+            }
+            for resource, namespaces in selected_named_service_operations(self).items()
+        }
+        effective = {resource: rows for resource, rows in effective.items() if rows}
+        if effective:
+            public["effective_named_service_operations"] = effective
         return public
 
 
@@ -1103,7 +1162,7 @@ class AutomationAccessService:
         label: str,
         resource_grants: Mapping[str, Any],
         operations: Iterable[str] = (),
-        named_service_operations: Mapping[str, Any] | None = None,
+        named_service_operations: Mapping[str, Any] | str | None = None,
         account_scope: Mapping[str, Any] | None = None,
         ttl_seconds: Any = None,
         client_id: str | None = None,
@@ -1272,7 +1331,9 @@ class AutomationAccessService:
                 if not merge_existing and selected_named_service_operations is None:
                     # Same rule for the namespace narrowing: omitting it keeps
                     # the record's own state, including an explicit empty one.
-                    selected_named_service_operations = existing.named_service_operations
+                    selected_named_service_operations = _inherited_selection(
+                        existing, selected_resource_grants
+                    )
             if existing is not None and merge_existing:
                 for resource_key, held in existing.resource_grants.items():
                     merged = list(selected_resource_grants.get(resource_key, []))
@@ -1285,13 +1346,19 @@ class AutomationAccessService:
                     for grants_for_resource in selected_resource_grants.values()
                     for grant in grants_for_resource
                 ])
-                if selected_named_service_operations is not None:
+                # The card's own side is frozen before it is merged into: a
+                # consent screen names a door and its claims, never the inner
+                # namespaces, so it is not the reviewed explicit "*" that may
+                # re-pin. Computed after the claim merge above, because the
+                # freeze is filtered by the claims THIS save persists.
+                inherited = _inherited_selection(existing, selected_resource_grants)
+                if selected_named_service_operations is None:
+                    selected_named_service_operations = inherited
+                else:
                     # A one-click extension accumulates: the merged boundary is
                     # the wider of what the card holds and what was submitted.
                     selected_named_service_operations = (
-                        selected_named_service_operations.union(
-                            existing.named_service_operations
-                        )
+                        selected_named_service_operations.union(inherited)
                     )
                 # Merge the account binding per provider AND per account: union
                 # the claim lists (a one-click grant accumulates; a REPLACE edit
@@ -1462,7 +1529,7 @@ class AutomationAccessService:
         *,
         access_id: str,
         resource_grants: Mapping[str, Any],
-        named_service_operations: Mapping[str, Any] | None = None,
+        named_service_operations: Mapping[str, Any] | str | None = None,
         account_scope: Mapping[str, Any] | None = None,
         label: str | None = None,
         expected_card_revision: int | None = None,
@@ -1538,7 +1605,9 @@ class AutomationAccessService:
         # Resolved before pruning: pruning acts on the selection about to be
         # persisted. Omitted keeps the record's own state; legacy becomes "*".
         if selected_named_service_operations is None:
-            selected_named_service_operations = existing.named_service_operations
+            selected_named_service_operations = _inherited_selection(
+                existing, selected_resource_grants
+            )
         if selected_named_service_operations.is_unknown:
             selected_named_service_operations = NamedServiceSelection.all()
 
@@ -1769,6 +1838,12 @@ class AutomationAccessService:
             {"removed": <structured denial>}   the card holds it, the catalog
                                                no longer offers it
             CatalogUnavailable                 current authority is unknown
+
+        A refusal says WHICH side refused: ``missing_claims`` when the card
+        lacks the claims, ``not_granted`` (a structured card-side denial) when
+        it holds them and only its own boundary excludes the operation. Without
+        that, a caller reads every refusal as "ask for consent" and loops on
+        claims the card already carries.
         """
         ns = _clean(namespace).lower().rstrip(":")
         op = _clean(operation)
@@ -1838,19 +1913,48 @@ class AutomationAccessService:
             if removed is not None:
                 return {"governed": True, "granted": False, "removed": removed}
             granted = False
+            missing_claims: list[str] = sorted(required)
+            not_granted: dict[str, Any] | None = None
             if record is not None:
                 held = set(record.resource_grants.get(cfg.resource, ()))
-                granted = required.issubset(held)
-                selection = record.named_service_operations
-                if granted and selection.is_none:
-                    granted = False
-                elif granted and selection.is_exact:
-                    narrowed = selection.operations.get(cfg.resource)
-                    if narrowed:
-                        granted = op in set(narrowed.get(ns, ()))
+                missing_claims = sorted(required - held)
+                granted = not missing_claims
+                if granted:
+                    # The materialized boundary is the card's answer, the same
+                    # tree the named-services door enforces. Reading the
+                    # selection instead loses the wildcard, whose meaning is
+                    # "everything the acknowledged catalog offered" — an
+                    # expansion that lives in the boundary, not in the intent.
+                    # A pre-encoding record carries no boundary and keeps its
+                    # claims-only compatibility answer.
+                    if not record.named_service_operations.is_unknown:
+                        granted = boundary_permits_operation(
+                            record.named_services, namespace=ns, operation=op
+                        )
+                        if not granted:
+                            # The claims are held and the catalog offers this;
+                            # only the card's own boundary excludes it. Saying
+                            # so is what keeps the caller out of a consent loop
+                            # for claims it already has.
+                            not_granted = card_boundary_denial(
+                                provenance=CardProvenance(
+                                    access_id=record.access_id,
+                                    card_revision=record.card_revision,
+                                    catalog_version=record.catalog_version,
+                                ),
+                                request=CapabilityRequest(
+                                    kind=CAPABILITY_NAMED_SERVICE_OPERATION,
+                                    resource=cfg.resource,
+                                    surface="named_service",
+                                    namespace=ns,
+                                    operation=op,
+                                ),
+                            )
             return {
                 "governed": True,
                 "granted": granted,
+                "not_granted": not_granted,
+                "missing_claims": missing_claims,
                 "resource": cfg.resource,
                 "claims": sorted(required),
                 "client_id": client_id,

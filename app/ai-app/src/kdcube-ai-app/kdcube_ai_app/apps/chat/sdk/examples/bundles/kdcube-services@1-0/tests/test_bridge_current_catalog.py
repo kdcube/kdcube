@@ -243,3 +243,60 @@ async def test_a_card_written_before_the_boundary_field_keeps_the_descriptor():
     bridge = _bridge(module, request, config=copy.deepcopy(NAMED_SERVICES))
 
     assert set(bridge._catalog.namespace_names()) == {"mail"}
+
+
+class _NarrowedPolicy(_Policy):
+    """The card's boundary: the tool is configured, this operation is not."""
+
+    def operation_configured(self, *, tool_name, operation):
+        return operation != "object.search"
+
+
+async def test_an_operation_the_card_does_not_cover_names_its_remedy():
+    """The mirror of the removal denial.
+
+    The catalog still offers this, so the answer is not "gone" — the card's
+    grantor can add it. Without saying so the door returned an anonymous
+    `named_service_operation_not_configured`, and the caller had nothing to act
+    on in the one case where a remedy exists.
+    """
+    module = _bridge_module()
+    bridge = _bridge(module, _request())
+
+    denial = await bridge._authorize(
+        _NarrowedPolicy(), "object.search", tool_name="named_services_search"
+    )
+
+    assert denial is not None
+    assert denial["error"]["code"] == "delegated_capability_not_granted"
+    assert denial["error"]["retryable"] is False
+    ret = denial["ret"]
+    assert ret["access_id"] == "oauth-5aa44826664a0bdd"
+    assert ret["card_revision"] == 8
+    assert ret["card_catalog_version"] == CARD_VERSION
+    assert ret["recovery"] == {
+        "action": "grant_capability_in_delegated_access",
+        "retry_same_request": False,
+        "request_user_consent": True,
+    }
+    assert ret["requested_capability"] == {
+        "kind": "named_service_operation",
+        "resource": RESOURCE,
+        "surface": "named_service",
+        "outer_operation": "named_services_search",
+        "namespace": "mail",
+        "operation": "object.search",
+    }
+
+
+async def test_a_non_delegated_caller_still_gets_the_descriptor_answer():
+    """Nothing to grant and no card to point at: the boundary is the descriptor
+    itself, so the flat configuration error stays."""
+    module = _bridge_module()
+    bridge = _bridge(module, _request(delegated=False))
+
+    denial = await bridge._authorize(
+        _NarrowedPolicy(), "object.search", tool_name="named_services_search"
+    )
+
+    assert denial["error"] == "named_service_operation_not_configured"

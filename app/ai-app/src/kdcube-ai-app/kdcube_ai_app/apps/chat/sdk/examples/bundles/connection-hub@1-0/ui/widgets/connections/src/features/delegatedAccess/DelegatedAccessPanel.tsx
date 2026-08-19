@@ -8,6 +8,7 @@ import type {
   DelegatedAccessNamedServiceOperations,
   DelegatedAccessRecord,
   DelegatedAccessResourceOption,
+  DelegatedAccessStoredNamedServices,
   DelegatedCatalogDrift,
   DelegatedToKdcubeAccount,
 } from '../../api/types';
@@ -428,13 +429,95 @@ function isWildcardNamedServices(
   return typeof selection === 'string';
 }
 
-function namedServiceRows(
-  selection: DelegatedAccessRecord['named_service_operations'],
-): string[] {
-  if (!selection || isWildcardNamedServices(selection)) return [];
-  return Object.values(selection as DelegatedAccessNamedServiceOperations)
+/** What the card covers, for display and for seeding the editor.
+ *
+ *  The stored selection answers this only when it is an exact map. A wildcard
+ *  and a pre-encoding record name no operations of their own, so the server
+ *  ships the expansion it saved them against; without it both draw exactly like
+ *  an explicit {}. */
+function cardNamedServiceOperations(
+  item: DelegatedAccessRecord,
+): DelegatedAccessNamedServiceOperations {
+  const effective = item.effective_named_service_operations;
+  if (effective && Object.keys(effective).length) return effective;
+  const selection = item.named_service_operations;
+  if (!selection || isWildcardNamedServices(selection)) return {};
+  return selection as DelegatedAccessNamedServiceOperations;
+}
+
+function namedServiceRows(item: DelegatedAccessRecord): string[] {
+  return Object.values(cardNamedServiceOperations(item))
     .flatMap((namespaces) => Object.entries(namespaces || {}))
     .map(([namespace, operations]) => `${namespace} (${(operations || []).join(', ')})`);
+}
+
+/** Every named-service operation the ACTIVE catalog offers for these resources.
+ *
+ *  The same rows the picker draws, so "all of them are ticked" is a question
+ *  the panel can answer without guessing. */
+function offeredNamedServiceOperations(
+  resources: DelegatedAccessResourceOption[],
+  forResources: string[],
+): DelegatedAccessNamedServiceOperations {
+  const wanted = new Set(forResources);
+  const out: DelegatedAccessNamedServiceOperations = {};
+  resources.forEach((option) => {
+    if (!wanted.has(option.resource)) return;
+    const namespaces: Record<string, string[]> = {};
+    (option.named_services || []).forEach((namespace) => {
+      const operations = operationRows(namespace).map((row) => row.operation);
+      if (operations.length) namespaces[namespace.namespace] = operations;
+    });
+    if (Object.keys(namespaces).length) out[option.resource] = namespaces;
+  });
+  return out;
+}
+
+/** The card-level selection as the server stores it.
+ *
+ *  `"*"` is not a separate mode in the design: an explicitly submitted wildcard
+ *  "means the operator selected all operations shown from the current catalog",
+ *  which is the one case Save may keep as `"*"` against the new catalog
+ *  version. So ticking every offered box encodes as `"*"`, anything less as the
+ *  exact map, and nothing as an explicit {}. */
+function encodeNamedServiceSelection(
+  selected: DelegatedAccessNamedServiceOperations,
+  offered: DelegatedAccessNamedServiceOperations,
+): DelegatedAccessStoredNamedServices {
+  const entries = Object.entries(offered);
+  if (!entries.length) return selected;
+  const everythingTicked = entries.every(([resource, namespaces]) => (
+    Object.entries(namespaces).every(([namespace, operations]) => {
+      const held = new Set(selected[resource]?.[namespace] || []);
+      return operations.every((operation) => held.has(operation));
+    })
+  ));
+  return everythingTicked ? '*' : selected;
+}
+
+/** The card's coverage, kept to what the picker can actually draw.
+ *
+ *  Operations the active catalog no longer offers have no checkbox, so seeding
+ *  them would resubmit choices the operator cannot see or untick — the design
+ *  is explicit that the frontend never sends a hidden stale operation back
+ *  merely to reconstruct the old card. */
+function seedNamedServiceOperations(
+  item: DelegatedAccessRecord,
+  offered: DelegatedAccessNamedServiceOperations,
+): DelegatedAccessNamedServiceOperations {
+  const covered = cardNamedServiceOperations(item);
+  const out: DelegatedAccessNamedServiceOperations = {};
+  Object.entries(offered).forEach(([resource, namespaces]) => {
+    const held = covered[resource] || {};
+    const kept: Record<string, string[]> = {};
+    Object.entries(namespaces).forEach(([namespace, operations]) => {
+      const selected = new Set(held[namespace] || []);
+      const surviving = operations.filter((operation) => selected.has(operation));
+      if (surviving.length) kept[namespace] = surviving;
+    });
+    if (Object.keys(kept).length) out[resource] = kept;
+  });
+  return out;
 }
 
 function driftLabel(row: { resource: string; namespace?: string; claim?: string; operation?: string }): string {
@@ -675,7 +758,13 @@ export function DelegatedAccessPanel({ openParams }: { openParams?: Record<strin
     await dispatch(createDelegatedAccess({
       label: label.trim() || 'Automation access',
       resourceGrants,
-      namedServiceOperations: selectedNamedServiceOperations,
+      namedServiceOperations: encodeNamedServiceSelection(
+        selectedNamedServiceOperations,
+        offeredNamedServiceOperations(
+          resources,
+          selectedResourceEntries.map(([resource]) => resource),
+        ),
+      ),
       accountScope: createAccountScope,
       ttlSeconds,
     })).unwrap().catch(() => undefined);
@@ -822,27 +911,19 @@ export function DelegatedAccessPanel({ openParams }: { openParams?: Record<strin
     });
     setEditingAccessId(item.access_id);
     setEditPicks(picks);
-    // A wildcard names no operations to seed. Leaving the editor empty makes
-    // the save omit the field, which preserves the stored policy instead of
-    // narrowing the card to nothing.
+    // Seeded from what the card COVERS, not from what it names: a wildcard
+    // names nothing, and an empty picker is indistinguishable from an explicit
+    // {} — the operator would then narrow the card with the first box they tick
+    // believing they widen it.
     setEditNamedServiceOperations(
-      isWildcardNamedServices(item.named_service_operations)
-        ? {}
-        : Object.fromEntries(
-          Object.entries(
-            (item.named_service_operations || {}) as DelegatedAccessNamedServiceOperations,
-          )
-            .map(([resource, namespaces]) => [
-              resource,
-              Object.fromEntries(
-                Object.entries(namespaces || {}).map(([ns, ops]) => [ns, [...(ops || [])]]),
-              ),
-            ]),
-        ),
+      seedNamedServiceOperations(
+        item,
+        offeredNamedServiceOperations(resources, Object.keys(item.resource_grants || {})),
+      ),
     );
     setEditAccountScope(seedAccountScopeFromRecord(item));
     setEditLabel(item.label || '');
-  }, [seedAccountScopeFromRecord]);
+  }, [resources, seedAccountScopeFromRecord]);
   // Human label for one connected account (falls back to the id).
   const accountLabelById = useMemo(() => {
     const map = new Map<string, string>();
@@ -1103,12 +1184,17 @@ export function DelegatedAccessPanel({ openParams }: { openParams?: Record<strin
         Object.entries(editNamedServiceOperations)
           .filter(([resource]) => prunedKept[resource]),
       );
+      // Nothing offered anywhere means there is nothing to say about the inner
+      // boundary; omitting preserves the card's own policy. Otherwise the save
+      // is explicit — `"*"` when every offered box is ticked, the exact map
+      // otherwise, {} when the operator cleared them all.
+      const offered = offeredNamedServiceOperations(resources, Object.keys(prunedKept));
       await dispatch(updateDelegatedAccess({
         accessId: item.access_id,
         label: editLabel.trim() || item.label || 'Automation access',
         resourceGrants: prunedKept,
-        namedServiceOperations: Object.keys(keptNamedServiceOperations).length
-          ? keptNamedServiceOperations
+        namedServiceOperations: Object.keys(offered).length
+          ? encodeNamedServiceSelection(keptNamedServiceOperations, offered)
           : undefined,
         accountScope: editAccountScope,
         // What this editor was opened on. The server refuses the save when
@@ -1476,12 +1562,15 @@ export function DelegatedAccessPanel({ openParams }: { openParams?: Record<strin
                                   </Field>
                                 </Fragment>
                               ))}
-                              {namedServiceRows(item.named_service_operations).length ? (
+                              {namedServiceRows(item).length ? (
                                 <Field label="Services">
-                                  <CountFold
-                                    entries={namedServiceRows(item.named_service_operations)}
-                                    noun="service"
-                                  />
+                                  <CountFold entries={namedServiceRows(item)} noun="service" />
+                                  {isWildcardNamedServices(item.named_service_operations) ? (
+                                    <small>
+                                      Every operation these services offered when this card was
+                                      last saved. Operations added since are not included.
+                                    </small>
+                                  ) : null}
                                 </Field>
                               ) : (
                                 <Field label="Operations">
@@ -1708,10 +1797,9 @@ export function DelegatedAccessPanel({ openParams }: { openParams?: Record<strin
                         <Field label="Operations"><CountFold entries={item.operations} noun="operation" /></Field>
                       ) : null}
                       {(() => {
-                        // A grant can carry an EMPTY namespace map, or a
-                        // wildcard that names none; render the row only when it
-                        // actually names services.
-                        const services = namedServiceRows(item.named_service_operations);
+                        // A grant can carry an EMPTY namespace map; render the
+                        // row only when the card actually covers services.
+                        const services = namedServiceRows(item);
                         return services.length ? (
                           <Field label="Services"><CountFold entries={services} noun="service" /></Field>
                         ) : null;

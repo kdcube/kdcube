@@ -177,3 +177,58 @@ def test_pruning_everything_leaves_a_card_with_no_authority():
     )
 
     assert result.empty is True
+
+
+# -- the administrator all-resource row is not a survival ticket ----------------
+
+
+def test_a_withdrawn_resource_is_pruned_even_beside_a_wildcard_row():
+    """Save must prune a door the deployment withdrew.
+
+    With the admin `*` row present, a resolution keyed on the raw string would
+    find it and the selection would survive every save, so the card could never
+    be brought back in line with the catalog.
+    """
+    catalog = copy.deepcopy(CONNECTIONS)
+    catalog["delegated_credentials"]["oauth"]["resources"] = [
+        {
+            "resource": "*",
+            "admin_only": True,
+            "grants": ["kdcube:role:super-admin"],
+        }
+    ]
+
+    result = _reconcile(
+        {RESOURCE: ["named_services:use", "mail:read"]},
+        NamedServiceSelection.exact({RESOURCE: {"mail": ["object.search"]}}),
+        connections=catalog,
+    )
+
+    assert result.pruned_resources == [RESOURCE]
+    assert result.resource_grants == {}
+    assert result.empty is True
+    assert [row["operation"] for row in result.pruned_named_service_operations] == [
+        "object.search"
+    ]
+
+
+def test_an_administrator_selection_survives_against_the_wildcard_row():
+    """A card that holds `*` keeps it: the row is its row."""
+    catalog = copy.deepcopy(CONNECTIONS)
+    catalog["delegated_credentials"]["oauth"]["resources"].append(
+        {
+            "resource": "*",
+            "admin_only": True,
+            "grants": ["kdcube:role:super-admin"],
+        }
+    )
+
+    result = _reconcile(
+        {"*": ["kdcube:role:super-admin"]},
+        NamedServiceSelection.none(),
+        connections=catalog,
+    )
+
+    assert result.pruned_resources == []
+    assert result.resource_grants == {"*": ["kdcube:role:super-admin"]}
+    assert result.empty is False

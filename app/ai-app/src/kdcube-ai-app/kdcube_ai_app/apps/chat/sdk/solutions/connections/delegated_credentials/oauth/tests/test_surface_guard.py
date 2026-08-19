@@ -77,6 +77,30 @@ GUARD_CONNECTIONS = {
 }
 
 
+def _connections_with_admin_wildcard(*, keep_guard_resource: bool = True) -> dict:
+    """The catalog shape the guard suite could not express before.
+
+    A deployment that declares the all-resource administrator row alongside its
+    specific rows. Withdrawing a specific row then leaves a row that matches
+    every URL, which is exactly the state that must still deny.
+    """
+    import copy as _copy
+
+    trimmed = _copy.deepcopy(GUARD_CONNECTIONS)
+    resources = trimmed["delegated_credentials"]["oauth"]["resources"]
+    if not keep_guard_resource:
+        resources.clear()
+    resources.append(
+        {
+            "resource": "*",
+            "label": "All platform and application APIs",
+            "admin_only": True,
+            "grants": ["kdcube:role:super-admin"],
+        }
+    )
+    return trimmed
+
+
 def _connections_without(*, tool: str = "", claim: str = "", resource: bool = True) -> dict:
     import copy as _copy
 
@@ -1354,3 +1378,70 @@ def test_a_removed_capability_denial_reads_no_historical_catalog(monkeypatch):
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "delegated_capability_no_longer_available"
     assert reads == []
+
+
+# -- the administrator all-resource row is a surface, not a catch-all ---------
+
+
+def test_a_withdrawn_resource_is_denied_even_when_the_catalog_keeps_a_wildcard_row(
+    monkeypatch,
+):
+    """The invariant the whole slice exists for: an administrator can take a
+    door away. With a `*` row present, matching by request URL alone would find
+    it, and the bearer would keep authority nobody could revoke through the
+    catalog."""
+    client = _client(
+        monkeypatch,
+        connections=_connections_with_admin_wildcard(keep_guard_resource=False),
+        grant_record={"operations": ["records_export"], "credential": _authority()},
+    )
+
+    response = client.post(
+        "/guard", json=_rpc_tool_call(), headers={"Authorization": "Bearer reader"},
+    )
+
+    assert response.status_code == 403
+    body = response.json()
+    assert body["error"]["code"] == "delegated_capability_no_longer_available"
+    assert body["ret"]["requested_capability"]["kind"] == "resource"
+
+
+def test_an_administrator_card_still_reaches_the_wildcard_row(monkeypatch):
+    """The same row remains a real delegation surface for a card that holds it:
+    `*` answers a selector that is itself `*`."""
+    authority = _authority(scopes=["kdcube:role:super-admin"])
+    authority["attrs"]["resource_grants"] = {"*": ["kdcube:role:super-admin"]}
+    client = _client(
+        monkeypatch,
+        connections=_connections_with_admin_wildcard(keep_guard_resource=False),
+        auth={
+            "mode": "managed",
+            "authority_id": "delegated_client",
+            "tools": {"records_export": {"grants": ["kdcube:role:super-admin"]}},
+            "selected_tool_grants": True,
+        },
+        grant_record={"operations": ["records_export"], "credential": authority},
+    )
+
+    response = client.post(
+        "/guard", json=_rpc_tool_call(), headers={"Authorization": "Bearer reader"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+
+
+def test_a_surviving_resource_is_unaffected_by_the_wildcard_row(monkeypatch):
+    """A specific row still answers its own requests when both exist."""
+    client = _client(
+        monkeypatch,
+        connections=_connections_with_admin_wildcard(),
+        grant_record={"operations": ["records_export"], "credential": _authority()},
+    )
+
+    response = client.post(
+        "/guard", json=_rpc_tool_call(), headers={"Authorization": "Bearer reader"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True

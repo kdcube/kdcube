@@ -130,6 +130,11 @@ export interface DelegatedAccessRecord {
   operations?: string[];
   resource_grants?: Record<string, string[]>;
   named_service_operations?: DelegatedAccessStoredNamedServices;
+  /** Derived, never authority: the selection above expanded under the catalog
+   *  version the card was saved against. `"*"` and a pre-encoding record name
+   *  no operations of their own, so this is the only way a surface can draw
+   *  what such a card actually covers. */
+  effective_named_service_operations?: DelegatedAccessNamedServiceOperations;
   /** Per-account claim binding: {provider_id: {account_id: [claims]}}. For a
    *  provider, which connected account(s) this client may use AND, per account,
    *  the claims it may use there. account "*" = any account; claim "*" = any. */

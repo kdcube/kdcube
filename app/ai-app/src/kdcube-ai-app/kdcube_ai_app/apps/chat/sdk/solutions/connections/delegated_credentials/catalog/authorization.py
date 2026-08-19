@@ -43,15 +43,31 @@ CAPABILITY_KINDS = (
 DENIAL_CODE = "delegated_capability_no_longer_available"
 DENIAL_REASON = "current_catalog_excludes_requested_capability"
 DENIAL_WHERE = "delegated_catalog.authorization"
+NOT_GRANTED_CODE = "delegated_capability_not_granted"
+NOT_GRANTED_REASON = "card_does_not_cover_requested_capability"
+NOT_GRANTED_WHERE = "delegated_card.authorization"
 UNAVAILABLE_CODE = "temporarily_unavailable"
 UNAVAILABLE_WHERE = "delegated_catalog.resolution"
 
+# The two sides of the same contract. A removal is addressed to whoever
+# configures the deployment; a card that never covered the capability is
+# addressed to its grantor, who can widen it. Saying which one it is, in words,
+# is the point: a reasoning consumer that reads "not available" for both
+# advises revoking a working card to recover something no consent can restore.
 _MESSAGES = {
-    CAPABILITY_RESOURCE: "The requested resource is not available in the current delegated-service catalog.",
-    CAPABILITY_RESOURCE_CLAIM: "The requested resource claim is not available in the current delegated-service catalog.",
-    CAPABILITY_OUTER_OPERATION: "The requested operation is not available in the current delegated-service catalog.",
-    CAPABILITY_NAMED_SERVICE_NAMESPACE: "The requested named-service namespace is not available in the current delegated-service catalog.",
-    CAPABILITY_NAMED_SERVICE_OPERATION: "The requested named-service operation is not available in the current delegated-service catalog.",
+    CAPABILITY_RESOURCE: "This deployment no longer offers the requested resource. Granting more access cannot restore it.",
+    CAPABILITY_RESOURCE_CLAIM: "This deployment no longer offers the requested resource claim. Granting more access cannot restore it.",
+    CAPABILITY_OUTER_OPERATION: "This deployment no longer offers the requested operation. Granting more access cannot restore it.",
+    CAPABILITY_NAMED_SERVICE_NAMESPACE: "This deployment no longer offers the requested named-service namespace. Granting more access cannot restore it.",
+    CAPABILITY_NAMED_SERVICE_OPERATION: "This deployment no longer offers the requested named-service operation. Granting more access cannot restore it.",
+}
+
+_NOT_GRANTED_MESSAGES = {
+    CAPABILITY_RESOURCE: "The delegated access card does not cover the requested resource. Its grantor can add it in Connection Hub.",
+    CAPABILITY_RESOURCE_CLAIM: "The delegated access card does not carry the requested resource claim. Its grantor can add it in Connection Hub.",
+    CAPABILITY_OUTER_OPERATION: "The delegated access card does not cover the requested operation. Its grantor can add it in Connection Hub.",
+    CAPABILITY_NAMED_SERVICE_NAMESPACE: "The delegated access card does not cover the requested named-service namespace. Its grantor can add it in Connection Hub.",
+    CAPABILITY_NAMED_SERVICE_OPERATION: "The delegated access card does not cover the requested named-service operation. Its grantor can add it in Connection Hub, under this card's named-service operations.",
 }
 
 # Fields each kind must carry, so a denial is actionable on its own.
@@ -132,10 +148,14 @@ class ActiveCatalogCapabilities:
         return self._document.version
 
     def resource_config(self, request: CapabilityRequest) -> Any:
-        # The concrete request URL selects the configured row; a card-stored
-        # selector is matched only when the transport supplies no URL.
-        return self._config.resource_config(
-            _clean(request.request_resource) or _clean(request.resource)
+        # The card's own selector selects the row, falling back to the request
+        # URL only when the caller supplies no selector. Judging a card by the
+        # URL lets the all-resource admin row answer for a door the deployment
+        # withdrew, which would leave the bearer holding authority nobody can
+        # take away through the catalog.
+        return self._config.card_selector_config(
+            _clean(request.resource),
+            request_resource=_clean(request.request_resource),
         )
 
     def resource_claims(self, request: CapabilityRequest) -> frozenset[str]:
@@ -207,6 +227,51 @@ def capability_denial(
             "recovery": {
                 "action": "refresh_discovery_or_review_delegated_access",
                 "retry_same_request": False,
+                # The design's retry meaning, machine-readable: "Do not blindly
+                # retry and do not request more user consent."
+                "request_user_consent": False,
+            },
+        },
+    }
+
+
+def card_boundary_denial(
+    *,
+    provenance: CardProvenance,
+    request: CapabilityRequest,
+    delegable: bool = True,
+) -> dict[str, Any]:
+    """The structured 403 body for a capability the CARD does not cover.
+
+    The mirror of ``capability_denial``: the active catalog still offers this,
+    so a remedy exists and the grantor owns it. ``delegable=False`` says the
+    deployment does not allow this capability to be asked for here, which
+    changes the answer from "ask for it" to "nobody here can grant it".
+    """
+    return {
+        "ok": False,
+        "error": {
+            "code": NOT_GRANTED_CODE,
+            "message": _NOT_GRANTED_MESSAGES.get(
+                request.kind, _NOT_GRANTED_MESSAGES[CAPABILITY_RESOURCE]
+            ),
+            "where": NOT_GRANTED_WHERE,
+            "retryable": False,
+        },
+        "ret": {
+            "reason": NOT_GRANTED_REASON,
+            "access_id": _clean(provenance.access_id),
+            "card_revision": int(provenance.card_revision or 0),
+            "requested_capability": request.path(),
+            "card_catalog_version": _clean(provenance.catalog_version),
+            "recovery": {
+                "action": (
+                    "grant_capability_in_delegated_access"
+                    if delegable
+                    else "capability_not_delegable_here"
+                ),
+                "retry_same_request": False,
+                "request_user_consent": bool(delegable),
             },
         },
     }
@@ -244,6 +309,12 @@ def denial_is_capability_removed(payload: Mapping[str, Any] | None) -> bool:
     return str(error.get("code") or "") == DENIAL_CODE
 
 
+def denial_is_capability_not_granted(payload: Mapping[str, Any] | None) -> bool:
+    error = (payload or {}).get("error")
+    error = error if isinstance(error, Mapping) else {}
+    return str(error.get("code") or "") == NOT_GRANTED_CODE
+
+
 __all__ = [
     "CAPABILITY_KINDS",
     "CAPABILITY_NAMED_SERVICE_NAMESPACE",
@@ -253,11 +324,15 @@ __all__ = [
     "CAPABILITY_RESOURCE_CLAIM",
     "DENIAL_CODE",
     "DENIAL_REASON",
+    "NOT_GRANTED_CODE",
+    "NOT_GRANTED_REASON",
     "ActiveCatalogCapabilities",
     "CapabilityRequest",
     "CardProvenance",
     "authorize_current_capability",
     "capability_denial",
+    "card_boundary_denial",
     "catalog_unavailable_denial",
+    "denial_is_capability_not_granted",
     "denial_is_capability_removed",
 ]

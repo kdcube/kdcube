@@ -91,7 +91,7 @@ def reconcile_selection(
 
     for raw_resource, grants in resource_grants.items():
         resource = _clean(raw_resource)
-        cfg = config.resource_config(resource)
+        cfg = config.card_selector_config(resource)
         if cfg is None:
             pruned_resources.append(resource)
             continue
@@ -126,7 +126,7 @@ def reconcile_selection(
                             }
                         )
                 continue
-            cfg = config.resource_config(resource)
+            cfg = config.card_selector_config(resource)
             block = getattr(cfg, "named_services", None)
             offered = (
                 configured_named_service_operations(block)

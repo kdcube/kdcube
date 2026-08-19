@@ -13,6 +13,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cat
     CapabilityRequest,
     CardProvenance,
     authorize_current_capability,
+    card_boundary_denial,
     catalog_unavailable_denial,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.catalog.resolver import (
@@ -380,6 +381,28 @@ class NamedServicesMcpBridge:
                 "operation": operation,
             }
         if not policy.operation_configured(tool_name=tool_name, operation=operation):
+            # For a delegated caller the boundary IS the card, and the active
+            # catalog was already consulted above — so reaching here means the
+            # deployment offers this and only the card does not cover it. That
+            # has a remedy its grantor owns, and the denial has to say so:
+            # the mirror of the removal denial, not an anonymous "not allowed".
+            view = delegated_credential_view(self._request)
+            if view.present:
+                return card_boundary_denial(
+                    provenance=CardProvenance(
+                        access_id=view.registry_access_id,
+                        card_revision=view.card_revision,
+                        catalog_version=view.catalog_version,
+                    ),
+                    request=CapabilityRequest(
+                        kind=CAPABILITY_NAMED_SERVICE_OPERATION,
+                        resource=view.resource,
+                        surface="named_service",
+                        outer_operation=tool_name,
+                        namespace=policy.namespace,
+                        operation=operation,
+                    ),
+                )
             return {
                 "ok": False,
                 "error": "named_service_operation_not_configured",

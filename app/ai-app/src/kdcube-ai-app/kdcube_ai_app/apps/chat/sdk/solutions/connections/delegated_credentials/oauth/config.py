@@ -171,6 +171,36 @@ class OAuthDelegatedClientConfig:
         }
 
     def resource_config(self, resource: str | None) -> OAuthDelegatedResourceConfig | None:
+        """The row that serves a REQUESTED resource.
+
+        The all-resource row answers whatever no specific row claims, which is
+        what makes it usable as the declared admin surface at issuance time.
+        """
+        return self._match_resource(resource, wildcard_row_is_fallback=True)
+
+    def card_selector_config(
+        self,
+        selector: str | None,
+        *,
+        request_resource: str = "",
+    ) -> OAuthDelegatedResourceConfig | None:
+        """The row that governs a CARD holding ``selector``.
+
+        The concrete request URL still picks the row, because a card selector
+        may be broader than the row it was granted through. What the selector
+        decides is whether the all-resource row is reachable at all: it is a
+        declared admin surface, answering only a card that holds ``*``. A card
+        whose door left the catalog therefore matches nothing, which is the
+        removal the guard, Save pruning, and drift each have to report.
+        """
+        return self._match_resource(
+            str(request_resource or "").strip() or selector,
+            wildcard_row_is_fallback=str(selector or "").strip().rstrip("/") == "*",
+        )
+
+    def _match_resource(
+        self, resource: str | None, *, wildcard_row_is_fallback: bool
+    ) -> OAuthDelegatedResourceConfig | None:
         text = str(resource or "").strip().rstrip("/")
         if not text:
             return None
@@ -180,12 +210,15 @@ class OAuthDelegatedClientConfig:
             if pattern == text:
                 return item
             if pattern == "*":
+                # Deferred so declaration order cannot let it shadow a specific
+                # row; whether it is reachable at all is the caller's question.
                 fallback = item
                 continue
             if fnmatch(text, pattern):
                 return item
-        if fallback is not None and fnmatch(text, fallback.resource.rstrip("/")):
-            return fallback
+        if wildcard_row_is_fallback and fallback is not None:
+            if fnmatch(text, fallback.resource.rstrip("/")):
+                return fallback
         return None
 
     def supported_scopes(self, resource: str | None = None) -> tuple[str, ...]:

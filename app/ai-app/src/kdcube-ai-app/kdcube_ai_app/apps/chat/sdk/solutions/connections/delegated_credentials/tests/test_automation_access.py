@@ -24,6 +24,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cat
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.automation_access import (
     AutomationAccessService,
+    agent_grant_access_id,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.config import (
     oauth_delegated_config,
@@ -1147,6 +1148,152 @@ async def test_agent_namespace_grant_state_governs_and_grants(card_persistence):
 
 
 @pytest.mark.asyncio
+async def test_the_native_gate_reads_the_boundary_not_the_intent(card_persistence):
+    """A wildcard card is bounded by what it expanded to, on the native path too.
+
+    The gate used to answer from the stored SELECTION and handled only `none`
+    and `exact`, so a wildcard fell through to a claims-only decision and
+    collected operations added after the card was issued — while the
+    named-services door, reading the materialized boundary, refused them. One
+    question, two answers. Both now read the boundary.
+    """
+    service = _named_services_agent_service(card_persistence)
+    ns_resource = "*/kdcube-services@1-0/public/mcp/named_services*"
+    claims = ["mail:read", "named_services:use"]
+
+    created = await service.create_access(
+        _AGENT_USER, label="agent", client_id=_AGENT_CLIENT,
+        resource_grants={ns_resource: claims},
+    )
+    assert created["ok"] is True
+    assert created["access"]["named_service_operations"] == "*"
+
+    granted = await service.agent_namespace_grant_state(
+        grantor_subject="platform-user-1", client_id=_AGENT_CLIENT,
+        namespace="mail", operation="object.search",
+    )
+    assert granted["granted"] is True
+
+    # The card's boundary is the expansion of the generation it was saved
+    # against. An operation the deployment adds later is outside it, and the
+    # claims the card already holds must not be enough on their own.
+    record = await service._load_record(
+        agent_grant_access_id("platform-user-1", _AGENT_CLIENT, [ns_resource]),
+        grantor_subject="platform-user-1",
+    )
+    namespaces = record.named_services["namespaces"]
+    namespaces["mail"]["tools"].pop("search")
+
+    await service._persist_record(record, expected_revision=record.card_revision)
+
+    after = await service.agent_namespace_grant_state(
+        grantor_subject="platform-user-1", client_id=_AGENT_CLIENT,
+        namespace="mail", operation="object.search",
+    )
+    assert after["governed"] is True
+    assert after["granted"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_boundary_refusal_says_the_card_refused_not_the_claims(card_persistence):
+    """The two refusals are different questions and need different answers.
+
+    Live run 2026-08-19: the gate refused an operation added after the card was
+    issued — correctly — but reported it as `missing=[memories:read,
+    named_services:use]`, claims the card already held. The caller raised a
+    consent demand for them, the demand deduplicated against the existing
+    grant, and the agent told the user to wait for a permission they had
+    already given. The design's denial table separates the two: a capability
+    the catalog offers but the card lacks may follow the consent path; the
+    caller has to be able to tell which case it is.
+    """
+    service = _named_services_agent_service(card_persistence)
+    ns_resource = "*/kdcube-services@1-0/public/mcp/named_services*"
+    assert (await service.create_access(
+        _AGENT_USER, label="agent", client_id=_AGENT_CLIENT,
+        resource_grants={ns_resource: ["mail:read", "named_services:use"]},
+    ))["ok"] is True
+
+    record = await service._load_record(
+        agent_grant_access_id("platform-user-1", _AGENT_CLIENT, [ns_resource]),
+        grantor_subject="platform-user-1",
+    )
+    record.named_services["namespaces"]["mail"]["tools"].pop("search")
+    await service._persist_record(record, expected_revision=record.card_revision)
+
+    state = await service.agent_namespace_grant_state(
+        grantor_subject="platform-user-1", client_id=_AGENT_CLIENT,
+        namespace="mail", operation="object.search",
+    )
+
+    assert state["granted"] is False
+    # The claims are held, so nothing about them is missing.
+    assert state["missing_claims"] == []
+    denial = state["not_granted"]
+    assert denial["error"]["code"] == "delegated_capability_not_granted"
+    assert denial["error"]["retryable"] is False
+    path = denial["ret"]["requested_capability"]
+    assert path["namespace"] == "mail" and path["operation"] == "object.search"
+    # A remedy exists and its owner is the grantor.
+    assert denial["ret"]["recovery"] == {
+        "action": "grant_capability_in_delegated_access",
+        "retry_same_request": False,
+        "request_user_consent": True,
+    }
+    assert denial["ret"]["access_id"] == record.access_id
+
+
+@pytest.mark.asyncio
+async def test_a_claim_refusal_names_only_the_claims_the_card_lacks(card_persistence):
+    """A demand that re-asks for held claims deduplicates away and teaches the
+    caller nothing, so the missing set is the difference, not the requirement."""
+    service = _named_services_agent_service(card_persistence)
+    ns_resource = "*/kdcube-services@1-0/public/mcp/named_services*"
+    assert (await service.create_access(
+        _AGENT_USER, label="agent", client_id=_AGENT_CLIENT,
+        resource_grants={ns_resource: ["named_services:use"]},
+    ))["ok"] is True
+
+    state = await service.agent_namespace_grant_state(
+        grantor_subject="platform-user-1", client_id=_AGENT_CLIENT,
+        namespace="mail", operation="object.search",
+    )
+
+    assert state["granted"] is False
+    assert state["not_granted"] is None
+    assert state["claims"] == ["mail:read", "named_services:use"]
+    assert state["missing_claims"] == ["mail:read"]
+
+
+@pytest.mark.asyncio
+async def test_a_removal_denial_tells_the_caller_consent_will_not_help(card_persistence):
+    """The mirror flag. The design's retry meaning for a withdrawn capability is
+    "do not blindly retry and do not request more user consent"; the live run
+    measured an agent advising a revoke-and-re-grant instead."""
+    service = _named_services_agent_service(card_persistence)
+    ns_resource = "*/kdcube-services@1-0/public/mcp/named_services*"
+    assert (await service.create_access(
+        _AGENT_USER, label="agent", client_id=_AGENT_CLIENT,
+        resource_grants={ns_resource: ["mail:read", "named_services:use"]},
+    ))["ok"] is True
+
+    trimmed = copy.deepcopy(service._catalog_resolver.connections)
+    trimmed["delegated_credentials"]["oauth"]["resources"][0]["named_services"][
+        "namespaces"]["mail"]["tools"].pop("search")
+    service._catalog_resolver.connections = trimmed
+
+    state = await service.agent_namespace_grant_state(
+        grantor_subject="platform-user-1", client_id=_AGENT_CLIENT,
+        namespace="mail", operation="object.search",
+    )
+
+    recovery = state["removed"]["ret"]["recovery"]
+    assert recovery["request_user_consent"] is False
+    assert recovery["retry_same_request"] is False
+    assert "no longer offers" in state["removed"]["error"]["message"]
+
+
+@pytest.mark.asyncio
 async def test_the_native_gate_refuses_an_operation_the_catalog_dropped(card_persistence):
     """The card holds it; the deployment no longer offers it. Consent cannot
     restore that, so the answer is a removal, not a pending grant."""
@@ -2033,10 +2180,15 @@ async def test_automation_access_update_empty_narrowing_clears_every_resource(ca
     # still gates per operation against the card's grants.
     assert await _namespaces() == ["mail", "slack"]
 
+    # Omitted -> the wildcard is frozen into what it already meant, so it can
+    # no longer be re-pinned to a later catalog. Only namespaces this card's
+    # claims authorize survive, because an exact selection may name nothing
+    # else; `mail` needs `mail:read`, which this card never held, so it was
+    # unusable before and is unusable now.
     await service.update_access(
         user, access_id=access_id, resource_grants={resource: grants}, label="Renamed",
     )
-    assert await _namespaces() == ["mail", "slack"]        # omitted -> preserved
+    assert await _namespaces() == ["slack"]
 
     await service.update_access(
         user, access_id=access_id, resource_grants={resource: grants},

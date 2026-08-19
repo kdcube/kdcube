@@ -305,3 +305,65 @@ def test_removal_and_addition_are_reported_together():
     assert [row["operation"] for row in drift["added"]["named_service_operations"]] == [
         "object.comments"
     ]
+
+
+# -- the administrator all-resource row does not mask a withdrawal --------------
+
+
+def test_a_withdrawn_resource_reads_as_removed_even_beside_a_wildcard_row():
+    """The deployment kept its admin `*` row and withdrew this card's door.
+
+    Judged by the request URL, the `*` row would answer and the card would be
+    described as intact; worse, the live run saw its claims reported as
+    withdrawn and "already ineffective" while the calls kept working. The card
+    holds no `*`, so the row is not its row: the resource itself is the removal.
+    """
+    withdrawn = copy.deepcopy(CONNECTIONS)
+    withdrawn["delegated_credentials"]["oauth"]["resources"] = [
+        {
+            "resource": "*",
+            "label": "All platform and application APIs",
+            "admin_only": True,
+            "grants": ["kdcube:role:super-admin"],
+        }
+    ]
+
+    drift = card_drift(
+        card=_card(),
+        active=_document(withdrawn),
+        baseline=_document(),
+    )
+
+    assert drift["status"] == DRIFT_CHANGED
+    removed = drift["removed"]
+    assert [row["resource"] for row in removed["resources"]] == [RESOURCE]
+    assert removed["resources"][0]["effect"] == EFFECT_DENIED
+    # What sits beneath a removed resource is not enumerated again, and none of
+    # it is described against the admin row.
+    assert removed["claims"] == []
+    assert removed["outer_operations"] == []
+    assert removed["named_service_operations"] == []
+
+
+def test_an_administrator_card_reads_the_wildcard_row_as_its_own():
+    """The mirror: a card that holds `*` is current against that row."""
+    catalog = copy.deepcopy(CONNECTIONS)
+    catalog["delegated_credentials"]["oauth"]["resources"].append(
+        {
+            "resource": "*",
+            "label": "All platform and application APIs",
+            "admin_only": True,
+            "grants": ["kdcube:role:super-admin"],
+        }
+    )
+    document = _document(catalog)
+    card = _card(
+        resource_grants={"*": ("kdcube:role:super-admin",)},
+        operations=(),
+        named_service_operations=NamedServiceSelection.none(),
+    )
+
+    drift = card_drift(card=card, active=document, baseline=document)
+
+    assert drift["removed"]["resources"] == []
+    assert drift["removed"]["claims"] == []
