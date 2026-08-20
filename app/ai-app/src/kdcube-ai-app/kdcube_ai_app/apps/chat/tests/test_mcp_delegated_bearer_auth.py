@@ -239,9 +239,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.authentication_surface im
     ConnectionHubAuthenticationSurface,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.config import (
-    OAuthDelegatedClientConfig,
-    OAuthDelegatedResourceConfig,
-    OAuthDelegatedToolConfig,
+    oauth_delegated_config_from_connections,
 )
 
 
@@ -316,33 +314,49 @@ _NAMED_SERVICES_PATTERN = "*/kdcube-services@1-0/public/mcp/named_services*"
 
 
 def _catalog():
-    wildcard = OAuthDelegatedResourceConfig(
-        resource="*", grants=("platform:admin",), tools=(), admin_only=True
+    """A real config, parsed by the reader the request path uses."""
+    return oauth_delegated_config_from_connections(
+        {
+            "delegated_credentials": {
+                "oauth": {
+                    "resources": [
+                        # Wildcard declared FIRST: order must not matter.
+                        {
+                            "resource": "*",
+                            "grants": ["platform:admin"],
+                            "admin_only": True,
+                        },
+                        {
+                            "resource": _NAMED_SERVICES_PATTERN,
+                            "grants": ["named_services:use"],
+                            "tools": {
+                                "named_services_list": {
+                                    "label": "List",
+                                    "grants": ["named_services:use"],
+                                },
+                                "named_services_action": {
+                                    "label": "Action",
+                                    "grants": ["named_services:use"],
+                                },
+                            },
+                        },
+                    ],
+                }
+            }
+        }
     )
-    specific = OAuthDelegatedResourceConfig(
-        resource=_NAMED_SERVICES_PATTERN,
-        grants=("named_services:use",),
-        tools=(
-            OAuthDelegatedToolConfig(name="named_services_list", label="List", grants=("named_services:use",)),
-            OAuthDelegatedToolConfig(name="named_services_action", label="Action", grants=("named_services:use",)),
-        ),
-    )
-    # Wildcard declared FIRST: order must not matter for the preference.
-    return SimpleNamespace(resources=(wildcard, specific))
 
 
 def test_specific_row_beats_wildcard():
-    cfg = _catalog()
-    row = OAuthDelegatedClientConfig.resource_config(
-        cfg, "https://host/api/integrations/bundles/t/p/kdcube-services@1-0/public/mcp/named_services"
+    row = _catalog().resource_config(
+        "https://host/api/integrations/bundles/t/p/kdcube-services@1-0/public/mcp/named_services"
     )
     assert row is not None and row.resource == _NAMED_SERVICES_PATTERN
     assert row.admin_only is False  # the specific row keeps its own semantics
 
 
 def test_wildcard_serves_only_the_unmatched():
-    cfg = _catalog()
-    row = OAuthDelegatedClientConfig.resource_config(
-        cfg, "https://host/api/integrations/bundles/t/p/press@2026-08-16/mcp/press"
+    row = _catalog().resource_config(
+        "https://host/api/integrations/bundles/t/p/press@2026-08-16/mcp/press"
     )
     assert row is not None and row.resource == "*" and row.admin_only is True
