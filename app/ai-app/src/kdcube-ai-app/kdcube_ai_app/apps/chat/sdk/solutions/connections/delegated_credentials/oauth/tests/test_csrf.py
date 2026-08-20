@@ -19,6 +19,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.tests.helpers import mount_test_oauth_adapter
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.consent import (
+    CONSENT_CONTRACT_VERSION,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.store import GrantStore
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.pkce import make_s256_challenge
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.tests.test_clients_and_store import FakeRedis
@@ -56,6 +59,7 @@ def _consent_form(csrf=None, decision="approve", **over):
     f["decision"] = decision
     f["platform_grants"] = ["records:read"]
     f["tools"] = ["records_export"]
+    f["consent_contract_version"] = CONSENT_CONTRACT_VERSION
     if csrf is not None:
         f["csrf_token"] = csrf
     return f

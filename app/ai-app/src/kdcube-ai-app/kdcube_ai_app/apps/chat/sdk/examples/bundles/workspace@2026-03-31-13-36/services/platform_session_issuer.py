@@ -123,8 +123,17 @@ def delegated_consent_page(
     signout_action = _str(data.get("signout_action")) or "/oauth/logout"
     return_to = _str(data.get("return_to"))
 
+    contract_version = _str(
+        (data.get("consent_contract") or {}).get("version")
+        if isinstance(data.get("consent_contract"), Mapping)
+        else ""
+    )
     hidden = render_consent_authorize_hidden_inputs(oauth_fields)
     hidden += "\n" + _hidden_input("csrf_token", csrf_token)
+    hidden += "\n" + _hidden_input("consent_contract_version", contract_version)
+    hidden += "\n" + _hidden_input(
+        "expected_catalog_version", _str(data.get("catalog_version"))
+    )
 
     grants = data.get("platform_grants") if isinstance(data.get("platform_grants"), list) else []
     grant_rows = "\n".join(
@@ -151,6 +160,39 @@ def delegated_consent_page(
         for item in tools
         if isinstance(item, Mapping) and _str(item.get("name"))
     ) or '<p class="empty">No individual tools requested.</p>'
+
+    operations = (
+        data.get("named_service_operations")
+        if isinstance(data.get("named_service_operations"), list)
+        else []
+    )
+    operation_rows = "\n".join(
+        _checkbox_row(
+            name="named_service_operations",
+            value=f"{_str(item.get('namespace'))}:{_str(item.get('operation'))}",
+            title=f"{_str(item.get('namespace_label'))} · {_str(item.get('label'))}",
+            description=_str(item.get("description")),
+            detail=", ".join(_str(grant) for grant in (item.get("grants") or []) if _str(grant)),
+        )
+        for item in operations
+        if isinstance(item, Mapping) and _str(item.get("namespace")) and _str(item.get("operation"))
+    )
+    operations_html = ""
+    if operation_rows:
+        operations_html = f"""
+          <h2>Named-service operations</h2>
+          <p class="hint">Nothing is selected by default. Selecting none connects
+          this client without named-service access; it can be widened later in
+          Connection Hub.</p>
+          {_checkbox_row(
+              name="named_service_operations_all",
+              value="1",
+              title="Every operation offered right now",
+              description="Bound to the current service catalog; operations added later are not included.",
+              detail="",
+          )}
+{operation_rows}
+"""
 
     account_html = ""
     if grantor_label or grantor_subject:
@@ -233,6 +275,7 @@ def delegated_consent_page(
           <h2>Tool access</h2>
           <p class="hint">Select the concrete tools this client may call.</p>
 {tool_rows}
+{operations_html}
           <div class="actions">
             <button class="primary" type="submit" name="decision" value="approve">Approve</button>
             <button class="secondary" type="submit" name="decision" value="deny">Deny</button>
@@ -262,7 +305,7 @@ def delegated_consent_page(
   </script>
 </body>
 </html>"""
-    return {"html": html_body}
+    return {"html": html_body, "consent_contract_version": contract_version}
 
 
 async def google_login_page(

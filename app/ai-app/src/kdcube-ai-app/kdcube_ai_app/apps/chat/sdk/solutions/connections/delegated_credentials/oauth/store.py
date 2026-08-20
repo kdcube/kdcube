@@ -140,6 +140,8 @@ class GrantStore:
         grantor_authority: Optional[Dict[str, Any]] = None,
         delegation_edges: Optional[List[Dict[str, Any]]] = None,
         named_services: Optional[Dict[str, Any]] = None,
+        named_service_operations: Any = None,
+        catalog_version: str = "",
         account_scope: Optional[Dict[str, Any]] = None,
         client_metadata: Optional[Dict[str, Any]] = None,
     ) -> str:
@@ -157,6 +159,11 @@ class GrantStore:
             "grantor_authority": grantor_authority or {},
             "delegation_edges": list(delegation_edges or []),
             "named_services": named_services or {},
+            # The operator's operation choice and the catalog generation it was
+            # made against; carried to token exchange so the card is born with
+            # an explicit selection rather than an absent one.
+            "named_service_operations": named_service_operations,
+            "catalog_version": catalog_version or "",
             # Per-account claim picks made on the consent screen; carried to
             # token exchange so the registry card is born with the binding.
             "account_scope": dict(account_scope or {}),

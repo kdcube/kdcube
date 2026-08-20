@@ -108,6 +108,41 @@ async def _put(service: AutomationAccessService, record: AutomationAccessRecord)
 
 
 @pytest.mark.asyncio
+async def test_claims_alone_select_no_operation(card_persistence):
+    """Claims and the operation selection are independent dimensions.
+
+    A claim lets an operation pass the claim gate; it does not mean the user
+    chose every operation that claim technically opens. The create-side
+    leniency the design carried for pre-field callers — "an omitted
+    `named_service_operations` value is resolved to `"*"`" — made the omission
+    the normal path for agent and OAuth consent, which name claims and never
+    operations, so cards were born reaching a whole door.
+    """
+    service = _service(card_persistence)
+    created = await service.create_access(
+        USER, label="CI bot", resource_grants={RESOURCE: GRANTS}
+    )
+    access_id = created["access"]["access_id"]
+
+    assert await _stored(service, access_id) == ({}, [])
+    assert created["access"]["named_service_operations"] == {}
+
+
+@pytest.mark.asyncio
+async def test_an_explicit_wildcard_is_still_the_whole_offered_catalog(card_persistence):
+    """`"*"` survives as the explicit choice: everything offered right now."""
+    service = _service(card_persistence)
+    created = await service.create_access(
+        USER, label="CI bot", resource_grants={RESOURCE: GRANTS},
+        named_service_operations="*",
+    )
+
+    assert await _stored(service, created["access"]["access_id"]) == (
+        "*", ["mail", "slack"],
+    )
+
+
+@pytest.mark.asyncio
 async def test_manual_clear_survives_an_unrelated_update(card_persistence):
     service = _service(card_persistence)
     created = await service.create_access(
@@ -187,7 +222,8 @@ async def test_an_inherited_wildcard_is_frozen_into_what_it_already_meant(card_p
     """
     service = _service(card_persistence)
     created = await service.create_access(
-        USER, label="all ops", resource_grants={RESOURCE: GRANTS}
+        USER, label="all ops", resource_grants={RESOURCE: GRANTS},
+        named_service_operations="*",
     )
     access_id = created["access"]["access_id"]
 
@@ -216,7 +252,8 @@ async def test_freezing_a_wildcard_keeps_the_claims_that_same_save_adds(card_per
     """
     service = _service(card_persistence)
     created = await service.create_access(
-        USER, label="all ops", resource_grants={RESOURCE: GRANTS}
+        USER, label="all ops", resource_grants={RESOURCE: GRANTS},
+        named_service_operations="*",
     )
     access_id = created["access"]["access_id"]
     assert await _stored(service, access_id) == ("*", ["mail", "slack"])
@@ -440,9 +477,17 @@ async def test_saves_stamp_the_active_version_and_advance_the_revision(card_pers
 
 @pytest.mark.asyncio
 async def test_a_legacy_card_becomes_explicit_on_its_next_save(card_persistence):
+    """A pre-encoding record names no operations, so its save derives them.
+
+    The design resolves it from the tree the card materialized — "derive the
+    prior exact set from stored named_services" — not from a wildcard: a
+    wildcard would re-read the current catalog and hand the card whatever the
+    deployment added while it was legacy.
+    """
     service = _service(card_persistence)
     created = await service.create_access(
-        USER, label="CI bot", resource_grants={RESOURCE: GRANTS}
+        USER, label="CI bot", resource_grants={RESOURCE: GRANTS},
+        named_service_operations="*",
     )
     access_id = created["access"]["access_id"]
 
@@ -461,8 +506,8 @@ async def test_a_legacy_card_becomes_explicit_on_its_next_save(card_persistence)
         USER, access_id=access_id, resource_grants={RESOURCE: GRANTS}, label="Renamed",
     )
     selection, namespaces = await _stored(service, access_id)
-    assert selection == "*"
-    assert namespaces == ["mail", "slack"]
+    assert selection == {RESOURCE: {"slack": ["object.action", "object.search"]}}
+    assert namespaces == ["slack"]
     saved = await service._load_record(access_id, grantor_subject=USER["user_id"])
     assert saved.catalog_version
 
@@ -488,7 +533,8 @@ async def test_a_wildcard_does_not_pick_up_an_operation_added_after_it_was_issue
 
     service = _service(card_persistence)
     created = await service.create_access(
-        USER, label="all ops", resource_grants={RESOURCE: GRANTS}
+        USER, label="all ops", resource_grants={RESOURCE: GRANTS},
+        named_service_operations="*",
     )
     access_id = created["access"]["access_id"]
     assert await _stored(service, access_id) == ("*", ["mail", "slack"])
@@ -560,6 +606,7 @@ async def test_a_merging_re_consent_does_not_re_pin_a_wildcard(card_persistence)
     created = await service.create_access(
         USER, label="agent", client_id="kdcube-agent:app:merge1",
         resource_grants={RESOURCE: GRANTS},
+        named_service_operations="*",
     )
     access_id = created["access"]["access_id"]
     assert await _stored(service, access_id) == ("*", ["mail", "slack"])
@@ -626,6 +673,7 @@ async def test_a_merging_extension_adds_to_the_frozen_set_instead_of_reopening(
     created = await service.create_access(
         USER, label="agent", client_id="kdcube-agent:app:merge3",
         resource_grants={RESOURCE: GRANTS},
+        named_service_operations="*",
     )
     access_id = created["access"]["access_id"]
     assert await _stored(service, access_id) == ("*", ["mail", "slack"])
@@ -643,3 +691,290 @@ async def test_a_merging_extension_adds_to_the_frozen_set_instead_of_reopening(
     assert sorted(selection[RESOURCE]["slack"]) == [
         "object.action", "object.schema", "object.search",
     ]
+
+
+@pytest.mark.asyncio
+async def test_every_family_edits_its_authority_and_keeps_its_credential(card_persistence):
+    """The source records how the credential is managed, not who may change
+    authority.
+
+    Editing ran through a manual-only path that also blanked the record's
+    credential fields, so opening it to the other families would have destroyed
+    an agent's reusable bearer and an OAuth client's token handles. The card
+    keeps them: the design's own line is that the families' mutation surfaces
+    differ while their authority semantics do not.
+    """
+    service = _service(card_persistence)
+    seed = await service.create_access(
+        USER, label="seed", resource_grants={RESOURCE: GRANTS},
+        named_service_operations="*",
+    )
+    template = await service._load_record(
+        seed["access"]["access_id"], grantor_subject=USER["user_id"]
+    )
+
+    for source, card_id in (("agent", "agent-edit-1"), ("oauth", "oauth-edit-1")):
+        await _put(service, replace(
+            template,
+            access_id=card_id,
+            source=source,
+            card_revision=0,
+            access_token=f"at-{source}",
+            refresh_token=f"rt-{source}",
+            last_issued_at=1_780_000_000,
+        ))
+
+        saved = await service.update_access(
+            USER, access_id=card_id, resource_grants={RESOURCE: GRANTS},
+            named_service_operations={RESOURCE: {"slack": ["object.search"]}},
+        )
+        assert saved["ok"] is True, saved
+
+        record = await service._load_record(card_id, grantor_subject=USER["user_id"])
+        assert record.named_service_operations.to_stored() == {
+            RESOURCE: {"slack": ["object.search"]}
+        }
+        assert record.access_token == f"at-{source}"
+        assert record.refresh_token == f"rt-{source}"
+        assert record.last_issued_at == 1_780_000_000
+        assert record.source == source
+
+
+@pytest.mark.asyncio
+async def test_an_external_client_edit_reaches_the_named_service_dimension(card_persistence):
+    """`extend_client_access` rewrote claims and account binding only.
+
+    Its card kept whatever boundary OAuth consent left, so the one entrance an
+    external client's grant is edited through could not change the dimension the
+    catalog work is about. It resolves authority through the same path as every
+    other save now, including the catalog stamp.
+    """
+    service = _service(card_persistence)
+    seed = await service.create_access(
+        USER, label="seed", resource_grants={RESOURCE: GRANTS},
+        named_service_operations="*",
+    )
+    template = await service._load_record(
+        seed["access"]["access_id"], grantor_subject=USER["user_id"]
+    )
+    card_id = oauth_access_id(USER["user_id"], "claude", RESOURCE)
+    await _put(service, replace(
+        template,
+        access_id=card_id,
+        client_id="claude",
+        source="oauth",
+        card_revision=0,
+        catalog_version="",
+        access_token="at-claude",
+        refresh_token="rt-claude",
+    ))
+
+    result = await service.extend_client_access(
+        USER,
+        client_id="claude",
+        resource=RESOURCE,
+        claims=GRANTS,
+        named_service_operations={RESOURCE: {"slack": ["object.search"]}},
+        replace=True,
+    )
+    assert result["ok"] is True, result
+
+    record = await service._load_record(card_id, grantor_subject=USER["user_id"])
+    assert record.named_service_operations.to_stored() == {
+        RESOURCE: {"slack": ["object.search"]}
+    }
+    assert sorted((record.named_services or {}).get("namespaces") or {}) == ["slack"]
+    assert record.catalog_version
+    assert record.access_token == "at-claude"
+    assert record.refresh_token == "rt-claude"
+
+
+@pytest.mark.asyncio
+async def test_an_oauth_card_is_born_with_a_selection_and_a_catalog_version(card_persistence):
+    """`record_oauth_grant` initialised its carry-forward fields for a rotation
+    and persisted them on birth, so a first consent wrote `unknown` with no
+    catalog version — a card bounded by nothing and pinned to nothing.
+    """
+    service = _service(card_persistence)
+
+    await service.record_oauth_grant(
+        grantor_subject=USER["user_id"],
+        client_id="claude",
+        scopes=GRANTS,
+        resource=RESOURCE,
+        access_token="at",
+        refresh_token="rt",
+        named_service_operations={RESOURCE: {"slack": ["object.search"]}},
+        catalog_version="delegated_catalog_2026-08-20-00-00-00-000_aaaaaaaaaaaa",
+    )
+
+    card_id = oauth_access_id(USER["user_id"], "claude", RESOURCE)
+    record = await service._load_record(card_id, grantor_subject=USER["user_id"])
+    assert record.named_service_operations.to_stored() == {
+        RESOURCE: {"slack": ["object.search"]}
+    }
+    assert sorted((record.named_services or {}).get("namespaces") or {}) == ["slack"]
+    assert record.catalog_version == "delegated_catalog_2026-08-20-00-00-00-000_aaaaaaaaaaaa"
+
+
+@pytest.mark.asyncio
+async def test_a_refresh_rotation_writes_no_authority(card_persistence):
+    """Rotation updates credential handles only."""
+    service = _service(card_persistence)
+    await service.record_oauth_grant(
+        grantor_subject=USER["user_id"],
+        client_id="claude",
+        scopes=GRANTS,
+        resource=RESOURCE,
+        access_token="at-1",
+        refresh_token="rt-1",
+        named_service_operations={RESOURCE: {"slack": ["object.search"]}},
+        catalog_version="delegated_catalog_2026-08-20-00-00-00-000_aaaaaaaaaaaa",
+    )
+    card_id = oauth_access_id(USER["user_id"], "claude", RESOURCE)
+
+    await service.record_oauth_grant(
+        grantor_subject=USER["user_id"],
+        client_id="claude",
+        scopes=GRANTS,
+        resource=RESOURCE,
+        access_token="at-2",
+        refresh_token="rt-2",
+        named_service_operations="*",
+        catalog_version="delegated_catalog_2026-08-20-11-11-11-111_bbbbbbbbbbbb",
+    )
+
+    record = await service._load_record(card_id, grantor_subject=USER["user_id"])
+    assert record.named_service_operations.to_stored() == {
+        RESOURCE: {"slack": ["object.search"]}
+    }
+    assert record.catalog_version == "delegated_catalog_2026-08-20-00-00-00-000_aaaaaaaaaaaa"
+    assert record.access_token == "at-2"
+    assert record.refresh_token == "rt-2"
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_pre_encoding_boundary_is_not_guessed(card_persistence):
+    """Deriving would produce {} — indistinguishable from an explicit nothing.
+
+    The design refuses to guess here: the server reports
+    `migration_confirmation_required` and the record is left alone until an
+    explicit selection is submitted.
+    """
+    service = _service(card_persistence)
+    created = await service.create_access(
+        USER, label="legacy", resource_grants={RESOURCE: GRANTS},
+        named_service_operations="*",
+    )
+    access_id = created["access"]["access_id"]
+    current = await service._load_record(access_id, grantor_subject=USER["user_id"])
+    await _put(service, replace(
+        current,
+        named_service_operations=NamedServiceSelection.unknown(),
+        named_services={"namespaces": {"slack": {"tools": {}}}},
+        catalog_version="",
+    ))
+
+    refused = await service.update_access(
+        USER, access_id=access_id, resource_grants={RESOURCE: GRANTS}, label="Renamed",
+    )
+
+    assert refused["ok"] is False
+    assert refused["error"] == "migration_confirmation_required"
+    assert refused["reason"] == "materialized_boundary_names_no_operation"
+    assert refused["recovery"]["retry_same_request"] is False
+    # Nothing was rewritten.
+    stored = await service._load_record(access_id, grantor_subject=USER["user_id"])
+    assert stored.named_service_operations.is_unknown
+    assert stored.card_revision == current.card_revision
+
+    # The same card saves once the operator states what it should mean.
+    saved = await service.update_access(
+        USER, access_id=access_id, resource_grants={RESOURCE: GRANTS},
+        named_service_operations={RESOURCE: {"slack": ["object.search"]}},
+    )
+    assert saved["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_readable_pre_encoding_record_still_migrates_silently(card_persistence):
+    """Ambiguity is the exception; an interpretable boundary needs no operator."""
+    service = _service(card_persistence)
+    created = await service.create_access(
+        USER, label="legacy", resource_grants={RESOURCE: GRANTS},
+        named_service_operations="*",
+    )
+    access_id = created["access"]["access_id"]
+    current = await service._load_record(access_id, grantor_subject=USER["user_id"])
+    await _put(service, replace(
+        current,
+        named_service_operations=NamedServiceSelection.unknown(),
+        catalog_version="",
+    ))
+
+    saved = await service.update_access(
+        USER, access_id=access_id, resource_grants={RESOURCE: GRANTS}, label="Renamed",
+    )
+
+    assert saved["ok"] is True
+    stored = await service._load_record(access_id, grantor_subject=USER["user_id"])
+    assert stored.named_service_operations.is_exact
+
+
+@pytest.mark.asyncio
+async def test_listing_reports_the_ambiguity_without_rewriting_the_card(card_persistence):
+    service = _service(card_persistence)
+    created = await service.create_access(
+        USER, label="legacy", resource_grants={RESOURCE: GRANTS},
+        named_service_operations="*",
+    )
+    access_id = created["access"]["access_id"]
+    current = await service._load_record(access_id, grantor_subject=USER["user_id"])
+    await _put(service, replace(
+        current,
+        named_service_operations=NamedServiceSelection.unknown(),
+        named_services={"namespaces": {"slack": {"tools": {}}}},
+        catalog_version="",
+    ))
+
+    listed = await service.list_access(USER)
+    item = next(row for row in listed["items"] if row["access_id"] == access_id)
+
+    assert item["migration"]["state"] == "migration_confirmation_required"
+    stored = await service._load_record(access_id, grantor_subject=USER["user_id"])
+    assert stored.card_revision == current.card_revision
+
+
+@pytest.mark.asyncio
+async def test_a_delegate_cannot_change_the_card_that_issued_it(card_persistence):
+    """Authority is the grantor's to change, on every entrance.
+
+    The delegate would find nothing under a grantor-keyed index either, but the
+    shared mutation path makes that an explicit rule rather than a side effect
+    of how cards are indexed.
+    """
+    service = _service(card_persistence)
+    created = await service.create_access(
+        USER, label="CI bot", resource_grants={RESOURCE: GRANTS},
+        named_service_operations="*",
+    )
+    access_id = created["access"]["access_id"]
+    delegate = {"user_id": f"integration:automation:{USER['user_id']}"}
+
+    for result in (
+        await service.update_access(
+            delegate, access_id=access_id, resource_grants={RESOURCE: GRANTS},
+        ),
+        await service.create_access(
+            delegate, label="x", resource_grants={RESOURCE: GRANTS},
+        ),
+        await service.revoke_access(delegate, access_id=access_id),
+        await service.extend_client_access(
+            delegate, client_id="claude", resource=RESOURCE, claims=GRANTS,
+        ),
+    ):
+        assert result["ok"] is False
+        assert result["error"] == "delegated_access_requires_grantor"
+
+    stored = await service._load_record(access_id, grantor_subject=USER["user_id"])
+    assert stored is not None and stored.card_revision == 1

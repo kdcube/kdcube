@@ -81,6 +81,10 @@ class MCPConsentRequired(Exception):
         }
         if c.get("agent_client_id"):
             consent_block["agent_client_id"] = c["agent_client_id"]
+        if c.get("namespace"):
+            consent_block["namespace"] = c["namespace"]
+        if c.get("operation"):
+            consent_block["operation"] = c["operation"]
         if c.get("grant"):
             consent_block["grant"] = c["grant"]
         return {
@@ -141,6 +145,8 @@ def mcp_consent_from_denial(
     connection_hub_url: str = "",
     tool_name: str = "",
     agent_client_id: str = "",
+    namespace: str = "",
+    operation: str = "",
 ) -> MCPConsentRequired:
     """Build the `MCPConsentRequired` from a KDCube-MCP denial + the connection's
     declared claims. The claims come from the caller (the `kind: mcp` connection's
@@ -149,14 +155,21 @@ def mcp_consent_from_denial(
     ``agent_client_id`` (the calling agent's ``kdcube-agent:<app>:<agent>``
     identity) makes the demand actionable: the payload carries a ``grant`` block —
     the Connection Hub operation + args — a consent surface POSTs to grant THIS
-    agent the claims, distinct from a connect-an-account flow."""
+    agent the claims, distinct from a connect-an-account flow.
+
+    ``namespace`` / ``operation`` name the inner capability the call wanted.
+    Approval grants that operation, not every operation its claims allow."""
     claim_list = [str(c).strip() for c in (claims or []) if str(c).strip()]
     label = tool_name or resource.rsplit("/", 1)[-1] or "this tool"
     claims_str = ", ".join(claim_list) or "the required access"
+    asked = f"the operation {operation}" if operation else ""
+    if asked and claim_list:
+        asked = f"{asked} and {claims_str}"
+    asked = asked or claims_str
     agent_message = (
-        f"{label} needs the user's consent to {claims_str}. It is blocked until the "
+        f"{label} needs the user's consent to {asked}. It is blocked until the "
         f"user grants it in Connection Hub (Delegated by KDCube). Tell the user you "
-        f"need their approval for {claims_str}; do not retry until they grant it."
+        f"need their approval for {asked}; do not retry until they grant it."
     )
     consent: Dict[str, Any] = {
         "code": CONSENT_NEEDED_CODE,
@@ -168,13 +181,24 @@ def mcp_consent_from_denial(
         consent["connection_hub_url"] = connection_hub_url
     if tool_name:
         consent["tool_name"] = tool_name
+    if namespace:
+        consent["namespace"] = namespace
+    if operation:
+        consent["operation"] = operation
     if agent_client_id:
         # The one-click grant action for this demand (user grants THIS agent).
         consent["kind"] = CONSENT_KIND_AGENT_GRANT
         consent["agent_client_id"] = agent_client_id
+        grant_payload: Dict[str, Any] = {
+            "client_id": agent_client_id,
+            "resource": resource,
+            "claims": claim_list,
+        }
+        if namespace and operation:
+            grant_payload["named_service_operations"] = {namespace: [operation]}
         consent["grant"] = {
             "operation": AGENT_GRANT_CREATE_OPERATION,
-            "payload": {"client_id": agent_client_id, "resource": resource, "claims": claim_list},
+            "payload": grant_payload,
         }
     return MCPConsentRequired(
         resource=resource, claims=claim_list, consent=consent, agent_message=agent_message,

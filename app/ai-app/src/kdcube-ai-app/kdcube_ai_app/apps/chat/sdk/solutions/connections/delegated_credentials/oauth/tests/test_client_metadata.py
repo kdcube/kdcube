@@ -29,6 +29,9 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oau
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.config import (
     OAuthDelegatedClientMetadataDocumentsConfig,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.consent import (
+    CONSENT_CONTRACT_VERSION,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.pkce import (
     make_s256_challenge,
 )
@@ -431,6 +434,7 @@ def _run_metadata_client_lifecycle(client, store):
             **_authorize_params(),
             "csrf_token": match.group(1),
             "decision": "approve",
+            "consent_contract_version": CONSENT_CONTRACT_VERSION,
             "platform_grants": "records:read",
             "tools": "records_export",
         },
@@ -526,6 +530,7 @@ def test_metadata_change_after_display_requires_fresh_consent():
             **_authorize_params(),
             "csrf_token": match.group(1),
             "decision": "approve",
+            "consent_contract_version": CONSENT_CONTRACT_VERSION,
             "platform_grants": "records:read",
         },
         headers={"Authorization": "Bearer admin-tok"},

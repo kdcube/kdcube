@@ -1109,11 +1109,18 @@ def test_named_service_boundary_narrowed_to_nothing_reaches_the_bridge(monkeypat
     assert boundary == {"namespaces": {}}
 
 
-def test_named_service_boundary_falls_back_to_the_snapshot_on_a_legacy_card(monkeypatch):
-    """Cards written before the field keep the bound snapshot."""
+def test_a_card_that_materialized_nothing_is_bounded_by_nothing(monkeypatch):
+    """A pre-encoding card is bounded by what it materialized, not by the
+    binding's embedded snapshot.
+
+    The boundary key was omitted when a card carried neither a selection nor a
+    tree, and an absent key leaves the descriptor as the only ceiling — so a
+    record whose writer never filled the field reached every namespace the
+    deployment configures.
+    """
     boundary = _boundary(monkeypatch, named_services={})
 
-    assert set(boundary["namespaces"]) == {"stale"}
+    assert boundary == {}
 
 
 # -- current-catalog intersection ----------------------------------------------

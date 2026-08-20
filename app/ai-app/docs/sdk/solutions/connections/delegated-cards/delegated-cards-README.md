@@ -29,9 +29,9 @@ The card is the user's live delegated-authority record, not a cached
 illustration of a token. Pointer-backed credentials identify the card, and the
 managed guard resolves its current contents on each call. Editing or revoking
 the card therefore changes the next call made with an already-issued bearer.
-The deployment descriptor is intended to remain the ceiling around that user
-decision. The descriptor-drift section below records where the current
-implementation does not yet preserve that invariant.
+The deployment descriptor, published as the delegated catalog, is the ceiling
+around that user decision: every governed call intersects the card with the
+active catalog, so a withdrawn capability is denied without editing the card.
 
 The card is also not a copy of the entire current service catalog. It stores
 the user's selected authority. Connection Hub separately reads the live
@@ -78,31 +78,7 @@ different authorization model.
 
 ## Stored Record
 
-### Current Redis-only implementation
-
-The current implementation stores each record in Redis:
-
-```text
-{tenant}:{project}:kdcube:delegated-access:automation:{access_id}
-{tenant}:{project}:kdcube:delegated-access:automation-by-grantor:{subject_hash}
-```
-
-The first key holds the record with a TTL. The second is the grantor's set of
-card ids. Expired or missing ids are pruned from the set during list.
-
-This is not sufficient as the durable card model. The record key is written
-with `SETEX`, so expiry erases the only copy of the authorization decision.
-Manual and hosted-agent cards default to one hour and are bounded to seven
-days. OAuth cards use the refresh-token lifetime, currently 180 days, and renew
-on token issuance. Runtime safely denies a missing or expired record, but no
-card provenance remains.
-
-The grantor index is also assigned a fixed seven-day TTL. An idle OAuth card can
-therefore disappear from Connection Hub's list while its card record and
-refresh authority remain live. Later OAuth issuance adds it to the index again,
-but the user may lose the visible revocation path in the meantime.
-
-### Required durable record and live cache
+### Durable record and live cache
 
 Connection Hub bundle storage is the durable source of truth. Redis is the
 TTL-managed live projection of the latest committed card revision:
@@ -180,7 +156,7 @@ outage blocks cache-miss recovery and every mutation; a governed request whose
 validated card and active catalog are already hot in Redis does not perform a
 durable read.
 
-### Current record fields
+### Record fields
 
 | Field | Meaning | Public list response |
 | --- | --- | --- |
@@ -189,34 +165,34 @@ durable read.
 | `grantor_subject`, `delegate_subject` | User who granted and integration principal that acts. | yes; list is also owner-scoped to the authenticated grantor. |
 | `operations` | Allowed outer API/MCP operation names derived at issuance or save. | yes |
 | `resource_grants` | Exact selected KDCube claims per resource. | yes |
-| `named_service_operations` | Exact selected namespace operations per resource. This is the selection the UI renders. | yes when non-empty; the current public serializer drops explicit `{}`. |
-| `named_services` | Materialized boundary tree derived from the descriptor and `named_service_operations`. The proc-side bridge consumes it. | no |
+| `named_service_operations` | The card's selection: `"*"`, `{}`, or an exact resource -> namespace -> operation map. | yes, verbatim, including `{}` and `"*"` |
+| `named_services` | Materialized boundary tree derived from the descriptor and `named_service_operations`. The proc-side bridge consumes it. | no; its expansion surfaces as `effective_named_service_operations` |
+| `effective_named_service_operations` | The selection expanded under the catalog version the card was saved against. Derived, never authority. | yes when the card covers any operation |
+| `catalog_version`, `card_revision` | The catalog generation this card was last saved against, and its monotonic revision. | yes |
 | `account_scope` | Provider -> account -> exact connected-account claims this caller may use. | yes when non-empty |
 | `identity_scope` | Which identity boundary the delegated resource uses. | yes |
 | `created_at`, `expires_at`, `last_issued_at` | Lifecycle timestamps. | yes when present |
 | `last_four`, `source` | Token fingerprint and card family. | yes |
 | `session_id`, `access_token`, `refresh_token` | Internal credential/revocation handles, according to source. | no |
 
-In the target split, every authority and lifecycle field above is copied into
-the immutable durable revision except `session_id`, `access_token`, and
-`refresh_token`. Those three fields may exist only in dedicated TTL-managed
-live stores, separate from the reconstructable card-authority projection.
+Every authority and lifecycle field above is copied into the immutable durable
+revision except `session_id`, `access_token`, and `refresh_token`. Those three
+live only in dedicated TTL-managed stores, separate from the reconstructable
+card-authority projection.
 
 `to_public_dict()` removes all token material, `session_id`, and the internal
 `named_services` boundary. A public card exposes the selection, never the
 provider credential or the materialized enforcement tree.
 
-The current record shape has one important ambiguity. Deserialization maps a
-missing selection and an explicit empty selection to the same `{}`, while the
-public serializer also drops `{}`. The code can therefore distinguish
-"unrestricted" from "disabled" during the update that receives the input, but
-not reliably on a later update that omits the field. This is a current defect,
-not part of the intended contract described below.
+The selection is retained verbatim, so a refetch preserves the difference
+between the four states:
 
-Consequently, after a list/refetch, absence of a public Services selection can
-currently mean either "use the full descriptor policy" or "no named-service
-operation is allowed." The read-only card and editor need the durable mode
-described under edit semantics before they can label those states reliably.
+| Stored | Meaning |
+| --- | --- |
+| `"*"` | Every named-service operation present in the referenced `catalog_version`. Operations added later are not included. |
+| `{}` | No named-service operation. |
+| exact map | That resource -> namespace -> operation selection. |
+| field absent | A record written before this encoding. Its prior set is derived from the materialized boundary. |
 
 Connected provider credentials are stored by the delegated-to-KDCube account
 system, not in these cards. `account_scope` contains ids and claims only.
@@ -408,21 +384,24 @@ This produces two deliberately different views:
 - Available resources, claims, namespaces, and operations come from the live
   descriptor-backed catalogs.
 - Check states begin from the stored card selection during edit.
-- Claim editing currently unions the card's stored claims with the current
-  resource claim catalog, so a removed stored claim remains visible and can be
-  unchecked.
-- Named-service operation rows currently come only from the live catalog. A
-  stored operation removed from that catalog has no row in the picker.
+- Claim editing unions the card's stored claims with the current resource claim
+  catalog, so a removed stored claim remains visible and can be unchecked.
+- Named-service operation rows come from the live catalog, ticked from the
+  card's coverage (`effective_named_service_operations`) intersected with what
+  the catalog still offers. An operation the catalog added after the card was
+  saved appears unchecked.
+- The picker is offered for every card family.
 - Account rows come from current connected accounts. A disconnected account is
   visible in read-only mode but is not seeded into the edit picker.
 
 The direct answer to "where does the Services list come from?" is therefore:
 
 ```text
-read-only Services row    -> card.named_service_operations (stored selection)
+read-only Services row    -> card.effective_named_service_operations (coverage)
 create/edit Services rows -> resources[].named_services (live descriptor catalog)
+edit check states         -> coverage ∩ what the catalog still offers
 provider prerequisites    -> live named-service discovery metadata
-account choices            -> live delegated-to-KDCube account catalog
+account choices           -> live delegated-to-KDCube account catalog
 ```
 
 ## Creation Lifecycle
@@ -444,10 +423,11 @@ authenticated user opens create form
 
 ```text
 agent attempts a governed operation
-  -> denial names deterministic kdcube-agent:<app>:<agent> client
-  -> user approves the demand in Connection Hub
+  -> denial names the deterministic kdcube-agent:<app>:<agent> client, the
+     namespace and the operation it was refused
+  -> user approves the demand in Connection Hub, with that operation pre-selected
   -> create_access deduplicates by grantor + client + resources
-  -> ordinary consent merges newly approved authority
+  -> approval merges exactly the approved authority
   -> explicit edit uses replace semantics
   -> reusable agent bearer and card are stored server-side
 ```
@@ -456,9 +436,13 @@ agent attempts a governed operation
 
 ```text
 external client completes OAuth consent
+  -> consent submits its contract version, the catalog version it was rendered
+     from, and the operation selection
+  -> authorization code carries that selection
   -> token endpoint issues access/refresh material
-  -> record_oauth_grant upserts one card per grantor + client + resource
-  -> refresh rotation updates current token handles and last_issued_at
+  -> record_oauth_grant writes one card per grantor + client + resource, born
+     with the submitted selection and the catalog version
+  -> refresh rotation updates token handles, expiry and last_issued_at only
   -> user edits or revokes the same visible card later
 ```
 
@@ -466,15 +450,59 @@ A reconnecting dynamic client may receive a new client id. Connection Hub can
 supersede a matching older card, carry its account binding forward, and revoke
 the old token handles.
 
+### Consent view model
+
+Connection Hub builds one view model per authorize request and hands it to
+whichever renderer serves the page — the built-in one or a bundle-hosted
+`consent_ui`. A custom renderer changes presentation, never the authorization
+contract.
+
+```text
+consent_contract.version
+catalog_version
+platform_grants
+tools                       (outer operations)
+named_service_operations    (namespace, operation, required claims)
+connected_accounts
+seeded_account_scope
+request / oauth_request     (client and PKCE metadata)
+```
+
+A renderer returns the contract version it implements alongside its HTML. An
+absent or mismatched version is refused with `consent_ui_contract_mismatch`
+before the page is shown, so a page that never rendered a dimension cannot
+report a choice about it.
+
+The submitted form carries `consent_contract_version`,
+`expected_catalog_version`, and the operation selection:
+
+| Submitted | Result |
+| --- | --- |
+| Every offered operation selected | `"*"`, bound to the catalog version shown on the page. |
+| Some operations selected | That exact selection, re-validated against the catalog. |
+| None selected | `{}`. The connection is created without named-service access and can be widened later in Connection Hub. |
+| `consent_contract_version` absent | No authorization code and no card. |
+| `expected_catalog_version` no longer active | `consent_catalog_changed`; authorization restarts rather than reinterpreting the selection. |
+
 ## Edit Semantics
 
 The card's selected authority is changed in place. No new manual token is
 issued, and a pointer-backed caller observes the change on its next request.
 
-### Manual card
+Authority is changed by the grantor, under their KDCube identity, wherever the
+edit was initiated from. A caller authenticated as the delegate
+(`integration:<client>:<grantor>`) is refused with
+`delegated_access_requires_grantor`.
 
-`delegated_access_update` is intended to validate and rewrite the record with
-this contract:
+### Any card: `delegated_access_update`
+
+One source-neutral edit serves all three families. The card keeps its
+`access_id` and its credential material — an agent's reusable bearer, an OAuth
+client's token handles, a manual card's client-side token — and the new
+authority applies on the caller's next request, with no re-mint and no
+re-authorization.
+
+`delegated_access_update` validates and rewrites the record with this contract:
 
 | Input | Meaning |
 | --- | --- |
@@ -494,12 +522,6 @@ that materialized tree contains the exact operation set present at Save time;
 governed execution can therefore intersect the card with current
 `active.json.connections` without loading catalog history.
 
-At the current PR head, non-empty preservation and an immediate explicit clear
-work, but the clear state is not represented durably. After
-`named_service_operations: {}` stores an empty selection, a later update that
-omits the field can interpret that empty value as "no narrowing" and rebuild
-the full descriptor policy.
-
 The persisted `named_service_operations` field carries the complete policy:
 
 | Stored value | Meaning |
@@ -508,18 +530,28 @@ The persisted `named_service_operations` field carries the complete policy:
 | `{}` | Permit no named-service operation. |
 | Resource/namespace/operation map | Permit exactly the named entries. |
 
-The list response must retain both `"*"` and `{}`. New records always persist
-one of the three forms; field omission remains an update-request instruction,
-not stored policy. A **pre-migration card record** is an ordinary card written
-before `catalog_version`, `card_revision`, and this unambiguous encoding were
-introduced. Such a record cannot be interpreted from an empty
-`named_service_operations` map alone because older full-boundary records
-serialized the same value. Lazy migration inspects raw field presence and the
-persisted materialized `named_services` boundary, derives the prior exact
-operation set, and does not mutate on GET. If those facts conflict, GET
-preserves the effective narrowed selection and asks for an explicit choice on
-Save; it does not guess. The next successful Save writes the explicit new
-representation.
+The list response retains both `"*"` and `{}`. New records always persist one of
+the three forms.
+
+Omission means different things per direction:
+
+| Direction | Omitted `named_service_operations` |
+| --- | --- |
+| create | `{}`. Claims do not select operations; `"*"` is stored only when the user chose every operation the current catalog offers. |
+| update | Preserve the card's own policy. A preserved `"*"` is written out as the exact set it already meant, so an unrelated save cannot re-pin it to a newer catalog. |
+
+A **pre-migration card record** is an ordinary card written before
+`catalog_version`, `card_revision`, and this encoding were introduced. Its prior
+set is derived from the persisted materialized `named_services` boundary; GET
+does not mutate it. Where that derivation would change authority silently, the
+server reports `migration_confirmation_required` and refuses a save that carries
+no explicit selection:
+
+| Condition | Why it is not derivable |
+| --- | --- |
+| The boundary names no operation. | Deriving yields `{}`, indistinguishable from a deliberate empty selection. |
+| The derived set is empty against the active catalog. | The migration would revoke without an operator decision. |
+| The card holds more than one named-service resource. | The boundary is stored as one merged tree; per-resource attribution is not recoverable. |
 
 When an existing `"*"` card is saved after catalog drift without an explicit
 new wildcard choice, the backend expands the wildcard against the saved
@@ -529,24 +561,29 @@ from the current catalog and binds that wildcard to the new version.
 
 ### Agent card
 
-Demand-driven approval merges by default so separate approved demands
-accumulate. An edit calls the same creation service with
-`merge_existing=False`; submitted resource claims replace that resource's
-selection, while omitted `account_scope` and `named_service_operations`
-preserve their stored values. Explicit empty maps clear those dimensions.
+An agent card has a second entrance: the consent demand. It MERGES exactly the
+capability that was refused — the namespace and operation the demand names, with
+the claims and account binding they need — into the card's existing selection.
+The card's own side is frozen into what it already meant before the merge, so a
+one-click approval never re-pins a `"*"` to a newer catalog.
 
-The current ordinary agent-card editor exposes resource claims and account
-scope. Pending consent can submit exact named-service operations. The backend
-supports the same absent/empty/content contract when that field is supplied.
-The same wildcard/empty/exact persisted contract resolves the current
-empty-versus-absent ambiguity.
+`delegated_agent_grant_create` merges by default, so separate approved demands
+accumulate. With `replace: true` the submitted resource claims replace that
+resource's selection; omitted `account_scope` and `named_service_operations`
+preserve their stored values, and explicit empty maps clear those dimensions.
 
 ### OAuth card
 
 `extend_client_access` merges a one-click extension or replaces one resource's
-claims during edit. It also merges or replaces `account_scope`. The current
-OAuth card edit path does not rewrite `named_service_operations`; its
-named-service boundary remains the one established by OAuth consent.
+claims, and merges or replaces `account_scope`. It resolves authority through
+the same path as every other save, so it also rewrites
+`named_service_operations`, the materialized boundary, and the catalog stamp.
+
+Re-authorization is not required to change an OAuth card: the edit rewrites the
+live card and the existing pointer-backed bearer sees the new authority on its
+next call. A refresh rotation updates credential handles, expiry, and
+`last_issued_at` only — it neither restores an older operation selection nor
+widens one.
 
 ## Runtime Enforcement Lifecycle
 
@@ -566,7 +603,7 @@ request bearer
        flattened grants/scopes
        operations
        account_scope
-       named_services materialized boundary, when present
+       named_services materialized boundary, always set
   -> enforce outer resource/tool gate
   -> enforce named-service namespace/operation boundary
   -> resolve a permitted connected account and its claims, when required
@@ -578,9 +615,12 @@ authority fails closed. Revocation deletes the card and invalidates the
 source-specific session/token records, so an in-flight bearer cannot recover
 authority from its older embedded snapshot.
 
-Legacy bindings without `registry_access_id` retain embedded-snapshot
-semantics. A card written before the internal `named_services` field keeps the
-binding's original named-service snapshot until its first compatible save.
+Legacy bindings without `registry_access_id` retain embedded-snapshot semantics
+for the card's own facts; the active-catalog intersection still applies to them.
+
+The named-service boundary is always carried, including when it is empty. An
+absent boundary would leave the descriptor as the only ceiling, so a card that
+materialized nothing permits nothing.
 
 ## Descriptor And Catalog Drift
 
@@ -592,43 +632,30 @@ current catalog        = what the deployment offers now
 effective authority    = never more than both permit
 ```
 
-The current implementation does not yet satisfy that last equation for every
-dimension after a descriptor change.
-
-### Current behavior
+### Behavior on a descriptor change
 
 | Descriptor change | Card/list behavior | Runtime behavior |
 | --- | --- | --- |
-| A claim or operation is added | It appears in the live create/edit catalog. Existing cards do not select it automatically. | Existing explicit selections do not gain it. |
-| A stored top-level claim is removed | Claim edit unions stored and current values, so the stale claim remains visible and removable. | The live guard currently copies stored `resource_grants` without clamping them to the current resource ceiling. |
-| A stored named-service operation is removed | Read-only view still shows the stored operation. The edit picker omits it because rows come from the live catalog. Strict save then rejects the invisible stale value as unknown. | The card's materialized `named_services` snapshot still includes the operation, so the inner bridge can continue to admit it. |
-| A whole stored resource is removed | The card still names it, while current resource metadata is absent. A normal save fails current-resource validation. | Pointer resolution still projects the stored resource grant. |
+| A claim or operation is added | It appears in the live create/edit catalog, unchecked. Existing cards do not select it automatically. | Existing selections do not gain it; a card holding `"*"` is bound to the catalog version it was saved against. |
+| A stored top-level claim is removed | Drift marks it removed; the claim editor still renders it so it can be unticked, and Save prunes it. | The governed call intersects the card with the active catalog and denies it. |
+| A stored named-service operation is removed | Drift marks it removed and states that it is already ineffective. | Denied immediately, even while provider code still implements the operation. |
+| A whole stored resource is removed | Drift marks the resource removed; Save prunes it, and a card left with no authority is revoked rather than kept. | Denied immediately. |
 
-The named-service case makes the card a dead end: the operator cannot untick an
-operation that the picker no longer renders, and unrelated edits fail until
-the descriptor is restored or the card is revoked.
+Two mechanisms hold that together:
 
-### Required reconciliation contract
+1. **Enforcement clamps immediately.** A governed call reads complete cached
+   `active.json` from Redis and intersects its embedded `connections` mapping
+   with the card. A Redis TTL miss reads through to the committed durable
+   `active.json` and repopulates Redis with the configured fixed TTL. It returns
+   `503 temporarily_unavailable` when that document cannot be obtained or its
+   `content_hash` does not match its embedded mapping.
+2. **The editor explains and repairs stored drift.** List and edit return a
+   server-computed drift projection. The UI shows **Service access changed since
+   this grant was last saved**, with details: removed selections are already
+   ineffective and are removed on save; newly available choices stay unchecked
+   until explicitly granted.
 
-The fix has two independent parts and both are required:
-
-1. **Enforcement clamps immediately.** A descriptor removal must reduce
-   effective authority before the user opens or saves the card. The enforcing
-   path needs an authoritative current ceiling without coupling a generic
-   surface guard to Connection Hub's storage or transport details. A governed
-   call reads complete cached `active.json` from Redis and intersects its
-   embedded `connections` mapping with the card. A Redis TTL miss may read
-   through to complete committed durable `active.json` and repopulate Redis
-   with the configured fixed TTL. It returns `503 temporarily_unavailable` if
-   that document cannot be obtained or its `content_hash` does not match its
-   embedded mapping.
-2. **The editor explains and repairs stored drift.** List/edit should return a
-   server-computed drift projection. The UI shows a visible warning such as
-   **Service access changed since this grant was last saved**, with details:
-   removed selections are no longer effective and will be removed on save;
-   newly available choices remain unchecked until explicitly granted.
-
-Save should reconcile in this order:
+Save reconciles in this order:
 
 ```text
 stored selection
@@ -746,10 +773,8 @@ instance for process-local reconciliation; `on_bundle_load` remains
 per-process initialization and does not publish catalog state. The same event
 also invokes coordinated `on_app_deploy` regardless of singleton mode.
 
-A future Access Map mutation persists the authoritative props and awaits the
-generic app-deployment coordinator before reporting success. Card list/create/
-update and governed-operation paths never publish or modify durable catalog
-history. They may restore an expired Redis cache entry from an already
+Card list/create/update and governed-operation paths never publish or modify
+durable catalog history. They may restore an expired Redis cache entry from an already
 committed document. They consume the registered active catalog represented by
 cached `active.json`.
 Effective props participate only in `on_app_deploy` alignment; they are not a
@@ -877,15 +902,15 @@ Those fields come from three request-time inputs:
 | Claim | The exact current resource/operation policy check that failed. |
 
 The managed REST/MCP guard checks resource, claims, and outer operation. The
-common named-service dispatcher performs the inner resource/namespace/
-operation check after request decoding and before provider selection or call.
-This placement supplies the same complete path for MCP, direct API, and native
-agent named-service calls.
+inner resource/namespace/operation check runs after request decoding and before
+provider selection, at each entrance a delegated call can take:
 
-The current outer MCP helper extracts only RPC id and tool name and discards
-tool arguments. Therefore implementation must carry the validated card context
-into common named-service dispatch and check the parsed `NamedServiceRequest`.
-It must not infer namespace or inner operation by parsing a tool name.
+| Entrance | Where the inner check runs |
+| --- | --- |
+| MCP door | `kdcube-services@1-0` named-services bridge, on the parsed `NamedServiceRequest`. |
+| Native agent turn | The per-agent gate, on the namespace and operation the tool call names. |
+
+Neither infers namespace or inner operation by parsing a tool name.
 
 No historical catalog body is required on this request path. Exact membership
 in the card proves the capability belonged to its stored selection; absence
@@ -927,14 +952,17 @@ grant operation, not a pointer move to a historical revision.
 | Concern | Implementation |
 | --- | --- |
 | Capability/resource vocabulary and parser aliases | `kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.config` |
-| Current Redis-only record, keys, and operation orchestration | `kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.automation_access` |
-| Required durable revisions and current pointer | planned `...delegated_credentials.cards.store.DelegatedCardStore` over Connection Hub bundle storage |
-| Required TTL live projection and read-through | planned `...delegated_credentials.cards.cache` |
-| Durable catalog history | planned `...delegated_credentials.catalog.store` and `.publisher`, using immutable version documents and complete `active.json` |
-| Request-serving catalog cache | planned async `...delegated_credentials.catalog.runtime_cache.DelegatedCatalogRuntimeCache`; Redis stores complete TTL-cached `active.json` and historical version documents, with atomic no-downgrade active updates |
-| Current catalog resolution | planned `...delegated_credentials.catalog.resolver`, reading complete Redis `active.json` on each request; no props input, second active-body lookup, or process catalog cache |
-| Runtime-cache recovery | planned request-time durable read-through in `...delegated_credentials.catalog.resolver`; `on_app_deploy` publication remains in `.publisher` |
-| Current-capability denial shaping | planned shared `authorize_current_capability(...)`, called by the managed REST/MCP guard and common named-service dispatcher with the complete parsed capability path |
+| Card operations and authority orchestration | `kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.automation_access` |
+| Authority resolution shared by every save | `automation_access.AutomationAccessService._resolve_card_authority` |
+| Durable revisions and current pointer | `...delegated_credentials.cards.store.DelegatedCardStore` over Connection Hub bundle storage |
+| Persistence port, TTL live projection and read-through | `...delegated_credentials.cards.persistence`, `.cache`, `.handles`, `.resolver` |
+| Stored selection states and card model | `...delegated_credentials.cards.model` |
+| Pre-encoding record interpretation | `...delegated_credentials.cards.migration` |
+| Durable catalog history and publication | `...delegated_credentials.catalog.store` and `.publisher`, immutable version documents and complete `active.json` |
+| Current catalog resolution and read-through recovery | `...delegated_credentials.catalog.resolver` |
+| Current-capability denial shaping | `...delegated_credentials.catalog.authorization.authorize_current_capability` and `card_boundary_denial` |
+| Save-time drift and reconciliation | `...delegated_credentials.catalog.drift`, `.reconcile` |
+| OAuth consent view model and contract | `...delegated_credentials.oauth.consent`, `.http.routes` |
 | Named-service strict narrowing and materialization | `...delegated_credentials.named_service_policy` |
 | Descriptor namespace/operation projection | `...solutions.named_services_providers.boundary_policy.NamedServiceBoundaryCatalog` |
 | Live provider requirement enrichment | `automation_access.AutomationAccessService._named_service_options` plus provider discovery `spec.metadata.connected_accounts` |

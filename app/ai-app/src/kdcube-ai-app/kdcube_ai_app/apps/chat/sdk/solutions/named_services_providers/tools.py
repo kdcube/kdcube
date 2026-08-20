@@ -681,30 +681,44 @@ async def _agent_grant_gate(base_ns: str, operation: str, tool_name: str) -> Dic
         set_agent_identity(client_id=client_id, resource=str(state.get("resource") or ""))
         if not state.get("governed") or state.get("granted"):
             return None
+        gate_claims = [str(c) for c in (state.get("claims") or [])]
+        # What the card actually lacks, not everything the operation declares:
+        # a demand that re-asks for held claims is deduplicated away and the
+        # caller learns nothing.
+        missing_claims = [str(c) for c in (state.get("missing_claims") or [])] or gate_claims
         not_granted = state.get("not_granted")
         if isinstance(not_granted, Mapping):
-            # The card holds the claims and the catalog still offers this; only
-            # the card's own boundary excludes the operation. A claims demand
-            # here asks for consent that is already given, so the caller loops
-            # and the user is told to wait for a permission they granted. The
-            # remedy is a card edit, and the denial says so.
+            # Claims are held; only the card's own boundary excludes the
+            # operation. The demand names it, and approval grants that one.
+            from kdcube_ai_app.apps.chat.sdk.solutions.connections.mcp_consent import (
+                announce_agent_consent as _announce,
+                mcp_consent_from_denial as _consent_from_denial,
+            )
+
+            boundary_consent = _consent_from_denial(
+                {"status": 403, "reason": "capability_not_granted"},
+                resource=str(state.get("resource") or ""),
+                claims=[str(c) for c in (state.get("missing_claims") or [])],
+                tool_name=base_ns,
+                agent_client_id=client_id,
+                namespace=base_ns,
+                operation=operation,
+            )
+            await _announce(boundary_consent)
             LOGGER.warning(
                 "Named-service agent gate: operation not covered by the card\n"
                 "  namespace: %s\n  operation: %s\n  tool: %s\n  agent_client: %s",
                 base_ns, operation, tool_name, client_id,
             )
-            return dict(not_granted)
+            refused = dict(not_granted)
+            refused["consent"] = boundary_consent.consent
+            return refused
         # Demand ordering (operator ruling 2026-07-25): when this operation is
         # account-backed and the user has ZERO connected accounts on the
         # backing provider, the CONNECT demand leads — the guided plan ends in
         # the agent-grant hand-off. Granting the agent first would bind
         # nothing. Fail-safe: any state-read failure keeps the agent-grant
         # demand below.
-        gate_claims = [str(c) for c in (state.get("claims") or [])]
-        # What the card actually lacks, not everything the operation declares:
-        # a demand that re-asks for held claims is deduplicated away and the
-        # caller learns nothing.
-        missing_claims = [str(c) for c in (state.get("missing_claims") or [])] or gate_claims
         try:
             from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.consent_denial import (
                 connect_first_denial_for_identity,
@@ -763,6 +777,8 @@ async def _agent_grant_gate(base_ns: str, operation: str, tool_name: str) -> Dic
             claims=missing_claims,
             tool_name=base_ns,
             agent_client_id=client_id,
+            namespace=base_ns,
+            operation=operation,
         )
         await announce_agent_consent(consent)
         LOGGER.info(

@@ -34,6 +34,10 @@ from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.boundary_pol
     NamedServiceBoundaryCatalog,
 )
 
+# Version of the consent view model. A renderer states the version it
+# implements; an absent or mismatched version is refused, not rendered.
+CONSENT_CONTRACT_VERSION = "2026-08-20.1"
+
 CONSENT_AUTHORIZE_FIELD_NAMES: tuple[str, ...] = (
     "client_id",
     "redirect_uri",
@@ -202,6 +206,65 @@ def named_service_rows_for_scopes(
     return out
 
 
+def named_service_selection_rows(
+    scopes: Iterable[str],
+    *,
+    config: OAuthDelegatedClientConfig | None = None,
+    resource: str | None = None,
+) -> List[dict]:
+    """Selectable named-service operations for the consent view model.
+
+    Carries the machine values a submission needs — the namespace key and the
+    operation id — beside the labels, and the claims each operation requires.
+    """
+    cfg = config or oauth_delegated_config()
+    resource_cfg = cfg.resource_config(resource)
+    if resource_cfg is None or not isinstance(resource_cfg.named_services, Mapping):
+        return []
+    allowed = {str(scope or "").strip() for scope in (scopes or ()) if str(scope or "").strip()}
+    out: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    catalog = NamedServiceBoundaryCatalog(resource_cfg.named_services)
+    for namespace in catalog.list_public():
+        key = str(namespace.get("namespace") or "").strip()
+        namespace_label = str(namespace.get("label") or key or "").strip()
+        tools = namespace.get("tools")
+        if not key or not isinstance(tools, Mapping):
+            continue
+        for tool_name, raw_tool in tools.items():
+            tool = raw_tool if isinstance(raw_tool, Mapping) else {}
+            operations = tool.get("operations")
+            entries = (
+                list(operations.items())
+                if isinstance(operations, Mapping) and operations
+                else [(str(tool.get("operation") or tool_name).strip(), tool)]
+            )
+            for operation, raw_policy in entries:
+                operation_id = str(operation or "").strip()
+                policy = raw_policy if isinstance(raw_policy, Mapping) else {}
+                grants = [
+                    str(item).strip()
+                    for item in (policy.get("grants") or tool.get("grants") or ())
+                    if str(item).strip()
+                ]
+                if not operation_id or (grants and not set(grants).issubset(allowed)):
+                    continue
+                if (key, operation_id) in seen:
+                    continue
+                seen.add((key, operation_id))
+                out.append({
+                    "namespace": key,
+                    "namespace_label": namespace_label or key,
+                    "operation": operation_id,
+                    "label": str(policy.get("label") or operation_id or tool_name).strip(),
+                    "description": str(
+                        policy.get("description") or tool.get("description") or ""
+                    ).strip(),
+                    "grants": grants,
+                })
+    return out
+
+
 def _brand_monogram(brand: str) -> str:
     """1-2 uppercase initials from the brand name (first letters of first two words)."""
     words = [w for w in brand.split() if w]
@@ -350,6 +413,7 @@ def render_consent_html(
     seeded_account_scope: Mapping[str, Any] | None = None,
     connection_hub_url: str = "",
     accounts_needed: AccountRequirements | None = None,
+    catalog_version: str = "",
 ) -> str:
     esc = _html.escape
     # Base URL of the Connection Hub widget (no query). The consent page must
@@ -360,7 +424,6 @@ def render_consent_html(
     hub_base = str(connection_hub_url or "").strip().rstrip("?&")
     tools = tools_for_scopes(req.scopes, config=config, resource=req.resource)
     platform_edge_grants = platform_edge_grants_for_scopes(req.scopes, config=config)
-    named_service_rows = named_service_rows_for_scopes(req.scopes, config=config, resource=req.resource)
     monogram = _brand_monogram(brand)
 
     tool_rows = _render_grouped((
@@ -383,20 +446,33 @@ def render_consent_html(
         for grant, label, desc in platform_edge_grants
     ), css_class="edge") or '    <p class="desc">No platform-authority grants are requested.</p>'
 
+    selection_rows = named_service_selection_rows(
+        req.scopes, config=config, resource=req.resource,
+    )
     namespace_rows = _render_grouped((
         (
-            namespace,
-            f'    <div class="namespace-row"><b>{esc(label)}</b>'
-            f'<span class="desc">{esc(desc)}</span>'
-            f'<span class="grants">{esc(", ".join(grants) or "none")}</span></div>'
+            row["namespace_label"],
+            f'    <label class="namespace-row">'
+            f'<input type="checkbox" name="named_service_operations" '
+            f'value="{esc(row["namespace"])}:{esc(row["operation"])}"> '
+            f'<span class="row-text"><b>{esc(row["label"])}</b>'
+            f'<span class="desc">{esc(row["description"])}</span>'
+            f'<span class="grants">{esc(", ".join(row["grants"]) or "none")}</span></span></label>'
         )
-        for namespace, label, desc, grants in named_service_rows
+        for row in selection_rows
     ), css_class="namespace")
     namespace_section = ""
     if namespace_rows:
         namespace_section = f"""
-    <p class="pick">Named-service namespace boundaries:</p>
-    <p class="desc">These are the concrete namespace operations covered by the selected grants.</p>
+    <p class="pick">Named-service operations:</p>
+    <p class="desc">Nothing is selected by default. A claim lets an operation
+    through the claim gate; it does not select the operation. Selecting none
+    connects this client without named-service access — it can be widened later
+    in Connection Hub.</p>
+    <label class="namespace-row"><input type="checkbox" name="named_service_operations_all" value="1">
+    <span class="row-text"><b>Every operation offered right now</b>
+    <span class="desc">Bound to the current service catalog; operations added
+    later are not included.</span></span></label>
 {namespace_rows}
 """
 
@@ -500,6 +576,8 @@ def render_consent_html(
         ("code_challenge", req.code_challenge),
         ("code_challenge_method", req.code_challenge_method),
         ("csrf_token", csrf_token),
+        ("consent_contract_version", CONSENT_CONTRACT_VERSION),
+        ("expected_catalog_version", catalog_version),
     ]
     hidden = "\n".join(
         f'    <input type="hidden" name="{esc(k)}" value="{esc(v)}">' for k, v in hidden_fields

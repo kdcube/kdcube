@@ -95,6 +95,10 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cat
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.catalog.reconcile import (
     reconcile_selection,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cards.migration import (
+    MIGRATION_CONFIRMATION_REQUIRED,
+    pre_migration_ambiguity,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.catalog.authorization import (
     CAPABILITY_NAMED_SERVICE_OPERATION,
     ActiveCatalogCapabilities,
@@ -283,8 +287,73 @@ def _subject_from_user(user: Mapping[str, Any]) -> str:
     return ""
 
 
+def _delegate_mutation_refusal(user: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Card authority is changed by the grantor, never by the delegate.
+
+    A delegated caller authenticates as ``integration:<client>:<grantor>``. It
+    would find no card under a grantor-keyed index anyway; this states the rule
+    instead of relying on that.
+    """
+    subject = _subject_from_user(user)
+    if subject.startswith("integration:"):
+        return {
+            "ok": False,
+            "error": "delegated_access_requires_grantor",
+            "message": (
+                "A delegated credential cannot change the authority of the card that "
+                "issued it. Sign in as the granting user in Connection Hub."
+            ),
+        }
+    return None
+
+
+def _grants_delegable(grants: Iterable[str], delegable: set[str]) -> bool:
+    """An entry is offered only when EVERY claim it costs is delegable: ticking
+    it makes the panel demand all of them."""
+    return all(str(grant) in delegable for grant in (grants or ()))
+
+
+def _delegable_named_service_options(
+    namespaces: list[dict[str, Any]], delegable: set[str]
+) -> list[dict[str, Any]]:
+    """Drop operations whose claims this grantor cannot delegate, then tools and
+    namespaces left with nothing."""
+    kept: list[dict[str, Any]] = []
+    for namespace in namespaces:
+        tools = namespace.get("tools")
+        if not isinstance(tools, Mapping):
+            kept.append(namespace)
+            continue
+        kept_tools: dict[str, Any] = {}
+        for tool_name, raw in tools.items():
+            tool = dict(raw) if isinstance(raw, Mapping) else {}
+            operations = tool.get("operations")
+            if isinstance(operations, Mapping) and operations:
+                kept_ops = {
+                    op: policy
+                    for op, policy in operations.items()
+                    if _grants_delegable(
+                        (policy or {}).get("grants") if isinstance(policy, Mapping) else (),
+                        delegable,
+                    )
+                }
+                if not kept_ops:
+                    continue
+                tool["operations"] = kept_ops
+            elif not _grants_delegable(tool.get("grants") or (), delegable):
+                continue
+            kept_tools[tool_name] = tool
+        if not kept_tools:
+            continue
+        narrowed = dict(namespace)
+        narrowed["tools"] = kept_tools
+        kept.append(narrowed)
+    return kept
+
+
 def automation_record_key(tenant: str, project: str, access_id: str) -> str:
-    """The registry card's Redis key — the guard resolves live against it."""
+    """The pre-durable card key format. Nothing reads or writes it; cards live
+    in durable storage and are cached under ``…:delegated-access:card:<id>``."""
     return f"{tenant}:{project}:kdcube:delegated-access:automation:{access_id}"
 
 
@@ -401,18 +470,39 @@ def _selection_policy_argument(
     """The narrowing argument ``named_service_policy_for_resource`` expects.
 
     ``None`` keeps the full descriptor policy, an empty map narrows every
-    resource to nothing, and an exact map narrows to its entries. A legacy
-    record without an explicit selection keeps its prior full-policy meaning
-    until its next successful save writes one.
+    resource to nothing, and an exact map narrows to its entries. Only an
+    explicit ``"*"`` keeps the full policy; a pre-encoding selection reaching
+    here unresolved narrows to nothing rather than widening.
     """
-    if selection.is_all or selection.is_unknown:
+    if selection.is_all:
         return None
-    if selection.is_none:
+    if selection.is_none or selection.is_unknown:
         return {}
     return {
         resource: {namespace: list(values) for namespace, values in namespaces.items()}
         for resource, namespaces in selection.operations.items()
     }
+
+
+@dataclass(frozen=True)
+class ResolvedCardAuthority:
+    """What a save writes, or why it cannot.
+
+    ``revoke`` is the reconciliation outcome where nothing survived the active
+    catalog: an empty card is revoked, never persisted.
+    """
+
+    resource_grants: dict[str, list[str]] = field(default_factory=dict)
+    operations: list[str] = field(default_factory=list)
+    named_service_operations: NamedServiceSelection = field(
+        default_factory=NamedServiceSelection.none
+    )
+    named_services: dict[str, Any] = field(default_factory=dict)
+    account_scope: dict[str, dict[str, list[str]]] = field(default_factory=dict)
+    identity_scope: str = "grantor"
+    reconciled: Any = None
+    revoke: bool = False
+    error: dict[str, Any] | None = None
 
 
 def _inherited_selection(
@@ -427,11 +517,14 @@ def _inherited_selection(
     by construction, so freezing needs no historical catalog document and works
     even when the referenced version is gone.
 
+    A pre-encoding record names no operations either, and the design resolves
+    it the same way: "derive the prior exact set from stored named_services".
+
     An explicitly submitted ``"*"`` does not come through here — that one is
     consent to everything the current catalog shows.
     """
     selection = existing.named_service_operations
-    if not selection.is_all:
+    if not (selection.is_all or selection.is_unknown):
         return selection
     # Filtered by the claims THIS save persists, not the ones the record used to
     # hold: a wildcard boundary is the descriptor tree unfiltered, an exact
@@ -752,6 +845,14 @@ class AutomationAccessService:
         authority, handles = loaded
         return record_from_card(authority, handles)
 
+    async def _committed_revision(self, access_id: str, *, grantor_subject: str) -> int:
+        """The write precondition for this id. A revoked or expired card is not
+        live authority but still owns the counter, so this is not derived from
+        the loaded record."""
+        return await self._cards().current_revision(
+            access_id, subject_hash=_subject_key(grantor_subject)
+        )
+
     async def _persist_record(
         self, record: AutomationAccessRecord, *, expected_revision: int
     ) -> None:
@@ -911,15 +1012,6 @@ class AutomationAccessService:
             raise CatalogUnavailable("active_catalog_version_missing")
         return version
 
-    def _key(self, suffix: str) -> str:
-        return f"{self._tenant}:{self._project}:kdcube:delegated-access:{suffix}"
-
-    def _record_key(self, access_id: str) -> str:
-        return self._key(f"automation:{access_id}")
-
-    def _index_key(self, grantor_subject: str) -> str:
-        return self._key(f"automation-by-grantor:{_subject_key(grantor_subject)}")
-
     async def _available_inventory(
         self,
         user: Mapping[str, Any],
@@ -1003,7 +1095,14 @@ class AutomationAccessService:
         return namespaces
 
     async def resource_options(self, user: Mapping[str, Any]) -> list[dict[str, Any]]:
+        """The catalog projected through what THIS grantor may delegate.
+
+        A card can never carry more than its grantor holds, so a claim outside
+        their delegable set is not offered — the same rule the admin-only row
+        above already applies to whole resources.
+        """
         platform_admin = _is_platform_admin(user)
+        delegable = set((await self._available_inventory(user)).grant_names())
         out: list[dict[str, Any]] = []
         for resource in self._config.resources:
             if resource.admin_only and not platform_admin:
@@ -1012,7 +1111,9 @@ class AutomationAccessService:
                 "resource": resource.resource,
                 "label": resource.label or resource.resource,
                 "identity_scope": resource.identity_scope,
-                "grants": list(resource.grants),
+                "grants": [
+                    grant for grant in resource.grants if grant in delegable
+                ],
                 "admin_only": bool(resource.admin_only),
                 "operations": [
                     {
@@ -1022,37 +1123,47 @@ class AutomationAccessService:
                         "grants": list(tool.grants),
                     }
                     for tool in resource.tools
+                    if _grants_delegable(tool.grants, delegable)
                 ],
             }
             if isinstance(resource.named_services, Mapping):
-                named_services = await self._named_service_options(resource.named_services)
+                named_services = _delegable_named_service_options(
+                    await self._named_service_options(resource.named_services),
+                    delegable,
+                )
                 if named_services:
                     option["named_services"] = named_services
             out.append(option)
         return out
 
     def _configured_resource(self, resource: str) -> Any | None:
-        text = _clean(resource).rstrip("/")
+        """The catalog row governing a card resource. Matched, not compared:
+        a card key is the row's pattern or a concrete URL."""
+        text = _clean(resource)
         if not text:
             return None
-        for item in self._config.resources:
-            if str(item.resource or "").strip().rstrip("/") == text:
-                return item
-        return None
+        return self._config.card_selector_config(text)
 
-    def _configured_resources(self, resources: Iterable[str]) -> tuple[Any, ...]:
+    def _configured_resource_pairs(
+        self, resources: Iterable[str]
+    ) -> tuple[tuple[str, Any], ...]:
+        """``(card resource, governing row)``. Grants and the selection are
+        keyed by the card resource, the descriptor subtree by the row."""
         selected = _as_list(list(resources))
-        configs: list[Any] = []
+        pairs: list[tuple[str, Any]] = []
         missing: list[str] = []
         for resource in selected:
             cfg = self._configured_resource(resource)
             if cfg is None:
                 missing.append(resource)
             else:
-                configs.append(cfg)
+                pairs.append((resource, cfg))
         if missing:
             raise ValueError("unknown delegated resource(s): " + ", ".join(missing))
-        return tuple(configs)
+        return tuple(pairs)
+
+    def _configured_resources(self, resources: Iterable[str]) -> tuple[Any, ...]:
+        return tuple(cfg for _, cfg in self._configured_resource_pairs(resources))
 
     def _resource_grants(self, resource_grants: Mapping[str, Any]) -> dict[str, list[str]]:
         out: dict[str, list[str]] = {}
@@ -1127,10 +1238,42 @@ class AutomationAccessService:
                 "status": 503,
             }
         drift_by_card = await self._catalog_drift(records_found)
+        try:
+            active = await self._active_catalog()
+        except CatalogUnavailable:
+            active = None
         records = []
         for record in records_found:
             item = record.to_public_dict()
             item["catalog_drift"] = drift_by_card[record.access_id]
+            # Reported, never applied: listing does not rewrite a record.
+            ambiguity = pre_migration_ambiguity(
+                record,
+                named_service_resources=[
+                    resource
+                    for resource in record.resource_grants
+                    if isinstance(
+                        getattr(self._configured_resource(resource), "named_services", None),
+                        Mapping,
+                    )
+                ],
+                offered=(
+                    self._catalog_named_service_operations(active, record.resource_grants)
+                    if active is not None
+                    else None
+                ),
+            )
+            if ambiguity is not None:
+                item["migration"] = ambiguity
+            # Card resource -> the catalog row it resolves to. A surface must
+            # not re-derive this: the match is the resolver's, not a comparison.
+            rows = {}
+            for resource in record.resource_grants:
+                cfg = self._configured_resource(resource)
+                if cfg is not None:
+                    rows[resource] = str(getattr(cfg, "resource", "") or "")
+            if rows:
+                item["catalog_row_by_resource"] = rows
             records.append(item)
 
         records.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
@@ -1183,6 +1326,9 @@ class AutomationAccessService:
         grantor_subject = _subject_from_user(user)
         if not grantor_subject:
             return {"ok": False, "error": "delegated_access_requires_authenticated_user"}
+        refusal = _delegate_mutation_refusal(user)
+        if refusal is not None:
+            return refusal
 
         selected_resource_grants = self._resource_grants(resource_grants)
         try:
@@ -1214,7 +1360,10 @@ class AutomationAccessService:
         # states what its surface can delegate, this deployment decides how much
         # of that may be asked for here, and until it says so the answer is no.
         try:
-            resource_configs = self._configured_resources(selected_resources) if self._config.resources else ()
+            resource_pairs = (
+                self._configured_resource_pairs(selected_resources)
+                if self._config.resources else ()
+            )
         except ValueError:
             return {
                 "ok": False,
@@ -1226,6 +1375,7 @@ class AutomationAccessService:
                     "with the tools it may grant, before access to it can be asked for."
                 ),
             }
+        resource_configs = tuple(cfg for _, cfg in resource_pairs)
 
         inventory = await self._available_inventory(user, requested_grants=selected_grants)
         available = set(inventory.grant_names())
@@ -1236,9 +1386,11 @@ class AutomationAccessService:
                 "error": "delegated_access_grants_not_delegable",
                 "grants": denied,
                 "message": (
-                    "These permissions are not among the ones this deployment allows for "
-                    "the endpoint. They are configured in connection-hub@1-0 "
-                    "`connections.delegated_credentials.oauth.resources`, per tool."
+                    "These permissions are not yours to delegate. A card never carries "
+                    "more than its grantor holds. Who may delegate each permission is "
+                    "declared in connection-hub@1-0 "
+                    "`connections.delegated_credentials.oauth.capabilities`, as "
+                    "`delegable_roles` and `delegable_permissions`."
                 ),
             }
         admin_required = [cfg.resource for cfg in resource_configs if cfg.admin_only]
@@ -1248,7 +1400,7 @@ class AutomationAccessService:
                 "error": "delegated_access_resource_requires_admin",
                 "resources": admin_required,
             }
-        cfg_by_resource = {cfg.resource: cfg for cfg in resource_configs}
+        cfg_by_resource = dict(resource_pairs)
         if selected_named_service_operations is not None and selected_named_service_operations.is_exact:
             unknown_selection_resources = sorted(
                 set(selected_named_service_operations.operations) - set(selected_resources)
@@ -1281,6 +1433,14 @@ class AutomationAccessService:
                 "ok": False,
                 "error": "delegated_access_resources_have_conflicting_identity_scopes",
                 "resources": selected_resources,
+                "identity_scopes": sorted(identity_scopes),
+                "message": (
+                    "A card issues one credential, so every endpoint on it must run "
+                    "under the same identity. These do not: " + ", ".join(sorted(identity_scopes))
+                    + ". The value is `identity_scope` in connection-hub@1-0 "
+                    "`connections.delegated_credentials.oauth.resources`. Grant "
+                    "endpoints that differ on separate cards."
+                ),
             }
         identity_scope = next(iter(identity_scopes), "grantor")
 
@@ -1376,14 +1536,17 @@ class AutomationAccessService:
             access_id = "aut_" + secrets.token_urlsafe(10)
             client_id = f"{AUTOMATION_CLIENT_PREFIX}:{access_id}"
 
-        # A create call that names no selection grants the full policy of the
-        # catalog it is saved against, and a legacy card resolves to the same
-        # explicit state on its next save.
-        if (
-            selected_named_service_operations is None
-            or selected_named_service_operations.is_unknown
-        ):
-            selected_named_service_operations = NamedServiceSelection.all()
+        # A create call that names no selection selects nothing. `"*"` is stored
+        # only when the user chose every operation the current catalog offers;
+        # claims do not select operations on their own.
+        if selected_named_service_operations is None:
+            selected_named_service_operations = NamedServiceSelection.none()
+        elif selected_named_service_operations.is_unknown:
+            selected_named_service_operations = (
+                _inherited_selection(existing, selected_resource_grants)
+                if existing is not None
+                else NamedServiceSelection.none()
+            )
         try:
             catalog_version = await self._active_catalog_version()
         except CatalogUnavailable as exc:
@@ -1395,15 +1558,28 @@ class AutomationAccessService:
                 "status": 503,
             }
 
+        try:
+            committed_revision = await self._committed_revision(
+                access_id, grantor_subject=grantor_subject
+            )
+        except CardUnavailable as exc:
+            return {
+                "ok": False,
+                "error": "delegated_cards_unavailable",
+                "reason": exc.reason,
+                "retryable": True,
+                "status": 503,
+            }
+
         named_services: dict[str, Any] = {}
-        for cfg in resource_configs:
+        for resource_value, cfg in resource_pairs:
             if isinstance(cfg.named_services, Mapping):
                 try:
                     selected_policy = named_service_policy_for_resource(
                         named_services=cfg.named_services,
-                        resource=cfg.resource,
+                        resource=resource_value,
                         selection=_selection_policy_argument(selected_named_service_operations),
-                        grants=selected_resource_grants.get(cfg.resource, []),
+                        grants=selected_resource_grants.get(resource_value, []),
                     )
                 except ValueError as exc:
                     return {
@@ -1491,7 +1667,7 @@ class AutomationAccessService:
             },
             identity_scope=identity_scope,
             catalog_version=catalog_version,
-            card_revision=(existing.card_revision + 1) if existing is not None else 1,
+            card_revision=committed_revision + 1,
             session_id=session_id,
             created_at=created_at,
             expires_at=expires_at,
@@ -1503,9 +1679,7 @@ class AutomationAccessService:
             access_token=access_token if access_source == ACCESS_SOURCE_AGENT else "",
         )
         try:
-            await self._persist_record(
-                record, expected_revision=existing.card_revision if existing is not None else 0
-            )
+            await self._persist_record(record, expected_revision=committed_revision)
         except (CardUnavailable, CardConflict, CardCommitFailed) as exc:
             return {
                 "ok": False,
@@ -1523,6 +1697,226 @@ class AutomationAccessService:
             "authorization_header": f"Bearer {access_token}" if access_token else "",
         }
 
+    async def _resolve_card_authority(
+        self,
+        *,
+        user: Mapping[str, Any],
+        existing: "AutomationAccessRecord",
+        active: Any,
+        resource_grants: Mapping[str, Any],
+        named_service_operations: Mapping[str, Any] | str | None,
+        account_scope: Mapping[str, Any] | None,
+    ) -> "ResolvedCardAuthority":
+        """The authority a save writes, resolved once for every entrance.
+
+        Owns the decisions, not the record: selection resolution, catalog
+        reconciliation, the delegability checks, the materialized boundary, and
+        the account binding. Callers own identity, preconditions, and the
+        credential fields their family carries.
+        """
+        selected_resource_grants = self._resource_grants(resource_grants)
+        try:
+            selected_named_service_operations = self._named_service_operation_selection(
+                named_service_operations
+            )
+        except ValueError as exc:
+            return ResolvedCardAuthority(error={
+                "ok": False,
+                "error": "invalid_named_service_operation_selection",
+                "message": str(exc),
+            })
+        if selected_named_service_operations is None:
+            ambiguity = pre_migration_ambiguity(
+                existing,
+                named_service_resources=[
+                    resource
+                    for resource in selected_resource_grants
+                    if isinstance(
+                        getattr(self._configured_resource(resource), "named_services", None),
+                        Mapping,
+                    )
+                ],
+                offered=self._catalog_named_service_operations(active, selected_resource_grants),
+            )
+            if ambiguity is not None:
+                return ResolvedCardAuthority(error={
+                    "ok": False,
+                    "error": MIGRATION_CONFIRMATION_REQUIRED,
+                    "message": (
+                        "This card predates the explicit named-service encoding and its "
+                        "stored evidence cannot be read without guessing. Review the "
+                        "operations and save an explicit selection."
+                    ),
+                    **ambiguity,
+                })
+        # Resolved before pruning: pruning acts on the selection about to be
+        # persisted. Omitted keeps the record's own state; a pre-encoding record
+        # resolves to what it materialized.
+        if (
+            selected_named_service_operations is None
+            or selected_named_service_operations.is_unknown
+        ):
+            selected_named_service_operations = _inherited_selection(
+                existing, selected_resource_grants
+            )
+
+        # Submitting nothing is a client error; pruning to nothing is a revoke.
+        if not any(selected_resource_grants.values()):
+            return ResolvedCardAuthority(error={
+                "ok": False, "error": "delegated_access_requires_resource_grants",
+            })
+
+        # Values absent from the active catalog are pruned, not rejected.
+        reconciled = reconcile_selection(
+            resource_grants=selected_resource_grants,
+            named_service_operations=selected_named_service_operations,
+            active=active,
+        )
+        if reconciled.empty:
+            return ResolvedCardAuthority(reconciled=reconciled, revoke=True)
+        selected_resource_grants = reconciled.resource_grants
+        selected_named_service_operations = reconciled.named_service_operations
+        selected_resources = list(selected_resource_grants)
+        if self._config.resources and not selected_resources:
+            return ResolvedCardAuthority(error={
+                "ok": False, "error": "delegated_access_requires_resource_grants",
+            })
+        selected_grants = _as_list([
+            grant
+            for grants_for_resource in selected_resource_grants.values()
+            for grant in grants_for_resource
+        ])
+        if not selected_grants:
+            # Removing everything is a revoke, not an edit.
+            return ResolvedCardAuthority(error={
+                "ok": False, "error": "delegated_access_requires_resource_grants",
+            })
+        # Same order as create_access: an endpoint this deployment never made
+        # delegable is a different answer from a permission it will not delegate.
+        try:
+            resource_pairs = (
+                self._configured_resource_pairs(selected_resources)
+                if self._config.resources else ()
+            )
+        except ValueError:
+            return ResolvedCardAuthority(error={
+                "ok": False,
+                "error": "delegated_access_unknown_resources",
+                "resources": selected_resources,
+                "message": (
+                    "This deployment has not made that endpoint delegable. Add it to "
+                    "connection-hub@1-0 `connections.delegated_credentials.oauth.resources`, "
+                    "with the tools it may grant, before access to it can be asked for."
+                ),
+            })
+        resource_configs = tuple(cfg for _, cfg in resource_pairs)
+        inventory = await self._available_inventory(user, requested_grants=selected_grants)
+        denied = [grant for grant in selected_grants if grant not in set(inventory.grant_names())]
+        if denied:
+            return ResolvedCardAuthority(error={
+                "ok": False,
+                "error": "delegated_access_grants_not_delegable",
+                "grants": denied,
+                "message": (
+                    "These permissions are not yours to delegate. A card never carries "
+                    "more than its grantor holds. Who may delegate each permission is "
+                    "declared in connection-hub@1-0 "
+                    "`connections.delegated_credentials.oauth.capabilities`, as "
+                    "`delegable_roles` and `delegable_permissions`."
+                ),
+            })
+        admin_required = [cfg.resource for cfg in resource_configs if cfg.admin_only]
+        if admin_required and not _is_platform_admin(user):
+            return ResolvedCardAuthority(error={
+                "ok": False,
+                "error": "delegated_access_resource_requires_admin",
+                "resources": admin_required,
+            })
+        cfg_by_resource = dict(resource_pairs)
+        if selected_named_service_operations is not None and selected_named_service_operations.is_exact:
+            unknown = sorted(
+                set(selected_named_service_operations.operations) - set(selected_resources)
+            )
+            if unknown:
+                return ResolvedCardAuthority(error={
+                    "ok": False,
+                    "error": "delegated_access_unknown_named_service_resources",
+                    "resources": unknown,
+                })
+        for resource_value, grants_for_resource in selected_resource_grants.items():
+            cfg = cfg_by_resource.get(resource_value)
+            if cfg is None:
+                continue
+            allowed_for_resource = set(self._config.supported_scopes(resource_value))
+            disallowed = [grant for grant in grants_for_resource if grant not in allowed_for_resource]
+            if disallowed:
+                return ResolvedCardAuthority(error={
+                    "ok": False,
+                    "error": "delegated_access_grants_not_allowed_for_resources",
+                    "grants": disallowed,
+                    "resource": resource_value,
+                })
+        identity_scopes = {
+            _clean(getattr(cfg, "identity_scope", "") or "grantor") for cfg in resource_configs
+        }
+        if len(identity_scopes) > 1:
+            return ResolvedCardAuthority(error={
+                "ok": False,
+                "error": "delegated_access_resources_have_conflicting_identity_scopes",
+                "resources": selected_resources,
+                "identity_scopes": sorted(identity_scopes),
+                "message": (
+                    "A card issues one credential, so every endpoint on it must run "
+                    "under the same identity. These do not: " + ", ".join(sorted(identity_scopes))
+                    + ". The value is `identity_scope` in connection-hub@1-0 "
+                    "`connections.delegated_credentials.oauth.resources`. Grant "
+                    "endpoints that differ on separate cards."
+                ),
+            })
+        # Recompute the boundary tree here: the descriptor is available in this
+        # process, the guard's is not.
+        named_services: dict[str, Any] = {}
+        for resource_value, cfg in resource_pairs:
+            if not isinstance(cfg.named_services, Mapping):
+                continue
+            try:
+                selected_policy = named_service_policy_for_resource(
+                    named_services=cfg.named_services,
+                    resource=resource_value,
+                    # Same value the record stores, so the tree and the
+                    # selection it was derived from cannot disagree.
+                    selection=_selection_policy_argument(selected_named_service_operations),
+                    grants=selected_resource_grants.get(resource_value, []),
+                )
+            except ValueError as exc:
+                return ResolvedCardAuthority(error={
+                    "ok": False,
+                    "error": "invalid_named_service_operation_selection",
+                    "message": str(exc),
+                })
+            named_services = self._merge_named_service_configs(named_services, selected_policy)
+        if account_scope is None:
+            selected_account_scope = {
+                provider: {account_id: list(claims) for account_id, claims in accounts.items()}
+                for provider, accounts in existing.account_scope.items()
+            }
+        else:
+            selected_account_scope = {
+                provider: {account_id: list(claims) for account_id, claims in accounts.items()}
+                for provider, accounts in normalize_account_scope(account_scope).items()
+            }
+        return ResolvedCardAuthority(
+            resource_grants=selected_resource_grants,
+            operations=self._resolve_operations(
+                grants=selected_grants, operations=(), resources=selected_resources,
+            ),
+            named_service_operations=selected_named_service_operations,
+            named_services=named_services,
+            account_scope=selected_account_scope,
+            identity_scope=next(iter(identity_scopes), existing.identity_scope or "grantor"),
+            reconciled=reconciled,
+        )
+
     async def update_access(
         self,
         user: Mapping[str, Any],
@@ -1535,15 +1929,19 @@ class AutomationAccessService:
         expected_card_revision: int | None = None,
         expected_catalog_version: str | None = None,
     ) -> dict[str, Any]:
-        """Edit a MANUAL automation access IN PLACE: replace its grants while
-        keeping the same access_id and token. The card is the guard's authority
-        (resolved live via resolve_live_grant_card), so the change applies to the
-        client's existing bearer on its very next call — no re-mint. A manual
-        token is client-side only, so it is never touched; only the card record
-        is rewritten. The submitted selection REPLACES the record exactly."""
+        """Edit a card's authority IN PLACE, whatever family issued it.
+
+        The card keeps its access_id and its credential material; the card is
+        the guard's authority (resolved live via resolve_live_grant_card), so
+        the change applies to the client's existing bearer on its very next call
+        — no re-mint, no re-authorization. The submitted selection REPLACES the
+        record exactly."""
         grantor_subject = _subject_from_user(user)
         if not grantor_subject:
             return {"ok": False, "error": "delegated_access_requires_authenticated_user"}
+        refusal = _delegate_mutation_refusal(user)
+        if refusal is not None:
+            return refusal
         access_id = _clean(access_id)
         if not access_id:
             return {"ok": False, "error": "delegated_access_requires_access_id"}
@@ -1561,10 +1959,8 @@ class AutomationAccessService:
             return {"ok": False, "error": "delegated_access_not_found"}
         if existing.grantor_subject != grantor_subject:
             return {"ok": False, "error": "delegated_access_not_owned"}
-        # Only a manual automation card is edited here. Agent/OAuth cards edit
-        # through their own consent flows (delegated_agent_grant_create).
-        if existing.source != ACCESS_SOURCE_MANUAL:
-            return {"ok": False, "error": "delegated_access_not_editable"}
+        # Every family edits here. The source records how the credential is
+        # managed; it does not decide whether the grantor may change authority.
 
         try:
             active = await self._active_catalog()
@@ -1594,34 +1990,18 @@ class AutomationAccessService:
         if conflict is not None:
             return conflict
 
-        # Validate the new grants with the SAME rules as create_access.
-        selected_resource_grants = self._resource_grants(resource_grants)
-        try:
-            selected_named_service_operations = self._named_service_operation_selection(
-                named_service_operations
-            )
-        except ValueError as exc:
-            return {"ok": False, "error": "invalid_named_service_operation_selection", "message": str(exc)}
-        # Resolved before pruning: pruning acts on the selection about to be
-        # persisted. Omitted keeps the record's own state; legacy becomes "*".
-        if selected_named_service_operations is None:
-            selected_named_service_operations = _inherited_selection(
-                existing, selected_resource_grants
-            )
-        if selected_named_service_operations.is_unknown:
-            selected_named_service_operations = NamedServiceSelection.all()
-
-        # Submitting nothing is a client error; pruning to nothing is a revoke.
-        if not any(selected_resource_grants.values()):
-            return {"ok": False, "error": "delegated_access_requires_resource_grants"}
-
-        # Values absent from the active catalog are pruned, not rejected.
-        reconciled = reconcile_selection(
-            resource_grants=selected_resource_grants,
-            named_service_operations=selected_named_service_operations,
+        resolved = await self._resolve_card_authority(
+            user=user,
+            existing=existing,
             active=active,
+            resource_grants=resource_grants,
+            named_service_operations=named_service_operations,
+            account_scope=account_scope,
         )
-        if reconciled.empty:
+        if resolved.error is not None:
+            return resolved.error
+        reconciled = resolved.reconciled
+        if resolved.revoke:
             # No authority survives: revoke rather than keep an empty card.
             revoked = await self.revoke_access(user, access_id=access_id)
             if not revoked.get("ok"):
@@ -1636,110 +2016,12 @@ class AutomationAccessService:
                     "catalog, so the card was revoked instead of saved."
                 ),
             }
-        selected_resource_grants = reconciled.resource_grants
-        selected_named_service_operations = reconciled.named_service_operations
-        selected_resources = list(selected_resource_grants)
-        if self._config.resources and not selected_resources:
-            return {"ok": False, "error": "delegated_access_requires_resource_grants"}
-        selected_grants = _as_list([
-            grant
-            for grants_for_resource in selected_resource_grants.values()
-            for grant in grants_for_resource
-        ])
-        if not selected_grants:
-            # Removing everything is a revoke, not an edit.
-            return {"ok": False, "error": "delegated_access_requires_resource_grants"}
-        # Same order as create_access: an endpoint this deployment never made
-        # delegable is a different answer from a permission it will not delegate.
-        try:
-            resource_configs = self._configured_resources(selected_resources) if self._config.resources else ()
-        except ValueError:
-            return {
-                "ok": False,
-                "error": "delegated_access_unknown_resources",
-                "resources": selected_resources,
-                "message": (
-                    "This deployment has not made that endpoint delegable. Add it to "
-                    "connection-hub@1-0 `connections.delegated_credentials.oauth.resources`, "
-                    "with the tools it may grant, before access to it can be asked for."
-                ),
-            }
-        inventory = await self._available_inventory(user, requested_grants=selected_grants)
-        denied = [grant for grant in selected_grants if grant not in set(inventory.grant_names())]
-        if denied:
-            return {
-                "ok": False,
-                "error": "delegated_access_grants_not_delegable",
-                "grants": denied,
-                "message": (
-                    "These permissions are not among the ones this deployment allows for "
-                    "the endpoint. They are configured in connection-hub@1-0 "
-                    "`connections.delegated_credentials.oauth.resources`, per tool."
-                ),
-            }
-        admin_required = [cfg.resource for cfg in resource_configs if cfg.admin_only]
-        if admin_required and not _is_platform_admin(user):
-            return {"ok": False, "error": "delegated_access_resource_requires_admin", "resources": admin_required}
-        cfg_by_resource = {cfg.resource: cfg for cfg in resource_configs}
-        if selected_named_service_operations is not None and selected_named_service_operations.is_exact:
-            unknown = sorted(
-                set(selected_named_service_operations.operations) - set(selected_resources)
-            )
-            if unknown:
-                return {"ok": False, "error": "delegated_access_unknown_named_service_resources", "resources": unknown}
-        for resource_value, grants_for_resource in selected_resource_grants.items():
-            cfg = cfg_by_resource.get(resource_value)
-            if cfg is None:
-                continue
-            allowed_for_resource = set(self._config.supported_scopes(resource_value))
-            disallowed = [grant for grant in grants_for_resource if grant not in allowed_for_resource]
-            if disallowed:
-                return {
-                    "ok": False,
-                    "error": "delegated_access_grants_not_allowed_for_resources",
-                    "grants": disallowed,
-                    "resource": resource_value,
-                }
-        identity_scopes = {
-            _clean(getattr(cfg, "identity_scope", "") or "grantor") for cfg in resource_configs
-        }
-        if len(identity_scopes) > 1:
-            return {
-                "ok": False,
-                "error": "delegated_access_resources_have_conflicting_identity_scopes",
-                "resources": selected_resources,
-            }
-        # Recompute the boundary tree here: the descriptor is available in this
-        # process, the guard's is not.
-        named_services: dict[str, Any] = {}
-        for cfg in resource_configs:
-            if not isinstance(cfg.named_services, Mapping):
-                continue
-            try:
-                selected_policy = named_service_policy_for_resource(
-                    named_services=cfg.named_services,
-                    resource=cfg.resource,
-                    # Same value the record stores below, so the tree and the
-                    # selection it was derived from cannot disagree.
-                    selection=_selection_policy_argument(selected_named_service_operations),
-                    grants=selected_resource_grants.get(cfg.resource, []),
-                )
-            except ValueError as exc:
-                return {"ok": False, "error": "invalid_named_service_operation_selection", "message": str(exc)}
-            named_services = self._merge_named_service_configs(named_services, selected_policy)
-        selected_operations = self._resolve_operations(
-            grants=selected_grants, operations=(), resources=selected_resources,
-        )
-        if account_scope is None:
-            selected_account_scope = {
-                provider: {account_id: list(claims) for account_id, claims in accounts.items()}
-                for provider, accounts in existing.account_scope.items()
-            }
-        else:
-            selected_account_scope = {
-                provider: {account_id: list(claims) for account_id, claims in accounts.items()}
-                for provider, accounts in normalize_account_scope(account_scope).items()
-            }
+        selected_resource_grants = resolved.resource_grants
+        selected_named_service_operations = resolved.named_service_operations
+        named_services = resolved.named_services
+        selected_operations = resolved.operations
+        selected_account_scope = resolved.account_scope
+
 
         now = int(time.time())
         if existing.expires_at <= now:
@@ -1759,7 +2041,7 @@ class AutomationAccessService:
                 provider: {account_id: tuple(claims) for account_id, claims in accounts.items()}
                 for provider, accounts in selected_account_scope.items()
             },
-            identity_scope=next(iter(identity_scopes), existing.identity_scope or "grantor"),
+            identity_scope=resolved.identity_scope,
             catalog_version=catalog_version,
             card_revision=existing.card_revision + 1,
             session_id=existing.session_id,
@@ -1767,8 +2049,13 @@ class AutomationAccessService:
             expires_at=existing.expires_at,
             last_four=existing.last_four,
             source=existing.source,
-            # Manual token stays client-side only; the record never holds it.
-            access_token="",
+            # Credential material is the card family's lifecycle, not its
+            # authority: an agent's reusable bearer and an OAuth client's token
+            # handles survive an authority edit untouched. A manual card holds
+            # none — its token is client-side only.
+            refresh_token=existing.refresh_token,
+            access_token=existing.access_token,
+            last_issued_at=existing.last_issued_at,
         )
         del remaining
         try:
@@ -2025,6 +2312,52 @@ class AutomationAccessService:
             )
         return None
 
+    @staticmethod
+    def _catalog_named_service_operations(
+        active: Any,
+        resource_grants: Mapping[str, Any],
+    ) -> dict[str, set[str]]:
+        """``namespace -> operations`` the active catalog offers for these resources."""
+        capabilities = ActiveCatalogCapabilities(active)
+        offered: dict[str, set[str]] = {}
+        for resource in resource_grants:
+            cfg = capabilities.resource_config(
+                CapabilityRequest(
+                    kind=CAPABILITY_NAMED_SERVICE_OPERATION,
+                    resource=_clean(resource),
+                    surface="named_service",
+                    namespace="-",
+                    operation="-",
+                )
+            )
+            block = getattr(cfg, "named_services", None) if cfg is not None else None
+            if not isinstance(block, Mapping):
+                continue
+            for namespace, operations in configured_named_service_operations(block).items():
+                offered.setdefault(namespace, set()).update(operations)
+        return offered
+
+    def _materialized_boundary_for(
+        self,
+        *,
+        selection: NamedServiceSelection,
+        resource: str,
+        grants: Iterable[str],
+    ) -> dict[str, Any]:
+        """The boundary tree a selection expands to for one resource."""
+        cfg = self._config.resource_config(resource) if resource else None
+        if cfg is None or not isinstance(getattr(cfg, "named_services", None), Mapping):
+            return {}
+        try:
+            return named_service_policy_for_resource(
+                named_services=cfg.named_services,
+                resource=cfg.resource,
+                selection=_selection_policy_argument(selection),
+                grants=list(grants),
+            )
+        except ValueError:
+            return {}
+
     async def record_oauth_grant(
         self,
         *,
@@ -2038,6 +2371,8 @@ class AutomationAccessService:
         access_token: str = "",
         refresh_token: str = "",
         account_scope: Mapping[str, Any] | None = None,
+        named_service_operations: Any = None,
+        catalog_version: str = "",
     ) -> AutomationAccessRecord | None:
         """Register (or update) an OAuth-flow delegated grant in the registry.
 
@@ -2075,7 +2410,12 @@ class AutomationAccessService:
         # Token rotation is not an authority change: the card keeps the catalog
         # generation it was last saved against and only advances its revision.
         existing_catalog_version = ""
-        existing_card_revision = 0
+        try:
+            existing_card_revision = await self._committed_revision(
+                access_id, grantor_subject=grantor
+            )
+        except CardUnavailable:
+            existing_card_revision = 0
         try:
             existing_card = await self._load_record(access_id, grantor_subject=grantor)
         except CardUnavailable:
@@ -2091,11 +2431,26 @@ class AutomationAccessService:
             }
             existing_selection = existing_card.named_service_operations
             existing_catalog_version = existing_card.catalog_version
-            existing_card_revision = existing_card.card_revision
             existing_named_services = copy.deepcopy(dict(existing_card.named_services or {}))
         # Initial consent (not a refresh rotation): absorb superseded sibling
         # cards BEFORE composing this card, so their binding carries over.
         is_initial_consent = existing_card is None
+        if is_initial_consent:
+            # Born from what the consent screen submitted, stamped with the
+            # catalog it was chosen against. An absent selection is `{}`.
+            try:
+                selection = self._named_service_operation_selection(
+                    named_service_operations
+                )
+            except ValueError:
+                selection = None
+            existing_selection = selection or NamedServiceSelection.none()
+            existing_catalog_version = _clean(catalog_version)
+            existing_named_services = self._materialized_boundary_for(
+                selection=existing_selection,
+                resource=resource_value,
+                grants=_as_list(list(scopes)),
+            )
         inherited_account_scope: dict[str, dict[str, list[str]]] = {}
         superseded: list[AutomationAccessRecord] = []
         if is_initial_consent:
@@ -2191,16 +2546,16 @@ class AutomationAccessService:
         if not grantor or not client:
             return {}
         seed: dict[str, dict[str, list[str]]] = {}
-        own_raw = await self._redis.get(
-            self._record_key(oauth_access_id(grantor, client, _clean(resource)))
-        )
         sources: list[Mapping[str, Mapping[str, Any]]] = []
-        if own_raw is not None:
-            try:
-                own = AutomationAccessRecord.from_mapping(json.loads(own_raw))
-                sources.append(own.account_scope)
-            except Exception:
-                pass
+        try:
+            own = await self._load_record(
+                oauth_access_id(grantor, client, _clean(resource)),
+                grantor_subject=grantor,
+            )
+        except CardUnavailable:
+            own = None
+        if own is not None:
+            sources.append(own.account_scope)
         try:
             donated, _retire = await self._collect_oauth_siblings(
                 grantor=grantor, client_id=client, resource=_clean(resource),
@@ -2361,6 +2716,7 @@ class AutomationAccessService:
         resource: str,
         claims: Iterable[str],
         account_scope: Mapping[str, Any] | None = None,
+        named_service_operations: Mapping[str, Any] | str | None = None,
         replace: bool = False,
         label: str | None = None,
     ) -> dict[str, Any]:
@@ -2378,6 +2734,9 @@ class AutomationAccessService:
         grantor_subject = _subject_from_user(user)
         if not grantor_subject:
             return {"ok": False, "error": "delegated_access_requires_authenticated_user"}
+        refusal = _delegate_mutation_refusal(user)
+        if refusal is not None:
+            return refusal
         client = _clean(client_id)
         resource_value = _clean(resource)
         claim_list = _as_list(list(claims))
@@ -2452,11 +2811,55 @@ class AutomationAccessService:
         # A DCR client registers one fixed name (every Claude connector arrives
         # as "Claude"), so the user may rename the card to tell connections
         # apart. Empty/absent label leaves the current one untouched.
+        try:
+            active = await self._active_catalog()
+        except CatalogUnavailable as exc:
+            return {
+                "ok": False,
+                "error": "delegated_catalog_unavailable",
+                "reason": exc.reason,
+                "retryable": True,
+                "status": 503,
+            }
+        resolved = await self._resolve_card_authority(
+            user=user,
+            existing=record,
+            active=active,
+            resource_grants={res: list(vals) for res, vals in resource_grants.items()},
+            named_service_operations=named_service_operations,
+            account_scope={
+                provider: {account_id: list(cl) for account_id, cl in accounts.items()}
+                for provider, accounts in account_scope_out.items()
+            },
+        )
+        if resolved.error is not None:
+            return resolved.error
+        if resolved.revoke:
+            revoked = await self.revoke_access(user, access_id=access_id)
+            if not revoked.get("ok"):
+                return revoked
+            return {
+                "ok": True,
+                "revoked": True,
+                "access_id": access_id,
+                "pruned": resolved.reconciled.to_public_dict(),
+            }
+        resource_grants = {
+            res: tuple(vals) for res, vals in resolved.resource_grants.items()
+        }
+        account_scope_out = {
+            provider: {account_id: tuple(cl) for account_id, cl in accounts.items()}
+            for provider, accounts in resolved.account_scope.items()
+        }
         new_label = _clean(label)
         updated = replace_fields(
             record,
             resource_grants=resource_grants,
             account_scope=account_scope_out,
+            named_service_operations=resolved.named_service_operations,
+            named_services=copy.deepcopy(resolved.named_services),
+            operations=tuple(resolved.operations),
+            catalog_version=_clean(getattr(active, "version", "")),
             label=new_label or record.label,
             card_revision=record.card_revision + 1,
         )
@@ -2488,6 +2891,9 @@ class AutomationAccessService:
         grantor_subject = _subject_from_user(user)
         if not grantor_subject:
             return {"ok": False, "error": "delegated_access_requires_authenticated_user"}
+        refusal = _delegate_mutation_refusal(user)
+        if refusal is not None:
+            return refusal
         access_id_value = _clean(access_id)
         if not access_id_value:
             return {"ok": False, "error": "delegated_access_id_required"}

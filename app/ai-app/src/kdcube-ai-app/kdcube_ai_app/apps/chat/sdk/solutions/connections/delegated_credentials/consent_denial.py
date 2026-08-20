@@ -60,6 +60,8 @@ def connection_hub_grant_url(
     hub_bundle_id: str = "connection-hub@1-0",
     account_id: str = "",
     account_claim: str = "",
+    namespace: str = "",
+    operation: str = "",
 ) -> str:
     """An absolute Connection Hub deep link that lands on the Delegated by
     KDCube tab with THIS client's access request focused (the pending pane:
@@ -70,6 +72,9 @@ def connection_hub_grant_url(
     landed there, names the exact account+claim to tick, and opens that
     provider's section — ticking is always the user's own action, nothing is
     pre-checked.
+
+    ``namespace`` / ``operation`` name the inner capability the pane
+    pre-selects.
 
     Openable outside the app origin — an external agent (Claude Code) relays
     it verbatim; the user signs in with their platform credentials and sees the
@@ -113,6 +118,10 @@ def connection_hub_grant_url(
         "resource": resource,
         "claims": ",".join(str(c) for c in claims if str(c or "").strip()),
     }
+    if str(namespace or "").strip():
+        query["namespace"] = str(namespace).strip()
+    if str(operation or "").strip():
+        query["operation"] = str(operation).strip()
     if str(account_id or "").strip():
         query["account_id"] = str(account_id).strip()
     if str(account_claim or "").strip():
@@ -181,6 +190,8 @@ def agent_grant_consent_denial(
         client_id=client_id or external_client_id,
         resource=resource,
         claims=missing_list,
+        namespace=namespace,
+        operation=operation,
     )
     if not client_id and not external_client_id:
         LOGGER.info(
@@ -200,6 +211,7 @@ def agent_grant_consent_denial(
         # Self-describing contract: the block names its namespace so a consumer
         # never re-derives it.
         "namespace": namespace,
+        "operation": operation,
     }
     if hub_url:
         consent["connection_hub_url"] = hub_url
@@ -208,9 +220,16 @@ def agent_grant_consent_denial(
         # The one-click grant action rides only for hosted agents today; an
         # external client's approval flows through the hub link (its record
         # extension is the hub's own operation).
+        grant_payload: dict[str, Any] = {
+            "client_id": client_id,
+            "resource": resource,
+            "claims": missing_list,
+        }
+        if namespace and operation:
+            grant_payload["named_service_operations"] = {namespace: [operation]}
         consent["grant"] = {
             "operation": "delegated_agent_grant_create",
-            "payload": {"client_id": client_id, "resource": resource, "claims": missing_list},
+            "payload": grant_payload,
         }
         denial["next_step"] = (
             "The user extends this agent's grant with the missing access in "

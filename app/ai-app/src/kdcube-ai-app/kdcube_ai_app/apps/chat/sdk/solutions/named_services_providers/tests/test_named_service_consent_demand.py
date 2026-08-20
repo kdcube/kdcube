@@ -312,3 +312,68 @@ async def test_menu_inventory_renders_even_when_coverage_hangs(monkeypatch):
     assert out["tools"][0].get("consent") is None
     assert out["tools"][0]["tools"][0].get("consent") is None
     assert any("without consent state" in msg for _lvl, msg in logged)
+
+
+@pytest.mark.asyncio
+async def test_a_boundary_refusal_asks_for_the_operation_it_was_refused(monkeypatch):
+    """The card holds the claims; only its own boundary excludes the operation.
+
+    A claims-shaped demand asks for consent that is already given, deduplicates
+    away, and leaves the agent telling the user to wait for a permission they
+    granted. The demand names the operation, and approval grants that one.
+    """
+    import kdcube_ai_app.apps.chat.sdk.infra.bundle_operations as bundle_operations
+    import kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx as comm_ctx
+    import kdcube_ai_app.apps.chat.sdk.solutions.connections.mcp_consent as mcp_consent
+    from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.tools import (
+        _agent_grant_gate,
+    )
+
+    resource = "*/kdcube-services@1-0/public/mcp/named_services*"
+    monkeypatch.setattr(
+        comm_ctx, "get_current_user_identity",
+        lambda: {"user_id": "u1", "bundle_id": "workspace@1-0", "tenant_id": "t", "project_id": "p"},
+    )
+    monkeypatch.setattr(
+        comm_ctx, "get_current_request_context",
+        lambda: SimpleNamespace(event=SimpleNamespace(agent_id="main")),
+    )
+
+    state = {
+        "governed": True,
+        "granted": False,
+        "missing_claims": [],
+        "claims": ["memories:read", "named_services:use"],
+        "resource": resource,
+        "client_id": "kdcube-agent:workspace@1-0:main",
+        "account_scope": {},
+        "not_granted": {
+            "ok": False,
+            "error": {"code": "delegated_capability_not_granted", "retryable": False},
+            "ret": {"requested_capability": {"namespace": "mem", "operation": "object.search"}},
+        },
+    }
+
+    async def fake_call(**kwargs):
+        return SimpleNamespace(value={"ok": True, "ret": {"object": state}})
+
+    monkeypatch.setattr(bundle_operations, "call_bundle_named_service", fake_call)
+
+    announced: list[Any] = []
+
+    async def fake_announce(consent):
+        announced.append(consent)
+
+    monkeypatch.setattr(mcp_consent, "announce_agent_consent", fake_announce)
+
+    result = await _agent_grant_gate("mem", "object.search", "named_services_search")
+
+    assert result["error"]["code"] == "delegated_capability_not_granted"
+    grant = result["consent"]["grant"]["payload"]
+    assert grant["named_service_operations"] == {"mem": ["object.search"]}
+    # No claim is missing, so the demand asks for the operation alone.
+    assert grant["claims"] == []
+    assert len(announced) == 1
+    assert announced[0].consent["operation"] == "object.search"
+    assert announced[0].consent["namespace"] == "mem"
+    assert "object.search" in announced[0].agent_message

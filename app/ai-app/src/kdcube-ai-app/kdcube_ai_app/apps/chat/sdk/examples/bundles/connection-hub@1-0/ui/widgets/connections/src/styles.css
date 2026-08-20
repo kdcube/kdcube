@@ -1332,6 +1332,42 @@ code {
   font-size: 12px;
 }
 
+.resource-boundaries-bulk {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.resource-boundaries-bulk button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent, #2f6fd0);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.resource-boundaries-bulk button:disabled {
+  color: var(--text-3, #9aa4b2);
+  cursor: default;
+  text-decoration: none;
+}
+
+.grant-chip-blocked {
+  opacity: 0.5;
+}
+
+.grant-chip-blocked input {
+  cursor: not-allowed;
+}
+
+.resource-boundaries-empty {
+  margin: 0 0 8px;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
 .namespace-boundary {
   border-top: 1px solid var(--line-soft);
 }

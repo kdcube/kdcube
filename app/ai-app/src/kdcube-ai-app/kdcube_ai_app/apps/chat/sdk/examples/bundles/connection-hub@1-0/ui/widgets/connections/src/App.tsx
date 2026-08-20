@@ -228,7 +228,7 @@ export default function App() {
         // offer its one-click grant pane; the nonce remounts it to re-read.
         try {
           const url = new URL(window.location.href);
-          (['pending_agent_grant', 'agent_client_id', 'manual_access_id', 'resource', 'claims', 'account_id', 'account_claim'] as const).forEach((key) => {
+          (['pending_agent_grant', 'agent_client_id', 'manual_access_id', 'resource', 'claims', 'namespace', 'operation', 'account_id', 'account_claim'] as const).forEach((key) => {
             const value = (params[key] || '').trim();
             if (value) url.searchParams.set(key, value);
             else url.searchParams.delete(key);

@@ -52,7 +52,10 @@ if existing then
   local ok, decoded = pcall(cjson.decode, existing)
   if ok and type(decoded) == 'table' then
     local kind = decoded['kind']
-    if kind ~= 'card' then
+    -- A revoked tombstone is displaced only by a writer whose expected
+    -- revision IS the revoked one: a re-consent commits the next revision of
+    -- the same id, while a stale writer still carries an older number.
+    if kind ~= 'card' and kind ~= 'revoked' then
       return 0
     end
     if tonumber(decoded['card_revision']) ~= tonumber(ARGV[2]) then

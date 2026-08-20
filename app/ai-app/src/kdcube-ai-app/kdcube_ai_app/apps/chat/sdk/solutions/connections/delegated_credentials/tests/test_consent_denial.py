@@ -97,6 +97,34 @@ def test_manual_automation_is_not_sent_to_the_pending_pane():
     assert "pending_agent_grant" not in str(denial)
 
 
+def test_the_demand_names_the_inner_operation_it_wants():
+    """Claims cannot express which operation was refused.
+
+    A card may hold every claim the operation declares and still not cover it,
+    so a claims-only demand asks for consent that is already given. Approval
+    grants the exact operation, which means the demand has to carry it.
+    """
+    denial = _denial("kdcube-agent:app:main")
+    consent = denial["consent"]
+
+    assert consent["namespace"] == "slack"
+    assert consent["operation"] == "object.search"
+    assert consent["grant"]["payload"]["named_service_operations"] == {
+        "slack": ["object.search"],
+    }
+    url = consent["connection_hub_url"]
+    assert "namespace=slack" in url
+    assert "operation=object.search" in url
+
+
+def test_a_demand_without_an_operation_keeps_the_claims_only_link():
+    url = connection_hub_grant_url(
+        tenant="t", project="p", client_id="claude", resource=RESOURCE, claims=["mail:read"],
+    )
+    assert "namespace=" not in url
+    assert "operation=" not in url
+
+
 def test_the_per_account_binding_link_also_skips_the_pending_pane():
     """The binding denial builds its own URL, so the rule lives in the builder.
 

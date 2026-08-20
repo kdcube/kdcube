@@ -190,6 +190,14 @@ class DelegatedCardService:
         except ObservedFileLockTimeout as exc:
             raise CardConflict("card_mutation_lock_timeout") from exc
 
+    async def current_revision(self, *, subject_hash: str, access_id: str) -> int:
+        """The committed revision whatever its state; 0 with no history. Same
+        read as the precondition below."""
+        current = await self._store.read_current_authority(
+            subject_hash=subject_hash, access_id=access_id
+        )
+        return int(current[1].card_revision) if current is not None else 0
+
     async def _assert_expected(
         self, *, subject_hash: str, access_id: str, expected_revision: int
     ) -> None:

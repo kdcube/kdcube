@@ -8,6 +8,9 @@ policy code receives this contract instead of building the pieces itself.
 
     load          committed authority and its live handles, or None when the
                   card is absent, expired, or revoked
+    current_revision
+                  the committed revision whatever its state, 0 with no durable
+                  history — the expected_revision a write must pass
     persist       commits the next revision; a mismatched expected_revision
                   raises CardConflict
     forget        revokes the card and drops its handles
@@ -48,6 +51,8 @@ LoadedCard = tuple[CardAuthority, CardCredentialHandles]
 
 class CardPersistence(Protocol):
     async def load(self, access_id: str, *, subject_hash: str) -> LoadedCard | None: ...
+
+    async def current_revision(self, access_id: str, *, subject_hash: str) -> int: ...
 
     async def persist(
         self,
@@ -94,6 +99,11 @@ class DurableCardPersistence:
         if subject_hash_for(authority.grantor_subject) != str(subject_hash):
             return None
         return authority, await self._handles.read(access_id)
+
+    async def current_revision(self, access_id: str, *, subject_hash: str) -> int:
+        return await self._cards.current_revision(
+            subject_hash=subject_hash, access_id=access_id
+        )
 
     async def persist(
         self,

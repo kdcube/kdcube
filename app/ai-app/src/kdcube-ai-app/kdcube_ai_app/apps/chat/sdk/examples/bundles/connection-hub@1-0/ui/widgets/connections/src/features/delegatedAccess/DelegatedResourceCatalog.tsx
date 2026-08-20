@@ -185,12 +185,51 @@ export function DelegatedResourceCatalog({
   const namespaces = resource.named_services || [];
   if (!namespaces.length) return null;
 
+  /* Every offered row, so "all of them" is a question this component can both
+   * ask and answer. Ticking all of them is what the save encodes as `"*"`. */
+  const offeredRows = namespaces.flatMap((namespace) => (
+    operationRows(namespace).map((row) => ({ namespace: namespace.namespace, row }))
+  ));
+  const selectedCount = namespaces.reduce((total, namespace) => (
+    total + (selectedOperations[namespace.namespace] || []).length
+  ), 0);
+
+  const setEveryOperation = (checked: boolean) => {
+    offeredRows.forEach(({ namespace, row }) => {
+      const held = new Set(selectedOperations[namespace] || []);
+      if (held.has(row.operation) === checked) return;
+      onOperationChange(namespace, row.operation, row.grants, checked);
+    });
+  };
+
   return (
     <div className="resource-boundaries">
       <div className="resource-boundaries-head">
         <strong>Named-service access</strong>
+        <span className="resource-boundaries-bulk">
+          <button
+            type="button"
+            onClick={() => setEveryOperation(true)}
+            disabled={selectedCount >= offeredRows.length}
+          >
+            Select all currently available
+          </button>
+          <button
+            type="button"
+            onClick={() => setEveryOperation(false)}
+            disabled={!selectedCount}
+          >
+            Clear
+          </button>
+        </span>
         <span className="badge">{namespaces.length} namespaces</span>
       </div>
+      {offeredRows.length && !selectedCount ? (
+        <p className="resource-boundaries-empty">
+          No operations selected - this card will reach no named-service
+          operation on this door.
+        </p>
+      ) : null}
       {namespaces.map((namespace) => {
         const rows = operationRows(namespace);
         const selected = new Set(selectedOperations[namespace.namespace] || []);

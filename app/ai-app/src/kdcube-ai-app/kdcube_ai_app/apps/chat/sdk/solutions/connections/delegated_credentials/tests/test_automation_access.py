@@ -512,6 +512,7 @@ async def test_resource_options_project_exact_named_service_and_provider_catalog
                 "slack:write",
             ]
         },
+        named_service_operations="*",
     )
     assert created["ok"] is True
     persisted_policy = store.bound[0]["named_services"]
@@ -1123,6 +1124,7 @@ async def test_agent_namespace_grant_state_governs_and_grants(card_persistence):
     created = await service.create_access(
         _AGENT_USER, label="agent", client_id=_AGENT_CLIENT,
         resource_grants={ns_resource: pending["claims"]},
+        named_service_operations={ns_resource: {"mail": ["object.search"]}},
     )
     assert created["ok"] is True
 
@@ -1164,6 +1166,7 @@ async def test_the_native_gate_reads_the_boundary_not_the_intent(card_persistenc
     created = await service.create_access(
         _AGENT_USER, label="agent", client_id=_AGENT_CLIENT,
         resource_grants={ns_resource: claims},
+        named_service_operations="*",
     )
     assert created["ok"] is True
     assert created["access"]["named_service_operations"] == "*"
@@ -1212,6 +1215,7 @@ async def test_a_boundary_refusal_says_the_card_refused_not_the_claims(card_pers
     assert (await service.create_access(
         _AGENT_USER, label="agent", client_id=_AGENT_CLIENT,
         resource_grants={ns_resource: ["mail:read", "named_services:use"]},
+        named_service_operations="*",
     ))["ok"] is True
 
     record = await service._load_record(
@@ -1331,6 +1335,7 @@ async def test_the_native_gate_refuses_a_namespace_the_catalog_dropped(card_pers
     assert (await service.create_access(
         _AGENT_USER, label="agent", client_id=_AGENT_CLIENT,
         resource_grants={ns_resource: ["mail:read", "named_services:use"]},
+        named_service_operations="*",
     ))["ok"] is True
 
     trimmed = copy.deepcopy(service._catalog_resolver.connections)
@@ -1480,6 +1485,7 @@ async def test_listing_reports_drift_against_the_card_baseline(card_persistence)
     created = await service.create_access(
         _AGENT_USER, label="agent", client_id=_AGENT_CLIENT,
         resource_grants={ns_resource: ["mail:read", "named_services:use"]},
+        named_service_operations="*",
     )
     assert created["ok"] is True
 
@@ -2169,15 +2175,18 @@ async def test_automation_access_update_empty_narrowing_clears_every_resource(ca
     user = {"user_id": "platform-user-1", "roles": ["kdcube:role:registered"], "permissions": []}
     resource = "https://example.test/mcp/named-services"
     grants = ["named_services:use", "slack:read"]
-    created = await service.create_access(user, label="all ops", resource_grants={resource: grants})
+    created = await service.create_access(
+        user, label="all ops", resource_grants={resource: grants},
+        named_service_operations="*",
+    )
     access_id = created["access"]["access_id"]
 
     async def _namespaces():
         raw = await stored_card(service, access_id)
         return sorted(raw["named_services"]["namespaces"])
 
-    # No narrowing asked for: the full descriptor policy, which the bridge
-    # still gates per operation against the card's grants.
+    # Every operation the catalog offered, which the bridge still gates per
+    # operation against the card's grants.
     assert await _namespaces() == ["mail", "slack"]
 
     # Omitted -> the wildcard is frozen into what it already meant, so it can
@@ -2232,3 +2241,246 @@ def test_a_catalog_tool_whose_claim_was_never_declared_is_reported():
 
 def test_a_coherent_catalog_reports_nothing():
     assert _config().ungrantable_resource_tools() == ()
+
+
+async def test_consent_seeds_the_account_binding_from_the_clients_own_card(card_persistence):
+    """The pre-check a re-consent screen shows comes from durable storage.
+
+    The client's own card is one of two seed sources; the other is a superseded
+    DCR sibling. Reading the card through anything but the durable store finds
+    nothing, and the screen silently drops the binding it should pre-check.
+    """
+    service = AutomationAccessService(
+        catalog_resolver=_CatalogResolver(connections=_connections()),
+        card_persistence=card_persistence,
+        redis=_Redis(),
+        tenant="demo-tenant",
+        project="demo-project",
+        config=_config(),
+        grant_store=_OAuthStore(),
+        authority=_Authority(),
+        minter=_minter,
+    )
+    record = await service.record_oauth_grant(
+        grantor_subject="platform-user-1",
+        client_id="claude",
+        client_label="Claude",
+        scopes=["records:read"],
+        resource="https://example.test/mcp",
+        access_token="kst1.oauth.token",
+        refresh_token="refresh-1",
+        account_scope={"slack": {"acct-1": ["chat:write"]}},
+    )
+    assert record is not None
+    assert record.account_scope == {"slack": {"acct-1": ("chat:write",)}}
+
+    seeded = await service.oauth_seed_account_scope(
+        grantor_subject="platform-user-1",
+        client_id="claude",
+        resource="https://example.test/mcp",
+    )
+    assert seeded == {"slack": {"acct-1": ["chat:write"]}}
+
+
+async def test_a_card_keyed_by_a_concrete_url_resolves_to_its_catalog_row(card_persistence):
+    """An OAuth card names the URL the client asked for; the catalog names a
+    pattern. The row is matched, not compared, so the card stays editable and
+    the listing tells a surface which row governs it."""
+    pattern = "https://example.test/mcp/named-services*"
+    concrete = "https://example.test/mcp/named-services/instance-7"
+    oauth = copy.deepcopy(NAMED_SERVICES_OAUTH)
+    for row in oauth["resources"]:
+        if row["resource"] == "https://example.test/mcp/named-services":
+            row["resource"] = pattern
+    connections = {"delegated_credentials": {"oauth": oauth}}
+    config = oauth_delegated_config(
+        SimpleNamespace(state=SimpleNamespace(oauth_delegated_config=oauth))
+    )
+    service = AutomationAccessService(
+        catalog_resolver=_CatalogResolver(connections=connections),
+        card_persistence=card_persistence,
+        redis=_Redis(),
+        tenant="demo-tenant",
+        project="demo-project",
+        config=config,
+        grant_store=_OAuthStore(),
+        authority=_Authority(),
+        minter=_minter,
+    )
+    user = {"sub": "platform-user-1", "roles": ["kdcube:role:registered"], "permissions": []}
+    record = await service.record_oauth_grant(
+        grantor_subject="platform-user-1",
+        client_id="dcr-claude",
+        client_label="Claude",
+        scopes=["named_services:use", "mail:read"],
+        resource=concrete,
+        access_token="kst1.oauth.token",
+        refresh_token="refresh-1",
+    )
+    assert record is not None
+
+    listed = await service.list_access(user)
+    item = next(row for row in listed["items"] if row["access_id"] == record.access_id)
+    # The surface is told which row governs the card, so it never compares.
+    assert item["catalog_row_by_resource"] == {concrete: pattern}
+
+    # And the same key is editable: unknown_resources would mean the save path
+    # judged the card by string equality too.
+    updated = await service.update_access(
+        user,
+        access_id=record.access_id,
+        resource_grants={concrete: ["named_services:use", "mail:read"]},
+        named_service_operations={concrete: {"mail": ["object.search"]}},
+    )
+    assert updated.get("ok") is True, updated
+    assert updated["access"]["named_service_operations"] == {
+        concrete: {"mail": ["object.search"]}
+    }
+    # The boundary comes from the row's subtree but the grants and the
+    # selection are read under the card's key, so the tree is not empty.
+    stored = await only_stored_card(service)
+    assert stored["named_services"], stored["named_services"]
+
+
+async def test_a_revoked_card_can_be_granted_again(card_persistence):
+    """Revoke does not poison a deterministic access_id.
+
+    `oauth_access_id` and `agent_grant_access_id` are derived from
+    (grantor, client, resource), so the same client reconnecting reuses the id.
+    The revoked revision keeps the counter; the new consent continues it.
+    """
+    service = AutomationAccessService(
+        catalog_resolver=_CatalogResolver(connections=_connections()),
+        card_persistence=card_persistence,
+        redis=_Redis(), tenant="demo-tenant", project="demo-project",
+        config=_config(), grant_store=_OAuthStore(),
+        authority=_Authority(), minter=_minter,
+    )
+    user = {"sub": "platform-user-1", "roles": ["kdcube:role:registered"], "permissions": []}
+    first = await service.record_oauth_grant(
+        grantor_subject="platform-user-1", client_id="dcr-claude", client_label="Claude",
+        scopes=["records:read"], resource="https://example.test/mcp",
+        access_token="kst1.a", refresh_token="r-a",
+    )
+    assert first is not None and first.card_revision == 1
+
+    revoked = await service.revoke_access(user, access_id=first.access_id)
+    assert revoked.get("ok") is True, revoked
+    assert (await service.list_access(user))["items"] == []
+
+    again = await service.record_oauth_grant(
+        grantor_subject="platform-user-1", client_id="dcr-claude", client_label="Claude",
+        scopes=["records:read"], resource="https://example.test/mcp",
+        access_token="kst1.b", refresh_token="r-b",
+    )
+    assert again is not None, "reconnect after revoke produced no card"
+    assert again.access_id == first.access_id
+    # The counter continues past the revoked revision rather than restarting.
+    assert again.card_revision > first.card_revision
+    assert len((await service.list_access(user))["items"]) == 1
+
+
+async def test_the_catalog_is_offered_through_what_the_grantor_may_delegate(card_persistence):
+    """A claim outside the grantor's delegable set is not offered anywhere.
+
+    Offering it produces a form whose save cannot succeed, and the picker
+    auto-ticks an operation's claims, so dropping a claim from one list while
+    its operation survives in another moves the wall rather than removing it.
+    """
+    oauth = copy.deepcopy(NAMED_SERVICES_OAUTH)
+    for capability in oauth["capabilities"]:
+        if capability["grant"] == "mail:send":
+            capability["delegable_roles"] = ["kdcube:role:super-admin"]
+    service = AutomationAccessService(
+        catalog_resolver=_CatalogResolver(
+            connections={"delegated_credentials": {"oauth": oauth}}
+        ),
+        card_persistence=card_persistence,
+        redis=_Redis(), tenant="demo-tenant", project="demo-project",
+        config=oauth_delegated_config(
+            SimpleNamespace(state=SimpleNamespace(oauth_delegated_config=oauth))
+        ),
+        grant_store=_OAuthStore(), authority=_Authority(), minter=_minter,
+    )
+    admin = {"sub": "u-admin", "roles": ["kdcube:role:super-admin"], "permissions": []}
+    plain = {"sub": "u-plain", "roles": ["kdcube:role:registered"], "permissions": []}
+
+    def claims(options):
+        return {grant for option in options for grant in option.get("grants") or []}
+
+    def operations(options):
+        out = set()
+        for option in options:
+            for namespace in option.get("named_services") or []:
+                for tool_name, tool in (namespace.get("tools") or {}).items():
+                    ops = tool.get("operations")
+                    if isinstance(ops, dict) and ops:
+                        out.update(f"{namespace['namespace']}:{op}" for op in ops)
+                    else:
+                        out.add(f"{namespace['namespace']}:{tool.get('operation') or tool_name}")
+        return out
+
+    wide = await service.resource_options(admin)
+    narrow = await service.resource_options(plain)
+
+    # The restricted claim is offered to the grantor who may delegate it.
+    assert "mail:send" in claims(wide)
+    plain_claims = claims(narrow)
+    assert "mail:send" not in plain_claims, plain_claims
+    assert "mail:read" in plain_claims
+
+    # And the operation that costs it disappears with it, instead of staying
+    # tickable against a claim the form no longer offers.
+    assert "mail:object.action" in operations(wide)
+    assert "mail:object.action" not in operations(narrow)
+    assert "mail:object.search" in operations(narrow)
+
+    # A save of what is still offered succeeds; the removed claim is refused
+    # with the reason that actually applies.
+    refused = await service.create_access(
+        plain,
+        label="Nope",
+        resource_grants={"https://example.test/mcp/named-services": ["mail:send"]},
+    )
+    assert refused["ok"] is False
+    assert refused["error"] == "delegated_access_grants_not_delegable"
+    assert "not yours to delegate" in refused["message"]
+    assert "capabilities" in refused["message"]
+
+
+async def test_mixed_identity_scopes_are_refused_with_their_reason(card_persistence):
+    """One card issues one credential, so its doors share one identity scope."""
+    oauth = copy.deepcopy(NAMED_SERVICES_OAUTH)
+    oauth["resources"] = list(oauth["resources"]) + [{
+        "resource": "https://example.test/mcp/family",
+        "label": "Family-scoped door",
+        "identity_scope": "grantor_identity_family",
+        "tools": {"family_call": {"label": "Call", "grants": ["named_services:use"]}},
+    }]
+    service = AutomationAccessService(
+        catalog_resolver=_CatalogResolver(
+            connections={"delegated_credentials": {"oauth": oauth}}
+        ),
+        card_persistence=card_persistence,
+        redis=_Redis(), tenant="demo-tenant", project="demo-project",
+        config=oauth_delegated_config(
+            SimpleNamespace(state=SimpleNamespace(oauth_delegated_config=oauth))
+        ),
+        grant_store=_OAuthStore(), authority=_Authority(), minter=_minter,
+    )
+    user = {"sub": "platform-user-1", "roles": ["kdcube:role:registered"], "permissions": []}
+    refused = await service.create_access(
+        user,
+        label="Mixed",
+        resource_grants={
+            "https://example.test/mcp/named-services": ["named_services:use"],
+            "https://example.test/mcp/family": ["named_services:use"],
+        },
+        named_service_operations={},
+    )
+    assert refused["ok"] is False
+    assert refused["error"] == "delegated_access_resources_have_conflicting_identity_scopes"
+    # The refusal names the conflict rather than only its code.
+    assert refused["identity_scopes"] == ["grantor", "grantor_identity_family"]
+    assert "identity_scope" in refused["message"]
+    assert "separate cards" in refused["message"]

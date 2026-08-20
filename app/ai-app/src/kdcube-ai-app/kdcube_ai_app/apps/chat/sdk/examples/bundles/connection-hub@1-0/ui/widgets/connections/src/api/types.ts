@@ -135,6 +135,10 @@ export interface DelegatedAccessRecord {
    *  no operations of their own, so this is the only way a surface can draw
    *  what such a card actually covers. */
   effective_named_service_operations?: DelegatedAccessNamedServiceOperations;
+  /** Card resource -> the catalog row that governs it. A card key is the row's
+   *  own pattern (hub-created) or a concrete URL (OAuth `resource`), so a
+   *  surface may not find its row by string equality. */
+  catalog_row_by_resource?: Record<string, string>;
   /** Per-account claim binding: {provider_id: {account_id: [claims]}}. For a
    *  provider, which connected account(s) this client may use AND, per account,
    *  the claims it may use there. account "*" = any account; claim "*" = any. */

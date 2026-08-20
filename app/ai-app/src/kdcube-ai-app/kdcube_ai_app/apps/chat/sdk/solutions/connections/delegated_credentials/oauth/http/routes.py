@@ -44,6 +44,8 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oau
     oauth_delegated_config,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.consent import (
+    CONSENT_CONTRACT_VERSION,
+    named_service_selection_rows,
     platform_edge_grants_for_scopes,
     render_consent_html,
     tools_for_scopes,
@@ -51,6 +53,9 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oau
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.authority import build_delegated_client_credential
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cards.resolver import (
     CardUnavailable,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.serving import (
+    delegated_serving_resolvers,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.cards.service import (
     CardCommitFailed,
@@ -202,6 +207,9 @@ def _consent_payload(
     grantor_label: str,
     signout_action: str,
     return_to: str,
+    catalog_version: str = "",
+    connected_accounts: list | None = None,
+    seeded_account_scope: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     authorize_request = {
         "client_id": req.client_id,
@@ -216,6 +224,8 @@ def _consent_payload(
         "client": req.client.snapshot() if req.client is not None else {},
     }
     return {
+        "consent_contract": {"version": CONSENT_CONTRACT_VERSION},
+        "catalog_version": catalog_version,
         # `request` is kept for existing renderers. `oauth_request` avoids a
         # common bundle-operation kwarg collision with the framework request.
         "request": authorize_request,
@@ -242,6 +252,11 @@ def _consent_payload(
             }
             for tool in cfg.tools_for_scopes(req.scopes, resource=req.resource)
         ],
+        "named_service_operations": named_service_selection_rows(
+            req.scopes, config=cfg, resource=req.resource,
+        ),
+        "connected_accounts": list(connected_accounts or []),
+        "seeded_account_scope": dict(seeded_account_scope or {}),
     }
 
 
@@ -303,6 +318,9 @@ async def _render_custom_consent_if_configured(
     cfg: OAuthDelegatedClientConfig,
     grantor_subject: str,
     grantor_label: str,
+    catalog_version: str = "",
+    connected_accounts: list | None = None,
+    seeded_account_scope: Mapping[str, Any] | None = None,
 ) -> Response | None:
     endpoint = _custom_consent_endpoint(request, cfg)
     if not endpoint:
@@ -341,6 +359,9 @@ async def _render_custom_consent_if_configured(
         grantor_label=grantor_label,
         signout_action=_logout_action(request),
         return_to=_return_to(request),
+        catalog_version=catalog_version,
+        connected_accounts=connected_accounts,
+        seeded_account_scope=seeded_account_scope,
     )
     try:
         result = await call_bundle_operation(
@@ -367,7 +388,82 @@ async def _render_custom_consent_if_configured(
             status_code=500,
             content={"error": "consent_ui_render_failed", "error_description": "renderer did not return html"},
         )
+    declared = _extract_custom_consent_contract_version(result)
+    if declared != CONSENT_CONTRACT_VERSION:
+        LOGGER.error(
+            "[connection-hub.oauth] consent_ui contract mismatch bundle=%s operation=%s "
+            "declared=%s expected=%s",
+            bundle_id, operation, declared or "<absent>", CONSENT_CONTRACT_VERSION,
+        )
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "consent_ui_contract_mismatch",
+                "error_description": (
+                    f"consent renderer {bundle_id}:{operation} declares "
+                    f"{declared or 'no'} contract version; this deployment serves "
+                    f"{CONSENT_CONTRACT_VERSION}. Update the renderer to the current "
+                    "consent view model, or remove `consent_ui` to use the built-in page."
+                ),
+            },
+        )
     return HTMLResponse(html)
+
+
+def _extract_custom_consent_contract_version(result: Any) -> str:
+    if not isinstance(result, Mapping):
+        return ""
+    for key in ("consent_contract_version", "contract_version"):
+        value = result.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    contract = result.get("consent_contract")
+    if isinstance(contract, Mapping):
+        value = contract.get("version")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _selected_named_service_operations(
+    form: Any,
+    *,
+    scopes: Iterable[str],
+    cfg: OAuthDelegatedClientConfig,
+    resource: str,
+) -> Any:
+    """The card-level selection a consent submission carries.
+
+    ``"*"`` when every offered operation was chosen, otherwise the exact
+    namespace map keyed by resource. Values outside what the page offered are
+    dropped; an empty result is a deliberate empty selection.
+    """
+    offered = named_service_selection_rows(scopes, config=cfg, resource=resource)
+    if str(form.get("named_service_operations_all") or "").strip():
+        return "*"
+    allowed = {(row["namespace"], row["operation"]) for row in offered}
+    picked: dict[str, list[str]] = {}
+    for raw in form.getlist("named_service_operations"):
+        namespace, _, operation = str(raw or "").partition(":")
+        key = (namespace.strip(), operation.strip())
+        if key not in allowed:
+            continue
+        operations = picked.setdefault(key[0], [])
+        if key[1] not in operations:
+            operations.append(key[1])
+    return {resource or "*": picked} if picked else {}
+
+
+async def _active_catalog_version_for_consent(request: Request) -> str:
+    resolvers = delegated_serving_resolvers(request)
+    if resolvers is None:
+        return ""
+    try:
+        document = await resolvers.catalog.resolve_active()
+    except Exception:
+        LOGGER.warning("[connection-hub.oauth] active catalog unreadable for consent", exc_info=True)
+        return ""
+    return str(getattr(document, "version", "") or "")
 
 
 def _logout_action(request: Request) -> str:
@@ -761,6 +857,13 @@ async def authorize(request: Request) -> Response:
         req.client is not None
         and req.client.registration_kind == CLIENT_REGISTRATION_PRE_REGISTERED
     )
+    # The view model is built before a renderer is chosen: both renderers see
+    # the same facts, and a custom one changes presentation only.
+    connected_accounts = await _connected_accounts_for_consent(subject)
+    seeded_account_scope = await _seed_account_scope_for_consent(
+        request, subject=subject, client_id=req.client_id, resource=req.resource, cfg=cfg,
+    )
+    catalog_version = await _active_catalog_version_for_consent(request)
     custom = await _render_custom_consent_if_configured(
         request,
         req=render_req,
@@ -770,13 +873,12 @@ async def authorize(request: Request) -> Response:
         cfg=cfg,
         grantor_subject=_user_subject(user or {}),
         grantor_label=_user_label(user or {}),
+        catalog_version=catalog_version,
+        connected_accounts=connected_accounts,
+        seeded_account_scope=seeded_account_scope,
     )
     if custom is not None:
         return custom
-    connected_accounts = await _connected_accounts_for_consent(subject)
-    seeded_account_scope = await _seed_account_scope_for_consent(
-        request, subject=subject, client_id=req.client_id, resource=req.resource, cfg=cfg,
-    )
     accounts_needed = _accounts_needed_for_consent(request, render_req.scopes, connected_accounts, cfg=cfg)
     return HTMLResponse(
         render_consent_html(
@@ -795,6 +897,7 @@ async def authorize(request: Request) -> Response:
             connected_accounts=connected_accounts,
             seeded_account_scope=seeded_account_scope,
             accounts_needed=accounts_needed,
+            catalog_version=catalog_version,
         )
     )
 
@@ -1031,6 +1134,43 @@ async def authorize_consent(request: Request) -> Response:
         )
         return RedirectResponse(url, status_code=302)
 
+    declared_contract = str(form.get("consent_contract_version") or "").strip()
+    if declared_contract != CONSENT_CONTRACT_VERSION:
+        LOGGER.error(
+            "[connection-hub.oauth] consent submission contract mismatch client_id=%s "
+            "declared=%s expected=%s",
+            req.client_id, declared_contract or "<absent>", CONSENT_CONTRACT_VERSION,
+        )
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "consent_ui_contract_mismatch",
+                "error_description": (
+                    "the consent page did not submit the current consent contract; "
+                    "no authorization code is issued"
+                ),
+            },
+        )
+    expected_catalog_version = str(form.get("expected_catalog_version") or "").strip()
+    active_catalog_version = await _active_catalog_version_for_consent(request)
+    if (
+        expected_catalog_version
+        and active_catalog_version
+        and expected_catalog_version != active_catalog_version
+    ):
+        return JSONResponse(
+            status_code=409,
+            content={
+                "error": "consent_catalog_changed",
+                "error_description": (
+                    "the service catalog changed after this page was shown; "
+                    "restart authorization"
+                ),
+                "expected_catalog_version": expected_catalog_version,
+                "active_catalog_version": active_catalog_version,
+            },
+        )
+
     requested_scope_set = _as_set(req.scopes)
     selected_scope_set = _as_set(form.getlist("platform_grants"))
     selected_scopes = [scope for scope in req.scopes if scope in selected_scope_set]
@@ -1063,6 +1203,9 @@ async def authorize_consent(request: Request) -> Response:
     selected_operations = [t for t in form.getlist("tools") if t in valid_tools]
     resource_cfg = cfg.resource_config(req.resource)
     named_services = dict(resource_cfg.named_services or {}) if resource_cfg is not None else {}
+    named_service_operations = _selected_named_service_operations(
+        form, scopes=selected_scopes, cfg=cfg, resource=req.resource,
+    )
     grantor_authority = _grantor_authority(user or {}, scopes=selected_scopes, inventory=inventory)
     delegation_edges = list(grantor_authority.get("delegation_edges") or [])
     # Per-account claim picks from the consent screen: checkbox values are
@@ -1097,6 +1240,8 @@ async def authorize_consent(request: Request) -> Response:
         grantor_authority=grantor_authority,
         delegation_edges=delegation_edges,
         named_services=named_services,
+        named_service_operations=named_service_operations,
+        catalog_version=active_catalog_version,
         account_scope=account_scope,
         client_metadata=req.client.snapshot() if req.client is not None else {},
     )
@@ -1160,6 +1305,8 @@ async def _issue_tokens(
     grantor_authority=None,
     delegation_edges=None,
     named_services=None,
+    named_service_operations=None,
+    catalog_version="",
     refresh_token=None,
     account_scope=None,
     client_metadata=None,
@@ -1284,6 +1431,8 @@ async def _issue_tokens(
             access_token=access_token,
             refresh_token=str(refresh_token or ""),
             account_scope=account_scope,
+            named_service_operations=named_service_operations,
+            catalog_version=catalog_version,
         )
     except (AutomationAccessUnavailable, CardUnavailable, CardConflict, CardCommitFailed) as exc:
         # The card is the authority a governed call resolves; a token whose card
@@ -1356,6 +1505,8 @@ async def token(request: Request) -> Response:
             grantor_authority=payload.get("grantor_authority") or {},
             delegation_edges=payload.get("delegation_edges") or [],
             named_services=payload.get("named_services") or {},
+            named_service_operations=payload.get("named_service_operations"),
+            catalog_version=payload.get("catalog_version") or "",
             account_scope=payload.get("account_scope") or None,
             client_metadata=payload.get("client_metadata") or {},
         )

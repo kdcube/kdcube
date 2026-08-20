@@ -640,12 +640,11 @@ async def _live_grant_record(request: Any, grant_record: Optional[Dict[str, Any]
         for provider, accounts in card.account_scope.items()
     }
     # The named-service boundary tree, narrowed from the descriptor when the
-    # card was written. A card that carries the selection owns the boundary
-    # even when it is empty; only a pre-encoding card keeps the bound snapshot.
-    if not card.named_service_operations.is_unknown:
-        resolved["named_services"] = dict(card.named_services or {})
-    elif card.named_services:
-        resolved["named_services"] = dict(card.named_services)
+    # card was written. Always set, including empty: an absent key leaves the
+    # descriptor as the only ceiling, so a card that materialized nothing would
+    # reach everything the deployment configures. A pre-encoding card is bounded
+    # by what it materialized, per the design's pre-migration rule.
+    resolved["named_services"] = dict(card.named_services or {})
     # Card provenance travels with the facts so a denial can name the card and
     # the catalog generation its selection was saved against.
     resolved["card_revision"] = int(card.card_revision or 0)

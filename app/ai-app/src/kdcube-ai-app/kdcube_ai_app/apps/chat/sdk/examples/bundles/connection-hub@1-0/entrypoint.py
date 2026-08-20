@@ -230,6 +230,21 @@ def _bool(value: Any, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on", "enabled"}
 
 
+def _named_service_operations_for(payload: Mapping[str, Any], resource: str) -> Any:
+    """The card-level selection a per-resource grant payload carries.
+
+    The demand names one door, so its payload names namespaces under that door;
+    `"*"` is card-level and travels as the string. Absent stays absent — the
+    service decides what an omitted selection means per entrance.
+    """
+    raw = payload.get("named_service_operations")
+    if isinstance(raw, str):
+        return raw.strip() or None
+    if isinstance(raw, Mapping) and raw:
+        return {resource: dict(raw)}
+    return None
+
+
 def _safe_list(value: Any) -> list[str]:
     if value is None:
         return []
@@ -2114,6 +2129,7 @@ class ConnectionHubEntrypoint(BaseEntrypoint):
                 resource=resource,
                 claims=claims,
                 account_scope=account_scope,
+                named_service_operations=_named_service_operations_for(payload, resource),
                 replace=bool(payload.get("replace")),
                 # Optional rename: a DCR client registers one fixed name, so the
                 # user may label the card. Empty keeps the existing name.
@@ -2124,10 +2140,7 @@ class ConnectionHubEntrypoint(BaseEntrypoint):
         # Optional named-service narrowing for THIS resource (namespace -> exact
         # operations), same selector the manual create flow sends — so extending
         # an agent's access from the hub can include named-service resources.
-        raw_ns = payload.get("named_service_operations")
-        named_service_operations = (
-            {resource: dict(raw_ns)} if isinstance(raw_ns, Mapping) and raw_ns else None
-        )
+        named_service_operations = _named_service_operations_for(payload, resource)
         # Default = MERGE (a one-click grant accumulates). `replace: true` is
         # the EDIT semantics: the submitted claim set becomes the record exactly
         # (the user unchecked something). Removing everything is a revoke, not
