@@ -62,11 +62,13 @@ def test_configured_agent_input_is_required_and_run_paths_are_per_invocation(
                 "user_type": "regular",
                 "session_id": "terminal-7",
                 "conversation_id": "research-42",
+                "recall_conversation_id": "research-recall",
             }
         }
     }
     configured = configured_agent_input(config)
 
+    assert configured.recall_conversation_id == "research-recall"
     assert configured.run_path(tmp_path, run_id="run-a") == (
         tmp_path / "runs" / "alice" / "research-42" / "run-a"
     )
@@ -77,6 +79,27 @@ def test_configured_agent_input_is_required_and_run_paths_are_per_invocation(
     del config["agent"]["input"]["conversation_id"]
     with pytest.raises(ValueError, match="conversation_id"):
         configured_agent_input(config)
+
+
+def test_recall_conversation_id_accepts_an_explicit_override() -> None:
+    config = {
+        "agent": {
+            "input": {
+                "user_id": "alice",
+                "user_type": "regular",
+                "session_id": "terminal-7",
+                "conversation_id": "research-42",
+                "recall_conversation_id": "descriptor-recall",
+            }
+        }
+    }
+
+    configured = configured_agent_input(
+        config,
+        recall_conversation_id="cli-recall",
+    )
+
+    assert configured.recall_conversation_id == "cli-recall"
 
 
 def test_tool_settings_are_owned_by_the_exact_tool_row(tmp_path: Path) -> None:

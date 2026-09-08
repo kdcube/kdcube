@@ -55,20 +55,34 @@ def test_agents_root_explains_the_demonstration_and_why_to_run_it() -> None:
     normalized = " ".join(source.split())
 
     assert "# Build and Run On-Premises Agents with the KDCube Harness" in source
-    assert "Native ReAct** is an included agent implementation" in source
+    assert "[Native agent](native/README.md)" in source
+    assert "This directory gives you three complete, runnable starting points" not in source
     assert "This is a constructor: each directory already runs" in source
-    assert "an agent you\nalready operate or a new implementation you build" in source
+    assert "use it to plug in your own agent" in normalized
+    assert "an isolated turn workspace and code-execution sandbox" in normalized
+    assert "The harness exists so those capabilities stay reusable" in normalized
+    assert "keep the same conversation, file, safety, and evidence" in normalized
+    assert (
+        "The examples connect terminal and local Telegram ingress adapters"
+        in normalized
+    )
+    assert "terminal/Telegram input" not in source
     assert "infrastructure you control" in source
+    assert "Redis/Postgres Compose to run" in source
     assert "## Use the ready composition" in source
     assert "## Resource profile" in source
     assert "for your own\ndomain workflow" in source
     assert "setup_local.py --provider none" in source
     assert "After the first run, change these constructor inputs:" in source
-    assert "direct on-premises topology" in normalized
-    assert "## What the harness gives the agent" in source
+    assert "configuration to run it with Redis, Postgres" in normalized
+    assert "## What the harness lets an agent do" in source
+    assert "Continue where it left off" in source
+    assert "Find earlier work" in source
+    assert "See what happened and what it cost" in source
     assert "## How do I try it?" in source
-    assert "continue a conversation by stable user" in normalized
+    assert "stable user and conversation identity lets the agent resume" in normalized
     assert "react.memsearch" in normalized
+    assert "conversation_tools.search" in normalized
     assert "KDCube Web Search and Web Fetch" in source
     assert "Create a `.venv` in the selected agent directory" in source
     assert ".venv/bin/python -m playwright install chromium" in source
@@ -77,14 +91,38 @@ def test_agents_root_explains_the_demonstration_and_why_to_run_it() -> None:
     assert "--conversation-id release-research" in source
     assert "isolated turn workspace" in source
     assert "agent_io_tools.tool_call" in source
+    assert "fn=web_tools.web_search" in source
+    assert 'workbook.save(output)' in source
+    assert "without placing all of\n  them in the model context" in source
     assert "ToolSubsystem" in source
-    assert "Files and attachments" in source
+    assert "Receive and return real files" in source
     assert "local filesystem or S3 storage" in source
-    assert "[Native ReAct](native/README.md)" in source
+    assert "[Native agent](native/README.md)" in source
     assert "[LangGraph](langgraph/README.md)" in source
     assert "[Claude Code](claude/README.md)" in source
     assert "Keep the agent core you already have" not in source
     assert "runnable proof" not in source
+
+
+def test_conversation_search_doc_leads_with_user_value() -> None:
+    source = (
+        REPO_ROOT
+        / "app"
+        / "ai-app"
+        / "docs"
+        / "sdk"
+        / "solutions"
+        / "conversation"
+        / "search-README.md"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(source.split())
+    body = source.split("---", 2)[2]
+
+    assert "recover useful work" in normalized
+    assert "continue last week's supplier comparison" in normalized
+    assert "an agent can resume work from another conversation" in normalized
+    assert "run_conversation_search" in source
+    assert body.index("recover useful work") < body.index("run_conversation_search")
 
 
 def test_repo_entry_points_name_the_agent_harness_value() -> None:
@@ -168,8 +206,8 @@ def test_each_example_owns_its_runnable_contract(adapter: str) -> None:
     assert agent_input["user_type"] == "regular"
     assert agent_input["session_id"] == "local-session"
     assert agent_input["conversation_id"] == f"{adapter}-demo"
+    assert agent_input["recall_conversation_id"] == f"{adapter}-recall-demo"
     if adapter == "native":
-        assert agent_input["recall_conversation_id"] == "native-recall-demo"
         assert agent["max_tokens"] == 80000
     assert agent["instructions"]["profile"] == (
         "lite:core" if adapter == "native" else "workspace-files"
@@ -188,7 +226,10 @@ def test_each_example_owns_its_runnable_contract(adapter: str) -> None:
     assert agent["tools"]
     assert all(str(item.get("id") or "").strip() for item in agent["tools"])
     configured_by_id = {item["id"]: item for item in agent["tools"]}
-    assert set(configured_by_id) == {"web", "code", "documents"}
+    expected_sources = {"web", "code", "documents"}
+    if adapter != "native":
+        expected_sources.add("conversations")
+    assert set(configured_by_id) == expected_sources
     assert configured_by_id["web"]["module"].endswith(".web_tools")
     assert configured_by_id["web"]["alias"] == "web_tools"
     assert configured_by_id["web"]["allowed"] == ["web_search", "web_fetch"]
@@ -199,6 +240,13 @@ def test_each_example_owns_its_runnable_contract(adapter: str) -> None:
     assert configured_by_id["code"]["module"].endswith(".exec_tools")
     assert configured_by_id["code"]["allowed"] == ["execute_code_python"]
     assert configured_by_id["code"]["runtime"] == {"execute_code_python": "docker"}
+    if adapter != "native":
+        assert configured_by_id["conversations"]["module"].endswith(
+            ".conversation_tools"
+        )
+        assert configured_by_id["conversations"]["alias"] == "conversation_tools"
+        assert configured_by_id["conversations"]["allowed"] == ["search"]
+        assert configured_by_id["conversations"]["runtime"] == {"search": "local"}
     assert configured_by_id["documents"]["module"].endswith(".rendering_tools")
     assert set(configured_by_id["documents"]["allowed"]) == {
         "write_pdf",
@@ -294,6 +342,41 @@ def test_every_adapter_uses_kdcube_web_search_and_fetch() -> None:
         assert "xlsx_contains_tool_evidence" in source
 
 
+def test_every_adapter_exposes_cross_conversation_search() -> None:
+    native = (AGENTS_ROOT / "native" / "agent.py").read_text(encoding="utf-8")
+    langgraph = (AGENTS_ROOT / "langgraph" / "agent.py").read_text(
+        encoding="utf-8"
+    )
+    langgraph_tools = (AGENTS_ROOT / "langgraph" / "tools.py").read_text(
+        encoding="utf-8"
+    )
+    claude = (AGENTS_ROOT / "claude" / "agent.py").read_text(encoding="utf-8")
+
+    assert '"react.memsearch"' in native
+    assert '"conversation_tools.search"' in langgraph_tools
+    assert '"conversation_tools.search"' in claude
+    for source in (langgraph, claude):
+        assert "conversation_search_tool=" in source
+        assert "recall_conversation_id" in source
+
+    for adapter in ("langgraph", "claude"):
+        config = yaml.safe_load(
+            (AGENTS_ROOT / adapter / "config.template.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        tools = {row["id"]: row for row in config["agent"]["tools"]}
+        assert tools["conversations"] == {
+            "id": "conversations",
+            "kind": "python",
+            "module": "kdcube_ai_app.apps.chat.sdk.tools.conversation_tools",
+            "alias": "conversation_tools",
+            "discovery": "semantic_kernel",
+            "allowed": ["search"],
+            "runtime": {"search": "local"},
+        }
+
+
 @pytest.mark.asyncio
 async def test_langgraph_web_search_adapter_calls_kdcube_tool() -> None:
     from agents.langgraph import tools as langgraph_tools
@@ -381,6 +464,62 @@ async def test_langgraph_web_fetch_adapter_calls_kdcube_tool() -> None:
             "refinement": "none",
         },
         call_reason="Fetch a selected web source",
+    )
+
+
+@pytest.mark.asyncio
+async def test_langgraph_conversation_search_adapter_calls_kdcube_tool() -> None:
+    from agents.langgraph import tools as langgraph_tools
+
+    runtime = SimpleNamespace(
+        invoke_tool=AsyncMock(
+            return_value={
+                "ok": True,
+                "error": None,
+                "ret": {
+                    "items": [
+                        {
+                            "ref": "conv:turn:turn-earlier",
+                            "body": {"conversation_id": "conversation-earlier"},
+                        }
+                    ]
+                },
+            }
+        )
+    )
+    tools = langgraph_tools.build_tools(
+        runtime,
+        configured_ids={"conversation_tools.search"},
+    )
+
+    result = json.loads(
+        await tools[0].ainvoke(
+            {
+                "query": "earlier source",
+                "scope": "user",
+                "targets": ["assistant", "summary"],
+                "top_k": 3,
+                "days": 30,
+                "include_recovery_sessions": False,
+            }
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["ret"]["items"][0]["body"]["conversation_id"] == (
+        "conversation-earlier"
+    )
+    runtime.invoke_tool.assert_awaited_once_with(
+        tool_id="conversation_tools.search",
+        params={
+            "query": "earlier source",
+            "scope": "user",
+            "targets": ["assistant", "summary"],
+            "top_k": 3,
+            "days": 30,
+            "include_recovery_sessions": False,
+        },
+        call_reason="Search this user's conversation history",
     )
 
 
@@ -511,7 +650,7 @@ async def test_claude_cli_credentials_keep_descriptor_fields_distinct(
 
 
 @pytest.mark.asyncio
-async def test_claude_harness_mcp_exposes_execution_and_rendering_tools(
+async def test_claude_harness_mcp_exposes_conversation_execution_and_rendering_tools(
     tmp_path: Path,
 ) -> None:
     from kdcube_ai_app.apps.chat.sdk.runtime.mcp.client import open_mcp_client
@@ -557,6 +696,7 @@ async def test_claude_harness_mcp_exposes_execution_and_rendering_tools(
         listed = await client.list_tools()
 
     assert {tool.name for tool in listed.tools} == {
+        "conversation_search",
         "execute_python",
         "write_pdf",
         "write_docx",
@@ -1128,7 +1268,7 @@ def test_direct_recipe_is_an_executable_configuration_contract() -> None:
         "default_llm_model_id: <model-tag-loaded-by-your-local-runtime>",
         "endpoint: http://127.0.0.1:11500/generate",
         "kdcube_ai_app.apps.models_gateway.app:app",
-        "Native ReAct does not require provider-native tool calling",
+        "The Native agent does not require provider-native tool calling",
         "Playwright/Chromium render",
         ".venv/bin/python agent.py --check",
         "agent:\n  input:",

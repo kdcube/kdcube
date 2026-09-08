@@ -954,6 +954,23 @@ class ToolSubsystem:
         except Exception:
             return None
 
+    def bind_context_rag_client(self, context_rag_client: ContextRAGClient) -> None:
+        """Bind the host-owned conversation client to every loaded tool module."""
+        if context_rag_client is None:
+            raise ValueError("context_rag_client is required")
+        self.context_rag_client = context_rag_client
+        for module in self._modules:
+            bind_module_target(
+                module["mod"],
+                svc=self.svc,
+                registry=self.registry,
+                integrations={
+                    "ctx_client": self.context_rag_client,
+                    "kv_cache": self.kv_cache,
+                    "tool_subsystem": self,
+                },
+            )
+
     async def prebind_for_in_memory(self, *,
                                     workdir: pathlib.Path,
                                     outdir: pathlib.Path,

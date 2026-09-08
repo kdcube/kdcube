@@ -415,6 +415,8 @@ class DirectAgentHarness:
                 "user_type": cfg.user_type,
                 "conversation_id": conversation_id,
                 "turn_id": turn_id,
+                "bundle_id": cfg.bundle_id,
+                "agent_id": cfg.agent_id,
             },
             conversation={
                 "session_id": cfg.session_id,

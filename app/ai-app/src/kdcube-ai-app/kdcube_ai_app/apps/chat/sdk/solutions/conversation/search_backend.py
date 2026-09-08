@@ -15,8 +15,13 @@ via `ConversationSearchContext` (mapped from the named-service context).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, Dict, List, Optional
 
+from kdcube_ai_app.apps.chat.sdk.event_identity import (
+    index_agent_id,
+    resolve_request_identity,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.conversation.api import (
     ConversationSearchBackend,
     ConversationSearchContext,
@@ -34,6 +39,56 @@ def conversation_search_context_from_ns(ns_ctx: NamedServiceContext) -> Conversa
         bundle_id=ns_ctx.bundle_id,
         tenant=ns_ctx.tenant,
         project=ns_ctx.project,
+    )
+
+
+def conversation_search_context_from_tool_subsystem(
+    tool_subsystem: Any,
+) -> ConversationSearchContext:
+    """Build search identity from a trusted, bound tool invocation.
+
+    The model-facing tool parameters intentionally contain no user, tenant,
+    project, bundle, conversation, turn, or agent identity. Those values come
+    from the communicator and bundle spec already bound by the host.
+    """
+    if tool_subsystem is None:
+        raise RuntimeError("conversation search requires a bound tool subsystem")
+    comm = getattr(tool_subsystem, "comm", None)
+    if comm is None:
+        raise RuntimeError("conversation search requires a bound communicator")
+
+    identity = resolve_request_identity(comm)
+    user_id = str(identity.get("owner") or "").strip()
+    if not user_id:
+        raise RuntimeError("conversation search requires a resolved caller user")
+
+    service = getattr(comm, "service", None)
+    service = service if isinstance(service, Mapping) else {}
+    conversation = getattr(comm, "conversation", None)
+    conversation = conversation if isinstance(conversation, Mapping) else {}
+    registry = getattr(tool_subsystem, "registry", None)
+    registry = registry if isinstance(registry, Mapping) else {}
+    bundle_spec = getattr(tool_subsystem, "bundle_spec", None)
+
+    return ConversationSearchContext(
+        user_id=user_id,
+        conversation_id=str(
+            identity.get("conversation_id")
+            or conversation.get("conversation_id")
+            or ""
+        ).strip(),
+        turn_id=str(service.get("turn_id") or conversation.get("turn_id") or "").strip(),
+        bundle_id=str(
+            service.get("bundle_id")
+            or getattr(bundle_spec, "id", "")
+            or ""
+        ).strip()
+        or None,
+        agent_id=index_agent_id(
+            service.get("agent_id") or registry.get("client_id")
+        ),
+        tenant=str(identity.get("tenant") or "").strip() or None,
+        project=str(identity.get("project") or "").strip() or None,
     )
 
 
@@ -118,7 +173,41 @@ def make_conversation_search_backend(
     )
 
 
+def make_conversation_search_backend_from_client(
+    *,
+    context_rag_client: Any,
+    context: ConversationSearchContext,
+) -> ConversationSearchBackend:
+    """Adapt an existing conversation client to the common search backend.
+
+    Direct and managed harnesses already own this client. Reusing it keeps one
+    Postgres pool and one storage binding for the host lifetime.
+    """
+    if context_rag_client is None:
+        raise RuntimeError("conversation search requires a conversation client")
+
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.browser import ContextBrowser
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.proto import RuntimeCtx
+
+    runtime_ctx = RuntimeCtx(
+        tenant=context.tenant,
+        project=context.project,
+        user_id=context.user_id,
+        conversation_id=context.conversation_id or None,
+        turn_id=context.turn_id or None,
+        bundle_id=context.bundle_id,
+        agent_id=context.agent_id or "",
+    )
+    return ContextBrowser(
+        ctx_client=context_rag_client,
+        model_service=getattr(context_rag_client, "model_service", None),
+        runtime_ctx=runtime_ctx,
+    )
+
+
 __all__ = [
     "conversation_search_context_from_ns",
+    "conversation_search_context_from_tool_subsystem",
     "make_conversation_search_backend",
+    "make_conversation_search_backend_from_client",
 ]

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -21,6 +21,7 @@ class _ToolSubsystem:
         self.comm = kwargs["comm"]
         self.bundle_root = Path(kwargs["bundle_spec"].path)
         self.prebind_for_in_memory = AsyncMock()
+        self.bind_context_rag_client = Mock()
 
 
 def _runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DirectToolRuntime:
@@ -62,6 +63,69 @@ def test_direct_turn_workspace_uses_the_canonical_artifact_layout(
     )
     with pytest.raises(ValueError, match="canonical turn_"):
         DirectTurnWorkspace(tmp_path, "turn-demo")
+
+
+@pytest.mark.asyncio
+async def test_runtime_lazily_binds_and_closes_its_conversation_harness(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(module, "ToolSubsystem", _ToolSubsystem)
+    client = object()
+    conversation_harness = SimpleNamespace(
+        open=AsyncMock(),
+        close=AsyncMock(),
+        conversation_client=client,
+    )
+    runtime = DirectToolRuntime(
+        service=object(),
+        comm=SimpleNamespace(),
+        workspace=DirectTurnWorkspace(tmp_path, "turn_demo"),
+        exec_runtime={"mode": "docker", "image": "exec:test"},
+        bundle_id="example@1-0",
+        bundle_root=tmp_path,
+        bundle_module="agent",
+        conversation_harness=conversation_harness,
+    )
+
+    await runtime.prepare()
+    await runtime.prepare()
+    await runtime.close()
+    await runtime.close()
+
+    conversation_harness.open.assert_awaited_once()
+    runtime.tool_subsystem.bind_context_rag_client.assert_called_once_with(client)
+    conversation_harness.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_runtime_does_not_close_a_harness_when_client_is_already_bound(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(module, "ToolSubsystem", _ToolSubsystem)
+    conversation_harness = SimpleNamespace(
+        open=AsyncMock(),
+        close=AsyncMock(),
+        conversation_client=object(),
+    )
+    runtime = DirectToolRuntime(
+        service=object(),
+        comm=SimpleNamespace(),
+        workspace=DirectTurnWorkspace(tmp_path, "turn_demo"),
+        exec_runtime={"mode": "docker", "image": "exec:test"},
+        bundle_id="example@1-0",
+        bundle_root=tmp_path,
+        bundle_module="agent",
+        context_rag_client=object(),
+        conversation_harness=conversation_harness,
+    )
+
+    await runtime.prepare()
+    await runtime.close()
+
+    conversation_harness.open.assert_not_awaited()
+    conversation_harness.close.assert_not_awaited()
 
 
 @pytest.mark.asyncio

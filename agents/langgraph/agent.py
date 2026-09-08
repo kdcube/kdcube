@@ -75,7 +75,10 @@ from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.tool_runtime import (  #
 from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.workspace import (  # noqa: E402
     DirectTurnWorkspace,
 )
-from agents.langgraph.tools import build_tools  # noqa: E402
+from agents.langgraph.tools import (  # noqa: E402
+    CONVERSATION_SEARCH_TOOL_ID,
+    build_tools,
+)
 from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.model_service import (  # noqa: E402
     build_model_service,
     embedding_service_if_configured,
@@ -104,6 +107,7 @@ RENDER_TOOL_IDS = (
 MODEL_TOOL_NAMES = {
     WEB_SEARCH_TOOL_ID: "web_search",
     WEB_FETCH_TOOL_ID: "web_fetch",
+    CONVERSATION_SEARCH_TOOL_ID: "conversation_search",
     EXEC_TOOL_ID: "execute_python",
     RENDER_TOOL_IDS[0]: "write_pdf",
     RENDER_TOOL_IDS[1]: "write_docx",
@@ -295,6 +299,7 @@ async def run_one_turn(
             bundle_root=HERE,
             bundle_module="agent",
             tool_config=tool_config,
+            context_rag_client=turn.conversation_client,
         )
         graph = build_graph(
             model,
@@ -329,6 +334,7 @@ async def main_async(args: argparse.Namespace) -> None:
         user_id=args.user_id,
         conversation_id=args.conversation_id,
         session_id=args.session_id,
+        recall_conversation_id=args.recall_conversation_id,
     )
     configured_web_search(config, connection_id="web")
     from kdcube_ai_app.apps.chat.sdk.tools.mcp.web_search import web_search_server
@@ -352,7 +358,13 @@ async def main_async(args: argparse.Namespace) -> None:
         bundle_root=HERE,
     )
     configured_ids = set(configured_tool_ids(tool_config))
-    supported = {WEB_SEARCH_TOOL_ID, WEB_FETCH_TOOL_ID, EXEC_TOOL_ID, *RENDER_TOOL_IDS}
+    supported = {
+        WEB_SEARCH_TOOL_ID,
+        WEB_FETCH_TOOL_ID,
+        CONVERSATION_SEARCH_TOOL_ID,
+        EXEC_TOOL_ID,
+        *RENDER_TOOL_IDS,
+    }
     unsupported = sorted(configured_ids.difference(supported))
     if unsupported:
         raise ValueError(
@@ -391,6 +403,11 @@ async def main_async(args: argparse.Namespace) -> None:
     )
     instructions = compose_provider_native_instructions(
         instruction_selection,
+        conversation_search_tool=(
+            MODEL_TOOL_NAMES[CONVERSATION_SEARCH_TOOL_ID]
+            if CONVERSATION_SEARCH_TOOL_ID in configured_ids
+            else None
+        ),
         exec_tool=(
             MODEL_TOOL_NAMES[EXEC_TOOL_ID] if EXEC_TOOL_ID in configured_ids else None
         ),
@@ -565,6 +582,7 @@ async def main_async(args: argparse.Namespace) -> None:
     required_demo_tools = {
         WEB_SEARCH_TOOL_ID,
         WEB_FETCH_TOOL_ID,
+        CONVERSATION_SEARCH_TOOL_ID,
         EXEC_TOOL_ID,
         RENDER_TOOL_IDS[0],
     }
@@ -576,6 +594,15 @@ async def main_async(args: argparse.Namespace) -> None:
         )
 
     conversation_id = agent_input.conversation_id
+    recall_conversation_id = agent_input.recall_conversation_id
+    if not recall_conversation_id:
+        raise ValueError(
+            "agent.input.recall_conversation_id is required for the built-in recall demonstration"
+        )
+    if recall_conversation_id == conversation_id:
+        raise ValueError(
+            "agent.input.recall_conversation_id must differ from conversation_id"
+        )
     run_root = agent_input.run_path(
         output_dir,
         run_id=f"run_{uuid.uuid4().hex[:12]}",
@@ -636,6 +663,8 @@ async def main_async(args: argparse.Namespace) -> None:
     turn_ids: list[str] = []
     called_tools_by_turn: list[set[str]] = []
     completed_turns: list[Any] = []
+    recall_turn_id = ""
+    recall_records: list[dict[str, Any]] = []
     async with harness:
         async with open_postgres_checkpointer(
             settings, harness_config.postgres_url
@@ -680,11 +709,59 @@ async def main_async(args: argparse.Namespace) -> None:
                     "the research turn completed without required tools: "
                     + ", ".join(missing_research)
                 )
+            recall_input = replace(
+                agent_input,
+                conversation_id=recall_conversation_id,
+            )
+            recall_run_config = {
+                "configurable": {
+                    "thread_id": recall_input.continuity_key(
+                        tenant=harness_config.tenant,
+                        project=harness_config.project,
+                        agent_id=harness_config.agent_id,
+                    )
+                },
+                "recursion_limit": int(agent_cfg.get("recursion_limit") or 24),
+            }
+            recall_answer, recall_turn_id, recall_tools, _recall_turn = (
+                await run_one_turn(
+                    prompt=(
+                        f"Call conversation_search with scope='user' to recover the research "
+                        f"about {topic!r} from my other conversation. Report one recovered "
+                        "source URL and name the source conversation id."
+                    ),
+                    number=3,
+                    conversation_id=recall_conversation_id,
+                    run_root=run_root,
+                    run_config=recall_run_config,
+                    model=model,
+                    checkpointer=checkpointer,
+                    instructions=instructions,
+                    tool_config=tool_config,
+                    configured_ids=configured_ids,
+                    exec_runtime=exec_runtime,
+                    service=service,
+                    harness=harness,
+                )
+            )
+            if MODEL_TOOL_NAMES[CONVERSATION_SEARCH_TOOL_ID] not in recall_tools:
+                raise RuntimeError(
+                    "the recall turn completed without calling conversation_search"
+                )
+            print(f"\n[cross-conversation answer]\n{recall_answer}\n")
         records = await harness.verify_conversation(
             conversation_id=conversation_id,
             expected_turn_ids=turn_ids,
         )
         print(f"[conversation] materialized {len(records)} durable turn record(s)")
+        recall_records = await harness.verify_conversation(
+            conversation_id=recall_conversation_id,
+            expected_turn_ids=(recall_turn_id,),
+        )
+        print(
+            "[conversation] conversation_search recovered a different conversation "
+            "for the same user"
+        )
         evidence_path = run_root / "evidence.json"
         evidence = write_evidence_index(
             evidence_path,
@@ -695,6 +772,8 @@ async def main_async(args: argparse.Namespace) -> None:
             adapter_evidence={
                 "checkpoint": "Postgres LangGraph thread",
                 "generated_source_archive_path": f"{turn_ids[-1]}/executions/*/pkg/user_code.py",
+                "cross_conversation_turn": recall_turn_id,
+                "cross_conversation_records": len(recall_records),
             },
         )
         print_evidence_summary(evidence_path, evidence)
@@ -771,6 +850,10 @@ def main() -> None:
         help="Override agent.input.conversation_id and resume that conversation.",
     )
     parser.add_argument("--session-id", help="Override agent.input.session_id.")
+    parser.add_argument(
+        "--recall-conversation-id",
+        help="Override agent.input.recall_conversation_id for the recall demonstration.",
+    )
     modes.add_argument(
         "--interactive",
         action="store_true",

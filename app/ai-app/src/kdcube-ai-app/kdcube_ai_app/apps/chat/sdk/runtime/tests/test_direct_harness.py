@@ -38,6 +38,22 @@ def test_config_requires_every_direct_host_boundary() -> None:
         _config(turn_cache_ttl_seconds=0)
 
 
+def test_communicator_carries_trusted_bundle_and_agent_identity() -> None:
+    harness = DirectAgentHarness(
+        config=_config(),
+        model_service=None,
+        emitter=SimpleNamespace(emit=AsyncMock()),
+    )
+
+    comm = harness.communicator(
+        conversation_id="conversation",
+        turn_id="turn",
+    )
+
+    assert comm.service["bundle_id"] == "example@1-0"
+    assert comm.service["agent_id"] == "agent"
+
+
 @pytest.mark.asyncio
 async def test_turn_accepts_caller_attachment_bytes(tmp_path) -> None:
     storage = SimpleNamespace(

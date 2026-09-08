@@ -7,9 +7,16 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
+from kdcube_ai_app.apps.chat.sdk.solutions.conversation.api import (
+    ConversationSearchContext,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.conversation.search_backend import (
     conversation_search_context_from_ns,
+    conversation_search_context_from_tool_subsystem,
     make_conversation_search_backend,
+    make_conversation_search_backend_from_client,
 )
 
 
@@ -33,3 +40,81 @@ def test_backend_is_lazy_and_satisfies_protocol():
         assert hasattr(backend, method)
     # Construction is lazy: nothing built until the first search.
     assert backend._browser is None
+
+
+def test_tool_context_uses_only_bound_caller_identity():
+    comm = SimpleNamespace(
+        tenant="tenant-a",
+        project="project-a",
+        user_id="user-a",
+        user_type="regular",
+        service={
+            "tenant": "tenant-a",
+            "project": "project-a",
+            "user": "user-a",
+            "conversation_id": "conversation-current",
+            "turn_id": "turn-current",
+            "bundle_id": "bundle@1-0",
+            "agent_id": "agent-a",
+        },
+        conversation={
+            "conversation_id": "conversation-current",
+            "turn_id": "turn-current",
+        },
+    )
+    tool_subsystem = SimpleNamespace(
+        comm=comm,
+        registry={},
+        bundle_spec=SimpleNamespace(id="fallback@1-0"),
+    )
+
+    context = conversation_search_context_from_tool_subsystem(tool_subsystem)
+
+    assert context.user_id == "user-a"
+    assert context.conversation_id == "conversation-current"
+    assert context.turn_id == "turn-current"
+    assert context.bundle_id == "bundle@1-0"
+    assert context.agent_id == "agent-a"
+    assert context.tenant == "tenant-a"
+    assert context.project == "project-a"
+
+
+def test_tool_context_requires_a_resolved_caller_user():
+    tool_subsystem = SimpleNamespace(
+        comm=SimpleNamespace(
+            tenant="tenant-a",
+            project="project-a",
+            user_id="",
+            service={},
+            conversation={},
+        ),
+        registry={},
+        bundle_spec=SimpleNamespace(id="bundle@1-0"),
+    )
+
+    with pytest.raises(RuntimeError, match="resolved caller user"):
+        conversation_search_context_from_tool_subsystem(tool_subsystem)
+
+
+def test_existing_client_backend_preserves_bound_runtime_identity():
+    client = SimpleNamespace(model_service=object())
+    context = ConversationSearchContext(
+        user_id="user-a",
+        conversation_id="conversation-current",
+        turn_id="turn-current",
+        bundle_id="bundle@1-0",
+        agent_id="agent-a",
+        tenant="tenant-a",
+        project="project-a",
+    )
+
+    backend = make_conversation_search_backend_from_client(
+        context_rag_client=client,
+        context=context,
+    )
+
+    assert backend.ctx_client is client
+    assert backend.svc is client.model_service
+    assert backend._runtime_ctx.user_id == "user-a"
+    assert backend._runtime_ctx.conversation_id == "conversation-current"
+    assert backend._runtime_ctx.agent_id == "agent-a"

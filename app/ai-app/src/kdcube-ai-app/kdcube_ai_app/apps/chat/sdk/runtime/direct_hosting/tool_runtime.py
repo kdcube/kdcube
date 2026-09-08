@@ -80,6 +80,7 @@ class DirectToolRuntime:
         bundle_module: str,
         tool_config: AgentToolConfig | None = None,
         context_rag_client: Any = None,
+        conversation_harness: Any = None,
         timeout_s: int = 600,
         logger: Any = None,
     ) -> None:
@@ -90,6 +91,9 @@ class DirectToolRuntime:
         self.timeout_s = max(1, int(timeout_s or 600))
         self.logger = logger or AgentLogger("direct_hosting.tools")
         self.tool_config = tool_config or AgentToolConfig()
+        self._conversation_harness = conversation_harness
+        self._conversation_client_bound = context_rag_client is not None
+        self._conversation_harness_opened = False
         self._tool_policy = (
             None
             if tool_config is None
@@ -112,11 +116,25 @@ class DirectToolRuntime:
         )
 
     async def prepare(self) -> None:
+        if not self._conversation_client_bound and self._conversation_harness is not None:
+            await self._conversation_harness.open()
+            self._conversation_harness_opened = True
+            self.tool_subsystem.bind_context_rag_client(
+                self._conversation_harness.conversation_client
+            )
+            self._conversation_client_bound = True
         await self.tool_subsystem.prebind_for_in_memory(
             workdir=self.workspace.workdir,
             outdir=self.workspace.runtime_outdir,
             logger=self.logger,
         )
+
+    async def close(self) -> None:
+        """Close resources this direct tool runtime owns."""
+        if self._conversation_harness_opened and self._conversation_harness is not None:
+            self._conversation_harness_opened = False
+            await self._conversation_harness.close()
+            self._conversation_client_bound = False
 
     def configured_tool_ids(self) -> tuple[str, ...]:
         """Return the finite, discovered catalog selected by descriptor policy."""

@@ -106,6 +106,7 @@ def test_provider_native_profile_teaches_direct_workspace_and_capabilities() -> 
         ),
         exec_tool="execute_python",
         rendering_tools=("write_pdf", "write_docx"),
+        conversation_search_tool="conversation_search",
         web_search_tool="web_search",
         web_fetch_tool="web_fetch",
         skill_instructions="[ACTIVE SKILLS]\nFollow the research brief skill.",
@@ -124,6 +125,8 @@ def test_provider_native_profile_teaches_direct_workspace_and_capabilities() -> 
     assert "already materialized in the current-turn workspace" in text
     assert "pull_files" not in text
     assert "[DOCUMENT RENDERING - `write_pdf`, `write_docx`]" in text
+    assert "[CONVERSATION RECALL - conversation_search]" in text
+    assert "Caller identity is bound by the harness" in text
     assert "[WEB RESEARCH - web_search + web_fetch]" in text
     assert "use `web_fetch` to inspect at least one selected source page" in text
     assert "consume the result rows from `ret`" in text

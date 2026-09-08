@@ -1,9 +1,9 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/README.md
 title: "Agent Harness Runtime"
-summary: "Framework-neutral event, timeline, and workspace contracts shared by KDCube agent adapters."
-tags: ["runtime", "harness", "agents", "events", "timeline", "workspace"]
-updated_at: 2026-09-07
+summary: "Keep user conversations, files, isolated workspaces, and execution evidence stable while Native, LangGraph, Claude Code, or custom agent implementations change around them."
+tags: ["runtime", "harness", "agents", "events", "timeline", "workspace", "conversation-search"]
+updated_at: 2026-09-08
 keywords:
   [
     "agent harness",
@@ -27,8 +27,17 @@ see_also:
 ---
 # Agent Harness Runtime
 
-The agent harness is the framework-neutral runtime layer between KDCube's
-classical runtime services and concrete agent implementations.
+The agent harness lets different agent implementations use the same durable
+conversation, file, workspace, event, and accounting contracts. An agent can
+be replaced without making its users lose history or making every adapter
+invent another artifact format and security boundary.
+
+This layer exists to separate a useful agent product from one particular model
+loop. Teams can change an agent implementation while users keep their history
+and files, tools keep the same enforcement boundary, and operators keep one
+account of what ran and what it cost.
+
+The included **KDCube Native ReAct agent** is called the **Native agent** below.
 
 ```text
 KDCube runtime services
@@ -41,14 +50,15 @@ KDCube runtime services
                  +------------+------------+
                  |                         |
                  v                         v
-      native ReAct Agent adapter    ported-agent adapters
+  Native agent adapter                 ported-agent adapters
                                       (for example LangGraph)
 ```
 
-The native ReAct Agent is a consumer of this layer, not its owner. Conversation APIs, chat and
-canvas integrations, and ported agents also use parts of the same contracts.
-This prevents every agent framework from inventing a different ref grammar,
-turn-log format, artifact layout, or file-download resolver.
+The Native agent is a consumer of this layer, not its owner. Conversation
+APIs, chat and canvas integrations, and
+ported agents also use parts of the same contracts. This prevents every agent
+framework from inventing a different ref grammar, turn-log format, artifact
+layout, or file-download resolver.
 
 ## Scope Map
 
@@ -95,10 +105,11 @@ implementation imports a harness helper.
 
 | Consumer | Shared harness use |
 | --- | --- |
-| Native ReAct Agent v2/v3 | All three scopes, plus ReAct-owned rounds, tools, prompts, cache, and online governance. |
+| Native agent v2/v3 | All three scopes, plus ReAct-owned rounds, tools, prompts, cache, and online governance. |
 | Ported LangGraph example | Current-event framing, shared pull and checkout, canonical file refs, and the common code-exec artifact layout. |
 | Foreign-runtime wrappers | Shared pull/checkout can be exposed through local MCP; a trusted wrapper may also bind explicit conversation-file publication. `harness-claude-demo@1-0` is the focused public implementation. |
 | Conversation solution | Timeline payload parsing, turn-log persistence, turn-view reconstruction, and canonical ref presentation. |
+| Direct Native agent, LangGraph, and Claude examples | Accounted durable turns plus user-scoped search of current and earlier conversations; framework tool names call one conversation search engine. |
 | Chat/canvas surfaces | Canonical `conv:fi:` refs and generic object download/action resolution. |
 | Namespace providers | Owner refs can be materialized through registered rehosters without teaching the harness each provider's storage layout. |
 
@@ -132,7 +143,8 @@ under `sdk/solutions/react`; the worked ported-agent adapter lives under the
 ## Direct SDK host
 
 The repository's [`agents/`](../../../../../agents/README.md) directory contains
-three direct SDK programs for native ReAct, LangGraph, and Claude Code. Each
+three direct SDK programs for the Native agent, a LangGraph agent,
+and Claude Code. Each
 uses `DirectAgentHarness` with explicit identity, Redis, Postgres, and storage
 configuration. The facade binds one accounted turn, writes the common KDCube
 conversation record, and verifies that each Postgres row points to a
@@ -144,8 +156,9 @@ configuration, setup, and console-evidence helpers live under
 Redis holds the short-lived per-turn accounting mirror. All three use the
 KDCube conversation tables in Postgres and durable payload storage. LangGraph
 additionally uses its own Postgres checkpoint tables for graph continuation.
-The examples run the same two-turn web-research and PDF/XLSX task and expose
-real `ChatCommunicator` events in the terminal. Their shared direct-channel
+The examples run the same web-research and PDF/XLSX task, then verify that the
+same user can recover it from another conversation. They expose real
+`ChatCommunicator` events in the terminal. Their shared direct-channel
 contract also supports a continuing terminal session and a process-local
 Telegram webhook. Telegram update parsing, attachment hydration, and final
 turn-log delivery reuse the integration SDK; each concrete adapter supplies
@@ -174,7 +187,7 @@ ReAct-specific terms in this inventory are described in
 | `workspace.py` | Remaining generic code-path discovery and logical/physical path hydration into `runtime/harness/workspace/`; shared source resolution and checkout are already extracted. | ReAct tool semantics and ANNOUNCE, the uncached per-round runtime-state block shown to the model. |
 | `artifacts.py` and `artifact_analysis.py` | Generic artifact metadata, error normalization, summary preparation, and file materialization. | `ReactArtifactView`, ReAct's artifact presentation model, and ReAct tool-result block layout. |
 | `timeline.py` | Artifact lookup, source-pool selectors that choose citation/source blocks, and other block-only readers into `runtime/harness/timeline/`. | The live ReAct `Timeline`, plans, context compaction, memory-reminder blocks, and ANNOUNCE layout. |
-| `events/policies/`, `events/exploration.py`, and generic parts of `events/artifact_production.py` | Provider/tool event-source policy, which decides how source output enters the record, and safe block projection into the common event/timeline subsystem. | Native `react.*` event ids, live-listener ownership, bounded extra-round credit for folded events, and ReAct round folding. |
+| `events/policies/`, `events/exploration.py`, and generic parts of `events/artifact_production.py` | Provider/tool event-source policy, which decides how source output enters the record, and safe block projection into the common event/timeline subsystem. | Native agent `react.*` event ids, live-listener ownership, bounded extra-round credit for folded events, and ReAct round folding. |
 | `proto.py` | A small framework-neutral execution/runtime context under `sdk/runtime/`. | `ReactResult`, `ReactStateSnapshot`, ReAct cache/session policy, and subagent state. |
 | `decision_prompt.py` | The wrapper that inserts administrator-owned instructions at their required priority into shared instruction helpers. | ReAct decision protocol and prompt composition. |
 

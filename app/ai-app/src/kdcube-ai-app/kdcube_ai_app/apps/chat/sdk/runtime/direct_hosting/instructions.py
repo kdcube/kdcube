@@ -211,6 +211,15 @@ def _web_research_guide(search_tool: str, fetch_tool: str | None = None) -> str:
 """.strip()
 
 
+def _conversation_search_guide(search_tool: str) -> str:
+    return f"""
+[CONVERSATION RECALL - {search_tool}]
+- Use `{search_tool}` when the user refers to facts, decisions, files, or work from an earlier conversation and the needed material is not already visible.
+- Use `scope="user"` for the current user's other conversations. Search with concrete words likely to occur in the stored text, then cite the returned conversation and turn references when reporting what was recovered.
+- Caller identity is bound by the harness. Never ask for, invent, or pass a user, tenant, project, conversation, or agent identity as a tool argument.
+""".strip()
+
+
 def _rendering_guide(tool_names: Sequence[str]) -> str:
     rendered = ", ".join(f"`{name}`" for name in tool_names)
     return f"""
@@ -234,6 +243,7 @@ def compose_provider_native_instructions(
     *,
     exec_tool: str | None = None,
     rendering_tools: Sequence[str] = (),
+    conversation_search_tool: str | None = None,
     web_search_tool: str | None = None,
     web_fetch_tool: str | None = None,
     skill_instructions: str = "",
@@ -252,6 +262,9 @@ def compose_provider_native_instructions(
         )
 
     parts = [_DIRECT_WORKSPACE_FILES, workspace_agent_conduct_guards()]
+    conversation_search = str(conversation_search_tool or "").strip()
+    if conversation_search:
+        parts.append(_conversation_search_guide(conversation_search))
     web = str(web_search_tool or "").strip()
     if web:
         parts.append(_web_research_guide(web, web_fetch_tool))

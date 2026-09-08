@@ -1,12 +1,13 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/conversation/search-README.md
 title: "Conversation Search"
-summary: "One search engine over the conversation memory realm, three doors into it: the in-app agent (react.memsearch and the `conv` named service), external agents (the managed MCP surface served by the kdcube-services app), and people (a REST endpoint plus the chat-widget search UI). Covers the search model (user boundary ∩ scope ∩ time window ∩ targets), hybrid ranking with user-held rank weights, honest summary/notes labeling, snippet materialization with its retrieval-row fallback, and the explicit identity contract."
-tags: ["sdk", "solutions", "conversation", "search", "conv", "memory-realm", "named-service-provider", "rank-weights", "rrf"]
-updated_at: 2026-08-20
+summary: "Recover decisions, sources, and prior work from the same user's current or earlier conversations through one identity-safe search used by agents, apps, MCP clients, REST, and the chat UI."
+tags: ["sdk", "solutions", "conversation", "search", "conv", "memory-realm", "agent-tools", "named-service-provider", "rank-weights", "rrf"]
+updated_at: 2026-09-08
 keywords:
   [
     "conversation search",
+    "conversation_tools.search",
     "conv namespace",
     "run_conversation_search",
     "ConversationSearchContext",
@@ -32,14 +33,40 @@ see_also:
 ---
 # Conversation Search
 
-Conversations are one of the user's **memory realms** — what was actually said
-in chat, this conversation or across earlier ones. One engine searches that
-realm: `run_conversation_search(...)` in
-`sdk/solutions/conversation/api.py`. Three doors open onto it — the in-app
-agent, external agents over the managed MCP surface, and people through the
-chat widget — and every door runs the same candidates, the same ranking, the
-same identity boundary. The realm is **read-only** through search: conversations
-are recovered, never written.
+Conversation search exists so a person or agent can recover useful work without
+remembering which conversation contains it. An agent can continue from an
+earlier decision or source; a person can find a prior exchange; and an app can
+offer the same recall without building another index.
+
+For example, a user can open a new conversation and ask an agent to continue
+last week's supplier comparison. Search can recover the shortlist, reasoning,
+and cited sources from the user's earlier conversation. The user does not have
+to remember its title, copy old messages, or give every agent framework a
+different memory system.
+
+The shared search makes four product behaviors possible through one boundary:
+
+- an agent can resume work from another conversation;
+- a person can find and reopen an earlier exchange;
+- an app or external agent can add recall through a named service or MCP;
+- teams can change agent adapters without fragmenting the user's searchable
+  history.
+
+Conversations are one of the user's **memory realms**: what was actually said
+in this conversation or earlier ones. Every route reaches one engine,
+`run_conversation_search(...)` in `sdk/solutions/conversation/api.py`. The
+**KDCube Native ReAct agent** is called the **Native agent** below:
+
+```text
+Native agent -- react.memsearch ------------------------+
+LangGraph, Claude, or another agent --                  |
+  conversation_tools.search ----------------------------+--> one search engine
+App or external agent -- conv named service / MCP ------+    one user boundary
+Person -- REST endpoint / chat search UI ---------------+
+```
+
+Every route gets the same candidates, ranking, and identity boundary. Search
+is read-only: it recovers conversations; it never writes them.
 
 ## The search model
 
@@ -79,14 +106,14 @@ The engine routes each request one of two ways:
   An `ordinal` fetches turn N; no query and no window is a timeline overview.
   A query sent alongside catalog signals is ignored with an explicit warning in
   the response. A blank query with no catalog signal is a contract error
-  (`missing_query`); the REST door turns it into a 400.
+  (`missing_query`); the REST endpoint turns it into a 400.
 
 **Query shape** is part of the contract, not a hint. The lexical arm ANDs
 every unquoted word of `query` (`websearch_to_tsquery`), treats a
 `"quoted phrase"` as verbatim, honours `OR` and `-word`, and the fuzzy arm
 averages similarity over the query tokens, so conversational framing ("last
 time I worked with excel on ...") empties the lexical result and dilutes the
-rest. Every door renders the same guidance to its agent: content words as they
+rest. Every agent-facing route renders the same guidance: content words as they
 would appear in the stored text, one topic per call, exact strings quoted,
 synonyms joined with `OR`, time words moved to `from`/`to`. The text is
 `CONVERSATION_QUERY_GUIDE` in `sdk/solutions/conversation/instructions.py`,
@@ -142,7 +169,7 @@ Every framework-neutral minimal TurnLog projects one index-only row per folded
 user submission and one for the final assistant completion. These rows share
 the saved turn identity and carry `projection:minimal.turn.log`; embedding is
 best effort, while their stored text always remains eligible for lexical and
-trigram retrieval. KDCube ReAct writes the same prompt/completion roles through
+trigram retrieval. The Native agent writes the same prompt/completion roles through
 its rich finalization and additionally contributes supported attachment text,
 working summaries, retrieval anchors, and selected notes. Agent-native
 checkpoints and session stores remain separate continuation mechanisms and are
@@ -191,18 +218,19 @@ explicit `ConversationSearchContext` and a search backend:
 Tenant and project are **not** `WHERE` filters. Isolation is the Postgres
 **schema name**, derived from tenant + project when the search backend is
 constructed; the backend handed to the engine is already bound to one. Each
-door therefore supplies the same two seams: a **context** built from its own
+surface therefore supplies the same two inputs: a **context** built from its own
 authority (runtime state, named-service request auth, or the HTTP session) and
 a **backend** bound to the right schema
 (`search_backend.make_conversation_search_backend`).
 
-## Three doors
+## Ways to use conversation search
 
-### 1. The in-app agent
+### Let an agent recover earlier work
 
-The ReAct tool `react.memsearch` is a thin caller: it builds the context with
-`ConversationSearchContext.from_runtime_ctx(...)` — the only place identity is
-read off runtime state — and passes the live context browser as the backend.
+The Native agent tool `react.memsearch` is a thin caller: it builds the context
+with `ConversationSearchContext.from_runtime_ctx(...)` — the only place
+identity is read off runtime state — and passes the live context browser as the
+backend.
 Agents can also reach the realm through the `conv` named service with the
 standard named-service tools (see the
 [named-services tools doc](../../tools/named-services-tools-README.md)):
@@ -218,7 +246,22 @@ named_services.search_objects(
 Empty `query` with `ordinal` or a `from`/`to` window does the deterministic
 catalog lookup instead of topic search.
 
-### 2. External agents, through the managed MCP surface
+The canonical descriptor-selectable SDK tool is
+`sdk/tools/conversation_tools.py::ConversationTools.search`. It accepts only
+search choices such as query, scope, targets, age, and result limit. Tenant,
+project, user, current conversation, turn, bundle, and agent identity come from
+the trusted communicator and tool subsystem bound to the active turn; the
+model cannot name another caller in tool arguments.
+
+The direct LangGraph example presents this callable as `conversation_search`.
+The direct Claude example presents it through the local harness MCP server as
+`mcp__kdcube_harness__conversation_search`. Both are schema adapters over
+`conversation_tools.search`; the Native agent keeps its established
+`react.memsearch` agent interface. Their runnable descriptor and verification
+flow are in
+[Run the Agent Harness from Python](../../../recipes/quickstart/run-agent-harness-from-python-README.md).
+
+### Give an external agent the same recall through managed MCP
 
 The provider (`sdk/solutions/conversation/named_service.py`, provider id
 `sdk.conversation`) mirrors the memory provider's shape: decorated class,
@@ -235,10 +278,10 @@ consent and enforcement live at the managed boundary, and registration follows
 the [discovery registry](../../namespace-services/discovery-README.md) like
 every other provider.
 
-### 3. People: the REST door and the chat widget
+### Let a person search their own conversations
 
 `POST /api/cb/conversations/{tenant}/{project}/search`
-(`apps/chat/ingress/conversations/search.py`) is the human door. Its contract:
+(`apps/chat/ingress/conversations/search.py`) is the human-facing route. Its contract:
 
 - **The searched user is always the authenticated session user.** The route
   builds the context from the session and a pooled backend from the request's

@@ -91,6 +91,9 @@ each other and keep the platform's contracts intact.
 
 - Every doc carries YAML front matter (`id`, `title`, `summary`, `tags`,
   `keywords`, `see_also`).
+- Lead a feature with why it exists, the problem it solves, and what it lets a
+  reader build or do. Then explain APIs, storage, and implementation details;
+  do not leave the reader to infer value from a feature inventory.
 - One document owns each concept's depth; other documents get a one-line
   pointer, not a restated explanation. Public docs never link untracked or
   ignored paths.

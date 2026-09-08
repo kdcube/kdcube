@@ -4,6 +4,7 @@ agent:
     user_type: regular
     session_id: local-session
     conversation_id: claude-demo
+    recall_conversation_id: claude-recall-demo
   ingress:
     telegram:
       host: 127.0.0.1
@@ -48,6 +49,14 @@ agent:
       allowed: [execute_code_python]
       runtime:
         execute_code_python: docker
+    - id: conversations
+      kind: python
+      module: kdcube_ai_app.apps.chat.sdk.tools.conversation_tools
+      alias: conversation_tools
+      discovery: semantic_kernel
+      allowed: [search]
+      runtime:
+        search: local
     - id: documents
       kind: python
       module: kdcube_ai_app.apps.chat.sdk.tools.rendering_tools

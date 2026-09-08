@@ -1,10 +1,10 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/recipes/quickstart/run-agent-harness-from-python-README.md
 title: "Recipe: Run the Agent Harness from Python"
-summary: "Run native ReAct, LangGraph, or Claude Code from SDK source with terminal or local Telegram input, Web Search and Web Fetch, isolated code execution, document rendering, durable conversations, and accounting."
+summary: "Run the KDCube Native ReAct agent, a LangGraph agent, or Claude Code from Python and give it durable recall, web research, isolated code and file work, document rendering, and inspectable usage."
 status: current
-tags: ["recipe", "quickstart", "agent-harness", "python", "native-react", "langgraph", "claude-code", "self-hosted", "terminal", "telegram", "web-search", "web-fetch", "rendering"]
-keywords: ["run agent harness", "direct SDK agent", "terminal chat", "local Telegram webhook", "KDCube Web Search", "KDCube Web Fetch", "standard descriptors", "Redis", "Postgres", "Git transcript", "isolated code execution", "write_pdf", "write_docx", "write_pptx"]
+tags: ["recipe", "quickstart", "agent-harness", "python", "native-react", "langgraph", "claude-code", "self-hosted", "terminal", "telegram", "conversation-search", "web-search", "web-fetch", "rendering"]
+keywords: ["run agent harness", "direct SDK agent", "cross-conversation search", "conversation_tools.search", "terminal chat", "local Telegram webhook", "KDCube Web Search", "KDCube Web Fetch", "standard descriptors", "Redis", "Postgres", "Git transcript", "isolated code execution", "write_pdf", "write_docx", "write_pptx"]
 updated_at: 2026-09-08
 see_also:
   - repo:kdcube-ai-app/agents/README.md
@@ -24,12 +24,18 @@ Run an agent from a shell or IDE and give it KDCube Harness capabilities. The
 sample process imports KDCube SDK source directly and runs as its own Python
 process. Redis and Postgres are independent support services.
 
-Choose one complete example:
+Use this recipe to see the useful behavior before building an app around it:
+the agent researches current information, continues a conversation, creates
+real files with isolated code, finds work from another conversation, and
+leaves conversation and spending evidence you can inspect.
+
+Choose the **KDCube Native ReAct agent** (**Native agent** below), LangGraph,
+or Claude Code:
 
 ```text
 agents/
-  native/       KDCube ReactSolverV2
-  langgraph/    LangGraph through KDCubeChatModel
+  native/       Native agent
+  langgraph/    LangGraph agent through KDCubeChatModel
   claude/       Claude Code through ClaudeCodeAgent
 ```
 
@@ -77,6 +83,12 @@ Open agents/
        rendering_tools.write_pdf -> polished PDF
               |
               v
+       second conversation for the same user
+              |
+              v
+       Conversation Search -> earlier findings
+              |
+              v
        inspect conversation, files, execution, and spend evidence
 
 or select a direct conversation channel
@@ -86,8 +98,12 @@ or select a direct conversation channel
               +--> --telegram-local   verified webhook, files, final reply
 ```
 
-The model writes the research and Python. KDCube supplies the reusable
-execution, rendering, persistence, accounting, and communicator boundaries.
+The flow shows the practical result: an agent can investigate current
+information, continue the work later, produce useful files, and recover the
+research from another conversation without rebuilding those capabilities in
+its own loop. The model writes the research and Python. KDCube supplies the
+reusable execution, rendering, persistence, accounting, and communicator
+boundaries.
 This is the important document boundary: the model authors the content and
 visual structure, while stable tools own PDF, DOCX, and PPTX conversion. The
 agent can produce polished files without inventing a document-generation
@@ -99,7 +115,7 @@ Install Git, Python 3.11, and Docker Engine or Docker Desktop with Compose.
 
 You also need one model interface:
 
-- Native or LangGraph uses a provider API key or an on-host model behind the
+- The Native agent or LangGraph uses a provider API key or an on-host model behind the
   KDCube models gateway.
 - Claude uses an authenticated Claude Code CLI or an Anthropic key.
 
@@ -142,7 +158,7 @@ paths. DOCX consumes Markdown; PPTX consumes section-based HTML.
 
 ## 4. Create local descriptors
 
-For Native or LangGraph with a hosted provider:
+For the Native agent or LangGraph with a hosted provider:
 
 ```bash
 .venv/bin/python setup_local.py --provider anthropic
@@ -172,7 +188,7 @@ ordinary app-agnostic platform descriptors; this direct process does not need
 
 ### Use an on-host model
 
-Native and LangGraph use the SDK's shared descriptor-to-`ModelServiceBase`
+The Native agent and LangGraph use the SDK's shared descriptor-to-`ModelServiceBase`
 route. Prepare either example without a provider secret:
 
 ```bash
@@ -229,7 +245,7 @@ The agent process runs on the host, so it uses `127.0.0.1`. A KDCube
 processor running inside Docker uses `host.docker.internal` for the same host
 gateway.
 
-Native ReAct does not require provider-native tool calling. Its instruction
+The Native agent does not require provider-native tool calling. Its instruction
 profile and parser own the action protocol. The chosen model still needs to
 follow that protocol, preserve structured action arguments, and fit the
 instructions, tool catalog, conversation, and requested output inside
@@ -294,8 +310,9 @@ tables. LangGraph also creates its checkpoint tables.
 ## 7. Inspect the agent YAML
 
 `config.local.yaml` selects behavior, tools, skills, and the local output root.
-This is the Native shape; LangGraph and Claude use framework-specific tool IDs
-for the same capabilities:
+This is the Native agent shape; LangGraph and Claude add the SDK conversation-search
+source shown after it and use framework-specific tool IDs for the same
+capabilities:
 
 ```yaml
 agent:
@@ -360,6 +377,29 @@ agent:
       - demo.research-brief
 ```
 
+LangGraph and Claude select cross-conversation search from the canonical SDK
+tool source:
+
+```yaml
+agent:
+  tools:
+    - id: conversations
+      kind: python
+      module: kdcube_ai_app.apps.chat.sdk.tools.conversation_tools
+      alias: conversation_tools
+      discovery: semantic_kernel
+      allowed: [search]
+      runtime:
+        search: local
+```
+
+The Native agent already exposes this capability as `react.memsearch`. All three paths
+call `run_conversation_search` from the shared conversation solution.
+The model supplies the query, scope, content targets, and result limit. The
+harness supplies tenant, project, user, current conversation, turn, bundle,
+and agent identity from the active turn; those identity fields are not tool
+arguments.
+
 `user_id` and `conversation_id` select the durable conversation. Run with the
 same pair again to continue it; change `conversation_id` to start another
 conversation for that user. Tenant and project come from `assembly.yaml`.
@@ -373,9 +413,9 @@ tenant / project / user_id / conversation_id / agent_id
 The shared conversation itself remains keyed by tenant, project, user, and
 conversation. The final `agent_id` segment prevents two agent implementations
 serving that conversation from colliding in private state. `session_id`
-identifies the current calling session and accounting lineage. Native's
-`recall_conversation_id` is the separate conversation used by its explicit
-cross-conversation search demonstration.
+identifies the current calling session and accounting lineage.
+`recall_conversation_id` is the separate conversation used by each runner's
+explicit cross-conversation search demonstration.
 
 Postgres transcript persistence and text recall work without an embedding
 credential. With a configured embedding provider, the search path combines
@@ -386,8 +426,9 @@ the active search mode at startup.
 The descriptor uses the same canonical tool IDs for every agent. Framework
 adapters translate those IDs only at their model-facing boundary:
 
-| Capability | Native | LangGraph | Claude Code |
+| Capability | Native agent | LangGraph | Claude Code |
 | --- | --- | --- | --- |
+| Conversation Search | `react.memsearch` | `conversation_search` | `mcp__kdcube_harness__conversation_search` |
 | Web Search | `web_tools.web_search` | `web_search` | `mcp__kdcube_web_search__web_search` |
 | Web Fetch | `web_tools.web_fetch` | `web_fetch` | `mcp__kdcube_web_search__web_fetch` |
 | Isolated Python | `exec_tools.execute_code_python` | `execute_python` | `mcp__kdcube_harness__execute_python` |
@@ -399,7 +440,7 @@ Unknown tool or skill IDs fail during `--check`. Settings stay on their source
 row. Web Search and Web Fetch run from the same
 [KDCube Web Search MCP implementation](../../../../../mcp/web-search/README.md);
 the `agent.tools[id=web]` source owns their shared domain allowlist, blocklist, and SSRF
-policy. Native and LangGraph call the SDK implementation in-process. Claude
+policy. The Native agent and LangGraph call the SDK implementation in-process. Claude
 starts the public `mcp/web-search/server.py` launcher as a stdio MCP server.
 Change the allowlist when changing the sample topic.
 
@@ -432,7 +473,7 @@ code executor receives the tool result through authenticated, scoped
 supervisor IPC. Its container remains network-isolated and receives neither
 the search credential nor model/provider credentials.
 
-The Native profile is `lite:core`; the SDK adds the existing ReAct exec,
+The Native agent profile is `lite:core`; the SDK adds the existing ReAct exec,
 rendering, and web blocks only when their tool families are enabled. LangGraph
 and Claude use `workspace-files`, a framework-neutral profile that teaches the
 direct current-turn artifact workspace without ReAct channel syntax. In all
@@ -449,10 +490,10 @@ profile -> workspace/conduct -> enabled tool guidance -> skills
 
 Claude writes the composed profile to `CLAUDE.md` and materializes selected
 skills under `.claude/skills`. LangGraph includes selected skill text in its
-system prompt. Native keeps the normal ReAct skill gallery and strict protocol.
+system prompt. The Native agent keeps the normal ReAct skill gallery and strict protocol.
 See
 [Direct Agent Instruction Profiles](../../runtime/harness/direct-agent-instruction-profiles-README.md)
-for supported Native profile IDs and the exact composition contract.
+for supported Native agent profile IDs and the exact composition contract.
 
 `descriptors.local/assembly.yaml` selects independent services and durable
 storage. The templates select a local filesystem path:
@@ -520,12 +561,14 @@ file:
 .venv/bin/python agent.py \
   --user-id alice \
   --conversation-id release-research \
-  --session-id terminal-1
+  --session-id terminal-1 \
+  --recall-conversation-id release-research-recall
 ```
 
 Running the same command again continues `release-research` for `alice`.
 Choosing another user or conversation selects a separate durable history.
-Native also accepts `--recall-conversation-id` for its third-turn recall test.
+All three runners accept `--recall-conversation-id` for the separate recall
+check.
 Every construction check prints the resolved input and full private-state
 scope before any model call.
 
@@ -534,7 +577,8 @@ contacting a provider or support service. `--infra-check` verifies Redis,
 Postgres tables, KDCube storage, the executor image, and Playwright Chromium
 without model spend. Claude also verifies its Git transcript store.
 
-The full two-turn scenario:
+The built-in demonstration runs the research-and-report flow first, then checks
+recall from another conversation:
 
 1. Stores `research-request.md` as a user attachment, performs Web Search, and
    fetches at least one selected result page before accepting it as evidence.
@@ -546,6 +590,8 @@ The full two-turn scenario:
    print-ready HTML. The runner verifies that a returned title and URL reached
    the workbook.
 4. The agent invokes `write_pdf`; KDCube renders and hosts the final PDF.
+5. A new conversation for the same user invokes Conversation Search and must
+   recover the research stored by the first conversation.
 
 A successful run ends with:
 
@@ -760,8 +806,10 @@ format instead of forcing every model to rebuild formatting code.
 
 ## 13. Understand continuity by adapter
 
-Native adds a third turn in a different conversation and requires
-`react.memsearch` to recover the earlier research for the same user.
+After the two research-and-report turns, each runner starts a different
+conversation for the same user and requires its Conversation Search tool to
+recover the earlier research. The Native agent uses `react.memsearch`; LangGraph and
+Claude use adapters over `conversation_tools.search`.
 
 LangGraph rebuilds its graph with turn-bound tools on every invocation while
 reusing the same Postgres checkpoint thread. Its thread ID includes tenant,
@@ -790,7 +838,7 @@ to change model, infrastructure, storage, economics, executor, and secrets.
 Every Python source row names a `module` or local `ref`, an `alias`, exact
 callable names under `allowed`, and optional per-callable `runtime` values.
 The SDK `ToolSubsystem` introspects those sources and applies the same selected
-catalog to direct calls and generated-code supervisor calls. Native ReAct
+catalog to direct calls and generated-code supervisor calls. The Native agent
 consumes that catalog directly. LangGraph's `tools.py` and Claude's local MCP
 servers are model-facing schema adapters over those canonical IDs. A new
 domain callable therefore gets one descriptor row plus the corresponding

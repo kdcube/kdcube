@@ -1,9 +1,10 @@
-"""Local stdio MCP bridge for direct Agent Harness execution/rendering tools."""
+"""Local stdio MCP bridge for direct Agent Harness conversation and file tools."""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any, AsyncIterator, Literal
@@ -63,13 +64,48 @@ class DirectArtifactContract(TypedDict):
 @asynccontextmanager
 async def tool_server_lifespan(_app: KDCubeMCPServer) -> AsyncIterator[dict[str, Any]]:
     """Release process-wide renderer resources before the MCP event loop closes."""
-    async with direct_host_process_lifespan():
-        yield {}
+    runtime = getattr(_app, "_direct_tool_runtime", None)
+    try:
+        async with direct_host_process_lifespan():
+            yield {}
+    finally:
+        if runtime is not None:
+            await runtime.close()
 
 
 def build_app(runtime: DirectToolRuntime) -> KDCubeMCPServer:
     """Expose the current turn's trusted execution and rendering bridge."""
     app = KDCubeMCPServer("kdcube_harness", lifespan=tool_server_lifespan)
+    app._direct_tool_runtime = runtime
+
+    @app.tool(
+        name="conversation_search",
+        description=(
+            "Search this user's current or earlier KDCube conversations. Caller "
+            "identity is supplied by the harness, not by tool arguments."
+        ),
+    )
+    async def conversation_search(
+        query: str,
+        scope: str = "user",
+        targets: list[str] | None = None,
+        top_k: int = 5,
+        days: int = 365,
+        include_recovery_sessions: bool = False,
+    ) -> str:
+        result = await runtime.invoke_tool(
+            tool_id="conversation_tools.search",
+            params={
+                "query": query,
+                "scope": scope,
+                "targets": targets or ["assistant", "user", "attachment", "summary"],
+                "top_k": top_k,
+                "days": days,
+                "include_recovery_sessions": include_recovery_sessions,
+            },
+            call_reason="Search this user's conversation history",
+        )
+        return json.dumps(result, ensure_ascii=False, default=str)
 
     @app.tool(
         name="execute_python",
@@ -213,6 +249,7 @@ async def _build_runtime(args: argparse.Namespace) -> DirectToolRuntime:
             agent_id=args.agent_id,
             bundle_root=Path(args.bundle_root),
         ),
+        conversation_harness=harness,
         timeout_s=args.timeout_s,
     )
 

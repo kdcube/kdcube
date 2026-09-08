@@ -30,6 +30,7 @@ class ConfiguredAgentInput:
     user_type: str
     session_id: str
     conversation_id: str
+    recall_conversation_id: str = ""
 
     def continuity_key(
         self,
@@ -79,6 +80,7 @@ def configured_agent_input(
     user_id: str | None = None,
     conversation_id: str | None = None,
     session_id: str | None = None,
+    recall_conversation_id: str | None = None,
 ) -> ConfiguredAgentInput:
     """Resolve required direct-run input, with explicit CLI overrides."""
     raw = _agent(config).get("input")
@@ -101,7 +103,13 @@ def configured_agent_input(
         raise ValueError(
             "agent.input is missing required values: " + ", ".join(missing)
         )
-    return ConfiguredAgentInput(**normalized)
+    recall = str(
+        recall_conversation_id
+        if recall_conversation_id is not None
+        else raw.get("recall_conversation_id")
+        or ""
+    ).strip()
+    return ConfiguredAgentInput(**normalized, recall_conversation_id=recall)
 
 
 def configured_tool_connections(

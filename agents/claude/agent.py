@@ -97,6 +97,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.claude_code.streaming import (  # noq
 
 WEB_SEARCH_TOOL_ID = "mcp__kdcube_web_search__web_search"
 WEB_FETCH_TOOL_ID = "mcp__kdcube_web_search__web_fetch"
+CONVERSATION_SEARCH_TOOL_ID = "mcp__kdcube_harness__conversation_search"
 EXEC_TOOL_ID = "mcp__kdcube_harness__execute_python"
 RENDER_TOOL_IDS = (
     "mcp__kdcube_harness__write_pdf",
@@ -107,6 +108,7 @@ BUILTIN_TOOL_IDS = ("Read", "Write", "Edit", "Grep", "Glob")
 CANONICAL_TOOL_IDS = {
     "web_tools.web_search": WEB_SEARCH_TOOL_ID,
     "web_tools.web_fetch": WEB_FETCH_TOOL_ID,
+    "conversation_tools.search": CONVERSATION_SEARCH_TOOL_ID,
     "exec_tools.execute_code_python": EXEC_TOOL_ID,
     "rendering_tools.write_pdf": RENDER_TOOL_IDS[0],
     "rendering_tools.write_docx": RENDER_TOOL_IDS[1],
@@ -225,6 +227,11 @@ async def agent_config(
     harness_server_id = "kdcube_harness"
     instructions = compose_provider_native_instructions(
         instruction_selection,
+        conversation_search_tool=(
+            CONVERSATION_SEARCH_TOOL_ID
+            if CONVERSATION_SEARCH_TOOL_ID in allowed_tools
+            else None
+        ),
         exec_tool=EXEC_TOOL_ID if EXEC_TOOL_ID in allowed_tools else None,
         rendering_tools=tuple(
             tool_id for tool_id in RENDER_TOOL_IDS if tool_id in allowed_tools
@@ -256,6 +263,7 @@ async def agent_config(
         }
         enabled_mcp_servers.append(web_search_server_id)
     if {
+        "conversation_tools.search",
         "exec_tools.execute_code_python",
         "rendering_tools.write_pdf",
         "rendering_tools.write_docx",
@@ -499,6 +507,7 @@ async def main_async(args: argparse.Namespace) -> None:
         user_id=args.user_id,
         conversation_id=args.conversation_id,
         session_id=args.session_id,
+        recall_conversation_id=args.recall_conversation_id,
     )
     configured_web_search(config, connection_id="web")
     output = configured_run_directory(config, config_path=config_path)
@@ -712,6 +721,7 @@ async def main_async(args: argparse.Namespace) -> None:
     required_demo_tools = {
         WEB_SEARCH_TOOL_ID,
         WEB_FETCH_TOOL_ID,
+        CONVERSATION_SEARCH_TOOL_ID,
         EXEC_TOOL_ID,
         RENDER_TOOL_IDS[0],
     }
@@ -720,6 +730,15 @@ async def main_async(args: argparse.Namespace) -> None:
         raise RuntimeError(
             "the built-in demonstration requires tools: "
             + ", ".join(missing_demo_tools)
+        )
+    recall_conversation_id = agent_input.recall_conversation_id
+    if not recall_conversation_id:
+        raise ValueError(
+            "agent.input.recall_conversation_id is required for the built-in recall demonstration"
+        )
+    if recall_conversation_id == conversation_id:
+        raise ValueError(
+            "agent.input.recall_conversation_id must differ from conversation_id"
         )
 
     emitter = ConsoleEmitter(run_root / "communicator.jsonl")
@@ -775,6 +794,8 @@ async def main_async(args: argparse.Namespace) -> None:
     turn_ids: list[str] = []
     called_tools_by_turn: list[set[str]] = []
     completed_turns: list[Any] = []
+    recall_turn_id = ""
+    recall_records: list[dict[str, Any]] = []
     async with harness:
         if args.infra_check:
             await bootstrap_claude_code_session_store(config=session_store)
@@ -819,11 +840,74 @@ async def main_async(args: argparse.Namespace) -> None:
                 "the research turn completed without required tools: "
                 + ", ".join(missing_research)
             )
+        recall_input = replace(
+            agent_input,
+            conversation_id=recall_conversation_id,
+        )
+        recall_private_state_key = recall_input.continuity_key(
+            tenant=harness_config.tenant,
+            project=harness_config.project,
+            agent_id=harness_config.agent_id,
+        )
+        recall_binding = ClaudeCodeBinding(
+            user_id=agent_input.user_id,
+            conversation_id=recall_conversation_id,
+            session_id=agent_input.session_id,
+            claude_session_id=str(
+                uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    f"kdcube-agent:{recall_private_state_key}",
+                )
+            ),
+        )
+        recall_workspace = run_root / "recall-workspace"
+        recall_workspace.mkdir(parents=True, exist_ok=True)
+        recall_session_store = session_store_config(
+            settings,
+            descriptors_dir=descriptors_dir,
+            workspace=recall_workspace,
+            user_id=agent_input.user_id,
+            conversation_id=recall_conversation_id,
+            agent_id=harness_config.agent_id,
+        )
+        recall_answer, recall_turn_id, recall_tools, _recall_turn = await run_one_turn(
+            prompt=(
+                f"Call the kdcube_harness conversation_search MCP tool with scope='user' "
+                f"to recover the research about {topic!r} from my other conversation. "
+                "Report one recovered source URL and name the source conversation id."
+            ),
+            number=3,
+            resume=False,
+            raw_config=config,
+            config_path=config_path,
+            descriptors_dir=descriptors_dir,
+            run_root=run_root,
+            workspace=recall_workspace,
+            skill_ids=skill_config.enabled,
+            binding=recall_binding,
+            harness=harness,
+            session_store=recall_session_store,
+            instruction_selection=instruction_selection,
+            model=selected_model.model,
+        )
+        if CONVERSATION_SEARCH_TOOL_ID not in recall_tools:
+            raise RuntimeError(
+                "the recall turn completed without calling conversation_search"
+            )
+        print(f"\n[cross-conversation answer]\n{recall_answer}\n")
         records = await harness.verify_conversation(
             conversation_id=conversation_id,
             expected_turn_ids=turn_ids,
         )
         print(f"[conversation] materialized {len(records)} durable turn record(s)")
+        recall_records = await harness.verify_conversation(
+            conversation_id=recall_conversation_id,
+            expected_turn_ids=(recall_turn_id,),
+        )
+        print(
+            "[conversation] conversation_search recovered a different conversation "
+            "for the same user"
+        )
         evidence_path = run_root / "evidence.json"
         evidence = write_evidence_index(
             evidence_path,
@@ -839,6 +923,8 @@ async def main_async(args: argparse.Namespace) -> None:
                     else None
                 ),
                 "generated_source_archive_path": f"{turn_ids[-1]}/executions/*/pkg/user_code.py",
+                "cross_conversation_turn": recall_turn_id,
+                "cross_conversation_records": len(recall_records),
             },
         )
         print_evidence_summary(evidence_path, evidence)
@@ -916,6 +1002,10 @@ def main() -> None:
         help="Override agent.input.conversation_id and resume that conversation.",
     )
     parser.add_argument("--session-id", help="Override agent.input.session_id.")
+    parser.add_argument(
+        "--recall-conversation-id",
+        help="Override agent.input.recall_conversation_id for the recall demonstration.",
+    )
     modes.add_argument(
         "--interactive",
         action="store_true",

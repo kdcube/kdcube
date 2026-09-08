@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the KDCube native ReAct agent as a direct SDK process."""
+"""Run the KDCube Native agent as a direct SDK process."""
 
 from __future__ import annotations
 
@@ -482,11 +482,9 @@ async def main_async(args: argparse.Namespace) -> None:
         user_id=args.user_id,
         conversation_id=args.conversation_id,
         session_id=args.session_id,
+        recall_conversation_id=args.recall_conversation_id,
     )
-    input_config = dict((config.get("agent") or {}).get("input") or {})
-    recall_conversation_id = str(
-        args.recall_conversation_id or input_config.get("recall_conversation_id") or ""
-    ).strip()
+    recall_conversation_id = agent_input.recall_conversation_id
     if bool((config.get("agent") or {}).get("cross_conversation_search", True)):
         if not recall_conversation_id:
             raise ValueError(

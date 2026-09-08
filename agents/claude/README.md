@@ -1,9 +1,9 @@
 ---
 id: repo:kdcube-ai-app/agents/claude/README.md
 title: "Run the Claude Code Agent"
-summary: "Run Claude Code through the KDCube harness with a Git-backed transcript and durable conversation."
-tags: ["agents", "claude-code", "harness", "conversation", "standalone", "web-search", "web-fetch", "mcp"]
-keywords: ["ClaudeCodeAgent", "KDCube Web Search MCP", "KDCube Web Fetch", "Claude transcript", "Git session store", "ChatCommunicator", "accounting"]
+summary: "Give Claude Code durable user conversations, earlier-work recall, governed web and file tools, isolated execution, reusable skills, and inspectable usage through the KDCube Harness."
+tags: ["agents", "claude-code", "harness", "conversation", "standalone", "web-search", "web-fetch", "conversation-search", "mcp"]
+keywords: ["ClaudeCodeAgent", "KDCube Web Search MCP", "KDCube Web Fetch", "conversation_tools.search", "Claude transcript", "Git session store", "ChatCommunicator", "accounting"]
 updated_at: 2026-09-08
 see_also:
   - repo:kdcube-ai-app/agents/README.md
@@ -18,6 +18,10 @@ This directory runs the local Claude Code CLI through `ClaudeCodeAgent`. The
 harness stores its conversation in Postgres and configured storage; the SDK
 stores its resumable CLI transcript on a per-conversation Git branch. It runs
 directly as a Python process from this checkout.
+Use it to keep Claude Code's coding loop while adding durable KDCube
+conversations, governed tools, generated files, and accountable execution.
+This turns a coding-agent session into user-facing work that can continue,
+produce durable deliverables, and be inspected after the process exits.
 
 ## Run it
 
@@ -58,16 +62,18 @@ HTTPS tunnel, register that URL with Telegram, then run:
 The complete webhook registration and process-local delivery boundary are in the
 [executable recipe](../../app/ai-app/docs/recipes/quickstart/run-agent-harness-from-python-README.md#10-connect-a-local-telegram-bot).
 
-The default run uses `agent.input.user_id: demo-user` and
-`agent.input.conversation_id: claude-demo`. Run it again with those values to
-continue the same durable conversation and Git-backed Claude transcript, or
-override them:
+The default run uses `agent.input.user_id: demo-user`,
+`agent.input.conversation_id: claude-demo`, and
+`agent.input.recall_conversation_id: claude-recall-demo`. Run it again with
+those values to continue the same durable conversation and Git-backed Claude
+transcript, or override them:
 
 ```bash
 .venv/bin/python agent.py \
   --user-id alice \
   --conversation-id release-research \
-  --session-id terminal-1
+  --session-id terminal-1 \
+  --recall-conversation-id release-research-recall
 ```
 
 For API-key execution, use `--provider anthropic`; the setup command writes the
@@ -101,7 +107,14 @@ descriptor-selected tool policy. A second MCP operation calls
 `rendering_tools.write_pdf` to render the HTML into a polished PDF. The same
 server exposes Markdown-to-DOCX and section-HTML-to-PPTX operations.
 
-The harness independently records both turns and accounting in KDCube storage.
+The recall check starts `claude-recall-demo`, a different conversation for the
+same user, and must call the harness `conversation_search` MCP tool to recover the
+earlier research. That MCP operation is a small adapter over the
+descriptor-selected SDK tool `conversation_tools.search`; caller identity
+comes from the harness, not from Claude's arguments.
+
+The harness records the research, report, recall result, and accounting in
+KDCube storage.
 Inspect `output/runs/<user>/<conversation>/<run>/evidence.json`; it points to
 `output/kdcube-storage`, the execution ZIP containing `pkg/user_code.py`, and
 the Claude transcript branch. A successful run ends with `demonstration: PASS`.
@@ -111,7 +124,7 @@ the Claude transcript branch. A successful run ends with `demonstration: PASS`.
 Edit `config.local.yaml` to change Claude's command and timeout, the
 `workspace-files` instruction profile, `additional_instructions`, local
 ingress, run directory, tools, skills, or task. Its `agent.input` section selects the local caller
-session and durable conversation. Tenant and project come from
+session, durable conversation, and recall conversation. Tenant and project come from
 `descriptors.local/assembly.yaml`; the Git transcript branch and Claude session
 ID add this runner's stable `claude` agent ID. The profile becomes generated
 `CLAUDE.md`; selected KDCube skills become native `.claude/skills` entries. Web
@@ -128,7 +141,7 @@ also needs a Claude-facing MCP schema adapter; the descriptor `allowed` list
 still controls whether the trusted runtime may execute it. The shared descriptor template ships with
 `claude-haiku-4-5-20251001` selected. The Claude Code
 subprocess requires `default_llm_provider: anthropic`; direct agents that use
-KDCube `ModelServiceBase`, including the Native and LangGraph examples, can
+KDCube `ModelServiceBase`, including the Native agent and LangGraph examples, can
 instead select `provider: custom`. Tool and skill selection stays
 in `config.local.yaml`; executor, storage, and Git settings stay in the
 standard descriptors.

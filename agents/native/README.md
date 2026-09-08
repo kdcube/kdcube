@@ -1,23 +1,28 @@
 ---
 id: repo:kdcube-ai-app/agents/native/README.md
-title: "Run the Native ReAct Agent"
-summary: "Run KDCube native ReAct directly from Python with YAML-selected tools and skills."
-tags: ["agents", "native-react", "harness", "standalone", "demonstration", "web-search", "web-fetch"]
-keywords: ["ReactSolverV2", "DirectAgentHarness", "KDCube Web Search", "KDCube Web Fetch", "Postgres conversation", "ChatCommunicator", "accounting"]
+title: "Run the Native Agent"
+summary: "Use the KDCube Native ReAct agent to research, create files with isolated code execution, continue conversations, and recover earlier work, with models, tools, and skills selected in YAML."
+tags: ["agents", "native-react", "harness", "standalone", "demonstration", "web-search", "web-fetch", "conversation-search"]
+keywords: ["ReactSolverV2", "DirectAgentHarness", "react.memsearch", "KDCube Web Search", "KDCube Web Fetch", "Postgres conversation", "ChatCommunicator", "accounting"]
 updated_at: 2026-09-08
 see_also:
   - repo:kdcube-ai-app/agents/README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/quickstart/run-agent-harness-from-python-README.md
   - repo:kdcube-ai-app/mcp/web-search/README.md
 ---
-# Run the Native ReAct Agent
+# Run the Native Agent
 
 ## What it is
 
-This directory runs KDCube's `ReactSolverV2` in your Python process.
+This directory runs the **KDCube Native ReAct agent** (`ReactSolverV2`), called
+the **Native agent** below, in your Python process.
 `config.local.yaml` selects agent behavior and tool settings;
 `descriptors.local/` selects the model, storage, and support services. It runs
 directly as a Python process from this checkout.
+Use it when you want a complete agent loop that can run with an on-host or
+provider model while you change its tools, skills, and instructions in YAML.
+It is the shortest starting point when you need a working agent rather than an
+adapter for a framework you already use.
 
 ## Run it
 
@@ -116,7 +121,7 @@ ollama pull <model-tag-loaded-by-your-local-runtime>
 ```
 
 `agent.py --check` must print the exact `custom/<model-tag>`, endpoint, and
-context budget before a model call is made. Native ReAct supplies its action
+context budget before a model call is made. The Native agent supplies its action
 protocol through instructions and parsing; the model provider does not need a
 provider-native tool-calling API. The selected model must still follow that
 protocol reliably within the configured context window.
@@ -139,8 +144,11 @@ The YAML also enables `write_docx` for Markdown and `write_pptx` for
 section-based HTML. The default demonstration calls only `write_pdf`; alter the
 second prompt to exercise either sibling operation.
 
-Native adds a third turn in another conversation and uses `react.memsearch` to
-recover its earlier research. A successful run ends with `demonstration: PASS`.
+After the research-and-report flow, the Native agent starts another
+conversation and uses `react.memsearch` to recover its earlier research.
+`react.memsearch` calls the shared SDK conversation-search engine also exposed
+to the LangGraph and Claude examples.
+A successful run ends with `demonstration: PASS`.
 The second conversation is the explicit
 `agent.input.recall_conversation_id`. Inspect
 `output/runs/<user>/<conversation>/<run>/evidence.json`; it points to durable

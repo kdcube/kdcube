@@ -1,4 +1,4 @@
-"""KDCube Web Search, isolated code execution, and rendering for LangGraph."""
+"""KDCube conversation, web, code-execution, and rendering tools for LangGraph."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.tool_runtime import (
 
 WEB_SEARCH_TOOL_ID = "web_tools.web_search"
 WEB_FETCH_TOOL_ID = "web_tools.web_fetch"
+CONVERSATION_SEARCH_TOOL_ID = "conversation_tools.search"
 EXEC_TOOL_ID = "exec_tools.execute_code_python"
 RENDER_TOOL_IDS = {
     "write_pdf": "rendering_tools.write_pdf",
@@ -123,6 +124,37 @@ def build_tools(
             )
 
     @tool
+    async def conversation_search(
+        query: str,
+        scope: str = "user",
+        targets: list[str] | None = None,
+        top_k: int = 5,
+        days: int = 365,
+        include_recovery_sessions: bool = False,
+    ) -> str:
+        """Search this user's current or earlier KDCube conversations."""
+        try:
+            result = await require_runtime().invoke_tool(
+                tool_id=CONVERSATION_SEARCH_TOOL_ID,
+                params={
+                    "query": query,
+                    "scope": scope,
+                    "targets": targets
+                    or ["assistant", "user", "attachment", "summary"],
+                    "top_k": top_k,
+                    "days": days,
+                    "include_recovery_sessions": include_recovery_sessions,
+                },
+                call_reason="Search this user's conversation history",
+            )
+            return json.dumps(result, ensure_ascii=False, default=str)
+        except Exception as exc:
+            return json.dumps(
+                {"ok": False, "error": str(exc), "ret": None},
+                ensure_ascii=False,
+            )
+
+    @tool
     async def execute_python(
         code: str,
         artifacts: list[dict[str, Any]],
@@ -179,9 +211,20 @@ def build_tools(
     available = [
         (WEB_SEARCH_TOOL_ID, web_search),
         (WEB_FETCH_TOOL_ID, web_fetch),
+        (CONVERSATION_SEARCH_TOOL_ID, conversation_search),
         (EXEC_TOOL_ID, execute_python),
         (RENDER_TOOL_IDS["write_pdf"], write_pdf),
         (RENDER_TOOL_IDS["write_docx"], write_docx),
         (RENDER_TOOL_IDS["write_pptx"], write_pptx),
     ]
     return [item for canonical_id, item in available if canonical_id in configured_ids]
+
+
+__all__ = [
+    "CONVERSATION_SEARCH_TOOL_ID",
+    "EXEC_TOOL_ID",
+    "RENDER_TOOL_IDS",
+    "WEB_FETCH_TOOL_ID",
+    "WEB_SEARCH_TOOL_ID",
+    "build_tools",
+]
