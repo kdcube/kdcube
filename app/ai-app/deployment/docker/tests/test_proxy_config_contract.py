@@ -143,6 +143,42 @@ class ProxyConfigContractTest(unittest.TestCase):
                     "proxy_set_header X-Forwarded-Host  $http_host;",
                     template,
                 )
+                self._assert_oauth_discovery_routes(template)
+
+    def _assert_oauth_discovery_routes(self, config: str) -> None:
+        """OAuth discovery must never fall through to the site fallback.
+
+        Claude Code and other MCP clients probe the RFC 9728 and RFC 8414
+        well-known paths at the origin root before, or instead of, following
+        the 401 challenge. The fallback answers unknown paths with the SPA's
+        200 HTML, which a client fails to parse as JSON, so the proxy answers
+        the pathless forms with an exact 404, maps the path-inserted forms onto
+        the bundle OAuth surface, and 404s every other /.well-known/ path.
+        """
+        for needle in (
+            "location = /.well-known/oauth-protected-resource {",
+            "location ^~ /.well-known/oauth-protected-resource/ {",
+            'rewrite "^/[.]well-known/oauth-protected-resource(/api/integrations/bundles/'
+            '[^/]+/[^/]+/[^/]+/public)/(.+?)/?$" "$1/oauth/.well-known/oauth-protected-resource'
+            "?resource=",
+            "location = /.well-known/oauth-authorization-server {",
+            "location ^~ /.well-known/oauth-authorization-server/ {",
+            'rewrite "^/[.]well-known/oauth-authorization-server(/api/integrations/bundles/'
+            '[^/]+/[^/]+/[^/]+/public/oauth)/?$" "$1/.well-known/oauth-authorization-server" break;',
+            "location ^~ /.well-known/ {",
+            'return 404 "{\\"detail\\":\\"Not Found\\"}";',
+        ):
+            self.assertIn(needle, config)
+        routes = config.index("KDCUBE_APPLICATION_SITE_ROUTES:BEGIN")
+        self.assertLess(
+            config.index("location ^~ /.well-known/ {", routes),
+            config.index("location / {", routes),
+            "the well-known catch-all must precede the site fallback",
+        )
+        metadata_route = config.split(
+            "location ^~ /.well-known/oauth-protected-resource/ {", 1
+        )[1].split("}", 1)[0]
+        self.assertIn("proxy_pass http://chat_proc;", metadata_route)
 
     def test_helm_proxy_uses_the_same_generated_route_contract(self) -> None:
         chart = (
@@ -157,6 +193,7 @@ class ProxyConfigContractTest(unittest.TestCase):
         self.assertIn("location ^~ {{ $routePrefix }}/ {", chart)
         self.assertIn("rewrite ^/$ /api/integrations/site-root break;", chart)
         self.assertIn("rewrite ^/sites/(.*)$ /api/integrations/sites/$1 break;", chart)
+        self._assert_oauth_discovery_routes(chart)
 
 
 if __name__ == "__main__":

@@ -182,6 +182,27 @@ full decision contract is owned by
 The protocol support boundary and conformance gates are owned by
 [OAuth Delegated Credential Protocol Adapter](https://github.com/elenaviter/app-ecosystem/blob/main/docs/connection-hub/package/oauth-delegated-credential-protocol.md#mcp-2026-07-28-support-boundary).
 
+### Discovery through the front proxy
+
+A guarded surface answers an unauthenticated request with `401` and
+`WWW-Authenticate: Bearer resource_metadata="<issuer>/.well-known/oauth-protected-resource?resource=<surface url>"`,
+where the issuer is the Connection Hub bundle's `public/oauth` path. That is
+the discovery path the MCP specification names, and a client that follows it
+never needs anything at the origin root.
+
+Clients also probe the origin-root locations RFC 9728 and RFC 8414 define:
+`/.well-known/oauth-protected-resource[/<surface path>]` and
+`/.well-known/oauth-authorization-server[/<issuer path>]`. Claude Code checks
+those first. The shipped proxy templates therefore carry a generated block
+(`deployment/nginx/generate_application_site_routes.py`) that answers the
+pathless forms with an exact JSON 404, rewrites the path-inserted forms onto
+the bundle OAuth surface, and 404s every other `/.well-known/` path, so
+nothing under `/.well-known/` reaches the application-site fallback. Without
+that block the fallback answers `200` with the SPA's HTML, the client fails to
+parse it as JSON, and discovery stops before the challenge is ever seen. A
+deployment whose front proxy predates the block shows exactly that symptom;
+regenerate the proxy from the current template.
+
 ## Layer 5 - namespace boundary policy: door claims per operation
 
 The generic named-services bridge exposes namespace-agnostic tools

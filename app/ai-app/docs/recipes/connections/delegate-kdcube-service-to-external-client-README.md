@@ -45,6 +45,9 @@ Claude may not call tools that were not consented.
 
 3. External client probes the service
    KDCube replies that the service requires delegated credentials.
+   The reply is a 401 whose WWW-Authenticate header names the metadata URL.
+   Clients that probe the origin-root /.well-known/ locations first get the
+   same documents through the proxy's discovery routes.
    A client not pre-listed in public_clients identifies itself one of two ways,
    and it chooses which:
      - Client ID Metadata Document (CIMD): its client_id is an HTTPS URL that
