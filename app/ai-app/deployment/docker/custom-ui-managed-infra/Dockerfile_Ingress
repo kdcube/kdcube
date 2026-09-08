@@ -1,11 +1,11 @@
 # Multi-stage build for ingress (SSE/API) service
 
 # Stage 1: Build stage
-FROM python:3.12-slim as builder
+FROM python:3.12-slim AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_CACHE_DIR=/root/.cache/pip
 
 RUN apt-get update && apt-get install -y \
     --no-install-recommends \
@@ -19,22 +19,36 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 COPY src/kdcube-ai-app/requirements-chat-ingress.txt requirements.txt
 COPY src/kdcube-ai-app/requirements-aws.txt requirements-aws.txt
-COPY deployment/docker/local-python-packages /tmp/kdcube-local-python-packages
-# Seed maintainer-selected distributions before dependency resolution.
-RUN pip install --upgrade pip
-RUN if [ -f /tmp/kdcube-local-python-packages/requirements.txt ]; then \
-      pip install --no-cache-dir --no-deps \
-        -r /tmp/kdcube-local-python-packages/requirements.txt; \
-    fi
-RUN pip install --no-cache-dir -r requirements.txt
-# Reapply the selected source after dependency resolution.
-RUN if [ -f /tmp/kdcube-local-python-packages/requirements.txt ]; then \
-      pip install --no-cache-dir --no-deps --force-reinstall \
-        -r /tmp/kdcube-local-python-packages/requirements.txt; \
+RUN --mount=type=cache,target=/root/.cache/pip pip install --upgrade pip
+COPY deployment/docker/scripts/kdcube_local_python_packages_plan.py /usr/local/bin/kdcube-local-packages-plan
+# The manifest of maintainer-selected distributions only, never their sources
+# (the [n] / [t] globs make the two files optional): the requirements layer is
+# keyed by which distributions are selected, not by their content.
+COPY deployment/docker/local-python-packages/.gitkeep \
+     deployment/docker/local-python-packages/manifest.jso[n] \
+     deployment/docker/local-python-packages/requirements.tx[t] \
+     /tmp/kdcube-local-python-packages/
+# Plan the two passes: the ordinary requirements without the selected
+# distributions (their version floors are met by the selected sources), and
+# the selected sources with the extras those requirements asked for.
+RUN python /usr/local/bin/kdcube-local-packages-plan \
+      --requirements requirements.txt \
+      --stage /tmp/kdcube-local-python-packages \
+      --out /tmp/kdcube-pip
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r /tmp/kdcube-pip/requirements.txt
+# The selected sources arrive last: the only pip layer a maintainer edit
+# re-runs. First with their declared dependencies, then the exact sources
+# without dependencies.
+COPY deployment/docker/local-python-packages/ /tmp/kdcube-local-python-packages/
+RUN --mount=type=cache,target=/root/.cache/pip \
+    if [ -s /tmp/kdcube-pip/local-install.txt ]; then \
+      pip install -r /tmp/kdcube-pip/local-install.txt && \
+      pip install --no-deps --force-reinstall -r /tmp/kdcube-pip/local-install.txt; \
     fi
 
 # Stage 2: Production stage
-FROM python:3.12-slim as production
+FROM python:3.12-slim AS production
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -61,8 +75,9 @@ COPY --from=builder /opt/venv /opt/venv
 RUN groupadd --gid 1000 appuser && \
     useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash appuser
 
+# The platform source is the most volatile input, so it is the last layer;
+# --chown sets ownership at copy time.
 COPY --chown=appuser:appuser src/kdcube-ai-app/ .
-RUN chown -R appuser:appuser /app
 
 USER appuser
 CMD ["python", "kdcube_ai_app/apps/chat/ingress/web_app.py"]

@@ -547,19 +547,29 @@ kdcube refresh \
 
 The shell variables above carry source paths for this command; runtime
 configuration remains descriptor-owned. The CLI copies each selected source
-into a transient Docker build-context directory. Every Python image then:
+into a transient Docker build-context directory next to a manifest naming the
+selected distributions. Every Python image then, in this layer order:
 
-1. preinstalls the selected distributions without dependencies, making their
-   candidate versions available to requirement resolution;
-2. installs its ordinary requirements and the selected packages' declared
-   extras;
-3. force-reinstalls the exact selected sources after resolution.
+1. copies the manifest alone and plans two install passes with
+   `deployment/docker/scripts/kdcube_local_python_packages_plan.py`: the
+   ordinary requirements with the selected distributions' lines removed, and
+   the selected sources with the extras those lines asked for;
+2. installs the ordinary requirements. This layer is keyed by the requirement
+   files and by which distributions are selected, never by their content, so it
+   stays cached while a maintainer edits a selected source;
+3. copies the selected sources and installs them with their declared
+   dependencies, resolved against the installed set, then force-reinstalls the
+   exact sources without dependencies.
 
-This order supports both a local replacement for an already published package
-and a newly introduced candidate version that has not reached the package
-index. The transient source copies are removed after the build. The flag
-requires `--build`, and production consumers resolve published package
-versions.
+A selected source therefore satisfies a version floor that no published
+release meets yet (its line never reaches the ordinary pass), a local
+replacement for a published package wins (the last pass is the exact source),
+and an edit in a selected source re-runs one small pip layer. In the processor
+image Chromium is installed before the venv is copied in, and in the executor
+image right after the ordinary requirements, so neither a dependency bump nor
+a selected-source edit repeats the browser download. Every pip layer shares a
+BuildKit cache mount, so a layer that does re-run reinstalls from cached
+wheels instead of the network.
 
 `service-foundation` currently supplies host-process relay lifecycle and is not
 imported by KDCube runtime images. Install it in the host command's Python

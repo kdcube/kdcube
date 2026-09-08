@@ -1,11 +1,20 @@
-# Multi-stage build for processor (queue worker + integrations) service
+# Multi-stage build for processor (queue worker + integrations) service.
+#
+# Layers are ordered by volatility. A maintainer edit in a locally sourced
+# package (app-foundation, connection-hub, ...) or in the platform source must
+# never re-run the expensive layers: OS packages, Node, the Claude Code CLI,
+# Chromium, or the ordinary Python requirements. BuildKit is assumed (the CLI
+# builds with it); the pip cache mounts keep downloaded wheels across builds
+# without growing the image, which matters on a slow connection.
 
-# Stage 1: Build stage
-FROM python:3.12-slim as builder
+# Stage 1: the venv. Ordinary requirements first, keyed by the requirement
+# files and by WHICH distributions are maintainer-selected (the manifest, not
+# their sources); the selected sources land on top in the last layers.
+FROM python:3.12-slim AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_CACHE_DIR=/root/.cache/pip
 
 RUN apt-get update && apt-get install -y \
     --no-install-recommends \
@@ -16,25 +25,44 @@ RUN apt-get update && apt-get install -y \
 
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
+RUN --mount=type=cache,target=/root/.cache/pip pip install --upgrade pip
 
 COPY src/kdcube-ai-app/requirements-chat-processor.txt requirements.txt
 COPY src/kdcube-ai-app/requirements-aws.txt requirements-aws.txt
-COPY deployment/docker/local-python-packages /tmp/kdcube-local-python-packages
-# Seed maintainer-selected distributions before dependency resolution.
-RUN pip install --upgrade pip
-RUN if [ -f /tmp/kdcube-local-python-packages/requirements.txt ]; then \
-      pip install --no-cache-dir --no-deps \
-        -r /tmp/kdcube-local-python-packages/requirements.txt; \
-    fi
-RUN pip install --no-cache-dir -r requirements.txt
-# Reapply the selected source after dependency resolution.
-RUN if [ -f /tmp/kdcube-local-python-packages/requirements.txt ]; then \
-      pip install --no-cache-dir --no-deps --force-reinstall \
-        -r /tmp/kdcube-local-python-packages/requirements.txt; \
+COPY deployment/docker/scripts/kdcube_local_python_packages_plan.py /usr/local/bin/kdcube-local-packages-plan
+# The manifest of maintainer-selected distributions only, never their sources
+# (the [n] / [t] globs make the two files optional). The plan below is keyed by
+# which distributions are selected, so editing a selected source does not
+# invalidate the requirements layer.
+COPY deployment/docker/local-python-packages/.gitkeep \
+     deployment/docker/local-python-packages/manifest.jso[n] \
+     deployment/docker/local-python-packages/requirements.tx[t] \
+     /tmp/kdcube-local-python-packages/
+# Plan the two passes: the ordinary requirements without the selected
+# distributions (their version floors are met by the selected sources, even a
+# floor no published release meets yet), and the selected sources with the
+# extras those requirements asked for.
+RUN python /usr/local/bin/kdcube-local-packages-plan \
+      --requirements requirements.txt \
+      --stage /tmp/kdcube-local-python-packages \
+      --out /tmp/kdcube-pip
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r /tmp/kdcube-pip/requirements.txt
+# The selected sources arrive last: this is the only venv layer a maintainer
+# edit re-runs. First with their declared dependencies, resolved against the
+# installed set; then the exact sources again without dependencies, so what
+# runs is what was selected.
+COPY deployment/docker/local-python-packages/ /tmp/kdcube-local-python-packages/
+RUN --mount=type=cache,target=/root/.cache/pip \
+    if [ -s /tmp/kdcube-pip/local-install.txt ]; then \
+      pip install -r /tmp/kdcube-pip/local-install.txt && \
+      pip install --no-deps --force-reinstall -r /tmp/kdcube-pip/local-install.txt; \
     fi
 
-# Stage 2: Production stage
-FROM python:3.12-slim as production
+# Stage 2: the runtime image. Everything that does not depend on the venv
+# comes first, Chromium included, so the venv and the platform source are the
+# only layers that move between two builds.
+FROM python:3.12-slim AS production
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -85,10 +113,14 @@ RUN npm install -g @anthropic-ai/claude-code \
     && npm cache clean --force \
     && claude --version
 
-COPY --from=builder /opt/venv /opt/venv
-
-RUN python -m playwright install --with-deps chromium && \
-    chmod -R a+rX /opt/ms-playwright
+# Chromium and its OS libraries BEFORE the venv, from a throwaway venv, so a
+# venv change (a dependency bump, a maintainer-selected source) never repeats
+# the browser download. The app venv's own playwright reconciles below.
+RUN python -m venv /opt/playwright-bootstrap \
+    && /opt/playwright-bootstrap/bin/pip install --no-cache-dir playwright \
+    && /opt/playwright-bootstrap/bin/python -m playwright install --with-deps chromium \
+    && rm -rf /opt/playwright-bootstrap \
+    && chmod -R a+rX /opt/ms-playwright
 
 # Create non-root user
 RUN groupadd --gid 1000 appuser && \
@@ -98,9 +130,18 @@ RUN groupadd --gid 1000 appuser && \
 RUN mkdir -p /exec-workspace && \
     chown -R appuser:appuser /exec-workspace
 
-COPY --chown=appuser:appuser src/kdcube-ai-app/ .
+COPY --from=builder /opt/venv /opt/venv
 
-RUN chown -R appuser:appuser /app
+# The venv's playwright decides the browser build. When it matches the
+# bootstrap above this is a no-op; when it does not, only then is a build
+# downloaded.
+RUN python -m playwright install chromium && \
+    chmod -R a+rX /opt/ms-playwright
+
+# The platform source is the most volatile input, so it is the last layer.
+# --chown sets ownership at copy time; a chown -R afterwards would duplicate
+# the whole tree into one more layer.
+COPY --chown=appuser:appuser src/kdcube-ai-app/ .
 
 COPY deployment/docker/custom-ui-managed-infra/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \

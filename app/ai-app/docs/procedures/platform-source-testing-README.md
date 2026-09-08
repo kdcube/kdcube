@@ -290,9 +290,10 @@ kdcube refresh \
   --maintainer-local-python-package "connection-hub=$CONNECTION_HUB_SOURCE"
 ```
 
-The image preinstalls candidate distributions before resolving normal
-requirements, then reapplies the exact selected source. This allows a local
-candidate to satisfy a newly declared version floor. The complete command
+The image installs its ordinary requirements without the selected
+distributions, keyed by the selection manifest, then installs the exact
+selected sources on top. A local candidate satisfies a newly declared version
+floor, and an edit in a candidate re-runs only the last pip layer. The complete command
 contract and package-selection rule live in
 [Current KDCube CLI](../service/cicd/cli-README.md#maintainer-local-python-package-sources).
 

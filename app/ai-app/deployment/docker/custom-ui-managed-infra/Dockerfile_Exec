@@ -1,6 +1,14 @@
+# Isolated code executor image.
+#
+# Layers are ordered by volatility: OS packages, the ordinary Python
+# requirements and Chromium come first and stay cached; the maintainer-selected
+# package sources and the platform source come last, so a library edit costs
+# one small pip layer and one copy, never a browser download. BuildKit is
+# assumed (the CLI builds with it); the pip cache mounts keep downloaded wheels
+# across builds without growing the image.
 FROM python:3.12-slim
 
-ENV PIP_NO_CACHE_DIR=1
+ENV PIP_CACHE_DIR=/root/.cache/pip
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash curl ca-certificates grep findutils patch ripgrep \
@@ -13,25 +21,30 @@ RUN which patch && patch --version | head -n 1
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH" \
     PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+RUN --mount=type=cache,target=/root/.cache/pip pip install --upgrade pip
 
-# Install Python deps
+# Ordinary requirements, keyed by the requirement files and by WHICH
+# distributions are maintainer-selected (the manifest, not their sources).
 COPY src/kdcube-ai-app/requirements-chat.txt requirements.txt
 COPY src/kdcube-ai-app/requirements-aws.txt requirements-aws.txt
-COPY deployment/docker/local-python-packages /tmp/kdcube-local-python-packages
-# Seed maintainer-selected distributions before dependency resolution.
-RUN pip install --upgrade pip
-RUN if [ -f /tmp/kdcube-local-python-packages/requirements.txt ]; then \
-      pip install --no-cache-dir --no-deps \
-        -r /tmp/kdcube-local-python-packages/requirements.txt; \
-    fi
-RUN pip install --no-cache-dir -r requirements.txt
-# Reapply the selected source after dependency resolution.
-RUN if [ -f /tmp/kdcube-local-python-packages/requirements.txt ]; then \
-      pip install --no-cache-dir --no-deps --force-reinstall \
-        -r /tmp/kdcube-local-python-packages/requirements.txt; \
-    fi
+COPY deployment/docker/scripts/kdcube_local_python_packages_plan.py /usr/local/bin/kdcube-local-packages-plan
+COPY deployment/docker/local-python-packages/.gitkeep \
+     deployment/docker/local-python-packages/manifest.jso[n] \
+     deployment/docker/local-python-packages/requirements.tx[t] \
+     /tmp/kdcube-local-python-packages/
+# Plan the two passes: the ordinary requirements without the selected
+# distributions (their version floors are met by the selected sources, even a
+# floor no published release meets yet), and the selected sources with the
+# extras those requirements asked for.
+RUN python /usr/local/bin/kdcube-local-packages-plan \
+      --requirements requirements.txt \
+      --stage /tmp/kdcube-local-python-packages \
+      --out /tmp/kdcube-pip
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r /tmp/kdcube-pip/requirements.txt
 
-# Install browser deps separately to keep pip layer cacheable
+# Browser and its OS libraries right after the ordinary requirements: the
+# venv's playwright is fixed here, before any maintainer-selected source.
 RUN python -m playwright install --with-deps chromium && \
     chmod -R a+rX /opt/ms-playwright
 
@@ -42,6 +55,16 @@ RUN groupadd --gid 1001 executor && \
 # Generated code never needs setuid/setgid helpers. Remove these bits from the
 # executor image so kernel/page-cache bugs have no obvious privilege target.
 RUN find / -xdev \( -perm -4000 -o -perm -2000 \) -type f -exec chmod ug-s {} + || true
+
+# The selected sources arrive last: this is the only pip layer a maintainer
+# edit re-runs. First with their declared dependencies, resolved against the
+# installed set; then the exact sources again without dependencies.
+COPY deployment/docker/local-python-packages/ /tmp/kdcube-local-python-packages/
+RUN --mount=type=cache,target=/root/.cache/pip \
+    if [ -s /tmp/kdcube-pip/local-install.txt ]; then \
+      pip install -r /tmp/kdcube-pip/local-install.txt && \
+      pip install --no-deps --force-reinstall -r /tmp/kdcube-pip/local-install.txt; \
+    fi
 
 # --- Environment variables ---
 ENV PYTHONDONTWRITEBYTECODE=1 \
