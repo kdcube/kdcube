@@ -291,7 +291,6 @@ def create_direct_telegram_app(
     async def healthz() -> dict[str, Any]:
         return {"ok": True, "mode": "direct-telegram-local"}
 
-    @app.post(config.path)
     async def telegram_webhook(request: Request) -> dict[str, Any]:
         try:
             update = await request.json()
@@ -308,6 +307,12 @@ def create_direct_telegram_app(
             )
         except DirectTelegramRequestError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    # Request is imported lazily so direct-hosting users without FastAPI can
+    # still import the SDK module. Resolve the postponed annotation before
+    # FastAPI inspects the route signature.
+    telegram_webhook.__annotations__["request"] = Request
+    app.post(config.path)(telegram_webhook)
 
     return app
 

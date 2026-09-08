@@ -4,7 +4,7 @@ title: "Direct Agent Instruction Profiles"
 summary: "How direct Native ReAct, LangGraph, and Claude Code hosts compose SDK-owned workspace teaching, enabled capabilities, skills, and administrator customization."
 tags: ["runtime", "harness", "agents", "instructions", "profiles", "native-react", "langgraph", "claude-code"]
 keywords: ["direct agent instructions", "workspace-files", "lite:core", "additional_instructions", "Claude CLAUDE.md", "LangGraph system prompt"]
-updated_at: 2026-09-06
+updated_at: 2026-09-08
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/quickstart/run-agent-harness-from-python-README.md
@@ -106,7 +106,10 @@ ReAct channel syntax. It teaches:
 
 - KDCube accounting, communicator, conversation, attachment, file, and
   execution evidence boundaries;
-- current-turn `files/<scope>/<name>` paths and artifact contracts;
+- exact current-turn artifact mapping, where a contract path such as
+  `files/research/report.xlsx` maps to
+  `Path(OUTPUT_DIR) / "files/research/report.xlsx"` without dropping the
+  leading namespace;
 - the distinction between framework-native process files and hosted KDCube
   artifacts;
 - isolated execution without ambient network or secrets;
@@ -123,6 +126,12 @@ KDCube skills are materialized as native project skills under
 full skill body. Claude's native `Read`, `Write`, and `Edit` tools operate on
 its process workspace. User-facing deliverables are produced through the
 configured KDCube execution and rendering MCP tools.
+
+Conversation persistence does not require an embedding provider. The direct
+host always writes transcript rows to Postgres. When the selected embedding
+provider has a configured credential or endpoint, conversation search combines
+semantic, lexical, and trigram retrieval; otherwise it uses lexical and trigram
+retrieval without probing an unconfigured provider.
 
 ## Verify The Selection
 

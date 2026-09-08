@@ -639,6 +639,80 @@ def test_rewrite_exec_code_paths_does_not_rewrite_literal_under_current_turn_lit
     assert rewrites == []
 
 
+def test_rewrite_exec_code_paths_qualifies_output_dir_segment_join():
+    code = (
+        "from pathlib import Path\n"
+        "output_root = Path(OUTPUT_DIR)\n"
+        'research_dir = output_root / "files" / "research"\n'
+        'xlsx = research_dir / "research-data.xlsx"\n'
+    )
+
+    rewritten, rewrites = rewrite_exec_code_paths(
+        code,
+        turn_id="turn_2026-09-08-03-40-00-000",
+    )
+
+    assert (
+        'research_dir = output_root / "turn_2026-09-08-03-40-00-000/files" / "research"'
+        in rewritten
+    )
+    assert rewrites == [
+        {
+            "original": "files",
+            "rewritten": "turn_2026-09-08-03-40-00-000/files",
+        }
+    ]
+
+
+def test_rewrite_exec_code_paths_recognizes_output_dir_environment_alias():
+    code = (
+        "import os\n"
+        "from pathlib import Path\n"
+        "output_dir = Path(os.environ.get('OUTPUT_DIR', '/tmp/agent_artifacts'))\n"
+        'research_dir = output_dir / "files" / "research"\n'
+        'xlsx = research_dir / "research-data.xlsx"\n'
+    )
+
+    rewritten, rewrites = rewrite_exec_code_paths(
+        code,
+        turn_id="turn_2026-09-08-04-30-00-000",
+    )
+
+    assert (
+        'research_dir = output_dir / "turn_2026-09-08-04-30-00-000/files" / "research"'
+        in rewritten
+    )
+    assert rewrites == [
+        {
+            "original": "files",
+            "rewritten": "turn_2026-09-08-04-30-00-000/files",
+        }
+    ]
+
+
+def test_rewrite_exec_code_paths_qualifies_direct_output_dir_join():
+    code = (
+        "import pathlib\n"
+        'target = pathlib.Path(OUTPUT_DIR) / "git/projects" / "demo" / "README.md"\n'
+    )
+
+    rewritten, rewrites = rewrite_exec_code_paths(code, turn_id="turn_direct")
+
+    assert 'pathlib.Path(OUTPUT_DIR) / "turn_direct/git/projects"' in rewritten
+    assert rewrites == [
+        {"original": "git/projects", "rewritten": "turn_direct/git/projects"}
+    ]
+
+
+def test_rewrite_exec_code_paths_does_not_assume_arbitrary_out_variable_is_root():
+    code = 'OUT = Path("/tmp/unrelated")\ntarget = OUT / "files" / "report.txt"\n'
+
+    rewritten, rewrites = rewrite_exec_code_paths(code, turn_id="turn_direct")
+
+    assert rewritten == code
+    assert rewrites == []
+
+
 def test_build_exec_output_contract_rejects_invalid_visibility():
     contract, normalized, err = build_exec_output_contract([
         {

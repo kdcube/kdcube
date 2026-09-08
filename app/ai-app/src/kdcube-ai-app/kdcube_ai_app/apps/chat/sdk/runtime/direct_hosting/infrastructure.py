@@ -28,6 +28,7 @@ def activate_platform_descriptors(descriptors_dir: Path):
     os.environ["GLOBAL_SECRETS_YAML"] = str(root / "secrets.yaml")
     os.environ["ECONOMICS_YAML_DESCRIPTOR_PATH"] = str(root / "economics.yaml")
     os.environ["GATEWAY_YAML_PATH"] = str(root / "gateway.yaml")
+    os.environ["GATEWAY_COMPONENT"] = "proc"
 
     from kdcube_ai_app.apps.chat.sdk.config import get_settings
     from kdcube_ai_app.apps.chat.sdk.config_cache import clear_config_cache
@@ -42,6 +43,24 @@ def activate_platform_descriptors(descriptors_dir: Path):
     raw_storage = str(getattr(settings, "STORAGE_PATH", "") or "").strip()
     if raw_storage and not urlparse(raw_storage).scheme:
         settings.STORAGE_PATH = str((root / raw_storage).expanduser().resolve())
+    raw_bundle_storage = str(
+        getattr(settings.PLATFORM.APPLICATIONS, "BUNDLE_STORAGE_ROOT", "") or ""
+    ).strip()
+    if raw_bundle_storage and not urlparse(raw_bundle_storage).scheme:
+        bundle_storage = Path(raw_bundle_storage).expanduser()
+        if not bundle_storage.is_absolute():
+            bundle_storage = root / bundle_storage
+        settings.PLATFORM.APPLICATIONS.BUNDLE_STORAGE_ROOT = str(
+            bundle_storage.resolve()
+        )
+    raw_host_bundle_storage = str(
+        getattr(settings, "HOST_BUNDLE_STORAGE_PATH", "") or ""
+    ).strip()
+    if raw_host_bundle_storage and not urlparse(raw_host_bundle_storage).scheme:
+        host_bundle_storage = Path(raw_host_bundle_storage).expanduser()
+        if not host_bundle_storage.is_absolute():
+            host_bundle_storage = root / host_bundle_storage
+        settings.HOST_BUNDLE_STORAGE_PATH = str(host_bundle_storage.resolve())
     return settings
 
 

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from html import unescape
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
+from zipfile import BadZipFile, ZipFile
 
 
 def utc_now() -> str:
@@ -156,9 +158,67 @@ def print_evidence_summary(path: Path, payload: dict[str, Any]) -> None:
         )
 
 
+def recorded_tool_items(runtime_outdir: Path, tool_id: str) -> list[Any]:
+    """Return successful list items recorded for one tool in a direct turn."""
+    root = Path(runtime_outdir).expanduser().resolve()
+    index_path = root / "tool_calls_index.json"
+    try:
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    filenames = index.get(str(tool_id)) if isinstance(index, dict) else None
+    if not isinstance(filenames, list):
+        return []
+
+    items: list[Any] = []
+    for filename in filenames:
+        candidate = (root / str(filename)).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            continue
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        result = payload.get("ret") if isinstance(payload, dict) else None
+        if isinstance(result, dict) and "ok" in result:
+            if result.get("ok") is not True or result.get("error"):
+                continue
+            result = result.get("ret")
+        if isinstance(result, list):
+            items.extend(result)
+    return items
+
+
+def xlsx_contains_tool_evidence(path: Path, items: list[Any]) -> bool:
+    """Return whether an XLSX contains a title/URL pair from recorded tool rows."""
+    pairs = [
+        (str(item.get("title") or "").strip(), str(item.get("url") or "").strip())
+        for item in items
+        if isinstance(item, dict)
+    ]
+    pairs = [(title, url) for title, url in pairs if title and url]
+    if not pairs:
+        return False
+    try:
+        with ZipFile(Path(path).expanduser().resolve()) as archive:
+            corpus = "\n".join(
+                unescape(archive.read(name).decode("utf-8", errors="replace"))
+                for name in archive.namelist()
+                if name.startswith("xl/")
+                and (name.endswith(".xml") or name.endswith(".rels"))
+            )
+    except (OSError, BadZipFile):
+        return False
+    return any(title in corpus and url in corpus for title, url in pairs)
+
+
 __all__ = [
     "ConsoleEmitter",
     "print_evidence_summary",
+    "recorded_tool_items",
     "utc_now",
     "write_evidence_index",
+    "xlsx_contains_tool_evidence",
 ]

@@ -130,8 +130,33 @@ async def build_model_service(
     return ModelServiceBase(workflow)
 
 
+def embedding_service_if_configured(
+    service: ModelServiceBase | None,
+) -> ModelServiceBase | None:
+    """Expose semantic indexing only when its selected provider is usable."""
+    if service is None:
+        return None
+    config = getattr(service, "config", None)
+    embedder = getattr(config, "embedder_config", None) or {}
+    provider = str(embedder.get("provider") or "").strip().lower()
+    if provider == "custom":
+        return service if getattr(config, "custom_embedding_endpoint", None) else None
+    credential_field = {
+        "openai": "openai_api_key",
+        "anthropic": "claude_api_key",
+        "google": "google_api_key",
+        "hugging-face": "huggingface_api_key",
+        "huggingface": "huggingface_api_key",
+        "openrouter": "openrouter_api_key",
+    }.get(provider)
+    if credential_field and str(getattr(config, credential_field, "") or "").strip():
+        return service
+    return None
+
+
 __all__ = [
     "DirectModelSelection",
     "build_model_service",
     "configured_model_selection",
+    "embedding_service_if_configured",
 ]

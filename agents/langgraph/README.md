@@ -90,7 +90,9 @@ Turn one hosts a research-request attachment, searches with
 result with KDCube Web Fetch. Turn two resumes the same Postgres-backed graph
 thread. The model authors Python using `openpyxl`; the program makes an
 additional Web Search call through `agent_io_tools.tool_call` and creates an
-XLSX and HTML in the isolated turn workspace. The trusted supervisor executes
+XLSX and HTML in the isolated turn workspace. It consumes Web Search rows from
+the tool's `ret` result, and the runner verifies that a returned title and URL
+reached the workbook. The trusted supervisor executes
 the Web call under the same descriptor-selected tool policy. `write_pdf` then
 renders the HTML into a polished PDF.
 

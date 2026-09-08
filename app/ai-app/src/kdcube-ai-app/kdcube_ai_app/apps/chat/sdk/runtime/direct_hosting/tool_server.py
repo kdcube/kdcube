@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, AsyncIterator, Literal
 
 from pydantic import Field
+from typing_extensions import TypedDict
 import yaml
 
 from kdcube_ai_app.apps.chat.sdk.runtime.direct_harness import DirectAgentHarness
@@ -16,6 +18,9 @@ from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.infrastructure import (
     activate_platform_descriptors,
     direct_harness_config,
     platform_exec_profile,
+)
+from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.lifecycle import (
+    direct_host_process_lifespan,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.configuration import (
     configured_agent_tool_config,
@@ -33,27 +38,69 @@ from kdcube_ai_app.apps.chat.sdk.runtime.mcp.server import KDCubeMCPServer
 from kdcube_ai_app.apps.chat.sdk.tools.mcp.mcp_app_transport import run_stdio
 
 
+class DirectArtifactContract(TypedDict):
+    """One output file that isolated execution must preserve."""
+
+    filepath: Annotated[
+        str,
+        Field(
+            description=(
+                "OUTPUT_DIR-relative path beginning with files/ or git/projects/"
+            )
+        ),
+    ]
+    description: Annotated[str, Field(description="What the output file contains")]
+    visibility: Annotated[
+        Literal["internal", "external"],
+        Field(
+            description=(
+                "external exposes the file to the user; internal keeps it as turn evidence"
+            )
+        ),
+    ]
+
+
+@asynccontextmanager
+async def tool_server_lifespan(_app: KDCubeMCPServer) -> AsyncIterator[dict[str, Any]]:
+    """Release process-wide renderer resources before the MCP event loop closes."""
+    async with direct_host_process_lifespan():
+        yield {}
+
+
 def build_app(runtime: DirectToolRuntime) -> KDCubeMCPServer:
     """Expose the current turn's trusted execution and rendering bridge."""
-    app = KDCubeMCPServer("kdcube_harness")
+    app = KDCubeMCPServer("kdcube_harness", lifespan=tool_server_lifespan)
 
     @app.tool(
         name="execute_python",
         description=(
             "Execute agent-authored Python in KDCube's configured isolated runtime. "
+            "The source is an asynchronous module body: use await directly at module "
+            "scope and never call asyncio.run() or run_until_complete(). "
             "Use it for computation and file creation. Every kept output must be "
             "declared in artifacts as {filepath, description, visibility}; paths "
-            "are current-turn OUTPUT_DIR-relative files/... paths."
+            "are current-turn OUTPUT_DIR-relative files/... paths. Write them below "
+            "Path(OUTPUT_DIR) and create their parent directories. OUTPUT_DIR is "
+            "injected by the runtime; do not replace it with another path."
         ),
     )
     async def execute_python(
         code: Annotated[
             str,
-            Field(description="Complete Python source authored for this invocation"),
+            Field(
+                description=(
+                    "Complete asynchronous module-body Python source; top-level await "
+                    "is supported and event-loop launchers are invalid"
+                )
+            ),
         ],
         artifacts: Annotated[
-            list[dict[str, Any]],
-            Field(description="Required output artifact contract"),
+            list[DirectArtifactContract],
+            Field(
+                description=(
+                    "Required output files with filepath, description, and visibility"
+                )
+            ),
         ],
         program_name: Annotated[
             str, Field(description="Short execution label")
@@ -195,4 +242,9 @@ if __name__ == "__main__":
     main()
 
 
-__all__ = ["build_app", "main"]
+__all__ = [
+    "DirectArtifactContract",
+    "build_app",
+    "main",
+    "tool_server_lifespan",
+]

@@ -2038,8 +2038,8 @@ class ContextBrowser:
         ctx_client = ctx_client or self.ctx_client
         conv_idx = conv_idx or (getattr(ctx_client, "idx", None) if ctx_client else None)
         model_service = model_service or self.svc
-        if not conv_idx or not model_service:
-            raise ValueError("ContextBrowser.search requires conv_idx and model_service.")
+        if not conv_idx:
+            raise ValueError("ContextBrowser.search requires conv_idx.")
         return await search_context(
             conv_idx=conv_idx,
             ctx_client=ctx_client,

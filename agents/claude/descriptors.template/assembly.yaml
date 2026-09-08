@@ -2,6 +2,9 @@ context:
   tenant: standalone
   project: agent-harness-claude
 
+paths:
+  host_bundle_storage_path: ../output/bundle-storage
+
 infra:
   postgres:
     host: 127.0.0.1
@@ -33,6 +36,8 @@ secrets:
 platform:
   services:
     proc:
+      bundles:
+        bundle_storage_root: ../output/bundle-storage
       tools:
         web_search:
           web_search_primary_backend: duckduckgo
@@ -40,7 +45,7 @@ platform:
       exec:
         py_code_exec_image: py-code-exec:latest
         py_code_exec_timeout: 600
-        py_code_exec_network_mode: none
+        py_code_exec_network_mode: auto
         py_code_exec_container_strategy: split
         max_file_bytes: 100m
         max_exec_workspace_delta_bytes: 250m

@@ -377,6 +377,12 @@ identifies the current calling session and accounting lineage. Native's
 `recall_conversation_id` is the separate conversation used by its explicit
 cross-conversation search demonstration.
 
+Postgres transcript persistence and text recall work without an embedding
+credential. With a configured embedding provider, the search path combines
+semantic, lexical, and trigram retrieval. Without one, it uses lexical and
+trigram retrieval and does not contact a default provider. Each runner prints
+the active search mode at startup.
+
 The descriptor uses the same canonical tool IDs for every agent. Framework
 adapters translate those IDs only at their model-facing boundary:
 
@@ -470,8 +476,16 @@ platform:
     proc:
       exec:
         py_code_exec_image: py-code-exec:latest
-        py_code_exec_network_mode: none
+        py_code_exec_network_mode: auto
 ```
+
+`auto` configures the trusted supervisor's network. From a host process it uses
+Docker host networking; from a processor container it shares that processor's
+network namespace, so descriptor-selected tools can reach provider APIs and
+private services. The split executor that runs model-authored Python always
+starts in a separate container with `--network none`. It reaches an allowed
+tool only through the authenticated supervisor socket and never receives the
+tool's credentials.
 
 To store conversation files, artifacts, turn records, and execution archives
 in S3, select an S3 URI instead:
@@ -527,8 +541,10 @@ The full two-turn scenario:
 2. Continues the conversation, authors Python, and invokes isolated code
    execution.
 3. The generated program calls `web_tools.web_search` through
-   `agent_io_tools.tool_call`, then creates an XLSX evidence table and
-   print-ready HTML.
+   `agent_io_tools.tool_call`, validates its `{ok, error, ret}` result envelope,
+   and consumes the returned rows, then creates an XLSX evidence table and
+   print-ready HTML. The runner verifies that a returned title and URL reached
+   the workbook.
 4. The agent invokes `write_pdf`; KDCube renders and hosts the final PDF.
 
 A successful run ends with:

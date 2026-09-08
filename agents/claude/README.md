@@ -70,9 +70,11 @@ override them:
   --session-id terminal-1
 ```
 
-For API-key execution, use `--provider anthropic` and set
-`platform.services.anthropic.claude_code_key` in the generated secrets
-descriptor.
+For API-key execution, use `--provider anthropic`; the setup command writes the
+key to `platform.services.anthropic.api_key` in the generated secrets
+descriptor. The runner projects that descriptor field to the standard
+`ANTHROPIC_API_KEY` subprocess input without making environment variables a
+user-facing configuration surface.
 
 The first Python command creates this runner's `.venv`; no prebuilt environment
 is shipped. Installing `requirements.txt` installs the SDK and this runner's
@@ -92,7 +94,9 @@ configured KDCube boundaries.
 Turn two resumes the same Git-backed Claude session. Claude authors Python
 using `openpyxl`; that program makes an additional KDCube Web Search call
 through `agent_io_tools.tool_call` and creates an XLSX and HTML in the isolated
-turn workspace. The trusted supervisor executes the Web call under the same
+turn workspace. It consumes Web Search rows from the tool's `ret` result, and
+the runner verifies that a returned title and URL reached the workbook. The
+trusted supervisor executes the Web call under the same
 descriptor-selected tool policy. A second MCP operation calls
 `rendering_tools.write_pdf` to render the HTML into a polished PDF. The same
 server exposes Markdown-to-DOCX and section-HTML-to-PPTX operations.

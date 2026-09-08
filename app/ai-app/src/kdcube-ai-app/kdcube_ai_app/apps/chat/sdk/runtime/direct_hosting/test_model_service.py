@@ -82,6 +82,42 @@ def test_registered_model_keeps_backward_compatible_provider_inference(
     )
 
 
+@pytest.mark.parametrize(
+    ("provider", "field"),
+    (
+        ("openai", "openai_api_key"),
+        ("anthropic", "claude_api_key"),
+        ("google", "google_api_key"),
+        ("hugging-face", "huggingface_api_key"),
+        ("openrouter", "openrouter_api_key"),
+    ),
+)
+def test_embedding_service_requires_selected_provider_credential(
+    provider: str,
+    field: str,
+) -> None:
+    config = SimpleNamespace(embedder_config={"provider": provider})
+    service = SimpleNamespace(config=config)
+
+    assert model_service.embedding_service_if_configured(service) is None
+
+    setattr(config, field, "configured-secret")
+    assert model_service.embedding_service_if_configured(service) is service
+
+
+def test_custom_embedding_service_requires_endpoint() -> None:
+    config = SimpleNamespace(
+        embedder_config={"provider": "custom"},
+        custom_embedding_endpoint=None,
+    )
+    service = SimpleNamespace(config=config)
+
+    assert model_service.embedding_service_if_configured(service) is None
+
+    config.custom_embedding_endpoint = "http://127.0.0.1:8080/embed"
+    assert model_service.embedding_service_if_configured(service) is service
+
+
 def test_unknown_model_without_provider_fails_instead_of_falling_back(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

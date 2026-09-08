@@ -28,8 +28,10 @@ from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.channels import (
 from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.evidence import (
     ConsoleEmitter,
     print_evidence_summary,
+    recorded_tool_items,
     utc_now,
     write_evidence_index,
+    xlsx_contains_tool_evidence,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.infrastructure import (
     activate_platform_descriptors,
@@ -50,10 +52,14 @@ from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.instructions import (
 from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.local_setup import (
     configure,
 )
+from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.lifecycle import (
+    direct_host_process_lifespan,
+)
 from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.model_service import (
     DirectModelSelection,
     build_model_service,
     configured_model_selection,
+    embedding_service_if_configured,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.tool_runtime import (
     DirectToolRuntime,
@@ -100,11 +106,14 @@ __all__ = [
     "configured_web_search",
     "configured_instruction_selection",
     "configured_model_selection",
+    "embedding_service_if_configured",
     "compose_provider_native_instructions",
     "completed_direct_turn_result",
     "direct_harness_config",
+    "direct_host_process_lifespan",
     "platform_exec_profile",
     "print_evidence_summary",
+    "recorded_tool_items",
     "postgres_label",
     "postgres_url",
     "PROVIDER_NATIVE_WORKSPACE_FILES_PROFILE",
@@ -118,4 +127,5 @@ __all__ = [
     "verify_docker_image",
     "verify_playwright_chromium",
     "write_evidence_index",
+    "xlsx_contains_tool_evidence",
 ]

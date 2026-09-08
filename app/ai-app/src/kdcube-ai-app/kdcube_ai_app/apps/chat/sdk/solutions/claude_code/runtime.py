@@ -11,6 +11,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass, field
 from typing import Callable, Literal
 
@@ -227,14 +228,13 @@ def _session_commit_identity(config: ClaudeCodeSessionStoreConfig) -> tuple[str,
 
 
 def _ensure_local_git_repo(*, local_root: pathlib.Path, config: ClaudeCodeSessionStoreConfig) -> None:
-    if (local_root / ".git").exists():
-        return
-    local_root.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        ["git", "init", str(local_root)],
-        check=True,
-        capture_output=True,
-    )
+    if not (local_root / ".git").exists():
+        local_root.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            ["git", "init", str(local_root)],
+            check=True,
+            capture_output=True,
+        )
     name, email = _session_commit_identity(config)
     _ensure_git_commit_identity(repo_root=local_root, name=name, email=email)
     subprocess.run(
@@ -242,6 +242,42 @@ def _ensure_local_git_repo(*, local_root: pathlib.Path, config: ClaudeCodeSessio
         check=True,
         capture_output=True,
     )
+
+
+_TRANSIENT_GIT_LOCK_MARKERS = (
+    "another git process",
+    "cannot lock ref",
+    "index.lock",
+)
+
+
+def _run_local_git_mutation(
+    *,
+    repo_root: pathlib.Path,
+    args: list[str],
+    attempts: int = 5,
+) -> subprocess.CompletedProcess[str]:
+    """Run a local Git write, retrying only short-lived lock conflicts."""
+    command = ["git", "-C", str(repo_root), *args]
+    last: subprocess.CompletedProcess[str] | None = None
+    for attempt in range(max(1, attempts)):
+        last = subprocess.run(command, capture_output=True, text=True)
+        if last.returncode == 0:
+            return last
+        detail = "\n".join(
+            part.strip() for part in (last.stderr, last.stdout) if part and part.strip()
+        )
+        transient = any(
+            marker in detail.lower() for marker in _TRANSIENT_GIT_LOCK_MARKERS
+        )
+        if not transient or attempt + 1 >= max(1, attempts):
+            operation = args[0] if args else "operation"
+            raise RuntimeError(
+                f"Claude session-store git {operation} failed: "
+                f"{detail or f'exit code {last.returncode}'}"
+            )
+        time.sleep(0.1 * (2**attempt))
+    raise AssertionError("unreachable")
 
 
 def _clear_session_root(*, local_root: pathlib.Path) -> None:
@@ -515,26 +551,23 @@ def _publish_claude_code_session_store_sync(
     local_root.mkdir(parents=True, exist_ok=True)
     repo_root = _ensure_session_repo(config=config, repo_url=repo_url, env=git_env)
     _ensure_local_git_repo(local_root=local_root, config=config)
-    subprocess.run(
-        ["git", "-C", str(local_root), "add", "-A", "--", "."],
-        check=True,
-        capture_output=True,
+    _run_local_git_mutation(
+        repo_root=local_root,
+        args=["add", "-A", "--", "."],
     )
     committed = False
     message = f"Claude session snapshot {config.conversation_id}"
     has_head = _git_has_head(repo_root=local_root)
     if not has_head:
-        subprocess.run(
-            ["git", "-C", str(local_root), "commit", "--allow-empty", "-m", message],
-            check=True,
-            capture_output=True,
+        _run_local_git_mutation(
+            repo_root=local_root,
+            args=["commit", "--allow-empty", "-m", message],
         )
         committed = True
     elif _git_has_staged_changes(repo_root=local_root):
-        subprocess.run(
-            ["git", "-C", str(local_root), "commit", "-m", message],
-            check=True,
-            capture_output=True,
+        _run_local_git_mutation(
+            repo_root=local_root,
+            args=["commit", "-m", message],
         )
         committed = True
 

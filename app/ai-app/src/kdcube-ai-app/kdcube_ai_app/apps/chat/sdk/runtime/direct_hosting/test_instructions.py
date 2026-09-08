@@ -114,11 +114,19 @@ def test_provider_native_profile_teaches_direct_workspace_and_capabilities() -> 
     assert "[KDCUBE DIRECT AGENT HARNESS]" in text
     assert "[CURRENT-TURN ARTIFACT WORKSPACE]" in text
     assert "[CODE IS YOUR HANDS — execute_python]" in text
+    assert "[ISOLATED PYTHON EXECUTION]" in text
+    assert "never call `asyncio.run()`" in text
+    assert "await agent_io_tools.tool_call" in text
+    assert "`OUTPUT_DIR` is already injected as the artifact root" in text
+    assert "Path(OUTPUT_DIR)" in text
+    assert 'Path(OUTPUT_DIR) / "files/research/report.xlsx"' in text
+    assert "keep the leading `files/` or `git/projects/` namespace" in text
     assert "already materialized in the current-turn workspace" in text
     assert "pull_files" not in text
     assert "[DOCUMENT RENDERING - `write_pdf`, `write_docx`]" in text
     assert "[WEB RESEARCH - web_search + web_fetch]" in text
     assert "use `web_fetch` to inspect at least one selected source page" in text
+    assert "consume the result rows from `ret`" in text
     assert "[ACTIVE SKILLS]" in text
     assert "[START AGENT ADMIN CUSTOMIZATION - HARD OVERRIDE]" in text
     assert text.endswith("[END AGENT ADMIN CUSTOMIZATION]")

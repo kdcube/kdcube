@@ -4,6 +4,7 @@ import asyncio
 import base64
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
 from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.channels import (
@@ -14,7 +15,9 @@ from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.telegram import (
     DirectTelegramCredentials,
     DirectTelegramRequestError,
     DirectTelegramWebhook,
+    TELEGRAM_WEBHOOK_SECRET_HEADER,
     configured_direct_telegram,
+    create_direct_telegram_app,
     resolve_direct_telegram_credentials,
 )
 
@@ -142,6 +145,38 @@ async def test_webhook_rejects_a_missing_or_invalid_secret() -> None:
         await webhook.process(provided_secret="", update=_update(1))
     with pytest.raises(DirectTelegramRequestError, match="secret_invalid"):
         await webhook.process(provided_secret="wrong", update=_update(1))
+
+
+@pytest.mark.asyncio
+async def test_fastapi_route_injects_the_request_body() -> None:
+    webhook = DirectTelegramWebhook(
+        credentials=DirectTelegramCredentials("bot-token", "expected"),
+        run_turn=AsyncMock(return_value=_result()),
+        deliver=AsyncMock(return_value={"telegram_delivery": {"ok": True}}),
+    )
+    app = create_direct_telegram_app(
+        config=DirectTelegramConfig(
+            host="127.0.0.1",
+            port=8787,
+            path="/telegram/webhook",
+            bot_token_ref="platform.services.telegram.bot_token",
+            webhook_secret_ref="platform.services.telegram.webhook_secret",
+        ),
+        webhook=webhook,
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://direct-agent.test",
+    ) as client:
+        response = await client.post(
+            "/telegram/webhook",
+            headers={TELEGRAM_WEBHOOK_SECRET_HEADER: "expected"},
+            json=_update(2),
+        )
+
+    assert response.status_code == 200
+    assert response.json()["stage"] == "completed-inline"
 
 
 @pytest.mark.asyncio

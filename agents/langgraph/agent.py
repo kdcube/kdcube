@@ -47,10 +47,15 @@ from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.instructions import (  #
     compose_provider_native_instructions,
     configured_instruction_selection,
 )
+from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.lifecycle import (  # noqa: E402
+    direct_host_process_lifespan,
+)
 from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.evidence import (  # noqa: E402
     ConsoleEmitter,
     print_evidence_summary,
+    recorded_tool_items,
     write_evidence_index,
+    xlsx_contains_tool_evidence,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.channels import (  # noqa: E402
     DirectInputAttachment,
@@ -73,6 +78,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.workspace import (  # no
 from agents.langgraph.tools import build_tools  # noqa: E402
 from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.model_service import (  # noqa: E402
     build_model_service,
+    embedding_service_if_configured,
 )
 from kdcube_ai_app.apps.chat.emitters import ChatCommunicator  # noqa: E402
 from kdcube_ai_app.apps.chat.sdk.frameworks.langchain import (
@@ -453,6 +459,7 @@ async def main_async(args: argparse.Namespace) -> None:
         return
 
     service = await build_model_service(role=ROLE, check_only=args.check)
+    embedding_service = embedding_service_if_configured(service)
     selected_model = service.config.ensure_role(ROLE)
     print(f"model: {selected_model['provider']}/{selected_model['model']}")
     if selected_model["provider"] == "custom":
@@ -461,6 +468,14 @@ async def main_async(args: argparse.Namespace) -> None:
             "model context: "
             f"{service.config.custom_model_num_ctx or 'gateway default'}"
         )
+    print(
+        "conversation search: "
+        + (
+            "semantic + lexical + trigram"
+            if embedding_service is not None
+            else "lexical + trigram (embedding provider not configured)"
+        )
+    )
     model = KDCubeChatModel(
         models_service=service,
         role=ROLE,
@@ -489,7 +504,7 @@ async def main_async(args: argparse.Namespace) -> None:
         request_root.mkdir(parents=True, exist_ok=True)
         request_harness = DirectAgentHarness(
             config=request_config,
-            model_service=service,
+            model_service=embedding_service,
             emitter=ConsoleEmitter(request_root / "communicator.jsonl"),
         )
         request_run_config = {
@@ -569,7 +584,7 @@ async def main_async(args: argparse.Namespace) -> None:
     emitter = ConsoleEmitter(run_root / "communicator.jsonl")
     harness = DirectAgentHarness(
         config=harness_config,
-        model_service=service,
+        model_service=embedding_service,
         emitter=emitter,
     )
     print(f"run output: {run_root}")
@@ -588,7 +603,8 @@ async def main_async(args: argparse.Namespace) -> None:
     prompts = [
         (
             f"The attached research request asks about {topic}. Call web_search for recent, "
-            "concrete information, then call web_fetch on at least one selected result URL. "
+            "concrete information; it returns snippets and URLs only. Then issue a separate "
+            "web_fetch call on at least one selected result URL before completing the turn. "
             "Return five sourced findings grounded in the inspected page and retain them for "
             "the next turn."
         ),
@@ -599,9 +615,16 @@ async def main_async(args: argparse.Namespace) -> None:
             "params={'queries': 'site:python.org current stable Python release', "
             "'objective': 'Verify the stable release used in this report', 'n': 3}, "
             "call_reason='Verify release from generated code', "
-            "tool_id='web_tools.web_search')`. Use that returned evidence in the workbook. "
+            "tool_id='web_tools.web_search')`. The result is an envelope with `ok` and `ret`; "
+            "raise if it is not ok or ret is empty, then include at least the first returned "
+            "title and URL in the workbook. "
             "Do not import `web_tools`; the isolated runtime supplies the handle from the "
-            "configured tool catalog. The Python must use openpyxl to create "
+            "configured tool catalog. `OUTPUT_DIR` is already injected: do not assign it "
+            "and do not read it from os.environ. Create the output directory exactly with "
+            "`research_dir = Path(OUTPUT_DIR) / 'files/research'`. Every artifacts item must "
+            "use exactly `filepath`, `description`, and `visibility` keys; visibility is "
+            "`external` for the XLSX and `internal` for the HTML. The Python must use "
+            "openpyxl to create "
             "files/research/research-data.xlsx and create polished, print-ready HTML at "
             "files/research/research-brief.html. Declare the XLSX external and the HTML "
             "internal in the artifact contract. After execution succeeds, call write_pdf "
@@ -689,6 +712,26 @@ async def main_async(args: argparse.Namespace) -> None:
         raise RuntimeError(
             f"agent completed without required artifacts: {', '.join(missing)}"
         )
+    nested_search_items = recorded_tool_items(
+        deliverable_workspace.runtime_outdir, WEB_SEARCH_TOOL_ID
+    )
+    if not nested_search_items:
+        raise RuntimeError(
+            "generated Python called Web Search but received no recorded results; "
+            "verify trusted-supervisor networking and Web Search credentials"
+        )
+    if not xlsx_contains_tool_evidence(
+        deliverable_workspace.current_file("research/research-data.xlsx"),
+        nested_search_items,
+    ):
+        raise RuntimeError(
+            "research-data.xlsx does not contain a title and URL returned by the "
+            "generated program's nested Web Search call"
+        )
+    print(
+        f"[isolated execution] nested Web Search returned "
+        f"{len(nested_search_items)} item(s)"
+    )
     print("demonstration: PASS")
 
 
@@ -739,7 +782,13 @@ def main() -> None:
         help="Run the local inline Telegram webhook configured under agent.ingress.telegram.",
     )
     try:
-        asyncio.run(main_async(parser.parse_args()))
+        args = parser.parse_args()
+
+        async def run() -> None:
+            async with direct_host_process_lifespan():
+                await main_async(args)
+
+        asyncio.run(run())
     except KeyboardInterrupt:
         pass
 

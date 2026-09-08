@@ -44,11 +44,16 @@ from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.instructions import (  #
     configured_instruction_selection,
     native_react_instruction_blocks,
 )
+from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.lifecycle import (  # noqa: E402
+    direct_host_process_lifespan,
+)
 from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.evidence import (  # noqa: E402
     ConsoleEmitter,
     print_evidence_summary,
+    recorded_tool_items,
     utc_now,
     write_evidence_index,
+    xlsx_contains_tool_evidence,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.channels import (  # noqa: E402
     DirectInputAttachment,
@@ -66,6 +71,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.workspace import (  # no
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.model_service import (  # noqa: E402
     build_model_service,
+    embedding_service_if_configured,
 )
 from kdcube_ai_app.apps.chat.emitters import ChatCommunicator  # noqa: E402
 from kdcube_ai_app.apps.chat.sdk.protocol import (  # noqa: E402
@@ -242,6 +248,7 @@ async def build_turn(
     max_iterations: int,
     max_tokens: int,
     service: ModelServiceBase,
+    embedding_service: ModelServiceBase | None,
     context_client: Any,
     comm: ChatCommunicator,
     tool_config: AgentToolConfig,
@@ -277,7 +284,7 @@ async def build_turn(
     browser = ContextBrowser(
         ctx_client=context_client,
         logger=logger,
-        model_service=service,
+        model_service=embedding_service,
         runtime_ctx=runtime,
     )
     await browser.load_timeline()
@@ -349,6 +356,7 @@ async def run_turn(
     root: Path,
     config: dict[str, Any],
     service: ModelServiceBase,
+    embedding_service: ModelServiceBase | None,
     harness: DirectAgentHarness,
     tool_config: AgentToolConfig,
     exec_runtime: dict[str, Any] | None,
@@ -375,6 +383,7 @@ async def run_turn(
             max_iterations=int(agent_config.get("max_iterations") or 8),
             max_tokens=int(agent_config.get("max_tokens") or 12000),
             service=service,
+            embedding_service=embedding_service,
             context_client=turn.conversation_client,
             comm=turn.comm,
             tool_config=tool_config,
@@ -500,6 +509,7 @@ async def main_async(args: argparse.Namespace) -> None:
             check_only=args.check,
         )
     )
+    embedding_service = embedding_service_if_configured(service)
     root = configured_run_directory(config, config_path=config_path)
     harness_config = direct_harness_config(
         settings=settings,
@@ -550,6 +560,14 @@ async def main_async(args: argparse.Namespace) -> None:
                 "model context: "
                 f"{service.config.custom_model_num_ctx or 'gateway default'}"
             )
+        print(
+            "conversation search: "
+            + (
+                "semantic + lexical + trigram"
+                if embedding_service is not None
+                else "lexical + trigram (embedding provider not configured)"
+            )
+        )
     print(f"tools: {', '.join(tool_ids) or '(none)'}")
     print(f"instruction profile: {instruction_selection.profile}")
     print(
@@ -588,7 +606,7 @@ async def main_async(args: argparse.Namespace) -> None:
             check_root = Path(temp_root)
             check_harness = DirectAgentHarness(
                 config=harness_config,
-                model_service=service,
+                model_service=embedding_service,
                 emitter=ConsoleEmitter(check_root / "communicator.jsonl"),
             )
             solver, _browser, _comm, _runtime, tools = await build_turn(
@@ -599,6 +617,7 @@ async def main_async(args: argparse.Namespace) -> None:
                 max_iterations=int(agent_config.get("max_iterations") or 8),
                 max_tokens=int(agent_config.get("max_tokens") or 12000),
                 service=service,
+                embedding_service=embedding_service,
                 context_client=_ConstructionContextClient(check_root / "context"),
                 comm=check_harness.communicator(
                     conversation_id=agent_input.conversation_id,
@@ -641,7 +660,7 @@ async def main_async(args: argparse.Namespace) -> None:
         request_root.mkdir(parents=True, exist_ok=True)
         request_harness = DirectAgentHarness(
             config=request_config,
-            model_service=service,
+            model_service=embedding_service,
             emitter=ConsoleEmitter(request_root / "communicator.jsonl"),
         )
         async with request_harness:
@@ -652,6 +671,7 @@ async def main_async(args: argparse.Namespace) -> None:
                 root=request_root,
                 config=config,
                 service=service,
+                embedding_service=embedding_service,
                 harness=request_harness,
                 tool_config=tool_config,
                 exec_runtime=exec_runtime,
@@ -701,7 +721,7 @@ async def main_async(args: argparse.Namespace) -> None:
     emitter = ConsoleEmitter(run_root / "communicator.jsonl")
     harness = DirectAgentHarness(
         config=harness_config,
-        model_service=service,
+        model_service=embedding_service,
         emitter=emitter,
     )
     topic = str(
@@ -728,7 +748,9 @@ async def main_async(args: argparse.Namespace) -> None:
         "params={'queries': 'site:python.org current stable Python release', "
         "'objective': 'Verify the stable release used in this report', 'n': 3}, "
         "call_reason='Verify release from generated code', "
-        "tool_id='web_tools.web_search')`. Use that returned evidence in the workbook. "
+        "tool_id='web_tools.web_search')`. The result is an envelope with `ok` and `ret`; "
+        "raise if it is not ok or ret is empty, then include at least the first returned "
+        "title and URL in the workbook. "
         "Do not import `web_tools`; the isolated runtime supplies the handle from the "
         "configured tool catalog. The Python must use openpyxl to create "
         "files/research/research-data.xlsx and must create a polished, print-ready HTML brief "
@@ -754,8 +776,10 @@ async def main_async(args: argparse.Namespace) -> None:
         first, first_turn_id, first_sources, first_turn = await run_turn(
             prompt=(
                 f"The attached research-request.md asks about {topic}. "
-                "Call web_tools.web_search for recent, concrete information about it, then "
-                "call web_tools.web_fetch on at least one selected result URL. Return five "
+                "Call web_tools.web_search with fetch_content=false for recent, concrete "
+                "information about it. Then issue a separate web_tools.web_fetch call on at "
+                "least one selected result URL, even if a search result already contains "
+                "page content. Return five "
                 "sourced findings grounded in the inspected page and retain them for the next turn."
             ),
             turn_number=1,
@@ -763,6 +787,7 @@ async def main_async(args: argparse.Namespace) -> None:
             root=run_root,
             config=config,
             service=service,
+            embedding_service=embedding_service,
             harness=harness,
             tool_config=tool_config,
             exec_runtime=exec_runtime,
@@ -788,6 +813,7 @@ async def main_async(args: argparse.Namespace) -> None:
             root=run_root,
             config=config,
             service=service,
+            embedding_service=embedding_service,
             harness=harness,
             tool_config=tool_config,
             exec_runtime=exec_runtime,
@@ -815,6 +841,7 @@ async def main_async(args: argparse.Namespace) -> None:
                 root=run_root,
                 config=config,
                 service=service,
+                embedding_service=embedding_service,
                 harness=harness,
                 tool_config=tool_config,
                 exec_runtime=exec_runtime,
@@ -852,15 +879,34 @@ async def main_async(args: argparse.Namespace) -> None:
         )
         print_evidence_summary(evidence_path, evidence)
     second_turn_root = run_root / second_turn_id
-    missing = [
-        name
+    artifact_paths = {
+        name: next(iter(second_turn_root.rglob(name)), None)
         for name in ("research-brief.pdf", "research-data.xlsx")
-        if not list(second_turn_root.rglob(name))
-    ]
+    }
+    missing = [name for name, path in artifact_paths.items() if path is None]
     if missing:
         raise RuntimeError(
             f"agent completed without required artifacts: {', '.join(missing)}"
         )
+    nested_search_items = recorded_tool_items(
+        second_turn_root / "out", WEB_SEARCH_TOOL_ID
+    )
+    if not nested_search_items:
+        raise RuntimeError(
+            "generated Python called Web Search but received no recorded results; "
+            "verify trusted-supervisor networking and Web Search credentials"
+        )
+    workbook_path = artifact_paths["research-data.xlsx"]
+    assert workbook_path is not None
+    if not xlsx_contains_tool_evidence(workbook_path, nested_search_items):
+        raise RuntimeError(
+            "research-data.xlsx does not contain a title and URL returned by the "
+            "generated program's nested Web Search call"
+        )
+    print(
+        f"[isolated execution] nested Web Search returned "
+        f"{len(nested_search_items)} item(s)"
+    )
     print("demonstration: PASS")
 
 
@@ -916,7 +962,11 @@ def main() -> None:
     )
     args = parser.parse_args()
     try:
-        asyncio.run(main_async(args))
+        async def run() -> None:
+            async with direct_host_process_lifespan():
+                await main_async(args)
+
+        asyncio.run(run())
     except KeyboardInterrupt:
         pass
 

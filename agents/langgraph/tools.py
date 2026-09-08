@@ -58,39 +58,57 @@ def build_tools(
         return runtime
 
     @tool
-    async def web_search(query: str, max_results: int = 5) -> str:
+    async def web_search(
+        queries: str | list[str],
+        objective: str = "",
+        n: int = 5,
+        fetch_content: bool = False,
+        use_llm: bool = False,
+    ) -> str:
         """Search with KDCube Web Search. Returns title, excerpt, and URL rows."""
-        limit = max(1, min(int(max_results or 5), 8))
+        limit = max(1, min(int(n or 5), 8))
         try:
             rows = _normalise_results(
                 await require_runtime().invoke_tool(
                     tool_id=WEB_SEARCH_TOOL_ID,
-                    params={"queries": query, "objective": query, "n": limit},
+                    params={
+                        "queries": queries,
+                        "objective": objective or None,
+                        "n": limit,
+                        "fetch_content": bool(fetch_content),
+                        "use_llm": bool(use_llm),
+                    },
                     call_reason="Search the public web",
                 )
             )
             return json.dumps(
-                {"ok": True, "query": query, "results": rows},
+                {"ok": True, "queries": queries, "results": rows},
                 ensure_ascii=False,
             )
         except Exception as exc:
             return json.dumps(
-                {"ok": False, "query": query, "error": str(exc), "results": []}
+                {
+                    "ok": False,
+                    "queries": queries,
+                    "error": str(exc),
+                    "results": [],
+                }
             )
 
     @tool
     async def web_fetch(
-        url: str,
+        urls: str | list[str],
         objective: str = "",
+        refinement: str = "none",
     ) -> str:
-        """Fetch one selected result through KDCube's governed Web Fetch."""
+        """Fetch selected URLs through KDCube's governed Web Fetch."""
         try:
             fetched = await require_runtime().invoke_tool(
                 tool_id=WEB_FETCH_TOOL_ID,
                 params={
-                    "urls": [url],
+                    "urls": urls,
                     "objective": objective or None,
-                    "refinement": "none",
+                    "refinement": refinement,
                 },
                 call_reason="Fetch a selected web source",
             )
@@ -101,7 +119,7 @@ def build_tools(
             )
         except Exception as exc:
             return json.dumps(
-                {"ok": False, "url": url, "error": str(exc), "result": None}
+                {"ok": False, "urls": urls, "error": str(exc), "result": None}
             )
 
     @tool

@@ -94,13 +94,10 @@ class WebTools:
            "Array of string queries (rephrases/synonyms) or a single query string. Query results might be large. Prefer max 2 queries at a time"
         )],
 
-        # queries: Annotated[str | list[str], (
-        #     "Array of string queries (rephrases/synonyms) or a single query string. Variants improve recall/diversity."
-        # )],
-        objective: Annotated[Optional[str], "Optional search objective (goal/question). Used for snippet relevance scoring and content refinement."],
-        # refinement: Annotated[str, "Post-fetch content refinement: 'none'|'balanced'|'recall'|'precision'"] = "balanced",
+        objective: Annotated[Optional[str], "Optional search objective (goal/question). Used for snippet relevance scoring and content refinement."] = None,
         n: Annotated[int, "Max unique results (1-8). Prefer max 5", {"min": 1, "max": 20}] = 8,
-        # fetch_content: Annotated[bool, "If true, fetch full page content according to 'refinement' option. Increase tokens as stated in refinement modes. Use False if you need to decide the fetch on your own. If false, return ranked snippets/URLs only (no content attr)."] = True,
+        fetch_content: Annotated[bool, "When true, fetch page content during search. When false, return ranked snippets and URLs so selected pages can be inspected separately with web_fetch."] = True,
+        use_llm: Annotated[bool, "When true, use neural relevance scoring and content refinement. When false, use provider ranking without any model call."] = True,
         freshness: Annotated[Optional[str], "Canonical freshness: 'day'|'week'|'month'|'year' or null."] = None,
         country: Annotated[Optional[str], "Canonical country ISO2, e.g. 'DE', 'US'. Supported only: 'AR', 'AU', 'AT', 'BE', 'BR', 'CA', 'CL', 'DK', 'FI', 'FR', 'DE', 'GR', 'HK',"] = None,
         safesearch: Annotated[str, "Canonical safesearch: 'off'|'moderate'|'strict'."] = "moderate",
@@ -111,7 +108,6 @@ class WebTools:
             "Content present only if fetched; may be refined per mode. Non-HTML supported files return mime/base64 instead of content."
     )]:
         refinement: Annotated[str, "Post-fetch content refinement: 'none'|'balanced'|'recall'|'precision'"] = "balanced"
-        fetch_content: Annotated[bool, "If true, fetch full page content according to 'refinement' option. Increase tokens as stated in refinement modes. Use False if you need to decide the fetch on your own. If false, return ranked snippets/URLs only (no content attr)."] = True
         try:
             if isinstance(queries, str):
                 try:
@@ -133,6 +129,7 @@ class WebTools:
                 country=country,
                 safesearch=safesearch,
                 fetch_content=fetch_content,
+                use_llm=use_llm,
                 namespaced_kv_cache=cache,
             )
             for r in rows:

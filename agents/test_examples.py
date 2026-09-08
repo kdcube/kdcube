@@ -170,6 +170,7 @@ def test_each_example_owns_its_runnable_contract(adapter: str) -> None:
     assert agent_input["conversation_id"] == f"{adapter}-demo"
     if adapter == "native":
         assert agent_input["recall_conversation_id"] == "native-recall-demo"
+        assert agent["max_tokens"] == 80000
     assert agent["instructions"]["profile"] == (
         "lite:core" if adapter == "native" else "workspace-files"
     )
@@ -246,6 +247,18 @@ def test_each_example_owns_its_runnable_contract(adapter: str) -> None:
         "web_search_primary_backend": "duckduckgo",
         "web_search_backend": "duckduckgo",
     }
+    assert assembly["paths"]["host_bundle_storage_path"] == (
+        "../output/bundle-storage"
+    )
+    assert assembly["platform"]["services"]["proc"]["bundles"] == {
+        "bundle_storage_root": "../output/bundle-storage"
+    }
+    assert (
+        assembly["platform"]["services"]["proc"]["exec"][
+            "py_code_exec_network_mode"
+        ]
+        == "auto"
+    )
 
 
 def test_every_adapter_uses_kdcube_web_search_and_fetch() -> None:
@@ -277,6 +290,8 @@ def test_every_adapter_uses_kdcube_web_search_and_fetch() -> None:
     for source in (native_source, langgraph_source, claude_source):
         assert "agent_io_tools.tool_call(fn=web_tools.web_search" in source
         assert "Do not import `web_tools`" in source
+        assert "The result is an envelope with `ok` and `ret`" in source
+        assert "xlsx_contains_tool_evidence" in source
 
 
 @pytest.mark.asyncio
@@ -303,7 +318,15 @@ async def test_langgraph_web_search_adapter_calls_kdcube_tool() -> None:
     )
 
     result = json.loads(
-        await tools[0].ainvoke({"query": "current Python release", "max_results": 2})
+        await tools[0].ainvoke(
+            {
+                "queries": "current Python release",
+                "objective": "verify the current release",
+                "n": 2,
+                "fetch_content": False,
+                "use_llm": False,
+            }
+        )
     )
 
     assert result["ok"] is True
@@ -312,8 +335,10 @@ async def test_langgraph_web_search_adapter_calls_kdcube_tool() -> None:
         tool_id="web_tools.web_search",
         params={
             "queries": "current Python release",
-            "objective": "current Python release",
+            "objective": "verify the current release",
             "n": 2,
+            "fetch_content": False,
+            "use_llm": False,
         },
         call_reason="Search the public web",
     )
@@ -339,8 +364,9 @@ async def test_langgraph_web_fetch_adapter_calls_kdcube_tool() -> None:
     result = json.loads(
         await tools[0].ainvoke(
             {
-                "url": "https://python.org/",
+                "urls": ["https://python.org/"],
                 "objective": "verify release",
+                "refinement": "none",
             }
         )
     )
@@ -459,6 +485,28 @@ def test_claude_demo_recognizes_search_and_fetch_calls() -> None:
     assert _called_tool_names(events) == {
         "mcp__kdcube_web_search__web_search",
         "mcp__kdcube_web_search__web_fetch",
+    }
+
+
+@pytest.mark.asyncio
+async def test_claude_cli_credentials_keep_descriptor_fields_distinct(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agents.claude import agent as claude_agent
+
+    values = {
+        "platform.services.anthropic.api_key": "anthropic-api-key",
+        "platform.services.anthropic.claude_code_key": "claude-code-key",
+    }
+
+    async def get_secret(ref: str) -> str | None:
+        return values.get(ref)
+
+    monkeypatch.setattr(claude_agent, "get_secret", get_secret)
+
+    assert await claude_agent.descriptor_claude_cli_credentials() == {
+        "ANTHROPIC_API_KEY": "anthropic-api-key",
+        "CLAUDE_CODE_KEY": "claude-code-key",
     }
 
 
@@ -1039,6 +1087,14 @@ def test_native_event_evidence_resolves_json_tool_calls_and_results() -> None:
     assert event_source_ids(blocks) == {"react.memsearch"}
 
 
+def test_claude_evidence_uses_the_canonical_supervisor_tool_identity() -> None:
+    from agents.claude.agent import WEB_SEARCH_TOOL_ID, canonical_tool_id
+
+    assert canonical_tool_id(WEB_SEARCH_TOOL_ID) == "web_tools.web_search"
+    with pytest.raises(ValueError, match="one canonical SDK identity"):
+        canonical_tool_id("mcp__unknown__tool")
+
+
 def test_missing_isolated_exec_image_fails_before_agent_construction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1215,9 +1271,18 @@ def test_descriptor_activation_normalizes_storage_for_sdk_consumers(
         "GLOBAL_SECRETS_YAML",
         "ECONOMICS_YAML_DESCRIPTOR_PATH",
         "GATEWAY_YAML_PATH",
+        "GATEWAY_COMPONENT",
     ):
         monkeypatch.setenv(env_name, "")
-    settings = SimpleNamespace(STORAGE_PATH="../output/kdcube-storage")
+    settings = SimpleNamespace(
+        STORAGE_PATH="../output/kdcube-storage",
+        HOST_BUNDLE_STORAGE_PATH="../output/bundle-storage",
+        PLATFORM=SimpleNamespace(
+            APPLICATIONS=SimpleNamespace(
+                BUNDLE_STORAGE_ROOT="../output/bundle-storage"
+            )
+        ),
+    )
     monkeypatch.setattr(
         "kdcube_ai_app.apps.chat.sdk.config.get_settings",
         Mock(return_value=settings),
@@ -1234,8 +1299,15 @@ def test_descriptor_activation_normalizes_storage_for_sdk_consumers(
     activated = infrastructure.activate_platform_descriptors(tmp_path)
 
     assert activated is settings
+    assert os.environ["GATEWAY_COMPONENT"] == "proc"
     assert settings.STORAGE_PATH == str(
         (tmp_path / "../output/kdcube-storage").resolve()
+    )
+    assert settings.HOST_BUNDLE_STORAGE_PATH == str(
+        (tmp_path / "../output/bundle-storage").resolve()
+    )
+    assert settings.PLATFORM.APPLICATIONS.BUNDLE_STORAGE_ROOT == str(
+        (tmp_path / "../output/bundle-storage").resolve()
     )
 
 

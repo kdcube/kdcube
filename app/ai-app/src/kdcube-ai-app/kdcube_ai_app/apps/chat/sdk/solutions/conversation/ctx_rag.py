@@ -3320,7 +3320,12 @@ async def search_context(
 
     async def _search_one(where: str, query: str, embedding: List[float]|None = None) -> list[dict]:
         try:
-            [qvec] = [embedding] if embedding else await model_service.embed_texts([query])
+            if embedding is not None:
+                qvec = embedding
+            elif model_service is not None:
+                [qvec] = await model_service.embed_texts([query])
+            else:
+                return []
             where, search_roles, search_tags = _resolve_roles_and_tags(where)
             res = await conv_idx.search_turn_logs_via_content(
                 user_id=user,

@@ -184,6 +184,16 @@ _DIRECT_WORKSPACE_FILES = """
 """.strip()
 
 
+_DIRECT_EXECUTION_GUIDE = """
+[ISOLATED PYTHON EXECUTION]
+- The execution tool evaluates the submitted Python as an asynchronous module body. Use `await` directly at module scope when calling an injected async tool; never call `asyncio.run()`, `loop.run_until_complete()`, or start another event loop.
+- Execution-enabled catalog handles are injected into the program. Call one with `await agent_io_tools.tool_call(fn=<handle>, params={...}, call_reason=..., tool_id=...)`; do not import the tool module.
+- Treat a nested tool failure as an execution failure. Do not catch it and continue with invented, stale, or unverified data.
+- `OUTPUT_DIR` is already injected as the artifact root. Use it directly; do not replace it with a literal path or derive a different output root.
+- Map every artifact contract path exactly below `Path(OUTPUT_DIR)`. For example, contract path `files/research/report.xlsx` means `Path(OUTPUT_DIR) / "files/research/report.xlsx"`; keep the leading `files/` or `git/projects/` namespace and create its parent directory.
+""".strip()
+
+
 def _web_research_guide(search_tool: str, fetch_tool: str | None = None) -> str:
     fetch = str(fetch_tool or "").strip()
     inspect_line = (
@@ -196,6 +206,7 @@ def _web_research_guide(search_tool: str, fetch_tool: str | None = None) -> str:
 [WEB RESEARCH - {search_tool}{f' + {fetch}' if fetch else ''}]
 - Use `{search_tool}` when the task needs current public information. Preserve the returned source URLs and ground factual claims in the results you actually inspected.
 {inspect_line}
+- Inside isolated Python, KDCube Web Search returns its normal `{{"ok": ..., "error": ..., "ret": [...]}}` envelope. Require `ok`, consume the result rows from `ret`, and treat an empty `ret` as a failed verification.
 - Search is a governed capability with configured egress policy. A denied domain or failed request is evidence to report or work around within the allowed source set, never a reason to bypass the tool.
 """.strip()
 
@@ -247,6 +258,7 @@ def compose_provider_native_instructions(
     executable = str(exec_tool or "").strip()
     if executable:
         parts.append(exec_capability_guide(exec_tool=executable, pull_tool=""))
+        parts.append(_DIRECT_EXECUTION_GUIDE)
     elif not rendering_tools:
         parts.append(prose_only_output_guide())
     renderers = tuple(

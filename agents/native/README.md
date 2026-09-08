@@ -128,7 +128,9 @@ Turn one hosts a research-request attachment, searches with
 result with KDCube Web Fetch. Turn two makes the model author Python that uses
 `openpyxl`. That generated program calls the enabled Web Search tool through
 `agent_io_tools.tool_call` for an additional verification query, then creates
-an XLSX and HTML. The generated program runs in the isolated turn workspace;
+an XLSX and HTML. It consumes Web Search rows from the tool's `ret` result, and
+the runner verifies that a returned title and URL reached the workbook. The
+generated program runs in the isolated turn workspace;
 the Web tool runs in the trusted supervisor under the same YAML allow policy.
 The agent then calls `rendering_tools.write_pdf` to turn the HTML into a
 polished PDF. It does not generate PDF bytes in Python.

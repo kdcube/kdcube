@@ -47,10 +47,15 @@ from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.instructions import (  #
     compose_provider_native_instructions,
     configured_instruction_selection,
 )
+from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.lifecycle import (  # noqa: E402
+    direct_host_process_lifespan,
+)
 from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.evidence import (  # noqa: E402
     ConsoleEmitter,
     print_evidence_summary,
+    recorded_tool_items,
     write_evidence_index,
+    xlsx_contains_tool_evidence,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.channels import (  # noqa: E402
     DirectInputAttachment,
@@ -111,11 +116,41 @@ BUNDLE_ID = "standalone-claude-demo@1-0"
 AGENT_ID = "claude"
 
 
+def canonical_tool_id(provider_tool_id: str) -> str:
+    """Resolve a Claude-facing tool name to its canonical SDK identity."""
+    matches = [
+        canonical_id
+        for canonical_id, mapped_id in CANONICAL_TOOL_IDS.items()
+        if mapped_id == provider_tool_id
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            f"Claude tool {provider_tool_id!r} does not have one canonical SDK identity"
+        )
+    return matches[0]
+
+
 def load_config(path: Path) -> dict[str, Any]:
     value = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     if not isinstance(value, dict):
         raise ValueError("configuration root must be a mapping")
     return value
+
+
+async def descriptor_claude_cli_credentials() -> dict[str, str]:
+    """Project descriptor-owned Anthropic credentials into the Claude CLI."""
+    api_key = str(
+        await get_secret("platform.services.anthropic.api_key") or ""
+    ).strip()
+    claude_code_key = str(
+        await get_secret("platform.services.anthropic.claude_code_key") or ""
+    ).strip()
+    env: dict[str, str] = {}
+    if api_key:
+        env["ANTHROPIC_API_KEY"] = api_key
+    if claude_code_key:
+        env["CLAUDE_CODE_KEY"] = claude_code_key
+    return env
 
 
 async def agent_config(
@@ -145,18 +180,12 @@ async def agent_config(
     command = str(adapter.get("command") or "claude")
     if not check_only and shutil.which(command) is None:
         raise RuntimeError(f"Claude Code executable {command!r} is not on PATH")
-    api_key = str(
-        await get_secret("platform.services.anthropic.claude_code_key")
-        or await get_secret("platform.services.anthropic.api_key")
-        or ""
-    )
     python_bin = Path(sys.executable).resolve().parent
     env = {
         "PATH": os.pathsep.join((str(python_bin), os.environ.get("PATH", ""))),
         "VIRTUAL_ENV": str(python_bin.parent),
     }
-    if api_key:
-        env["CLAUDE_CODE_KEY"] = api_key
+    env.update(await descriptor_claude_cli_credentials())
     tool_config = configured_agent_tool_config(
         config,
         agent_id=agent_id,
@@ -719,14 +748,21 @@ async def main_async(args: argparse.Namespace) -> None:
         (
             "Continue this same session and use the retained findings. Author complete Python "
             "and call the kdcube_harness execute_python MCP tool. Inside that generated Python, "
+            "write an asynchronous module body: use top-level await directly, do not define a "
+            "main runner, and never call asyncio.run or run_until_complete. First make this "
+            "uncaught call and require its returned result before writing the workbook: "
             "call the configured Web Search handle with `await "
             "agent_io_tools.tool_call(fn=web_tools.web_search, "
             "params={'queries': 'site:python.org current stable Python release', "
-            "'objective': 'Verify the stable release used in this report', 'n': 3}, "
+            "'objective': 'Verify the stable release used in this report', 'n': 3, "
+            "'use_llm': False, 'fetch_content': False}, "
             "call_reason='Verify release from generated code', "
-            "tool_id='web_tools.web_search')`. Use that returned evidence in the workbook. "
+            "tool_id='web_tools.web_search')`. The result is an envelope with `ok` and `ret`; "
+            "raise if it is not ok or ret is empty, then include at least the first returned "
+            "title and URL in the workbook. "
             "Do not import `web_tools`; the isolated runtime supplies the handle from the "
-            "configured tool catalog. The Python must use openpyxl "
+            "configured tool catalog. Write files below Path(OUTPUT_DIR), creating their "
+            "parents. The Python must use openpyxl "
             "to create files/research/research-data.xlsx and create polished, print-ready HTML "
             "at files/research/research-brief.html. Declare the XLSX external and the HTML "
             "internal in the artifact contract. After execution succeeds, call the "
@@ -820,6 +856,27 @@ async def main_async(args: argparse.Namespace) -> None:
         raise RuntimeError(
             f"agent completed without required artifacts: {', '.join(missing)}"
         )
+    nested_search_items = recorded_tool_items(
+        deliverable_workspace.runtime_outdir,
+        canonical_tool_id(WEB_SEARCH_TOOL_ID),
+    )
+    if not nested_search_items:
+        raise RuntimeError(
+            "generated Python called Web Search but received no recorded results; "
+            "verify trusted-supervisor networking and Web Search credentials"
+        )
+    if not xlsx_contains_tool_evidence(
+        deliverable_workspace.current_file("research/research-data.xlsx"),
+        nested_search_items,
+    ):
+        raise RuntimeError(
+            "research-data.xlsx does not contain a title and URL returned by the "
+            "generated program's nested Web Search call"
+        )
+    print(
+        f"[isolated execution] nested Web Search returned "
+        f"{len(nested_search_items)} item(s)"
+    )
     print("demonstration: PASS")
 
 
@@ -870,7 +927,13 @@ def main() -> None:
         help="Run the local inline Telegram webhook configured under agent.ingress.telegram.",
     )
     try:
-        asyncio.run(main_async(parser.parse_args()))
+        args = parser.parse_args()
+
+        async def run() -> None:
+            async with direct_host_process_lifespan():
+                await main_async(args)
+
+        asyncio.run(run())
     except KeyboardInterrupt:
         pass
 

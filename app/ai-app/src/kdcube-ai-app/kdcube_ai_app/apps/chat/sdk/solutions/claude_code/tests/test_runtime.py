@@ -164,6 +164,101 @@ def test_ensure_session_repo_uses_resolved_https_origin(tmp_path: Path):
     assert remote_url == "https://github.com/org/session-store.git"
 
 
+def test_existing_session_checkout_gets_repo_local_commit_identity(tmp_path: Path):
+    local_root = tmp_path / "workspace" / ".claude"
+    subprocess.run(
+        ["git", "init", str(local_root)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    config = _config(
+        tmp_path,
+        git_repo=tmp_path / "remote.git",
+        local_root=local_root,
+    )
+
+    runtime_module._ensure_local_git_repo(local_root=local_root, config=config)
+
+    name = subprocess.run(
+        ["git", "-C", str(local_root), "config", "--local", "--get", "user.name"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    email = subprocess.run(
+        ["git", "-C", str(local_root), "config", "--local", "--get", "user.email"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert name == "Claude Session (alice)"
+    assert email == "alice@local.invalid"
+
+
+def test_local_git_mutation_retries_a_transient_index_lock(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    attempts = iter(
+        (
+            subprocess.CompletedProcess(
+                args=[],
+                returncode=128,
+                stdout="",
+                stderr="fatal: Unable to create '.git/index.lock': File exists",
+            ),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
+        )
+    )
+    calls: list[list[str]] = []
+    sleeps: list[float] = []
+
+    def run(command, **_kwargs):
+        calls.append(command)
+        return next(attempts)
+
+    monkeypatch.setattr(runtime_module.subprocess, "run", run)
+    monkeypatch.setattr(runtime_module.time, "sleep", sleeps.append)
+
+    runtime_module._run_local_git_mutation(
+        repo_root=tmp_path,
+        args=["commit", "-m", "snapshot"],
+    )
+
+    assert len(calls) == 2
+    assert sleeps == [0.1]
+
+
+def test_local_git_mutation_does_not_retry_a_permanent_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    calls: list[list[str]] = []
+    sleeps: list[float] = []
+
+    def run(command, **_kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=128,
+            stdout="",
+            stderr="fatal: unable to create directory: Permission denied",
+        )
+
+    monkeypatch.setattr(runtime_module.subprocess, "run", run)
+    monkeypatch.setattr(runtime_module.time, "sleep", sleeps.append)
+
+    with pytest.raises(RuntimeError, match="Permission denied"):
+        runtime_module._run_local_git_mutation(
+            repo_root=tmp_path,
+            args=["commit", "-m", "snapshot"],
+        )
+
+    assert len(calls) == 1
+    assert sleeps == []
+
+
 class _FakeAgent:
     def __init__(
         self,

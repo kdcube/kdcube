@@ -39,8 +39,10 @@ class FakeConvIndex:
         self._sem = sem
         self._lex = lex
         self._trgm = trgm
+        self.semantic_calls = 0
 
     async def search_turn_logs_via_content(self, **kwargs):
+        self.semantic_calls += 1
         return list(self._sem)
 
     async def search_turn_logs_via_content_lexical(self, **kwargs):
@@ -62,11 +64,24 @@ class FailingModelService:
         raise RuntimeError("embedding unavailable")
 
 
-async def _run(conv_idx, *, rank_weights=None, model_service=None, **overrides):
+_DEFAULT_MODEL_SERVICE = object()
+
+
+async def _run(
+    conv_idx,
+    *,
+    rank_weights=None,
+    model_service=_DEFAULT_MODEL_SERVICE,
+    **overrides,
+):
     kwargs = dict(
         conv_idx=conv_idx,
         ctx_client=object(),  # unused: with_payload=False
-        model_service=model_service or FakeModelService(),
+        model_service=(
+            FakeModelService()
+            if model_service is _DEFAULT_MODEL_SERVICE
+            else model_service
+        ),
         targets=[{"where": "assistant", "query": "seeded query"}],
         user="u1",
         conv="conv-1",
@@ -182,3 +197,18 @@ async def test_semantic_arm_degrades_when_embedding_fails():
     best, hits = await _run(index, model_service=FailingModelService())
     assert _order(hits) == ["B"]
     assert best == "B"
+
+
+@pytest.mark.asyncio
+async def test_unconfigured_embedding_skips_semantic_arm_without_network_probe():
+    index = FakeConvIndex(
+        sem=[_row("A", rec=0.0)],
+        lex=[_row("B", rec=0.0)],
+        trgm=[],
+    )
+
+    best, hits = await _run(index, model_service=None)
+
+    assert _order(hits) == ["B"]
+    assert best == "B"
+    assert index.semantic_calls == 0

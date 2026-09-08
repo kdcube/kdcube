@@ -13,7 +13,7 @@ agent:
       bot_token_ref: platform.services.telegram.bot_token
       webhook_secret_ref: platform.services.telegram.webhook_secret
   max_iterations: 8
-  max_tokens: 12000
+  max_tokens: 80000
   topic: "the current stable Python release and its release date"
   cross_conversation_search: true
   instructions:

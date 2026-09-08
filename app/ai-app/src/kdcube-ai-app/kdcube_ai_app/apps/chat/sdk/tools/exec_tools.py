@@ -602,6 +602,65 @@ def _assigned_current_turn_segment_names(code: str, *, turn_id: str) -> set[str]
     return {match.group(1) for match in pattern.finditer(code)}
 
 
+def _assigned_output_root_names(code: str) -> set[str]:
+    """Find simple aliases whose value is the injected artifact root."""
+    if not isinstance(code, str):
+        return set()
+    env_lookup = (
+        r"(?:os\.)?environ(?:"
+        r"\[\s*['\"]OUTPUT_DIR['\"]\s*\]"
+        r"|\.get\(\s*['\"]OUTPUT_DIR['\"](?:\s*,\s*[^)]*)?\)"
+        r")"
+    )
+    getenv_lookup = (
+        r"(?:os\.)?getenv\(\s*['\"]OUTPUT_DIR['\"](?:\s*,\s*[^)]*)?\)"
+    )
+    direct = re.compile(
+        r"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"
+        rf"(?:pathlib\.)?Path\(\s*(?:OUTPUT_DIR|{env_lookup}|{getenv_lookup})\s*\)"
+        r"\s*(?:#.*)?$"
+    )
+    aliases = {match.group(1) for match in direct.finditer(code)}
+    changed = True
+    while changed:
+        changed = False
+        for match in re.finditer(
+            r"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"
+            r"([A-Za-z_][A-Za-z0-9_]*)\s*(?:#.*)?$",
+            code,
+        ):
+            target, source = match.groups()
+            if source in aliases or source == "OUT_DIR":
+                if target not in aliases:
+                    aliases.add(target)
+                    changed = True
+    return aliases
+
+
+def _rewrite_output_root_namespace_joins(
+    code: str,
+    *,
+    turn_id: str,
+) -> Tuple[str, List[Dict[str, str]]]:
+    """Qualify ``Path(OUTPUT_DIR) / 'files'`` style generated-code joins."""
+    roots = {"OUT_DIR", *_assigned_output_root_names(code)}
+    root_names = "|".join(re.escape(name) for name in sorted(roots, key=len, reverse=True))
+    direct_path = r"(?:pathlib\.)?Path\(\s*OUTPUT_DIR\s*\)"
+    pattern = re.compile(
+        rf"(?P<prefix>(?<![A-Za-z0-9_])(?:{root_names}|{direct_path})\s*/\s*)"
+        r"(?P<quote>['\"])(?P<namespace>git/projects|files|attachments)(?P=quote)"
+    )
+    rewrites: List[Dict[str, str]] = []
+
+    def replace(match: re.Match[str]) -> str:
+        namespace = match.group("namespace")
+        qualified = f"{turn_id}/{namespace}"
+        rewrites.append({"original": namespace, "rewritten": qualified})
+        return f"{match.group('prefix')}{match.group('quote')}{qualified}{match.group('quote')}"
+
+    return pattern.sub(replace, code), rewrites
+
+
 def _has_current_turn_join_context(
     code: str,
     token_start: int,
@@ -634,7 +693,7 @@ def rewrite_exec_code_paths(
     """
     if not isinstance(code, str) or not code.strip() or not turn_id:
         return code or "", []
-    rewrites: List[Dict[str, str]] = []
+    code, rewrites = _rewrite_output_root_namespace_joins(code, turn_id=turn_id)
     out_parts: List[str] = []
     last = 0
     current_turn_segment_names = _assigned_current_turn_segment_names(code, turn_id=turn_id)
