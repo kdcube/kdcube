@@ -18,9 +18,18 @@ COPY src/kdcube-ai-app/requirements-chat.txt requirements.txt
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Install browser deps separately to keep pip layer cacheable
-RUN python -m playwright install --with-deps chromium && \
-    chmod -R a+rX /opt/ms-playwright
+# Install browser deps separately to keep pip layer cacheable.
+# Chromium/Playwright is only needed for document rendering. It dominates image
+# size, so make it opt-out via a build-arg. Default INSTALL_CHROMIUM=1 preserves
+# upstream behavior (browser installed); build with --build-arg INSTALL_CHROMIUM=0
+# for a slim, render-less image. Only an explicit "0" skips the install.
+ARG INSTALL_CHROMIUM=1
+RUN if [ "$INSTALL_CHROMIUM" != "0" ]; then \
+        python -m playwright install --with-deps chromium && \
+        chmod -R a+rX /opt/ms-playwright; \
+    else \
+        echo "INSTALL_CHROMIUM=0: skipping Chromium/Playwright install (slim image; set KDCUBE_DISABLE_DOC_RENDERING=1 at runtime)"; \
+    fi
 
 # Create unprivileged user for executor (but entrypoint runs as root)
 RUN groupadd --gid 1001 executor && \
