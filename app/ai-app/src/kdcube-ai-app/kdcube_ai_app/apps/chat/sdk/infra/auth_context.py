@@ -214,6 +214,42 @@ class AuthContext:
             or fingerprint
             or bundle_id
         )
+        # Delegated surfaces (Connection Hub OAuth cards, agent clients) attach
+        # their authority facts to the request user, not to the routing actor.
+        # Nested named-service calls rebuild this context from the external
+        # event payload and providers derive their caller from ``to_actor()``,
+        # so the authority must ride on ``actor`` or downstream admission
+        # checks see a plain user and refuse card-bound operations.
+        identity_authority = (
+            _mapping(data.get("identity_authority"))
+            or _mapping(user.get("identity_authority"))
+            or _mapping(actor.get("identity_authority"))
+        )
+        actor_payload = actor or {
+            key: item
+            for key, item in data.items()
+            if key
+            in {
+                "tenant",
+                "tenant_id",
+                "project",
+                "project_id",
+                "bundle_id",
+                "principal_kind",
+                "principal_id",
+                "user_id",
+                "user_type",
+                "username",
+                "email",
+                "fingerprint",
+                "roles",
+                "permissions",
+                "session_id",
+                "stream_id",
+            }
+        }
+        if identity_authority and not _mapping(actor_payload.get("identity_authority")):
+            actor_payload = {**actor_payload, "identity_authority": identity_authority}
 
         return cls(
             tenant=tenant or "",
@@ -243,29 +279,7 @@ class AuthContext:
             stream_id=_string(data.get("stream_id")) or _string(routing.get("stream_id")) or _string(actor.get("stream_id")),
             request_id=_string(data.get("request_id")) or _string(meta.get("task_id")),
             source=source or _string(data.get("source")),
-            actor=actor or {
-                key: item
-                for key, item in data.items()
-                if key
-                in {
-                    "tenant",
-                    "tenant_id",
-                    "project",
-                    "project_id",
-                    "bundle_id",
-                    "principal_kind",
-                    "principal_id",
-                    "user_id",
-                    "user_type",
-                    "username",
-                    "email",
-                    "fingerprint",
-                    "roles",
-                    "permissions",
-                    "session_id",
-                    "stream_id",
-                }
-            },
+            actor=actor_payload,
             metadata=dict(data.get("metadata") or {}),
         )
 

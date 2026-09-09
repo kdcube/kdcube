@@ -55,6 +55,58 @@ def test_auth_context_from_external_event_payload_preserves_user_identity():
     assert ctx.turn_id == "turn-1"
 
 
+def test_auth_context_from_external_event_payload_carries_delegated_identity_authority():
+    # A Connection Hub delegated card is projected onto the request user by the
+    # managed MCP guard. Nested named-service calls rebuild the auth context from
+    # this payload and providers read the caller from ``to_actor()``; losing the
+    # binding here made card-bound callers look like plain users downstream.
+    binding = {
+        "schema": "connection_hub.delegated_card_binding.v1",
+        "access_id": "oauth-card-1",
+        "client_id": "dcr-client-1",
+        "grantor_user_id": "user-1",
+        "delegate_identity": "integration:dcr-client-1:user-1",
+    }
+    payload = ExternalEventPayload(
+        meta=ExternalEventMeta(task_id="task-1", created_at=1.0),
+        routing=ExternalEventRouting(bundle_id="problem-board@1-0", session_id="session-1"),
+        actor=ExternalEventActor(tenant_id="tenant-a", project_id="project-a"),
+        user=ExternalEventUser(
+            user_type="external",
+            user_id="user-1",
+            username="integration:dcr-client-1:user-1",
+            identity_authority={
+                "authority_id": "delegated_client",
+                "delegate_identity": "integration:dcr-client-1:user-1",
+                "grantor_user_id": "user-1",
+                "delegated_card_binding": binding,
+            },
+        ),
+    )
+
+    ctx = AuthContext.from_external_event_payload(payload)
+
+    assert ctx.user_id == "user-1"
+    assert ctx.actor["tenant_id"] == "tenant-a"
+    assert ctx.actor["identity_authority"]["delegated_card_binding"] == binding
+    assert ctx.to_actor()["identity_authority"]["delegate_identity"] == "integration:dcr-client-1:user-1"
+
+    roundtrip = AuthContext.from_mapping(ctx.to_dict())
+    assert roundtrip.actor["identity_authority"]["delegated_card_binding"] == binding
+
+
+def test_auth_context_from_mapping_keeps_explicit_actor_identity_authority():
+    explicit = {"authority_id": "platform", "actor_user_id": "user-2"}
+    ctx = AuthContext.from_mapping(
+        {
+            "actor": {"tenant": "tenant-a", "project": "project-a", "identity_authority": explicit},
+            "user": {"user_id": "user-2", "identity_authority": {"authority_id": "other"}},
+        }
+    )
+
+    assert ctx.actor["identity_authority"] == explicit
+
+
 def test_auth_context_for_bundle_job_is_headless_and_not_a_user():
     ctx = AuthContext.for_bundle_job(
         tenant="tenant-a",

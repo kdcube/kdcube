@@ -350,6 +350,15 @@ neither message points at the declaration:
 routes through the managed MCP guard, which knows the tool name, instead of the
 single-operation REST path.
 
+**The delegated identity travels with the caller into nested calls.** When the
+surface forwards to another bundle's named-service provider, the guard's
+projection of the card (`identity_authority`, including the
+`delegated_card_binding`) rides on the rebuilt auth context's `actor`, so a
+provider that admits only card-bound or agent-client callers reads it from
+there. The symptom when a layer drops it: the guard log shows
+`authority=delegated_client` and the provider still answers `403` with its
+"agent identity required" code, treating the caller as a plain user.
+
 **Repeated relay `429` responses can reveal gateway identity ordering.** The
 characteristic log pair is a gateway capacity or rate-limit entry for
 `anonymous`, followed by a managed MCP guard entry that accepts the same
