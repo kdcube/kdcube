@@ -510,6 +510,7 @@ async def gateway_middleware(request: Request, call_next):
         )
     if request.method == "OPTIONS" or request.url.path.startswith((
         "/api/cp-frontend-config",
+        "/api/platform/session/",
         "/api/platform/logout",
         "/profile",
         "/monitoring",
@@ -661,7 +662,24 @@ async def platform_logout(request: Request):
         except Exception:
             logger.warning("Failed to invalidate bundle platform session during logout", exc_info=True)
 
-    response = JSONResponse({"ok": True, "invalidated": invalidated})
+    # On the server-held session lane the upstream (Cognito's hosted UI, an
+    # OIDC issuer) keeps its own sign-in; the browser navigates there next to
+    # end it, then comes back to ``next``.
+    upstream_logout_url = ""
+    if provider in {"session", "bundle", "bundle-session"}:
+        try:
+            from kdcube_ai_app.auth.bundle.browser_session import platform_browser_session_flow, public_origin
+            from connection_hub.browser_session.next_url import safe_next_path
+
+            flow = await platform_browser_session_flow(origin=public_origin(request))
+            if flow is not None:
+                origin = public_origin(request)
+                back_to = f"{origin}{safe_next_path(request.query_params.get('next'))}"
+                upstream_logout_url = flow.upstream.logout_url(post_logout_redirect=back_to)
+        except Exception:
+            logger.debug("Upstream logout URL unavailable", exc_info=True)
+
+    response = JSONResponse({"ok": True, "invalidated": invalidated, "upstreamLogoutUrl": upstream_logout_url})
     for name in {
         auth_cfg.AUTH_TOKEN_COOKIE_NAME,
         auth_cfg.ID_TOKEN_COOKIE_NAME,
@@ -670,6 +688,11 @@ async def platform_logout(request: Request):
         if name:
             response.delete_cookie(name, path="/")
     return response
+
+# The platform's browser sign-in (server-held session): /api/platform/session/*.
+from kdcube_ai_app.apps.chat.ingress.platform_session import create_platform_session_router
+
+app.include_router(create_platform_session_router())
 
 # ================================
 # MONITORING ENDPOINTS

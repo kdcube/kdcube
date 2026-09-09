@@ -109,6 +109,20 @@ def _resolve_bundle_auth_login_url(
         return
     if _text(auth.get("loginUrl")):
         return
+
+    # The platform-hosted sign-in: the selected session provider names an
+    # OIDC or Cognito upstream, so the browser goes to the platform's own
+    # login route and comes back with the session cookie. No bundle route.
+    from kdcube_ai_app.auth.bundle.browser_session import LOGIN_ROUTE, LOGOUT_ROUTE, upstream_is_oidc
+
+    if upstream_is_oidc(platform_auth_config):
+        origin = request_origin(request) or ""
+        auth["loginUrl"] = f"{origin.rstrip('/')}{LOGIN_ROUTE}"
+        auth["logoutUrl"] = _text(auth.get("logoutUrl")) or LOGOUT_ROUTE
+        auth["sessionLane"] = "platform"
+        auth.pop("oidcConfig", None)
+        return
+
     connection_hub = auth.get("connectionHub")
     if not isinstance(connection_hub, dict):
         return

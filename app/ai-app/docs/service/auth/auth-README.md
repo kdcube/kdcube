@@ -159,6 +159,7 @@ That authority projection is documented in
 - Session cookies carry a signed `kst1.*` token. Redis stores the active
   session record, user record, and revocation/version state.
 - Details: [Application-Hosted Platform Login And Session](app-hosted-platform-login-and-session-README.md).
+- The platform can host the sign-in itself against a Cognito or OIDC upstream, one HttpOnly cookie for every surface, sliding lifetime: [Platform-Hosted Sign-In](app-hosted-platform-login-and-session-README.md#platform-hosted-sign-in-the-server-held-browser-session).
 
 5) Delegated auth (proxy login service)
 - Proxy service build: [ProxyLogin Dockerfile](../../../deployment/docker/custom-ui-managed-infra/Dockerfile_ProxyLogin)
@@ -249,6 +250,7 @@ service; Connection Hub remains their configuration owner.
 |---|---|
 | Understand how requests choose Cognito/session/Connection Hub authenticators | [Auth Selector](auth-selector-README.md) |
 | Application/front shell performs login and browser should become a platform user | [Application-Hosted Platform Login And Session](app-hosted-platform-login-and-session-README.md) |
+| The platform should host the sign-in against a Cognito or OIDC upstream, with no identity client in the browser | [Platform-Hosted Sign-In](app-hosted-platform-login-and-session-README.md#platform-hosted-sign-in-the-server-held-browser-session) |
 | App writes a SimpleIDP token for local/embedded simple auth | [App SimpleIDP Bridge](app-simple-idp-bridge-README.md) |
 | External tool should access a narrow MCP integration surface after descriptor-governed user/admin consent | [OAuth delegated credential Protocol Adapter](../../sdk/solutions/connections/delegated-credentials/oauth-delegated-credential-protocol-adapter-README.md) |
 | Public mini app needs Socket.IO Data Bus publish rights | [Bundle Federated Auth](../../sdk/bundle/auth-bundle-federated-README.md) |

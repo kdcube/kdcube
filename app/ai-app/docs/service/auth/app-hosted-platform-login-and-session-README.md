@@ -1,10 +1,10 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/service/auth/app-hosted-platform-login-and-session-README.md
 title: "Application-Hosted Platform Login And Session"
-summary: "Application-hosted external sign-in followed by a KDCube-owned, Redis-backed platform session."
+summary: "Application-hosted external sign-in followed by a KDCube-owned, Redis-backed platform session; and the platform-hosted sign-in against a Cognito or OIDC upstream, the server-held browser session with a sliding lifetime."
 tags: ["service", "auth", "application", "bundle", "session", "sso"]
-keywords: ["application-hosted platform login", "platform session", "bundle session", "bundle_session_login", "kst1", "front shell", "login", "logout", "register", "invalidate"]
-updated_at: 2026-08-26
+keywords: ["application-hosted platform login", "platform session", "bundle session", "bundle_session_login", "kst1", "front shell", "login", "logout", "register", "invalidate", "platform-hosted sign-in", "browser session", "sliding session", "OIDC", "Cognito hosted UI"]
+updated_at: 2026-09-10
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/app-simple-idp-bridge-README.md
@@ -12,6 +12,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-firewall-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-widget-integration-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-platform-integration-README.md
+  - https://github.com/elenaviter/app-ecosystem/blob/main/docs/connection-hub/package/browser-session.md
 ---
 # Application-Hosted Platform Login And Session
 
@@ -27,6 +28,11 @@ Use this when an app needs to accept identities from Telegram, Google,
 another OAuth/OIDC provider, a front shell, or an embedded app and then make the
 browser authenticated for normal platform routes such as `/profile`,
 `/api/integrations/*`, `/sse`, and `/socket.io`.
+
+The platform can also host the sign-in itself against a Cognito or OIDC
+upstream, with no identity client in the browser: the
+[server-held browser session](#platform-hosted-sign-in-the-server-held-browser-session)
+below.
 
 ## Name And Technical Alias
 
@@ -150,6 +156,122 @@ from kdcube_ai_app.apps.chat.sdk.config import get_settings
 
 auth_cookie = get_settings().AUTH.AUTH_TOKEN_COOKIE_NAME
 ```
+
+## Platform-Hosted Sign-In: The Server-Held Browser Session
+
+The lane above hosts the login in an application (the Google reference). The
+platform can also host it: the browser is sent to the identity provider by the
+platform's own route, comes back to the platform's own callback, and leaves
+with the session cookie. No JavaScript identity client, no token in a cookie a
+script can read, no per-tab renewal. The session slides on activity: a request
+extends it by the idle limit, never past the maximum since sign-in.
+
+The session itself is the host-neutral `connection_hub.browser_session`
+(one-time browser-bound login attempt with PKCE and nonce, the same-origin
+`next` guard, sliding renewal, the OIDC code-flow upstream with a Cognito
+preset). The platform supplies the backend over `BundleSessionAuthority`, the
+attempt store in the same Redis namespace, and the routes
+(`kdcube_ai_app/auth/bundle/browser_session.py`,
+`kdcube_ai_app/apps/chat/ingress/platform_session.py`).
+
+### Descriptor
+
+Select a session provider whose `input.authenticator_ref` names a Cognito or
+OIDC authority provider. The upstream's issuer, client id and hosted UI come
+from that provider; nothing about the identity provider reaches the browser
+configuration.
+
+```yaml
+auth:
+  type: "bundle"
+  idp: "session"
+  connection_hub:
+    bundle_id: connection-hub@1-0
+    authority_id: kdcube.platform
+    provider_id: browser_session
+```
+
+```yaml
+authority_registry:
+  authorities:
+    kdcube.platform:
+      providers:
+        cognito:                       # the upstream: an existing Cognito provider
+          type: multi_cognito
+          authenticator:
+            type: cognito_id_token
+            region: <region>
+            user_pool_id: <pool>
+            app_client_id: <client id>
+            hosted_ui_domain: https://auth.example.com
+        browser_session:
+          type: bundle_session_login
+          enabled: true
+          label: Platform browser session
+          input:
+            authenticator_ref:
+              authority_id: kdcube.platform
+              provider_id: cognito
+            scopes: [openid, email, profile]
+            groups_claim: cognito:groups      # optional: upstream groups become roles
+            # client_secret_ref: ...           # only for a confidential app client
+            # redirect_uri: https://...        # only when it differs from <origin>/api/platform/session/callback
+          issuer:
+            type: kdcube_session_token
+            ttl_seconds: 43200                 # idle limit (12h)
+            max_ttl_seconds: 604800            # maximum since sign-in (7d)
+            touch_interval_seconds: 60         # a slide is written at most this often
+            attempt_ttl_seconds: 600           # a login must complete within this
+            cookie:
+              secure: true
+              same_site: lax
+              auth_token_cookie_name: __Secure-LATC
+          grants:
+            default:
+              roles: [kdcube:role:registered]
+              permissions: []
+            assignable:
+              roles: [kdcube:role:registered, kdcube:role:super-admin]
+              permissions: ["kdcube:*:*:*"]
+```
+
+Register `https://<public origin>/api/platform/session/callback` as a callback
+URL on the app client, and `https://<public origin>/` (or the page you send
+people back to) as a sign-out URL. The app client may stay public: the
+exchange uses PKCE.
+
+### Routes
+
+| Route | What it does |
+|---|---|
+| `GET /api/platform/session/login?next=<same-origin path>` | Starts a one-time attempt, sets the attempt cookie (`__Host-kdcube-login`), redirects to the identity provider. `next` must be a same-origin absolute path, else `/`. |
+| `GET /api/platform/session/callback?code=&state=` | Takes the attempt (once), requires the attempt cookie of the browser that started it, exchanges the code, verifies the ID token (signature, issuer, audience, nonce), writes the platform user record and the session, sets the session cookie, redirects to `next`. A refused sign-in is a small page with a reason code and a retry link. |
+| `GET /api/platform/session/status` | Whether the lane is configured, its routes and lifetimes. |
+| `POST /api/platform/logout?next=` | Ends the session and clears the cookies as before, and answers `upstreamLogoutUrl`: the identity provider's sign-out URL that returns to `next`. A client navigates there to end the upstream sign-in too. |
+
+The proxy route matrix carries `/api/platform/` to the chat ingress
+(`deployment/nginx/generate_application_site_routes.py`); without it the
+callback would land on the application-site fallback as a 200 HTML page.
+
+### What the browser sees
+
+`/api/cp-frontend-config` on this lane answers `auth.authType: "bundle"`,
+`auth.loginUrl: "<origin>/api/platform/session/login"`,
+`auth.logoutUrl: "/api/platform/logout"`, `auth.profileUrl: "/profile"` and
+`auth.sessionLane: "platform"`, and carries no `oidcConfig`. A surface signs
+in by navigating to `loginUrl` with its own `next`, and asks `profileUrl`
+whether it is signed in. Sign-out in one tab signs out all: there is one
+cookie.
+
+### Sliding renewal
+
+The token's `exp` is the hard bound (the maximum since sign-in). The Redis
+session record carries the idle bound (`exp`), the hard bound (`max_exp`) and
+`last_seen`. The gateway's `BundleSessionAuthManager` slides a validated
+session whose last extension is older than the touch interval to the idle
+limit from now, capped at the hard bound (`BundleSessionAuthority.touch`).
+A deployment without this lane keeps fixed-expiry sessions: the manager
+receives no policy and never touches.
 
 ## Google Login: Setup And Trust Boundaries
 

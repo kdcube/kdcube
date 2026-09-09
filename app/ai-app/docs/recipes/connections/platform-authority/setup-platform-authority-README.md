@@ -43,6 +43,7 @@ provider internals.
 | Multi-Cognito | A runtime trusts more than one Cognito pool/client pair. | Browser still logs into one configured OIDC provider. | Access token + ID token; server verifies both against the trusted provider list. |
 | SimpleIDP | Local/dev or controlled test deployment needs simple users without an external IdP. | Simple token issue/login flow. | Simple platform token in `AUTH_TOKEN_COOKIE_NAME` or Authorization header. |
 | Application-hosted platform login | An application bundle owns the login UI/upstream proof and KDCube owns the resulting platform session. | Browser follows `auth.loginUrl`. | KDCube `kst1` platform-session token in `AUTH_TOKEN_COOKIE_NAME`; ID token cookie is not required. |
+| Platform-hosted sign-in | The platform hosts the sign-in against a Cognito or OIDC upstream named by the session provider; the browser runs no identity client. | Browser follows `auth.loginUrl` (`/api/platform/session/login`); the platform's callback sets the cookie. | KDCube `kst1` platform-session token in `AUTH_TOKEN_COOKIE_NAME`, HttpOnly, sliding lifetime. See [Platform-Hosted Sign-In](../../../service/auth/app-hosted-platform-login-and-session-README.md#platform-hosted-sign-in-the-server-held-browser-session). |
 
 All methods should produce a `kdcube.platform` subject for normal platform
 surfaces.

@@ -393,6 +393,9 @@ Server configuration:
 - Connection Hub owns provider details under
   `authority_registry.authorities.kdcube.platform.providers.<provider_id>`.
 - The provider type is `bundle_session_login`.
+- With `input.authenticator_ref` naming a Cognito or OIDC provider, the
+  platform hosts the sign-in itself and `auth.loginUrl` becomes
+  `/api/platform/session/login`: [Platform-Hosted Sign-In](../../../../service/auth/app-hosted-platform-login-and-session-README.md#platform-hosted-sign-in-the-server-held-browser-session).
 - The application bundle owns only the registered UI/operations, for example
   `entrypoints.login`, `entrypoints.session_issue`, and optionally
   `entrypoints.consent`.

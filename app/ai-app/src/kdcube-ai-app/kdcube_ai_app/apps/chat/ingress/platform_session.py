@@ -1,0 +1,144 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Elena Viter
+
+"""The platform's browser sign-in routes: the only place FastAPI meets the
+server-held browser session.
+
+    GET /api/platform/session/login?next=<same-origin path>
+        starts a one-time login attempt, sets the attempt cookie, redirects
+        the browser to the upstream (Cognito's hosted UI, any OIDC issuer).
+    GET /api/platform/session/callback?code=&state=
+        completes the attempt: code exchange, ID-token verification, the
+        platform user record, the session cookie; redirects to the validated
+        ``next``. A failed sign-in answers a small page with the reason and
+        a link to try again, never a stack.
+    GET /api/platform/session/status
+        whether the lane is configured on this deployment, and its routes.
+
+The flow is built per request from the deployment's descriptors
+(``kdcube_ai_app.auth.bundle.browser_session``); a test injects its own
+through ``flow_provider``.
+"""
+
+from __future__ import annotations
+
+import html
+import logging
+from typing import Any, Awaitable, Callable
+
+from fastapi import APIRouter, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+
+from connection_hub.browser_session.flow import BrowserSessionFlow, LoginAttemptRejected, LoginRejected
+from connection_hub.browser_session.model import CookieSpec
+
+from kdcube_ai_app.auth.bundle.browser_session import (
+    CALLBACK_ROUTE,
+    LOGIN_ROUTE,
+    LOGOUT_ROUTE,
+    PROFILE_ROUTE,
+    platform_browser_session_flow,
+    public_origin,
+)
+
+logger = logging.getLogger(__name__)
+
+FlowProvider = Callable[[Request], Awaitable[BrowserSessionFlow | None]]
+
+NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+
+
+def apply_cookie(response: Response, spec: CookieSpec) -> None:
+    """Write one ``CookieSpec`` as the framework's Set-Cookie."""
+    if spec.clears:
+        response.delete_cookie(spec.name, path=spec.path, domain=spec.domain or None, secure=spec.secure, httponly=spec.http_only, samesite=spec.same_site)
+        return
+    response.set_cookie(
+        spec.name,
+        spec.value,
+        max_age=spec.max_age,
+        path=spec.path,
+        domain=spec.domain or None,
+        secure=spec.secure,
+        httponly=spec.http_only,
+        samesite=spec.same_site,
+    )
+
+
+def _failure_page(reason: str, detail: str, *, retry_url: str) -> HTMLResponse:
+    text = html.escape(detail or reason.replace("_", " "))
+    body = (
+        "<!doctype html><meta charset='utf-8'><title>Sign-in did not complete</title>"
+        "<style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem;color:#0D1E2C}"
+        "a{color:#009C92}code{background:#E6F1F0;padding:.1em .3em;border-radius:3px}</style>"
+        f"<h1>Sign-in did not complete</h1><p>{text}</p>"
+        f"<p>Reason code: <code>{html.escape(reason)}</code></p>"
+        f"<p><a href='{html.escape(retry_url)}'>Try again</a></p>"
+    )
+    return HTMLResponse(body, status_code=400, headers=NO_STORE)
+
+
+async def _default_flow_provider(request: Request) -> BrowserSessionFlow | None:
+    return await platform_browser_session_flow(origin=public_origin(request))
+
+
+def create_platform_session_router(*, flow_provider: FlowProvider | None = None) -> APIRouter:
+    provider = flow_provider or _default_flow_provider
+    router = APIRouter(tags=["platform-session"])
+
+    @router.get(LOGIN_ROUTE)
+    async def session_login(request: Request) -> Response:
+        flow = await provider(request)
+        if flow is None:
+            return JSONResponse({"detail": "platform session sign-in is not configured"}, status_code=404, headers=NO_STORE)
+        start = await flow.begin_login(request.query_params.get("next"))
+        if not start.redirect_url:
+            return JSONResponse({"detail": "the configured upstream does not redirect"}, status_code=500, headers=NO_STORE)
+        response = RedirectResponse(start.redirect_url, status_code=302, headers=NO_STORE)
+        apply_cookie(response, start.attempt_cookie)
+        return response
+
+    @router.get(CALLBACK_ROUTE)
+    async def session_callback(request: Request) -> Response:
+        flow = await provider(request)
+        if flow is None:
+            return JSONResponse({"detail": "platform session sign-in is not configured"}, status_code=404, headers=NO_STORE)
+        attempt_cookie_name = flow.begin_login.__self__._cookies.clear_attempt_cookie().name  # type: ignore[attr-defined]
+        binding = request.cookies.get(attempt_cookie_name)
+        try:
+            done = await flow.complete_login(dict(request.query_params), attempt_binding=binding)
+        except LoginAttemptRejected as exc:
+            logger.info("platform session sign-in refused: %s", exc.reason)
+            return _failure_page(exc.reason, "The sign-in attempt is unknown, expired, or was started in another browser.", retry_url=LOGIN_ROUTE)
+        except LoginRejected as exc:
+            logger.warning("platform session sign-in rejected by the upstream: %s %s", exc.reason, exc.detail)
+            return _failure_page(exc.reason, "The identity provider did not confirm the sign-in.", retry_url=LOGIN_ROUTE)
+        response = RedirectResponse(done.redirect_to, status_code=302, headers=NO_STORE)
+        apply_cookie(response, done.session_cookie)
+        apply_cookie(response, done.clear_attempt_cookie)
+        logger.info(
+            "platform session issued subject=%s session=%s provider=%s",
+            done.session.subject, done.session.session_id, done.identity.provider,
+        )
+        return response
+
+    @router.get("/api/platform/session/status")
+    async def session_status(request: Request) -> JSONResponse:
+        flow = await provider(request)
+        payload: dict[str, Any] = {
+            "configured": flow is not None,
+            "loginUrl": LOGIN_ROUTE,
+            "callbackUrl": CALLBACK_ROUTE,
+            "logoutUrl": LOGOUT_ROUTE,
+            "profileUrl": PROFILE_ROUTE,
+        }
+        if flow is not None:
+            payload["upstream"] = flow.upstream.name
+            payload["idleTtlSeconds"] = flow.policy.idle_ttl_seconds
+            payload["maxTtlSeconds"] = flow.policy.max_ttl_seconds
+        return JSONResponse(payload, headers=NO_STORE)
+
+    return router
+
+
+__all__ = ["apply_cookie", "create_platform_session_router"]

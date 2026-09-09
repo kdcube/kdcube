@@ -137,6 +137,10 @@ The browser app asks the Connection Hub SDK client to resolve
 `entrypoints.login` into the tenant/project-specific app-operation URL when it needs a
 platform session. Descriptors should not materialize `auth.login_url`.
 
+When the platform hosts the sign-in itself (a session provider with a Cognito
+or OIDC upstream), `auth.loginUrl` is the platform's own
+`/api/platform/session/login`: [Platform-Hosted Sign-In](../../../service/auth/app-hosted-platform-login-and-session-README.md#platform-hosted-sign-in-the-server-held-browser-session).
+
 The browser app should not know whether this provider is technically
 `bundle_session_login`, Cognito, or another platform authority. It should use
 the auth URLs returned by `/api/cp-frontend-config`:

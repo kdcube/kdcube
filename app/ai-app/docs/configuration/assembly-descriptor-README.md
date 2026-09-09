@@ -198,6 +198,9 @@ async platform session authority to issue platform-recognized `kst1.*`
 cookies. It requires
 `platform.services.session_token.secret` in `secrets.yaml`. See
 [Application-Hosted Platform Login And Session](../service/auth/app-hosted-platform-login-and-session-README.md).
+When the selected session provider's `input.authenticator_ref` names a Cognito
+or OIDC provider, the platform hosts the sign-in itself on
+`/api/platform/session/login`: [Platform-Hosted Sign-In](../service/auth/app-hosted-platform-login-and-session-README.md#platform-hosted-sign-in-the-server-held-browser-session).
 
 `auth.authenticators` configures request-auth surfaces. The platform
 authenticator itself is derived from the selected Connection Hub platform

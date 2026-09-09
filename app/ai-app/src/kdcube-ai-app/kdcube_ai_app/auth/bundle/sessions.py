@@ -102,6 +102,9 @@ class BundleSessionVerification:
     session_id: str
     user: BundleSessionUser
     claims: dict[str, Any]
+    # The live Redis record: ``iat``, ``exp`` (idle bound), ``max_exp`` (hard
+    # bound), ``last_seen``. A sliding caller decides from it whether to touch.
+    record: dict[str, Any] = field(default_factory=dict)
 
 
 class BundleSessionAuthUser(User):
@@ -455,6 +458,7 @@ class BundleSessionAuthority:
         provider: str | None = None,
         provider_subject: str | None = None,
         ttl_seconds: int | None = None,
+        idle_ttl_seconds: int | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> BundleSessionGrant:
         sub_value = str(sub or "").strip()
@@ -466,6 +470,7 @@ class BundleSessionAuthority:
                 provider=provider,
                 provider_subject=provider_subject,
                 ttl_seconds=ttl_seconds,
+                idle_ttl_seconds=idle_ttl_seconds,
                 metadata=metadata,
             )
 
@@ -476,6 +481,7 @@ class BundleSessionAuthority:
         provider: str | None = None,
         provider_subject: str | None = None,
         ttl_seconds: int | None = None,
+        idle_ttl_seconds: int | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> BundleSessionGrant:
         sub_value = str(sub or "").strip()
@@ -485,9 +491,15 @@ class BundleSessionAuthority:
         if user.disabled:
             raise BundleSessionInvalid("bundle session user is disabled")
 
+        # ``ttl`` is the hard bound the token carries (its ``exp``). A sliding
+        # session also has an idle bound, shorter, kept on the Redis record and
+        # moved forward by ``touch``; the record decides liveness, the token
+        # only proves issuance. Without an idle bound both are the same.
         ttl = _bounded_ttl(ttl_seconds)
+        idle = min(_bounded_ttl(idle_ttl_seconds), ttl) if idle_ttl_seconds else ttl
         issued_at = int(time.time())
         expires_at = issued_at + ttl
+        idle_expires_at = issued_at + idle
         session_id = f"bsn_{uuid.uuid4().hex}"
         version = await self._current_version(sub_value)
         session_record = {
@@ -501,7 +513,9 @@ class BundleSessionAuthority:
             "active": True,
             "metadata": dict(metadata or {}),
             "iat": issued_at,
-            "exp": expires_at,
+            "exp": idle_expires_at,
+            "max_exp": expires_at,
+            "last_seen": issued_at,
         }
         claims = {
             "schema": SESSION_TOKEN_SCHEMA,
@@ -522,16 +536,16 @@ class BundleSessionAuthority:
         session_record["token_sha256"] = _hash_token(token)
 
         redis = await self._redis_client()
-        await self._set_json(self._session_key(session_id), session_record, ttl_seconds=ttl)
+        await self._set_json(self._session_key(session_id), session_record, ttl_seconds=idle)
         await redis.sadd(self._user_sessions_key(sub_value), session_id)
         await redis.expire(self._user_sessions_key(sub_value), max(ttl, BUNDLE_SESSION_DEFAULT_TTL_SECONDS))
-        logger.info("Bundle session login issued sub=%s session=%s ttl=%s", sub_value, session_id, ttl)
+        logger.info("Bundle session login issued sub=%s session=%s ttl=%s idle=%s", sub_value, session_id, ttl, idle)
         return BundleSessionGrant(
             token=token,
             session_id=session_id,
             user=user,
             claims=claims,
-            expires_at=expires_at,
+            expires_at=idle_expires_at,
         )
 
 
@@ -548,6 +562,7 @@ class BundleSessionAuthority:
         provider_subject: str | None = None,
         metadata: Mapping[str, Any] | None = None,
         ttl_seconds: int | None = None,
+        idle_ttl_seconds: int | None = None,
     ) -> BundleSessionGrant:
         await self.register_user(
             sub=sub,
@@ -566,7 +581,29 @@ class BundleSessionAuthority:
             provider_subject=provider_subject,
             metadata=metadata,
             ttl_seconds=ttl_seconds,
+            idle_ttl_seconds=idle_ttl_seconds,
         )
+
+    async def touch(self, session_id: str, *, expires_at: int, now: int | None = None) -> dict[str, Any] | None:
+        """Move a live session's idle expiry to ``expires_at`` (never past its
+        hard bound) and record the request time. Returns the record, or
+        ``None`` when the session is gone."""
+        sid = str(session_id or "").strip()
+        if not sid:
+            return None
+        current_time = int(time.time() if now is None else now)
+        record = await self._get_json(self._session_key(sid))
+        if not record or not record.get("active", True):
+            return None
+        if int(record.get("exp") or 0) < current_time:
+            return None
+        hard_bound = int(record.get("max_exp") or record.get("exp") or 0)
+        target = min(int(expires_at), hard_bound) if hard_bound else int(expires_at)
+        record["exp"] = max(target, int(record.get("exp") or 0))
+        record["last_seen"] = current_time
+        ttl = max(1, record["exp"] - current_time)
+        await self._set_json(self._session_key(sid), record, ttl_seconds=ttl)
+        return record
 
     async def logout(self, *, token: str | None = None, session_id: str | None = None) -> bool:
         sid = str(session_id or "").strip()
@@ -649,7 +686,9 @@ class BundleSessionAuthority:
             raise BundleSessionInvalid("bundle session user is unavailable")
         if user.disabled:
             raise BundleSessionInvalid("bundle session user is disabled")
-        return BundleSessionVerification(session_id=session_id, user=user, claims=claims)
+        return BundleSessionVerification(
+            session_id=session_id, user=user, claims=claims, record=dict(session_record)
+        )
 
 
 _AUTHORITIES: dict[tuple[str | None, str | None, str | None], BundleSessionAuthority] = {}
@@ -691,6 +730,10 @@ async def login_or_register_bundle_session(**kwargs: Any) -> BundleSessionGrant:
     return await get_bundle_session_authority().login_or_register(**kwargs)
 
 
+async def touch_bundle_session(session_id: str, *, expires_at: int, now: int | None = None) -> dict[str, Any] | None:
+    return await get_bundle_session_authority().touch(session_id, expires_at=expires_at, now=now)
+
+
 async def logout_bundle_session(**kwargs: Any) -> bool:
     return await get_bundle_session_authority().logout(**kwargs)
 
@@ -715,17 +758,40 @@ class BundleSessionAuthManager(AuthManager):
         send_validation_error_details: bool = False,
         *,
         authority: BundleSessionAuthority | None = None,
+        sliding: Any | None = None,
     ):
         super().__init__(send_validation_error_details)
         self.authority = authority or get_bundle_session_authority()
+        # A ``SessionPolicy`` (idle_ttl_seconds, max_ttl_seconds,
+        # touch_interval_seconds, expiry_after) when sessions slide on
+        # activity; ``None`` keeps the fixed expiry a session was issued with.
+        self.sliding = sliding
+
+    async def _slide(self, verification: BundleSessionVerification, now: int) -> None:
+        policy = self.sliding
+        record = verification.record or {}
+        if policy is None or not record:
+            return
+        last_seen = int(record.get("last_seen") or record.get("iat") or 0)
+        if now - last_seen < int(getattr(policy, "touch_interval_seconds", 60)):
+            return
+        target = int(policy.expiry_after(now=now, issued_at=int(record.get("iat") or now)))
+        if target <= int(record.get("exp") or 0):
+            return
+        try:
+            await self.authority.touch(verification.session_id, expires_at=target, now=now)
+        except Exception:  # noqa: BLE001 - a missed slide is not a failed request
+            logger.debug("Bundle session slide skipped session=%s", verification.session_id, exc_info=True)
 
     async def authenticate(self, token: str) -> BundleSessionAuthUser:
         if not token:
             raise AuthenticationError("No token provided")
+        now = int(time.time())
         try:
-            verification = await self.authority.validate_token(token)
+            verification = await self.authority.validate_token(token, now=now)
         except BundleSessionError as exc:
             raise AuthenticationError(str(exc)) from exc
+        await self._slide(verification, now)
         user = verification.user
         return BundleSessionAuthUser(
             username=user.username or user.sub,

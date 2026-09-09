@@ -160,10 +160,16 @@ def create_platform_auth_manager(
 
     if provider in {"session", "bundle", "bundle-session"}:
         from kdcube_ai_app.auth.bundle import BundleSessionAuthManager
+        from kdcube_ai_app.auth.bundle.browser_session import sliding_policy
 
-        logger.info("Using BundleSessionAuthManager for %s platform authentication", service_label)
+        sliding = sliding_policy(settings)
+        logger.info(
+            "Using BundleSessionAuthManager for %s platform authentication sliding=%s",
+            service_label,
+            "on" if sliding is not None else "off",
+        )
         return with_authenticator_metadata(
-            BundleSessionAuthManager(send_validation_error_details=send_validation_error_details),
+            BundleSessionAuthManager(send_validation_error_details=send_validation_error_details, sliding=sliding),
             descriptor,
         )
 

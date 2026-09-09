@@ -144,6 +144,19 @@ class ProxyConfigContractTest(unittest.TestCase):
                     template,
                 )
                 self._assert_oauth_discovery_routes(template)
+                self._assert_platform_session_route(template)
+
+    def _assert_platform_session_route(self, config: str) -> None:
+        """The platform's browser sign-in (login, callback, status, logout)
+        lives on the chat ingress under /api/platform/; without a proxy route
+        the callback lands on the application-site fallback as 200 HTML."""
+        self.assertEqual(config.count("location ^~ /api/platform/ {"), 1)
+        routes = config.index("KDCUBE_APPLICATION_SITE_ROUTES:BEGIN")
+        self.assertLess(
+            config.index("location ^~ /api/platform/ {", routes),
+            config.index("location / {", routes),
+            "the platform session route must precede the site fallback",
+        )
 
     def _assert_oauth_discovery_routes(self, config: str) -> None:
         """OAuth discovery must never fall through to the site fallback.

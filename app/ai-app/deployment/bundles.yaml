@@ -2531,6 +2531,46 @@ bundles:
               #       auth_token_cookie_name: __Secure-LATC
               #       id_token_cookie_name: __Secure-LITC
               #       masqueraded_token_cookie_name: __Secure-LMTC
+              # Platform-hosted sign-in (server-held browser session): the platform's
+              # own /api/platform/session/login and /callback, an OIDC or Cognito upstream
+              # named by input.authenticator_ref, sliding lifetime. Select it with
+              # auth.connection_hub.provider_id: browser_session. See
+              # docs/service/auth/app-hosted-platform-login-and-session-README.md.
+              # browser_session:
+              #   type: bundle_session_login
+              #   enabled: true
+              #   label: Platform browser session (server-held, Cognito upstream)
+              #   input:
+              #     authenticator_ref:
+              #       authority_id: kdcube.platform
+              #       provider_id: cognito
+              #     scopes:
+              #     - openid
+              #     - email
+              #     - profile
+              #     groups_claim: cognito:groups
+              #   issuer:
+              #     type: kdcube_session_token
+              #     ttl_seconds: 43200
+              #     max_ttl_seconds: 604800
+              #     touch_interval_seconds: 60
+              #     attempt_ttl_seconds: 600
+              #     cookie:
+              #       secure: true
+              #       same_site: lax
+              #       auth_token_cookie_name: __Secure-LATC
+              #   grants:
+              #     default:
+              #       roles:
+              #       - kdcube:role:registered
+              #       permissions: []
+              #     assignable:
+              #       roles:
+              #       - kdcube:role:registered
+              #       - kdcube:role:super-admin
+              #       permissions:
+              #       - kdcube:*:chat:*;read;write
+              #       - kdcube:*:*:*
               workspace_google_session:
                 type: bundle_session_login
                 enabled: true
