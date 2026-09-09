@@ -28,6 +28,7 @@ from connection_hub.delegated_credentials.oauth.clients import (
     client_from_record,
     dcr_redirect_allowed,
     get_client,
+    normalize_public_client_metadata,
 )
 from connection_hub.delegated_credentials.live_grant import (
     LiveGrantCardError,
@@ -829,6 +830,31 @@ async def register_client(request: Request) -> Response:
         body = {}
     if not isinstance(body, Mapping):
         body = {}
+    server_assigned = {
+        "client_id",
+        "client_secret",
+        "client_secret_expires_at",
+        "registration_access_token",
+        "registration_client_uri",
+    }
+    if server_assigned.intersection(body):
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "invalid_client_metadata",
+                "error_description": "client metadata contains a server-assigned field",
+            },
+        )
+    try:
+        asserted_metadata = normalize_public_client_metadata(body)
+    except ValueError:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "invalid_client_metadata",
+                "error_description": "client metadata is too large, unsupported, or sensitive",
+            },
+        )
     application_type = str(
         body.get("application_type")
         or cfg.dynamic_client_registration.default_application_type
@@ -879,6 +905,7 @@ async def register_client(request: Request) -> Response:
         "client_name": body.get("client_name"),
         "logo_uri": logo_uri,
         "client_uri": client_uri,
+        "client_metadata": asserted_metadata,
     }
     # What the client ACTUALLY sends at registration decides the card's default
     # name. A client that registers one fixed name for every connector it opens
@@ -896,7 +923,8 @@ async def register_client(request: Request) -> Response:
         application_type=application_type,
         metadata=metadata,
     )
-    content = {
+    content = dict(asserted_metadata)
+    content.update({
         "client_id": record["client_id"],
         "redirect_uris": record["redirect_uris"],
         "token_endpoint_auth_method": "none",
@@ -904,7 +932,7 @@ async def register_client(request: Request) -> Response:
         "grant_types": ["authorization_code", "refresh_token"],
         "response_types": ["code"],
         "client_name": body.get("client_name"),
-    }
+    })
     if logo_uri:
         content["logo_uri"] = logo_uri
     if client_uri:
@@ -1679,6 +1707,18 @@ async def _issue_tokens(
         registered_name = str(metadata_snapshot.get("client_name") or "")
         if door_alias and door_alias.lower() not in client_label.lower():
             client_label = f"{client_label} · {door_alias}" if client_label else door_alias
+        asserted_metadata = (
+            metadata_snapshot.get("client_metadata")
+            if isinstance(metadata_snapshot.get("client_metadata"), Mapping)
+            else {}
+        )
+        agent_id = str(
+            asserted_metadata.get("kdcube_agent_id")
+            or asserted_metadata.get("kdcube_worker_id")
+            or ""
+        ).strip()
+        if agent_id and agent_id.lower() not in client_label.lower():
+            client_label = f"{client_label} · {agent_id}" if client_label else agent_id
         # Card naming is derived, not received: log every input so a wrong card
         # title is diagnosable from the proc log instead of by inspecting the
         # rendered UI (grep: connection_hub.oauth card_label).
@@ -1703,6 +1743,7 @@ async def _issue_tokens(
             account_scope=account_scope,
             named_service_operations=named_service_operations,
             catalog_version=catalog_version,
+            client_metadata=asserted_metadata,
         )
     except (AutomationAccessUnavailable, CardUnavailable, CardConflict, CardCommitFailed) as exc:
         # The card is the authority a governed call resolves; a token whose card
