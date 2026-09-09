@@ -173,6 +173,58 @@ def _export_client(
     return TestClient(app), redis, runtime
 
 
+PUBLIC_HOST = "demo.kdcube.tech"
+PUBLIC_AUTHORIZATION_SERVER = (
+    f"https://{PUBLIC_HOST}/api/integrations/bundles/tenant-a/project-a/"
+    "connection-hub@1-0/public/oauth"
+)
+
+
+def _published_authorization_server(monkeypatch, headers: dict[str, str]) -> str:
+    response = _client(monkeypatch).get(
+        "/api/integrations/management/v1/.well-known/oauth-protected-resource",
+        headers=headers,
+    )
+    assert response.status_code == 200
+    return response.json()["authorization_servers"][0]
+
+
+def test_metadata_publishes_the_public_origin_behind_a_terminating_proxy(
+    monkeypatch,
+) -> None:
+    """The document travels to callers that never see the internal hop.
+
+    The proc is reached over plain http on an internal name; the published
+    authorization server must be the origin the browser used, taken from the
+    forwarded provenance the deployment's proxy sets.
+    """
+    assert _published_authorization_server(
+        monkeypatch,
+        {"host": PUBLIC_HOST, "x-forwarded-proto": "https"},
+    ) == PUBLIC_AUTHORIZATION_SERVER
+
+
+def test_metadata_reads_rfc_7239_forwarded_when_it_is_the_only_provenance(
+    monkeypatch,
+) -> None:
+    """A proxy that speaks RFC 7239 instead of X-Forwarded-* must not leave the
+    internal host in a document external callers act on."""
+    assert _published_authorization_server(
+        monkeypatch,
+        {"host": "chat-proc:8020", "forwarded": f"proto=https;host={PUBLIC_HOST}"},
+    ) == PUBLIC_AUTHORIZATION_SERVER
+
+
+def test_metadata_does_not_promise_https_on_a_deployment_reached_over_http(
+    monkeypatch,
+) -> None:
+    """A local deployment answers on http; a document claiming https sends its
+    callers to a port that never completes a TLS handshake."""
+    assert _published_authorization_server(
+        monkeypatch, {"host": "localhost:8020"}
+    ).startswith("http://localhost:8020/")
+
+
 def test_metadata_publishes_resource_authorization_server_and_operations(
     monkeypatch,
 ) -> None:
@@ -185,7 +237,7 @@ def test_metadata_publishes_resource_authorization_server_and_operations(
     assert payload["resource"] == RESOURCE
     assert payload["authorization_servers"] == [
         (
-            "https://testserver/api/integrations/bundles/tenant-a/project-a/"
+            "http://testserver/api/integrations/bundles/tenant-a/project-a/"
             "connection-hub@1-0/public/oauth"
         )
     ]
@@ -275,7 +327,7 @@ def test_missing_bearer_points_to_protected_resource_metadata(monkeypatch) -> No
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "delegated_bearer_missing"
     assert response.headers["www-authenticate"] == (
-        'Bearer resource_metadata="https://testserver/api/integrations/'
+        'Bearer resource_metadata="http://testserver/api/integrations/'
         'management/v1/.well-known/oauth-protected-resource"'
     )
 
@@ -480,7 +532,7 @@ def test_human_secret_export_is_exact_pkce_bound_and_one_use(monkeypatch) -> Non
     assert start.status_code == 200
     start_payload = start.json()
     assert start_payload["required_assurance"] == SESSION_CONFIRMATION
-    assert start_payload["authorization_url"].startswith("https://testserver/")
+    assert start_payload["authorization_url"].startswith("http://testserver/")
     assert "canary::" not in start.text
 
     authorization = client.get(start_payload["authorization_url"])
@@ -507,7 +559,7 @@ def test_human_secret_export_is_exact_pkce_bound_and_one_use(monkeypatch) -> Non
         "http://127.0.0.1:53123/callback"
     )
     assert callback_query["state"] == ["s" * 43]
-    assert callback_query["iss"] == ["https://testserver"]
+    assert callback_query["iss"] == ["http://testserver"]
     code = callback_query["code"][0]
 
     result = client.post(
