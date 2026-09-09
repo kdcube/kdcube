@@ -8,6 +8,8 @@ then runs the normal authorization_code + PKCE flow.
 """
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -59,6 +61,38 @@ def test_register_returns_public_client(client):
     assert body["application_type"] == "native"
     assert body["logo_uri"] == f"{ISSUER}/img/favicon.svg"
     assert body["client_uri"] == ISSUER
+
+
+def test_register_retains_safe_client_metadata_for_the_card(client):
+    response = client.post(
+        "/oauth/register",
+        json={
+            "client_name": "Connection Hub CLI · worker_stream · codex:session-1",
+            "redirect_uris": [CB],
+            "token_endpoint_auth_method": "none",
+            "kdcube_agent_id": "codex:session-1",
+            "kdcube_machine_id": "machine-1",
+        },
+    )
+
+    assert response.status_code == 201
+    registered = response.json()
+    assert registered["kdcube_agent_id"] == "codex:session-1"
+    record = asyncio.run(
+        client.app.state.oauth_grant_store.get_client_record(registered["client_id"])
+    )
+    assert record["metadata"]["client_metadata"]["kdcube_machine_id"] == "machine-1"
+
+
+@pytest.mark.parametrize("field", ["client_secret", "kdcube_access_token"])
+def test_register_rejects_secret_bearing_metadata(client, field):
+    response = client.post(
+        "/oauth/register",
+        json={"redirect_uris": [CB], field: "not-for-storage"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_client_metadata"
 
 
 def test_register_requires_redirect_uris(client):
