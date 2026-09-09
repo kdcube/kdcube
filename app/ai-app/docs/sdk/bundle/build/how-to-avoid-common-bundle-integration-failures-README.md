@@ -350,6 +350,23 @@ neither message points at the declaration:
 routes through the managed MCP guard, which knows the tool name, instead of the
 single-operation REST path.
 
+**Repeated relay `429` responses can reveal gateway identity ordering.** The
+characteristic log pair is a gateway capacity or rate-limit entry for
+`anonymous`, followed by a managed MCP guard entry that accepts the same
+request with `authority=delegated_client`. The gateway counted the request
+before recognizing the card, so callers behind one proxy address and user
+agent shared the anonymous fingerprint and its limits.
+
+Gateway admission resolves a valid live card before generic request rate
+limiting. Its gateway session and rate bucket use `card:<access_id>` as the
+budget subject; its limit class comes from the grantor's platform roles, with
+the registered class as the minimum. This scoped budget subject does not
+replace the grantor or delegated caller identities carried in the authority
+projection. An unknown, invalid, expired, revoked, or resource-mismatched
+bearer remains anonymous at gateway admission; the managed surface guard still
+owns the authorization denial. A gateway `429` carries `Retry-After`, which
+gives clients the actual backoff interval.
+
 ## Recipe: Live Events From Bundle Operations
 
 Do not create bundle-owned raw WebSocket or raw SSE endpoints just to stream

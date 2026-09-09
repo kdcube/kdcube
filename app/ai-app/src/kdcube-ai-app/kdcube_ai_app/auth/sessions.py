@@ -145,6 +145,9 @@ local function merge_user_data(existing_obj, user_obj)
     if user_obj["identity_authority"] ~= nil then
         existing_obj["identity_authority"] = user_obj["identity_authority"]
     end
+    if user_obj["rate_limit_subject"] ~= nil then
+        existing_obj["rate_limit_subject"] = user_obj["rate_limit_subject"]
+    end
 end
 
 local function apply_context(existing_obj, ctx_obj)
@@ -358,6 +361,7 @@ class UserSession:
     timezone: Optional[str] = None
     request_context: Optional[RequestContext] = None
     identity_authority: Optional[Dict[str, Any]] = None
+    rate_limit_subject: Optional[str] = None
 
     def __post_init__(self):
         if isinstance(self.user_type, str):
@@ -374,6 +378,8 @@ class UserSession:
                 self.request_context = None
         if self.identity_authority is not None and not isinstance(self.identity_authority, dict):
             self.identity_authority = None
+        if self.rate_limit_subject is not None:
+            self.rate_limit_subject = str(self.rate_limit_subject).strip() or None
 
         if self.roles is None:
             self.roles = []
@@ -464,6 +470,7 @@ class SessionManager:
             request_context=context,
             timezone=context.user_timezone,
             identity_authority=user_data.get("identity_authority") if user_data else None,
+            rate_limit_subject=user_data.get("rate_limit_subject") if user_data else None,
         )
         if _auth_debug_enabled():
             logger.info(

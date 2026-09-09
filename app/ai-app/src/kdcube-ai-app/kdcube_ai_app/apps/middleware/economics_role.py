@@ -12,6 +12,15 @@ from kdcube_ai_app.apps.chat.sdk.infra.economics.plan_resolution import subscrip
 from kdcube_ai_app.auth.sessions import UserSession, UserType
 
 
+def _economics_user_id(session: UserSession) -> str:
+    authority = (
+        session.identity_authority
+        if isinstance(session.identity_authority, dict)
+        else {}
+    )
+    return str(authority.get("economics_user_id") or session.user_id or "").strip()
+
+
 class EconomicsRoleResolver:
     """
     Resolve economics-driven role overrides.
@@ -49,20 +58,26 @@ class EconomicsRoleResolver:
         return UserType.REGISTERED
 
     async def resolve_role(self, session: UserSession) -> Optional[UserType]:
-        if not session or not session.user_id:
+        if not session:
             return None
-        return await self.resolve_role_for_user_id(session.user_id)
+        user_id = _economics_user_id(session)
+        if not user_id:
+            return None
+        return await self.resolve_role_for_user_id(user_id)
 
     async def ensure_baseline_subscription_for_session(self, session: UserSession) -> None:
-        if not session or not session.user_id:
+        if not session:
             return
         if session.user_type in {UserType.ANONYMOUS, UserType.EXTERNAL}:
+            return
+        user_id = _economics_user_id(session)
+        if not user_id:
             return
 
         plan_id = "admin" if session.user_type == UserType.PRIVILEGED else "free"
         await self._cp.subscription_mgr.ensure_baseline_subscription(
             tenant=self._tenant,
             project=self._project,
-            user_id=session.user_id,
+            user_id=user_id,
             plan_id=plan_id,
         )

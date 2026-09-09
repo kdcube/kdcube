@@ -253,7 +253,7 @@ def _surface_with_bearer(raiser_or_session):
             raise raiser_or_session
         return raiser_or_session
 
-    surface._try_delegated_platform_bearer = _bearer
+    surface._try_delegated_card_bearer = _bearer
     return surface
 
 

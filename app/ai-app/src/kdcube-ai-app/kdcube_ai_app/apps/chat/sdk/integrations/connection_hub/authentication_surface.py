@@ -46,9 +46,15 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentia
     delegated_platform_admin_runtime_projection,
     delegated_request_resource,
     delegated_rest_runtime_projection,
+    resolve_delegated_card_session_projection,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.request_auth import SessionFactory
-from kdcube_ai_app.auth.AuthManager import AuthenticationError, AuthorizationError, PAID_ROLES
+from kdcube_ai_app.auth.AuthManager import (
+    AuthenticationError,
+    AuthorizationError,
+    PAID_ROLES,
+    REGISTERED_ROLE,
+)
 from kdcube_ai_app.auth.sessions import RequestContext, UserSession, UserType
 from kdcube_ai_app.infra.plugin.bundle_store import (
     _get_bundle_props_from_authority as get_bundle_props_from_authority,
@@ -509,6 +515,9 @@ class ConnectionHubAuthenticationSurface:
         roles = list(projection.get("roles") or [])
         permissions = list(projection.get("permissions") or [])
         identity_authority = dict(projection.get("identity_authority") or {})
+        card_principal = _str(projection.get("card_principal"))
+        if card_principal and REGISTERED_ROLE not in roles:
+            roles.append(REGISTERED_ROLE)
         user_id = _str(projection.get("user_id"))
         if not user_id:
             raise AuthorizationError("delegated credential did not resolve a platform user")
@@ -519,6 +528,12 @@ class ConnectionHubAuthenticationSurface:
             "permissions": permissions,
             "identity_authority": identity_authority,
         }
+        rate_limit_subject = _str(
+            projection.get("rate_limit_subject")
+            or identity_authority.get("gateway_rate_limit_subject")
+        )
+        if rate_limit_subject:
+            user_data["rate_limit_subject"] = rate_limit_subject
         session = await session_factory(context, _roles_user_type(roles), user_data)
         session.identity_authority = identity_authority
         logger.info(
@@ -557,7 +572,18 @@ class ConnectionHubAuthenticationSurface:
         admin row serves everything else. The full surface (`__call__`), used
         on non-MCP routes, keeps its historical strict behavior."""
         try:
-            return await self._try_delegated_platform_bearer(request, context, session_factory)
+            card_session = await self._try_delegated_card_bearer(
+                request,
+                context,
+                session_factory,
+            )
+            if card_session is not None:
+                return card_session
+            return await self._try_delegated_platform_bearer(
+                request,
+                context,
+                session_factory,
+            )
         except (AuthenticationError, AuthorizationError):
             return None
         except Exception:
@@ -570,6 +596,30 @@ class ConnectionHubAuthenticationSurface:
                 exc_info=False,
             )
             return None
+
+    async def _try_delegated_card_bearer(
+        self,
+        request: Request,
+        context: RequestContext,
+        session_factory: SessionFactory,
+    ) -> Optional[UserSession]:
+        auth_header = str(request.headers.get("authorization") or "").strip()
+        if not auth_header.lower().startswith("bearer "):
+            return None
+        if self._delegated_platform_resource_config(request) is None:
+            return None
+        projection = await resolve_delegated_card_session_projection(
+            request,
+            authority_id=DEFAULT_DELEGATED_AUTHORITY_ID,
+        )
+        if not projection:
+            return None
+        return await self._session_from_delegated_projection(
+            request=request,
+            context=context,
+            session_factory=session_factory,
+            projection=projection,
+        )
 
     async def _try_delegated_platform_bearer(
         self,

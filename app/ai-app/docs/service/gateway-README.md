@@ -19,7 +19,7 @@ This document describes **how the gateway actually runs today** in this codebase
 
 The gateway provides:
 - **Session resolution** (auth → user/session/user_type)
-- **Rate limiting** (per session, per user type, burst + hourly)
+- **Rate limiting** (per resolved budget subject, per user type, burst + hourly)
 - **Backpressure** (tenant/project queue + processor health admission control)
 - **Circuit breakers** (fail‑fast on system failures)
 - **Atomic enqueue gating** (admit/deny at enqueue time)
@@ -38,14 +38,22 @@ graph TD
 ```
 
 ### Rate limit vs backpressure scope (important)
-- **Rate limits are per session** (keyed by `session_id`, tenant/project‑scoped in Redis).
+- **Rate limits are per resolved budget subject**, tenant/project-scoped in
+  Redis. The ordinary subject is `session_id`. An authentication surface may
+  provide a stable subject when several transport sessions represent one
+  governed caller. A live delegated Card uses `card:<access_id>` so proxy
+  address and user agent do not collapse separate callers into one anonymous
+  budget.
+- For that Card session, `identity_authority.economics_user_id` keeps role
+  resolution and baseline subscription attached to the linked grantor. The
+  Card owns the request counter; the grantor owns the economics tier.
 - **Backpressure is per tenant/project** (global queue + healthy processor capacity).
 
 ```mermaid
 graph TD
-  subgraph Per-Session
-    S1[session_id=A] --> RL1[Rate limiter]
-    S2[session_id=B] --> RL2[Rate limiter]
+  subgraph Per-Budget-Subject
+    S1[subject=A] --> RL1[Rate limiter]
+    S2[subject=B] --> RL2[Rate limiter]
   end
   subgraph Per-Tenant/Project
     Q[Shared queues + proc heartbeats] --> BP[Backpressure gate]
@@ -369,8 +377,10 @@ Use the same shape as:
 ```
 
 ### Quick key check (Redis)
-- **Rate limits (per session):**  
-  `{tenant}:{project}:kdcube:system:ratelimit:{session_id}*`
+- **Rate limits (per resolved budget subject):**
+  `{tenant}:{project}:kdcube:system:ratelimit:{subject}*`
+  The ordinary subject is `session_id`; a live delegated Card uses
+  `card:<access_id>`.
 - **Queues + backpressure (per tenant/project):**  
   `{tenant}:{project}:kdcube:chat:prompt:queue:{role}`  
   `{tenant}:{project}:kdcube:heartbeat:process:*` (capacity source)  

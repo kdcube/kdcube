@@ -14,10 +14,19 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.authentication_surf
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth import (
     surface_guard,
 )
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.request_auth import (
+    CONNECTION_HUB_DELEGATED_BEARER_ONLY,
+    RequestAuthResolver,
+)
 from kdcube_ai_app.auth.sessions import RequestContext, UserSession, UserType
 
 
 PLATFORM_RESOURCE_PATTERN = "https://testserver*/api/platform/admin/redeploy"
+MCP_RESOURCE = (
+    "https://testserver:80/api/integrations/bundles/demo/project/"
+    "records@1-0/public/mcp/records"
+)
+MCP_PATH = "/api/integrations/bundles/demo/project/records@1-0/public/mcp/records"
 
 
 class _GrantStore:
@@ -37,6 +46,24 @@ PLATFORM_CONNECTIONS = {
                     "resource": PLATFORM_RESOURCE_PATTERN,
                     "grants": ["devops:deploy"],
                     "tools": {"platform_admin_redeploy": {"grants": ["devops:deploy"]}},
+                },
+            ],
+        },
+    },
+}
+
+MCP_CONNECTIONS = {
+    "delegated_credentials": {
+        "oauth": {
+            "enabled": True,
+            "resources": [
+                {
+                    "resource": MCP_RESOURCE,
+                    "grants": ["records:read"],
+                    "tools": {
+                        "records_list": {"grants": ["records:read"]},
+                        "records_get": {"grants": ["records:read"]},
+                    },
                 },
             ],
         },
@@ -254,6 +281,143 @@ async def test_connection_hub_surface_accepts_delegated_bearer_for_platform_reso
     assert session.permissions == ["devops:deploy"]
     assert session.identity_authority["delegate_identity"] == "integration:automation:platform-user-1"
     assert session.identity_authority["resource_grants"] == {PLATFORM_RESOURCE_PATTERN: ["devops:deploy"]}
+
+
+async def test_delegated_bearer_slice_projects_card_principal_and_grantor_role(monkeypatch):
+    access_id = "oauth-7211bfadcbe1e3b8"
+
+    async def fake_authenticate(token: str):
+        if token != "card-token":
+            return None
+        return {
+            "sub": "integration:worker:platform-user-1",
+            "roles": ["kdcube:role:delegated-client"],
+            "permissions": ["records:read"],
+        }
+
+    async def fake_live_grant(_request, grant_record):
+        return grant_record
+
+    monkeypatch.setattr(
+        surface_guard,
+        "_authenticate_delegated_client_access_token",
+        fake_authenticate,
+    )
+    monkeypatch.setattr(surface_guard, "_live_grant_record", fake_live_grant)
+
+    surface = ConnectionHubAuthenticationSurface(
+        redis=None,
+        pg_pool=None,
+        tenant="demo-tenant",
+        project="demo-project",
+    )
+    surface._delegated_oauth_raw_config = lambda _request: {
+        "enabled": True,
+        "resources": MCP_CONNECTIONS["delegated_credentials"]["oauth"]["resources"],
+    }
+    grant_record = {
+        "registry_access_id": access_id,
+        "client_id": "worker-client",
+        "expires_at": 2_000_000_000,
+        "credential": _authority(
+            scopes=["records:read"],
+            resource=MCP_RESOURCE,
+            grantor_subject="platform-user-1",
+            subject="integration:worker:platform-user-1",
+        ),
+        "grantor_authority": {
+            "grantor_roles": ["kdcube:role:paid"],
+            "grantor_permissions": ["records:read"],
+        },
+    }
+    request = _request(
+        {"Authorization": "Bearer card-token"},
+        path=MCP_PATH,
+        app=_App(grant_record, connections=MCP_CONNECTIONS),
+    )
+
+    async def _session_factory(context, user_type, user_data):
+        return UserSession(
+            session_id="s-card",
+            user_type=user_type,
+            user_id=user_data["user_id"],
+            username=user_data["username"],
+            roles=user_data["roles"],
+            permissions=user_data["permissions"],
+            request_context=context,
+            identity_authority=user_data["identity_authority"],
+            rate_limit_subject=user_data.get("rate_limit_subject"),
+        )
+
+    session = await surface.authenticate_delegated_bearer(
+        request,
+        RequestContext(
+            client_ip="127.0.0.1",
+            user_agent="connection-hub-cli",
+            authorization_header="Bearer card-token",
+        ),
+        _session_factory,
+    )
+
+    assert session is not None
+    assert session.user_id == f"card:{access_id}"
+    assert session.rate_limit_subject == f"card:{access_id}"
+    assert session.user_type == UserType.PAID
+    assert "kdcube:role:paid" in session.roles
+    assert "kdcube:role:registered" in session.roles
+    assert session.identity_authority["grantor_user_id"] == "platform-user-1"
+    assert session.identity_authority["delegated_card_binding"]["access_id"] == access_id
+
+
+async def test_invalid_delegated_card_bearer_resolves_anonymous(monkeypatch):
+    async def fake_authenticate(_token: str):
+        return None
+
+    monkeypatch.setattr(
+        surface_guard,
+        "_authenticate_delegated_client_access_token",
+        fake_authenticate,
+    )
+    surface = ConnectionHubAuthenticationSurface(
+        redis=None,
+        pg_pool=None,
+        tenant="demo-tenant",
+        project="demo-project",
+    )
+    surface._delegated_oauth_raw_config = lambda _request: {
+        "enabled": True,
+        "resources": MCP_CONNECTIONS["delegated_credentials"]["oauth"]["resources"],
+    }
+
+    async def _session_factory(context, user_type, user_data):
+        assert user_data is None
+        return UserSession(
+            session_id="s-anonymous",
+            user_type=user_type,
+            request_context=context,
+        )
+
+    resolver = RequestAuthResolver(
+        auth_manager=None,
+        session_factory=_session_factory,
+    )
+    resolver.install_connection_hub_surface(surface)
+    session = await resolver.resolve_session(
+        _request(
+            {"Authorization": "Bearer invalid"},
+            path=MCP_PATH,
+            app=_App(None, connections=MCP_CONNECTIONS),
+        ),
+        RequestContext(
+            client_ip="127.0.0.1",
+            user_agent="connection-hub-cli",
+            authorization_header="Bearer invalid",
+        ),
+        allow_connection_hub=CONNECTION_HUB_DELEGATED_BEARER_ONLY,
+    )
+
+    assert session.user_type == UserType.ANONYMOUS
+    assert session.user_id is None
 
 
 async def test_connection_hub_surface_accepts_admin_delegated_bearer_for_all_resources(monkeypatch):

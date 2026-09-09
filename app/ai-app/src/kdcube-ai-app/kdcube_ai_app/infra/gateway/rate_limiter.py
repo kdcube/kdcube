@@ -16,6 +16,14 @@ from kdcube_ai_app.infra.redis.client import get_async_redis_client
 
 logger = logging.getLogger(__name__)
 
+
+def rate_limit_subject(session: UserSession) -> str:
+    """Return the stable subject that owns this request budget."""
+
+    subject = str(getattr(session, "rate_limit_subject", None) or "").strip()
+    return subject or str(session.session_id)
+
+
 class RateLimitError(GatewayError):
     """Rate limit exceeded"""
     def __init__(self, message: str, retry_after: int = 3600, session: UserSession = None):
@@ -82,7 +90,7 @@ class RateLimiter:
         if not config:
             return  # No limits configured
 
-        rate_key = f"{self.RATE_LIMIT_PREFIX}:{session.session_id}"
+        rate_key = f"{self.RATE_LIMIT_PREFIX}:{rate_limit_subject(session)}"
         current_time = time.time()
 
         # Use Redis pipeline for atomic operations (your existing code)

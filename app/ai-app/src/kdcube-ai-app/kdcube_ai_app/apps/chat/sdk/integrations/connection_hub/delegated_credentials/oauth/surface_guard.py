@@ -79,6 +79,7 @@ from connection_hub.hub.resolver import (
     resolve_delegated_authority_projection,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.named_service_admission import (
+    DELEGATED_CARD_BINDING_SCHEMA,
     delegated_card_binding_from_request,
     store_managed_named_service_admission_snapshot,
 )
@@ -675,8 +676,20 @@ def _delegated_runtime_projection(
         }
     )
     delegated_card_binding = delegated_card_binding_from_request(request)
+    if not delegated_card_binding and credential_view.registry_access_id:
+        delegated_card_binding = {
+            "schema": DELEGATED_CARD_BINDING_SCHEMA,
+            "access_id": credential_view.registry_access_id,
+            "client_id": credential_view.client_id,
+            "grantor_user_id": grantor_user_id,
+            "delegate_identity": delegate_identity,
+            "expires_at": int(grant_record.get("expires_at") or 0),
+        }
     if delegated_card_binding:
         identity_authority["delegated_card_binding"] = delegated_card_binding
+        identity_authority["gateway_rate_limit_subject"] = (
+            f"card:{delegated_card_binding['access_id']}"
+        )
     identity_authority = {
         key: value for key, value in identity_authority.items()
         if value not in ("", None, [], {})
@@ -963,6 +976,51 @@ async def _authorize_delegated_managed_request(
         )
 
     return None, user, envelope, grant_record or {}
+
+
+async def resolve_delegated_card_session_projection(
+    request: Request,
+    *,
+    authority_id: str,
+) -> dict[str, Any]:
+    """Resolve a live card bearer into gateway session facts.
+
+    This is the identity-only entrance used before generic gateway admission.
+    It reuses the managed guard's bearer verification, live-card restoration,
+    and request-resource boundary. Tool and operation authorization remain with
+    the managed MCP/REST guard that owns the concrete surface call.
+    """
+
+    denial, _user, envelope, grant_record = await _authorize_delegated_managed_request(
+        request=request,
+        auth=None,
+        authority_id=authority_id,
+        roles=(),
+        permissions=(),
+        logger=LOGGER,
+        surface_label="gateway_identity",
+    )
+    if denial is not None:
+        return {}
+
+    view = DelegatedCredentialView.from_envelope(envelope, grant_record)
+    if not view.registry_access_id:
+        return {}
+
+    runtime = _delegated_runtime_projection(request, surface="gateway")
+    if not runtime:
+        return {}
+
+    card_principal = f"card:{view.registry_access_id}"
+    identity_authority = dict(runtime.get("identity_authority") or {})
+    identity_authority["gateway_rate_limit_subject"] = card_principal
+    return {
+        **runtime,
+        "user_id": card_principal,
+        "username": runtime.get("delegate_identity") or card_principal,
+        "identity_authority": identity_authority,
+        "card_principal": card_principal,
+    }
 
 
 async def authorize_delegated_mcp_proxy_request(
@@ -1325,5 +1383,6 @@ __all__ = [
     "managed_mcp_auth_policy",
     "managed_rest_auth_policy",
     "mcp_auth_mode",
+    "resolve_delegated_card_session_projection",
     "rest_auth_mode",
 ]

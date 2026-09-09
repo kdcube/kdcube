@@ -25,8 +25,19 @@ from kdcube_ai_app.auth.sessions import SessionManager, UserType, UserSession, R
 
 logger = logging.getLogger(__name__)
 
+
 def _auth_debug_enabled() -> bool:
     return os.getenv("AUTH_DEBUG", "").lower() in {"1", "true", "yes", "on"}
+
+
+def _session_economics_user_id(user_data: Optional[Dict]) -> Optional[str]:
+    if not user_data:
+        return None
+    authority = user_data.get("identity_authority")
+    authority = authority if isinstance(authority, dict) else {}
+    user_id = authority.get("economics_user_id") or user_data.get("user_id")
+    normalized = str(user_id or "").strip()
+    return normalized or None
 
 
 class RequestGateway:
@@ -94,14 +105,14 @@ class RequestGateway:
             user_data: Optional[Dict] = None,
     ) -> UserSession:
         effective_user_type = user_type
+        economics_user_id = _session_economics_user_id(user_data)
         if (
                 self.econ_role_resolver
                 and user_type != UserType.PRIVILEGED
-                and user_data
-                and user_data.get("user_id")
+                and economics_user_id
         ):
             try:
-                new_role = await self.econ_role_resolver(user_data["user_id"])
+                new_role = await self.econ_role_resolver(economics_user_id)
                 if new_role:
                     effective_user_type = new_role
             except Exception as e:
