@@ -114,11 +114,14 @@ const ChatSidePanel = () => {
         })
     }, [currentBundleId, mainViewActive, visiblePanel, widgets])
 
-    const [maxWidth, setMaxWidth] = useState<number>(window.innerWidth / 2)
+    // The side panel may take up to two thirds of the window: the widgets it
+    // hosts (Connection Hub above all) are fluid and use the width they get.
+    const SIDE_PANEL_MAX_FRACTION = 2 / 3
+    const [maxWidth, setMaxWidth] = useState<number>(window.innerWidth * SIDE_PANEL_MAX_FRACTION)
 
     useEffect(() => {
         const observer = new ResizeObserver((entries) => {
-            entries.forEach(e => setMaxWidth(e.contentRect.width /2))
+            entries.forEach(e => setMaxWidth(e.contentRect.width * SIDE_PANEL_MAX_FRACTION))
         })
         observer.observe(document.body)
         return () => {

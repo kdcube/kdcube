@@ -78,7 +78,12 @@ const PanelContainer = ({children, className, reload, visible = true}: PanelCont
 
     return useMemo(() => {
         return <motion.div
-            className={fullScreen ? "w-screen h-screen fixed z-40 top-0 left-0" : className}
+            // Focus mode: a framed overlay with a margin around it, not a bare
+            // full-viewport takeover - the page is still visible behind it and
+            // the panel reads as a deliberate stage rather than a glitch.
+            className={fullScreen
+                ? "fixed z-40 inset-4 md:inset-6 rounded-xl overflow-hidden shadow-2xl border border-slate-200 bg-white"
+                : className}
             style={{
                 pointerEvents: visible ? "auto" : 'none',
             }}

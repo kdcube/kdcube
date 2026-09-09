@@ -2389,7 +2389,8 @@ bundles:
               enabled: true
               connector_apps:
                 demo:
-                  label: "KDCube LinkedIn"
+                  label: "KDCube LinkedIn - personal profile"
+                  description: "Posts and reads as you, on your own LinkedIn profile."
                   enabled: true
                   client_id: "<LINKEDIN_OAUTH_CLIENT_ID>"
                   client_secret_ref: "connections.delegated_to_kdcube.providers.linkedin.connector_apps.demo.client_secret"
@@ -2403,7 +2404,8 @@ bundles:
                 # ceiling carries only the org claims, which routes org
                 # connects to this app (claims-driven connector narrowing).
                 org:
-                  label: "KDCube LinkedIn Org"
+                  label: "KDCube LinkedIn - organization pages"
+                  description: "Posts and reads on the LinkedIn Pages you administer."
                   enabled: false
                   client_id: "<LINKEDIN_ORG_OAUTH_CLIENT_ID>"
                   client_secret_ref: "connections.delegated_to_kdcube.providers.linkedin.connector_apps.org.client_secret"
@@ -2595,6 +2597,18 @@ bundles:
             enabled: true
             src_folder: ui/widgets/connections
             build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
+        # Standalone Connection Hub site: /sites/connections/ on this runtime.
+        # Add the public ngrok hostname to `hosts` to also serve it at `/` of
+        # that host (route_prefix is /platform, so sites are permitted).
+        main_view:
+          src_folder: ui/main
+          build_command: cp index.html site.js styles.css <VI_BUILD_DEST_ABSOLUTE_PATH>/
+          site:
+            enabled: true
+            alias: connections
+            default: false
+            hosts: []
+            title: Connection Hub
   - id: kdcube-services@1-0
     name: KDCube Services
     singleton: false
