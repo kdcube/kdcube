@@ -434,6 +434,28 @@ def _deep_merge_bundle_props(base: Dict[str, Any], override: Dict[str, Any]) -> 
     return out
 
 
+def _effective_rest_bundle_props(
+        *,
+        workflow: Any,
+        props: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Merge code-owned defaults with descriptor-owned overrides.
+
+    Direct API and MCP routes need this effective view before admission so
+    policy declared by ``configuration_defaults()`` is enforced even when the
+    descriptor carries no override. This helper is intentionally side-effect
+    free; request hooks remain behind the authorization boundary.
+    """
+    defaults = copy.deepcopy(getattr(workflow, "bundle_props_defaults", None) or {})
+    if not defaults:
+        defaults = copy.deepcopy(getattr(workflow, "bundle_props", None) or {})
+
+    merger = getattr(workflow, "_deep_merge_props", None)
+    if callable(merger):
+        return merger(defaults, props or {})
+    return _deep_merge_bundle_props(defaults, props or {})
+
+
 async def _apply_rest_bundle_props_to_workflow(
         *,
         workflow: Any,
@@ -443,15 +465,7 @@ async def _apply_rest_bundle_props_to_workflow(
     REST/MCP/widget calls bypass BaseEntrypoint.run(), so apply persisted
     bundle props explicitly before invoking decorated bundle methods.
     """
-    defaults = copy.deepcopy(getattr(workflow, "bundle_props_defaults", None) or {})
-    if not defaults:
-        defaults = copy.deepcopy(getattr(workflow, "bundle_props", None) or {})
-
-    merger = getattr(workflow, "_deep_merge_props", None)
-    if callable(merger):
-        merged = merger(defaults, props or {})
-    else:
-        merged = _deep_merge_bundle_props(defaults, props or {})
+    merged = _effective_rest_bundle_props(workflow=workflow, props=props)
 
     try:
         setattr(workflow, "bundle_props", merged)
@@ -5076,11 +5090,14 @@ async def _call_bundle_mcp_inner(
         project=project_id,
         bundle_id=spec_resolved.id,
     )
-    endpoint_spec = apply_mcp_overrides(endpoint_spec, _props)
-    await _apply_rest_bundle_props_to_workflow(workflow=workflow, props=_props)
-    if not is_bundle_enabled(_props):
+    effective_props = _effective_rest_bundle_props(
+        workflow=workflow,
+        props=_props,
+    )
+    endpoint_spec = apply_mcp_overrides(endpoint_spec, effective_props)
+    if not is_bundle_enabled(effective_props):
         raise HTTPException(status_code=404, detail=f"Bundle {spec_resolved.id} is disabled")
-    if not is_mcp_enabled(_props, endpoint_spec):
+    if not is_mcp_enabled(effective_props, endpoint_spec):
         raise HTTPException(status_code=404, detail=f"Bundle MCP endpoint {endpoint_alias} is not available")
 
     mcp_request_body: bytes | None = None
@@ -5111,6 +5128,8 @@ async def _call_bundle_mcp_inner(
             bundle_id=spec_resolved.id,
             endpoint_alias=endpoint_alias,
         )
+
+    await _apply_rest_bundle_props_to_workflow(workflow=workflow, props=_props)
 
     try:
         fn = getattr(workflow, endpoint_spec.method_name)
@@ -5675,9 +5694,13 @@ async def _call_bundle_op_inner(
         project=project_id,
         bundle_id=spec_resolved.id,
     )
-    endpoint_spec = apply_api_overrides(endpoint_spec, _props)
+    effective_props = _effective_rest_bundle_props(
+        workflow=workflow,
+        props=_props,
+    )
+    endpoint_spec = apply_api_overrides(endpoint_spec, effective_props)
     endpoint_auth = provider_surface_auth(
-        _props,
+        effective_props,
         "api",
         alias=endpoint_spec.alias,
         http_method=endpoint_spec.http_method,
@@ -5709,9 +5732,9 @@ async def _call_bundle_op_inner(
     if not _endpoint_visible(endpoint_spec.user_types, endpoint_spec.roles, session, endpoint_auth):
         raise HTTPException(status_code=403, detail=f"Bundle operation {operation} is not visible to this user")
     await _apply_rest_bundle_props_to_workflow(workflow=workflow, props=_props)
-    if not is_bundle_enabled(_props):
+    if not is_bundle_enabled(effective_props):
         raise HTTPException(status_code=404, detail=f"Bundle {spec_resolved.id} is disabled")
-    if not is_api_enabled(_props, endpoint_spec):
+    if not is_api_enabled(effective_props, endpoint_spec):
         raise HTTPException(status_code=404, detail=f"Bundle operation {operation} is not available")
     await _enforce_bundle_operation_csrf(
         endpoint_spec=endpoint_spec,

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import uuid
 from typing import Any, Mapping
 
@@ -66,6 +67,12 @@ def _session_from_socket_meta(socket_session: Mapping[str, Any] | None) -> UserS
         roles=list(data.get("roles") or []),
         permissions=list(data.get("permissions") or []),
         timezone=data.get("timezone") or "unknown",
+        identity_authority=(
+            dict(data.get("identity_authority"))
+            if isinstance(data.get("identity_authority"), Mapping)
+            else None
+        ),
+        rate_limit_subject=data.get("rate_limit_subject"),
     )
 
 
@@ -80,6 +87,8 @@ def _actor_from_session(session: UserSession) -> dict[str, Any]:
         "roles": list(session.roles or []),
         "permissions": list(session.permissions or []),
         "timezone": session.timezone,
+        "identity_authority": dict(session.identity_authority or {}),
+        "rate_limit_subject": session.rate_limit_subject,
     }
 
 
@@ -120,6 +129,20 @@ class DataBusSocketIOIngress:
                     "index": None,
                     "error": "bundle_id is not allowed by federated token",
                 }])
+            try:
+                expires_at = int(federated_claims.get("exp") or 0)
+            except (TypeError, ValueError):
+                expires_at = 0
+            if expires_at <= int(time.time()):
+                return self._ack(
+                    status="rejected",
+                    rejected=[{
+                        "index": None,
+                        "error": "federated Data Bus session is expired",
+                        "error_type": "federated_token_expired",
+                        "status": 401,
+                    }],
+                )
         messages = data.get("messages")
         if not isinstance(messages, list) or not messages:
             return self._ack(status="rejected", rejected=[{"index": None, "error": "messages[] is required"}])

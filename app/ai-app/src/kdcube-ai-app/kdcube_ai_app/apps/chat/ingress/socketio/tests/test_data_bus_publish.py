@@ -21,6 +21,7 @@ class FakeRedis:
     def __init__(self):
         self.streams = {}
         self.values = {}
+        self.sorted = {}
         self._next_id = 1
 
     async def xadd(self, key, fields, maxlen=None, approximate=True):
@@ -50,6 +51,35 @@ class FakeRedis:
     async def expire(self, key, ttl):
         del key, ttl
         return True
+
+    async def delete(self, key):
+        self.values.pop(key, None)
+        return 1
+
+    async def zadd(self, key, values):
+        self.sorted.setdefault(key, {}).update(values)
+        return len(values)
+
+    async def zrem(self, key, member):
+        self.sorted.get(key, {}).pop(member, None)
+        return 1
+
+    async def zremrangebyscore(self, key, low, high):
+        del low
+        cutoff = float(high)
+        for member, score in list(self.sorted.get(key, {}).items()):
+            if float(score) <= cutoff:
+                self.sorted[key].pop(member, None)
+        return 1
+
+    async def zrangebyscore(self, key, low, high):
+        minimum = float(low)
+        maximum = float("inf") if high == "+inf" else float(high)
+        return [
+            member
+            for member, score in self.sorted.get(key, {}).items()
+            if minimum <= float(score) <= maximum
+        ]
 
 
 class FakePipeline:
@@ -98,6 +128,8 @@ class FakeSessionManager:
             permissions=list(user_data.get("permissions") or []),
             timezone="UTC",
             request_context=context,
+            identity_authority=user_data.get("identity_authority"),
+            rate_limit_subject=user_data.get("rate_limit_subject"),
         )
         self.sessions[session.session_id] = session
         return session
@@ -125,10 +157,14 @@ class FakeSocketServer:
 class FakeComm:
     def __init__(self):
         self.acquired = []
+        self.released = []
 
     async def acquire_session_channel(self, session_id, callback, tenant, project):
         del callback
         self.acquired.append((session_id, tenant, project))
+
+    async def release_session_channel(self, session_id, tenant, project):
+        self.released.append((session_id, tenant, project))
 
 
 def _socket_session():
@@ -319,6 +355,49 @@ async def test_data_bus_publish_accepts_messages_into_bundle_stream(monkeypatch)
         "socket_id": "socket-1",
     }
     assert "external_events" not in record
+
+
+@pytest.mark.asyncio
+async def test_data_bus_publish_rejects_an_expired_federated_session() -> None:
+    redis = FakeRedis()
+    ingress = DataBusSocketIOIngress(app=_app(redis))
+    socket_session = {
+        **_socket_session(),
+        "federated_claims": {
+            "bundle_id": "task-tracker@1-0",
+            "exp": 1,
+        },
+    }
+
+    ack = await ingress.handle_publish(
+        sid="socket-1",
+        socket_session=socket_session,
+        data={
+            "schema": "kdcube.data_bus.ingress.v1",
+            "bundle_id": "task-tracker@1-0",
+            "messages": [
+                {
+                    "message_id": "m1",
+                    "subject": "task_tracker.canvas.patch",
+                    "object_ref": "canvas:main",
+                    "idempotency_key": "op-1",
+                    "payload": {},
+                }
+            ],
+        },
+    )
+
+    assert ack["status"] == "rejected"
+    assert ack["accepted"] == []
+    assert ack["rejected"] == [
+        {
+            "index": None,
+            "error": "federated Data Bus session is expired",
+            "error_type": "federated_token_expired",
+            "status": 401,
+        }
+    ]
+    assert redis.streams == {}
 
 
 @pytest.mark.asyncio
@@ -690,7 +769,7 @@ async def test_socketio_chat_message_and_data_bus_publish_coexist_without_cross_
     assert "external_events" not in record
 
 
-async def _federated_handler(monkeypatch):
+async def _federated_handler(monkeypatch, *, identity_authority=None):
     from kdcube_ai_app.apps.chat.sdk import config as sdk_config
 
     async def fake_get_secret(key, default=None, **kwargs):
@@ -720,6 +799,7 @@ async def _federated_handler(monkeypatch):
         user_id="telegram:42",
         user_type=UserType.REGISTERED,
         username="telegram-user",
+        identity_authority=identity_authority,
         secret="test-secret",
     )
 
@@ -737,7 +817,15 @@ async def _federated_handler(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_socketio_connect_accepts_scoped_federated_data_bus_token(monkeypatch):
-    handler, grant = await _federated_handler(monkeypatch)
+    authority = {
+        "delegated_card_binding": {
+            "access_id": "worker-card-a",
+            "grantor_user_id": "user-a",
+        }
+    }
+    handler, grant = await _federated_handler(
+        monkeypatch, identity_authority=authority
+    )
 
     ok = await handler._handle_connect(
         "socket-1",
@@ -758,7 +846,69 @@ async def test_socketio_connect_accepts_scoped_federated_data_bus_token(monkeypa
     assert handler._sid_to_session_id["socket-1"] == grant.session.session_id
     assert handler.sio.rooms == [("socket-1", grant.session.session_id)]
     assert handler.sio.saved_sessions["socket-1"]["user_session"]["user_id"] == "telegram:42"
+    assert (
+        handler.sio.saved_sessions["socket-1"]["user_session"]["identity_authority"]
+        == authority
+    )
     assert handler.sio.saved_sessions["socket-1"]["bundle_id"] == "task-tracker@1-0"
+    assert any(
+        "principal:" in key and rows
+        for key, rows in handler.app.state.redis_async.sorted.items()
+    )
+
+
+@pytest.mark.asyncio
+async def test_federated_disconnect_removes_live_route_and_releases_channel(monkeypatch):
+    handler, grant = await _federated_handler(monkeypatch)
+
+    assert await handler._handle_connect(
+        "socket-1",
+        {
+            "HTTP_ORIGIN": "https://app.example",
+            "REMOTE_ADDR": "127.0.0.1",
+            "HTTP_USER_AGENT": "pytest",
+        },
+        {
+            "tenant": "tenant-a",
+            "project": "project-a",
+            "bundle_id": "task-tracker@1-0",
+            "federated_token": grant.token,
+        },
+    ) is True
+
+    await handler._handle_disconnect("socket-1")
+
+    assert all(
+        not rows for rows in handler.app.state.redis_async.sorted.values()
+    )
+    assert "socket-1" not in handler._sid_to_session_id
+    assert "socket-1" not in handler._sid_to_tenant_project
+    assert handler._comm.released == [
+        (grant.session.session_id, "tenant-a", "project-a")
+    ]
+
+
+def test_data_bus_actor_preserves_delegated_authority_for_handler_policy() -> None:
+    authority = {
+        "delegated_card_binding": {
+            "access_id": "worker-card-a",
+            "grantor_user_id": "user-a",
+        }
+    }
+    session = pub._session_from_socket_meta(
+        {
+            "user_session": {
+                **_socket_session()["user_session"],
+                "identity_authority": authority,
+                "rate_limit_subject": "card:worker-card-a",
+            }
+        }
+    )
+
+    actor = pub._actor_from_session(session)
+
+    assert actor["identity_authority"] == authority
+    assert actor["rate_limit_subject"] == "card:worker-card-a"
 
 
 @pytest.mark.asyncio

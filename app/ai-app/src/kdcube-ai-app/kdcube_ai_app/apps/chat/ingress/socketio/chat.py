@@ -14,7 +14,7 @@ import uuid
 import logging
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 import socketio
 from fastapi import HTTPException
@@ -24,6 +24,9 @@ from kdcube_ai_app.auth.sessions import UserSession, UserType, RequestContext
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.federated_tokens.data_bus import (
     FederatedTokenError,
     verify_federated_data_bus_token,
+)
+from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.live_sessions import (
+    DataBusLiveSessionRegistry,
 )
 
 from kdcube_ai_app.apps.chat.sdk.protocol import (
@@ -362,6 +365,7 @@ class SocketIOChatHandler:
         #         return False
 
         # 7) save socket session metadata (store ctx too!)
+        acquired_session_id = None
         try:
             tenant = auth.get("tenant")
             project = auth.get("project")
@@ -393,6 +397,32 @@ class SocketIOChatHandler:
                 tenant=tenant,
                 project=project,
             )
+            acquired_session_id = session.session_id
+
+            # Presence means this socket can actually receive a push. Publish
+            # the routing index only after its room and Redis subscription are
+            # ready, otherwise a concurrent event can be reported as delivered
+            # while it has nowhere to fan out.
+            if isinstance(federated_claims, Mapping):
+                principal = str(
+                    getattr(session, "rate_limit_subject", None)
+                    or session.user_id
+                    or ""
+                ).strip()
+                expires_at = int(federated_claims.get("exp") or 0)
+                if not principal or expires_at <= 0:
+                    raise ValueError("federated Data Bus session is missing principal or expiry")
+                await DataBusLiveSessionRegistry(
+                    getattr(self.app.state, "redis_async", None)
+                ).register(
+                    tenant=str(tenant or ""),
+                    project=str(project or ""),
+                    bundle_id=str(auth.get("bundle_id") or ""),
+                    principal=principal,
+                    session_id=session.session_id,
+                    socket_id=sid,
+                    expires_at=expires_at,
+                )
 
             await self.sio.emit("session_info", {
                 "session_id": session.session_id,
@@ -410,16 +440,52 @@ class SocketIOChatHandler:
 
         except Exception as e:
             logger.error("WS connect finalization failed: %s", e)
+            if isinstance(federated_claims, Mapping):
+                redis = getattr(getattr(self.app, "state", None), "redis_async", None)
+                if redis is not None:
+                    try:
+                        await DataBusLiveSessionRegistry(redis).unregister(
+                            socket_id=sid
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Failed to roll back live Data Bus socket sid=%s",
+                            sid,
+                            exc_info=True,
+                        )
+            if acquired_session_id:
+                try:
+                    await self._comm.release_session_channel(
+                        acquired_session_id,
+                        tenant=tenant,
+                        project=project,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to release Data Bus session channel session_id=%s",
+                        acquired_session_id,
+                        exc_info=True,
+                    )
+            self._sid_to_session_id.pop(sid, None)
+            self._sid_to_tenant_project.pop(sid, None)
             return False
 
     async def _handle_disconnect(self, sid):
         logger.info("Chat client disconnected: %s", sid)
+        redis = getattr(getattr(self.app, "state", None), "redis_async", None)
+        if redis is not None:
+            try:
+                await DataBusLiveSessionRegistry(redis).unregister(socket_id=sid)
+            except Exception:
+                logger.warning(
+                    "Failed to unregister live Data Bus socket sid=%s", sid, exc_info=True
+                )
         session_id = self._sid_to_session_id.pop(sid, None)
         if session_id:
-            tenant_project = self._sid_to_tenant_project.get(sid) or {}
+            tenant_project = self._sid_to_tenant_project.pop(sid, None) or {}
             await self._comm.release_session_channel(session_id,
-                                                     tenant=tenant_project["tenant"],
-                                                     project=tenant_project["project"])
+                                                     tenant=tenant_project.get("tenant"),
+                                                     project=tenant_project.get("project"))
 
 
     # ---------- CHAT MESSAGE with GATING (restored) ----------

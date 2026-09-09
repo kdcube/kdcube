@@ -137,6 +137,41 @@ def test_public_api_request_session_is_anonymous_without_gateway_session():
     assert resolved.user_id is None
 
 
+def test_effective_rest_bundle_props_keeps_descriptor_precedence():
+    workflow = SimpleNamespace(
+        bundle_props_defaults={
+            "surfaces": {
+                "as_provider": {
+                    "mcp": {
+                        "worker_stream": {
+                            "auth": {"mode": "managed", "authority_id": "default"}
+                        }
+                    }
+                }
+            }
+        }
+    )
+
+    effective = integrations._effective_rest_bundle_props(
+        workflow=workflow,
+        props={
+            "surfaces": {
+                "as_provider": {
+                    "mcp": {
+                        "worker_stream": {
+                            "auth": {"mode": "managed", "authority_id": "configured"}
+                        }
+                    }
+                }
+            }
+        },
+    )
+
+    assert effective["surfaces"]["as_provider"]["mcp"]["worker_stream"][
+        "auth"
+    ] == {"mode": "managed", "authority_id": "configured"}
+
+
 @pytest.fixture(autouse=True)
 def _default_authoritative_bundle_props(monkeypatch):
     monkeypatch.setattr(integrations, "_authoritative_bundle_props", lambda **kwargs: {})
@@ -1363,6 +1398,84 @@ async def test_public_webhook_can_resolve_identity_through_internal_peer_operati
 
 
 @pytest.mark.asyncio
+async def test_call_bundle_api_inner_enforces_auth_from_code_defaults(monkeypatch):
+    class _ManagedDefaultsWorkflow:
+        bundle_props = {}
+        bundle_props_defaults = {
+            "surfaces": {
+                "as_provider": {
+                    "api": {
+                        "public": {
+                            "worker_claim": {
+                                "auth": {
+                                    "mode": "managed",
+                                    "authority_id": "delegated_client",
+                                    "grants": ["work:relay"],
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        @api(method="POST", alias="worker_claim", route="public")
+        async def worker_claim(self, **kwargs):
+            return kwargs
+
+    captured = {}
+
+    async def _load_bundle_workflow(**kwargs):
+        del kwargs
+        return (
+            _ManagedDefaultsWorkflow(),
+            SimpleNamespace(id="problem-board@1-0"),
+            "tenant-a",
+            "project-a",
+        )
+
+    async def _authorize_delegated_rest_request(
+        *, request, auth, operation, method
+    ):
+        del request
+        captured.update(auth=auth, operation=operation, method=method)
+        return JSONResponse({"error": "authorization_required"}, status_code=401)
+
+    monkeypatch.setattr(integrations, "_load_bundle_workflow", _load_bundle_workflow)
+    monkeypatch.setattr(
+        integrations,
+        "authorize_delegated_rest_request",
+        _authorize_delegated_rest_request,
+    )
+
+    response = await integrations._call_bundle_op_inner(
+        tenant="tenant-a",
+        project="project-a",
+        bundle_id="problem-board@1-0",
+        payload=integrations.BundleSuggestionsRequest(data={}),
+        request=_request(
+            method="POST",
+            path=(
+                "/api/integrations/bundles/tenant-a/project-a/"
+                "problem-board@1-0/public/worker_claim"
+            ),
+        ),
+        operation="worker_claim",
+        route="public",
+        session=_session(),
+    )
+
+    assert response.status_code == 401
+    assert captured == {
+        "auth": _ManagedDefaultsWorkflow.bundle_props_defaults["surfaces"][
+            "as_provider"
+        ]["api"]["public"]["worker_claim"]["auth"],
+        "operation": "worker_claim",
+        "method": "POST",
+    }
+
+
+@pytest.mark.asyncio
 async def test_call_bundle_mcp_inner_dispatches_into_bundle_mcp_app(monkeypatch):
     async def _load_bundle_workflow(**kwargs):
         del kwargs
@@ -1423,6 +1536,87 @@ async def test_call_bundle_mcp_inner_supports_public_mcp_endpoint(monkeypatch):
     payload = json.loads(response.body.decode("utf-8"))
     assert payload["path"] == "/mcp"
     assert payload["method"] == "GET"
+
+
+@pytest.mark.asyncio
+async def test_call_bundle_mcp_inner_enforces_auth_from_code_defaults(monkeypatch):
+    class _ManagedDefaultsWorkflow:
+        bundle_props = {}
+        bundle_props_defaults = {
+            "surfaces": {
+                "as_provider": {
+                    "mcp": {
+                        "worker_stream": {
+                            "auth": {
+                                "mode": "managed",
+                                "authority_id": "delegated_client",
+                                "tools": {
+                                    "open_worker_stream": {
+                                        "grants": ["work:relay"],
+                                    }
+                                },
+                                "selected_tool_grants": True,
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        @mcp(
+            alias="worker_stream",
+            route="public",
+            auth_config="surfaces.as_provider.mcp.worker_stream.auth",
+        )
+        def worker_stream_mcp(self, **kwargs):
+            del kwargs
+            return _RecordingMCPProvider()
+
+    captured = {}
+
+    async def _load_bundle_workflow(**kwargs):
+        del kwargs
+        return (
+            _ManagedDefaultsWorkflow(),
+            SimpleNamespace(id="problem-board@1-0"),
+            "tenant-a",
+            "project-a",
+        )
+
+    async def _authorize_delegated_mcp_request(*, request, body, auth):
+        del request, body
+        captured["auth"] = auth
+        return JSONResponse({"error": "authorization_required"}, status_code=401)
+
+    monkeypatch.setattr(integrations, "_load_bundle_workflow", _load_bundle_workflow)
+    monkeypatch.setattr(
+        integrations,
+        "authorize_delegated_mcp_request",
+        _authorize_delegated_mcp_request,
+    )
+
+    response = await integrations._call_bundle_mcp_inner(
+        tenant="tenant-a",
+        project="project-a",
+        bundle_id="problem-board@1-0",
+        request=_request(
+            method="POST",
+            path=(
+                "/api/integrations/bundles/tenant-a/project-a/"
+                "problem-board@1-0/public/mcp/worker_stream"
+            ),
+            body=b'{"jsonrpc":"2.0","id":1,"method":"initialize"}',
+            headers=[(b"content-type", b"application/json")],
+        ),
+        endpoint_alias="worker_stream",
+        route="public",
+        mcp_path="",
+    )
+
+    assert response.status_code == 401
+    assert captured["auth"] == _ManagedDefaultsWorkflow.bundle_props_defaults[
+        "surfaces"
+    ]["as_provider"]["mcp"]["worker_stream"]["auth"]
 
 
 @pytest.mark.asyncio

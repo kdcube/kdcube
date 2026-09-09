@@ -1,10 +1,10 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/service/comm/data-bus-README.md
 title: "Data Bus"
-summary: "Runtime contract for the bundle-scoped Data Bus: durable non-conversation messages, handler registration, ordering, and comm fanout boundary."
+summary: "Runtime contract for the bundle-scoped Data Bus: non-conversation messages, handler registration, ordering, correlated results, and live federated-session fanout."
 status: active
 tags: ["service", "comm", "data-bus", "socketio", "sse", "redis-streams", "bundle-runtime"]
-updated_at: 2026-06-07
+updated_at: 2026-09-09
 keywords:
   [
     "data bus",
@@ -12,6 +12,8 @@ keywords:
     "redis streams",
     "socket.io",
     "object ordering",
+    "live data bus session",
+    "correlated handler result",
     "document patch",
     "domain state",
   ]
@@ -230,6 +232,51 @@ normalized actor/reply metadata as ordinary platform-authenticated sockets.
 
 Use the full bundle recipe in
 [Federated Data Bus Session Tokens](../../sdk/bundle/auth-bundle-federated-README.md).
+
+### Addressed Push To Live Federated Sessions
+
+A federated client may keep its admitted Socket.IO connection open for both
+directions. KDCube registers that session as live only after the socket joined
+its session room and the ingress process acquired the matching Redis relay
+subscription. Disconnect and claim expiry remove it from the live view.
+
+The routing key is scoped by tenant, project, bundle, and authenticated
+principal. A delegated card uses its Card-scoped rate-limit subject when one is
+present; other federated clients use the session user ID. Bundle code can then
+send a compact wake event to every current session for that principal:
+
+```python
+from kdcube_ai_app.apps.chat.sdk.runtime.data_bus import (
+    DataBusLiveSessionPublisher,
+)
+
+publisher = DataBusLiveSessionPublisher(
+    redis=self.redis,
+    tenant=tenant,
+    project=project,
+    bundle_id="example@1-0",
+)
+
+await publisher.publish(
+    principal="card:<opaque-card-id>",
+    event_type="example.object.available.v1",
+    data={"kind": "object.changed", "refs": {"object_ref": object_ref}},
+)
+```
+
+Commit the authoritative domain state before sending this event. Live fanout
+is a prompt to reconcile, not the state record: keep its body to an event kind
+and references, and retain a periodic or reconnect reconciliation path for a
+missed wake. `connected(principal)` reports transport presence; it does not
+prove that a human or model consumed the referenced state.
+
+The client-side `app_foundation.data_bus.FederatedDataBusClient` uses the same
+socket for worker requests, correlated handler results, and unmatched
+application events. An ingress acknowledgement proves only that a package
+entered the bundle stream. The later `kdcube.data_bus.result`, `.conflict`, or
+`.error` event proves the handler outcome. If that terminal event is not seen,
+the outcome is unknown and a retry must preserve both `message_id` and
+`idempotency_key`.
 
 ## Core Envelope
 

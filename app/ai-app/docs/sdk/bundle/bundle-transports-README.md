@@ -533,6 +533,20 @@ Connection Hub then owns the matching resource/tool/grant catalog. See
 [Expose An MCP Service From A KDCube App](../../recipes/apps/expose-mcp-service-README.md)
 and [Protect Bundle MCP With Managed Credentials](../../recipes/connections/protect-bundle-mcp-with-managed-credentials-README.md).
 
+`auth_config` resolves against the endpoint's effective bundle properties:
+code-owned `configuration_defaults()` deep-merged with descriptor-owned
+overrides. A deployment descriptor therefore records only intentional policy
+overrides; it does not have to repeat the app's managed-auth default. Direct
+API and MCP admission evaluates this effective view before invoking the bundle
+surface. For a managed public MCP endpoint, an unauthenticated request must
+receive `401` with a `WWW-Authenticate` resource-metadata challenge.
+
+For a security-sensitive code default, also pass the same policy to the
+decorator's `auth=` argument and retain `auth_config=` as the override path.
+Build both values from one function or constant. Runtime admission still uses
+the effective properties, while static manifest and CLI diagnostics can report
+the guarded default without instantiating the bundle.
+
 ### 4.7 What `@mcp(...)` does not support
 
 `@mcp(...)` does not support proc-side:
