@@ -101,11 +101,11 @@ the Connection Hub widget and cannot mint it.
 ```text
 User signs into KDCube
   -> opens Connection Hub
-  -> opens Delegated by KDCube
+  -> opens Access cards
   -> opens Create automation access
   -> chooses grants inside one or more resources
   -> for a named-services MCP resource, chooses exact namespace operations
-  -> completes any shown provider-account prerequisite in Delegated to KDCube
+  -> completes any shown provider-account prerequisite in Accounts
   -> creates a token
   -> copies the Bearer header once
 ```
@@ -132,28 +132,38 @@ its delegated grants cannot drift apart.
 Issued access records shown by Connection Hub expose this map, not a standalone
 `resources` field or standalone `grants` field.
 
-### Renew an expired token
+### Renew a credential, two ways
 
 A token has a lifetime; the grants do not. When the token expires, the card
-stays on **Delegated by KDCube** with an `expired` badge and every grant,
-operation selection, account binding and policy it held. Renewing issues a
-new token on the same card:
+stays on **Access cards** with an `expired` badge and every grant, operation
+selection, account binding and policy it held, and it can still be edited.
+Two ways bring the credential back:
 
-```text
-User opens Delegated by KDCube
-  -> the card shows "expired" and a Renew button
-  -> Renew, then confirm
-  -> copies the new Bearer header once (the previous token no longer works)
-  -> the automation runs again with the same access
-```
+- **Reissue** (manual tokens): a new token on the same card and `access_id`.
 
-The card keeps its `access_id`, so scripts that reference it by id, and the
-once-or-always policies on its operations, need no change. Renewing before
-expiry is allowed and rotates the token. By default the new token lives as
-long as the previous one did; the operation `delegated_access_renew` also
-takes `ttl_seconds`. A card that was revoked cannot be renewed. Connected
-apps and hosted agents renew differently: reconnect from the client, or
-grant the agent again from the chat, both onto the same card.
+  ```text
+  User opens Access cards
+    -> the card shows "expired" and Reissue token
+    -> Reissue, then confirm
+    -> copies the new Bearer header once (the previous token no longer works)
+    -> the automation runs again with the same access
+  ```
+
+  Scripts that reference the card by id, and the once-or-always policies on
+  its operations, need no change. Reissuing before expiry is allowed and
+  rotates the token. A manual token carries its own end date inside it, so
+  it is never prolonged.
+- **Prolong** (connected apps such as Claude Code or Claude Desktop): the
+  client keeps the token it has, and the card's expiry, the refresh token and
+  the current access binding are extended. Offered while the credential has
+  not ended yet ("expires soon"); after that the client reconnects, onto the
+  same card.
+
+By default the new lifetime equals the previous one; the operation
+`delegated_access_renew` also takes `ttl_seconds` and `mode`
+(`reissue` or `prolong`). A card that was revoked cannot be renewed. A
+hosted agent's card renews itself the next time the agent is granted from
+the chat.
 
 ### Named-service resources are selected at operation level
 
