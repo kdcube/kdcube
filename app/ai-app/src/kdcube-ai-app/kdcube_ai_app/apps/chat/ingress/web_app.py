@@ -665,11 +665,20 @@ async def platform_logout(request: Request):
     # On the server-held session lane the upstream (Cognito's hosted UI, an
     # OIDC issuer) keeps its own sign-in; the browser navigates there next to
     # end it, then comes back to ``next``.
+    # The identity provider gets one fixed post-logout URL per origin; the
+    # destination travels in a short-lived return cookie the signed-out
+    # route reads, so no per-page URL ever needs registering upstream.
     upstream_logout_url = ""
+    return_cookie = None
     if provider in {"session", "bundle", "bundle-session"}:
         try:
-            from kdcube_ai_app.auth.bundle.browser_session import platform_browser_session_flow, public_origin
-            from connection_hub.browser_session.next_url import safe_next_path
+            from kdcube_ai_app.auth.bundle.browser_session import (
+                RETURN_COOKIE_TTL_SECONDS,
+                SIGNED_OUT_ROUTE,
+                platform_browser_session_flow,
+                public_origin,
+            )
+            from connection_hub.browser_session.next_url import safe_next_target
 
             flow = await platform_browser_session_flow(origin=public_origin(request))
             if flow is not None:
@@ -678,12 +687,18 @@ async def platform_logout(request: Request):
                     form = await request.form()
                     next_raw = form.get("next")
                 origin = public_origin(request)
-                back_to = f"{origin}{safe_next_path(next_raw)}"
-                upstream_logout_url = flow.upstream.logout_url(post_logout_redirect=back_to)
+                upstream_logout_url = flow.upstream.logout_url(post_logout_redirect=f"{origin}{SIGNED_OUT_ROUTE}")
+                if upstream_logout_url:
+                    destination = safe_next_target(next_raw, allowed_origins=flow.policy.return_origins)
+                    return_cookie = flow.cookies.return_cookie(destination, max_age=RETURN_COOKIE_TTL_SECONDS)
         except Exception:
             logger.debug("Upstream logout URL unavailable", exc_info=True)
 
     response = JSONResponse({"ok": True, "invalidated": invalidated, "upstreamLogoutUrl": upstream_logout_url})
+    if return_cookie is not None:
+        from kdcube_ai_app.apps.chat.ingress.platform_session import apply_cookie
+
+        apply_cookie(response, return_cookie)
     for name in {
         auth_cfg.AUTH_TOKEN_COOKIE_NAME,
         auth_cfg.ID_TOKEN_COOKIE_NAME,

@@ -53,7 +53,10 @@ def _cookies(response) -> dict[str, SimpleCookie]:
 @pytest.fixture
 def harness():
     upstream = FakeUpstream()
-    policy = SessionPolicy(idle_ttl_seconds=600, max_ttl_seconds=3600, touch_interval_seconds=60, attempt_ttl_seconds=120)
+    policy = SessionPolicy(
+        idle_ttl_seconds=600, max_ttl_seconds=3600, touch_interval_seconds=60, attempt_ttl_seconds=120,
+        return_origins=("https://www.kdcube.example",),
+    )
     flow = BrowserSessionFlow(
         backend=MemorySessionBackend(secret="s"),
         attempts=MemoryLoginAttemptStore(),
@@ -142,3 +145,34 @@ def test_status_and_the_unconfigured_lane(harness):
     assert client.get("/api/platform/session/status").json()["configured"] is False
     assert client.get("/api/platform/session/login", follow_redirects=False).status_code == 404
     assert client.get("/api/platform/session/callback", params={"state": "x"}, follow_redirects=False).status_code == 404
+
+
+def test_signed_out_continues_to_the_destination_from_the_return_cookie(harness):
+    client, _, state = harness
+    client.cookies.set("__Host-kdcube-return", "/chat?tab=2")
+    response = client.get("/api/platform/session/signed-out", follow_redirects=False)
+    assert response.status_code == 302 and response.headers["location"] == "/chat?tab=2"
+    assert _cookies(response)["__Host-kdcube-return"].value == "", "the return cookie is cleared"
+
+    client.cookies.set("__Host-kdcube-return", "https://evil.example/x")
+    assert client.get("/api/platform/session/signed-out", follow_redirects=False).headers["location"] == "/"
+    client.cookies.clear()
+    assert client.get("/api/platform/session/signed-out", follow_redirects=False).headers["location"] == "/"
+    assert client.get("/api/platform/session/status").json()["signedOutUrl"] == "/api/platform/session/signed-out"
+
+    state["flow"] = None
+    assert client.get("/api/platform/session/signed-out", follow_redirects=False).status_code == 302
+
+
+def test_sign_in_and_signed_out_return_to_a_listed_website_origin(harness):
+    client, _, _ = harness
+    start = client.get("/api/platform/session/login", params={"next": "https://www.kdcube.example/docs?x=1"}, follow_redirects=False)
+    state = start.headers["location"].split("state=")[1]
+    client.cookies.set("__Host-kdcube-login", _cookies(start)["__Host-kdcube-login"].value)
+    done = client.get("/api/platform/session/callback", params={"state": state, "code": "abc"}, follow_redirects=False)
+    assert done.headers["location"] == "https://www.kdcube.example/docs?x=1"
+
+    client.cookies.set("__Host-kdcube-return", "https://www.kdcube.example/pricing")
+    assert client.get("/api/platform/session/signed-out", follow_redirects=False).headers["location"] == "https://www.kdcube.example/pricing"
+    client.cookies.set("__Host-kdcube-return", "https://evil.example/pricing")
+    assert client.get("/api/platform/session/signed-out", follow_redirects=False).headers["location"] == "/"

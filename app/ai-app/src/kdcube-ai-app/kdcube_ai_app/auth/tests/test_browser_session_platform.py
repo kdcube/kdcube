@@ -17,6 +17,7 @@ from connection_hub.browser_session.cookies import StandardCookiePolicy
 from connection_hub.browser_session.flow import BrowserSessionFlow, LoginAttemptRejected
 from connection_hub.browser_session.model import LoginAttempt, SessionPolicy, VerifiedIdentity
 
+from kdcube_ai_app.auth.AuthManager import AuthenticationError
 from kdcube_ai_app.auth.bundle import BundleSessionAuthManager, BundleSessionAuthority
 from kdcube_ai_app.auth.bundle.browser_session import (
     LOGIN_ROUTE,
@@ -281,3 +282,72 @@ def test_config_max_ttl_is_never_below_idle_ttl():
     platform_auth["provider"]["issuer"] = {"ttl_seconds": 7200, "max_ttl_seconds": 60}
     config = browser_session_config(_settings(platform_auth))
     assert config.policy.max_ttl_seconds == 7200
+
+
+# ---- a host that keeps its own login: tokens beside the session ---------------
+
+class _Rejecting:
+    async def authenticate(self, token):
+        raise AssertionError("must not be called")
+
+    async def authenticate_with_both(self, access_token, id_token):
+        raise AssertionError("must not be called")
+
+
+class _TokenManager:
+    def __init__(self):
+        self.calls = []
+
+    async def authenticate(self, token):
+        self.calls.append(("one", token, None)); return SimpleNamespace(sub="jwt-user")
+
+    async def authenticate_with_both(self, access_token, id_token):
+        self.calls.append(("both", access_token, id_token)); return SimpleNamespace(sub="jwt-user")
+
+
+@pytest.mark.asyncio
+async def test_session_or_token_manager_dispatches_by_credential_shape():
+    from kdcube_ai_app.auth.bundle import SessionOrTokenAuthManager
+
+    authority = _authority()
+    await authority.register_user(sub="u1", username="u1")
+    grant = await authority.login(sub="u1", ttl_seconds=600)
+    tokens = _TokenManager()
+    manager = SessionOrTokenAuthManager(BundleSessionAuthManager(authority=authority), tokens)
+
+    assert (await manager.authenticate(grant.token)).sub == "u1"
+    assert (await manager.authenticate_with_both(grant.token, "ignored-id")).sub == "u1"
+    assert tokens.calls == []
+
+    assert (await manager.authenticate_with_both("eyJhbGciOi.jwt.sig", "eyJ.id.sig")).sub == "jwt-user"
+    assert tokens.calls[-1] == ("both", "eyJhbGciOi.jwt.sig", "eyJ.id.sig")
+    assert (await manager.authenticate("eyJhbGciOi.jwt.sig")).sub == "jwt-user"
+
+    only_session = SessionOrTokenAuthManager(BundleSessionAuthManager(authority=authority), None)
+    with pytest.raises(AuthenticationError):
+        await only_session.authenticate("eyJhbGciOi.jwt.sig")
+    with pytest.raises(AuthenticationError):
+        await manager.authenticate("")
+
+
+def test_upstream_cognito_providers_come_from_the_session_provider_upstream():
+    from kdcube_ai_app.auth.bundle.browser_session import upstream_cognito_providers
+
+    platform_auth = _platform_auth()
+    platform_auth["upstream_authority_provider"]["provider"]["authenticator"]["trusted_providers"] = [
+        {"alias": "staging", "kind": "cognito", "region": "eu-west-1", "user_pool_id": "eu-west-1_OTHER", "app_client_id": "other-client"},
+    ]
+    seen = {}
+
+    def resolve(**kwargs):
+        seen.update(kwargs); return ["primary", "staging"]
+
+    settings = _settings(platform_auth)
+    settings._resolve_cognito_trusted_providers = resolve
+    config = browser_session_config(settings)
+    assert upstream_cognito_providers(config, settings) == ["primary", "staging"]
+    assert seen["primary_pool_id"] == "eu-west-1_POOL" and seen["primary_client_id"] == "client-id"
+    assert seen["registry_providers"][0]["alias"] == "staging"
+
+    platform_auth["provider"]["input"]["accept_upstream_tokens"] = False
+    assert upstream_cognito_providers(browser_session_config(settings), settings) == []

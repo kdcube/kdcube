@@ -92,12 +92,12 @@ Platform UserSession
 
 ## Descriptor Contract
 
-Use `auth.idp: session` for this provider:
+Select the provider in `assembly.yaml`; its type (`bundle_session_login`)
+is what puts the platform on the session lane:
 
 ```yaml
 auth:
   type: "bundle"
-  idp: "session"
   connection_hub:
     bundle_id: connection-hub@1-0
     authority_id: kdcube.platform
@@ -105,8 +105,16 @@ auth:
     entrypoint: login
 ```
 
-When `frontend.config.auth.authType` is omitted, `auth.type: bundle` or
-`auth.idp: session` derives browser `authType: "bundle"`. That tells the
+The platform authenticator is resolved in this order: an explicit
+`auth.authenticators.platform` entry, the `AUTH_PROVIDER` environment
+variable, the Connection Hub provider named by `auth.connection_hub`, then
+`auth.idp`, then `auth.type`. With a Connection Hub provider selected,
+`auth.idp` is redundant on the server: it is the fallback for descriptors
+without a Connection Hub provider (`auth.idp: session`, `bundle`,
+`cognito`, `simple`). `auth.type: bundle` is what the browser reads.
+
+When `frontend.config.auth.authType` is omitted, `auth.type: bundle` (or the
+fallback form `auth.idp: session`) derives browser `authType: "bundle"`. That tells the
 control-plane client that login is owned by an app/front shell and that
 platform requests should use the descriptor-configured cookies already present
 in the browser.
@@ -183,12 +191,11 @@ configuration.
 
 ```yaml
 auth:
-  type: "bundle"
-  idp: "session"
+  type: "bundle"                 # what the browser reads: the server owns login
   connection_hub:
     bundle_id: connection-hub@1-0
     authority_id: kdcube.platform
-    provider_id: browser_session
+    provider_id: browser_session # a bundle_session_login provider: the session lane
 ```
 
 ```yaml
@@ -214,10 +221,13 @@ authority_registry:
               provider_id: cognito
             scopes: [openid, email, profile]
             groups_claim: cognito:groups      # optional: upstream groups become roles
+            # accept_upstream_tokens: false   # default true: a host may still present tokens from the upstream pools
             # client_secret_ref: ...           # only for a confidential app client
             # redirect_uri: https://...        # only when it differs from <origin>/api/platform/session/callback
           issuer:
             type: kdcube_session_token
+            return_origins:                    # website origins a sign-in or sign-out may return to
+            - https://www.example.com          # exact origin, or https://*.example.com for subdomains
             ttl_seconds: 43200                 # idle limit (12h)
             max_ttl_seconds: 604800            # maximum since sign-in (7d)
             touch_interval_seconds: 60         # a slide is written at most this often
@@ -235,10 +245,18 @@ authority_registry:
               permissions: ["kdcube:*:*:*"]
 ```
 
-Register `https://<public origin>/api/platform/session/callback` as a callback
-URL on the app client, and `https://<public origin>/` (or the page you send
-people back to) as a sign-out URL. The app client may stay public: the
-exchange uses PKCE.
+Register exactly two URLs per public origin on the app client:
+
+```text
+callback:  https://<public origin>/api/platform/session/callback
+sign-out:  https://<public origin>/api/platform/session/signed-out
+```
+
+The sign-out URL is fixed because the destination does not travel through
+the identity provider: the logout stores it in a short-lived return cookie
+and the signed-out route continues there. No page URL of any frontend ever
+needs registering upstream. The app client may stay public: the exchange
+uses PKCE.
 
 ### Routes
 
@@ -246,8 +264,9 @@ exchange uses PKCE.
 |---|---|
 | `GET /api/platform/session/login?next=<same-origin path>` | Starts a one-time attempt, sets the attempt cookie (`__Host-kdcube-login`), redirects to the identity provider. `next` must be a same-origin absolute path, else `/`. |
 | `GET /api/platform/session/callback?code=&state=` | Takes the attempt (once), requires the attempt cookie of the browser that started it, exchanges the code, verifies the ID token (signature, issuer, audience, nonce), writes the platform user record and the session, sets the session cookie, redirects to `next`. A refused sign-in is a small page with a reason code and a retry link. |
+| `GET /api/platform/session/signed-out` | The identity provider's post-logout target, one fixed URL per origin. Reads and clears the return cookie set by the logout and redirects to that same-origin path, else `/`. |
 | `GET /api/platform/session/status` | Whether the lane is configured, its routes and lifetimes. |
-| `POST /api/platform/logout?next=` | Ends the session and clears the cookies as before, and answers `upstreamLogoutUrl`: the identity provider's sign-out URL that returns to `next`. A client navigates there to end the upstream sign-in too. |
+| `POST /api/platform/logout?next=` | Ends the session and clears the cookies as before, stores the validated `next` in the return cookie, and answers `upstreamLogoutUrl`: the identity provider's sign-out URL that returns to the signed-out route. A client navigates there to end the upstream sign-in too. |
 
 The proxy route matrix carries `/api/platform/` to the chat ingress
 (`deployment/nginx/generate_application_site_routes.py`); without it the
@@ -274,6 +293,15 @@ in by navigating to `loginUrl` with its own `next`, and asks `profileUrl`
 whether it is signed in. Sign-out in one tab signs out all: there is one
 cookie.
 
+Every situation a page can be in (KDCube-owned or host-owned login; same
+origin, same site, cross-site; cookie or headers), with before and after
+diagrams for the website and the control plane web app:
+[Browser Sign-In Situations](browser-sign-in-situations-README.md). On this
+lane the gateway dispatches by credential shape: a `kst1.` token goes to the
+session authority, any other token to the Cognito manager built from the
+provider's upstream pool, so a host that keeps its own login keeps working
+(`input.accept_upstream_tokens: false` turns that off).
+
 `@kdcube/components-core/session` is that contract as code for site shells,
 widgets and application pages, with React bindings in
 `@kdcube/components-react/session`:
@@ -281,6 +309,21 @@ widgets and application pages, with React bindings in
 navigations to protected widget and management routes bounce to
 `/api/platform/session/login` on this lane, and to the application site's
 `/signin/` page otherwise (`sign_in_bounce_path`).
+
+### A website on another origin of the same site
+
+A website beside the platform (`www.example.com` beside `app.example.com`)
+signs in through the platform's routes and comes back to its own pages:
+`next` may be an absolute URL whose origin is listed in
+`issuer.return_origins`, and the logout's `next` likewise. Anything else
+collapses to `/` on the platform origin. The session cookie stays host-only
+on the platform origin: the website's own requests to the platform, and the
+widgets it embeds from the platform, carry it because the two origins are
+the same site (SameSite=Lax permits same-site requests). Nothing about the
+website's origin needs registering on the identity provider; only the
+platform origin's callback and signed-out URLs do. The website's
+server-session mode in `auth.js` sends its full URL as `next` for this
+reason.
 
 ### Sliding renewal
 
@@ -966,7 +1009,7 @@ If `/profile` is anonymous, check these items in order:
 
 | Check | Expected |
 |---|---|
-| Descriptor | `auth.idp: session` in `assembly.yaml`. |
+| Descriptor | `auth.connection_hub` naming a `bundle_session_login` provider in `assembly.yaml` (fallback: `auth.idp: session`). |
 | Secret | `platform.services.session_token.secret` exists and is identical for ingress/proc. |
 | Cookie name | Browser sends the selected provider auth cookie to the platform origin. |
 | Token prefix | Cookie value starts with `kst1.`. |

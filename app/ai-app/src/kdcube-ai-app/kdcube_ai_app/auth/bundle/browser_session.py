@@ -57,6 +57,11 @@ logger = logging.getLogger(__name__)
 
 LOGIN_ROUTE = "/api/platform/session/login"
 CALLBACK_ROUTE = "/api/platform/session/callback"
+# The one post-logout URL an identity provider needs per origin: the browser
+# comes back here after the upstream sign-out and continues to the
+# destination the logout carried in the return cookie.
+SIGNED_OUT_ROUTE = "/api/platform/session/signed-out"
+RETURN_COOKIE_TTL_SECONDS = 300
 LOGOUT_ROUTE = "/api/platform/logout"
 PROFILE_ROUTE = "/profile"
 
@@ -318,7 +323,9 @@ def browser_session_config(settings: Any | None = None) -> BrowserSessionConfig 
     issuer_cfg = _dict(provider.get("issuer"))
     cookie_cfg = _dict(issuer_cfg.get("cookie"))
     scopes = tuple(_str(s) for s in (input_cfg.get("scopes") or ("openid", "email", "profile")) if _str(s))
+    return_origins = tuple(_str(o) for o in (issuer_cfg.get("return_origins") or ()) if _str(o))
     policy = SessionPolicy(
+        return_origins=return_origins,
         idle_ttl_seconds=_int(issuer_cfg.get("ttl_seconds"), 12 * 3600),
         max_ttl_seconds=max(_int(issuer_cfg.get("max_ttl_seconds"), 7 * 24 * 3600), _int(issuer_cfg.get("ttl_seconds"), 12 * 3600)),
         touch_interval_seconds=_int(issuer_cfg.get("touch_interval_seconds"), 60),
@@ -358,6 +365,41 @@ def sign_in_bounce_path(settings: Any | None = None) -> str:
     except Exception:  # noqa: BLE001 - no settings, no lane
         configured = False
     return LOGIN_ROUTE if configured else SITE_SIGN_IN_PATH
+
+
+def upstream_cognito_providers(config: BrowserSessionConfig, settings: Any | None = None) -> list[Any]:
+    """The Cognito pools a token-bearing host may present tokens from on the
+    session lane: the provider's upstream authenticator and its
+    ``trusted_providers`` rows, as ``CognitoTrustedProviderConfig`` values.
+    Empty when the upstream is not Cognito or the provider opts out with
+    ``input.accept_upstream_tokens: false``."""
+    from kdcube_ai_app.apps.chat.sdk.config import get_settings
+
+    if config.upstream_provider_label != "cognito":
+        return []
+    input_cfg = _dict(config.provider.get("input"))
+    if input_cfg.get("accept_upstream_tokens") is False:
+        return []
+    upstream = _dict(_dict(_dict(settings_platform_auth(settings)).get("upstream_authority_provider")).get("provider"))
+    authenticator = _dict(upstream.get("authenticator")) or upstream
+    rows = authenticator.get("trusted_providers")
+    resolver = (settings or get_settings())._resolve_cognito_trusted_providers
+    return list(resolver(
+        primary_region=_str(authenticator.get("region")) or None,
+        primary_pool_id=_str(authenticator.get("user_pool_id") or authenticator.get("pool_id")) or None,
+        primary_client_id=config.client_id or None,
+        registry_providers=rows if isinstance(rows, list) else None,
+    ))
+
+
+def settings_platform_auth(settings: Any | None = None) -> Mapping[str, Any]:
+    from kdcube_ai_app.apps.chat.sdk.config import get_settings
+
+    try:
+        result = (settings or get_settings()).connection_hub_platform_auth_config()
+    except Exception:  # noqa: BLE001
+        return {}
+    return result if isinstance(result, Mapping) else {}
 
 
 def sliding_policy(settings: Any | None = None) -> SessionPolicy | None:
@@ -489,6 +531,8 @@ __all__ = [
     "LOGIN_ROUTE",
     "LOGOUT_ROUTE",
     "PROFILE_ROUTE",
+    "RETURN_COOKIE_TTL_SECONDS",
+    "SIGNED_OUT_ROUTE",
     "BrowserSessionConfig",
     "PlatformSessionBackend",
     "RedisLoginAttemptStore",
@@ -497,6 +541,8 @@ __all__ = [
     "platform_browser_session_flow",
     "public_origin",
     "sign_in_bounce_path",
+    "settings_platform_auth",
     "sliding_policy",
+    "upstream_cognito_providers",
     "upstream_is_oidc",
 ]

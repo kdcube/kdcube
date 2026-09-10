@@ -159,19 +159,30 @@ def create_platform_auth_manager(
         )
 
     if provider in {"session", "bundle", "bundle-session"}:
-        from kdcube_ai_app.auth.bundle import BundleSessionAuthManager
-        from kdcube_ai_app.auth.bundle.browser_session import sliding_policy
+        from kdcube_ai_app.auth.bundle import BundleSessionAuthManager, SessionOrTokenAuthManager
+        from kdcube_ai_app.auth.bundle.browser_session import browser_session_config, upstream_cognito_providers
 
-        sliding = sliding_policy(settings)
+        lane = browser_session_config(settings)
+        session_manager = BundleSessionAuthManager(
+            send_validation_error_details=send_validation_error_details,
+            sliding=lane.policy if lane is not None else None,
+        )
+        # A host that keeps its own login against the same Cognito pools may
+        # still present its tokens: dispatch by credential shape.
+        token_providers = upstream_cognito_providers(lane, settings) if lane is not None else []
+        tokens = None
+        if token_providers:
+            from kdcube_ai_app.auth.implementations.multi_cognito import MultiCognitoAuthManager
+
+            tokens = MultiCognitoAuthManager(token_providers, send_validation_error_details=send_validation_error_details)
         logger.info(
-            "Using BundleSessionAuthManager for %s platform authentication sliding=%s",
+            "Using BundleSessionAuthManager for %s platform authentication sliding=%s upstream_tokens=%s",
             service_label,
-            "on" if sliding is not None else "off",
+            "on" if lane is not None else "off",
+            len(token_providers),
         )
-        return with_authenticator_metadata(
-            BundleSessionAuthManager(send_validation_error_details=send_validation_error_details, sliding=sliding),
-            descriptor,
-        )
+        manager = SessionOrTokenAuthManager(session_manager, tokens, send_validation_error_details=send_validation_error_details) if tokens else session_manager
+        return with_authenticator_metadata(manager, descriptor)
 
     if provider == "oauth":
         logger.warning(

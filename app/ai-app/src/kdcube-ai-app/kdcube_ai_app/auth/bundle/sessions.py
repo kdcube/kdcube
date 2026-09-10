@@ -730,6 +730,51 @@ async def login_or_register_bundle_session(**kwargs: Any) -> BundleSessionGrant:
     return await get_bundle_session_authority().login_or_register(**kwargs)
 
 
+class SessionOrTokenAuthManager(AuthManager):
+    """The platform authenticator on the session lane when a host may still
+    bring its own tokens.
+
+    A credential is dispatched by its shape: a ``kst1.`` token (the session
+    cookie the platform sets) goes to the session authority; anything else
+    (a Cognito access token in ``Authorization`` or in the token cookie, with
+    its ID token) goes to the token manager built from the session provider's
+    upstream Cognito pools. A website that keeps its own login therefore
+    keeps working on a deployment that moved to the session lane, on the
+    same origin through the token cookies it writes, or across origins
+    through the headers it sends.
+    """
+
+    def __init__(self, session: BundleSessionAuthManager, tokens: AuthManager | None, *, send_validation_error_details: bool = False):
+        super().__init__(send_validation_error_details)
+        self.session = session
+        self.tokens = tokens
+
+    @staticmethod
+    def is_session_token(token: str | None) -> bool:
+        return str(token or "").strip().startswith(f"{SESSION_TOKEN_PREFIX}.")
+
+    def _pick(self, token: str) -> AuthManager:
+        if self.is_session_token(token) or self.tokens is None:
+            return self.session
+        return self.tokens
+
+    async def authenticate(self, token: str) -> User:
+        if not token:
+            raise AuthenticationError("No token provided")
+        return await self._pick(token).authenticate(token)
+
+    async def authenticate_with_both(self, access_token: str, id_token: str | None) -> User:
+        if not access_token:
+            raise AuthenticationError("No token provided")
+        manager = self._pick(access_token)
+        if manager is self.session:
+            return await manager.authenticate(access_token)
+        return await manager.authenticate_with_both(access_token, id_token)
+
+    async def get_service_token(self) -> str:
+        return await self.session.get_service_token()
+
+
 async def touch_bundle_session(session_id: str, *, expires_at: int, now: int | None = None) -> dict[str, Any] | None:
     return await get_bundle_session_authority().touch(session_id, expires_at=expires_at, now=now)
 

@@ -192,10 +192,13 @@ validate tokens using the configured auth provider.
 `auth.proxy_login.enforce_mfa` maps to Proxy Login `COGNITO_ENFORCEMFA`. When
 enabled, Proxy Login enforces MFA during the Cognito login flow.
 
-`auth.idp: session` selects application-hosted platform login and session,
-where an application/front shell validates an external identity and calls the
-async platform session authority to issue platform-recognized `kst1.*`
-cookies. It requires
+The session lane (application-hosted platform login, or the platform-hosted
+sign-in) is selected by the Connection Hub provider that `auth.connection_hub`
+names: a `bundle_session_login` provider puts the platform on it. `auth.idp:
+session` is the fallback selector for descriptors without a Connection Hub
+provider. On this lane an application/front shell, or the platform itself,
+validates an external identity and the platform session authority issues the
+platform-recognized `kst1.*` cookie. It requires
 `platform.services.session_token.secret` in `secrets.yaml`. See
 [Application-Hosted Platform Login And Session](../service/auth/app-hosted-platform-login-and-session-README.md).
 When the selected session provider's `input.authenticator_ref` names a Cognito
@@ -377,9 +380,10 @@ If `frontend.config.auth.authType` is omitted, it is derived from top-level
 auth: `auth.type: simple` emits browser `authType: simple`, `auth.type:
 cognito` emits `authType: cognito`, and `auth.type: delegated` emits
 `authType: delegated`. `auth.type: bundle` or `auth.idp: session` emits
-`authType: bundle`: a bundle/front shell performs login and sets the
-descriptor-configured platform cookies, while the platform still validates
-requests through `auth.idp: session`. The older browser value `hardcoded` is a
+`authType: bundle`: the server side owns login (an application-hosted page or
+the platform's own sign-in route) and the browser only probes `/profile`;
+the platform validates requests through the session provider selected by
+`auth.connection_hub` (fallback `auth.idp: session`). The older browser value `hardcoded` is a
 legacy alias for `simple`; new descriptors should use `simple`. `oauth` is not
 a deployment auth mode; use `cognito` for the OSS browser Cognito/OIDC flow.
 

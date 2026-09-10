@@ -12,6 +12,10 @@ server-held browser session.
         platform user record, the session cookie; redirects to the validated
         ``next``. A failed sign-in answers a small page with the reason and
         a link to try again, never a stack.
+    GET /api/platform/session/signed-out
+        the identity provider's post-logout target, one fixed URL per
+        origin; continues to the destination the logout stored in the
+        return cookie.
     GET /api/platform/session/status
         whether the lane is configured on this deployment, and its routes.
 
@@ -31,12 +35,14 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 
 from connection_hub.browser_session.flow import BrowserSessionFlow, LoginAttemptRejected, LoginRejected
 from connection_hub.browser_session.model import CookieSpec
+from connection_hub.browser_session.next_url import safe_next_target
 
 from kdcube_ai_app.auth.bundle.browser_session import (
     CALLBACK_ROUTE,
     LOGIN_ROUTE,
     LOGOUT_ROUTE,
     PROFILE_ROUTE,
+    SIGNED_OUT_ROUTE,
     platform_browser_session_flow,
     public_origin,
 )
@@ -103,8 +109,7 @@ def create_platform_session_router(*, flow_provider: FlowProvider | None = None)
         flow = await provider(request)
         if flow is None:
             return JSONResponse({"detail": "platform session sign-in is not configured"}, status_code=404, headers=NO_STORE)
-        attempt_cookie_name = flow.begin_login.__self__._cookies.clear_attempt_cookie().name  # type: ignore[attr-defined]
-        binding = request.cookies.get(attempt_cookie_name)
+        binding = request.cookies.get(flow.cookies.clear_attempt_cookie().name)
         try:
             done = await flow.complete_login(dict(request.query_params), attempt_binding=binding)
         except LoginAttemptRejected as exc:
@@ -122,6 +127,22 @@ def create_platform_session_router(*, flow_provider: FlowProvider | None = None)
         )
         return response
 
+    @router.get(SIGNED_OUT_ROUTE)
+    async def session_signed_out(request: Request) -> Response:
+        """Where the identity provider sends the browser after its sign-out.
+        One fixed URL per origin is registered there; the destination the
+        logout carried in the return cookie decides where to go next."""
+        flow = await provider(request)
+        cookie_name = flow.cookies.clear_return_cookie().name if flow is not None else ""
+        destination = safe_next_target(
+            request.cookies.get(cookie_name) if cookie_name else None,
+            allowed_origins=flow.policy.return_origins if flow is not None else (),
+        )
+        response = RedirectResponse(destination, status_code=302, headers=NO_STORE)
+        if flow is not None:
+            apply_cookie(response, flow.cookies.clear_return_cookie())
+        return response
+
     @router.get("/api/platform/session/status")
     async def session_status(request: Request) -> JSONResponse:
         flow = await provider(request)
@@ -129,6 +150,7 @@ def create_platform_session_router(*, flow_provider: FlowProvider | None = None)
             "configured": flow is not None,
             "loginUrl": LOGIN_ROUTE,
             "callbackUrl": CALLBACK_ROUTE,
+            "signedOutUrl": SIGNED_OUT_ROUTE,
             "logoutUrl": LOGOUT_ROUTE,
             "profileUrl": PROFILE_ROUTE,
         }

@@ -106,9 +106,10 @@ Notes:
   from that selected provider and emitted as
   `auth.oidcConfig.end_session_endpoint`; it has no separate process-setting
   knob.
-- `auth.idp: session` selects application-hosted platform login and session.
-  It requires the platform secret `platform.services.session_token.secret`; the
-  technical provider type is `bundle_session_login`. A session provider whose
+- The session lane is selected by the `bundle_session_login` provider that
+  `auth.connection_hub` names (`auth.idp: session` is the fallback selector
+  when no Connection Hub provider is configured). It requires the platform
+  secret `platform.services.session_token.secret`. A session provider whose
   `input.authenticator_ref` names a Cognito or OIDC provider makes the platform
   host the sign-in itself: [Platform-Hosted Sign-In](../service/auth/app-hosted-platform-login-and-session-README.md#platform-hosted-sign-in-the-server-held-browser-session).
 

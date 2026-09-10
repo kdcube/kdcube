@@ -22,6 +22,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/protect-bundle-rest-with-managed-credentials-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/create-delegated-automation-access-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/delegate-kdcube-service-to-external-client-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/custom-mcp-connector-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/protect-external-service-with-connection-hub-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
   - https://github.com/elenaviter/app-ecosystem/blob/main/docs/connection-hub/testing/end-to-end-acceptance.md
@@ -50,6 +51,7 @@ are intentionally shorter and more task-oriented than the SDK architecture docs.
 | [Protect REST With Managed Credentials](protect-bundle-rest-with-managed-credentials-README.md) | An application REST operation or configured platform REST resource should accept delegated bearer tokens with per-operation grants. |
 | [Create Delegated Automation Access](create-delegated-automation-access-README.md) | A signed-in user needs a short-lived bearer for automation, with resource grants, exact named-service operation selection, provider-account prerequisites, or admin-only all-resource access. |
 | [Delegate A KDCube Service To An External Client](delegate-kdcube-service-to-external-client-README.md) | A user wants to connect Claude or another external client to a KDCube service with explicit consent and least-privilege tools. |
+| [Use A Custom MCP Server From KDCube Agents And External Clients](custom-mcp-connector-README.md) | You have your own MCP server and want Claude Desktop, Claude Code, or a hosted KDCube agent to call a chosen subset of its tools through Connection Hub, with the server's credential held server-side and the agent opted in by its descriptor ceiling. |
 | [Protect An External Service With Connection Hub](protect-external-service-with-connection-hub-README.md) | A backend outside KDCube should accept Connection Hub delegated credentials and enforce current cards/catalog authority without moving behind a KDCube REST or MCP door. |
 
 ## Canonical SDK Docs

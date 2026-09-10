@@ -239,6 +239,11 @@ For login:
 3. pass the current site path as `next` when the login endpoint supports it;
 4. re-check `/profile` after the login flow.
 
+The KDCube website itself exposes this as a per-profile switch, `auth.loginMode`
+(`auto`, `platform`, `own-oidc`), so it can run the platform-hosted sign-in or
+its own OIDC client on demand. The situations behind that choice:
+[Browser Sign-In Situations](../../service/auth/browser-sign-in-situations-README.md).
+
 For logout, use `auth.logoutUrl` from the same config and then re-check
 `/profile`. This keeps one website implementation valid for Cognito and
 application-hosted platform authorities.

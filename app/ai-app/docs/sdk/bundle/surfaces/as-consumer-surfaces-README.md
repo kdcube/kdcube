@@ -111,6 +111,11 @@ effective tools
   intersect conversation narrowing
 ```
 
+Every field of a family, its allowed values, the refusal reasons, and the way
+the ceiling meets the user's card are explained for readers in
+[Custom MCP Connectors And Governed Invocation](https://github.com/elenaviter/app-ecosystem/blob/main/docs/connection-hub/custom-mcp-connector.md);
+the procedure is [Use A Custom MCP Server From KDCube Agents And External Clients](../../../recipes/connections/custom-mcp-connector-README.md).
+
 The host supplies a current Card/Gateway facts loader and a trusted per-call
 bearer resolver. KDCube rebuilds the projection for each turn and binds the
 aggregate delegated MCP Gateway in the trusted supervisor. Provider credentials

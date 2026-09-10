@@ -251,6 +251,7 @@ service; Connection Hub remains their configuration owner.
 | Understand how requests choose Cognito/session/Connection Hub authenticators | [Auth Selector](auth-selector-README.md) |
 | Application/front shell performs login and browser should become a platform user | [Application-Hosted Platform Login And Session](app-hosted-platform-login-and-session-README.md) |
 | The platform should host the sign-in against a Cognito or OIDC upstream, with no identity client in the browser | [Platform-Hosted Sign-In](app-hosted-platform-login-and-session-README.md#platform-hosted-sign-in-the-server-held-browser-session) |
+| Decide how a page reaches KDCube signed in: who owns the login, where the page lives, cookie or headers, with before/after diagrams for the website and the control plane | [Browser Sign-In Situations](browser-sign-in-situations-README.md) |
 | App writes a SimpleIDP token for local/embedded simple auth | [App SimpleIDP Bridge](app-simple-idp-bridge-README.md) |
 | External tool should access a narrow MCP integration surface after descriptor-governed user/admin consent | [OAuth delegated credential Protocol Adapter](../../sdk/solutions/connections/delegated-credentials/oauth-delegated-credential-protocol-adapter-README.md) |
 | Public mini app needs Socket.IO Data Bus publish rights | [Bundle Federated Auth](../../sdk/bundle/auth-bundle-federated-README.md) |

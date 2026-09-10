@@ -277,6 +277,9 @@ Backend-only authoring checklist:
 
 ## Auth And Origin Decision
 
+The full matrix of who owns the login, where the page lives, and what carries
+the credential, with diagrams: [Browser Sign-In Situations](service/auth/browser-sign-in-situations-README.md).
+
 Browser integrations must decide two separate things:
 
 1. Can the host page frame KDCube?
