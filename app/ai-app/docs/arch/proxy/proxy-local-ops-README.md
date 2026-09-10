@@ -25,13 +25,13 @@ For the **production (EC2 + SSL + proxylogin)** setup, see:
 | | Local (this doc) | EC2 / SSL |
 |---|---|---|
 | SSL/TLS | None — HTTP :80 only | TLS termination, HTTPS redirect |
-| Auth | None — no `proxylogin` | Cookie unmask via `proxylogin` |
+| Auth | Server session, Cognito, or simple by default; delegated profile available | Cookie unmask via `proxylogin` |
 | `server_name` | `_` (any host) | Explicit domain |
 | IP block | Not present | Direct IP → `444` |
 | HSTS | Not present | Present |
 | CORS | Handled at proxy for integrations routes | Delegated to backend |
 | Infrastructure | postgres, redis, pgadmin included | External (managed infra) |
-| Backends | 4 (no `proxylogin`) | 5 (includes `proxylogin`) |
+| Backends | 4 by default; 5 with the delegated profile | 5 (includes `proxylogin`) |
 | Port exposure | `:80` only | `:80` + `:443` |
 
 ---
@@ -68,7 +68,9 @@ chat ingress `/socket.io/`. Clients should use the slash route on the wire.
 Outer dev proxies such as Caddy may accept `/cb/socket.io` too, but OpenResty
 templates keep the routed location as `/cb/socket.io/`.
 
-`proxylogin` is **not present** in this deployment. The `/auth/*` route group does not exist.
+The default local topology leaves the `proxylogin` profile inactive and uses a
+proxy config without `/auth/*`. Delegated auth activates the profile and its
+matching proxy config.
 
 ---
 
@@ -90,7 +92,8 @@ The all-in-one compose includes managed infrastructure that is external in the E
 | `web-ui` | `kdcube-web-ui` | React SPA |
 | `web-proxy` | `kdcube-web-proxy` | This proxy (OpenResty) |
 
-`proxylogin` and `kb`/`dramatiq` services are commented out in this compose file.
+`proxylogin` is declared under its inactive-by-default Compose profile.
+`kb`/`dramatiq` services remain outside this compose topology.
 
 ### Network layout
 
@@ -181,20 +184,23 @@ limit_req_status 429;
 
 ## Enabling proxylogin locally
 
-`proxylogin` is commented out in the all-in-one compose but is supported. To enable:
+Proxylogin is available as a Compose profile. To enable it:
 
-1. Uncomment the `proxylogin` service block in `docker-compose.yml`.
-2. Uncomment the `proxylogin` entry in `web-proxy.depends_on`.
-3. Switch the runtime config to the delegated-auth variant:
+1. Set `auth.type: delegated` and `auth.proxy_login.enabled: true` in
+   `assembly.yaml`.
+2. Switch the runtime config to the delegated-auth variant:
    ```
    NGINX_PROXY_RUNTIME_CONFIG_PATH=./config/nginx_proxy_ssl_delegated_auth.conf
    ```
-4. Provide `.env.proxylogin` with the required Cognito / auth configuration.
+3. Provide `.env.proxylogin` with the required Cognito / auth configuration.
+4. Start through the `kdcube` CLI, or pass `--profile proxylogin` when invoking
+   Docker Compose directly.
 5. If the deployment changes the auth or ID cookie names, set
    `AUTH_TOKEN_COOKIE_NAME` and `ID_TOKEN_COOKIE_NAME` through `assembly.yaml`;
    the CLI renders them into the web-proxy environment.
 
-Without step 3, OpenResty will fail to start because the SSL/delegated-auth config references `proxy_login` upstream which would not exist.
+The delegated proxy config and proxylogin profile are one topology: enable
+both together.
 
 ---
 

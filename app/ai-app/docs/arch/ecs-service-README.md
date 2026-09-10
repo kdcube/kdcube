@@ -42,7 +42,7 @@ auth, rate limiting, real IP handling, and security headers.
 | --- | --- | ---: | --- |
 | `web-proxy` | Fargate | `80` | OpenResty reverse proxy. Routes UI, auth, API, SSE, integration, and static paths. Applies proxy auth, security headers, rate limits, and service discovery routing. |
 | `web-ui` | Fargate | `80` | Static frontend container. Runtime frontend config is injected at startup. |
-| `proxylogin` | Fargate | `8080` | Delegated auth service. Handles OIDC/Cognito flows, session token masking/unmasking, refresh, and password-reset flows when enabled. |
+| `proxylogin` | optional Fargate service | `8080` | Delegated auth service. `auth.proxy_login.enabled` selects zero or one ECS task; the server-side session lane uses zero. |
 | `chat-ingress` | Fargate | `8010` | API, SSE, and Socket.IO ingress. Validates chat requests, accepts uploads, applies gateway/backpressure checks, admits Data Bus publish packages, and enqueues or streams work for processors. |
 | `clamav` | sidecar in `chat-ingress` | `3310` | Optional upload scanning sidecar used by ingress when AV scanning is enabled. |
 | `chat-proc` | Fargate or EC2 capacity provider | `8020` | Queue worker, Data Bus worker, and agent runtime. Runs bundles, model calls, web search/fetch, tools, integrations, `@data_bus_handler(...)`, and code execution orchestration. |

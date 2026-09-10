@@ -144,6 +144,8 @@ services:
 
   proxylogin:
     logging: *kdcube-logging
+    profiles:
+      - proxylogin
     image: proxylogin:latest
     build:
       dockerfile: ./Dockerfile_ProxyLogin

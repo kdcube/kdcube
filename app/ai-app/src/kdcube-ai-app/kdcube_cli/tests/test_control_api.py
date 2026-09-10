@@ -238,7 +238,10 @@ def test_repository_connection_hub_descriptor_resolves_product_surfaces(tmp_path
         "widget:connections_settings",
         "mcp:remote_mcp_proxy",
     }
-    assert target.application_url(app.reference).endswith(
+    assert target.application_url(
+        app.reference,
+        SurfaceSelector(kind=SurfaceKind.WIDGET, alias="connections_settings"),
+    ).endswith(
         "/connection-hub@1-0/public/widgets/connections_settings"
     )
 
@@ -379,6 +382,80 @@ def test_local_start_and_stop_use_typed_lifecycle_and_lock(tmp_path):
         ControlEventKind.COMMAND,
         ControlEventKind.COMMAND,
     ]
+
+
+def test_local_start_activates_proxy_login_for_delegated_auth(tmp_path):
+    repo, workdir = _make_runtime(tmp_path)
+    _write_yaml(
+        workdir / "config" / "assembly.yaml",
+        {
+            "auth": {
+                "type": "delegated",
+                "proxy_login": {"enabled": True},
+            }
+        },
+    )
+    runner = FakeRunner()
+    target = LocalDeploymentTarget(
+        DeploymentTargetRef.local(workdir),
+        repo_root=repo,
+        runner=runner,
+        lock_file=tmp_path / "cli-lock.json",
+    )
+
+    target.start()
+
+    up_command = next(call["command"] for call in runner.calls if "up" in call["command"])
+    assert ("--profile", "proxylogin") == up_command[4:6]
+
+
+def test_local_start_removes_proxy_login_after_it_is_disabled(tmp_path):
+    repo, workdir = _make_runtime(tmp_path)
+    runner = FakeRunner(running_services="chat-proc\nproxylogin\nweb-proxy\n")
+    events = []
+    target = LocalDeploymentTarget(
+        DeploymentTargetRef.local(workdir),
+        repo_root=repo,
+        runner=runner,
+        lock_file=tmp_path / "cli-lock.json",
+    )
+
+    target.start(event_sink=events.append)
+
+    compose_commands = [call["command"] for call in runner.calls if "compose" in call["command"]]
+    remove_command = next(command for command in compose_commands if "rm" in command)
+    up_command = next(command for command in compose_commands if "up" in command)
+    assert remove_command[-4:] == ("rm", "--stop", "--force", "proxylogin")
+    assert "--profile" not in up_command
+    assert [event.kind for event in events] == [
+        ControlEventKind.COMMAND,
+        ControlEventKind.COMMAND,
+    ]
+
+
+def test_local_start_rejects_proxy_login_for_server_side_login(tmp_path):
+    repo, workdir = _make_runtime(tmp_path)
+    _write_yaml(
+        workdir / "config" / "assembly.yaml",
+        {
+            "auth": {
+                "type": "bundle",
+                "proxy_login": {"enabled": True},
+            }
+        },
+    )
+    runner = FakeRunner()
+    target = LocalDeploymentTarget(
+        DeploymentTargetRef.local(workdir),
+        repo_root=repo,
+        runner=runner,
+        lock_file=tmp_path / "cli-lock.json",
+    )
+
+    with pytest.raises(OperationFailedError, match="proxy_login.enabled=true"):
+        target.start()
+
+    assert not any("compose" in call["command"] for call in runner.calls)
 
 
 def test_local_lifecycle_distinguishes_unavailable_docker(tmp_path):

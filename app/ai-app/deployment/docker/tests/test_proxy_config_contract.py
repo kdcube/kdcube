@@ -5,6 +5,8 @@ import sys
 import unittest
 from pathlib import Path
 
+import yaml
+
 
 DOCKER_ROOT = Path(__file__).resolve().parents[1]
 AI_APP_ROOT = DOCKER_ROOT.parents[1]
@@ -30,6 +32,28 @@ PROXY_ROUTE_TEMPLATES = (
 
 
 class ProxyConfigContractTest(unittest.TestCase):
+    def test_proxylogin_is_an_explicit_compose_profile(self) -> None:
+        compose_paths = (
+            DOCKER_ROOT / "all_in_one_kdcube/docker-compose.yaml",
+            DOCKER_ROOT / "custom-ui-managed-infra/docker-compose.yaml",
+            DOCKER_ROOT / "local-infra-stack/docker-compose.yaml",
+        )
+
+        for compose_path in compose_paths:
+            with self.subTest(compose=compose_path):
+                compose = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
+                self.assertEqual(
+                    compose["services"]["proxylogin"]["profiles"],
+                    ["proxylogin"],
+                )
+
+        for compose_path in compose_paths[:2]:
+            with self.subTest(optional_dependency=compose_path):
+                compose = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
+                dependency = compose["services"]["web-proxy"]["depends_on"]["proxylogin"]
+                self.assertEqual(dependency["condition"], "service_started")
+                self.assertFalse(dependency["required"])
+
     def test_proxy_image_validates_activated_config_before_start(self) -> None:
         dockerfile = (DOCKER_ROOT / "all_in_one_kdcube/Dockerfile_ProxyOpenResty").read_text(
             encoding="utf-8"

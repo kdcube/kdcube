@@ -183,7 +183,7 @@ Alternatively, use `GIT_HTTP_TOKEN` for HTTPS auth.
 
 The CLI selects the runtime proxy template from platform-shipped nginx configs
 based on:
-- auth mode (`simple`, `cognito`, `delegated`)
+- auth mode (`simple`, `cognito`, `delegated`, `bundle`)
 - `proxy.ssl`
 - compose mode (`custom-ui-managed-infra`)
 
@@ -254,7 +254,7 @@ For direct runtime descriptor reads, see:
  dc-infra stop web-ui && dc-infra rm web-ui -f && dc-infra up web-ui -d --build
 
 # Rebuild proxylogin
- dc-infra stop proxylogin && dc-infra rm proxylogin -f && dc-infra build proxylogin --no-cache && dc-infra up proxylogin -d
+ dc-infra --profile proxylogin stop proxylogin && dc-infra --profile proxylogin rm proxylogin -f && dc-infra --profile proxylogin build proxylogin --no-cache && dc-infra --profile proxylogin up proxylogin -d
 
 # Rebuild proxy
  dc-infra stop web-proxy && dc-infra rm web-proxy -f && dc-infra up web-proxy -d --build

@@ -415,21 +415,25 @@ services:
       - ${PATH_TO_FRONTEND_CONFIG_JSON}:/usr/share/nginx/html/config.json:ro
       - ${KDCUBE_CONFIG_DIR:-./config}/nginx_ui.conf:/etc/nginx/nginx.conf:ro
 
-#  proxylogin:
-#    image: proxylogin:latest
-#    build:
-#      no_cache: true
-#      dockerfile: Dockerfile_ProxyLogin
-#    env_file:
-#      - path: ${KDCUBE_CONFIG_DIR:-./config}/.env.proxylogin
-#        required: false
-#    networks:
-#      - kdcube-internal
-#    volumes:
-#      - type: bind
-#        source: ${HOME}/.aws
-#        target: /home/proxylogin/.aws
-#        read_only: true
+  proxylogin:
+    logging: *kdcube-logging
+    profiles:
+      - proxylogin
+    image: proxylogin:latest
+    build:
+      no_cache: true
+      context: ../../..
+      dockerfile: deployment/docker/all_in_one_kdcube/Dockerfile_ProxyLogin
+    env_file:
+      - path: ${KDCUBE_CONFIG_DIR:-./config}/.env.proxylogin
+        required: false
+    networks:
+      - kdcube-internal
+    volumes:
+      - type: bind
+        source: ${HOME}/.aws
+        target: /home/proxylogin/.aws
+        read_only: true
 
   web-proxy:
     logging: *kdcube-logging
@@ -453,8 +457,9 @@ services:
         condition: service_started
       metrics:
         condition: service_started
-#      proxylogin:
-#        condition: service_started
+      proxylogin:
+        condition: service_started
+        required: false
     networks:
       - kdcube-external
       - kdcube-internal

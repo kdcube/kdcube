@@ -69,6 +69,15 @@ staged into the descriptor directory by the installer and reached through
 
 ### Identity, auth, and ports
 
+Process topology is descriptor-owned as well:
+
+| Descriptor path | CLI local compose | AWS deployment |
+|---|---|---|
+| `auth.proxy_login.enabled` | Activates the `proxylogin` Compose profile when true; an older running sidecar is removed when false. | Sets the `proxylogin` ECS service desired task count to one when true and zero when false. |
+
+The valid auth combinations and the legacy omitted-value behavior are owned by
+[Assembly Descriptor](assembly-descriptor-README.md#platform-auth-selection).
+
 | Env var | Descriptor path | Descriptor file | Modes |
 |---|---|---|---|
 | `AUTH_PROVIDER` | selected provider type from `auth.connection_hub` -> `connection-hub@1-0.config.authority_registry` | `assembly.yaml` + `bundles.yaml` | effective runtime value |

@@ -13,6 +13,7 @@ auth:
     app_client_id: ""
     service_client_id: ""
   proxy_login:
+    enabled: false
     redis_key_prefix: "proxylogin:<TENANT>:<PROJECT>:"
     token_masquerade: true
     enforce_mfa: false

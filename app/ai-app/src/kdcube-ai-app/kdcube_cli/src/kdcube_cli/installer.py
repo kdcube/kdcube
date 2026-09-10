@@ -16,7 +16,7 @@ import tempfile
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Mapping, Optional, Set, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 from urllib.parse import unquote, urlparse, urlsplit, urlunsplit
 
 from rich.console import Console
@@ -27,6 +27,13 @@ from rich.prompt import Prompt
 from rich.table import Table
 from rich.text import Text
 
+from kdcube_cli.compose_profiles import (
+    PROXYLOGIN_PROFILE,
+    PROXYLOGIN_SERVICE,
+    ComposeProfileConfigurationError,
+    compose_profile_args,
+    proxy_login_enabled,
+)
 from kdcube_cli.descriptor_files import (
     copy_descriptor_file,
     enforce_secret_descriptor_permissions,
@@ -2486,7 +2493,12 @@ def compose_env(env_file: Path) -> Dict[str, str]:
     return env
 
 
-def list_compose_services(ctx: PathsContext, env_file: Path) -> List[str]:
+def list_compose_services(
+    ctx: PathsContext,
+    env_file: Path,
+    *,
+    profile_args: Sequence[str] = (),
+) -> List[str]:
     try:
         output = subprocess.check_output(
             [
@@ -2494,6 +2506,7 @@ def list_compose_services(ctx: PathsContext, env_file: Path) -> List[str]:
                 "compose",
                 "--env-file",
                 str(env_file),
+                *profile_args,
                 "config",
                 "--services",
             ],
@@ -2505,6 +2518,48 @@ def list_compose_services(ctx: PathsContext, env_file: Path) -> List[str]:
     except Exception as exc:
         print(f"[kdcube-cli] Unable to list compose services: {exc}")
         return []
+
+
+def remove_proxy_login_if_running(
+    console: Console,
+    ctx: PathsContext,
+    env_file: Path,
+) -> None:
+    base_command = ["docker", "compose", "--env-file", str(env_file)]
+    running = subprocess.run(
+        [
+            *base_command,
+            "--profile",
+            PROXYLOGIN_PROFILE,
+            "ps",
+            "--services",
+            "--filter",
+            "status=running",
+        ],
+        cwd=ctx.docker_dir,
+        env=compose_env(env_file),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    services = {line.strip() for line in running.stdout.splitlines() if line.strip()}
+    if PROXYLOGIN_SERVICE not in services:
+        return
+    subprocess.run(
+        [
+            *base_command,
+            "--profile",
+            PROXYLOGIN_PROFILE,
+            "rm",
+            "--stop",
+            "--force",
+            PROXYLOGIN_SERVICE,
+        ],
+        cwd=ctx.docker_dir,
+        env=compose_env(env_file),
+        check=True,
+    )
+    console.print("[dim]Stopped proxylogin because auth.proxy_login.enabled is false.[/dim]")
 
 
 def apply_runtime_secrets(console: Console, ctx: PathsContext, secrets: Dict[str, str], env_file: Path) -> None:
@@ -3651,6 +3706,11 @@ def gather_configuration(
         auth_choice = picker_options[display_options.index(selected_label)]
     auth_mode = auth_choice
     _set_nested(assembly_data, ["auth", "type"], auth_mode)
+    _set_nested(
+        assembly_data,
+        ["auth", "proxy_login", "enabled"],
+        auth_mode == "delegated",
+    )
     if auth_choice == "simple":
         auth_provider = "simple"
     elif auth_choice == "bundle":
@@ -4140,6 +4200,7 @@ def gather_configuration(
             ["auth", "proxy_login"],
         ):
             _delete_nested(assembly_data, legacy_path)
+        _set_nested(assembly_data, ["auth", "proxy_login", "enabled"], False)
         # Write the browser auth block explicitly rather than letting the frontend
         # builder substitute a token that appears nowhere in the descriptor.
         _set_nested(assembly_data, ["frontend", "config", "auth", "authType"], "simple")
@@ -5922,6 +5983,12 @@ def run_setup(
     )
     env_main = load_env_file(config_dir / ".env")
     env_proc = load_env_file(config_dir / ".env.proc")
+    runtime_assembly = load_release_descriptor(config_dir / "assembly.yaml")
+    try:
+        use_proxy_login = proxy_login_enabled(runtime_assembly)
+        profile_args = compose_profile_args(runtime_assembly)
+    except ComposeProfileConfigurationError as exc:
+        raise SystemExit(f"Invalid proxy-login descriptor configuration: {exc}") from exc
 
     try:
         final_assembly = load_release_descriptor_soft(Path(release_descriptor_path).expanduser()) if release_descriptor_path else {}
@@ -6022,9 +6089,10 @@ def run_setup(
                 "kdcube-web-ui",
                 "kdcube-web-proxy",
                 "kdcube-secrets",
-                "proxylogin",
                 "py-code-exec",
             ]
+            if use_proxy_login:
+                images.append(PROXYLOGIN_SERVICE)
             try:
                 for image in images:
                     subprocess.run(
@@ -6062,8 +6130,8 @@ def run_setup(
                         "postgres-setup",
                         "kdcube-secrets",
                     ]
-                    if ctx.docker_dir.name == "custom-ui-managed-infra":
-                        build_services.append("proxylogin")
+                    if use_proxy_login:
+                        build_services.append(PROXYLOGIN_SERVICE)
                     if not (ui_image_override and not is_placeholder(ui_image_override)):
                         build_services.append("web-ui")
                     subprocess.run(
@@ -6072,6 +6140,7 @@ def run_setup(
                             "compose",
                             "--env-file",
                             str(config_dir / ".env"),
+                            *profile_args,
                             "build",
                             *build_services,
                         ],
@@ -6117,7 +6186,10 @@ def run_setup(
                 "compose",
                 "--env-file",
                 str(runtime_env),
+                *profile_args,
             ]
+            if not use_proxy_login:
+                remove_proxy_login_if_running(console, ctx, runtime_env)
             build_flag = ["--build"] if install_mode != "release" else []
             force_recreate_flag = ["--force-recreate"] if install_mode != "release" else []
             if runtime_secrets and use_secrets_service_runtime:
@@ -6142,7 +6214,11 @@ def run_setup(
                     f"provider is '{runtime_secrets_provider}', so CLI sidecar injection is skipped.[/yellow]"
                 )
 
-            services = list_compose_services(ctx, runtime_env)
+            services = list_compose_services(
+                ctx,
+                runtime_env,
+                profile_args=profile_args,
+            )
             if services:
                 console.print(f"[dim]Compose services:[/dim] {', '.join(sorted(services))}")
             if runtime_secrets and use_secrets_service_runtime and services:

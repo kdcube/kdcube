@@ -18,7 +18,7 @@ Choose the path that matches your workflow.
 
 Use this when developing the platform or SDK. You run ingress/proc/metrics/frontend directly on your host, while infra runs elsewhere (e.g. `local-infra-stack`).
 
-## 2. Local infra only (Postgres/Redis/ClamAV/proxylogin)
+## 2. Local infra only (Postgres/Redis/ClamAV, optional proxylogin)
 **Folder:** [deployment/docker/local-infra-stack/](../../deployment/docker/local-infra-stack)
 
 Use this when you want a local infra stack but run services on your host (DevEnv).

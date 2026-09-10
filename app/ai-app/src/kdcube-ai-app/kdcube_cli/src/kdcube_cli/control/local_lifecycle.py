@@ -7,6 +7,13 @@ from pathlib import Path
 from typing import Dict, Mapping, Optional, Sequence, Set
 
 from kdcube_cli import installer as installer_mod
+from kdcube_cli.compose_profiles import (
+    PROXYLOGIN_PROFILE,
+    PROXYLOGIN_SERVICE,
+    ComposeProfileConfigurationError,
+    compose_profile_args,
+    proxy_login_enabled,
+)
 from kdcube_cli.control.errors import DockerUnavailableError, OperationFailedError
 from kdcube_cli.control.execution import CommandResult, CommandRunner
 from kdcube_cli.control.initialization import EventSink
@@ -70,6 +77,15 @@ class LocalLifecycleController:
             self._context.config_dir / "assembly.yaml"
         )
         try:
+            profile_args = compose_profile_args(assembly)
+            use_proxy_login = proxy_login_enabled(assembly)
+        except ComposeProfileConfigurationError as exc:
+            raise OperationFailedError(
+                "start",
+                self._reference.target_id,
+                f"Compose profile configuration is invalid: {exc}",
+            ) from exc
+        try:
             validate_host_vault_assembly_for_start(
                 assembly,
                 workdir=self._context.workdir,
@@ -86,11 +102,23 @@ class LocalLifecycleController:
             env_file,
             installer_mod.generate_runtime_tokens(),
         )
-        command = ["docker", "compose", "--env-file", str(runtime_env), "up", "-d"]
+        base_command = [
+            "docker",
+            "compose",
+            "--env-file",
+            str(runtime_env),
+        ]
+        command = [*base_command, *profile_args, "up", "-d"]
         if request.build:
             command.append("--build")
         try:
             self._write_lock(env_file)
+            if not use_proxy_login:
+                self._remove_running_proxy_login(
+                    base_command,
+                    runtime_env,
+                    event_sink=event_sink,
+                )
             self._emit_command(event_sink, command)
             result = self._run_command(
                 command,
@@ -137,6 +165,8 @@ class LocalLifecycleController:
             "compose",
             "--env-file",
             str(env_file),
+            "--profile",
+            PROXYLOGIN_PROFILE,
             "down",
             "--remove-orphans",
         ]
@@ -163,6 +193,64 @@ class LocalLifecycleController:
             changed=True,
             running=False,
         )
+
+    def _remove_running_proxy_login(
+        self,
+        base_command: Sequence[str],
+        runtime_env: Path,
+        *,
+        event_sink: Optional[EventSink],
+    ) -> None:
+        status_command = [
+            *base_command,
+            "--profile",
+            PROXYLOGIN_PROFILE,
+            "ps",
+            "--services",
+            "--filter",
+            "status=running",
+        ]
+        status = self._run_command(
+            status_command,
+            cwd=self._context.docker_dir,
+            env=compose_environment(runtime_env),
+            capture_output=True,
+            timeout=DOCKER_STATUS_TIMEOUT_SECONDS,
+        )
+        if status.returncode != 0:
+            raise OperationFailedError(
+                "start",
+                self._reference.target_id,
+                "Docker compose could not inspect optional services.",
+                returncode=status.returncode,
+            )
+        running = {line.strip() for line in status.stdout.splitlines() if line.strip()}
+        if PROXYLOGIN_SERVICE not in running:
+            return
+
+        remove_command = [
+            *base_command,
+            "--profile",
+            PROXYLOGIN_PROFILE,
+            "rm",
+            "--stop",
+            "--force",
+            PROXYLOGIN_SERVICE,
+        ]
+        self._emit_command(event_sink, remove_command)
+        removed = self._run_command(
+            remove_command,
+            cwd=self._context.docker_dir,
+            env=compose_environment(runtime_env),
+            capture_output=not self._stream_process_output,
+        )
+        if removed.returncode != 0:
+            raise OperationFailedError(
+                "start",
+                self._reference.target_id,
+                "Docker compose could not stop the disabled proxy-login service.",
+                returncode=removed.returncode,
+            )
 
     def running_services(self) -> Set[str]:
         env_file = self._context.config_dir / ".env"

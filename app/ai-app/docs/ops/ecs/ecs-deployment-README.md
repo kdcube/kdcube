@@ -61,7 +61,9 @@ Current runtime on ECS:
 - `chat-ingress` handles REST and SSE gateway traffic
 - `chat-proc` handles queue processing, bundle execution, and integrations endpoints
 - `metrics` exports autoscaling metrics in Redis mode
-- `proxylogin` is used only for delegated-auth deployments
+- `proxylogin` has one task only when `auth.type: delegated` and
+  `auth.proxy_login.enabled: true`; every other auth mode sets its desired task
+  count to zero
 - `exec` is an on-demand task launched by proc, not a steady ECS service
 
 Routing is roughly:

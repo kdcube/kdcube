@@ -32,7 +32,8 @@ cp sample_env/.env.postgres.setup ./.env.postgres.setup
 cp sample_env/.env.ingress ./.env.ingress
 cp sample_env/.env.proc ./.env.proc
 cp sample_env/.env.metrics ./.env.metrics
-cp sample_env/.env.proxylogin ./.env.proxylogin
+# Required only for delegated auth:
+# cp sample_env/.env.proxylogin ./.env.proxylogin
 ```
 
 2. Configure **managed Postgres/Redis**:
@@ -56,6 +57,15 @@ Available templates:
 ```bash
 docker compose up -d --build
 ```
+
+For legacy delegated auth, set `auth.proxy_login.enabled: true` and activate
+the profile when invoking Compose directly:
+
+```bash
+docker compose --profile proxylogin up -d --build
+```
+
+The `kdcube` CLI selects this profile from the staged assembly descriptor.
 
 ## Prepare local data + logs directories
 
@@ -119,7 +129,8 @@ Backend API routes are **not** under `routesPrefix`:
 
 - `postgres-setup` runs once to bootstrap schemas in the managed Postgres.
 - This stack assumes Redis/Postgres are reachable from containers (VPC/SG/localhost).
-- If you don’t use delegated auth, you can leave `proxylogin` unused or comment it out in compose.
+- The `proxylogin` profile is inactive for server-side session, Cognito, and
+  simple auth modes.
 - `docker-entrypoint.sh` is used by **chat‑proc only** (it configures Docker socket
   access and ensures the exec workspace is writable). Ingress does **not** use it.
 
@@ -136,7 +147,7 @@ Backend API routes are **not** under `routesPrefix`:
  dc-infra build web-ui && dc-infra up -d --no-deps web-ui
 
 # Rebuild proxylogin (no deps)
- dc-infra build proxylogin --no-cache && dc-infra up -d --no-deps proxylogin
+ dc-infra --profile proxylogin build proxylogin --no-cache && dc-infra --profile proxylogin up -d --no-deps proxylogin
 
 # Rebuild proxy (no deps)
  dc-infra build web-proxy && dc-infra up -d --no-deps web-proxy

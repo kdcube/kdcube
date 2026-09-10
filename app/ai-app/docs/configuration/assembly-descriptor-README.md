@@ -172,11 +172,23 @@ auth:
     provider_id: cognito
 
   proxy_login:
+    enabled: false
     redis_key_prefix: "proxylogin:<TENANT>:<PROJECT>:"
     token_masquerade: true
     enforce_mfa: false
     http_urlbase: "https://YOUR_DOMAIN/auth"
 ```
+
+`auth.proxy_login.enabled` controls the legacy delegated-login process. The
+supported pairs are `auth.type: delegated` with `enabled: true`, or any other
+auth type with `enabled: false`. KDCube Compose starts the `proxylogin` profile
+only when this value is true. An ECS deployment keeps the service definition
+but sets its desired task count to zero when this value is false. A server-side
+session (`auth.type: bundle`) therefore runs without proxylogin.
+
+Descriptors written before this switch remain compatible: an omitted value
+resolves to true for `auth.type: delegated` and false for every other auth
+type. New and regenerated descriptors write the value explicitly.
 
 The auth and identity cookie names are not frontend-only settings. They are
 registered on the selected Connection Hub platform provider and rendered into

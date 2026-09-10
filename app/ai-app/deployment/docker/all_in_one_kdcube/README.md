@@ -12,7 +12,7 @@ This compose stack runs a full local KDCube environment with **managed local inf
 - Metrics service (`metrics`)
 - Web UI (`web-ui`)
 - OpenResty reverse proxy (`web-proxy`)
-- Optional `proxylogin` (commented out by default)
+- Optional `proxylogin` (the `proxylogin` profile, inactive by default)
 
 ## Quick start
 
@@ -28,7 +28,7 @@ cp sample_env/.env.metrics ./config/.env.metrics
 # Nginx configs (mounted into containers at runtime)
 cp nginx/conf/nginx_ui.conf ./config/nginx_ui.conf
 cp nginx/conf/nginx_proxy.conf ./config/nginx_proxy.conf
-# Optional (if you enable proxylogin):
+# Required only for delegated auth:
 # cp sample_env/.env.proxylogin ./config/.env.proxylogin
 ```
 
@@ -78,6 +78,15 @@ If the UI is calling the wrong tenant/project, verify:
 ```bash
 docker compose --env-file ./config/.env up -d --build
 ```
+
+Direct Compose use for legacy delegated auth activates the optional profile:
+
+```bash
+docker compose --env-file ./config/.env --profile proxylogin up -d --build
+```
+
+The `kdcube` CLI reads `auth.proxy_login.enabled` and selects the profile for
+you.
 
 Open the UI:
 - `http://localhost:${KDCUBE_PROXY_HTTP_PORT:-KDCUBE_UI_PORT}/platform/chat`
@@ -163,7 +172,8 @@ docker build -t py-code-exec:latest -f Dockerfile_Exec ../../..
 - `pgadmin` requires `PGADMIN_DEFAULT_EMAIL` and `PGADMIN_DEFAULT_PASSWORD`
   in `.env.postgres.setup` (sample env provides defaults).
 - Data persists under `./data/*`.
-- Proxylogin is disabled by default in compose; enable it if you use delegated auth.
+- Proxylogin is disabled by default. `auth.type: delegated` uses
+  `auth.proxy_login.enabled: true`; other auth types use `false`.
 - `docker-entrypoint.sh` is used by **chat‑proc only** (it configures Docker socket
   access and ensures the exec workspace is writable). Ingress does **not** use it.
 
@@ -177,7 +187,7 @@ docker compose stop postgres-setup && docker compose rm postgres-setup -f && doc
 ```
 
 ```shell
-docker compose stop proxylogin && docker compose rm proxylogin -f && docker compose build proxylogin --no-cache && docker compose up proxylogin -d
+docker compose --profile proxylogin stop proxylogin && docker compose --profile proxylogin rm proxylogin -f && docker compose --profile proxylogin build proxylogin --no-cache && docker compose --profile proxylogin up proxylogin -d
 ```
 
 ```shell
@@ -185,7 +195,7 @@ docker compose stop redis && docker compose rm redis -f && docker compose up red
 ```
 
 ```shell
-docker compose stop proxylogin && docker compose rm proxylogin -f && docker compose build --no-cache && docker compose up proxylogin -d
+docker compose --profile proxylogin stop proxylogin && docker compose --profile proxylogin rm proxylogin -f && docker compose --profile proxylogin build proxylogin --no-cache && docker compose --profile proxylogin up proxylogin -d
 ```
 
 ```bash
@@ -199,7 +209,7 @@ docker compose stop proxylogin && docker compose rm proxylogin -f && docker comp
  dc-infra build web-ui && dc-infra up -d --no-deps web-ui
 
 # Rebuild proxylogin (no deps)
- dc-infra build proxylogin --no-cache && dc-infra up -d --no-deps proxylogin
+ dc-infra --profile proxylogin build proxylogin --no-cache && dc-infra --profile proxylogin up -d --no-deps proxylogin
 
 # Rebuild proxy (no deps)
  dc-infra build web-proxy && dc-infra up -d --no-deps web-proxy

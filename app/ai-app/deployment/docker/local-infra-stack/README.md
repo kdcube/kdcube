@@ -1,7 +1,7 @@
 ---
 id: ks:deployment/docker/local-infra-stack/README.md
 title: "Local Infra Stack (Docker Compose)"
-summary: "Run Postgres, Redis, ClamAV, and proxylogin locally for KDCube development."
+summary: "Run Postgres, Redis, ClamAV, and the optional proxylogin profile locally for KDCube development."
 tags: ["deployment", "docker", "infra", "postgres", "redis", "clamav", "proxylogin"]
 keywords: ["local infra", "docker compose", "postgres-setup", "schema bootstrap", "redis password", "clamav", "proxylogin"]
 see_also:
@@ -10,7 +10,8 @@ see_also:
 ---
 # Local Infra Stack (Docker Compose)
 
-This compose stack runs **infra services only** (Postgres, Redis, ClamAV, proxylogin).  
+This compose stack runs **infra services only** (Postgres, Redis, and ClamAV).
+Proxylogin is available through an explicit profile for legacy delegated auth.
 Use it when you run KDCube services locally (IDE/venv) or in a separate stack.
 
 ---
@@ -22,7 +23,8 @@ Use it when you run KDCube services locally (IDE/venv) or in a separate stack.
 ```shell
 cp sample_env/.env ./.env
 cp sample_env/.env.postgres.setup ./.env.postgres.setup
-cp sample_env/.env.proxylogin ./.env.proxylogin
+# Required only for delegated auth:
+# cp sample_env/.env.proxylogin ./.env.proxylogin
 ```
 
 2. Edit `.env` (required):
@@ -50,6 +52,12 @@ chmod -R 0777 ./data
 
 ```shell
 docker compose up -d
+```
+
+For delegated auth:
+
+```shell
+docker compose --profile proxylogin up -d
 ```
 
 Or with rebuild
@@ -80,8 +88,8 @@ docker compose stop postgres-setup && docker compose rm -f postgres-setup
 docker compose build postgres-setup --no-cache && docker compose up -d postgres-setup
 
 # Rebuild proxylogin
-docker compose stop proxylogin && docker compose rm -f proxylogin
-docker compose build proxylogin --no-cache && docker compose up -d proxylogin
+docker compose --profile proxylogin stop proxylogin && docker compose --profile proxylogin rm -f proxylogin
+docker compose --profile proxylogin build proxylogin --no-cache && docker compose --profile proxylogin up -d proxylogin
 
 # Restart redis
 docker compose stop redis && docker compose rm -f redis

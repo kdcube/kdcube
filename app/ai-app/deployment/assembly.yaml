@@ -53,6 +53,7 @@ auth:
     hosted_ui_domain: ""              # public Cognito hosted/custom domain used for browser logout
 
   proxy_login:
+    enabled: false                         # true only for auth.type: delegated
     redis_key_prefix: "proxylogin:<TENANT>:<PROJECT>:"
     token_masquerade: true
     enforce_mfa: false                    # COGNITO_ENFORCEMFA

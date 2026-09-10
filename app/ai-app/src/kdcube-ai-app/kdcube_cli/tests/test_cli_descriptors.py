@@ -2869,6 +2869,7 @@ def test_gather_configuration_keeps_service_env_minimal_with_platform_descriptor
     assert assembly_data["platform"]["services"]["proc"]["service"]["cb_relay_identity"] == "relay.proc"
     assert assembly_data["platform"]["services"]["proc"]["tools"]["web_search"]["web_favicon_enrich_enabled"] is False
     assert assembly_data["platform"]["services"]["proc"]["tools"]["web_search"]["web_favicon_enrich_timeout_s"] == 2.5
+    assert assembly_data["auth"]["proxy_login"] == {"enabled": False}
 
 
 def test_gather_configuration_supports_explicit_proxy_host_ports(monkeypatch, tmp_path: Path):
@@ -2995,6 +2996,7 @@ def test_gather_configuration_supports_explicit_proxy_host_ports(monkeypatch, tm
     assert "HTTP_URLBASE=http://ai.example.com/auth" in env_proxy
     assembly_data = yaml.safe_load(assembly_path.read_text())
     proxy_login = assembly_data["auth"]["proxy_login"]
+    assert proxy_login["enabled"] is True
     assert proxy_login["redis_key_prefix"] == "proxylogin:demo-tenant:demo-project:"
     assert proxy_login["enforce_mfa"] is True
     assert proxy_login["password_reset"]["redirect_url"] == "http://ai.example.com/platform/reset-password?user=%[1]s"

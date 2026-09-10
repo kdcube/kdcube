@@ -338,6 +338,11 @@ plane web app, the widgets and the website read `/api/cp-frontend-config`
 at page load and follow what they find. What changes is the browser
 sessions alive at that moment:
 
+Set `auth.proxy_login.enabled: false` for this session lane. Proxylogin belongs
+to the legacy `auth.type: delegated` lane; the platform session endpoints run
+in KDCube itself. The process-selection contract is documented in
+[Assembly Descriptor](../../configuration/assembly-descriptor-README.md#platform-auth-selection).
+
 | Switch | Control plane web app, widgets, website on `loginMode: auto` | Website on `own-oidc` | Website on `platform` |
 | --- | --- | --- | --- |
 | off to on (`cognito` to `browser_session`) | The next page load probes `/profile` with the old Cognito token cookies, which the gateway still accepts, so nobody is signed out. When the access token expires, nothing renews it any more, the page sees anonymous, and the user signs in once through the platform route. | unaffected, its tokens stay accepted | unaffected, it already used the server route |
