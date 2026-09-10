@@ -98,7 +98,12 @@ auth:
 
 `auth.connection_hub.provider_id` chooses the authenticator; `auth.type` is
 what the browser is told. Restart the runtime. With S and C both registered,
-this switch needs no identity-provider change.
+this switch needs no identity-provider change, and no client is rebuilt or
+redeployed: the pages read the auth contract at load. Browser sessions alive
+at the switch sign in once more at most; a website pinned to
+`loginMode: platform` must be moved to `auto` or `own-oidc` before switching
+off. The full effect table:
+[Switching server-side login on and off](../../../service/auth/app-hosted-platform-login-and-session-README.md#switching-server-side-login-on-and-off).
 
 ## Step 7. Switch the site's login
 
@@ -107,6 +112,8 @@ In the website's `kdcube.config.json`, per profile:
 lane, `platform` always uses server-side login, `own-oidc` always runs the
 site's own client with the provider named in `auth.oidc`. With W registered
 for the site's origins, this switch needs no identity-provider change either.
+It is an edit to a static file, so it takes a website deploy; a platform lane
+switch under `auto` takes none.
 
 ## Step 8. Verify
 

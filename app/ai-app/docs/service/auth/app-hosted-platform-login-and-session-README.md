@@ -328,6 +328,28 @@ platform origin's callback and signed-out URLs do. The website's
 server-session mode in `auth.js` sends its full URL as `next` for this
 reason.
 
+### Switching server-side login on and off
+
+The switch is two lines in the environment's `assembly.yaml`, `auth.type`
+and `auth.connection_hub.provider_id`, followed by a restart. It needs the
+image to carry the lane's code and, for a cloud environment, the descriptor
+inputs published. No client is rebuilt or redeployed for it: the control
+plane web app, the widgets and the website read `/api/cp-frontend-config`
+at page load and follow what they find. What changes is the browser
+sessions alive at that moment:
+
+| Switch | Control plane web app, widgets, website on `loginMode: auto` | Website on `own-oidc` | Website on `platform` |
+| --- | --- | --- | --- |
+| off to on (`cognito` to `browser_session`) | The next page load probes `/profile` with the old Cognito token cookies, which the gateway still accepts, so nobody is signed out. When the access token expires, nothing renews it any more, the page sees anonymous, and the user signs in once through the platform route. | unaffected, its tokens stay accepted | unaffected, it already used the server route |
+| on to off (`browser_session` to `cognito`) | The next page load runs the browser OIDC client; the session cookie holds a `kst1` token the Cognito manager cannot read, so the user signs in once, often silently while the hosted UI session lives. The frontend's cookie write replaces the session cookie. | unaffected | breaks by design: it insists on a `loginUrl` the Cognito lane does not advertise. Set the profile to `auto` or `own-oidc` first. |
+
+Never affected: external MCP clients (Claude Desktop, Claude Code and the
+others authenticate to Connection Hub's OAuth server and their cards, not
+to the browser login), automation tokens, service-to-service calls, and
+the identity provider once both URL sets are registered per origin
+(section "What the identity provider must know" of
+[Browser Sign-In Situations](browser-sign-in-situations-README.md)).
+
 ### Sliding renewal
 
 The token's `exp` is the hard bound (the maximum since sign-in). The Redis
