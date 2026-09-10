@@ -30,6 +30,7 @@ webauthn==2.8.0
 pydantic==2.13.4
 python-dotenv==1.1.1
 PyYAML==6.0.2
+ruamel.yaml==0.18.15
 python-socketio==5.13.0
 redis==6.2.0
 requests==2.32.5
