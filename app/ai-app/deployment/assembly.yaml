@@ -70,6 +70,13 @@ auth:
 # protected-service HMAC value lives in the Connection Hub app's secrets.
 # ---------------------------------------------------------------------------
 management:
+  # Allows an administrator-facing app to update selected staged platform
+  # settings. Keep closed on source-published deployments.
+  platform_settings:
+    editing:
+      enabled: false
+      sections:
+        auth: false
   delegated:
     enabled: true
     effect_pending_seconds: 120

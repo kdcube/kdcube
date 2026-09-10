@@ -30,16 +30,17 @@ import io
 import os
 import shutil
 import tempfile
-import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-from kdcube_ai_app.apps.chat.sdk.config_scopes import _descriptor_path
+from kdcube_ai_app.apps.chat.sdk.config_scopes import _descriptor_path, _resolve_dotted_value
+from kdcube_ai_app.infra.descriptors.locking import descriptor_edit_lock
 
 UNCHANGED = "<unchanged>"
 SECRET_LIKE_KEYS = frozenset({"id_token", "cookie", "client_secret", "secret", "secret_ref", "token"})
-EDITS_ENV = "KDCUBE_DESCRIPTOR_EDITS"
+EDITING_POLICY_PATH = "management.platform_settings.editing"
 DEFAULT_CONNECTION_HUB_BUNDLE = "connection-hub@1-0"
 
 # The provider types the platform resolver understands
@@ -110,15 +111,38 @@ def bundles_path() -> Path:
     return _descriptor_path(env_name="BUNDLES_YAML_DESCRIPTOR_PATH", filename="bundles.yaml", default="/config/bundles.yaml")
 
 
-def edits_enabled() -> bool:
-    return str(os.getenv(EDITS_ENV) or "").strip().lower() not in {"off", "0", "false", "no"}
+def platform_settings_editing_policy(*, path: Path | None = None) -> dict[str, Any]:
+    """Read the descriptor-owned editing gate from ``assembly.yaml``.
+
+    The gate is closed unless both the general switch and the named section
+    switch are explicitly true. This leaves room for later platform settings
+    without implicitly exposing their writers when the first section is
+    enabled.
+    """
+    target = path or assembly_path()
+    if not target.exists():
+        return {"enabled": False, "sections": {}}
+    policy = _resolve_dotted_value(_plain(_load_rt(target)), EDITING_POLICY_PATH)
+    if not isinstance(policy, Mapping):
+        return {"enabled": False, "sections": {}}
+    sections = policy.get("sections")
+    return {
+        "enabled": policy.get("enabled") is True,
+        "sections": dict(sections) if isinstance(sections, Mapping) else {},
+    }
 
 
-def _guard(path: Path) -> None:
-    if not edits_enabled():
+def edits_enabled(*, section: str = "auth", policy_path: Path | None = None) -> bool:
+    policy = platform_settings_editing_policy(path=policy_path)
+    sections = policy.get("sections") or {}
+    return policy.get("enabled") is True and sections.get(str(section or "").strip()) is True
+
+
+def _guard(path: Path, *, section: str, policy_path: Path | None = None) -> None:
+    if not edits_enabled(section=section, policy_path=policy_path):
         raise DescriptorEditRefused(
-            "disabled_by_env",
-            f"Descriptor edits are switched off on this runtime ({EDITS_ENV}). Change the file at its source and publish it.",
+            "editing_disabled",
+            f"Editing the `{section}` platform settings is disabled in `{EDITING_POLICY_PATH}`. Change the source descriptor and publish it.",
         )
     if not path.exists():
         raise DescriptorEditRefused("file_missing", f"The descriptor file is not here: {path}")
@@ -140,7 +164,7 @@ def _load_rt(path: Path) -> Any:
 
 
 def _backup_name(path: Path) -> Path:
-    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     return path.with_name(f"{path.name}.bak-{stamp}")
 
 
@@ -155,6 +179,8 @@ def _write_rt(path: Path, document: Any) -> Path:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(buffer.getvalue())
+            handle.flush()
+            os.fsync(handle.fileno())
         shutil.copymode(path, tmp_name)
         os.replace(tmp_name, path)
     except Exception:
@@ -274,13 +300,22 @@ def _find_bundle_entry(document: Any, bundle_id: str) -> Any:
     return None
 
 
+def _bundle_props_node(entry: Any) -> Any:
+    """Return the physical node exposed as bundle properties at runtime."""
+    if not isinstance(entry, Mapping):
+        return None
+    config = entry.get("config")
+    return config if isinstance(config, Mapping) else entry
+
+
 def _providers_node(entry: Any, authority_id: str, *, create: bool) -> Any:
-    registry = entry.get("authority_registry") if isinstance(entry, Mapping) else None
+    props = _bundle_props_node(entry)
+    registry = props.get("authority_registry") if isinstance(props, Mapping) else None
     if not isinstance(registry, Mapping):
         if not create:
             return None
-        entry["authority_registry"] = {}
-        registry = entry["authority_registry"]
+        props["authority_registry"] = {}
+        registry = props["authority_registry"]
     authorities = registry.get("authorities")
     if not isinstance(authorities, Mapping):
         if not create:
@@ -320,45 +355,50 @@ def edit_bundle_authority_provider(
     allow_secret_removal: bool = False,
     create: bool = False,
     path: Path | None = None,
+    policy_path: Path | None = None,
 ) -> DescriptorEdit:
     """Replace one provider block under `authority_registry` of one bundle."""
     target = path or bundles_path()
-    _guard(target)
     bundle_id = str(bundle_id or "").strip() or DEFAULT_CONNECTION_HUB_BUNDLE
     authority_id = str(authority_id or "").strip()
     provider_id = str(provider_id or "").strip()
     if not authority_id or not provider_id:
         raise DescriptorEditRefused("target_missing", "Name the authority and the provider to edit.")
-    document = _load_rt(target)
-    entry = _find_bundle_entry(document, bundle_id)
-    if entry is None:
-        raise DescriptorEditRefused("bundle_missing", f"No bundle `{bundle_id}` in {target.name}.")
-    providers = _providers_node(entry, authority_id, create=create)
-    if providers is None:
-        raise DescriptorEditRefused("authority_missing", f"No authority `{authority_id}` with providers in bundle `{bundle_id}`.")
-    existing = _plain(providers.get(provider_id)) if provider_id in providers else None
-    if existing is None and not create:
-        raise DescriptorEditRefused("provider_missing", f"No provider `{provider_id}` under authority `{authority_id}`.")
-    merged = merge_unchanged(_plain(provider), existing)
-    if existing is not None and not allow_secret_removal:
-        dropped = dropped_secret_keys(merged, existing)
-        if dropped:
-            raise DescriptorEditRefused(
-                "secret_key_dropped",
-                "The submission drops keys that carry a secret reference or a cookie name; keep them, or say so.",
-                problems=[f"missing: {key}" for key in dropped],
-            )
-    problems = validate_authority_provider(merged)
-    if problems:
-        raise DescriptorEditRefused("invalid_provider", "The provider block does not resolve as submitted.", problems=problems)
-    providers[provider_id] = merged
-    backup = _write_rt(target, document)
+    effective_policy_path = policy_path or target.with_name("assembly.yaml")
+    with descriptor_edit_lock(target):
+        _guard(target, section="auth", policy_path=effective_policy_path)
+        document = _load_rt(target)
+        entry = _find_bundle_entry(document, bundle_id)
+        if entry is None:
+            raise DescriptorEditRefused("bundle_missing", f"No bundle `{bundle_id}` in {target.name}.")
+        providers = _providers_node(entry, authority_id, create=create)
+        if providers is None:
+            raise DescriptorEditRefused("authority_missing", f"No authority `{authority_id}` with providers in bundle `{bundle_id}`.")
+        existing = _plain(providers.get(provider_id)) if provider_id in providers else None
+        if existing is None and not create:
+            raise DescriptorEditRefused("provider_missing", f"No provider `{provider_id}` under authority `{authority_id}`.")
+        merged = merge_unchanged(_plain(provider), existing)
+        if existing is not None and not allow_secret_removal:
+            dropped = dropped_secret_keys(merged, existing)
+            if dropped:
+                raise DescriptorEditRefused(
+                    "secret_key_dropped",
+                    "The submission drops keys that carry a secret reference or a cookie name; keep them, or say so.",
+                    problems=[f"missing: {key}" for key in dropped],
+                )
+        problems = validate_authority_provider(merged)
+        if problems:
+            raise DescriptorEditRefused("invalid_provider", "The provider block does not resolve as submitted.", problems=problems)
+        if existing == merged:
+            return DescriptorEdit(path=str(target), backup="", changed=(), scope="providers", activation="none")
+        providers[provider_id] = merged
+        backup = _write_rt(target, document)
     return DescriptorEdit(
         path=str(target),
         backup=str(backup),
         changed=(f"{bundle_id}.authority_registry.authorities.{authority_id}.providers.{provider_id}",),
         scope="providers",
-        activation="refresh",
+        activation="publish",
     )
 
 
@@ -370,7 +410,8 @@ def registry_provider_types(bundle_id: str = DEFAULT_CONNECTION_HUB_BUNDLE, *, p
         return {}
     entry = _find_bundle_entry(_load_rt(target), str(bundle_id or "").strip() or DEFAULT_CONNECTION_HUB_BUNDLE)
     out: dict[tuple[str, str], dict[str, Any]] = {}
-    registry = entry.get("authority_registry") if isinstance(entry, Mapping) else None
+    props = _bundle_props_node(entry)
+    registry = props.get("authority_registry") if isinstance(props, Mapping) else None
     authorities = registry.get("authorities") if isinstance(registry, Mapping) else None
     for authority_id, authority in (authorities or {}).items() if isinstance(authorities, Mapping) else []:
         providers = authority.get("providers") if isinstance(authority, Mapping) else None
@@ -390,42 +431,44 @@ def edit_assembly_platform_sign_in(
     bundle_id: str = "",
     path: Path | None = None,
     bundles: Path | None = None,
+    policy_path: Path | None = None,
 ) -> DescriptorEdit:
     """Point the platform at another sign-in provider of its authority: the
     two lines `auth.type` and `auth.connection_hub.provider_id`, together."""
     target = path or assembly_path()
-    _guard(target)
     provider_id = str(provider_id or "").strip()
     if not provider_id:
         raise DescriptorEditRefused("target_missing", "Name the provider to sign in with.")
-    document = _load_rt(target)
-    auth = document.get("auth") if isinstance(document, Mapping) else None
-    if not isinstance(auth, Mapping):
-        raise DescriptorEditRefused("auth_missing", f"No `auth` block in {target.name}.")
-    hub = auth.get("connection_hub")
-    if not isinstance(hub, Mapping):
-        raise DescriptorEditRefused("auth_missing", "No `auth.connection_hub` block: this descriptor selects its authority another way.")
-    bundle = str(bundle_id or hub.get("bundle_id") or DEFAULT_CONNECTION_HUB_BUNDLE).strip()
-    authority = str(authority_id or hub.get("authority_id") or "kdcube.platform").strip()
-    known = registry_provider_types(bundle, path=bundles)
-    spec = known.get((authority, provider_id))
-    if spec is None:
-        raise DescriptorEditRefused("provider_unknown", f"Authority `{authority}` of bundle `{bundle}` declares no provider `{provider_id}`.")
-    if not spec.get("enabled", True):
-        raise DescriptorEditRefused("provider_disabled", f"Provider `{provider_id}` is disabled; enable it first.")
-    auth_type = AUTH_TYPE_FOR_PROVIDER_TYPE.get(spec.get("type") or "")
-    if not auth_type:
-        raise DescriptorEditRefused("provider_type_unsupported", f"Provider `{provider_id}` has type `{spec.get('type')}`, which the platform cannot sign in with.")
-    changed: list[str] = []
-    if str(auth.get("type") or "") != auth_type:
-        auth["type"] = auth_type
-        changed.append("auth.type")
-    if str(hub.get("provider_id") or "") != provider_id:
-        hub["provider_id"] = provider_id
-        changed.append("auth.connection_hub.provider_id")
-    if not changed:
-        return DescriptorEdit(path=str(target), backup="", changed=(), scope="lane", activation="none")
-    backup = _write_rt(target, document)
+    with descriptor_edit_lock(target):
+        _guard(target, section="auth", policy_path=policy_path or target)
+        document = _load_rt(target)
+        auth = document.get("auth") if isinstance(document, Mapping) else None
+        if not isinstance(auth, Mapping):
+            raise DescriptorEditRefused("auth_missing", f"No `auth` block in {target.name}.")
+        hub = auth.get("connection_hub")
+        if not isinstance(hub, Mapping):
+            raise DescriptorEditRefused("auth_missing", "No `auth.connection_hub` block: this descriptor selects its authority another way.")
+        bundle = str(bundle_id or hub.get("bundle_id") or DEFAULT_CONNECTION_HUB_BUNDLE).strip()
+        authority = str(authority_id or hub.get("authority_id") or "kdcube.platform").strip()
+        known = registry_provider_types(bundle, path=bundles)
+        spec = known.get((authority, provider_id))
+        if spec is None:
+            raise DescriptorEditRefused("provider_unknown", f"Authority `{authority}` of bundle `{bundle}` declares no provider `{provider_id}`.")
+        if not spec.get("enabled", True):
+            raise DescriptorEditRefused("provider_disabled", f"Provider `{provider_id}` is disabled; enable it first.")
+        auth_type = AUTH_TYPE_FOR_PROVIDER_TYPE.get(spec.get("type") or "")
+        if not auth_type:
+            raise DescriptorEditRefused("provider_type_unsupported", f"Provider `{provider_id}` has type `{spec.get('type')}`, which the platform cannot sign in with.")
+        changed: list[str] = []
+        if str(auth.get("type") or "") != auth_type:
+            auth["type"] = auth_type
+            changed.append("auth.type")
+        if str(hub.get("provider_id") or "") != provider_id:
+            hub["provider_id"] = provider_id
+            changed.append("auth.connection_hub.provider_id")
+        if not changed:
+            return DescriptorEdit(path=str(target), backup="", changed=(), scope="lane", activation="none")
+        backup = _write_rt(target, document)
     return DescriptorEdit(path=str(target), backup=str(backup), changed=tuple(changed), scope="lane", activation="refresh")
 
 
@@ -441,6 +484,7 @@ __all__ = [
     "edit_bundle_authority_provider",
     "edits_enabled",
     "merge_unchanged",
+    "platform_settings_editing_policy",
     "registry_provider_types",
     "validate_authority_provider",
 ]

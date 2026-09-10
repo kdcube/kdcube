@@ -4,13 +4,14 @@ title: "Platform Assembly Descriptor"
 summary: "Platform-level non-secret deployment configuration in assembly.yaml: tenant/project identity, auth, models, services, ports, storage backends, local runtime paths, and frontend/runtime wiring."
 tags: ["service", "configuration", "platform", "deployment", "assembly", "descriptor"]
 keywords: ["platform deployment identity", "tenant and project scope", "auth and cognito settings", "service port layout", "storage and workspace backends", "runtime path wiring", "application preparation concurrency", "application preparation retry", "bundle descriptor provider", "frontend build metadata", "local compose topology", "aws deployment mapping"]
-updated_at: 2026-09-07
+updated_at: 2026-09-11
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/descriptors-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/service-runtime-configuration-mapping-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-descriptor-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/secrets-descriptor-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/gateway-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/platform-settings-live-update-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/arch/proc/application-startup-health-and-readiness-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-credentials/oauth-delegated-credential-protocol-adapter-README.md
 ---
@@ -35,6 +36,24 @@ It does not define:
 - gateway throttling and route guards
 
 Those belong to the other descriptor files.
+
+## Administrator Editing Of Staged Platform Settings
+
+`management.platform_settings.editing` controls whether administrator-facing
+applications may update selected staged descriptor sections. Both `enabled`
+and the section key must be explicitly true; absence is closed:
+
+```yaml
+management:
+  platform_settings:
+    editing:
+      enabled: false
+      sections:
+        auth: false
+```
+
+[Live Platform Settings Updates](platform-settings-live-update-README.md)
+owns the writer, notification, service-handler and refresh-boundary contract.
 
 ## Direct runtime contract from this descriptor
 

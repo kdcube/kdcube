@@ -16,7 +16,7 @@ import inspect
 import json
 import logging
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Mapping, Sequence
 
@@ -47,6 +47,7 @@ class PlatformSettingsUpdate:
     event_id: str
     published_at: str
     version: int = PLATFORM_SETTINGS_UPDATE_VERSION
+    subscriber_count: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -157,11 +158,15 @@ async def publish_platform_settings_update(
         reason=reason,
         actor=actor,
     )
-    await redis.publish(
+    subscriber_count = await redis.publish(
         platform_settings_update_channel(tenant=event.tenant, project=event.project),
         event.to_json(),
     )
-    return event
+    try:
+        delivered = max(0, int(subscriber_count))
+    except (TypeError, ValueError):
+        delivered = 0
+    return replace(event, subscriber_count=delivered)
 
 
 class PlatformSettingsUpdateListener:

@@ -74,7 +74,8 @@ async def test_publish_contains_routing_metadata_and_no_setting_values():
     assert payload["section"] == "auth" and payload["scope"] == "providers"
     assert payload["changed"] == ["provider.trusted_providers"]
     assert "value" not in payload and "settings" not in payload
-    assert PlatformSettingsUpdate.from_message(raw) == event
+    assert event.subscriber_count == 1
+    assert PlatformSettingsUpdate.from_message(raw).to_dict() == event.to_dict()
 
 
 @pytest.mark.asyncio

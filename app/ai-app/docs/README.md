@@ -4,10 +4,11 @@ title: "Platform Documentation Index"
 summary: "Curated top-level map of the KDCube documentation tree for app builders, integrators, operators, and agents."
 tags: ["docs", "index", "sdk", "service", "ops", "architecture"]
 keywords: ["documentation index", "platform architecture", "configuration guides", "service runtime docs", "app sdk docs", "execution docs", "deployment and operations docs", "app builder docs", "client widgets", "streaming", "memory", "claude code"]
-updated_at: 2026-09-10
+updated_at: 2026-09-11
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/procedures/README.md
   - repo:kdcube-ai-app/app/ai-app/docs/procedures/platform-source-testing-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/platform-settings-live-update-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/arch/security-and-trust-model-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/arch/delegated-authority-and-admission-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/delegated-management-service-README.md
@@ -50,6 +51,7 @@ Curated index of platform, service, and SDK documentation.
 * Delegated KDCube Management Service: [delegated-management-service-README.md](service/cicd/delegated-management-service-README.md)
 * Connection Hub Solution: [connection-hub-solution-README.md](sdk/solutions/connections/connection-hub-solution-README.md)
 * Browser Sign-In Situations: [browser-sign-in-situations-README.md](service/auth/browser-sign-in-situations-README.md)
+* Live Platform Settings Updates: [platform-settings-live-update-README.md](configuration/platform-settings-live-update-README.md)
 * Protect An External Service With Connection Hub: [protect-external-service-with-connection-hub-README.md](recipes/connections/protect-external-service-with-connection-hub-README.md)
 * Use A Custom MCP Server From KDCube Agents And External Clients: [custom-mcp-connector-README.md](recipes/connections/custom-mcp-connector-README.md)
 * Register KDCube On Your Identity Provider: [identity-provider-urls-README.md](recipes/connections/platform-authority/identity-provider-urls-README.md)

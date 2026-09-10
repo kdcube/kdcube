@@ -30,6 +30,7 @@ from kdcube_ai_app.infra.gateway.gateway import create_gateway_from_config
 
 from kdcube_ai_app.apps.middleware.gateway import FastAPIGatewayAdapter
 from kdcube_ai_app.apps.middleware.platform_auth import create_platform_auth_manager
+from kdcube_ai_app.auth.platform_auth_reload import PlatformAuthManagerHolder
 from kdcube_ai_app.infra.rendering.link_preview import AsyncLinkPreview, get_shared_link_preview
 from kdcube_ai_app.infra.service_hub.inventory import (
     ConfigRequest,
@@ -162,7 +163,7 @@ def create_auth_manager():
 
 def create_request_gateway():
     """Create the request gateway with centralized configuration"""
-    auth_manager = create_auth_manager()
+    auth_manager = get_auth_manager()
     gateway_config = create_gateway_configuration()
 
     # Set the global configuration for monitoring access
@@ -279,10 +280,13 @@ _conv_browser: Optional[ContextRAGClient] = None
 
 
 def get_auth_manager():
-    """Get singleton auth manager"""
+    """Get the stable holder used by every ingress authentication path."""
     global _auth_manager
     if _auth_manager is None:
-        _auth_manager = create_auth_manager()
+        _auth_manager = PlatformAuthManagerHolder(
+            create_auth_manager,
+            service_label="ingress",
+        )
     return _auth_manager
 
 def get_gateway():

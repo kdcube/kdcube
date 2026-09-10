@@ -76,6 +76,7 @@ from kdcube_ai_app.apps.middleware.gateway import (
     bind_stream_id_to_request_state,
 )
 from kdcube_ai_app.apps.middleware.platform_auth import platform_authenticator_provider
+from kdcube_ai_app.auth.platform_auth_reload import PlatformAuthSettingsHandler
 from kdcube_ai_app.apps.middleware.token_extract import extract_auth_tokens_from_query_params
 from starlette.datastructures import MutableHeaders
 from kdcube_ai_app.infra.gateway.backpressure import create_atomic_chat_queue_manager
@@ -92,13 +93,14 @@ from kdcube_ai_app.infra.gateway.config import (
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 
 from kdcube_ai_app.apps.chat.ingress.resolvers import (
-    get_fastapi_adapter, get_fast_api_accounting_binder, get_user_session_dependency, require_auth,
+    get_auth_manager, get_fastapi_adapter, get_fast_api_accounting_binder, get_user_session_dependency, require_auth,
     INSTANCE_ID, CHAT_APP_PORT, REDIS_URL, _announce_startup,
     get_pg_pool, get_conversation_system, get_redis_clients, close_redis_clients, get_redis_monitor_instance,
     get_heartbeats_mgr_and_middleware, service_health_checker
 )
 from kdcube_ai_app.infra.metrics.rolling_stats import record_metric
 from kdcube_ai_app.infra.namespaces import REDIS
+from kdcube_ai_app.infra.platform_settings.updates import PlatformSettingsUpdateListener
 from kdcube_ai_app.infra.availability.shutdown_diagnostics import (
     install_uvicorn_shutdown_diagnostics,
     log_shutdown_diagnostics,
@@ -262,6 +264,18 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("Failed to initialize shared Redis pools")
         raise
+    app.state.platform_settings_stop = asyncio.Event()
+    app.state.platform_settings_listener = PlatformSettingsUpdateListener(
+        app.state.redis_async,
+        tenant=settings.TENANT,
+        project=settings.PROJECT,
+        handlers={"auth": PlatformAuthSettingsHandler(get_auth_manager())},
+        stop_event=app.state.platform_settings_stop,
+    )
+    app.state.platform_settings_task = asyncio.create_task(
+        app.state.platform_settings_listener.run(),
+        name="platform-settings-listener",
+    )
     try:
         app.state.redis_monitor = await get_redis_monitor_instance()
     except Exception:
@@ -462,6 +476,14 @@ async def lifespan(app: FastAPI):
             app.state.gateway_config_task.cancel()
     except Exception:
         pass
+    if hasattr(app.state, "platform_settings_stop"):
+        app.state.platform_settings_stop.set()
+    if hasattr(app.state, "platform_settings_task"):
+        app.state.platform_settings_task.cancel()
+        try:
+            await app.state.platform_settings_task
+        except asyncio.CancelledError:
+            pass
     if hasattr(app.state, "socketio_handler") and getattr(app.state.socketio_handler, "stop", None):
         await _safe_shutdown_step("socketio_handler.stop", app.state.socketio_handler.stop(), timeout=5.0)
     if hasattr(app.state, "sse_hub"):

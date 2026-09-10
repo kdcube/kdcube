@@ -4,7 +4,7 @@ title: "Application-Hosted Platform Login And Session"
 summary: "Application-hosted external sign-in followed by a KDCube-owned, Redis-backed platform session; and the platform-hosted sign-in against a Cognito or OIDC upstream, the server-held browser session with a sliding lifetime."
 tags: ["service", "auth", "application", "bundle", "session", "sso"]
 keywords: ["application-hosted platform login", "platform session", "bundle session", "bundle_session_login", "kst1", "front shell", "login", "logout", "register", "invalidate", "platform-hosted sign-in", "browser session", "sliding session", "OIDC", "Cognito hosted UI"]
-updated_at: 2026-09-10
+updated_at: 2026-09-11
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/app-simple-idp-bridge-README.md
@@ -12,6 +12,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-firewall-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-widget-integration-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-platform-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/platform-settings-live-update-README.md
   - https://github.com/elenaviter/app-ecosystem/blob/main/docs/connection-hub/package/browser-session.md
 ---
 # Application-Hosted Platform Login And Session
@@ -365,10 +366,13 @@ one provider block at a time for the providers (`authority_provider_set`,
 after `authority_provider_validate` checked the buffer). Comments and every
 other key are kept, the previous file stays beside the new one as
 `.bak-<stamp>`, secret-bearing keys are merged from the file where the
-buffer says `<unchanged>`, and `KDCUBE_DESCRIPTOR_EDITS=off` switches
-editing off on a runtime whose descriptors are published from source. The
-lane switch applies on the next refresh, as above; provider edits apply on
-refresh until the runtime's live reload lands.
+buffer says `<unchanged>`. Editing is allowed only when
+`management.platform_settings.editing.enabled` and its `auth` section are
+true in `assembly.yaml`. Provider edits notify ingress immediately and are
+reported as live only when a listener received the event. The lane switch
+applies on the next refresh, as above. The generic mechanism and deployed
+service ownership are defined in
+[Live Platform Settings Updates](../../configuration/platform-settings-live-update-README.md).
 
 ### Sliding renewal
 

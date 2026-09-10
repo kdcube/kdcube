@@ -8,6 +8,8 @@ secret-bearing key or leave a provider that cannot resolve."""
 from __future__ import annotations
 
 import os
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -29,6 +31,12 @@ ASSEMBLY = """auth:
     bundle_id: connection-hub@1-0
     authority_id: kdcube.platform
     provider_id: cognito
+management:
+  platform_settings:
+    editing:
+      enabled: true
+      sections:
+        auth: true
 storage:
   kind: local   # keep
 """
@@ -41,37 +49,38 @@ BUNDLES = """bundles:
     name: Workspace   # the default app
   - id: connection-hub@1-0
     name: Connection Hub
-    authority_registry:
-      authorities:
-        kdcube.platform:
-          label: KDCube platform authority
-          platform: true
-          providers:
-            cognito:
-              type: multi_cognito
-              enabled: true
-              label: KDCube Cognito platform session   # shown in the widget
-              authenticator:
-                type: cognito_id_token
-                id_token: ref://cookie-name   # a reference, never a value
-                region: eu-west-1
-                user_pool_id: eu-west-1_AAA
-                app_client_id: client-a
-                trusted_providers:
-                - alias: demo
-                  kind: cognito
+    config:
+      authority_registry:
+        authorities:
+          kdcube.platform:
+            label: KDCube platform authority
+            platform: true
+            providers:
+              cognito:
+                type: multi_cognito
+                enabled: true
+                label: KDCube Cognito platform session   # shown in the widget
+                authenticator:
+                  type: cognito_id_token
+                  id_token: ref://cookie-name   # a reference, never a value
                   region: eu-west-1
                   user_pool_id: eu-west-1_AAA
                   app_client_id: client-a
-            browser_session:
-              type: bundle_session_login
-              enabled: true
-              input:
-                authenticator_ref:
-                  authority_id: kdcube.platform
-                  provider_id: cognito
-              issuer:
-                type: kdcube_session_token
+                  trusted_providers:
+                  - alias: demo
+                    kind: cognito
+                    region: eu-west-1
+                    user_pool_id: eu-west-1_AAA
+                    app_client_id: client-a
+              browser_session:
+                type: bundle_session_login
+                enabled: true
+                input:
+                  authenticator_ref:
+                    authority_id: kdcube.platform
+                    provider_id: cognito
+                issuer:
+                  type: kdcube_session_token
 """
 
 
@@ -130,7 +139,7 @@ def test_provider_edit_adds_a_pool_keeps_secrets_and_comments(files):
         provider=submitted, path=files["bundles"],
     )
     text = files["bundles"].read_text(encoding="utf-8")
-    assert edit.scope == "providers" and edit.activation == "refresh"
+    assert edit.scope == "providers" and edit.activation == "publish"
     assert "id_token: ref://cookie-name" in text, "the secret reference is merged back, never retyped"
     assert "alias: staging" in text and "user_pool_id: eu-west-1_BBB" in text
     assert "name: Workspace   # the default app" in text and "authority_id: kdcube.platform" in text
@@ -194,12 +203,15 @@ def test_merge_unchanged_is_positional_for_lists_and_deep_for_mappings():
     assert merged == {"a": {"secret": "s", "n": 2}, "rows": [{"k": "x"}]}
 
 
-def test_edits_can_be_switched_off_and_refuse_unwritable(files, monkeypatch):
-    monkeypatch.setenv("KDCUBE_DESCRIPTOR_EDITS", "off")
+def test_edits_require_the_descriptor_owned_section_gate(files):
+    disabled = files["assembly"].read_text(encoding="utf-8").replace("enabled: true", "enabled: false", 1)
+    files["assembly"].write_text(disabled, encoding="utf-8")
     with pytest.raises(DescriptorEditRefused) as off:
         edit_assembly_platform_sign_in(provider_id="browser_session", path=files["assembly"], bundles=files["bundles"])
-    assert off.value.reason == "disabled_by_env"
-    monkeypatch.delenv("KDCUBE_DESCRIPTOR_EDITS")
+    assert off.value.reason == "editing_disabled"
+
+
+def test_edit_refuses_unwritable_descriptor(files):
     os.chmod(files["assembly"], 0o444)
     try:
         with pytest.raises(DescriptorEditRefused) as ro:
@@ -207,3 +219,33 @@ def test_edits_can_be_switched_off_and_refuse_unwritable(files, monkeypatch):
         assert ro.value.reason == "not_writable"
     finally:
         os.chmod(files["assembly"], 0o644)
+
+
+def test_concurrent_provider_edits_re_read_inside_the_file_lock(files, monkeypatch):
+    from kdcube_ai_app.infra.descriptors import edit as edit_module
+
+    original_write = edit_module._write_rt
+
+    def slow_write(path, document):
+        time.sleep(0.05)
+        return original_write(path, document)
+
+    monkeypatch.setattr(edit_module, "_write_rt", slow_write)
+
+    def create(provider_id: str) -> None:
+        edit_bundle_authority_provider(
+            bundle_id="connection-hub@1-0",
+            authority_id="kdcube.platform",
+            provider_id=provider_id,
+            provider={"type": "simple_idp", "enabled": True},
+            create=True,
+            path=files["bundles"],
+            policy_path=files["assembly"],
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(create, ("simple-a", "simple-b")))
+
+    text = files["bundles"].read_text(encoding="utf-8")
+    assert "simple-a:" in text
+    assert "simple-b:" in text
