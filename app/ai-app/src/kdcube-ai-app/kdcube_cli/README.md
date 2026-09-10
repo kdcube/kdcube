@@ -3,7 +3,7 @@ id: repo:kdcube/app/ai-app/src/kdcube-ai-app/kdcube_cli/README.md
 title: "KDCube CLI"
 summary: "Installs and operates KDCube runtimes, manages exact secrets through their selected provider, and exposes typed deployment and management APIs for application-specific CLIs."
 tags: ["kdcube", "cli", "runtime", "deployment-target", "secrets", "python-api"]
-keywords: ["kdcube-cli", "kdcube init", "kdcube start", "kdcube stop", "kdcube secrets", "kdcube bundle delete", "targeted bundle retirement", "kdcube_cli.control", "kdcube_cli.management"]
+keywords: ["kdcube-cli", "kdcube init", "kdcube start", "kdcube stop", "kdcube secrets", "kdcube bundle delete", "managed bundle deletion", "purge-data", "force-retire", "targeted bundle retirement", "kdcube_cli.control", "kdcube_cli.management"]
 updated_at: 2026-09-10
 see_also:
   - repo:kdcube/app/ai-app/docs/service/cicd/cli-README.md
@@ -607,11 +607,14 @@ you need the raw Docker Compose command and full proc response. Use `--json`
 for scriptable output.
 
 ```bash
-# Delete by ID from descriptors and the running runtime
+# Managed deprovision and targeted retirement by bundle ID
 kdcube bundle delete <bundle_id>
 
 # Also permit the app hook to delete its durable app-owned data
 kdcube bundle delete <bundle_id> --purge-data
+
+# Retire after a failed deprovision attempt and report cleanup incomplete
+kdcube bundle delete <bundle_id> --force-retire
 ```
 
 Deletion closes the target app in the local proc, stops its scheduled and Data
@@ -620,10 +623,18 @@ Bus intake, waits for tracked chat tasks, invokes its optional
 retires only that bundle. Other bundles remain loaded. Normal deletion retains
 durable app data; `--purge-data` authorizes the hook to remove data it owns.
 `--force-retire` is the explicit escape hatch after failed cleanup and reports
-that cleanup remains incomplete. See the
+that cleanup remains incomplete. It does not authorize data purge and does not
+claim cleanup succeeded. With both flags, a failed purge remains incomplete
+even though retirement continues. `--purge-data` requires a running
+`chat-proc`, including when combined with `--force-retire`. See the
 [guarded deprovision contract](../../../docs/sdk/bundle/bundle-lifecycle-README.md#removal-deprovisioning-and-durable-data).
 `kdcube bundle <bundle_id> --delete` is the compatibility form of the same
 complete operation.
+
+Run managed deletion while the target remains declared. Descriptor apply can
+retire an ID removed from desired inventory, but it does not invoke the app's
+deprovision hook or authorize durable-data purge. Update reusable seed
+descriptors after managed deletion succeeds.
 
 **Descriptor apply** — when a user intentionally edits seed `bundles.yaml` /
 `bundles.secrets.yaml` and wants to reapply that descriptor source of truth to
@@ -647,8 +658,9 @@ This is not a platform refresh: it touches only `bundles.yaml` and optional
 `bundles.secrets.yaml` in the active runtime config directory. Host local
 bundle paths from seed descriptors are translated to runtime `/bundles/...`
 paths before staging. With `--reload`, changed declared bundle IDs are
-reloaded and removed IDs are retired. Each operation targets only its changed
-ID; unchanged bundles keep running.
+reloaded and removed IDs are retired. Removed IDs follow inventory retirement;
+they do not run `on_app_deprovision(...)`. Each operation targets only its
+changed ID; unchanged bundles keep running.
 
 **Status** — inspect one explicit bundle entry:
 

@@ -3,7 +3,7 @@ id: repo:kdcube/app/ai-app/docs/service/cicd/cli-README.md
 title: "Current KDCube CLI"
 summary: "Current implemented CLI surface for local environment bootstrapping, workdir preparation, Docker Compose startup, descriptor validation, exact delegated secret management, host-vault activation, maintainer package-source builds, and deployment selection."
 tags: ["service", "cicd", "cli", "env", "deployment", "bundle"]
-keywords: ["kdcube cli", "local environment bootstrap", "workdir setup", "docker compose control", "descriptor validation", "current cli contract", "local deployment tooling", "multiple local runtime snapshots", "single active local deployment", "tenant project workdir namespace", "bundle config patch", "bundle secret patch", "bundle delete", "targeted bundle retirement", "host vault stage", "host vault activate", "host vault recover", "kdcube bundle command", "bundle reload internals", "reload-authority", "maintainer local Python package", "unpublished package candidate"]
+keywords: ["kdcube cli", "local environment bootstrap", "workdir setup", "docker compose control", "descriptor validation", "current cli contract", "local deployment tooling", "multiple local runtime snapshots", "single active local deployment", "tenant project workdir namespace", "bundle config patch", "bundle secret patch", "bundle delete", "managed bundle deletion", "purge-data", "force-retire", "targeted bundle retirement", "host vault stage", "host vault activate", "host vault recover", "kdcube bundle command", "bundle reload internals", "reload-authority", "maintainer local Python package", "unpublished package candidate"]
 updated_at: 2026-09-10
 see_also:
   - repo:kdcube/app/ai-app/docs/service/cicd/release-README.md
@@ -659,8 +659,10 @@ touch `assembly.yaml`, `gateway.yaml`, platform `secrets.yaml`, or
 
 Host local bundle paths in seed descriptors are translated to runtime-visible
 `/bundles/...` paths before staging. With `--reload`, changed declared bundle
-IDs are reloaded and removed IDs are retired after staging. Each runtime
-operation targets only its changed ID; unchanged bundles keep running.
+IDs are reloaded and removed IDs are retired after staging. This is inventory
+reconciliation: a removed ID does not run `on_app_deprovision(...)` and does
+not receive purge permission. Each runtime operation targets only its changed
+ID; unchanged bundles keep running.
 
 ### 2.3c Export and import local runtime descriptors
 
@@ -957,9 +959,9 @@ Value coercion rules:
 
 `--del-config` and `--del-secret` raise an error if the key does not exist.
 
-#### Delete a bundle entry
+#### Managed bundle deletion
 
-Delete a bundle by ID:
+Decommission one bundle by ID through the managed lifecycle:
 
 ```bash
 kdcube bundle delete <bundle_id> \
@@ -972,6 +974,12 @@ invokes its optional `on_app_deprovision(...)` hook. It removes the entry from
 `bundles.yaml` and `bundles.secrets.yaml` only after that hook succeeds, then
 retires that bundle's loaded code, widgets, sidecars, scheduled jobs, and Data
 Bus handlers. Every other bundle keeps its current runtime state.
+
+Keep the target declared until this command starts. Removing its YAML row and
+then running descriptor reconciliation expresses a desired-inventory change;
+it can retire runtime state, but it cannot invoke the installed app's cleanup
+hook. After managed deletion succeeds, remove the same row from any reusable
+seed descriptor so a later import does not install the app again.
 
 Normal deletion passes `purge_data=False`, so the hook must retain app-owned
 PostgreSQL records, Redis data, local/object storage, and other user or business
@@ -990,14 +998,27 @@ kdcube bundle delete <bundle_id> --force-retire \
   --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
 ```
 
+| Modifier | Operational meaning |
+|---|---|
+| no modifier | run the hook with `purge_data=False`; retain durable user and business data |
+| `--purge-data` | run the hook with `purge_data=True`; a running `chat-proc` is required |
+| `--force-retire` | after deprovision failure, continue retirement and report cleanup incomplete; this does not authorize a purge |
+| both modifiers | request purge, but continue retirement after failure; failed cleanup and purge are still reported incomplete |
+
+`--force-retire` is an explicit recovery decision, not a successful-cleanup
+result. It never means that resources were removed or that data was purged.
+
 See the [guarded deprovision contract](../../sdk/bundle/bundle-lifecycle-README.md#removal-deprovisioning-and-durable-data)
 for hook arguments, ownership, and idempotency rules.
 
-When `chat-proc` is stopped, ordinary descriptor deletion completes the
-operation and reports that app deprovisioning did not run; the bundle remains
-absent on the next start. `--purge-data` requires a running proc and fails
-closed otherwise. Repeating an interrupted command reuses its recorded
-operation ID and safely completes the remaining retirement step.
+When `chat-proc` is stopped, managed deletion without `--purge-data` completes
+descriptor retirement and reports that app deprovisioning did not run; the
+bundle remains absent on the next start. `--purge-data` requires a running
+proc and fails closed otherwise, even with `--force-retire`. For
+lifecycle-complete decommissioning, start `chat-proc` and rerun while the
+bundle is still declared.
+Repeating an interrupted command reuses its recorded operation ID and safely
+completes the remaining retirement step.
 
 `kdcube bundle <bundle_id> --delete` remains a compatibility alias with the
 same complete behavior. A default bundle must be replaced as

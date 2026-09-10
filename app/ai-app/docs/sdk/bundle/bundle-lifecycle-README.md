@@ -3,7 +3,7 @@ id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-lifecycle-README.md
 title: "Bundle Lifecycle"
 summary: "Application lifecycle model covering supervised preparation, process-local and shared hooks, readiness admission, invocation, background jobs, targeted retirement, guarded deprovisioning, singleton state, and phase-appropriate storage and configuration."
 tags: ["sdk", "bundle", "lifecycle", "readiness", "storage", "configuration", "entrypoint", "background-jobs", "deprovision"]
-keywords: ["bundle discovery and load", "supervised application preparation", "service.readiness", "initialization hooks", "on_bundle_load", "on_app_deploy", "on_app_deprovision", "application admission", "invocation phases", "on_job lifecycle", "background job lifecycle", "targeted bundle retirement", "application data purge", "singleton bundle state", "ui build lifecycle", "storage availability by phase", "configuration availability by phase", "bundle lifecycle model"]
+keywords: ["bundle discovery and load", "supervised application preparation", "service.readiness", "initialization hooks", "on_bundle_load", "on_app_deploy", "on_app_deprovision", "application admission", "invocation phases", "on_job lifecycle", "background job lifecycle", "managed bundle deletion", "targeted bundle retirement", "application data purge", "purge-data", "force-retire", "singleton bundle state", "ui build lifecycle", "storage availability by phase", "configuration availability by phase", "bundle lifecycle model"]
 updated_at: 2026-09-10
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-developer-guide-README.md
@@ -237,6 +237,27 @@ delete its durable app-owned data. The flag grants permission; it does not tell
 the platform how an app stores data and does not cause the platform to guess
 table names, Redis keys, storage prefixes, or external resources.
 
+The command modifiers have these exact meanings:
+
+| Command | `purge_data` passed to the hook | If app deprovisioning fails |
+|---|---:|---|
+| `bundle delete <id>` | `False` | the descriptor remains so the operator can fix the failure and retry |
+| `bundle delete <id> --purge-data` | `True` | the descriptor remains; no data purge is reported as complete |
+| `bundle delete <id> --force-retire` | `False` | descriptor and runtime retirement continue, with `cleanup_incomplete` reported |
+| `bundle delete <id> --purge-data --force-retire` | `True` | retirement continues, but failed cleanup and failed purge remain explicitly incomplete |
+
+`--force-retire` changes failure handling only. It does not grant permission to
+purge data, synthesize cleanup, or turn a failed purge into a successful one.
+`--purge-data` still requires a running `chat-proc`, including when combined
+with `--force-retire`.
+
+Managed decommissioning starts while the installed descriptor and source are
+still available, because the platform needs both to invoke the app hook with
+its last effective configuration. Use `kdcube bundle delete <bundle-id>` for
+that lifecycle. Removing an ID from descriptor input and reconciling it is an
+inventory operation: it retires the target runtime state, but has no authority
+to invoke app cleanup and no durable-data purge permission.
+
 The hook is an async instance or module function:
 
 ```python
@@ -271,17 +292,19 @@ Contract:
   configuration authority
 - failure leaves the descriptor entry intact and returns a retryable,
   actionable result; it must not be reported as successful deletion
-- `--force-retire` may remove runtime authority after a failed hook, but reports
-  that app-owned cleanup remains incomplete
+- `--force-retire` may continue descriptor and runtime retirement after a failed
+  deprovision request, but reports that app-owned cleanup remains incomplete;
+  when purge was requested, it also reports that purge did not complete
 - removing an ID through descriptor reconciliation retires its runtime state but
   does not infer permission to execute app cleanup or purge durable data
 - sibling applications are never prepared, reloaded, stopped, or deprovisioned
   as a side effect
 
 If `chat-proc` is stopped, the CLI cannot safely execute trusted app lifecycle
-code. Ordinary descriptor deletion may still retire the app on next startup,
-but must report that deprovisioning was not run. `--purge-data` fails closed
-until the runtime is available.
+code. Managed deletion without `--purge-data` may still remove descriptor
+authority and retire the app on next startup, but must report that
+deprovisioning was not run. `--purge-data` fails closed until the runtime is
+available; `--force-retire` does not override this purge precondition.
 
 The CLI persists the delete operation ID under the runtime workdir until the
 operation finishes. A retry after an interrupted command therefore reuses the

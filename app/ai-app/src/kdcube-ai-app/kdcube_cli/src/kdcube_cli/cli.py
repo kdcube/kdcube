@@ -4700,12 +4700,18 @@ def main() -> None:
     _sp.add_argument(
         "--purge-data",
         action="store_true",
-        help="With bundle delete, permit the app deprovision hook to remove durable app data",
+        help=(
+            "With bundle delete, permit the installed app hook to remove durable app-owned "
+            "data; requires a running chat-proc"
+        ),
     )
     _sp.add_argument(
         "--force-retire",
         action="store_true",
-        help="With bundle delete, remove the app after a cleanup failure and report incomplete cleanup",
+        help=(
+            "With bundle delete, continue retirement after deprovision failure and report "
+            "cleanup incomplete; does not authorize or claim data purge"
+        ),
     )
     _sp.add_argument(
         "--descriptors-location",
