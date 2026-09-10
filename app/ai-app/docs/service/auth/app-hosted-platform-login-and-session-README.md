@@ -355,6 +355,21 @@ the identity provider once both URL sets are registered per origin
 (section "What the identity provider must know" of
 [Browser Sign-In Situations](browser-sign-in-situations-README.md)).
 
+**From Connection Hub.** A platform administrator can make the same
+switch, and edit the sign-in providers, on the Authenticators tab of
+Connection Hub. The tab reads the platform's selection and every provider
+of the authority registry (`authorities_describe`), and its editor writes
+the staged descriptor files through `kdcube_ai_app.infra.descriptors.edit`:
+the two assembly lines together for the switch (`platform_sign_in_set`),
+one provider block at a time for the providers (`authority_provider_set`,
+after `authority_provider_validate` checked the buffer). Comments and every
+other key are kept, the previous file stays beside the new one as
+`.bak-<stamp>`, secret-bearing keys are merged from the file where the
+buffer says `<unchanged>`, and `KDCUBE_DESCRIPTOR_EDITS=off` switches
+editing off on a runtime whose descriptors are published from source. The
+lane switch applies on the next refresh, as above; provider edits apply on
+refresh until the runtime's live reload lands.
+
 ### Sliding renewal
 
 The token's `exp` is the hard bound (the maximum since sign-in). The Redis
