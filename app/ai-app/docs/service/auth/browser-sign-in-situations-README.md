@@ -224,6 +224,10 @@ The management human-approval sign-in adds one more callback on a platform
 origin, `/api/integrations/management/v1/human-approval/oidc/callback`.
 The step-by-step, with a worked two-pool example:
 [Register KDCube On Your Identity Provider](../../recipes/connections/platform-authority/identity-provider-urls-README.md).
+The KDCube deployments' own record and the mini-cloud test matrix:
+[Identity Provider URLs For The KDCube Deployments](../cicd/identity-provider-urls-README.md);
+the local setup that runs it:
+[Test A Website That Uses KDCube Locally, Simulating The Cloud](../../recipes/setups/test-website-with-kdcube-locally-as-mini-cloud-README.md).
 
 ## What stays, and why
 

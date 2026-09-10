@@ -245,3 +245,12 @@ claims, then performs normal JWKS verification for that provider.
   - [economics-descriptor-README.md](../../economics/economics-descriptor-README.md)
 - Runtime env and descriptor mapping:
   - [service-runtime-configuration-mapping-README.md](../../configuration/service-runtime-configuration-mapping-README.md)
+
+## Identity provider URLs
+
+Switching an environment's `auth.type` and `auth.connection_hub.provider_id`
+needs no identity-provider change once each platform origin carries the
+platform's two session routes and the control plane's own pages, and each
+website origin its own client's pages. The record for the KDCube deployments,
+with the mini-cloud test matrix:
+[Identity Provider URLs For The KDCube Deployments](identity-provider-urls-README.md).

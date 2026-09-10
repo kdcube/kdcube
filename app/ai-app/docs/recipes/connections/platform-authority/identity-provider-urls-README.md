@@ -148,3 +148,7 @@ For the tunnel origin that is seven URLs on each client: three callbacks
 (`/api/platform/session/callback`, `/platform/callback`, `/callback.html`)
 and four sign-outs (`/api/platform/session/signed-out`, `/platform/chat`,
 `/`, `/logout-complete.html`).
+
+The real record for the KDCube deployments, every URL explained, with the
+end-to-end setup and the test matrix run as a mini cloud:
+[Identity Provider URLs For The KDCube Deployments](../../../service/cicd/identity-provider-urls-README.md).

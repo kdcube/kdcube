@@ -412,6 +412,14 @@ Allowed web origin:
 https://<ngrok-domain>
 ```
 
+Those two are the control plane web app's own client. With server-side
+login on the runtime add `https://<ngrok-domain>/api/platform/session/callback`
+and `https://<ngrok-domain>/api/platform/session/signed-out`; with a website
+served at the tunnel's root in its own-client mode add its `/callback.html`,
+`/` and `/logout-complete.html`. The complete rule and the record for the
+KDCube deployments:
+[Identity Provider URLs For The KDCube Deployments](identity-provider-urls-README.md).
+
 ### Telegram
 
 In the active bundle descriptor, set:
