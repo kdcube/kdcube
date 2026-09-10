@@ -112,10 +112,18 @@ def platform_authenticator_descriptor(settings: Any | None = None) -> dict[str, 
     }
 
 
-def with_authenticator_metadata(manager: Any, descriptor: Mapping[str, Any]) -> Any:
+def with_authenticator_metadata(
+    manager: Any,
+    descriptor: Mapping[str, Any],
+    *,
+    runtime_auth_config: Any | None = None,
+) -> Any:
     setattr(manager, "authenticator_id", str(descriptor.get("authenticator_id") or "kdcube.platform.token"))
     setattr(manager, "authority_id", str(descriptor.get("authority_id") or "kdcube.platform"))
     setattr(manager, "authenticator_provider", str(descriptor.get("provider") or ""))
+    # A reloadable holder exposes the same snapshot to token-transport adapters,
+    # so manager policy and cookie/header names advance together.
+    setattr(manager, "runtime_auth_config", runtime_auth_config)
     return manager
 
 
@@ -147,15 +155,33 @@ def create_platform_auth_manager(
         return with_authenticator_metadata(
             MultiCognitoAuthManager(providers, send_validation_error_details=send_validation_error_details),
             descriptor,
+            runtime_auth_config=settings.AUTH,
         )
 
     if provider == "cognito":
         from kdcube_ai_app.auth.implementations.cognito import CognitoAuthManager
 
         logger.info("Using CognitoAuthManager for %s platform authentication", service_label)
+        primary = next(
+            (
+                item
+                for item in (settings.AUTH.COGNITO_TRUSTED_PROVIDERS or [])
+                if item.region == settings.AUTH.COGNITO_REGION
+                and item.user_pool_id == settings.AUTH.COGNITO_USER_POOL_ID
+                and item.app_client_id == settings.AUTH.COGNITO_APP_CLIENT_ID
+            ),
+            None,
+        )
         return with_authenticator_metadata(
-            CognitoAuthManager(send_validation_error_details=send_validation_error_details),
+            CognitoAuthManager.from_values(
+                region=str(settings.AUTH.COGNITO_REGION or ""),
+                pool_id=str(settings.AUTH.COGNITO_USER_POOL_ID or ""),
+                client_id=str(settings.AUTH.COGNITO_APP_CLIENT_ID or ""),
+                hosted_ui=getattr(primary, "hosted_ui_domain", None),
+                send_validation_error_details=send_validation_error_details,
+            ),
             descriptor,
+            runtime_auth_config=settings.AUTH,
         )
 
     if provider in {"session", "bundle", "bundle-session"}:
@@ -182,7 +208,11 @@ def create_platform_auth_manager(
             len(token_providers),
         )
         manager = SessionOrTokenAuthManager(session_manager, tokens, send_validation_error_details=send_validation_error_details) if tokens else session_manager
-        return with_authenticator_metadata(manager, descriptor)
+        return with_authenticator_metadata(
+            manager,
+            descriptor,
+            runtime_auth_config=settings.AUTH,
+        )
 
     if provider == "oauth":
         logger.warning(
@@ -205,6 +235,7 @@ def create_platform_auth_manager(
             idp_db_path=idp_db_path,
         ),
         descriptor,
+        runtime_auth_config=settings.AUTH,
     )
 
 
