@@ -646,8 +646,18 @@ def _ensure_subprocess_temp_env(env: dict, *, outdir: pathlib.Path) -> None:
         env["MPLCONFIGDIR"] = str(mpl_dir)
     if _uses_overlay_tmp(env.get("FONTCONFIG_PATH")):
         env["FONTCONFIG_PATH"] = str(font_dir)
-    if not env.get("PLAYWRIGHT_BROWSERS_PATH") and pathlib.Path("/opt/ms-playwright").exists():
-        env["PLAYWRIGHT_BROWSERS_PATH"] = "/opt/ms-playwright"
+    if not env.get("PLAYWRIGHT_BROWSERS_PATH"):
+        if pathlib.Path("/opt/ms-playwright").exists():
+            env["PLAYWRIGHT_BROWSERS_PATH"] = "/opt/ms-playwright"
+        else:
+            # No baked browser tree: this is a host process. The cache redirect
+            # above would move Playwright's default browsers path into the
+            # per-turn tree and hide an installed browser, so pin the path this
+            # process itself resolves.
+            host_cache = os.environ.get("XDG_CACHE_HOME") or (pathlib.Path.home() / ".cache")
+            host_browsers = pathlib.Path(host_cache) / "ms-playwright"
+            if host_browsers.is_dir():
+                env["PLAYWRIGHT_BROWSERS_PATH"] = str(host_browsers)
 
 async def _run_subprocess(entry_path: pathlib.Path, *,
                           cwd: pathlib.Path,
