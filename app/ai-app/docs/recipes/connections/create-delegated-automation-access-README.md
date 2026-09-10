@@ -132,6 +132,29 @@ its delegated grants cannot drift apart.
 Issued access records shown by Connection Hub expose this map, not a standalone
 `resources` field or standalone `grants` field.
 
+### Renew an expired token
+
+A token has a lifetime; the grants do not. When the token expires, the card
+stays on **Delegated by KDCube** with an `expired` badge and every grant,
+operation selection, account binding and policy it held. Renewing issues a
+new token on the same card:
+
+```text
+User opens Delegated by KDCube
+  -> the card shows "expired" and a Renew button
+  -> Renew, then confirm
+  -> copies the new Bearer header once (the previous token no longer works)
+  -> the automation runs again with the same access
+```
+
+The card keeps its `access_id`, so scripts that reference it by id, and the
+once-or-always policies on its operations, need no change. Renewing before
+expiry is allowed and rotates the token. By default the new token lives as
+long as the previous one did; the operation `delegated_access_renew` also
+takes `ttl_seconds`. A card that was revoked cannot be renewed. Connected
+apps and hosted agents renew differently: reconnect from the client, or
+grant the agent again from the chat, both onto the same card.
+
 ### Named-service resources are selected at operation level
 
 When a resource config contains `named_services`, Connection Hub renders the
