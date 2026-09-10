@@ -139,6 +139,26 @@ def load_config(path: Path) -> dict[str, Any]:
     return value
 
 
+def _require_claude_credential(env: dict[str, str]) -> None:
+    """A git transcript store points the CLI at its own config directory.
+
+    The credential is therefore either supplied by the descriptor or linked in
+    from this machine's Claude Code login. With neither, the CLI subprocess
+    reports `Not logged in` and names no cause.
+    """
+    if env.get("ANTHROPIC_API_KEY") or env.get("CLAUDE_CODE_KEY"):
+        return
+    if (Path.home() / ".claude" / ".credentials.json").is_file():
+        return
+    raise RuntimeError(
+        "no Claude credential available: the git transcript store redirects the "
+        "CLI config directory, so this machine's ~/.claude login is linked in "
+        "only when it exists. Authenticate Claude Code here, set "
+        "platform.services.anthropic.api_key in descriptors.local/secrets.yaml, "
+        "or select claude_code_session.type: local."
+    )
+
+
 async def descriptor_claude_cli_credentials() -> dict[str, str]:
     """Project descriptor-owned Anthropic credentials into the Claude CLI."""
     api_key = str(
@@ -612,6 +632,8 @@ async def main_async(args: argparse.Namespace) -> None:
         print(
             f"Claude transcript branch: {claude_code_session_branch_ref(session_store)}"
         )
+        if not args.check:
+            _require_claude_credential(cfg.env)
     if exec_runtime is not None and not args.check:
         image = verify_docker_image(exec_runtime)
         print(f"isolated code-execution image: {image}")
