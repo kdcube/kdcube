@@ -55,53 +55,45 @@ def test_agents_root_explains_the_demonstration_and_why_to_run_it() -> None:
     normalized = " ".join(source.split())
 
     assert "# Build and Run On-Premises Agents with the KDCube Harness" in source
-    assert "[Native agent](native/README.md)" in source
-    assert "This directory gives you three complete, runnable starting points" not in source
-    assert "This is a constructor: each directory already runs" in source
-    assert "use it to plug in your own agent" in normalized
-    assert "an isolated turn workspace and code-execution sandbox" in normalized
-    assert "The harness exists so those capabilities stay reusable" in normalized
-    assert "keep the same conversation, file, safety, and evidence" in normalized
-    assert (
-        "The examples connect terminal and local Telegram ingress adapters"
-        in normalized
-    )
-    assert "terminal/Telegram input" not in source
-    assert "infrastructure you control" in source
-    assert "Redis/Postgres Compose to run" in source
-    assert "## Use the ready composition" in source
-    assert "## Resource profile" in source
-    assert "for your own\ndomain workflow" in source
-    assert "setup_local.py --provider none" in source
-    assert "After the first run, change these constructor inputs:" in source
-    assert "configuration to run it with Redis, Postgres" in normalized
-    assert "## What the harness lets an agent do" in source
-    assert "Continue where it left off" in source
-    assert "Find earlier work" in source
-    assert "See what happened and what it cost" in source
-    assert "## How do I try it?" in source
-    assert "stable user and conversation identity lets the agent resume" in normalized
-    assert "react.memsearch" in normalized
-    assert "conversation_tools.search" in normalized
-    assert "KDCube Web Search and Web Fetch" in source
-    assert "Create a `.venv` in the selected agent directory" in source
-    assert ".venv/bin/python -m playwright install chromium" in source
-    assert "py-code-exec:latest" in source
-    assert "research and report" in source
-    assert "--conversation-id release-research" in source
-    assert "isolated turn workspace" in source
-    assert "agent_io_tools.tool_call" in source
-    assert "fn=web_tools.web_search" in source
-    assert 'workbook.save(output)' in source
-    assert "without placing all of\n  them in the model context" in source
-    assert "ToolSubsystem" in source
-    assert "Receive and return real files" in source
-    assert "local filesystem or S3 storage" in source
+    assert len(source.splitlines()) <= 200
+    assert "without starting a KDCube server" in normalized
+    assert "normal Python processes" in normalized
     assert "[Native agent](native/README.md)" in source
     assert "[LangGraph](langgraph/README.md)" in source
     assert "[Claude Code](claude/README.md)" in source
-    assert "Keep the agent core you already have" not in source
-    assert "runnable proof" not in source
+    assert "**Your agent**" in source
+    assert "an isolated turn workspace and isolated code-execution sandbox" in normalized
+    assert "durable conversations and search across earlier conversations" in normalized
+    assert "local or S3 storage" in normalized
+    assert "streamed activity, model/tool usage, cost" in normalized
+    assert "infrastructure you control" in source
+    assert "A running KDCube deployment is not a prerequisite" in normalized
+    assert "## Try the Native agent" in source
+    assert "setup_local.py --provider anthropic" in source
+    assert "docker compose --env-file .env" in source
+    assert ".venv/bin/python -m playwright install chromium" in source
+    assert "py-code-exec:latest" in source
+    assert ".venv/bin/python agent.py --infra-check" in source
+    assert "Web Search tool" in source
+    assert "isolated code-execution tool creates XLSX + HTML" in source
+    assert "PDF rendering tool" in source
+    assert "another conversation searches and recovers" in source
+    assert "## Run the automatic demonstration" in source
+    assert "This command needs no input" in source
+    assert "prints `demonstration: PASS`, and exits" in normalized
+    assert "research-data.xlsx" in source
+    assert "evidence.json" in source
+    assert "## Talk to the agent" in source
+    assert "This command does not run the automatic demonstration" in normalized
+    assert "Each Telegram chat becomes a durable conversation" in normalized
+    assert "sends its answer and declared external files back" in normalized
+    assert "keeps listening until `Ctrl-C`" in normalized
+    assert "config.local.yaml" in source
+    assert "descriptors.local/assembly.yaml" in source
+    assert "--conversation-id first-research" in source
+    assert "step-by-step executable recipe" in normalized
+    assert "DirectAgentHarness" not in source
+    assert "ToolSubsystem" not in source
 
 
 def test_conversation_search_doc_leads_with_user_value() -> None:
