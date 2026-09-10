@@ -332,9 +332,11 @@ platform callback.
 - Namespace by app-prefixed table names, not one schema per app/version/agent.
 - Scope rows and every query by the columns the domain requires: tenant,
   project, app/bundle ID, and user/agent/conversation where applicable.
-- Provision with `CREATE ... IF NOT EXISTS` inside an async transaction and a
-  tenant/project/app-scoped advisory critical section.
-- Run provisioning idempotently from `on_bundle_load` or first safe use.
+- Provision with `CREATE ... IF NOT EXISTS` inside an async transaction.
+- Run generation-scoped shared provisioning idempotently from
+  `on_app_deploy`, which is coordinated across workers sharing app storage.
+  Reserve `on_bundle_load` for process-local preparation; use first safe use
+  only for resources that are intentionally lazy and remain race-safe.
 - Do not run `CREATE EXTENSION`; platform database setup owns extensions.
 
 Targeted bundle deletion invokes the optional guarded
@@ -344,6 +346,9 @@ explicit `--purge-data` command permits the hook to delete app-owned durable
 data. Implement the hook idempotently around its `operation_id`, and document
 every owned table, key prefix, storage prefix, and external resource. The full
 contract is owned by [Bundle Lifecycle](../sdk/bundle/bundle-lifecycle-README.md#removal-deprovisioning-and-durable-data).
+Follow [Implement And Test An App Lifecycle](apps/implement-app-lifecycle-README.md)
+for copy-ready hook code and the normal delete, purge, retry, and forced-retirement
+acceptance run.
 
 Read the [Storage SDK](../sdk/storage/),
 [Bundle Storage and Cache](../sdk/bundle/bundle-storage-and-cache-README.md), and

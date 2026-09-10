@@ -7,6 +7,7 @@ keywords: ["bundle authoring guide", "bundle creator path", "bundle integrator p
 updated_at: 2026-09-10
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/what-i-should-know-about-app-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/recipes/apps/implement-app-lifecycle-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-journal-solution-work-README.md
@@ -164,6 +165,13 @@ Common failure recipes:
 - before integrating memory, canvas, tasks, Telegram, delivery, or another
   reusable SDK subsystem, read
   [bundle-subsystem-integration-README.md](../bundle-subsystem-integration-README.md)
+
+Lifecycle recipe:
+
+- when the app creates shared resources, reacts to property changes, or owns
+  cleanup and retained data, follow
+  [Implement And Test An App Lifecycle](../../../recipes/apps/implement-app-lifecycle-README.md)
+  from deployment through managed deletion
 
 Shared widget rule:
 

@@ -4,7 +4,7 @@ title: "Platform Documentation Index"
 summary: "Curated top-level map of the KDCube documentation tree for app builders, integrators, operators, and agents."
 tags: ["docs", "index", "sdk", "service", "ops", "architecture"]
 keywords: ["documentation index", "platform architecture", "configuration guides", "service runtime docs", "app sdk docs", "execution docs", "deployment and operations docs", "app builder docs", "client widgets", "streaming", "memory", "claude code"]
-updated_at: 2026-09-05
+updated_at: 2026-09-10
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/procedures/README.md
   - repo:kdcube-ai-app/app/ai-app/docs/procedures/platform-source-testing-README.md
@@ -19,6 +19,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/quick-start-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/quickstart/run-agent-harness-from-python-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/recipes/apps/implement-app-lifecycle-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/arch/architecture-of-what-we-built-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/arch/architecture-of-what-you-build-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/arch/control-plane-web-app-README.md
@@ -74,6 +75,7 @@ Curated index of platform, service, and SDK documentation.
 ## Build Apps
 
 * How To Write An App: [how-to-write-bundle-README.md](sdk/bundle/build/how-to-write-bundle-README.md)
+* Implement And Test An App Lifecycle: [implement-app-lifecycle-README.md](recipes/apps/implement-app-lifecycle-README.md)
 * Assemble With SDK Building Blocks: [how-to-assemble-bundle-with-sdk-building-blocks-README.md](sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md)
 * Configure And Run An App: [how-to-configure-and-run-bundle-README.md](sdk/bundle/build/how-to-configure-and-run-bundle-README.md)
 * Test An App: [how-to-test-bundle-README.md](sdk/bundle/build/how-to-test-bundle-README.md)
