@@ -611,7 +611,10 @@ for scriptable output.
 kdcube bundle delete <bundle_id>
 ```
 
-Deletion retires only that bundle. Other bundles remain loaded.
+Deletion retires only that bundle. Other bundles remain loaded. The current
+command retains app-owned durable data and does not yet invoke app cleanup; the
+[guarded deprovision contract](../../../docs/sdk/bundle/bundle-lifecycle-README.md#removal-deprovisioning-and-durable-data)
+defines that next lifecycle phase.
 `kdcube bundle <bundle_id> --delete` is the compatibility form of the same
 complete operation.
 

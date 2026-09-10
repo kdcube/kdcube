@@ -1,10 +1,10 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-lifecycle-README.md
 title: "Bundle Lifecycle"
-summary: "Application lifecycle model covering supervised preparation, process-local and shared hooks, readiness admission, invocation, background jobs, singleton state, and phase-appropriate storage and configuration."
-tags: ["sdk", "bundle", "lifecycle", "readiness", "storage", "configuration", "entrypoint", "background-jobs"]
-keywords: ["bundle discovery and load", "supervised application preparation", "service.readiness", "initialization hooks", "on_bundle_load", "on_app_deploy", "application admission", "invocation phases", "on_job lifecycle", "background job lifecycle", "singleton bundle state", "ui build lifecycle", "storage availability by phase", "configuration availability by phase", "bundle lifecycle model"]
-updated_at: 2026-08-18
+summary: "Application lifecycle model covering supervised preparation, process-local and shared hooks, readiness admission, invocation, background jobs, targeted retirement, guarded deprovisioning, singleton state, and phase-appropriate storage and configuration."
+tags: ["sdk", "bundle", "lifecycle", "readiness", "storage", "configuration", "entrypoint", "background-jobs", "deprovision"]
+keywords: ["bundle discovery and load", "supervised application preparation", "service.readiness", "initialization hooks", "on_bundle_load", "on_app_deploy", "on_app_deprovision", "application admission", "invocation phases", "on_job lifecycle", "background job lifecycle", "targeted bundle retirement", "application data purge", "singleton bundle state", "ui build lifecycle", "storage availability by phase", "configuration availability by phase", "bundle lifecycle model"]
+updated_at: 2026-09-10
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-developer-guide-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-runtime-README.md
@@ -78,6 +78,9 @@ flowchart TD
     E --> V[@venv boundary optional]
     V --> O[post_run_hook]
     O --> F[on_turn_completed finalizer]
+    A -->|explicit delete| X[Close admission and recurring work]
+    X --> DP[on_app_deprovision once per logical operation]
+    DP --> RT[Retire only this app's runtime state]
 ```
 
 ## Main phases
@@ -99,6 +102,8 @@ flowchart TD
 | Decorated external execution | On demand inside an invocation | `@venv(...)` functions run in a cached per-bundle subprocess venv; the venv is rebuilt only when its `requirements.txt` hash changes |
 | Success completion | Successful invocation | `post_run_hook(...)` can finalize success-only bookkeeping |
 | Turn finalization | Every invocation after completion, error, or cancellation | `on_turn_completed(...)` can release per-turn resources; it must be fast and idempotent |
+| App deprovisioning | Explicit deletion through the guarded delete operation | Admission and recurring work close before `on_app_deprovision(...)` cleans app-owned resources; retries reuse one durable operation ID |
+| Runtime retirement | Successful deprovisioning, or descriptor reconciliation without deprovisioning | Only the target app's preparation, code, widgets, sidecars, schedules, Data Bus handlers, and property cache are removed; sibling apps remain live |
 
 ## Readiness And Admission
 
@@ -170,6 +175,7 @@ Important:
 |---|---|---|
 | `on_bundle_load(**kwargs)` | once per loaded app spec in each proc process | build local indexes, warm caches, clone repos, and prepare process-owned resources before this process admits the app |
 | `on_app_deploy(**kwargs)` | fleet-coordinated per source/config/runtime resource generation; interrupted work may be retried | publish idempotent shared catalogs, schemas, indexes, projections, generated assets, or other app resources |
+| `on_app_deprovision(**kwargs)` | once per logical explicit-delete operation; interrupted work may be retried | remove app-owned operational resources and, only when explicitly permitted, durable app data |
 | `on_props_changed(...)` | when effective props changed for the active instance | reconcile long-lived side effects after props refresh |
 | `pre_run_hook(state=...)` | every invocation | last-minute validation or reconciliation |
 | `execute_core(state=..., thread_id=..., params=...)` | every invocation | main bundle logic |
@@ -205,6 +211,82 @@ publication is one optional participant in that barrier. See
 for its static-surface modes and storage contract, and
 [Application Startup, Health, And Readiness](../../arch/proc/application-startup-health-and-readiness-README.md)
 for supervision, readiness, and admission.
+
+## Removal, deprovisioning, and durable data
+
+Implementation status on 2026-09-10: targeted runtime retirement is current.
+`on_app_deprovision(...)` and `bundle delete --purge-data` are the accepted
+contract below and are not implemented yet.
+
+These are three different operations:
+
+| Operation | Owner | Effect |
+|---|---|---|
+| Runtime retirement | platform | removes one app's loaded code, widgets, sidecars, readiness task, schedules, Data Bus handlers, and property cache |
+| App deprovisioning | app hook under platform supervision | unregisters or removes resources the app created and owns, such as external subscriptions, app-prefixed cache records, generated indexes, or app-specific infrastructure |
+| Durable-data purge | app hook after explicit operator permission | may irreversibly remove the app's tenant/project-scoped PostgreSQL records, object/file storage, and other retained business data |
+
+`kdcube bundle delete <bundle-id>` is the explicit deprovision operation. When
+the local runtime is running, it closes admission and recurring work for the
+target, invokes its optional `on_app_deprovision(...)` hook with
+`purge_data=False`, and removes descriptor authority only after the hook
+succeeds. No hook is a successful no-op. Durable user and business data must be
+retained in this mode.
+
+`kdcube bundle delete <bundle-id> --purge-data` grants the hook permission to
+delete its durable app-owned data. The flag grants permission; it does not tell
+the platform how an app stores data and does not cause the platform to guess
+table names, Redis keys, storage prefixes, or external resources.
+
+The hook is an async instance or module function:
+
+```python
+async def on_app_deprovision(
+    *,
+    bundle_spec,
+    agentic_spec,
+    storage_root,
+    tenant,
+    project,
+    props,
+    pg_pool,
+    redis,
+    operation_id,
+    purge_data,
+    logger,
+):
+    ...
+```
+
+Contract:
+
+- the platform runs the exact installed app generation with its last effective
+  descriptor configuration; lifecycle secrets remain server-side
+- the lifecycle identity is tenant/project/app-scoped system authority, never a
+  request user or an inherited connected-account grant
+- the hook may remove only resources owned by this app in that tenant/project
+- `purge_data=False` forbids deletion of retained user or business data
+- retries reuse `operation_id`; the hook must be idempotent because external
+  effects cannot be covered by one cross-system transaction
+- the platform records start, success, or failure before removing source and
+  configuration authority
+- failure leaves the descriptor entry intact and returns a retryable,
+  actionable result; it must not be reported as successful deletion
+- a force-retirement escape hatch may remove runtime authority after a failed
+  hook, but must report that app-owned cleanup remains incomplete
+- removing an ID through descriptor reconciliation retires its runtime state but
+  does not infer permission to execute app cleanup or purge durable data
+- sibling applications are never prepared, reloaded, stopped, or deprovisioned
+  as a side effect
+
+If `chat-proc` is stopped, the CLI cannot safely execute trusted app lifecycle
+code. Ordinary descriptor deletion may still retire the app on next startup,
+but must report that deprovisioning was not run. `--purge-data` fails closed
+until the runtime is available.
+
+A future process-local `on_bundle_unload(...)` may release in-memory clients or
+temporary handles in every worker. It is not the durable, fleet-coordinated
+`on_app_deprovision(...)` contract.
 
 `@venv(...)` is separate from `on_bundle_load(...)`:
 - it is not a one-time init hook

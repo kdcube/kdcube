@@ -970,7 +970,10 @@ This one command removes the entry from `bundles.yaml`, removes its
 `bundles.secrets.yaml` entry when present, and retires that bundle from a
 running local runtime. Runtime cleanup targets that ID: its preparation task,
 sidecars, loaded code, widgets, scheduled jobs, and Data Bus handlers are
-removed. Every other bundle keeps its current runtime state.
+removed. Every other bundle keeps its current runtime state. The current
+command retains app-owned PostgreSQL records, Redis data, local/object storage,
+and external resources; it does not yet invoke an app deprovision hook. See the
+accepted [guarded deprovision contract](../../sdk/bundle/bundle-lifecycle-README.md#removal-deprovisioning-and-durable-data).
 
 When `chat-proc` is stopped, descriptor deletion completes the operation; the
 bundle remains absent on the next start. Repeating the command is safe when a

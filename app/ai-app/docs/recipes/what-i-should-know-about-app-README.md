@@ -337,11 +337,12 @@ platform callback.
 - Run provisioning idempotently from `on_bundle_load` or first safe use.
 - Do not run `CREATE EXTENSION`; platform database setup owns extensions.
 
-**Current lifecycle gap:** KDCube does not yet expose a complete app
-deprovision/delete hook that an app can use to drop its owned tables. Provision
-for now, document table ownership and a manual/operator cleanup procedure, and
-do not claim that deleting an app automatically drops its data. A future
-deprovision phase must add an explicit, guarded cleanup contract.
+**Current lifecycle gap:** targeted bundle deletion retires the app's runtime
+surfaces but does not yet invoke app-owned cleanup or drop durable data.
+Provision for now, document table ownership and a manual/operator cleanup
+procedure, and do not claim that deleting an app automatically drops its data.
+The accepted guarded `on_app_deprovision(...)` and `--purge-data` contract is
+owned by [Bundle Lifecycle](../sdk/bundle/bundle-lifecycle-README.md#removal-deprovisioning-and-durable-data).
 
 Read the [Storage SDK](../sdk/storage/),
 [Bundle Storage and Cache](../sdk/bundle/bundle-storage-and-cache-README.md), and
