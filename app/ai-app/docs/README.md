@@ -51,6 +51,7 @@ Curated index of platform, service, and SDK documentation.
 * Browser Sign-In Situations: [browser-sign-in-situations-README.md](service/auth/browser-sign-in-situations-README.md)
 * Protect An External Service With Connection Hub: [protect-external-service-with-connection-hub-README.md](recipes/connections/protect-external-service-with-connection-hub-README.md)
 * Use A Custom MCP Server From KDCube Agents And External Clients: [custom-mcp-connector-README.md](recipes/connections/custom-mcp-connector-README.md)
+* Register KDCube On Your Identity Provider: [identity-provider-urls-README.md](recipes/connections/platform-authority/identity-provider-urls-README.md)
 * Architecture Of What We Built: [architecture-of-what-we-built-README.md](arch/architecture-of-what-we-built-README.md)
 * Architecture Of What You Build: [architecture-of-what-you-build-README.md](arch/architecture-of-what-you-build-README.md)
 * Control Plane Web App: [control-plane-web-app-README.md](arch/control-plane-web-app-README.md)

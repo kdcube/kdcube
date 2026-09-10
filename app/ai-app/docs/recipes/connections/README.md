@@ -23,6 +23,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/create-delegated-automation-access-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/delegate-kdcube-service-to-external-client-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/custom-mcp-connector-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/platform-authority/identity-provider-urls-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/protect-external-service-with-connection-hub-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
   - https://github.com/elenaviter/app-ecosystem/blob/main/docs/connection-hub/testing/end-to-end-acceptance.md
@@ -45,6 +46,7 @@ are intentionally shorter and more task-oriented than the SDK architecture docs.
 | [Telegram Integration](integrations/telegram-README.md) | A bundle exposes a Telegram webhook and Mini App, and Telegram users should connect to KDCube through Connection Hub before using platform-backed features. |
 | [Link From External Channel](link-from-external-channel-README.md) | A user starts inside Telegram, Slack, WhatsApp, a partner app, or another runtime that already carries provider auth material, and must create a connection edge to their KDCube platform user. |
 | [Set Up A Platform Authority Provider](platform-authority/setup-platform-authority-README.md) | A deployment needs to choose and configure the platform authority method: Cognito/multi-Cognito, SimpleIDP, or application-hosted login with a KDCube platform session. |
+| [Register KDCube On Your Identity Provider](platform-authority/identity-provider-urls-README.md) | You need the exact callback and sign-out URLs on Cognito or another identity provider for every login configuration, so that server-side login and a site's own OIDC client can be switched without touching the provider again. |
 | [Host A Platform Login Flow In An App](platform-authority/host-platform-login-in-app-README.md) | An app hosts a login UI/flow, such as Google sign-in, while Connection Hub owns platform authority registration and policy and KDCube owns the resulting session. |
 | [Use Connected Identities In A Product Feature](use-connected-identities-in-product-feature-README.md) | A product feature stores data by runtime actor, but should read one coherent set across the current user's connected identities. |
 | [Protect Bundle MCP With Managed Credentials](protect-bundle-mcp-with-managed-credentials-README.md) | A bundle exposes MCP tools and wants Connection Hub to manage delegated external-client access with per-tool grants. |

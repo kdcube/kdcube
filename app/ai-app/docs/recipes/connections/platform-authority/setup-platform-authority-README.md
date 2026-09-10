@@ -46,7 +46,9 @@ provider internals.
 | Platform-hosted sign-in | The platform hosts the sign-in against a Cognito or OIDC upstream named by the session provider; the browser runs no identity client. | Browser follows `auth.loginUrl` (`/api/platform/session/login`); the platform's callback sets the cookie. | KDCube `kst1` platform-session token in `AUTH_TOKEN_COOKIE_NAME`, HttpOnly, sliding lifetime. See [Platform-Hosted Sign-In](../../../service/auth/app-hosted-platform-login-and-session-README.md#platform-hosted-sign-in-the-server-held-browser-session). |
 
 All methods should produce a `kdcube.platform` subject for normal platform
-surfaces.
+surfaces. Which callback and sign-out URLs each method needs on the identity
+provider, per origin and app client:
+[Register KDCube On Your Identity Provider](identity-provider-urls-README.md).
 
 ## Select The Provider In Assembly
 

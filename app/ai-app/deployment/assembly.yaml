@@ -7,16 +7,24 @@ context:
 
 # ---------------------------------------------------------------------------
 # Authentication
-# auth.type controls request routing / deployment shape.
-# auth.idp controls backend AUTH_PROVIDER and must be "simple", "cognito", or
-# "session". Use "session" only when an application/front shell validates
-# external identity and KDCube issues platform-recognized session cookies.
-# If auth.idp is omitted, older descriptors still fall back from auth.type:
-# simple -> simple; bundle -> session; cognito/delegated -> cognito.
+# auth.type is what the browser is told about login:
+#   cognito    the platform's own frontends run an OIDC client in the browser (the Cognito lane)
+#   bundle     the server owns login; the browser only probes /profile and follows auth.loginUrl
+#              (the session lane: an application-hosted login such as the Google-backed
+#              workspace_google_session below, or the platform-hosted sign-in browser_session)
+#   simple     SimpleIDP tokens, development only
+#   delegated  the proxy-login service
+# The platform authenticator itself is chosen by auth.connection_hub.provider_id below:
+# a bundle_session_login provider selects the session lane, a cognito provider the
+# Cognito lane. auth.idp is only a fallback for descriptors without auth.connection_hub
+# (simple | cognito | session).
+# Server-side login ON:  type: bundle  + a bundle_session_login provider_id
+# Server-side login OFF: type: cognito + a cognito provider_id (see the commented
+#                        cognito provider in bundles.yaml). Change both, then restart.
 # ---------------------------------------------------------------------------
 auth:
-  type: "bundle"   # deployment mode: simple | cognito | delegated | bundle
-  idp: "session"   # backend AUTH_PROVIDER: simple | cognito | session
+  type: "bundle"   # what the browser is told: simple | cognito | delegated | bundle
+  idp: "session"   # fallback selector only, used when auth.connection_hub is absent
   turnstile_development_token: ""            # optional local/dev frontend Turnstile bypass token; leave empty outside development
 
   authenticators:

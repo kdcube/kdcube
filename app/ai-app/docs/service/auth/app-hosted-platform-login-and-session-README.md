@@ -256,7 +256,10 @@ The sign-out URL is fixed because the destination does not travel through
 the identity provider: the logout stores it in a short-lived return cookie
 and the signed-out route continues there. No page URL of any frontend ever
 needs registering upstream. The app client may stay public: the exchange
-uses PKCE.
+uses PKCE. What a deployment that can switch between this lane and the
+Cognito lane, or hosts a site with its own OIDC client, registers per origin:
+[What the identity provider must know](browser-sign-in-situations-README.md#what-the-identity-provider-must-know),
+and as a procedure, [Register KDCube On Your Identity Provider](../../recipes/connections/platform-authority/identity-provider-urls-README.md).
 
 ### Routes
 

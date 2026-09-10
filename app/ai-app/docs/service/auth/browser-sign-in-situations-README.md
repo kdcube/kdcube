@@ -194,6 +194,37 @@ CORS (5) and frame embedding (5). The identity provider needs the host's own
 pages, not KDCube's.
 ```
 
+## What the identity provider must know
+
+The identity provider only ever sees the redirect targets of the client
+that talks to it. Which URLs to register therefore follows from which
+clients run an OIDC flow, per origin:
+
+| Set | Who talks to the identity provider | Callback URL | Sign-out URLs |
+| --- | --- | --- | --- |
+| S | the platform, server login on (situations 1, 2) | `<platform origin>/api/platform/session/callback` | `<platform origin>/api/platform/session/signed-out` |
+| C | the control plane web app, server login off (situation 6) | `<platform origin>/platform/callback` | `<platform origin>/platform/chat` |
+| W | a site running its own OIDC client (situations 4, 5, 6; the KDCube website in `own-oidc`) | `<site origin>/callback.html` | `<site origin>/` and `<site origin>/logout-complete.html` |
+
+Rules:
+
+- A platform origin needs S while it may run server login and C while it
+  may run the Cognito lane. Register both to switch freely.
+- A site origin needs W only while the site may run its own client. On
+  server login it needs nothing, whatever origin it lives on: `return_origins`
+  on the platform, not the identity provider, brings it back.
+- An origin that is both (the site served at the platform's root) needs S,
+  C and W.
+- Each app client carries the origins of the pool it belongs to. A local
+  runtime that switches pools appears in both clients.
+- Nothing else. Old route prefixes, dev-server ports, retired hosts and
+  pages no client produces any more can go.
+
+The management human-approval sign-in adds one more callback on a platform
+origin, `/api/integrations/management/v1/human-approval/oidc/callback`.
+The step-by-step, with a worked two-pool example:
+[Register KDCube On Your Identity Provider](../../recipes/connections/platform-authority/identity-provider-urls-README.md).
+
 ## What stays, and why
 
 The header lane (`Authorization` and `X-ID-Token`) and the Cognito token
