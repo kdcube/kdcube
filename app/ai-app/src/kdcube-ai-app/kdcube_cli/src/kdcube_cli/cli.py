@@ -26,6 +26,12 @@ from rich.text import Text
 
 from kdcube_cli import installer as installer_mod
 from kdcube_cli.banner import print_cli_banner
+from kdcube_cli.bundle_delete_transaction import (
+    advance_bundle_delete_transaction,
+    begin_bundle_delete_transaction,
+    clear_bundle_delete_transaction,
+    load_bundle_delete_transaction,
+)
 from kdcube_cli.control import (
     AmbiguousTargetError,
     ControlEvent,
@@ -2844,6 +2850,95 @@ def reload_bundle_from_descriptor(
     return result
 
 
+def deprovision_bundle_in_runtime(
+    console: Console,
+    *,
+    repo_root: Path,
+    workdir: Path,
+    bundle_id: str,
+    operation_id: str,
+    purge_data: bool,
+    force_retire: bool = False,
+    verbose: bool = False,
+    quiet: bool = False,
+) -> dict[str, object]:
+    """Run app-owned cleanup before descriptor authority is removed."""
+    ctx = _build_paths_for_repo(repo_root, workdir)
+    env_main_path = ctx.config_dir / ".env"
+    env_proc_path = ctx.config_dir / ".env.proc"
+    if not env_main_path.exists() or not env_proc_path.exists():
+        raise SystemExit(
+            f"Runtime env files not found under {ctx.config_dir}. "
+            "Run the installer first for this workdir."
+        )
+
+    env_main = installer_mod.load_env_file(env_main_path)
+    env_proc = installer_mod.load_env_file(env_proc_path)
+    descriptor_path = _resolve_bundle_reload_source(env_main, env_proc)
+    if bundle_id not in _load_bundle_ids_from_descriptor(descriptor_path):
+        raise SystemExit(
+            f"Bundle '{bundle_id}' is absent from {descriptor_path}; "
+            "deprovision must run before descriptor removal."
+        )
+
+    running = _compose_running_services(ctx.docker_dir, env_main_path)
+    if "chat-proc" not in running:
+        if purge_data:
+            raise SystemExit(
+                "--purge-data requires the target chat-proc to be running so the installed "
+                "app can execute its guarded deprovision hook."
+            )
+        if not quiet:
+            console.print(
+                "[yellow]App deprovision not run:[/yellow] chat-proc is stopped; "
+                "app-owned cleanup may be incomplete."
+            )
+        return {
+            "status": "not_run",
+            "bundle_id": bundle_id,
+            "operation_id": operation_id,
+            "reason": "runtime_stopped",
+            "cleanup_incomplete": True,
+        }
+
+    try:
+        result = _post_local_bundle_control(
+            console,
+            ctx=ctx,
+            env_main_path=env_main_path,
+            endpoint="/internal/bundles/deprovision",
+            payload={
+                "bundle_id": bundle_id,
+                "operation_id": operation_id,
+                "purge_data": bool(purge_data),
+            },
+            label="Bundle deprovision",
+            verbose=verbose,
+        )
+    except SystemExit as exc:
+        if not force_retire:
+            raise
+        if not quiet:
+            console.print(
+                "[yellow]App cleanup failed; continuing because --force-retire was supplied.[/yellow]"
+            )
+        return {
+            "status": "forced_retirement",
+            "bundle_id": bundle_id,
+            "operation_id": operation_id,
+            "cleanup_incomplete": True,
+            "error": str(exc),
+        }
+
+    if not quiet:
+        if result.get("hook_present"):
+            label = "purged permitted app data" if purge_data else "cleaned app resources"
+            console.print(f"[green]App deprovision complete:[/green] {label}")
+        else:
+            console.print("[dim]App deprovision hook:[/dim] not declared")
+    return result
+
+
 def remove_bundle_from_runtime(
     console: Console,
     *,
@@ -2907,6 +3002,8 @@ def delete_bundle_by_id(
     repo_root: Path,
     workdir: Path,
     bundle_id: str,
+    purge_data: bool = False,
+    force_retire: bool = False,
     verbose: bool = False,
     quiet: bool = False,
 ) -> dict[str, object]:
@@ -2939,6 +3036,81 @@ def delete_bundle_by_id(
         raise SystemExit(
             f"Bundle '{normalized_id}' is the default bundle. "
             "Select another default_bundle_id before deleting it."
+        )
+
+    transaction = load_bundle_delete_transaction(
+        workdir=workdir,
+        bundle_id=normalized_id,
+    )
+    deprovision_result: dict[str, object] = {
+        "status": "not_run",
+        "bundle_id": normalized_id,
+        "reason": "descriptor_already_absent",
+    }
+    if bundle_index is not None:
+        descriptor_item = bundle_items[bundle_index]
+        transaction = begin_bundle_delete_transaction(
+            workdir=workdir,
+            bundle_id=normalized_id,
+            descriptor_item=descriptor_item,
+            purge_data=purge_data,
+        )
+        if transaction.phase == "deprovisioned":
+            deprovision_result = {
+                "status": "ok",
+                "bundle_id": normalized_id,
+                "operation_id": transaction.operation_id,
+                "purge_data": transaction.purge_data,
+                "replayed_from_cli_transaction": True,
+            }
+        else:
+            deprovision_result = deprovision_bundle_in_runtime(
+                console,
+                repo_root=repo_root,
+                workdir=workdir,
+                bundle_id=normalized_id,
+                operation_id=transaction.operation_id,
+                purge_data=purge_data,
+                force_retire=force_retire,
+                verbose=verbose,
+                quiet=quiet,
+            )
+            transaction = advance_bundle_delete_transaction(
+                workdir=workdir,
+                transaction=transaction,
+                phase=(
+                    "deprovisioned"
+                    if deprovision_result.get("status") == "ok"
+                    else "cleanup_incomplete"
+                ),
+            )
+    elif transaction is not None and transaction.phase in {"deprovisioned", "complete"}:
+        deprovision_result = {
+            "status": "ok",
+            "bundle_id": normalized_id,
+            "operation_id": transaction.operation_id,
+            "purge_data": transaction.purge_data,
+            "replayed_from_cli_transaction": True,
+        }
+    elif transaction is not None and transaction.phase == "cleanup_incomplete":
+        if purge_data and not force_retire:
+            raise SystemExit(
+                f"Bundle '{normalized_id}' is already absent from descriptor authority; "
+                "its recorded purge cleanup is incomplete. Retry with --force-retire to "
+                "finish runtime retirement without claiming that data was purged."
+            )
+        deprovision_result = {
+            "status": "cleanup_incomplete",
+            "bundle_id": normalized_id,
+            "operation_id": transaction.operation_id,
+            "purge_data": transaction.purge_data,
+            "cleanup_incomplete": True,
+            "replayed_from_cli_transaction": True,
+        }
+    elif purge_data:
+        raise SystemExit(
+            f"Bundle '{normalized_id}' is already absent from descriptor authority; "
+            "KDCube cannot safely infer or execute a durable-data purge."
         )
 
     descriptor_removed = bundle_index is not None
@@ -2978,11 +3150,19 @@ def delete_bundle_by_id(
         verbose=verbose,
         quiet=quiet,
     )
+    if transaction is not None:
+        transaction = advance_bundle_delete_transaction(
+            workdir=workdir,
+            transaction=transaction,
+            phase="complete",
+        )
+    clear_bundle_delete_transaction(workdir=workdir, bundle_id=normalized_id)
     return {
         "status": "ok",
         "bundle_id": normalized_id,
         "descriptor_removed": descriptor_removed,
         "secrets_removed": secrets_removed,
+        "deprovision": deprovision_result,
         "runtime": runtime_result,
     }
 
@@ -4518,6 +4698,16 @@ def main() -> None:
         help="Compatibility form of `kdcube bundle delete <bundle_id>`",
     )
     _sp.add_argument(
+        "--purge-data",
+        action="store_true",
+        help="With bundle delete, permit the app deprovision hook to remove durable app data",
+    )
+    _sp.add_argument(
+        "--force-retire",
+        action="store_true",
+        help="With bundle delete, remove the app after a cleanup failure and report incomplete cleanup",
+    )
+    _sp.add_argument(
         "--descriptors-location",
         default="",
         help="With `bundle config apply`, source directory containing bundles.yaml and optional bundles.secrets.yaml",
@@ -5256,6 +5446,8 @@ def main() -> None:
             _resolved = _resolve_cli_workdir(_workdir)
             _bundle_arg = str(args.bundle_id or "").strip()
             _status_bundle_arg = str(args.status_bundle_id or "").strip()
+            _purge_data = bool(args.purge_data)
+            _force_retire = bool(args.force_retire)
             _has_bundle_patch_flags = any(
                 [
                     args.local_path is not None,
@@ -5294,6 +5486,8 @@ def main() -> None:
                     repo_root=_repo,
                     workdir=_resolved,
                     bundle_id=_status_bundle_arg,
+                    purge_data=_purge_data,
+                    force_retire=_force_retire,
                     verbose=bool(args.verbose),
                     quiet=bool(args.quiet),
                 )
@@ -5303,6 +5497,10 @@ def main() -> None:
                     raise SystemExit("Usage: kdcube bundle reload <bundle_id> --workdir <workdir>")
                 if _has_bundle_patch_flags:
                     raise SystemExit("`kdcube bundle reload` cannot be combined with bundle mutation flags.")
+                if _purge_data or _force_retire:
+                    raise SystemExit(
+                        "--purge-data and --force-retire are only supported with `kdcube bundle delete`."
+                    )
                 if args.live_status:
                     raise SystemExit("--live is only supported with `kdcube bundle status <bundle_id>`.")
                 if args.descriptors_location or args.dry_run or args.reload_changed:
@@ -5329,6 +5527,10 @@ def main() -> None:
                     )
                 if _has_bundle_patch_flags:
                     raise SystemExit("`kdcube bundle config apply` cannot be combined with bundle mutation flags.")
+                if _purge_data or _force_retire:
+                    raise SystemExit(
+                        "--purge-data and --force-retire are only supported with `kdcube bundle delete`."
+                    )
                 if args.live_status:
                     raise SystemExit("--live is only supported with `kdcube bundle status <bundle_id>`.")
                 if not str(args.descriptors_location or "").strip():
@@ -5369,6 +5571,8 @@ def main() -> None:
                         bool(args.descriptors_location),
                         bool(args.dry_run),
                         bool(args.reload_changed),
+                        _purge_data,
+                        _force_retire,
                     ]
                 ):
                     raise SystemExit("`kdcube bundle status` cannot be combined with mutation flags.")
@@ -5398,6 +5602,11 @@ def main() -> None:
                 raise SystemExit(
                     "--descriptors-location, --dry-run, and --reload are only supported with "
                     "`kdcube bundle config apply`."
+                )
+            if (_purge_data or _force_retire) and not args.delete:
+                raise SystemExit(
+                    "--purge-data and --force-retire require `kdcube bundle delete <bundle_id>` "
+                    "or the compatibility --delete form."
                 )
             if not _bundle_arg:
                 raise SystemExit(
@@ -5459,6 +5668,8 @@ def main() -> None:
                     repo_root=_repo,
                     workdir=_resolved,
                     bundle_id=_bundle_id,
+                    purge_data=_purge_data,
+                    force_retire=_force_retire,
                     verbose=bool(args.verbose),
                     quiet=bool(args.quiet),
                 )

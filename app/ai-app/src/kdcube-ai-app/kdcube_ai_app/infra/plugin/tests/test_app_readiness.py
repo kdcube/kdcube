@@ -140,6 +140,46 @@ def test_only_required_applications_block_aggregate_readiness() -> None:
     assert aggregate.blocking == ()
 
 
+@pytest.mark.parametrize(
+    "state",
+    [
+        ApplicationLifecycleState.DEPROVISIONING,
+        ApplicationLifecycleState.DEPROVISION_FAILED,
+    ],
+)
+def test_deprovision_state_closes_admission_without_retry_signal(
+    state: ApplicationLifecycleState,
+) -> None:
+    registry = ApplicationReadinessRegistry()
+    registry.replace_desired(
+        tenant="tenant-a",
+        project="project-a",
+        applications={"app": _desired("generation-a")},
+    )
+    assert registry.transition(
+        tenant="tenant-a",
+        project="project-a",
+        application_id="app",
+        generation="generation-a",
+        state=state,
+        error="cleanup failed" if state is ApplicationLifecycleState.DEPROVISION_FAILED else None,
+    )
+
+    with pytest.raises(ApplicationNotReadyError) as raised:
+        registry.require_ready(
+            tenant="tenant-a",
+            project="project-a",
+            application_id="app",
+        )
+
+    assert raised.value.public_payload == {
+        "type": "application_deprovisioning",
+        "application_id": "app",
+        "state": state.value,
+        "retryable": False,
+    }
+
+
 @pytest.mark.asyncio
 async def test_runtime_loader_checks_admission_before_importing_application(
     monkeypatch: pytest.MonkeyPatch,

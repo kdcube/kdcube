@@ -4,7 +4,7 @@ title: "What I Should Know Before Writing a KDCube App"
 summary: "A builder's mind map for KDCube apps: async runtime rules, provider and consumer surfaces, identity and delegation, configuration, storage, concurrency, eventing, conversations, economics, UI, telemetry, isolated execution, and operational checks."
 status: current
 tags: ["recipe", "app", "bundle", "builder", "runtime", "async", "surfaces", "storage", "eventing", "economics"]
-updated_at: 2026-08-18
+updated_at: 2026-09-10
 keywords:
   [
     "KDCube app ingredients",
@@ -337,12 +337,13 @@ platform callback.
 - Run provisioning idempotently from `on_bundle_load` or first safe use.
 - Do not run `CREATE EXTENSION`; platform database setup owns extensions.
 
-**Current lifecycle gap:** targeted bundle deletion retires the app's runtime
-surfaces but does not yet invoke app-owned cleanup or drop durable data.
-Provision for now, document table ownership and a manual/operator cleanup
-procedure, and do not claim that deleting an app automatically drops its data.
-The accepted guarded `on_app_deprovision(...)` and `--purge-data` contract is
-owned by [Bundle Lifecycle](../sdk/bundle/bundle-lifecycle-README.md#removal-deprovisioning-and-durable-data).
+Targeted bundle deletion invokes the optional guarded
+`on_app_deprovision(...)` hook before descriptor authority is removed. Normal
+deletion passes `purge_data=False`; durable app data is retained. Only the
+explicit `--purge-data` command permits the hook to delete app-owned durable
+data. Implement the hook idempotently around its `operation_id`, and document
+every owned table, key prefix, storage prefix, and external resource. The full
+contract is owned by [Bundle Lifecycle](../sdk/bundle/bundle-lifecycle-README.md#removal-deprovisioning-and-durable-data).
 
 Read the [Storage SDK](../sdk/storage/),
 [Bundle Storage and Cache](../sdk/bundle/bundle-storage-and-cache-README.md), and
@@ -706,8 +707,8 @@ The maintenance contract is part of the app, not cleanup after implementation:
   secret placeholder. Document meanings and safe defaults; never commit secret
   values.
 - `docs/storage/README.md` names every owned store/table/key prefix, scope,
-  retention, migration/provisioning behavior, backup expectations, and the
-  current manual deprovision procedure.
+  retention, migration/provisioning behavior, backup expectations, and what
+  `on_app_deprovision(...)` removes with and without `purge_data` permission.
 - `docs/journal/` records meaningful architecture and behavior changes as they
   happen. It is the fast onboarding trail for the next developer or coding
   agent, not a dump of routine edits.
@@ -747,7 +748,7 @@ interfaces, docs/journal, focused tests, and release notes semantically aligned.
 | "Connecting MCP requires named services." | Ordinary MCP is first-class; named services are optional semantic object contracts. |
 | "I need to wrap web search or exec." | Built-in SDK tools already carry isolation, accounting, provenance, and artifact behavior. |
 | "Conversation history is my agent checkpointer." | KDCube's record and the agent's working memory are separate and both need correct wiring. |
-| "Deleting the app drops its tables." | There is no complete deprovision hook today; document owned tables and cleanup explicitly. |
+| "Deleting the app drops its tables." | Normal deletion retains durable data. An app may delete its owned tables only from `on_app_deprovision(...)` when `purge_data=True`. |
 | "Telemetry can trigger app work." | Telemetry records observations; use events, Data Bus, or jobs to execute work. |
 
 ## Ship Checklist

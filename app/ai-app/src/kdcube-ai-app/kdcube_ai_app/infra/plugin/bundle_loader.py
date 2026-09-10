@@ -3164,6 +3164,57 @@ class _StartupCommContext:
         self.actor = self._Actor(tenant, project)
 
 
+async def _lifecycle_workflow_config(
+    spec: BundleSpec,
+    bundle_spec: Any,
+    *,
+    tenant: str,
+    project: str,
+) -> tuple[Any, _StartupCommContext]:
+    from kdcube_ai_app.infra.service_hub.inventory import (
+        ConfigRequest,
+        create_workflow_config,
+        resolve_config_request_secrets,
+    )
+
+    comm_ctx = _StartupCommContext(tenant, project)
+    bundle_id = str(getattr(bundle_spec, "id", "") or spec.id or "").strip()
+    cfg_req = ConfigRequest(
+        agentic_bundle_id=bundle_id or None,
+        tenant=tenant,
+        project=project,
+    )
+    cfg_req = await resolve_config_request_secrets(cfg_req, bundle_id=bundle_id or None)
+    wf_config = create_workflow_config(cfg_req)
+    wf_config.ai_bundle_spec = bundle_spec
+    return wf_config, comm_ctx
+
+
+async def load_bundle_for_deprovision_async(
+    spec: BundleSpec,
+    bundle_spec: Any,
+    *,
+    tenant: str,
+    project: str,
+    pg_pool: Optional[Any] = None,
+    redis: Optional[Any] = None,
+) -> tuple[Any, types.ModuleType]:
+    """Load the installed app generation without running setup hooks."""
+    wf_config, comm_ctx = await _lifecycle_workflow_config(
+        spec,
+        bundle_spec,
+        tenant=tenant,
+        project=project,
+    )
+    return get_workflow_instance(
+        spec,
+        wf_config,
+        comm_context=comm_ctx,
+        pg_pool=pg_pool,
+        redis=redis,
+    )
+
+
 async def preload_bundle_async(
     spec: BundleSpec,
     bundle_spec: Any,
@@ -3185,22 +3236,12 @@ async def preload_bundle_async(
     _bundle_load_key() produces the same key that real requests will use, so
     the hook is not re-run after this process admits the app.
     """
-    from kdcube_ai_app.infra.service_hub.inventory import (
-        ConfigRequest,
-        create_workflow_config,
-        resolve_config_request_secrets,
-    )
-
-    comm_ctx = _StartupCommContext(tenant, project)
-    bundle_id = str(getattr(bundle_spec, "id", "") or "").strip()
-    cfg_req = ConfigRequest(
-        agentic_bundle_id=bundle_id or None,
+    wf_config, comm_ctx = await _lifecycle_workflow_config(
+        spec,
+        bundle_spec,
         tenant=tenant,
         project=project,
     )
-    cfg_req = await resolve_config_request_secrets(cfg_req, bundle_id=bundle_id or None)
-    wf_config = create_workflow_config(cfg_req)
-    wf_config.ai_bundle_spec = bundle_spec
 
     return await get_workflow_instance_async(
         spec,

@@ -148,7 +148,7 @@ def _manifest_auth_policy(auth: Mapping[str, Any] | None) -> dict[str, Any] | No
     return projected or None
 
 
-def _apply_effective_props(workflow: Any, descriptor_props: Mapping[str, Any]) -> dict[str, Any]:
+def apply_effective_props(workflow: Any, descriptor_props: Mapping[str, Any]) -> dict[str, Any]:
     defaults = copy.deepcopy(getattr(workflow, "bundle_props_defaults", None) or {})
     if not defaults:
         defaults = copy.deepcopy(getattr(workflow, "bundle_props", None) or {})
@@ -169,7 +169,7 @@ def _apply_effective_props(workflow: Any, descriptor_props: Mapping[str, Any]) -
     return dict(getattr(workflow, "bundle_props", None) or effective)
 
 
-def _select_hook_kwargs(hook: Any, provided: dict[str, Any]) -> dict[str, Any]:
+def select_hook_kwargs(hook: Any, provided: dict[str, Any]) -> dict[str, Any]:
     try:
         signature = inspect.signature(hook)
     except (TypeError, ValueError):
@@ -213,7 +213,7 @@ async def _invoke_on_app_deploy(
         "logger": logger,
         "reread_props": reread_props,
     }
-    await hook(**_select_hook_kwargs(hook, kwargs))
+    await hook(**select_hook_kwargs(hook, kwargs))
 
 
 def _surface_projection_sync(
@@ -290,7 +290,7 @@ async def deploy_loaded_bundle_app_resources(
         project=project,
         bundle_id=bundle_id,
     ) or {}
-    effective_props = _apply_effective_props(workflow, descriptor_props)
+    effective_props = apply_effective_props(workflow, descriptor_props)
     storage_root = await resolve_app_storage_root(
         spec=bundle_spec,
         tenant=tenant,
@@ -337,7 +337,7 @@ async def deploy_loaded_bundle_app_resources(
             project=project,
             bundle_id=bundle_id,
         ) or {}
-        return _apply_effective_props(workflow, fresh)
+        return apply_effective_props(workflow, fresh)
 
     async def _deploy_app_resources() -> None:
         await _invoke_on_app_deploy(

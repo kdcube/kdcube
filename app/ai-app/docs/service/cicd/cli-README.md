@@ -966,18 +966,38 @@ kdcube bundle delete <bundle_id> \
   --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
 ```
 
-This one command removes the entry from `bundles.yaml`, removes its
-`bundles.secrets.yaml` entry when present, and retires that bundle from a
-running local runtime. Runtime cleanup targets that ID: its preparation task,
-sidecars, loaded code, widgets, scheduled jobs, and Data Bus handlers are
-removed. Every other bundle keeps its current runtime state. The current
-command retains app-owned PostgreSQL records, Redis data, local/object storage,
-and external resources; it does not yet invoke an app deprovision hook. See the
-accepted [guarded deprovision contract](../../sdk/bundle/bundle-lifecycle-README.md#removal-deprovisioning-and-durable-data).
+This one command closes admission for the target in the local proc, stops its
+scheduled and Data Bus intake, waits for its tracked chat tasks to finish, and
+invokes its optional `on_app_deprovision(...)` hook. It removes the entry from
+`bundles.yaml` and `bundles.secrets.yaml` only after that hook succeeds, then
+retires that bundle's loaded code, widgets, sidecars, scheduled jobs, and Data
+Bus handlers. Every other bundle keeps its current runtime state.
 
-When `chat-proc` is stopped, descriptor deletion completes the operation; the
-bundle remains absent on the next start. Repeating the command is safe when a
-previous attempt removed the descriptor before live cleanup completed.
+Normal deletion passes `purge_data=False`, so the hook must retain app-owned
+PostgreSQL records, Redis data, local/object storage, and other user or business
+data. To authorize deletion of that durable data:
+
+```bash
+kdcube bundle delete <bundle_id> --purge-data \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+```
+
+If cleanup fails, the descriptor remains and the command fails. An operator
+can explicitly retire a broken app while acknowledging incomplete cleanup:
+
+```bash
+kdcube bundle delete <bundle_id> --force-retire \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+```
+
+See the [guarded deprovision contract](../../sdk/bundle/bundle-lifecycle-README.md#removal-deprovisioning-and-durable-data)
+for hook arguments, ownership, and idempotency rules.
+
+When `chat-proc` is stopped, ordinary descriptor deletion completes the
+operation and reports that app deprovisioning did not run; the bundle remains
+absent on the next start. `--purge-data` requires a running proc and fails
+closed otherwise. Repeating an interrupted command reuses its recorded
+operation ID and safely completes the remaining retirement step.
 
 `kdcube bundle <bundle_id> --delete` remains a compatibility alias with the
 same complete behavior. A default bundle must be replaced as

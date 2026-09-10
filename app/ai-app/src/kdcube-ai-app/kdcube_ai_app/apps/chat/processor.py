@@ -959,6 +959,28 @@ class EnhancedChatRequestProcessor:
         """Refresh app-owned scheduler/Data Bus adapters after an app becomes ready."""
         await self._reconcile_bundle_scheduler_from_authority(reason)
 
+    async def quiesce_application_runtime(self, bundle_id: str) -> dict[str, int]:
+        """Stop one app's recurring intake and wait for its executing tasks."""
+        normalized_id = str(bundle_id or "").strip()
+        if not normalized_id:
+            raise ValueError("bundle_id is required")
+        if self._scheduler is not None:
+            await self._scheduler.remove_bundle(normalized_id)
+        if self._data_bus_manager is not None:
+            await self._data_bus_manager.remove_bundle(normalized_id)
+
+        current = asyncio.current_task()
+        active = [
+            task
+            for task, details in tuple(self._active_task_details.items())
+            if task is not current
+            and not task.done()
+            and str(details.get("bundle_id") or "").strip() == normalized_id
+        ]
+        if active:
+            await asyncio.gather(*active, return_exceptions=True)
+        return {"active_tasks_drained": len(active)}
+
     async def _bundle_scheduler_reconcile_loop(self) -> None:
         interval = self._bundle_scheduler_reconcile_interval_sec
         logger.info(

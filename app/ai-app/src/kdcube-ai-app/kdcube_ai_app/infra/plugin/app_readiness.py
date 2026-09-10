@@ -21,6 +21,8 @@ class ApplicationLifecycleState(str, Enum):
     RETRYING = "retrying"
     READY = "ready"
     FAILED = "failed"
+    DEPROVISIONING = "deprovisioning"
+    DEPROVISION_FAILED = "deprovision_failed"
 
 
 def normalize_readiness_mode(value: object) -> ApplicationReadinessMode:
@@ -69,11 +71,15 @@ class ApplicationReadinessSnapshot:
         state = self.state.value
         if self.state is ApplicationLifecycleState.PENDING:
             state = ApplicationLifecycleState.PREPARING.value
+        deprovisioning = self.state in {
+            ApplicationLifecycleState.DEPROVISIONING,
+            ApplicationLifecycleState.DEPROVISION_FAILED,
+        }
         return {
-            "type": "application_not_ready",
+            "type": "application_deprovisioning" if deprovisioning else "application_not_ready",
             "application_id": self.application_id,
             "state": state,
-            "retryable": True,
+            "retryable": not deprovisioning,
         }
 
     def diagnostic_payload(self) -> dict[str, object]:
@@ -270,8 +276,25 @@ class ApplicationReadinessRegistry:
                 current.error_code = None
                 current.error_message = None
                 current.retry_at = None
-            elif state in (ApplicationLifecycleState.FAILED, ApplicationLifecycleState.RETRYING):
-                current.finished_at = now if state is ApplicationLifecycleState.FAILED else None
+            elif state is ApplicationLifecycleState.DEPROVISIONING:
+                current.started_at = now
+                current.finished_at = None
+                current.error_code = None
+                current.error_message = None
+                current.retry_at = None
+            elif state in (
+                ApplicationLifecycleState.FAILED,
+                ApplicationLifecycleState.RETRYING,
+                ApplicationLifecycleState.DEPROVISION_FAILED,
+            ):
+                current.finished_at = (
+                    now
+                    if state in {
+                        ApplicationLifecycleState.FAILED,
+                        ApplicationLifecycleState.DEPROVISION_FAILED,
+                    }
+                    else None
+                )
                 current.error_code = type(error).__name__ if isinstance(error, BaseException) else None
                 current.error_message = _bounded_error(error)
             return True

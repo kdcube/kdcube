@@ -214,9 +214,8 @@ for supervision, readiness, and admission.
 
 ## Removal, deprovisioning, and durable data
 
-Implementation status on 2026-09-10: targeted runtime retirement is current.
-`on_app_deprovision(...)` and `bundle delete --purge-data` are the accepted
-contract below and are not implemented yet.
+Implementation status on 2026-09-10: targeted runtime retirement and guarded
+`on_app_deprovision(...)` are implemented for the local CLI delete operation.
 
 These are three different operations:
 
@@ -272,8 +271,8 @@ Contract:
   configuration authority
 - failure leaves the descriptor entry intact and returns a retryable,
   actionable result; it must not be reported as successful deletion
-- a force-retirement escape hatch may remove runtime authority after a failed
-  hook, but must report that app-owned cleanup remains incomplete
+- `--force-retire` may remove runtime authority after a failed hook, but reports
+  that app-owned cleanup remains incomplete
 - removing an ID through descriptor reconciliation retires its runtime state but
   does not infer permission to execute app cleanup or purge durable data
 - sibling applications are never prepared, reloaded, stopped, or deprovisioned
@@ -284,8 +283,12 @@ code. Ordinary descriptor deletion may still retire the app on next startup,
 but must report that deprovisioning was not run. `--purge-data` fails closed
 until the runtime is available.
 
+The CLI persists the delete operation ID under the runtime workdir until the
+operation finishes. A retry after an interrupted command therefore reuses the
+same logical operation instead of silently creating a second cleanup request.
+
 A future process-local `on_bundle_unload(...)` may release in-memory clients or
-temporary handles in every worker. It is not the durable, fleet-coordinated
+temporary handles in every worker. It is not the durable, operation-coordinated
 `on_app_deprovision(...)` contract.
 
 `@venv(...)` is separate from `on_bundle_load(...)`:

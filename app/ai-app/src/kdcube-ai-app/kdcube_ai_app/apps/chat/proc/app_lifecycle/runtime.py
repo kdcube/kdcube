@@ -16,6 +16,9 @@ from kdcube_ai_app.apps.chat.proc.app_deployment.coordinator import (
     props_fingerprint,
     source_generation_for_spec,
 )
+from kdcube_ai_app.apps.chat.proc.app_deployment.deprovision import (
+    deprovision_loaded_bundle_app_resources,
+)
 from kdcube_ai_app.apps.chat.proc.app_deployment.modes import (
     static_widget_runtime_generation,
 )
@@ -24,6 +27,7 @@ from kdcube_ai_app.apps.chat.proc.app_lifecycle.supervisor import (
     ApplicationPreparation,
 )
 from kdcube_ai_app.infra.plugin.app_readiness import (
+    ApplicationLifecycleState,
     ApplicationReadinessMode,
     ApplicationReadinessRegistry,
     application_readiness_registry,
@@ -32,6 +36,7 @@ from kdcube_ai_app.infra.plugin.app_readiness import (
 from kdcube_ai_app.infra.plugin.bundle_loader import (
     BundleSpec,
     evict_bundle_scope,
+    load_bundle_for_deprovision_async,
     load_bundle_manifest,
     preload_bundle_async,
 )
@@ -254,6 +259,88 @@ class ProcApplicationLifecycle:
         async with self._reconcile_lock:
             self._last_registry = registry
             await self.supervisor.retire(application_id)
+
+    async def deprovision(
+        self,
+        entry: BundleEntry | dict[str, Any],
+        *,
+        operation_id: str,
+        purge_data: bool,
+        quiesce_runtime: Callable[[], Awaitable[dict[str, Any]]] | None = None,
+    ) -> dict[str, Any]:
+        """Close one app locally, then run its operation-coordinated cleanup hook."""
+        bundle_entry = (
+            entry if isinstance(entry, BundleEntry) else BundleEntry.model_validate(entry)
+        )
+        application_id = str(bundle_entry.id or "").strip()
+        async with self._reconcile_lock:
+            snapshot = self.registry.snapshot(
+                tenant=self.tenant,
+                project=self.project,
+                application_id=application_id,
+            )
+            if snapshot is None:
+                raise KeyError(f"Application {application_id!r} has no active lifecycle state")
+            generation = snapshot.desired_generation
+            self.registry.transition(
+                tenant=self.tenant,
+                project=self.project,
+                application_id=application_id,
+                generation=generation,
+                state=ApplicationLifecycleState.DEPROVISIONING,
+            )
+            await self.supervisor.quiesce(application_id)
+
+            try:
+                quiesce_result = (
+                    await quiesce_runtime() if quiesce_runtime is not None else {}
+                )
+                source_value = str(bundle_entry.path or "").strip()
+                source_path = Path(source_value) if source_value else None
+                if source_path is None or not source_path.exists():
+                    raise RuntimeError(
+                        f"Installed application source is unavailable: "
+                        f"application={application_id} path={source_value!r}"
+                    )
+                bundle_spec = bundle_entry_to_spec(bundle_entry)
+                agentic_spec = BundleSpec(
+                    id=application_id,
+                    path=bundle_entry.path,
+                    module=bundle_entry.module,
+                    singleton=bool(bundle_entry.singleton),
+                )
+                workflow, module = await load_bundle_for_deprovision_async(
+                    agentic_spec,
+                    bundle_spec,
+                    tenant=self.tenant,
+                    project=self.project,
+                    pg_pool=self.pg_pool,
+                    redis=self.redis,
+                )
+                result = await deprovision_loaded_bundle_app_resources(
+                    workflow=workflow,
+                    module=module,
+                    agentic_spec=agentic_spec,
+                    bundle_spec=bundle_spec,
+                    tenant=self.tenant,
+                    project=self.project,
+                    operation_id=operation_id,
+                    purge_data=purge_data,
+                    pg_pool=self.pg_pool,
+                    redis=self.redis,
+                )
+            except Exception as exc:
+                self.registry.transition(
+                    tenant=self.tenant,
+                    project=self.project,
+                    application_id=application_id,
+                    generation=generation,
+                    state=ApplicationLifecycleState.DEPROVISION_FAILED,
+                    error=exc,
+                )
+                raise
+
+            return {**result, "quiesce": quiesce_result}
 
     async def retry(self, application_id: str) -> None:
         if self._last_registry is None:

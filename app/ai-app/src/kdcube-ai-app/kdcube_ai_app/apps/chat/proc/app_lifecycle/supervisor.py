@@ -177,6 +177,23 @@ class ApplicationLifecycleSupervisor:
             self._retired_tasks.add(owned.task)
             owned.task.add_done_callback(self._retired_task_done)
 
+    async def quiesce(self, application_id: str) -> None:
+        """Cancel this application's preparation without removing readiness state."""
+        normalized_id = str(application_id or "").strip()
+        if not normalized_id:
+            raise ValueError("application_id is required")
+        task: asyncio.Task[None] | None = None
+        async with self._lock:
+            owned = self._tasks.pop(normalized_id, None)
+            if owned is None or owned.task.done():
+                return
+            task = owned.task
+            task.cancel()
+            self._retired_tasks.add(task)
+            task.add_done_callback(self._retired_task_done)
+        assert task is not None
+        await asyncio.gather(task, return_exceptions=True)
+
     async def _run_preparation(self, preparation: ApplicationPreparation) -> None:
         attempt = 0
         delay = self._retry_initial_seconds

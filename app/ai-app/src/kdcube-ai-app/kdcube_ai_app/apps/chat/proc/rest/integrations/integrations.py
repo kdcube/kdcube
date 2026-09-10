@@ -1552,6 +1552,14 @@ class BundleRemoveRequest(BaseModel):
     bundle_id: str
 
 
+class BundleDeprovisionRequest(BaseModel):
+    tenant: Optional[str] = None
+    project: Optional[str] = None
+    bundle_id: str
+    operation_id: str
+    purge_data: bool = False
+
+
 class BundleStatusRequest(BaseModel):
     tenant: Optional[str] = None
     project: Optional[str] = None
@@ -3390,6 +3398,125 @@ async def _do_remove_bundle_from_authority(
     }
 
 
+async def _do_deprovision_bundle(
+    request: Request,
+    payload: BundleDeprovisionRequest,
+) -> dict[str, Any]:
+    """Run app-owned cleanup while its source and descriptor authority remain."""
+    settings = get_settings()
+    tenant_id = payload.tenant or settings.TENANT
+    project_id = payload.project or settings.PROJECT
+    bundle_id = str(payload.bundle_id or "").strip()
+    operation_id = str(payload.operation_id or "").strip()
+    if not bundle_id:
+        raise HTTPException(status_code=400, detail="bundle_id is required")
+    if not operation_id:
+        raise HTTPException(status_code=400, detail="operation_id is required")
+    if tenant_id != settings.TENANT or project_id != settings.PROJECT:
+        raise HTTPException(
+            status_code=409,
+            detail="App deprovision must run in the target tenant/project runtime",
+        )
+
+    redis = _get_app_redis(request)
+    authority_registry = await load_registry(redis, tenant_id, project_id)
+    authority_entry = (authority_registry.bundles or {}).get(bundle_id)
+    if authority_entry is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Bundle '{bundle_id}' is absent from descriptor authority; "
+                "app deprovision must run before descriptor removal."
+            ),
+        )
+    if authority_registry.default_bundle_id == bundle_id:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Bundle '{bundle_id}' is the default bundle. "
+                "Select another default_bundle_id before deprovisioning it."
+            ),
+        )
+
+    from kdcube_ai_app.apps.chat.proc.app_deployment.deprovision import (
+        AppDeprovisionError,
+    )
+    from kdcube_ai_app.apps.chat.sdk.runtime.local_sidecars import (
+        stop_local_sidecars_for_bundle_ids,
+    )
+    from kdcube_ai_app.infra.plugin.bundle_registry import get_all
+
+    current_entry = get_all().get(bundle_id) or authority_entry
+    lifecycle = getattr(request.app.state, "application_lifecycle", None)
+    if lifecycle is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Application lifecycle supervisor is not running",
+        )
+
+    async def _quiesce_runtime() -> dict[str, Any]:
+        processor_result: dict[str, Any] = {}
+        processor = getattr(request.app.state, "processor", None)
+        if processor is not None:
+            processor_result = await processor.quiesce_application_runtime(bundle_id)
+        stopped_sidecars = await asyncio.to_thread(
+            stop_local_sidecars_for_bundle_ids,
+            bundle_ids={bundle_id},
+            tenant=tenant_id,
+            project=project_id,
+            terminate_timeout_sec=2.0,
+            kill_timeout_sec=1.0,
+        )
+        return {**processor_result, "stopped_sidecars": stopped_sidecars}
+
+    try:
+        result = await lifecycle.deprovision(
+            current_entry,
+            operation_id=operation_id,
+            purge_data=bool(payload.purge_data),
+            quiesce_runtime=_quiesce_runtime,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except TimeoutError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "app_deprovision_in_progress",
+                "bundle_id": bundle_id,
+                "operation_id": operation_id,
+                "message": str(exc),
+            },
+        ) from exc
+    except AppDeprovisionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "app_deprovision_failed",
+                "bundle_id": bundle_id,
+                "operation_id": operation_id,
+                "message": str(exc),
+            },
+        ) from exc
+    except (RuntimeError, TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "app_deprovision_failed",
+                "bundle_id": bundle_id,
+                "operation_id": operation_id,
+                "message": str(exc),
+            },
+        ) from exc
+
+    return {
+        "status": "ok",
+        "source": "authority",
+        "operation": "deprovision",
+        **result,
+    }
+
+
 @admin_router.post("/admin/integrations/bundles/reload-authority", status_code=200)
 async def admin_reload_bundles_from_authority(
         request: Request,
@@ -3435,6 +3562,15 @@ async def internal_remove_bundle(payload: BundleRemoveRequest, request: Request)
         permissions=[],
     )
     return await _do_remove_bundle_from_authority(request, automation_session, payload)
+
+
+@internal_router.post("/internal/bundles/deprovision", status_code=200)
+async def internal_deprovision_bundle(payload: BundleDeprovisionRequest, request: Request):
+    """Run one declared bundle's guarded app-owned cleanup before removal."""
+    client_ip = request.client.host if request.client else ""
+    if client_ip not in _LOCALHOST:
+        raise HTTPException(status_code=403, detail="Internal endpoint: localhost only")
+    return await _do_deprovision_bundle(request, payload)
 
 
 @admin_router.post("/admin/integrations/bundles/cleanup", status_code=200)

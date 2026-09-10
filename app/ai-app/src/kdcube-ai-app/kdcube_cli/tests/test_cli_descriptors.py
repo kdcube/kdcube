@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import sys
+from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -673,11 +674,34 @@ def test_delete_bundle_by_id_removes_descriptors_and_targets_one_runtime_bundle(
     )
     calls: dict[str, object] = {}
 
+    def fake_deprovision(console, **kwargs):
+        del console
+        current = yaml.safe_load(bundles_path.read_text(encoding="utf-8"))
+        current_secrets = yaml.safe_load(secrets_path.read_text(encoding="utf-8"))
+        calls["deprovision"] = kwargs
+        calls["descriptor_ids_during_deprovision"] = [
+            item["id"] for item in current["bundles"]["items"]
+        ]
+        calls["secret_ids_during_deprovision"] = [
+            item["id"] for item in current_secrets["bundles"]["items"]
+        ]
+        return {
+            "status": "ok",
+            "bundle_id": kwargs["bundle_id"],
+            "operation_id": kwargs["operation_id"],
+            "hook_present": True,
+        }
+
     def fake_remove_runtime(console, **kwargs):
         del console
+        current = yaml.safe_load(bundles_path.read_text(encoding="utf-8"))
+        assert kwargs["bundle_id"] not in {
+            item["id"] for item in current["bundles"]["items"]
+        }
         calls["runtime"] = kwargs
         return {"status": "ok", "bundle_id": kwargs["bundle_id"]}
 
+    monkeypatch.setattr(cli_mod, "deprovision_bundle_in_runtime", fake_deprovision)
     monkeypatch.setattr(cli_mod, "remove_bundle_from_runtime", fake_remove_runtime)
 
     result = cli_mod.delete_bundle_by_id(
@@ -692,6 +716,9 @@ def test_delete_bundle_by_id_removes_descriptors_and_targets_one_runtime_bundle(
     remaining_secrets = yaml.safe_load(secrets_path.read_text(encoding="utf-8"))
     assert [item["id"] for item in remaining["bundles"]["items"]] == ["stable@1-0"]
     assert [item["id"] for item in remaining_secrets["bundles"]["items"]] == ["stable@1-0"]
+    assert calls["descriptor_ids_during_deprovision"] == ["remove@1-0", "stable@1-0"]
+    assert calls["secret_ids_during_deprovision"] == ["remove@1-0", "stable@1-0"]
+    assert calls["deprovision"]["purge_data"] is False
     assert calls["runtime"]["bundle_id"] == "remove@1-0"
     assert result["descriptor_removed"] is True
     assert result["secrets_removed"] is True
@@ -742,6 +769,385 @@ def test_remove_bundle_from_runtime_calls_targeted_remove_endpoint(monkeypatch, 
     assert calls["payload"] == {"bundle_id": "remove@1-0"}
 
 
+def test_deprovision_bundle_in_runtime_calls_guarded_endpoint(monkeypatch, tmp_path: Path) -> None:
+    workdir = tmp_path / "demo__project"
+    config_dir = workdir / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / ".env").write_text("", encoding="utf-8")
+    (config_dir / ".env.proc").write_text("", encoding="utf-8")
+    (config_dir / "bundles.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "bundles": {
+                    "default_bundle_id": "stable@1-0",
+                    "items": [
+                        {"id": "remove@1-0", "path": "/bundles/remove"},
+                        {"id": "stable@1-0", "path": "/bundles/stable"},
+                    ],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    ctx = SimpleNamespace(config_dir=config_dir, docker_dir=tmp_path / "compose")
+    calls: dict[str, object] = {}
+    monkeypatch.setattr(cli_mod, "_build_paths_for_repo", lambda repo_root, runtime: ctx)
+    monkeypatch.setattr(cli_mod, "_compose_running_services", lambda *args: {"chat-proc"})
+
+    def fake_post(console, **kwargs):
+        del console
+        calls.update(kwargs)
+        return {
+            "status": "ok",
+            "bundle_id": kwargs["payload"]["bundle_id"],
+            "hook_present": True,
+        }
+
+    monkeypatch.setattr(cli_mod, "_post_local_bundle_control", fake_post)
+
+    result = cli_mod.deprovision_bundle_in_runtime(
+        Console(file=None),
+        repo_root=tmp_path / "repo",
+        workdir=workdir,
+        bundle_id="remove@1-0",
+        operation_id="operation-a",
+        purge_data=True,
+        quiet=True,
+    )
+
+    assert result["status"] == "ok"
+    assert calls["endpoint"] == "/internal/bundles/deprovision"
+    assert calls["payload"] == {
+        "bundle_id": "remove@1-0",
+        "operation_id": "operation-a",
+        "purge_data": True,
+    }
+
+
+def test_deprovision_bundle_refuses_purge_while_runtime_is_stopped(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    workdir = tmp_path / "demo__project"
+    config_dir = workdir / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / ".env").write_text("", encoding="utf-8")
+    (config_dir / ".env.proc").write_text("", encoding="utf-8")
+    (config_dir / "bundles.yaml").write_text(
+        yaml.safe_dump({"bundles": {"items": [{"id": "remove@1-0"}]}}),
+        encoding="utf-8",
+    )
+    ctx = SimpleNamespace(config_dir=config_dir, docker_dir=tmp_path / "compose")
+    monkeypatch.setattr(cli_mod, "_build_paths_for_repo", lambda repo_root, runtime: ctx)
+    monkeypatch.setattr(cli_mod, "_compose_running_services", lambda *args: set())
+
+    with pytest.raises(SystemExit, match="--purge-data requires"):
+        cli_mod.deprovision_bundle_in_runtime(
+            Console(file=None),
+            repo_root=tmp_path / "repo",
+            workdir=workdir,
+            bundle_id="remove@1-0",
+            operation_id="operation-a",
+            purge_data=True,
+            quiet=True,
+        )
+
+
+def test_deprovision_bundle_reports_skipped_cleanup_while_runtime_is_stopped(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    workdir = tmp_path / "demo__project"
+    config_dir = workdir / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / ".env").write_text("", encoding="utf-8")
+    (config_dir / ".env.proc").write_text("", encoding="utf-8")
+    (config_dir / "bundles.yaml").write_text(
+        yaml.safe_dump({"bundles": {"items": [{"id": "remove@1-0"}]}}),
+        encoding="utf-8",
+    )
+    ctx = SimpleNamespace(config_dir=config_dir, docker_dir=tmp_path / "compose")
+    monkeypatch.setattr(cli_mod, "_build_paths_for_repo", lambda repo_root, runtime: ctx)
+    monkeypatch.setattr(cli_mod, "_compose_running_services", lambda *args: set())
+    output = StringIO()
+
+    result = cli_mod.deprovision_bundle_in_runtime(
+        Console(file=output, force_terminal=False),
+        repo_root=tmp_path / "repo",
+        workdir=workdir,
+        bundle_id="remove@1-0",
+        operation_id="operation-a",
+        purge_data=False,
+    )
+
+    assert result["cleanup_incomplete"] is True
+    assert "App deprovision not run" in output.getvalue()
+
+
+def test_deprovision_force_retire_reports_incomplete_cleanup(monkeypatch, tmp_path: Path) -> None:
+    workdir = tmp_path / "demo__project"
+    config_dir = workdir / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / ".env").write_text("", encoding="utf-8")
+    (config_dir / ".env.proc").write_text("", encoding="utf-8")
+    (config_dir / "bundles.yaml").write_text(
+        yaml.safe_dump({"bundles": {"items": [{"id": "remove@1-0"}]}}),
+        encoding="utf-8",
+    )
+    ctx = SimpleNamespace(config_dir=config_dir, docker_dir=tmp_path / "compose")
+    monkeypatch.setattr(cli_mod, "_build_paths_for_repo", lambda repo_root, runtime: ctx)
+    monkeypatch.setattr(cli_mod, "_compose_running_services", lambda *args: {"chat-proc"})
+
+    def _fail_post(*args, **kwargs):
+        del args, kwargs
+        raise SystemExit("hook failed")
+
+    monkeypatch.setattr(cli_mod, "_post_local_bundle_control", _fail_post)
+
+    result = cli_mod.deprovision_bundle_in_runtime(
+        Console(file=None),
+        repo_root=tmp_path / "repo",
+        workdir=workdir,
+        bundle_id="remove@1-0",
+        operation_id="operation-a",
+        purge_data=False,
+        force_retire=True,
+        quiet=True,
+    )
+
+    assert result == {
+        "status": "forced_retirement",
+        "bundle_id": "remove@1-0",
+        "operation_id": "operation-a",
+        "cleanup_incomplete": True,
+        "error": "hook failed",
+    }
+
+
+def test_delete_hook_failure_leaves_descriptor_authority_intact(monkeypatch, tmp_path: Path) -> None:
+    workdir = tmp_path / "demo__project"
+    config_dir = workdir / "config"
+    config_dir.mkdir(parents=True)
+    bundles_path = config_dir / "bundles.yaml"
+    descriptor = {
+        "bundles": {
+            "default_bundle_id": "stable@1-0",
+            "items": [
+                {"id": "remove@1-0", "path": "/bundles/remove"},
+                {"id": "stable@1-0", "path": "/bundles/stable"},
+            ],
+        }
+    }
+    bundles_path.write_text(yaml.safe_dump(descriptor), encoding="utf-8")
+
+    def _fail(*args, **kwargs):
+        del args, kwargs
+        raise SystemExit("cleanup failed")
+
+    monkeypatch.setattr(cli_mod, "deprovision_bundle_in_runtime", _fail)
+    monkeypatch.setattr(
+        cli_mod,
+        "remove_bundle_from_runtime",
+        lambda *args, **kwargs: pytest.fail("runtime removal must not run"),
+    )
+
+    with pytest.raises(SystemExit, match="cleanup failed"):
+        cli_mod.delete_bundle_by_id(
+            Console(file=None),
+            repo_root=tmp_path / "repo",
+            workdir=workdir,
+            bundle_id="remove@1-0",
+            quiet=True,
+        )
+
+    assert yaml.safe_load(bundles_path.read_text(encoding="utf-8")) == descriptor
+
+
+def test_delete_retry_reuses_operation_after_incomplete_cleanup(monkeypatch, tmp_path: Path) -> None:
+    workdir = tmp_path / "demo__project"
+    config_dir = workdir / "config"
+    config_dir.mkdir(parents=True)
+    bundles_path = config_dir / "bundles.yaml"
+    descriptor = {
+        "bundles": {
+            "default_bundle_id": "stable@1-0",
+            "items": [
+                {"id": "remove@1-0", "path": "/bundles/remove"},
+                {"id": "stable@1-0", "path": "/bundles/stable"},
+            ],
+        }
+    }
+    bundles_path.write_text(yaml.safe_dump(descriptor), encoding="utf-8")
+    operation_ids: list[str] = []
+    real_save = cli_mod.installer_mod.save_release_descriptor
+    save_attempts = 0
+
+    def _deprovision(console, **kwargs):
+        del console
+        operation_ids.append(kwargs["operation_id"])
+        if len(operation_ids) == 1:
+            return {
+                "status": "forced_retirement",
+                "operation_id": kwargs["operation_id"],
+                "cleanup_incomplete": True,
+            }
+        return {"status": "ok", "operation_id": kwargs["operation_id"]}
+
+    def _save(path, value):
+        nonlocal save_attempts
+        if Path(path) == bundles_path and save_attempts == 0:
+            save_attempts += 1
+            raise OSError("descriptor write interrupted")
+        return real_save(path, value)
+
+    monkeypatch.setattr(cli_mod, "deprovision_bundle_in_runtime", _deprovision)
+    monkeypatch.setattr(cli_mod.installer_mod, "save_release_descriptor", _save)
+    monkeypatch.setattr(
+        cli_mod,
+        "remove_bundle_from_runtime",
+        lambda console, **kwargs: {"status": "ok", "bundle_id": kwargs["bundle_id"]},
+    )
+
+    with pytest.raises(OSError, match="descriptor write interrupted"):
+        cli_mod.delete_bundle_by_id(
+            Console(file=None),
+            repo_root=tmp_path / "repo",
+            workdir=workdir,
+            bundle_id="remove@1-0",
+            force_retire=True,
+            quiet=True,
+        )
+
+    result = cli_mod.delete_bundle_by_id(
+        Console(file=None),
+        repo_root=tmp_path / "repo",
+        workdir=workdir,
+        bundle_id="remove@1-0",
+        force_retire=True,
+        quiet=True,
+    )
+
+    assert result["status"] == "ok"
+    assert len(operation_ids) == 2
+    assert operation_ids[0] == operation_ids[1]
+
+
+def test_delete_retry_reuses_completed_deprovision_operation(monkeypatch, tmp_path: Path) -> None:
+    workdir = tmp_path / "demo__project"
+    config_dir = workdir / "config"
+    config_dir.mkdir(parents=True)
+    bundles_path = config_dir / "bundles.yaml"
+    bundles_path.write_text(
+        yaml.safe_dump(
+            {
+                "bundles": {
+                    "default_bundle_id": "stable@1-0",
+                    "items": [
+                        {"id": "remove@1-0", "path": "/bundles/remove"},
+                        {"id": "stable@1-0", "path": "/bundles/stable"},
+                    ],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    deprovision_calls: list[str] = []
+    removal_attempts = 0
+
+    def _deprovision(console, **kwargs):
+        del console
+        deprovision_calls.append(kwargs["operation_id"])
+        return {"status": "ok", "operation_id": kwargs["operation_id"]}
+
+    def _remove(console, **kwargs):
+        nonlocal removal_attempts
+        del console
+        removal_attempts += 1
+        if removal_attempts == 1:
+            raise SystemExit("runtime endpoint unavailable")
+        return {"status": "ok", "bundle_id": kwargs["bundle_id"]}
+
+    monkeypatch.setattr(cli_mod, "deprovision_bundle_in_runtime", _deprovision)
+    monkeypatch.setattr(cli_mod, "remove_bundle_from_runtime", _remove)
+
+    with pytest.raises(SystemExit, match="runtime endpoint unavailable"):
+        cli_mod.delete_bundle_by_id(
+            Console(file=None),
+            repo_root=tmp_path / "repo",
+            workdir=workdir,
+            bundle_id="remove@1-0",
+            purge_data=True,
+            quiet=True,
+        )
+
+    result = cli_mod.delete_bundle_by_id(
+        Console(file=None),
+        repo_root=tmp_path / "repo",
+        workdir=workdir,
+        bundle_id="remove@1-0",
+        purge_data=True,
+        quiet=True,
+    )
+
+    assert result["status"] == "ok"
+    assert result["deprovision"]["replayed_from_cli_transaction"] is True
+    assert len(deprovision_calls) == 1
+    assert removal_attempts == 2
+
+
+def test_reinstalled_identical_bundle_never_reuses_terminal_delete_marker(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    workdir = tmp_path / "demo__project"
+    config_dir = workdir / "config"
+    config_dir.mkdir(parents=True)
+    bundles_path = config_dir / "bundles.yaml"
+    descriptor = {
+        "bundles": {
+            "default_bundle_id": "stable@1-0",
+            "items": [
+                {"id": "remove@1-0", "path": "/bundles/remove"},
+                {"id": "stable@1-0", "path": "/bundles/stable"},
+            ],
+        }
+    }
+    bundles_path.write_text(yaml.safe_dump(descriptor), encoding="utf-8")
+    operation_ids: list[str] = []
+
+    def _deprovision(console, **kwargs):
+        del console
+        operation_ids.append(kwargs["operation_id"])
+        return {"status": "ok", "operation_id": kwargs["operation_id"]}
+
+    monkeypatch.setattr(cli_mod, "deprovision_bundle_in_runtime", _deprovision)
+    monkeypatch.setattr(
+        cli_mod,
+        "remove_bundle_from_runtime",
+        lambda console, **kwargs: {"status": "ok", "bundle_id": kwargs["bundle_id"]},
+    )
+    monkeypatch.setattr(cli_mod, "clear_bundle_delete_transaction", lambda **kwargs: None)
+
+    cli_mod.delete_bundle_by_id(
+        Console(file=None),
+        repo_root=tmp_path / "repo",
+        workdir=workdir,
+        bundle_id="remove@1-0",
+        quiet=True,
+    )
+    bundles_path.write_text(yaml.safe_dump(descriptor), encoding="utf-8")
+    cli_mod.delete_bundle_by_id(
+        Console(file=None),
+        repo_root=tmp_path / "repo",
+        workdir=workdir,
+        bundle_id="remove@1-0",
+        quiet=True,
+    )
+
+    assert len(operation_ids) == 2
+    assert operation_ids[0] != operation_ids[1]
+
+
 def test_bundle_delete_subcommand_is_complete_operation(monkeypatch, tmp_path: Path) -> None:
     workdir = tmp_path / "demo__project"
     calls: dict[str, object] = {}
@@ -773,6 +1179,8 @@ def test_bundle_delete_subcommand_is_complete_operation(monkeypatch, tmp_path: P
             "bundle",
             "delete",
             "remove@1-0",
+            "--purge-data",
+            "--force-retire",
             "--workdir",
             str(workdir),
         ],
@@ -782,6 +1190,8 @@ def test_bundle_delete_subcommand_is_complete_operation(monkeypatch, tmp_path: P
 
     assert calls["bundle_id"] == "remove@1-0"
     assert calls["workdir"] == workdir
+    assert calls["purge_data"] is True
+    assert calls["force_retire"] is True
 
 
 def test_bundle_config_apply_removes_deleted_ids_from_runtime(monkeypatch, tmp_path: Path) -> None:

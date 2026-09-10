@@ -116,6 +116,8 @@ class CONFIG:
         PRELOAD_LOCK_FMT = "kdcube:config:bundles:preload-lock:{tenant}:{project}"
         PRELOAD_BUNDLE_LOCK_FMT = "kdcube:config:bundles:preload-lock:{tenant}:{project}:{bundle_id}"
         PRELOAD_BUNDLE_DONE_FMT = "kdcube:config:bundles:preload-done:{tenant}:{project}:{bundle_id}:{generation}"
+        DEPROVISION_LOCK_FMT = "kdcube:config:bundles:deprovision-lock:{tenant}:{project}:{bundle_id}"
+        DEPROVISION_RESULT_FMT = "kdcube:config:bundles:deprovision-result:{tenant}:{project}:{bundle_id}:{operation_id}"
 
     class GATEWAY:
         NAMESPACE = "kdcube:config:gateway"

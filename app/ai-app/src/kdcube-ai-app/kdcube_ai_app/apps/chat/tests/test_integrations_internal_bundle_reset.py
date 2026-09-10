@@ -323,6 +323,134 @@ def test_internal_remove_rejects_bundle_still_in_descriptor(monkeypatch):
     assert "still present" in response.json()["detail"]
 
 
+def test_internal_deprovision_quiesces_and_runs_only_declared_target(monkeypatch):
+    app = FastAPI()
+    mount_integrations_routers(app)
+    calls: dict[str, object] = {}
+    target = BundleEntry(
+        id="remove@1-0",
+        path="/bundles/remove",
+        module="entrypoint",
+        singleton=True,
+    )
+    authority = BundlesRegistry(
+        default_bundle_id="stable@1-0",
+        bundles={
+            "remove@1-0": target,
+            "stable@1-0": BundleEntry(
+                id="stable@1-0",
+                path="/bundles/stable",
+                module="entrypoint",
+            ),
+        },
+    )
+
+    async def _load_registry(redis, tenant, project):
+        calls["authority"] = (redis, tenant, project)
+        return authority
+
+    class _Processor:
+        async def quiesce_application_runtime(self, bundle_id):
+            calls["processor"] = bundle_id
+            return {"active_tasks_drained": 2}
+
+    class _Lifecycle:
+        async def deprovision(self, entry, **kwargs):
+            calls["lifecycle_entry"] = entry
+            calls["lifecycle_kwargs"] = kwargs
+            quiesce = await kwargs["quiesce_runtime"]()
+            return {
+                "status": "ok",
+                "hook_present": True,
+                "operation_id": kwargs["operation_id"],
+                "purge_data": kwargs["purge_data"],
+                "quiesce": quiesce,
+            }
+
+    app.state.redis_async = object()
+    app.state.processor = _Processor()
+    app.state.application_lifecycle = _Lifecycle()
+    monkeypatch.setattr(integrations, "load_registry", _load_registry)
+    monkeypatch.setattr(
+        integrations,
+        "get_settings",
+        lambda: SimpleNamespace(TENANT="demo-tenant", PROJECT="demo-project"),
+    )
+    monkeypatch.setattr(integrations, "_LOCALHOST", {"testclient", "127.0.0.1", "::1"})
+
+    import kdcube_ai_app.apps.chat.sdk.runtime.local_sidecars as local_sidecars
+    import kdcube_ai_app.infra.plugin.bundle_registry as bundle_registry
+
+    monkeypatch.setattr(bundle_registry, "get_all", lambda: {"remove@1-0": target})
+    monkeypatch.setattr(
+        local_sidecars,
+        "stop_local_sidecars_for_bundle_ids",
+        lambda **kwargs: calls.setdefault("sidecars", kwargs) or 1,
+    )
+
+    response = TestClient(app).post(
+        "/internal/bundles/deprovision",
+        json={
+            "bundle_id": "remove@1-0",
+            "operation_id": "operation-a",
+            "purge_data": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["operation"] == "deprovision"
+    assert response.json()["purge_data"] is True
+    assert calls["processor"] == "remove@1-0"
+    assert calls["sidecars"]["bundle_ids"] == {"remove@1-0"}
+    assert calls["lifecycle_entry"].id == "remove@1-0"
+    assert calls["lifecycle_kwargs"]["operation_id"] == "operation-a"
+    assert set(authority.bundles) == {"remove@1-0", "stable@1-0"}
+
+
+def test_internal_deprovision_rejects_absent_and_default_bundles(monkeypatch):
+    app = FastAPI()
+    app.state.redis_async = object()
+    app.state.application_lifecycle = object()
+    mount_integrations_routers(app)
+    authority = BundlesRegistry(
+        default_bundle_id="default@1-0",
+        bundles={
+            "default@1-0": BundleEntry(
+                id="default@1-0",
+                path="/bundles/default",
+                module="entrypoint",
+            )
+        },
+    )
+
+    async def _load_registry(*args, **kwargs):
+        del args, kwargs
+        return authority
+
+    monkeypatch.setattr(integrations, "load_registry", _load_registry)
+    monkeypatch.setattr(
+        integrations,
+        "get_settings",
+        lambda: SimpleNamespace(TENANT="demo-tenant", PROJECT="demo-project"),
+    )
+    monkeypatch.setattr(integrations, "_LOCALHOST", {"testclient", "127.0.0.1", "::1"})
+    client = TestClient(app)
+
+    absent = client.post(
+        "/internal/bundles/deprovision",
+        json={"bundle_id": "absent@1-0", "operation_id": "operation-a"},
+    )
+    default = client.post(
+        "/internal/bundles/deprovision",
+        json={"bundle_id": "default@1-0", "operation_id": "operation-b"},
+    )
+
+    assert absent.status_code == 409
+    assert "before descriptor removal" in absent.json()["detail"]
+    assert default.status_code == 409
+    assert "default bundle" in default.json()["detail"]
+
+
 def test_internal_bundle_update_targets_changed_app_and_schedules_preparation(monkeypatch):
     app = FastAPI()
     mount_integrations_routers(app)

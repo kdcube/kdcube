@@ -207,6 +207,43 @@ async def test_retire_cancels_only_requested_application() -> None:
 
 
 @pytest.mark.asyncio
+async def test_quiesce_waits_for_target_preparation_exit_and_retains_readiness() -> None:
+    registry = ApplicationReadinessRegistry()
+    started = asyncio.Event()
+    cancellation_cleanup_done = asyncio.Event()
+
+    async def _prepare(item: ApplicationPreparation) -> None:
+        del item
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            await asyncio.sleep(0)
+            cancellation_cleanup_done.set()
+            raise
+
+    supervisor = ApplicationLifecycleSupervisor(
+        tenant="tenant-a",
+        project="project-a",
+        registry=registry,
+        prepare=_prepare,
+    )
+    await supervisor.reconcile({"app": _preparation("app", "generation-a")})
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    await supervisor.quiesce("app")
+
+    assert cancellation_cleanup_done.is_set()
+    assert "app" not in supervisor.task_generations()
+    assert registry.snapshot(
+        tenant="tenant-a",
+        project="project-a",
+        application_id="app",
+    ) is not None
+    await supervisor.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_shutdown_cancels_and_reaps_owned_tasks() -> None:
     registry = ApplicationReadinessRegistry()
     started = asyncio.Event()

@@ -609,12 +609,19 @@ for scriptable output.
 ```bash
 # Delete by ID from descriptors and the running runtime
 kdcube bundle delete <bundle_id>
+
+# Also permit the app hook to delete its durable app-owned data
+kdcube bundle delete <bundle_id> --purge-data
 ```
 
-Deletion retires only that bundle. Other bundles remain loaded. The current
-command retains app-owned durable data and does not yet invoke app cleanup; the
-[guarded deprovision contract](../../../docs/sdk/bundle/bundle-lifecycle-README.md#removal-deprovisioning-and-durable-data)
-defines that next lifecycle phase.
+Deletion closes the target app in the local proc, stops its scheduled and Data
+Bus intake, waits for tracked chat tasks, invokes its optional
+`on_app_deprovision(...)` hook, removes descriptor authority after success, and
+retires only that bundle. Other bundles remain loaded. Normal deletion retains
+durable app data; `--purge-data` authorizes the hook to remove data it owns.
+`--force-retire` is the explicit escape hatch after failed cleanup and reports
+that cleanup remains incomplete. See the
+[guarded deprovision contract](../../../docs/sdk/bundle/bundle-lifecycle-README.md#removal-deprovisioning-and-durable-data).
 `kdcube bundle <bundle_id> --delete` is the compatibility form of the same
 complete operation.
 

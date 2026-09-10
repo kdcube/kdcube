@@ -2159,3 +2159,51 @@ async def test_runtime_metadata_includes_active_task_activity_details(_patch_pro
         assert metadata["active_task_details"][0]["idle_age_sec"] >= 0
     finally:
         task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_quiesce_application_runtime_drains_only_target_bundle() -> None:
+    removed: list[tuple[str, str]] = []
+    target_release = asyncio.Event()
+    stable_release = asyncio.Event()
+
+    class _Manager:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def remove_bundle(self, bundle_id: str) -> None:
+            removed.append((self.name, bundle_id))
+
+    async def _wait(release: asyncio.Event) -> None:
+        await release.wait()
+
+    target_task = asyncio.create_task(_wait(target_release))
+    stable_task = asyncio.create_task(_wait(stable_release))
+    processor = SimpleNamespace(
+        _scheduler=_Manager("scheduler"),
+        _data_bus_manager=_Manager("data_bus"),
+        _active_task_details={
+            target_task: {"bundle_id": "remove@1-0"},
+            stable_task: {"bundle_id": "stable@1-0"},
+        },
+    )
+    quiesce = asyncio.create_task(
+        EnhancedChatRequestProcessor.quiesce_application_runtime(
+            processor,
+            "remove@1-0",
+        )
+    )
+    await asyncio.sleep(0)
+    assert quiesce.done() is False
+
+    target_release.set()
+    result = await asyncio.wait_for(quiesce, timeout=1)
+
+    assert result == {"active_tasks_drained": 1}
+    assert removed == [
+        ("scheduler", "remove@1-0"),
+        ("data_bus", "remove@1-0"),
+    ]
+    assert stable_task.done() is False
+    stable_release.set()
+    await asyncio.wait_for(stable_task, timeout=1)

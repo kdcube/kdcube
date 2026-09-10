@@ -4,7 +4,7 @@ title: "How To Write A Bundle"
 summary: "Authoring guide for bundle creators and integrators: bundle shape, lifecycle, decorators, runtime surfaces, bundle events, configuration and storage decisions, and how to turn a product idea or existing app into a deployable bundle."
 tags: ["sdk", "bundle", "authoring", "workflow", "widget", "api", "events", "testing"]
 keywords: ["bundle authoring guide", "bundle creator path", "bundle integrator path", "end to end bundle design", "decorator selection", "runtime surface selection", "widget api mcp cron on_job choices", "bundle events", "event sources", "artifact rehosters", "shared sdk widget components", "configuration and storage decisions", "bundle lifecycle design", "reference authoring patterns"]
-updated_at: 2026-08-25
+updated_at: 2026-09-10
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/what-i-should-know-about-app-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
@@ -343,6 +343,8 @@ Builder rule:
 Practical hook rule:
 
 - `on_bundle_load(...)` = one-time per process per tenant/project setup
+- `on_app_deprovision(...)` = idempotent app-owned cleanup during explicit
+  deletion; durable data may be deleted only when `purge_data=True`
 - `on_props_changed(...)` = reconcile long-lived state after effective prop change
 - `pre_run_hook(...)` = request-time validation or lazy reconcile before
   execution — **call `super()` FIRST**: the base hook starts the turn's event

@@ -10,8 +10,10 @@ import pytest
 from kdcube_ai_app.apps.chat.proc.app_lifecycle import runtime
 from kdcube_ai_app.apps.chat.proc.app_lifecycle.runtime import ProcApplicationLifecycle
 from kdcube_ai_app.infra.plugin.app_readiness import (
+    ApplicationLifecycleState,
     ApplicationReadinessMode,
     ApplicationReadinessRegistry,
+    DesiredApplicationState,
 )
 from kdcube_ai_app.infra.plugin.bundle_store import BundleEntry, BundlesRegistry
 
@@ -183,3 +185,137 @@ async def test_explicit_retry_reprepares_only_the_selected_application(
 
     assert calls == ["app@1-0", "app@1-0"]
     await lifecycle.shutdown()
+
+
+def _ready_deprovision_registry() -> ApplicationReadinessRegistry:
+    registry = ApplicationReadinessRegistry()
+    registry.replace_desired(
+        tenant="tenant-a",
+        project="project-a",
+        applications={
+            "remove@1-0": DesiredApplicationState(generation="remove-generation"),
+            "stable@1-0": DesiredApplicationState(generation="stable-generation"),
+        },
+    )
+    for application_id, generation in (
+        ("remove@1-0", "remove-generation"),
+        ("stable@1-0", "stable-generation"),
+    ):
+        assert registry.transition(
+            tenant="tenant-a",
+            project="project-a",
+            application_id=application_id,
+            generation=generation,
+            state=ApplicationLifecycleState.READY,
+        )
+    return registry
+
+
+@pytest.mark.asyncio
+async def test_deprovision_closes_admission_before_quiesce_and_runs_target_hook(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "remove"
+    source.mkdir()
+    registry = _ready_deprovision_registry()
+    lifecycle = _lifecycle(registry)
+    calls: list[str] = []
+
+    async def _load(*args, **kwargs):
+        del args, kwargs
+        calls.append("load")
+        return object(), object()
+
+    async def _deprovision(**kwargs):
+        assert kwargs["operation_id"] == "operation-a"
+        assert kwargs["purge_data"] is True
+        calls.append("hook")
+        return {"status": "ok", "hook_present": True}
+
+    async def _quiesce():
+        target = registry.snapshot(
+            tenant="tenant-a",
+            project="project-a",
+            application_id="remove@1-0",
+        )
+        sibling = registry.snapshot(
+            tenant="tenant-a",
+            project="project-a",
+            application_id="stable@1-0",
+        )
+        assert target is not None
+        assert target.state is ApplicationLifecycleState.DEPROVISIONING
+        assert sibling is not None and sibling.ready
+        calls.append("quiesce")
+        return {"active_tasks_drained": 1}
+
+    monkeypatch.setattr(runtime, "load_bundle_for_deprovision_async", _load)
+    monkeypatch.setattr(runtime, "deprovision_loaded_bundle_app_resources", _deprovision)
+
+    result = await lifecycle.deprovision(
+        BundleEntry(
+            id="remove@1-0",
+            path=str(source),
+            module="entrypoint",
+            singleton=True,
+        ),
+        operation_id="operation-a",
+        purge_data=True,
+        quiesce_runtime=_quiesce,
+    )
+
+    assert calls == ["quiesce", "load", "hook"]
+    assert result["quiesce"] == {"active_tasks_drained": 1}
+    assert registry.snapshot(
+        tenant="tenant-a",
+        project="project-a",
+        application_id="stable@1-0",
+    ).ready
+
+
+@pytest.mark.asyncio
+async def test_deprovision_failure_remains_closed_and_records_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "remove"
+    source.mkdir()
+    registry = _ready_deprovision_registry()
+    lifecycle = _lifecycle(registry)
+
+    async def _load(*args, **kwargs):
+        del args, kwargs
+        return object(), object()
+
+    async def _deprovision(**kwargs):
+        del kwargs
+        raise RuntimeError("cleanup failed")
+
+    monkeypatch.setattr(runtime, "load_bundle_for_deprovision_async", _load)
+    monkeypatch.setattr(runtime, "deprovision_loaded_bundle_app_resources", _deprovision)
+
+    with pytest.raises(RuntimeError, match="cleanup failed"):
+        await lifecycle.deprovision(
+            BundleEntry(
+                id="remove@1-0",
+                path=str(source),
+                module="entrypoint",
+            ),
+            operation_id="operation-failed",
+            purge_data=False,
+        )
+
+    failed = registry.snapshot(
+        tenant="tenant-a",
+        project="project-a",
+        application_id="remove@1-0",
+    )
+    assert failed is not None
+    assert failed.state is ApplicationLifecycleState.DEPROVISION_FAILED
+    assert failed.public_unavailable_payload()["retryable"] is False
+    assert registry.snapshot(
+        tenant="tenant-a",
+        project="project-a",
+        application_id="stable@1-0",
+    ).ready

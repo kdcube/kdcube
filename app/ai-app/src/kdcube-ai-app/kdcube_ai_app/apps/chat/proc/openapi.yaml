@@ -1452,6 +1452,31 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /internal/bundles/deprovision:
+    post:
+      tags:
+      - Integrations Internal
+      summary: Internal Deprovision Bundle
+      description: Run one declared bundle's guarded app-owned cleanup before removal.
+      operationId: internal_deprovision_bundle_internal_bundles_deprovision_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BundleDeprovisionRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
 components:
   schemas:
     AdminBundlesUpdateRequest:
@@ -1578,6 +1603,33 @@ components:
       required:
       - bundle_id
       title: BundleRemoveRequest
+    BundleDeprovisionRequest:
+      properties:
+        tenant:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Tenant
+        project:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project
+        bundle_id:
+          type: string
+          title: Bundle Id
+        operation_id:
+          type: string
+          title: Operation Id
+        purge_data:
+          type: boolean
+          title: Purge Data
+          default: false
+      type: object
+      required:
+      - bundle_id
+      - operation_id
+      title: BundleDeprovisionRequest
     BundleSecretsUpdateRequest:
       properties:
         tenant:
