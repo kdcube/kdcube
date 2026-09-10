@@ -634,6 +634,9 @@ async def get_profile(session: UserSession = Depends(get_user_session_dependency
             "user_type": user_type.upper(),
             "username": session.username,
             "user_id": session.user_id,
+            # The address a person recognises themselves by; a site header
+            # shows it instead of the subject id when it is known.
+            "email": session.email,
             "roles": session.roles,
             "permissions": session.permissions,
             "session_id": session.session_id,
