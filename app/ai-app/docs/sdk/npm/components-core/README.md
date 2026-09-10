@@ -36,6 +36,7 @@ interoperate.
 ## Documents
 
 - [Scene](./scene-README.md)
+- [Session](./session-README.md): the browser side of one server-held platform session (probe, sign-in redirect, sign-out, `kdcube-auth-changed`).
 - [Canvas pin board](./canvas-pin-board-README.md)
 - [Component events](./events-README.md)
 - [Context drag and canvas ingress](./context-drag-README.md)

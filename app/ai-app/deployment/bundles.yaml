@@ -2636,6 +2636,10 @@ bundles:
           connections_settings:
             enabled: true
             src_folder: ui/widgets/connections
+            shared_sources:
+              components_core_session:
+                src_folder: npm://components-core/src/session
+                target: _shared/components-core/session
             build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
         # Standalone Connection Hub site: /sites/connections/ on this runtime.
         # Add the public ngrok hostname to `hosts` to also serve it at `/` of

@@ -25,6 +25,10 @@
       "types": "./dist/scene/index.d.ts",
       "import": "./dist/scene/index.js"
     },
+    "./session": {
+      "types": "./dist/session/index.d.ts",
+      "import": "./dist/session/index.js"
+    },
     "./canvas": {
       "types": "./dist/canvas/index.d.ts",
       "import": "./dist/canvas/index.js"
@@ -40,6 +44,7 @@
     "test": "npm run build && node --test tests/*.test.mjs",
     "test:chat": "npm run build && node --test tests/chat-accounting-scope.test.mjs",
     "test:events": "npm run build && node --test tests/events-client.test.mjs",
+    "test:session": "npm run build && node --test tests/session.test.mjs",
     "test:scene": "npm run build && node --test tests/scene-runtime.test.mjs tests/scene-subscriptions.test.mjs tests/scene-event-bus.test.mjs tests/scene-host-drag.test.mjs tests/scene-drop-targets.test.mjs",
     "typecheck": "tsc --noEmit"
   },

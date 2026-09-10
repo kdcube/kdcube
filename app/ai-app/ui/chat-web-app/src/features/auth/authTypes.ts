@@ -11,6 +11,11 @@ export interface NoAuthConfig extends AuthConfig {
 export interface BundleSessionAuthConfig extends AuthConfig {
     authType: "bundle";
     loginUrl?: string;
+    /** Server logout; default /api/platform/logout. Answers upstreamLogoutUrl on the platform-hosted lane. */
+    logoutUrl?: string;
+    profileUrl?: string;
+    /** "platform" when the platform hosts the sign-in itself. */
+    sessionLane?: string;
     connectionHub?: {
         bundleId?: string;
         authorityId?: string;

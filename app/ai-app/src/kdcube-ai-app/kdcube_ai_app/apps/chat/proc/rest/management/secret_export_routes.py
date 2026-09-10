@@ -43,6 +43,7 @@ from kdcube_ai_app.apps.chat.proc.rest.management.secret_runtime import (
     ManagementSecretsProviderUnavailable,
 )
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
+from kdcube_ai_app.auth.bundle.browser_session import sign_in_bounce_path
 
 router = APIRouter()
 LOGGER = logging.getLogger("kdcube.management.secret_export")
@@ -390,7 +391,7 @@ async def authorize_secret_export(
     except HumanApprovalError as exc:
         if exc.status_code == 401:
             next_url = quote(_browser_return_to(request), safe="")
-            return RedirectResponse(f"/signin/?next={next_url}", status_code=302)
+            return RedirectResponse(f"{sign_in_bounce_path()}?next={next_url}", status_code=302)
         return _html_error(exc.code, status_code=exc.status_code)
     except SecretExportError as exc:
         return _html_error(exc.code, status_code=exc.status_code)

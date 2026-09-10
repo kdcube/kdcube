@@ -6,6 +6,7 @@ export default defineConfig({
     'chat/index': 'src/chat/index.ts',
     'events/index': 'src/events/index.ts',
     'scene/index': 'src/scene/index.ts',
+    'session/index': 'src/session/index.ts',
     'canvas/index': 'src/canvas/index.ts',
     'apps-config/index': 'src/apps-config/index.ts',
   },

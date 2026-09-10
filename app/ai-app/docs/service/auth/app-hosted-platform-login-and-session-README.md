@@ -253,6 +253,17 @@ The proxy route matrix carries `/api/platform/` to the chat ingress
 (`deployment/nginx/generate_application_site_routes.py`); without it the
 callback would land on the application-site fallback as a 200 HTML page.
 
+### Testing the lane
+
+`kdcube_ai_app/apps/chat/ingress/tests/test_platform_session_end_to_end.py`
+walks the whole sign-in against a mock OIDC issuer it serves itself: the
+router, discovery, PKCE, the confidential client's secret, ID-token
+verification through the issuer's JWKS, the session record, the gateway
+validation, replay and foreign-browser refusals, logout. No Cognito, no
+Redis, no proxy. Against a real deployment: select the provider, register
+the callback URL on the app client, open `/api/platform/session/status`,
+then sign in and ask `/profile`.
+
 ### What the browser sees
 
 `/api/cp-frontend-config` on this lane answers `auth.authType: "bundle"`,
@@ -262,6 +273,14 @@ callback would land on the application-site fallback as a 200 HTML page.
 in by navigating to `loginUrl` with its own `next`, and asks `profileUrl`
 whether it is signed in. Sign-out in one tab signs out all: there is one
 cookie.
+
+`@kdcube/components-core/session` is that contract as code for site shells,
+widgets and application pages, with React bindings in
+`@kdcube/components-react/session`:
+[Session](../../sdk/npm/components-core/session-README.md). Signed-out browser
+navigations to protected widget and management routes bounce to
+`/api/platform/session/login` on this lane, and to the application site's
+`/signin/` page otherwise (`sign_in_bounce_path`).
 
 ### Sliding renewal
 

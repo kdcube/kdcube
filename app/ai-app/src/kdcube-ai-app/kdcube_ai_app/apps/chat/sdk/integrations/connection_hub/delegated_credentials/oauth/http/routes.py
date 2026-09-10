@@ -95,6 +95,7 @@ from connection_hub.authority_registry_config import (
     resolve_authority_provider_instance,
 )
 from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import call_bundle_operation
+from kdcube_ai_app.auth.bundle.browser_session import sign_in_bounce_path
 from connection_hub.authority_inventory import (
     AuthorityGrantInventory,
     PlatformAuthorityInventoryProvider,
@@ -977,7 +978,7 @@ async def authorize(request: Request) -> Response:
         # return their JSON payload.
         if getattr(denied, "status_code", None) == 401:
             return_to = _return_to(request)
-            return RedirectResponse(f"/signin/?next={quote(return_to, safe='')}", status_code=302)
+            return RedirectResponse(f"{sign_in_bounce_path()}?next={quote(return_to, safe='')}", status_code=302)
         return denied
 
     subject = _user_subject(user or {})
@@ -1548,7 +1549,7 @@ async def oauth_logout(request: Request) -> Response:
     if not next_url.startswith("/") or next_url.startswith("//"):
         next_url = "/"
 
-    response = RedirectResponse(f"/signin/?next={quote(next_url, safe='')}", status_code=302)
+    response = RedirectResponse(f"{sign_in_bounce_path()}?next={quote(next_url, safe='')}", status_code=302)
     auth_cfg = get_settings().AUTH
     cookie_names = {
         oauth_delegated_config(request).auth_cookie_name,

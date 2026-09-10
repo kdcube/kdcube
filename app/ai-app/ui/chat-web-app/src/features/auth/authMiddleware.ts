@@ -184,6 +184,35 @@ export const authMiddleware = (): Middleware => {
             window.location.assign(url.toString());
         }
 
+        // The session cookie is HttpOnly: only the server can end it. Post the
+        // logout, then, when the platform hosts the sign-in, continue to the
+        // identity provider's sign-out so it forgets the browser too.
+        const endBundleSession = async () => {
+            const cfg = selectAuthConfig(store.getState()) as BundleSessionAuthConfig;
+            const logoutUrl = new URL(String(cfg.logoutUrl || "").trim() || "/api/platform/logout", window.location.origin);
+            logoutUrl.searchParams.set("next", selectChatPath(store.getState()) || "/");
+            let upstreamLogoutUrl = "";
+            try {
+                const response = await fetch(logoutUrl.toString(), {
+                    method: "POST",
+                    credentials: "include",
+                    cache: "no-store",
+                    headers: {Accept: "application/json"},
+                });
+                if (response.ok) {
+                    const body = await response.json().catch(() => null);
+                    upstreamLogoutUrl = String(body?.upstreamLogoutUrl || "").trim();
+                }
+            } catch (error) {
+                console.warn("Platform logout request failed", error);
+            }
+            removeCookies();
+            store.dispatch(setLoggedOut());
+            if (upstreamLogoutUrl) {
+                window.location.assign(upstreamLogoutUrl);
+            }
+        }
+
         const verifyBundleSession = async () => {
             store.dispatch(startLoading());
             try {
@@ -260,8 +289,7 @@ export const authMiddleware = (): Middleware => {
                         if ((action as UnknownAction).type === LOG_IN || (action as UnknownAction).type === LOG_IN_CALLBACK) {
                             void redirectToBundleLogin(payload?.navigateTo);
                         } else {
-                            removeCookies();
-                            store.dispatch(setLoggedOut());
+                            void endBundleSession();
                         }
                         return;
                     }

@@ -31,6 +31,7 @@ from kdcube_ai_app.apps.chat.proc.rest.management.human_approval_webauthn import
     registration_options,
     start_enrollment,
 )
+from kdcube_ai_app.auth.bundle.browser_session import sign_in_bounce_path
 
 router = APIRouter(prefix="/human-approval")
 
@@ -91,7 +92,7 @@ def _sign_in_redirect(request: Request) -> RedirectResponse:
     if request.url.query:
         return_to = f"{return_to}?{request.url.query}"
     return RedirectResponse(
-        f"/signin/?next={quote(return_to, safe='')}",
+        f"{sign_in_bounce_path()}?next={quote(return_to, safe='')}",
         status_code=302,
         headers=_HEADERS,
     )

@@ -25,6 +25,10 @@
       "types": "./dist/scene/index.d.ts",
       "import": "./dist/scene/index.js"
     },
+    "./session": {
+      "types": "./dist/session/index.d.ts",
+      "import": "./dist/session/index.js"
+    },
     "./apps-config": {
       "types": "./dist/apps-config/index.d.ts",
       "import": "./dist/apps-config/index.js"

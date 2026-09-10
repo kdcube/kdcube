@@ -29,11 +29,13 @@ def _is_top_level_html_navigation(request: Request) -> bool:
 
 
 def _sign_in_redirect(request: Request) -> RedirectResponse:
+    from kdcube_ai_app.auth.bundle.browser_session import sign_in_bounce_path
+
     return_to = request.url.path
     if request.url.query:
         return_to = f"{return_to}?{request.url.query}"
     return RedirectResponse(
-        url=f"/signin/?next={quote(return_to, safe='')}",
+        url=f"{sign_in_bounce_path()}?next={quote(return_to, safe='')}",
         status_code=302,
         headers={
             "Cache-Control": "no-store",

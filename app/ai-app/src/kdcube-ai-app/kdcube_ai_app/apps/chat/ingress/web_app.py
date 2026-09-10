@@ -673,8 +673,12 @@ async def platform_logout(request: Request):
 
             flow = await platform_browser_session_flow(origin=public_origin(request))
             if flow is not None:
+                next_raw = request.query_params.get("next")
+                if not next_raw and "application/x-www-form-urlencoded" in (request.headers.get("content-type") or ""):
+                    form = await request.form()
+                    next_raw = form.get("next")
                 origin = public_origin(request)
-                back_to = f"{origin}{safe_next_path(request.query_params.get('next'))}"
+                back_to = f"{origin}{safe_next_path(next_raw)}"
                 upstream_logout_url = flow.upstream.logout_url(post_logout_redirect=back_to)
         except Exception:
             logger.debug("Upstream logout URL unavailable", exc_info=True)

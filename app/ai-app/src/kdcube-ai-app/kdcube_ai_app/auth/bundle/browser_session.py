@@ -346,6 +346,20 @@ def browser_session_config(settings: Any | None = None) -> BrowserSessionConfig 
     )
 
 
+SITE_SIGN_IN_PATH = "/signin/"
+
+
+def sign_in_bounce_path(settings: Any | None = None) -> str:
+    """Where a signed-out browser navigation is sent to sign in: the
+    platform's own login route when this deployment hosts the sign-in, else
+    the application site's sign-in page. One constant, decided here."""
+    try:
+        configured = browser_session_config(settings) is not None
+    except Exception:  # noqa: BLE001 - no settings, no lane
+        configured = False
+    return LOGIN_ROUTE if configured else SITE_SIGN_IN_PATH
+
+
 def sliding_policy(settings: Any | None = None) -> SessionPolicy | None:
     """The sliding policy for request-time validation, or ``None`` when the
     lane is not configured (sessions then keep their fixed expiry)."""
@@ -482,6 +496,7 @@ __all__ = [
     "grants_resolver",
     "platform_browser_session_flow",
     "public_origin",
+    "sign_in_bounce_path",
     "sliding_policy",
     "upstream_is_oidc",
 ]
