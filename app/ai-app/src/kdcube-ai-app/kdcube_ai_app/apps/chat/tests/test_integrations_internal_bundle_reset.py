@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 from fastapi import FastAPI
@@ -167,6 +168,159 @@ def test_internal_reload_authority_evicts_requested_bundle_scope(monkeypatch):
         "drop_sys_modules": True,
     }
     assert "cleared" not in calls
+
+
+def test_internal_remove_retires_only_descriptor_absent_bundle(monkeypatch):
+    app = FastAPI()
+    mount_integrations_routers(app)
+    calls: dict[str, object] = {}
+    current = _Registry(
+        default_bundle_id="stable@1-0",
+        bundles={
+            "stable@1-0": _Entry(
+                {
+                    "id": "stable@1-0",
+                    "path": "/bundles/stable",
+                    "module": "entrypoint",
+                }
+            )
+        },
+    )
+
+    class _Redis:
+        async def publish(self, channel, payload):
+            calls["publish"] = (channel, payload)
+            return 2
+
+    class _Lifecycle:
+        async def retire(self, bundle_id, registry):
+            calls["lifecycle"] = (bundle_id, registry)
+
+    async def fake_sync_removal(redis, *, tenant, project, bundle_id):
+        calls["sync_registry_cache"] = (redis, tenant, project, bundle_id)
+        return current
+
+    async def fake_set_registry(registry, default_bundle_id, **kwargs):
+        calls["set_registry"] = (registry, default_bundle_id, kwargs)
+
+    def fake_get_all():
+        return {
+            "removed@1-0": {
+                "id": "removed@1-0",
+                "path": "/bundles/removed",
+                "module": "entrypoint",
+                "singleton": False,
+            },
+            "stable@1-0": {
+                "id": "stable@1-0",
+                "path": "/bundles/stable",
+                "module": "entrypoint",
+                "singleton": False,
+            },
+        }
+
+    def fake_evict(spec, *, drop_sys_modules=True):
+        calls["evicted"] = (spec.id, spec.path, drop_sys_modules)
+        return {"evicted_modules": 1}
+
+    def fake_invalidate_static(**kwargs):
+        calls["invalidated_static"] = kwargs
+        return 1
+
+    def fake_stop_sidecars(**kwargs):
+        calls["stopped_sidecars"] = kwargs
+        return 1
+
+    async def fake_invalidate_deployed(**kwargs):
+        calls["invalidated_deployed"] = kwargs
+
+    app.state.redis_async = _Redis()
+    app.state.application_lifecycle = _Lifecycle()
+    monkeypatch.setattr(
+        integrations,
+        "get_settings",
+        lambda: SimpleNamespace(TENANT="demo-tenant", PROJECT="demo-project"),
+    )
+    monkeypatch.setattr(integrations, "_LOCALHOST", {"testclient", "127.0.0.1", "::1"})
+    monkeypatch.setattr(
+        integrations,
+        "describe_authoritative_bundle_store",
+        lambda tenant, project: {"kind": "bundles-yaml"},
+    )
+    monkeypatch.setattr(integrations, "_invalidate_deployed_widget_manifests", fake_invalidate_deployed)
+
+    import kdcube_ai_app.apps.chat.sdk.runtime.local_sidecars as local_sidecars
+    import kdcube_ai_app.infra.plugin.bundle_loader as bundle_loader
+    import kdcube_ai_app.infra.plugin.bundle_registry as bundle_registry
+    import kdcube_ai_app.infra.plugin.bundle_store as bundle_store
+
+    monkeypatch.setattr(bundle_store, "sync_registry_after_bundle_removal", fake_sync_removal)
+    monkeypatch.setattr(bundle_registry, "get_all", fake_get_all)
+    monkeypatch.setattr(bundle_registry, "set_registry_async", fake_set_registry)
+    monkeypatch.setattr(bundle_loader, "evict_bundle_scope", fake_evict)
+    monkeypatch.setattr(bundle_loader, "invalidate_static_bundle_entrypoint_loads", fake_invalidate_static)
+    monkeypatch.setattr(local_sidecars, "stop_local_sidecars_for_bundle_ids", fake_stop_sidecars)
+
+    response = TestClient(app).post(
+        "/internal/bundles/remove",
+        json={"bundle_id": "removed@1-0"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["changed_bundle_ids"] == ["removed@1-0"]
+    assert calls["sync_registry_cache"][1:] == (
+        "demo-tenant",
+        "demo-project",
+        "removed@1-0",
+    )
+    assert calls["set_registry"][0] == {
+        "stable@1-0": {
+            "id": "stable@1-0",
+            "path": "/bundles/stable",
+            "module": "entrypoint",
+        }
+    }
+    assert calls["set_registry"][2] == {
+        "resolve_git": False,
+        "source": "admin.remove-authority",
+    }
+    assert calls["evicted"] == ("removed@1-0", "/bundles/removed", True)
+    assert calls["stopped_sidecars"]["bundle_ids"] == {"removed@1-0"}
+    retired_id, lifecycle_registry = calls["lifecycle"]
+    assert retired_id == "removed@1-0"
+    assert set(lifecycle_registry.bundles) == {"stable@1-0"}
+    event = json.loads(calls["publish"][1])
+    assert event["op"] == "remove"
+    assert event["changed_bundle_ids"] == ["removed@1-0"]
+    assert event["bundles"] == {}
+
+
+def test_internal_remove_rejects_bundle_still_in_descriptor(monkeypatch):
+    app = FastAPI()
+    app.state.redis_async = object()
+    mount_integrations_routers(app)
+    monkeypatch.setattr(
+        integrations,
+        "get_settings",
+        lambda: SimpleNamespace(TENANT="demo-tenant", PROJECT="demo-project"),
+    )
+    monkeypatch.setattr(integrations, "_LOCALHOST", {"testclient", "127.0.0.1", "::1"})
+
+    import kdcube_ai_app.infra.plugin.bundle_store as bundle_store
+
+    async def fake_sync_removal(redis, *, tenant, project, bundle_id):
+        del redis, tenant, project
+        raise bundle_store.BundleStillDeclaredError(bundle_id)
+
+    monkeypatch.setattr(bundle_store, "sync_registry_after_bundle_removal", fake_sync_removal)
+
+    response = TestClient(app).post(
+        "/internal/bundles/remove",
+        json={"bundle_id": "still-here@1-0"},
+    )
+
+    assert response.status_code == 409
+    assert "still present" in response.json()["detail"]
 
 
 def test_internal_bundle_update_targets_changed_app_and_schedules_preparation(monkeypatch):

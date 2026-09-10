@@ -249,6 +249,12 @@ class ProcApplicationLifecycle:
                 force={str(value).strip() for value in (force or ()) if str(value).strip()},
             )
 
+    async def retire(self, application_id: str, registry: BundlesRegistry) -> None:
+        """Retire one application while retaining all sibling lifecycle tasks."""
+        async with self._reconcile_lock:
+            self._last_registry = registry
+            await self.supervisor.retire(application_id)
+
     async def retry(self, application_id: str) -> None:
         if self._last_registry is None:
             raise RuntimeError("Application lifecycle has not received a registry snapshot")

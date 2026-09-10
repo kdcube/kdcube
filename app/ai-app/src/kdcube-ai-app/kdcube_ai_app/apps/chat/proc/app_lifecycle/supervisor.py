@@ -159,6 +159,24 @@ class ApplicationLifecycleSupervisor:
                     lambda completed, app_id=application_id: self._task_done(app_id, completed)
                 )
 
+    async def retire(self, application_id: str) -> None:
+        """Cancel and forget one application while retaining sibling tasks."""
+        normalized_id = str(application_id or "").strip()
+        if not normalized_id:
+            raise ValueError("application_id is required")
+        self.registry.remove_application(
+            tenant=self.tenant,
+            project=self.project,
+            application_id=normalized_id,
+        )
+        async with self._lock:
+            owned = self._tasks.pop(normalized_id, None)
+            if owned is None or owned.task.done():
+                return
+            owned.task.cancel()
+            self._retired_tasks.add(owned.task)
+            owned.task.add_done_callback(self._retired_task_done)
+
     async def _run_preparation(self, preparation: ApplicationPreparation) -> None:
         attempt = 0
         delay = self._retry_initial_seconds

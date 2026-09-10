@@ -2069,6 +2069,39 @@ async def load_registry_from_authority_readonly(
     reg = _ensure_admin_bundle(reg)
     return reg
 
+
+class BundleStillDeclaredError(ValueError):
+    """Raised when runtime retirement targets a descriptor-owned bundle."""
+
+
+async def sync_registry_after_bundle_removal(
+    redis,
+    *,
+    tenant: str,
+    project: str,
+    bundle_id: str,
+) -> BundlesRegistry:
+    """Cache one authoritative removal while retaining sibling property keys."""
+    normalized_id = str(bundle_id or "").strip()
+    if not normalized_id:
+        raise ValueError("bundle_id is required")
+    reg = await load_registry_from_authority_readonly(tenant, project)
+    if reg is None:
+        raise ValueError("No authoritative bundle descriptor is configured")
+    if normalized_id in (reg.bundles or {}):
+        raise BundleStillDeclaredError(
+            f"Bundle '{normalized_id}' remains present in descriptor authority"
+        )
+    await redis.set(redis_key(tenant, project), reg.model_dump_json())
+    await redis.delete(
+        _props_key(
+            tenant=tenant,
+            project=project,
+            bundle_id=normalized_id,
+        )
+    )
+    return reg
+
 async def save_registry(
     redis,
     reg: BundlesRegistry,

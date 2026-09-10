@@ -761,6 +761,24 @@ class BundleSchedulerManager:
             )
             self._tasks[key] = (task, schedule_signature)
 
+    async def remove_bundle(self, bundle_id: str) -> None:
+        """Cancel one bundle's scheduled jobs and retain all other jobs."""
+        normalized_id = str(bundle_id or "").strip()
+        removed_tasks: list[asyncio.Task] = []
+        for key in list(self._tasks):
+            if key.bundle_id != normalized_id:
+                continue
+            task, _schedule = self._tasks.pop(key)
+            task.cancel()
+            removed_tasks.append(task)
+            _log.info(
+                "[scheduler] Cancelling job for removed bundle: bundle=%s alias=%s",
+                key.bundle_id,
+                key.job_alias,
+            )
+        if removed_tasks:
+            await asyncio.gather(*removed_tasks, return_exceptions=True)
+
     async def shutdown(self) -> None:
         """Cancel all running job tasks and wait for them to finish."""
         _log.info("[scheduler] Shutting down — cancelling %d job(s)", len(self._tasks))

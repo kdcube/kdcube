@@ -296,6 +296,16 @@ class ApplicationReadinessRegistry:
         with self._lock:
             return self._scope_snapshots_locked(self._scope(tenant, project))
 
+    def remove_application(
+        self,
+        *,
+        tenant: str,
+        project: str,
+        application_id: str,
+    ) -> None:
+        with self._lock:
+            self._records.pop(self._key(tenant, project, application_id), None)
+
     def _scope_snapshots_locked(
         self,
         scope: tuple[str, str],

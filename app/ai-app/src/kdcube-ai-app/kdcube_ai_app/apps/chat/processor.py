@@ -2105,7 +2105,12 @@ class EnhancedChatRequestProcessor:
                     exc_info=True,
                 )
 
-        async def _catch_up_runtime_snapshot(reason: str, changed_bundle_ids: Optional[set[str]] = None) -> None:
+        async def _catch_up_runtime_snapshot(
+            reason: str,
+            changed_bundle_ids: Optional[set[str]] = None,
+            removed_bundle_ids: Optional[set[str]] = None,
+        ) -> None:
+            previous_bundles = get_all()
             current = await store_load(self.redis, tenant, project)
             await set_registry_async(
                 {bid: be.model_dump() for bid, be in (current.bundles or {}).items()},
@@ -2138,6 +2143,9 @@ class EnhancedChatRequestProcessor:
             normalized_changed_bundle_ids = sorted(
                 str(bid).strip() for bid in (changed_bundle_ids or set()) if str(bid).strip()
             )
+            normalized_removed_bundle_ids = sorted(
+                str(bid).strip() for bid in (removed_bundle_ids or set()) if str(bid).strip()
+            )
             logger.info(
                 "Bundle runtime catch-up started: reason=%s tenant=%s project=%s pid=%s changed_bundles=%s",
                 reason,
@@ -2149,7 +2157,7 @@ class EnhancedChatRequestProcessor:
             evictions: dict[str, dict[str, int]] = {}
             if normalized_changed_bundle_ids:
                 for bundle_id in normalized_changed_bundle_ids:
-                    entry = (current.bundles or {}).get(bundle_id)
+                    entry = (current.bundles or {}).get(bundle_id) or previous_bundles.get(bundle_id)
                     if entry is None:
                         logger.warning(
                             "Bundle runtime catch-up skipped missing changed bundle: reason=%s tenant=%s project=%s pid=%s bundle=%s",
@@ -2161,11 +2169,18 @@ class EnhancedChatRequestProcessor:
                         )
                         continue
                     try:
+                        path = entry.path if hasattr(entry, "path") else entry.get("path", "")
+                        module = entry.module if hasattr(entry, "module") else entry.get("module")
+                        singleton = (
+                            entry.singleton
+                            if hasattr(entry, "singleton")
+                            else entry.get("singleton", False)
+                        )
                         spec = BundleSpec(
                             id=bundle_id,
-                            path=entry.path,
-                            module=entry.module,
-                            singleton=bool(getattr(entry, "singleton", False)),
+                            path=path,
+                            module=module,
+                            singleton=bool(singleton),
                         )
                         evictions[bundle_id] = evict_bundle_scope(spec, drop_sys_modules=True)
                         invalidate_static_bundle_entrypoint_loads(
@@ -2219,34 +2234,47 @@ class EnhancedChatRequestProcessor:
                         )
                 except Exception:
                     logger.warning("Failed to stop local sidecars after bundle runtime catch-up", exc_info=True)
-            try:
-                from kdcube_ai_app.apps.chat.sdk.runtime.local_sidecars import stop_inactive_local_sidecars
+            if not normalized_removed_bundle_ids:
+                try:
+                    from kdcube_ai_app.apps.chat.sdk.runtime.local_sidecars import stop_inactive_local_sidecars
 
-                stopped_sidecars = stop_inactive_local_sidecars(
-                    active_bundle_ids={str(bid).strip() for bid in (current.bundles or {}).keys() if str(bid).strip()},
-                    tenant=tenant,
-                    project=project,
-                    terminate_timeout_sec=2.0,
-                    kill_timeout_sec=1.0,
-                )
-                if stopped_sidecars:
-                    logger.info(
-                        "Stopped inactive local sidecars after bundle runtime catch-up: tenant=%s project=%s count=%s",
-                        tenant,
-                        project,
-                        stopped_sidecars,
+                    stopped_sidecars = stop_inactive_local_sidecars(
+                        active_bundle_ids={str(bid).strip() for bid in (current.bundles or {}).keys() if str(bid).strip()},
+                        tenant=tenant,
+                        project=project,
+                        terminate_timeout_sec=2.0,
+                        kill_timeout_sec=1.0,
                     )
-            except Exception:
-                logger.warning("Failed to stop inactive local sidecars after bundle runtime catch-up", exc_info=True)
+                    if stopped_sidecars:
+                        logger.info(
+                            "Stopped inactive local sidecars after bundle runtime catch-up: tenant=%s project=%s count=%s",
+                            tenant,
+                            project,
+                            stopped_sidecars,
+                        )
+                except Exception:
+                    logger.warning("Failed to stop inactive local sidecars after bundle runtime catch-up", exc_info=True)
             if self._application_lifecycle is not None:
-                await self._application_lifecycle.reconcile(
-                    current,
-                    force=set(normalized_changed_bundle_ids),
-                )
+                if normalized_removed_bundle_ids:
+                    for bundle_id in normalized_removed_bundle_ids:
+                        await self._application_lifecycle.retire(bundle_id, current)
+                else:
+                    await self._application_lifecycle.reconcile(
+                        current,
+                        force=set(normalized_changed_bundle_ids),
+                    )
             if self._scheduler is not None:
-                await self._scheduler.reconcile(current)
+                if normalized_removed_bundle_ids:
+                    for bundle_id in normalized_removed_bundle_ids:
+                        await self._scheduler.remove_bundle(bundle_id)
+                else:
+                    await self._scheduler.reconcile(current)
             if self._data_bus_manager is not None:
-                await self._data_bus_manager.reconcile(current)
+                if normalized_removed_bundle_ids:
+                    for bundle_id in normalized_removed_bundle_ids:
+                        await self._data_bus_manager.remove_bundle(bundle_id)
+                else:
+                    await self._data_bus_manager.reconcile(current)
             logger.info(
                 "Bundle runtime catch-up complete: reason=%s tenant=%s project=%s pid=%s bundles=%s default=%s changed_bundles=%s evicted_bundles=%s",
                 reason,
@@ -2379,7 +2407,16 @@ class EnhancedChatRequestProcessor:
                                 bundle_id=bundle_id,
                             )
                         try:
-                            await _catch_up_runtime_snapshot("bundles.update", changed_bundle_ids=changed_bundle_ids)
+                            removed_bundle_ids = (
+                                set(changed_bundle_ids)
+                                if str(evt.get("op") or "").strip().lower() == "remove"
+                                else set()
+                            )
+                            await _catch_up_runtime_snapshot(
+                                "bundles.update",
+                                changed_bundle_ids=changed_bundle_ids,
+                                removed_bundle_ids=removed_bundle_ids,
+                            )
                         except Exception:
                             logger.warning("Bundle runtime catch-up failed after bundles.update", exc_info=True)
                         continue

@@ -633,6 +633,218 @@ def test_bundle_apply_command_quotes_values_with_spaces(tmp_path: Path):
     )
 
 
+def test_delete_bundle_by_id_removes_descriptors_and_targets_one_runtime_bundle(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    workdir = tmp_path / "demo__project"
+    config_dir = workdir / "config"
+    config_dir.mkdir(parents=True)
+    bundles_path = config_dir / "bundles.yaml"
+    bundles_path.write_text(
+        yaml.safe_dump(
+            {
+                "bundles": {
+                    "default_bundle_id": "stable@1-0",
+                    "items": [
+                        {"id": "remove@1-0", "path": "/bundles/remove", "module": "entrypoint"},
+                        {"id": "stable@1-0", "path": "/bundles/stable", "module": "entrypoint"},
+                    ],
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    secrets_path = config_dir / "bundles.secrets.yaml"
+    secrets_path.write_text(
+        yaml.safe_dump(
+            {
+                "bundles": {
+                    "items": [
+                        {"id": "remove@1-0", "secrets": {"token": "remove-me"}},
+                        {"id": "stable@1-0", "secrets": {"token": "retain-me"}},
+                    ]
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    calls: dict[str, object] = {}
+
+    def fake_remove_runtime(console, **kwargs):
+        del console
+        calls["runtime"] = kwargs
+        return {"status": "ok", "bundle_id": kwargs["bundle_id"]}
+
+    monkeypatch.setattr(cli_mod, "remove_bundle_from_runtime", fake_remove_runtime)
+
+    result = cli_mod.delete_bundle_by_id(
+        Console(file=None),
+        repo_root=tmp_path / "repo",
+        workdir=workdir,
+        bundle_id="remove@1-0",
+        quiet=True,
+    )
+
+    remaining = yaml.safe_load(bundles_path.read_text(encoding="utf-8"))
+    remaining_secrets = yaml.safe_load(secrets_path.read_text(encoding="utf-8"))
+    assert [item["id"] for item in remaining["bundles"]["items"]] == ["stable@1-0"]
+    assert [item["id"] for item in remaining_secrets["bundles"]["items"]] == ["stable@1-0"]
+    assert calls["runtime"]["bundle_id"] == "remove@1-0"
+    assert result["descriptor_removed"] is True
+    assert result["secrets_removed"] is True
+
+
+def test_remove_bundle_from_runtime_calls_targeted_remove_endpoint(monkeypatch, tmp_path: Path) -> None:
+    workdir = tmp_path / "demo__project"
+    config_dir = workdir / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / ".env").write_text("", encoding="utf-8")
+    (config_dir / ".env.proc").write_text("", encoding="utf-8")
+    (config_dir / "bundles.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "bundles": {
+                    "default_bundle_id": "stable@1-0",
+                    "items": [
+                        {"id": "stable@1-0", "path": "/bundles/stable", "module": "entrypoint"}
+                    ],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    ctx = SimpleNamespace(config_dir=config_dir, docker_dir=tmp_path / "compose")
+    calls: dict[str, object] = {}
+
+    monkeypatch.setattr(cli_mod, "_build_paths_for_repo", lambda repo_root, runtime: ctx)
+    monkeypatch.setattr(cli_mod, "_compose_running_services", lambda docker_dir, env_path: {"chat-proc"})
+
+    def fake_post(console, **kwargs):
+        del console
+        calls.update(kwargs)
+        return {"status": "ok", "bundle_id": kwargs["payload"]["bundle_id"]}
+
+    monkeypatch.setattr(cli_mod, "_post_local_bundle_control", fake_post)
+
+    result = cli_mod.remove_bundle_from_runtime(
+        Console(file=None),
+        repo_root=tmp_path / "repo",
+        workdir=workdir,
+        bundle_id="remove@1-0",
+        quiet=True,
+    )
+
+    assert result["status"] == "ok"
+    assert calls["endpoint"] == "/internal/bundles/remove"
+    assert calls["payload"] == {"bundle_id": "remove@1-0"}
+
+
+def test_bundle_delete_subcommand_is_complete_operation(monkeypatch, tmp_path: Path) -> None:
+    workdir = tmp_path / "demo__project"
+    calls: dict[str, object] = {}
+
+    monkeypatch.setattr(cli_mod, "_load_cli_defaults", lambda: {})
+    monkeypatch.setattr(
+        cli_mod,
+        "_resolve_subcommand_workdir",
+        lambda *_args, **_kwargs: workdir,
+    )
+    monkeypatch.setattr(cli_mod, "_resolve_cli_workdir", lambda path, **_kwargs: Path(path))
+    monkeypatch.setattr(
+        cli_mod,
+        "_resolve_subcommand_repo",
+        lambda *_args, **_kwargs: tmp_path / "repo",
+    )
+
+    def fake_delete(console, **kwargs):
+        del console
+        calls.update(kwargs)
+        return {"status": "ok"}
+
+    monkeypatch.setattr(cli_mod, "delete_bundle_by_id", fake_delete)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "kdcube",
+            "bundle",
+            "delete",
+            "remove@1-0",
+            "--workdir",
+            str(workdir),
+        ],
+    )
+
+    cli_mod.main()
+
+    assert calls["bundle_id"] == "remove@1-0"
+    assert calls["workdir"] == workdir
+
+
+def test_bundle_config_apply_removes_deleted_ids_from_runtime(monkeypatch, tmp_path: Path) -> None:
+    workdir = tmp_path / "demo__project"
+    config_dir = workdir / "config"
+    source_dir = tmp_path / "incoming"
+    config_dir.mkdir(parents=True)
+    source_dir.mkdir()
+    stable = {"id": "stable@1-0", "path": "/bundles/stable", "module": "entrypoint"}
+    removed = {"id": "remove@1-0", "path": "/bundles/remove", "module": "entrypoint"}
+    (config_dir / "bundles.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "bundles": {
+                    "default_bundle_id": "stable@1-0",
+                    "items": [stable, removed],
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (source_dir / "bundles.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "bundles": {
+                    "default_bundle_id": "stable@1-0",
+                    "items": [stable],
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        cli_mod,
+        "_canonical_descriptor_dir_from_initialized_workdir",
+        lambda runtime: config_dir,
+    )
+
+    def fake_remove(console, **kwargs):
+        del console
+        calls.append(kwargs["bundle_id"])
+        return {"status": "ok", "bundle_id": kwargs["bundle_id"]}
+
+    monkeypatch.setattr(cli_mod, "remove_bundle_from_runtime", fake_remove)
+
+    result = cli_mod.apply_bundle_config_descriptors(
+        Console(file=None),
+        workdir=workdir,
+        descriptors_location=source_dir,
+        reload_changed=True,
+        repo_root=tmp_path / "repo",
+        quiet=True,
+    )
+
+    assert calls == ["remove@1-0"]
+    assert result["removed_bundle_ids"] == ["remove@1-0"]
+    assert result["removed_from_runtime"][0]["bundle_id"] == "remove@1-0"
+
+
 def test_cli_quiet_requested_for_json_quiet_env_and_non_tty(monkeypatch):
     assert _cli_quiet_requested(["bundle", "--help"], stdout_is_tty=False) is True
     assert _cli_quiet_requested(["--quiet", "info"], stdout_is_tty=True) is True

@@ -2010,10 +2010,14 @@ def apply_bundle_config_descriptors(
         if reload_bundle_ids:
             verb = "would reload" if dry_run and reload_changed else "reload candidates"
             console.print(f"[dim]{verb}:[/dim] {', '.join(reload_bundle_ids)}")
-        if removed_ids:
+        if removed_bundle_ids:
+            verb = "would remove from runtime" if dry_run and reload_changed else "runtime removal candidates"
+            console.print(f"[dim]{verb}:[/dim] {', '.join(removed_bundle_ids)}")
+        secrets_only_removed_ids = sorted(set(secrets_removed_bundle_ids).difference(removed_bundle_ids))
+        if secrets_only_removed_ids:
             console.print(
-                "[yellow]Removed bundle ids are not reloaded because they are no longer declared:[/yellow] "
-                + ", ".join(removed_ids)
+                "[dim]removed secrets-only bundle ids:[/dim] "
+                + ", ".join(secrets_only_removed_ids)
             )
         if secret_only_changed_ids:
             console.print(
@@ -2022,7 +2026,8 @@ def apply_bundle_config_descriptors(
             )
 
     reload_results: list[dict[str, object]] = []
-    if reload_changed and reload_bundle_ids and not dry_run:
+    removal_results: list[dict[str, object]] = []
+    if reload_changed and (reload_bundle_ids or removed_bundle_ids) and not dry_run:
         if repo_root is None:
             raise SystemExit("repo_root is required when reload_changed=True")
         for bundle_id in reload_bundle_ids:
@@ -2036,6 +2041,16 @@ def apply_bundle_config_descriptors(
                 quiet=quiet,
             )
             reload_results.append({"bundle_id": bundle_id, "result": result})
+        for bundle_id in removed_bundle_ids:
+            result = remove_bundle_from_runtime(
+                console,
+                repo_root=repo_root,
+                workdir=workdir,
+                bundle_id=bundle_id,
+                verbose=verbose,
+                quiet=quiet,
+            )
+            removal_results.append({"bundle_id": bundle_id, "result": result})
 
     return {
         "status": "dry-run" if dry_run else "ok",
@@ -2046,6 +2061,7 @@ def apply_bundle_config_descriptors(
         "removed_bundle_ids": removed_ids,
         "secret_only_changed_bundle_ids": secret_only_changed_ids,
         "reloaded": reload_results,
+        "removed_from_runtime": removal_results,
     }
 
 
@@ -2701,6 +2717,66 @@ def _print_bundle_reload_summary(
         console.print(f"[dim]{line}[/dim]")
 
 
+def _post_local_bundle_control(
+    console: Console,
+    *,
+    ctx: PathsContext,
+    env_main_path: Path,
+    endpoint: str,
+    payload: dict[str, object],
+    label: str,
+    verbose: bool,
+) -> dict[str, object]:
+    payload_json = json.dumps(payload)
+    script = (
+        "import json,sys,urllib.request;"
+        f"data={payload_json!r}.encode('utf-8');"
+        "req=urllib.request.Request("
+        f"'http://127.0.0.1:8020{endpoint}',"
+        "data=data,"
+        "headers={'content-type':'application/json'},"
+        "method='POST');"
+        "resp=urllib.request.urlopen(req);"
+        "sys.stdout.write(resp.read().decode('utf-8'))"
+    )
+    cmd = [
+        "docker",
+        "compose",
+        "--env-file",
+        str(env_main_path),
+        "exec",
+        "-T",
+        "chat-proc",
+        "python",
+        "-c",
+        script,
+    ]
+    raw = _run_compose_capture(
+        console,
+        cmd,
+        cwd=ctx.docker_dir,
+        label=label,
+        verbose=verbose,
+    )
+    try:
+        result = json.loads(raw) if raw else {}
+    except json.JSONDecodeError as exc:
+        if verbose and raw:
+            raise SystemExit(f"{label} returned non-JSON output.") from exc
+        detail = _tail_process_text(raw)
+        message = f"{label} returned non-JSON output."
+        if detail:
+            message += f"\n{detail}"
+        message += "\nRerun with --verbose to see the raw docker compose command and full proc output."
+        raise SystemExit(message) from exc
+    if not isinstance(result, dict):
+        raise SystemExit(f"{label} returned an unexpected response shape.")
+    if result.get("status") != "ok":
+        detail = json.dumps(result, ensure_ascii=False, indent=2)
+        raise SystemExit(f"{label} failed.\n{detail}")
+    return result
+
+
 def reload_bundle_from_descriptor(
     console: Console,
     *,
@@ -2738,59 +2814,20 @@ def reload_bundle_from_descriptor(
             "Start the stack first, then rerun --bundle-reload."
         )
 
-    payload = json.dumps({"bundle_id": bundle_id})
-    script = (
-        "import json,sys,urllib.request;"
-        f"data={payload!r}.encode('utf-8');"
-        "req=urllib.request.Request("
-        "'http://127.0.0.1:8020/internal/bundles/reload-authority',"
-        "data=data,"
-        "headers={'content-type':'application/json'},"
-        "method='POST');"
-        "resp=urllib.request.urlopen(req);"
-        "sys.stdout.write(resp.read().decode('utf-8'))"
-    )
-    cmd = [
-        "docker",
-        "compose",
-        "--env-file",
-        str(env_main_path),
-        "exec",
-        "-T",
-        "chat-proc",
-        "python",
-        "-c",
-        script,
-    ]
-
     if not quiet and not json_output:
         console.print(
             f"[dim]Reloading bundle[/dim] {bundle_id}\n"
             f"[dim]Descriptor[/dim] {descriptor_path}"
         )
-    raw = _run_compose_capture(
+    result = _post_local_bundle_control(
         console,
-        cmd,
-        cwd=ctx.docker_dir,
+        ctx=ctx,
+        env_main_path=env_main_path,
+        endpoint="/internal/bundles/reload-authority",
+        payload={"bundle_id": bundle_id},
         label="Bundle reload",
         verbose=verbose,
     )
-    try:
-        result = json.loads(raw) if raw else {}
-    except json.JSONDecodeError as exc:
-        if verbose and raw:
-            raise SystemExit("Bundle reload returned non-JSON output.") from exc
-        detail = _tail_process_text(raw)
-        message = "Bundle reload returned non-JSON output."
-        if detail:
-            message += f"\n{detail}"
-        message += "\nRerun with --verbose to see the raw docker compose command and full proc output."
-        raise SystemExit(message) from exc
-    if not isinstance(result, dict):
-        raise SystemExit("Bundle reload returned an unexpected response shape.")
-    if result.get("status") != "ok":
-        detail = json.dumps(result, ensure_ascii=False, indent=2)
-        raise SystemExit(f"Bundle reload failed.\n{detail}")
     result.setdefault(
         "messages",
         _bundle_reload_summary_lines(result, descriptor_path=descriptor_path, bundle_id=bundle_id),
@@ -2805,6 +2842,149 @@ def reload_bundle_from_descriptor(
             bundle_id=bundle_id,
         )
     return result
+
+
+def remove_bundle_from_runtime(
+    console: Console,
+    *,
+    repo_root: Path,
+    workdir: Path,
+    bundle_id: str,
+    verbose: bool = False,
+    quiet: bool = False,
+) -> dict[str, object]:
+    """Retire one descriptor-absent bundle and preserve sibling runtime state."""
+    ctx = _build_paths_for_repo(repo_root, workdir)
+    env_main_path = ctx.config_dir / ".env"
+    env_proc_path = ctx.config_dir / ".env.proc"
+    if not env_main_path.exists() or not env_proc_path.exists():
+        raise SystemExit(
+            f"Runtime env files not found under {ctx.config_dir}. "
+            "Run the installer first for this workdir."
+        )
+
+    env_main = installer_mod.load_env_file(env_main_path)
+    env_proc = installer_mod.load_env_file(env_proc_path)
+    descriptor_path = _resolve_bundle_reload_source(env_main, env_proc)
+    if bundle_id in _load_bundle_ids_from_descriptor(descriptor_path):
+        raise SystemExit(
+            f"Bundle '{bundle_id}' is still declared in {descriptor_path}; "
+            "runtime removal requires the descriptor entry to be absent."
+        )
+
+    running = _compose_running_services(ctx.docker_dir, env_main_path)
+    if "chat-proc" not in running:
+        result = {
+            "status": "ok",
+            "bundle_id": bundle_id,
+            "runtime": "stopped",
+            "descriptor": str(descriptor_path),
+        }
+        if not quiet:
+            console.print(
+                "[green]Bundle removal complete.[/green] "
+                "chat-proc is stopped; the bundle will remain absent on the next start."
+            )
+        return result
+
+    result = _post_local_bundle_control(
+        console,
+        ctx=ctx,
+        env_main_path=env_main_path,
+        endpoint="/internal/bundles/remove",
+        payload={"bundle_id": bundle_id},
+        label="Bundle removal",
+        verbose=verbose,
+    )
+    if not quiet:
+        console.print(f"[green]Removed from running runtime:[/green] {bundle_id!r}")
+    return result
+
+
+def delete_bundle_by_id(
+    console: Console,
+    *,
+    repo_root: Path,
+    workdir: Path,
+    bundle_id: str,
+    verbose: bool = False,
+    quiet: bool = False,
+) -> dict[str, object]:
+    """Delete one bundle from descriptor authority and its running runtime."""
+    normalized_id = str(bundle_id or "").strip()
+    if not normalized_id:
+        raise SystemExit("Bundle ID is required.")
+
+    config_dir = workdir / "config"
+    bundles_path = config_dir / "bundles.yaml"
+    bundles_secrets_path = config_dir / "bundles.secrets.yaml"
+    if not bundles_path.exists():
+        raise SystemExit(
+            f"bundles.yaml not found at {bundles_path}.\n"
+            "Initialize the workdir first."
+        )
+
+    bundles_data = installer_mod.load_release_descriptor(bundles_path)
+    bundles_block = bundles_data.get("bundles") if isinstance(bundles_data, dict) else None
+    bundle_items = bundles_block.get("items", []) if isinstance(bundles_block, dict) else []
+    bundle_index = next(
+        (
+            index
+            for index, item in enumerate(bundle_items)
+            if isinstance(item, dict) and str(item.get("id", "")) == normalized_id
+        ),
+        None,
+    )
+    if bundle_index is not None and _bundle_descriptor_default_id(bundles_data) == normalized_id:
+        raise SystemExit(
+            f"Bundle '{normalized_id}' is the default bundle. "
+            "Select another default_bundle_id before deleting it."
+        )
+
+    descriptor_removed = bundle_index is not None
+    if bundle_index is not None:
+        del bundle_items[bundle_index]
+        installer_mod.save_release_descriptor(bundles_path, bundles_data)
+        if not quiet:
+            console.print(f"[green]Removed from bundles.yaml:[/green] {normalized_id!r}")
+    elif not quiet:
+        console.print(f"[dim]Already absent from bundles.yaml:[/dim] {normalized_id!r}")
+
+    secrets_removed = False
+    if bundles_secrets_path.exists():
+        secrets_data = installer_mod.load_release_descriptor(bundles_secrets_path)
+        secrets_block = secrets_data.get("bundles") if isinstance(secrets_data, dict) else None
+        secret_items = secrets_block.get("items", []) if isinstance(secrets_block, dict) else []
+        secret_index = next(
+            (
+                index
+                for index, item in enumerate(secret_items)
+                if isinstance(item, dict) and str(item.get("id", "")) == normalized_id
+            ),
+            None,
+        )
+        if secret_index is not None:
+            del secret_items[secret_index]
+            installer_mod.save_release_descriptor(bundles_secrets_path, secrets_data)
+            secrets_removed = True
+            if not quiet:
+                console.print(f"[green]Removed from bundles.secrets.yaml:[/green] {normalized_id!r}")
+
+    runtime_result = remove_bundle_from_runtime(
+        console,
+        repo_root=repo_root,
+        workdir=workdir,
+        bundle_id=normalized_id,
+        verbose=verbose,
+        quiet=quiet,
+    )
+    return {
+        "status": "ok",
+        "bundle_id": normalized_id,
+        "descriptor_removed": descriptor_removed,
+        "secrets_removed": secrets_removed,
+        "runtime": runtime_result,
+    }
 
 
 def _docker_running_names() -> list[str]:
@@ -4229,7 +4409,7 @@ def main() -> None:
 
     _sp = subparsers.add_parser("bundle", help="Create, update, delete, or inspect a staged bundle entry")
     _add_quiet_arg(_sp)
-    _sp.add_argument("bundle_id", nargs="?", help="Bundle ID to patch, or 'status'")
+    _sp.add_argument("bundle_id", nargs="?", help="Bundle ID to patch, or one of: status, reload, config, delete")
     _sp.add_argument("status_bundle_id", nargs="?", help=argparse.SUPPRESS)
     _sp.add_argument("--tenant", default="", help="Tenant of the runtime. With --project, composes under the platform default base.")
     _sp.add_argument("--project", default="", help="Project of the runtime. Pair with --tenant.")
@@ -4239,7 +4419,7 @@ def main() -> None:
     _sp.add_argument(
         "--verbose",
         action="store_true",
-        help="With `bundle reload` or `bundle config apply --reload`, show the raw docker compose command and proc response",
+        help="With `bundle reload`, `bundle delete`, or `bundle config apply --reload`, show the raw docker compose command and proc response",
     )
     _sp.add_argument(
         "--live",
@@ -4335,7 +4515,7 @@ def main() -> None:
         "--delete",
         action="store_true",
         default=False,
-        help="Remove this bundle entry from bundles.yaml (and its secrets entry if present)",
+        help="Compatibility form of `kdcube bundle delete <bundle_id>`",
     )
     _sp.add_argument(
         "--descriptors-location",
@@ -4351,7 +4531,7 @@ def main() -> None:
         "--reload",
         action="store_true",
         dest="reload_changed",
-        help="With `bundle config apply`, reload changed bundle ids after staging descriptors",
+        help="With `bundle config apply`, reload changed IDs and retire removed IDs after staging descriptors",
     )
 
     _sp = subparsers.add_parser("config", help="Export or import runtime descriptors")
@@ -5092,6 +5272,32 @@ def main() -> None:
                     bool(args.delete),
                 ]
             )
+            if _bundle_arg == "delete":
+                if not _status_bundle_arg:
+                    raise SystemExit("Usage: kdcube bundle delete <bundle_id> --workdir <workdir>")
+                if _has_bundle_patch_flags:
+                    raise SystemExit("`kdcube bundle delete` cannot be combined with bundle mutation flags.")
+                if args.json_output or args.live_status:
+                    raise SystemExit("--json and --live are not supported with `kdcube bundle delete`.")
+                if args.descriptors_location or args.dry_run or args.reload_changed:
+                    raise SystemExit(
+                        "--descriptors-location, --dry-run, and --reload are only supported with "
+                        "`kdcube bundle config apply`."
+                    )
+                _repo = _resolve_subcommand_repo(
+                    args.path,
+                    workdir=_resolved,
+                    path_provided=_arg_provided("--path"),
+                )
+                delete_bundle_by_id(
+                    console,
+                    repo_root=_repo,
+                    workdir=_resolved,
+                    bundle_id=_status_bundle_arg,
+                    verbose=bool(args.verbose),
+                    quiet=bool(args.quiet),
+                )
+                return
             if _bundle_arg == "reload":
                 if not _status_bundle_arg:
                     raise SystemExit("Usage: kdcube bundle reload <bundle_id> --workdir <workdir>")
@@ -5243,35 +5449,19 @@ def main() -> None:
                 raise SystemExit("--git-ref is required when --git-repo is specified.")
 
             if _delete:
-                _bundles_data = installer_mod.load_release_descriptor(_bundles_path)
-                _b_block = _bundles_data.get("bundles") if isinstance(_bundles_data, dict) else None
-                _b_items = _b_block.get("items", []) if isinstance(_b_block, dict) else []
-                _b_idx = next(
-                    (i for i, it in enumerate(_b_items) if isinstance(it, dict) and str(it.get("id", "")) == _bundle_id),
-                    None,
+                _repo = _resolve_subcommand_repo(
+                    args.path,
+                    workdir=_resolved,
+                    path_provided=_arg_provided("--path"),
                 )
-                if _b_idx is None:
-                    raise SystemExit(f"Bundle '{_bundle_id}' not found in {_bundles_path}")
-                del _b_items[_b_idx]
-                installer_mod.save_release_descriptor(_bundles_path, _bundles_data)
-                console.print(f"[green]Removed from bundles.yaml:[/green] {_bundle_id!r}")
-                _bs_idx = None
-                _bs_items = []
-                _bs_data = None
-                if _bundles_secrets_path.exists():
-                    _bs_data = installer_mod.load_release_descriptor(_bundles_secrets_path)
-                    _bs_block = _bs_data.get("bundles") if isinstance(_bs_data, dict) else None
-                    _bs_items = _bs_block.get("items", []) if isinstance(_bs_block, dict) else []
-                    _bs_idx = next(
-                        (i for i, it in enumerate(_bs_items) if isinstance(it, dict) and str(it.get("id", "")) == _bundle_id),
-                        None,
-                    )
-                if _bs_idx is not None:
-                    del _bs_items[_bs_idx]
-                    if _bs_data is not None:
-                        installer_mod.save_release_descriptor(_bundles_secrets_path, _bs_data)
-                    console.print(f"[green]Removed from bundles.secrets.yaml:[/green] {_bundle_id!r}")
-                _print_bundle_apply_hint(console, _bundle_id, _resolved)
+                delete_bundle_by_id(
+                    console,
+                    repo_root=_repo,
+                    workdir=_resolved,
+                    bundle_id=_bundle_id,
+                    verbose=bool(args.verbose),
+                    quiet=bool(args.quiet),
+                )
                 return
 
             # --- bundles.yaml operations (source mode + identity + config) ---

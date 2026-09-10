@@ -3,8 +3,8 @@ id: repo:kdcube/app/ai-app/src/kdcube-ai-app/kdcube_cli/README.md
 title: "KDCube CLI"
 summary: "Installs and operates KDCube runtimes, manages exact secrets through their selected provider, and exposes typed deployment and management APIs for application-specific CLIs."
 tags: ["kdcube", "cli", "runtime", "deployment-target", "secrets", "python-api"]
-keywords: ["kdcube-cli", "kdcube init", "kdcube start", "kdcube stop", "kdcube secrets", "kdcube_cli.control", "kdcube_cli.management"]
-updated_at: 2026-09-05
+keywords: ["kdcube-cli", "kdcube init", "kdcube start", "kdcube stop", "kdcube secrets", "kdcube bundle delete", "targeted bundle retirement", "kdcube_cli.control", "kdcube_cli.management"]
+updated_at: 2026-09-10
 see_also:
   - repo:kdcube/app/ai-app/docs/service/cicd/cli-README.md
   - repo:kdcube/app/ai-app/docs/service/cicd/deployment-target-control-api-README.md
@@ -607,9 +607,13 @@ you need the raw Docker Compose command and full proc response. Use `--json`
 for scriptable output.
 
 ```bash
-# Delete a bundle entry (also removes its secrets entry)
-kdcube bundle <bundle_id> --delete
+# Delete by ID from descriptors and the running runtime
+kdcube bundle delete <bundle_id>
 ```
+
+Deletion retires only that bundle. Other bundles remain loaded.
+`kdcube bundle <bundle_id> --delete` is the compatibility form of the same
+complete operation.
 
 **Descriptor apply** — when a user intentionally edits seed `bundles.yaml` /
 `bundles.secrets.yaml` and wants to reapply that descriptor source of truth to
@@ -632,7 +636,9 @@ kdcube bundle config apply \
 This is not a platform refresh: it touches only `bundles.yaml` and optional
 `bundles.secrets.yaml` in the active runtime config directory. Host local
 bundle paths from seed descriptors are translated to runtime `/bundles/...`
-paths before staging.
+paths before staging. With `--reload`, changed declared bundle IDs are
+reloaded and removed IDs are retired. Each operation targets only its changed
+ID; unchanged bundles keep running.
 
 **Status** — inspect one explicit bundle entry:
 

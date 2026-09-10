@@ -3,8 +3,8 @@ id: repo:kdcube/app/ai-app/docs/service/cicd/cli-README.md
 title: "Current KDCube CLI"
 summary: "Current implemented CLI surface for local environment bootstrapping, workdir preparation, Docker Compose startup, descriptor validation, exact delegated secret management, host-vault activation, maintainer package-source builds, and deployment selection."
 tags: ["service", "cicd", "cli", "env", "deployment", "bundle"]
-keywords: ["kdcube cli", "local environment bootstrap", "workdir setup", "docker compose control", "descriptor validation", "current cli contract", "local deployment tooling", "multiple local runtime snapshots", "single active local deployment", "tenant project workdir namespace", "bundle config patch", "bundle secret patch", "host vault stage", "host vault activate", "host vault recover", "kdcube bundle command", "bundle reload internals", "reload-authority", "maintainer local Python package", "unpublished package candidate"]
-updated_at: 2026-09-05
+keywords: ["kdcube cli", "local environment bootstrap", "workdir setup", "docker compose control", "descriptor validation", "current cli contract", "local deployment tooling", "multiple local runtime snapshots", "single active local deployment", "tenant project workdir namespace", "bundle config patch", "bundle secret patch", "bundle delete", "targeted bundle retirement", "host vault stage", "host vault activate", "host vault recover", "kdcube bundle command", "bundle reload internals", "reload-authority", "maintainer local Python package", "unpublished package candidate"]
+updated_at: 2026-09-10
 see_also:
   - repo:kdcube/app/ai-app/docs/service/cicd/release-README.md
   - repo:kdcube/app/ai-app/docs/service/cicd/descriptors-README.md
@@ -659,7 +659,8 @@ touch `assembly.yaml`, `gateway.yaml`, platform `secrets.yaml`, or
 
 Host local bundle paths in seed descriptors are translated to runtime-visible
 `/bundles/...` paths before staging. With `--reload`, changed declared bundle
-ids are reloaded after staging.
+IDs are reloaded and removed IDs are retired after staging. Each runtime
+operation targets only its changed ID; unchanged bundles keep running.
 
 ### 2.3c Export and import local runtime descriptors
 
@@ -958,17 +959,26 @@ Value coercion rules:
 
 #### Delete a bundle entry
 
-Remove a bundle from `bundles.yaml` (and its secrets entry from
-`bundles.secrets.yaml`, if present):
+Delete a bundle by ID:
 
 ```bash
-kdcube bundle <bundle_id> \
-  --delete \
+kdcube bundle delete <bundle_id> \
   --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
 ```
 
-`--delete` cannot be combined with any other flag. Exits with an error if the
-bundle is not found.
+This one command removes the entry from `bundles.yaml`, removes its
+`bundles.secrets.yaml` entry when present, and retires that bundle from a
+running local runtime. Runtime cleanup targets that ID: its preparation task,
+sidecars, loaded code, widgets, scheduled jobs, and Data Bus handlers are
+removed. Every other bundle keeps its current runtime state.
+
+When `chat-proc` is stopped, descriptor deletion completes the operation; the
+bundle remains absent on the next start. Repeating the command is safe when a
+previous attempt removed the descriptor before live cleanup completed.
+
+`kdcube bundle <bundle_id> --delete` remains a compatibility alias with the
+same complete behavior. A default bundle must be replaced as
+`default_bundle_id` before it can be deleted.
 
 #### Status
 

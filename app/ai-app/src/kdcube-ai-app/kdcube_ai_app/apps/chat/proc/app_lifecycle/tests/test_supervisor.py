@@ -151,6 +151,62 @@ async def test_supersession_cancels_only_the_replaced_application() -> None:
 
 
 @pytest.mark.asyncio
+async def test_retire_cancels_only_requested_application() -> None:
+    registry = ApplicationReadinessRegistry()
+    started = {"remove": asyncio.Event(), "stable": asyncio.Event()}
+    cancelled = {"remove": asyncio.Event(), "stable": asyncio.Event()}
+    stable_release = asyncio.Event()
+
+    async def _prepare(item: ApplicationPreparation) -> None:
+        started[item.application_id].set()
+        try:
+            if item.application_id == "stable":
+                await stable_release.wait()
+            else:
+                await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled[item.application_id].set()
+            raise
+
+    supervisor = ApplicationLifecycleSupervisor(
+        tenant="tenant-a",
+        project="project-a",
+        registry=registry,
+        prepare=_prepare,
+        concurrency=2,
+    )
+    await supervisor.reconcile({
+        "remove": _preparation("remove", "generation-remove"),
+        "stable": _preparation("stable", "generation-stable"),
+    })
+    await asyncio.wait_for(
+        asyncio.gather(started["remove"].wait(), started["stable"].wait()),
+        timeout=1,
+    )
+
+    await supervisor.retire("remove")
+    await asyncio.wait_for(cancelled["remove"].wait(), timeout=1)
+
+    assert cancelled["stable"].is_set() is False
+    assert "remove" not in supervisor.task_generations()
+    assert supervisor.task_generations()["stable"] == "generation-stable"
+    assert registry.snapshot(
+        tenant="tenant-a",
+        project="project-a",
+        application_id="remove",
+    ) is None
+    assert registry.snapshot(
+        tenant="tenant-a",
+        project="project-a",
+        application_id="stable",
+    ) is not None
+
+    stable_release.set()
+    await asyncio.wait_for(supervisor.wait_for_current(), timeout=1)
+    await supervisor.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_shutdown_cancels_and_reaps_owned_tasks() -> None:
     registry = ApplicationReadinessRegistry()
     started = asyncio.Event()

@@ -1427,6 +1427,31 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /internal/bundles/remove:
+    post:
+      tags:
+      - Integrations Internal
+      summary: Internal Remove Bundle
+      description: Retire one bundle already removed from descriptor authority.
+      operationId: internal_remove_bundle_internal_bundles_remove_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BundleRemoveRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
 components:
   schemas:
     AdminBundlesUpdateRequest:
@@ -1534,6 +1559,25 @@ components:
           title: Bundle Id
       type: object
       title: BundleReloadAuthorityRequest
+    BundleRemoveRequest:
+      properties:
+        tenant:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Tenant
+        project:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project
+        bundle_id:
+          type: string
+          title: Bundle Id
+      type: object
+      required:
+      - bundle_id
+      title: BundleRemoveRequest
     BundleSecretsUpdateRequest:
       properties:
         tenant:

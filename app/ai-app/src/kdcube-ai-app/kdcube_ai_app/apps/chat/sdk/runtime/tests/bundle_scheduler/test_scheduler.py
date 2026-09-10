@@ -107,6 +107,28 @@ def test_reconcile_empty_registry_creates_no_tasks():
     _run(_t())
 
 
+def test_remove_bundle_cancels_only_that_bundles_jobs():
+    async def _t():
+        mgr = BundleSchedulerManager(redis=None, tenant="t", project="p", instance_id="i1")
+        removed_task = asyncio.create_task(asyncio.Event().wait())
+        stable_task = asyncio.create_task(asyncio.Event().wait())
+        mgr._tasks = {
+            _JobKey(bundle_id="remove@1-0", job_alias="first"): (removed_task, "* * * * *"),
+            _JobKey(bundle_id="stable@1-0", job_alias="second"): (stable_task, "* * * * *"),
+        }
+
+        await mgr.remove_bundle("remove@1-0")
+
+        assert removed_task.cancelled()
+        assert stable_task.cancelled() is False
+        assert set(mgr._tasks) == {
+            _JobKey(bundle_id="stable@1-0", job_alias="second"),
+        }
+        await mgr.shutdown()
+
+    _run(_t())
+
+
 def test_reconcile_schedules_job_for_bundle():
     manifest = _make_manifest([_make_job_spec(alias="heartbeat")])
     pm, pp, ph = _patches(manifest)

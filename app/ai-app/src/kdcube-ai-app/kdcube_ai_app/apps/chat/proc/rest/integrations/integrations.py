@@ -1546,6 +1546,12 @@ class BundleReloadAuthorityRequest(BaseModel):
     bundle_id: Optional[str] = None
 
 
+class BundleRemoveRequest(BaseModel):
+    tenant: Optional[str] = None
+    project: Optional[str] = None
+    bundle_id: str
+
+
 class BundleStatusRequest(BaseModel):
     tenant: Optional[str] = None
     project: Optional[str] = None
@@ -3239,6 +3245,151 @@ async def _do_reload_bundles_from_authority(
     }
 
 
+async def _do_remove_bundle_from_authority(
+        request: Request,
+        session: UserSession,
+        payload: BundleRemoveRequest,
+):
+    """Retire one descriptor-absent bundle and preserve sibling runtime state."""
+    settings = get_settings()
+    tenant_id = payload.tenant or settings.TENANT
+    project_id = payload.project or settings.PROJECT
+    bundle_id = str(payload.bundle_id or "").strip()
+    if not bundle_id:
+        raise HTTPException(status_code=400, detail="bundle_id is required")
+
+    from kdcube_ai_app.apps.chat.sdk.runtime.local_sidecars import stop_local_sidecars_for_bundle_ids
+    from kdcube_ai_app.infra.plugin.bundle_loader import (
+        BundleSpec,
+        evict_bundle_scope,
+        invalidate_static_bundle_entrypoint_loads,
+    )
+    from kdcube_ai_app.infra.plugin.bundle_registry import get_all, set_registry_async
+    from kdcube_ai_app.infra.plugin.bundle_store import (
+        BundleStillDeclaredError,
+        sync_registry_after_bundle_removal,
+    )
+
+    redis = _get_app_redis(request)
+    previous_entry = None
+    if tenant_id == settings.TENANT and project_id == settings.PROJECT:
+        previous_entry = get_all().get(bundle_id)
+
+    # Replace the aggregate registry snapshot and delete only this bundle's
+    # property cache. Lifecycle work remains scoped to bundle_id.
+    try:
+        registry = await sync_registry_after_bundle_removal(
+            redis,
+            tenant=tenant_id,
+            project=project_id,
+            bundle_id=bundle_id,
+        )
+    except BundleStillDeclaredError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Bundle '{bundle_id}' is still present in the authoritative descriptor; "
+                "remove the descriptor entry before retiring its runtime state."
+            ),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    bundles_dict = {
+        current_id: entry.model_dump()
+        for current_id, entry in (registry.bundles or {}).items()
+    }
+    eviction_result: dict[str, int] | None = None
+    stopped_sidecars = 0
+    if tenant_id == settings.TENANT and project_id == settings.PROJECT:
+        await set_registry_async(
+            bundles_dict,
+            registry.default_bundle_id,
+            resolve_git=False,
+            source="admin.remove-authority",
+        )
+        stopped_sidecars = stop_local_sidecars_for_bundle_ids(
+            bundle_ids={bundle_id},
+            tenant=tenant_id,
+            project=project_id,
+            terminate_timeout_sec=2.0,
+            kill_timeout_sec=1.0,
+        )
+        if isinstance(previous_entry, dict):
+            try:
+                eviction_result = evict_bundle_scope(
+                    BundleSpec(
+                        id=bundle_id,
+                        path=str(previous_entry.get("path") or ""),
+                        module=previous_entry.get("module"),
+                        singleton=bool(previous_entry.get("singleton")),
+                    ),
+                    drop_sys_modules=True,
+                )
+            except Exception:
+                logger.warning(
+                    "[bundle.remove] failed to evict previous bundle scope: tenant=%s project=%s bundle=%s",
+                    tenant_id,
+                    project_id,
+                    bundle_id,
+                    exc_info=True,
+                )
+        invalidate_static_bundle_entrypoint_loads(
+            bundle_id=bundle_id,
+            tenant=tenant_id,
+            project=project_id,
+        )
+        lifecycle = getattr(request.app.state, "application_lifecycle", None)
+        if lifecycle is not None:
+            await lifecycle.retire(bundle_id, registry)
+
+    await _invalidate_deployed_widget_manifests(
+        tenant=tenant_id,
+        project=project_id,
+        bundle_ids=[bundle_id],
+    )
+
+    message = {
+        "type": "bundles.update",
+        "op": "remove",
+        "bundles": {},
+        "changed_bundle_ids": [bundle_id],
+        "default_bundle_id": registry.default_bundle_id,
+        "tenant": tenant_id,
+        "project": project_id,
+        "updated_by": session.username or session.user_id or "unknown",
+        "ts": datetime.utcnow().isoformat() + "Z",
+    }
+    reload_channel = _bundles_channel(
+        namespaces.CONFIG.BUNDLES.UPDATE_CHANNEL,
+        tenant=tenant_id,
+        project=project_id,
+    )
+    receivers = await redis.publish(
+        reload_channel,
+        json.dumps(message, ensure_ascii=False),
+    )
+    logger.info(
+        "[bundle.remove] retired: tenant=%s project=%s bundle=%s sidecars=%s receivers=%s",
+        tenant_id,
+        project_id,
+        bundle_id,
+        stopped_sidecars,
+        receivers,
+    )
+    return {
+        "status": "ok",
+        "source": "authority",
+        "operation": "remove",
+        "bundle_id": bundle_id,
+        "authority": describe_authoritative_bundle_store(tenant_id, project_id),
+        "eviction": eviction_result,
+        "stopped_sidecars": stopped_sidecars,
+        "changed_bundle_ids": [bundle_id],
+        "broadcast_receivers": receivers,
+    }
+
+
 @admin_router.post("/admin/integrations/bundles/reload-authority", status_code=200)
 async def admin_reload_bundles_from_authority(
         request: Request,
@@ -3267,6 +3418,23 @@ async def internal_reload_bundles_from_authority(payload: Optional[BundleReloadA
         permissions=[],
     )
     return await _do_reload_bundles_from_authority(request, automation_session, payload)
+
+
+@internal_router.post("/internal/bundles/remove", status_code=200)
+async def internal_remove_bundle(payload: BundleRemoveRequest, request: Request):
+    """Retire one bundle already removed from descriptor authority."""
+    client_ip = request.client.host if request.client else ""
+    if client_ip not in _LOCALHOST:
+        raise HTTPException(status_code=403, detail="Internal endpoint: localhost only")
+    automation_session = UserSession(
+        session_id="internal-automation",
+        user_type=UserType.PRIVILEGED,
+        user_id="cli-local",
+        username="cli-local",
+        roles=[],
+        permissions=[],
+    )
+    return await _do_remove_bundle_from_authority(request, automation_session, payload)
 
 
 @admin_router.post("/admin/integrations/bundles/cleanup", status_code=200)

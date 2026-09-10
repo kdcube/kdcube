@@ -674,6 +674,21 @@ class DataBusRuntimeManager:
             self._workers[key] = (task, signature, worker)
             _log.info("[data_bus] Worker scheduled: bundle=%s subjects=%s", key.bundle_id, sorted(handler_specs.keys()))
 
+    async def remove_bundle(self, bundle_id: str) -> None:
+        """Stop one bundle's Data Bus worker and retain all other workers."""
+        normalized_id = str(bundle_id or "").strip()
+        removed_tasks: list[asyncio.Task] = []
+        for key in list(self._workers):
+            if key.bundle_id != normalized_id:
+                continue
+            task, _signature, worker = self._workers.pop(key)
+            worker.stop()
+            task.cancel()
+            removed_tasks.append(task)
+            _log.info("[data_bus] Cancelling worker for removed bundle: bundle=%s", key.bundle_id)
+        if removed_tasks:
+            await asyncio.gather(*removed_tasks, return_exceptions=True)
+
     async def shutdown(self) -> None:
         _log.info("[data_bus] Shutting down %d worker(s)", len(self._workers))
         for _key, (task, _signature, worker) in list(self._workers.items()):

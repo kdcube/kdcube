@@ -645,6 +645,134 @@ async def test_config_listener_secrets_update_invalidates_config_secret_cache(mo
     assert redis.pubsub_instance.closed is True
 
 
+@pytest.mark.asyncio
+async def test_config_listener_remove_event_retires_only_requested_bundle(monkeypatch):
+    settings = SimpleNamespace(
+        TENANT="tenant-a",
+        PROJECT="project-a",
+        plain=lambda *_args, **_kwargs: "",
+    )
+    import kdcube_ai_app.apps.chat.sdk.config as sdk_config_mod
+    import kdcube_ai_app.apps.chat.sdk.runtime.local_sidecars as local_sidecars_mod
+    import kdcube_ai_app.apps.chat.sdk.solutions.sites as sites_mod
+    import kdcube_ai_app.infra.plugin.bundle_loader as bundle_loader_mod
+    import kdcube_ai_app.infra.plugin.bundle_registry as bundle_registry_mod
+    import kdcube_ai_app.infra.plugin.bundle_store as bundle_store_mod
+
+    current = bundle_store_mod.BundlesRegistry(
+        default_bundle_id="stable@1-0",
+        bundles={
+            "stable@1-0": bundle_store_mod.BundleEntry(
+                id="stable@1-0",
+                path="/bundles/stable",
+                module="entrypoint",
+            )
+        },
+    )
+    previous = {
+        "removed@1-0": {
+            "id": "removed@1-0",
+            "path": "/bundles/removed",
+            "module": "entrypoint",
+            "singleton": False,
+        },
+        "stable@1-0": {
+            "id": "stable@1-0",
+            "path": "/bundles/stable",
+            "module": "entrypoint",
+            "singleton": False,
+        },
+    }
+    lifecycle_reconciles = []
+    lifecycle_retires = []
+    scheduler_reconciles = []
+    scheduler_removes = []
+    data_bus_reconciles = []
+    data_bus_removes = []
+    evictions = []
+    targeted_sidecar_stops = []
+
+    async def _fake_load_registry(*_args, **_kwargs):
+        return current
+
+    async def _fake_set_registry_async(*_args, **_kwargs):
+        return None
+
+    async def _fake_refresh_sites(*_args, **_kwargs):
+        return None
+
+    class _Lifecycle:
+        async def reconcile(self, registry, *, force=None):
+            lifecycle_reconciles.append((registry, force))
+
+        async def retire(self, bundle_id, registry):
+            lifecycle_retires.append((bundle_id, registry))
+
+    class _Scheduler:
+        async def reconcile(self, registry):
+            scheduler_reconciles.append(registry)
+
+        async def remove_bundle(self, bundle_id):
+            scheduler_removes.append(bundle_id)
+
+    class _DataBus:
+        async def reconcile(self, registry):
+            data_bus_reconciles.append(registry)
+
+        async def remove_bundle(self, bundle_id):
+            data_bus_removes.append(bundle_id)
+
+    monkeypatch.setattr(sdk_config_mod, "get_settings", lambda: settings)
+    monkeypatch.setattr(bundle_store_mod, "load_registry", _fake_load_registry)
+    monkeypatch.setattr(bundle_registry_mod, "get_all", lambda: previous)
+    monkeypatch.setattr(bundle_registry_mod, "set_registry_async", _fake_set_registry_async)
+    monkeypatch.setattr(sites_mod, "refresh_application_site_catalog", _fake_refresh_sites)
+    monkeypatch.setattr(
+        bundle_loader_mod,
+        "evict_bundle_scope",
+        lambda spec, **_kwargs: evictions.append(spec.id) or {"evicted_modules": 1},
+    )
+    monkeypatch.setattr(
+        bundle_loader_mod,
+        "invalidate_static_bundle_entrypoint_loads",
+        lambda **_kwargs: 1,
+    )
+    monkeypatch.setattr(local_sidecars_mod, "stop_inactive_local_sidecars", lambda **_kwargs: 0)
+    monkeypatch.setattr(
+        local_sidecars_mod,
+        "stop_local_sidecars_for_bundle_ids",
+        lambda **kwargs: targeted_sidecar_stops.append(kwargs["bundle_ids"]) or 0,
+    )
+
+    event = {
+        "type": "bundles.update",
+        "op": "remove",
+        "bundles": {},
+        "changed_bundle_ids": ["removed@1-0"],
+        "default_bundle_id": "stable@1-0",
+    }
+    redis = _RedisWithMessagePubSub(
+        asyncio.Event(),
+        [{"type": "message", "data": json.dumps(event)}],
+    )
+    processor = _build_processor(redis)
+    redis.pubsub_instance.stop_event = processor._stop_event
+    processor._application_lifecycle = _Lifecycle()
+    processor._scheduler = _Scheduler()
+    processor._data_bus_manager = _DataBus()
+
+    await processor._config_listener_loop()
+
+    assert len(lifecycle_reconciles) == 1
+    assert len(scheduler_reconciles) == 2
+    assert len(data_bus_reconciles) == 2
+    assert lifecycle_retires == [("removed@1-0", current)]
+    assert scheduler_removes == ["removed@1-0"]
+    assert data_bus_removes == ["removed@1-0"]
+    assert evictions == ["removed@1-0"]
+    assert targeted_sidecar_stops == [{"removed@1-0"}]
+
+
 def test_processor_defaults_to_legacy_lists_scheduler_backend():
     processor = _build_processor(_MinimalRedis())
     assert processor.scheduler_backend_name == SCHEDULER_BACKEND_LEGACY_LISTS

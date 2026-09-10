@@ -25,6 +25,7 @@ class FakeRedis:
     def __init__(self):
         self.data = {}
         self.set_calls = []
+        self.delete_calls = []
 
     async def set(self, key, value, **kwargs):
         self.data[key] = value
@@ -35,6 +36,7 @@ class FakeRedis:
         return self.data.get(key)
 
     async def delete(self, key):
+        self.delete_calls.append(key)
         self.data.pop(key, None)
 
     async def scan_iter(self, match=None):
@@ -101,6 +103,55 @@ def _counting_yaml_loader(monkeypatch):
 
 def _store_for(path: Path) -> "bundle_store._FileBundleDescriptorStore":
     return bundle_store._FileBundleDescriptorStore(bundles_yaml_uri=str(path))
+
+
+@pytest.mark.asyncio
+async def test_removal_sync_preserves_sibling_property_cache(monkeypatch):
+    registry = bundle_store.BundlesRegistry(
+        default_bundle_id="stable@1-0",
+        bundles={
+            "stable@1-0": bundle_store.BundleEntry(
+                id="stable@1-0",
+                path="/bundles/stable",
+                module="entrypoint",
+            )
+        },
+    )
+    redis = FakeRedis()
+    stable_props_key = bundle_store._props_key(
+        tenant="tenant-a",
+        project="project-a",
+        bundle_id="stable@1-0",
+    )
+    removed_props_key = bundle_store._props_key(
+        tenant="tenant-a",
+        project="project-a",
+        bundle_id="removed@1-0",
+    )
+    redis.data[stable_props_key] = '{"stable":true}'
+    redis.data[removed_props_key] = '{"removed":true}'
+
+    async def _load_authority(tenant, project):
+        assert (tenant, project) == ("tenant-a", "project-a")
+        return registry
+
+    monkeypatch.setattr(bundle_store, "load_registry_from_authority_readonly", _load_authority)
+
+    result = await bundle_store.sync_registry_after_bundle_removal(
+        redis,
+        tenant="tenant-a",
+        project="project-a",
+        bundle_id="removed@1-0",
+    )
+
+    assert result is registry
+    assert redis.delete_calls == [removed_props_key]
+    assert redis.data[stable_props_key] == '{"stable":true}'
+    assert removed_props_key not in redis.data
+    cached_registry = bundle_store.BundlesRegistry.model_validate_json(
+        redis.data[bundle_store.redis_key("tenant-a", "project-a")]
+    )
+    assert set(cached_registry.bundles) == {"stable@1-0"}
 
 
 # ── (a) parse cache hit while the file is unchanged ──────────────────────────
