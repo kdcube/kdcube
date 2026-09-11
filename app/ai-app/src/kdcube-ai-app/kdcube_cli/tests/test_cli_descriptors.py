@@ -170,7 +170,7 @@ def test_default_install_exposes_governed_external_mcp_proxy():
     )
     assert proxy_resource == {
         "resource": "*/api/integrations/bundles/*/*/connection-hub@1-0/public/mcp/remote_mcp_proxy*",
-        "label": "Connected external MCP tools",
+        "label": "My MCP connectors",
         "identity_scope": "grantor",
         "grants": ["external_mcp:use"],
         "resource_selection": True,
