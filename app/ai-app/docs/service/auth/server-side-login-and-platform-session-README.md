@@ -180,6 +180,13 @@ attempt store in the same Redis namespace, and the routes
 (`kdcube_ai_app/auth/bundle/login_lane.py`,
 `kdcube_ai_app/apps/chat/ingress/platform_session.py`).
 
+For Cognito and OIDC, the verified upstream `sub` is the platform user ID,
+matching the browser-side authenticators. Moving the same authenticator to the
+server-side lane therefore keeps the user's connected accounts, conversations,
+memory, budgets, and other user-scoped records under the same principal. The
+session record also retains `provider` and `provider_subject` as evidence of
+how that principal was authenticated.
+
 ### Descriptor
 
 Select a `bundle` login entry whose `input.authenticator_ref` names a Cognito

@@ -177,7 +177,7 @@ async def test_flow_over_the_platform_backend_issues_a_platform_session(monkeypa
 
     done = await flow.complete_login({"state": start.attempt.state, "code": "c"}, attempt_binding=start.attempt.binding)
     assert done.redirect_to == "/app?tab=2"
-    assert done.session.subject == "cognito:abc-123"
+    assert done.session.subject == "abc-123", "changing the login lane must preserve the Cognito platform principal"
     assert done.session.user["email"] == "person@example.com"
     assert done.session.user["roles"] == ["member"] and done.session.user["permissions"] == ["chat:use"]
     assert done.session_cookie.name == "__Secure-LATC" and done.session_cookie.http_only
@@ -186,7 +186,7 @@ async def test_flow_over_the_platform_backend_issues_a_platform_session(monkeypa
     assert seen and seen[0].canonical_subject == "cognito:abc-123"
 
     verification = await authority.validate_token(done.session.token)
-    assert verification.user.sub == "cognito:abc-123"
+    assert verification.user.sub == "abc-123"
     assert verification.record["exp"] == clock.now + 600 and verification.record["max_exp"] == clock.now + 3600
     assert verification.record["metadata"]["upstream"] == "fake-idp"
 
@@ -265,6 +265,26 @@ def test_config_resolves_cognito_authenticator_from_the_registry():
     assert config.session_cookie_name == "__Secure-LATC"
     assert config.groups_claim == "cognito:groups"
     assert LOGIN_ROUTE == "/api/platform/session/login"
+
+
+def test_grants_lookup_uses_the_same_subject_as_direct_cognito(monkeypatch):
+    from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.authority_providers import bundle_login
+    from kdcube_ai_app.auth.bundle.login_lane import grants_resolver
+
+    seen = {}
+
+    def resolve_platform_grants(**kwargs):
+        seen.update(kwargs)
+        return ["member"], [], "test"
+
+    monkeypatch.setattr(bundle_login, "resolve_platform_grants", resolve_platform_grants)
+    resolve = grants_resolver(bundle_login_config(_settings(_platform_auth())))
+
+    roles, permissions, source = resolve(_identity())
+
+    assert (roles, permissions, source) == (["member", "staff"], [], "test")
+    assert seen["sub"] == "abc-123"
+    assert seen["provider"] == "cognito" and seen["provider_subject"] == "abc-123"
 
 
 def test_config_is_absent_without_a_bundle_provider_or_oidc_authenticator():

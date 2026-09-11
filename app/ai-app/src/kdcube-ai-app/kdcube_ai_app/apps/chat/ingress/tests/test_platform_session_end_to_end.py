@@ -198,7 +198,7 @@ class Harness:
         self.seen: list[str] = []
 
         def grants(identity):
-            self.seen.append(identity.canonical_subject)
+            self.seen.append(identity.subject)
             roles = ["kdcube:role:registered", *[g for g in identity.claims.get("cognito:groups", []) if isinstance(g, str)]]
             return roles, [], "test"
 
@@ -274,7 +274,7 @@ def test_sign_in_round_trip_issues_a_platform_session(issuer):
 
     # The token exchange happened once, with the code the issuer minted, PKCE and the secret checked there.
     assert len(issuer.token_requests) == 1 and issuer.token_requests[0]["client_id"] == CLIENT_ID
-    assert harness.seen == ["mock-idp:idp-user-1"]
+    assert harness.seen == ["idp-user-1"]
 
     # The gateway accepts the cookie and knows the user; the group became a role.
     manager = BundleSessionAuthManager(authority=harness.authority, sliding=harness.policy)
@@ -282,7 +282,7 @@ def test_sign_in_round_trip_issues_a_platform_session(issuer):
 
     user = asyncio.run(manager.authenticate(token))
     assert user.email == "person@example.com"
-    assert user.sub == "mock-idp:idp-user-1"
+    assert user.sub == "idp-user-1", "server-side OIDC must preserve the principal used by direct OIDC"
     assert "staff" in user.roles and "kdcube:role:registered" in user.roles
 
     verification = asyncio.run(harness.authority.validate_token(token))

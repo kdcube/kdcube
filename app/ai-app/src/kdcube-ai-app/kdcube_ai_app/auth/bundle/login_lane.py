@@ -87,6 +87,15 @@ def _int(value: Any, default: int) -> int:
     return parsed if parsed > 0 else default
 
 
+def _platform_subject(identity: VerifiedIdentity) -> str:
+    """Keep the principal emitted by KDCube's direct OIDC authenticators."""
+
+    # Moving the same authenticator from the browser to this server-side lane
+    # changes token custody, not the user's platform identity. Cognito and the
+    # existing OAuth manager expose the verified upstream ``sub`` verbatim.
+    return _str(identity.subject)
+
+
 # ---- the backend over the platform session authority -------------------------
 
 class PlatformSessionBackend:
@@ -117,7 +126,7 @@ class PlatformSessionBackend:
         metadata: Mapping[str, Any] | None = None,
     ) -> IssuedSession:
         now = int(time.time())
-        sub = identity.canonical_subject
+        sub = _platform_subject(identity)
         email = identity.email.lower()
         username = email or f"{identity.provider}_{identity.subject}"
         roles, permissions, binding_source = self._grants(identity)
@@ -426,7 +435,7 @@ def grants_resolver(config: BundleLoginConfig) -> GrantsResolver:
         roles, permissions, source = resolve_platform_grants(
             authority_cfg=config.authority,
             provider_cfg=config.provider,
-            sub=identity.canonical_subject,
+            sub=_platform_subject(identity),
             provider=identity.provider,
             provider_subject=identity.subject,
             verified_claims=identity.claims,
