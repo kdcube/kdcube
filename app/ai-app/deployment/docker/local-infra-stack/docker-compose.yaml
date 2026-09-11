@@ -29,6 +29,7 @@ services:
     logging: *kdcube-logging
     container_name: kdcube-local-postgres
     image: pgvector/pgvector:pg16
+    restart: unless-stopped
     env_file:
       - path: ./.env
         required: false
@@ -56,6 +57,7 @@ services:
     logging: *kdcube-logging
     container_name: kdcube-local-redis
     image: redis:latest
+    restart: unless-stopped
     env_file:
       - path: ./.env
         required: false

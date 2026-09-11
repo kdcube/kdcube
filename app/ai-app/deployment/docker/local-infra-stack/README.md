@@ -54,6 +54,10 @@ chmod -R 0777 ./data
 docker compose up -d
 ```
 
+Postgres, Redis, and ClamAV use `restart: unless-stopped`. Services that were
+running return after Docker Desktop or the host restarts; an explicit stop
+keeps that service stopped.
+
 For delegated auth:
 
 ```shell
