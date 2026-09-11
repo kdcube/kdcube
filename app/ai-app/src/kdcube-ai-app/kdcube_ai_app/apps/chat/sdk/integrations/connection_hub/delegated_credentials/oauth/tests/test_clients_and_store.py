@@ -30,6 +30,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentia
 )
 from connection_hub.delegated_credentials.oauth.store import (
     CLIENT_TTL_SECONDS,
+    CONSENT_DRAFT_TTL_SECONDS,
     GrantStore,
     GrantStoreUnavailable,
 )
@@ -336,6 +337,32 @@ async def test_consent_csrf_allows_only_one_concurrent_consumer(store):
 
     assert sum(result[0] for result in results) == 1
     assert sorted(result[1] for result in results) == ["not_found", "ok"]
+
+
+@pytest.mark.asyncio
+async def test_card_editor_consent_draft_is_owner_bound_short_lived_and_single_use(store):
+    draft = await store.create_consent_draft(
+        "user-1",
+        context={"client_id": "client-1", "catalog_version": "catalog-1"},
+    )
+    key = store._key("consent-draft", draft)
+
+    assert store._r.ttls[key] == CONSENT_DRAFT_TTL_SECONDS
+    assert await store.read_consent_draft_context(draft, "user-2") == (
+        False,
+        "subject_mismatch",
+        {},
+    )
+    assert await store.read_consent_draft_context(draft, "user-1") == (
+        True,
+        "ok",
+        {"client_id": "client-1", "catalog_version": "catalog-1"},
+    )
+    consumed = await store.consume_consent_draft_context(draft, "user-1")
+    replay = await store.consume_consent_draft_context(draft, "user-1")
+
+    assert consumed[0:2] == (True, "ok")
+    assert replay == (False, "not_found", {})
 
 
 @pytest.mark.asyncio

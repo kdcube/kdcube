@@ -301,6 +301,7 @@ def _client(
     }
 
     @app.post("/guard")
+    @app.post("/second")
     async def guard(request: Request):
         body = await request.body()
         denial = await surface_guard.authorize_delegated_mcp_request(
@@ -652,6 +653,65 @@ def test_live_card_does_not_share_an_equal_tool_name_between_resources(monkeypat
     assert body["consent"]["resource"] == GUARD_RESOURCE
     assert body["consent"]["outer_operation"] == "records_export"
     assert "grant" not in body["consent"]
+
+
+def test_live_multi_resource_card_allows_one_bearer_at_each_granted_resource(monkeypatch):
+    second_resource = "http://testserver/second"
+    connections = {
+        "delegated_credentials": {
+            "oauth": {
+                "enabled": True,
+                "resources": [
+                    {
+                        "resource": GUARD_RESOURCE,
+                        "grants": ["records:read"],
+                        "tools": {"records_export": {"grants": ["records:read"]}},
+                    },
+                    {
+                        "resource": second_resource,
+                        "grants": ["records:read"],
+                        "tools": {"records_export": {"grants": ["records:read"]}},
+                    },
+                ],
+            },
+        },
+    }
+    redis = _Redis()
+    _store_live_card(
+        redis,
+        _live_card(
+            resource_grants={
+                GUARD_RESOURCE: ("records:read",),
+                second_resource: ("records:read",),
+            },
+            resource_operations={
+                GUARD_RESOURCE: ("records_export",),
+                second_resource: ("records_export",),
+            },
+        ),
+    )
+    client = _client(
+        monkeypatch,
+        grant_record=_pointer_grant(),
+        redis=redis,
+        connections=connections,
+    )
+
+    first = client.post(
+        "/guard",
+        json=_rpc_tool_call(),
+        headers={"Authorization": "Bearer reader"},
+    )
+    second = client.post(
+        "/second",
+        json=_rpc_tool_call(),
+        headers={"Authorization": "Bearer reader"},
+    )
+
+    assert first.status_code == 200
+    assert first.json() == {"ok": True}
+    assert second.status_code == 200
+    assert second.json() == {"ok": True}
 
 
 def test_hosted_agent_outer_operation_denial_carries_exact_grant_action(monkeypatch):

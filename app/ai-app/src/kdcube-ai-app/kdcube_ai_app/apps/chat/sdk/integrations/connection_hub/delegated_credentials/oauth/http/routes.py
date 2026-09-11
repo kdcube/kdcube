@@ -17,7 +17,7 @@ import json
 import logging
 from functools import wraps
 from typing import Any, Iterable, Mapping, Optional, Tuple
-from urllib.parse import parse_qs, quote, urlsplit
+from urllib.parse import parse_qs, quote, urlencode, urlsplit
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -114,6 +114,8 @@ _AUTHORIZE_FORM_KEYS = (
     "client_id", "redirect_uri", "response_type", "scope",
     "resource", "state", "code_challenge", "code_challenge_method",
 )
+
+_CONSENT_DRAFT_SCHEMA = "connection_hub.oauth_consent_draft.v1"
 
 
 def _normalize_grant_store_unavailable(fn):
@@ -628,6 +630,39 @@ def _user_label(user: Mapping[str, object]) -> str:
     return ""
 
 
+def _oauth_card_label(
+    client_metadata: Mapping[str, Any] | None,
+    *,
+    resource: str,
+    explicit: str = "",
+) -> str:
+    """The owner-visible card name, including the entry door and agent id."""
+
+    if str(explicit or "").strip():
+        return str(explicit).strip()
+    metadata = dict(client_metadata or {})
+    label = str(
+        metadata.get("client_name")
+        or metadata.get("name")
+        or metadata.get("client_uri")
+        or ""
+    ).strip()
+    door_path = str(resource or "").split("?", 1)[0].rstrip("*").rstrip("/")
+    door_alias = door_path.rsplit("/mcp/", 1)[-1].strip("/") if "/mcp/" in door_path else ""
+    if door_alias and door_alias.lower() not in label.lower():
+        label = f"{label} · {door_alias}" if label else door_alias
+    asserted = metadata.get("client_metadata")
+    asserted = asserted if isinstance(asserted, Mapping) else {}
+    agent_id = str(
+        asserted.get("kdcube_agent_id")
+        or asserted.get("kdcube_worker_id")
+        or ""
+    ).strip()
+    if agent_id and agent_id.lower() not in label.lower():
+        label = f"{label} · {agent_id}" if label else agent_id
+    return label or str(metadata.get("client_id") or "Connected client")
+
+
 def _error_response(err: AuthorizeError, issuer: str) -> Response:
     if err.redirectable and err.redirect_uri:
         url = build_redirect(
@@ -1019,23 +1054,6 @@ async def authorize(request: Request) -> Response:
     if delegation_denied is not None:
         return delegation_denied
 
-    # Synchronizer CSRF token bound to the consenting user, embedded in the form.
-    csrf_context = {
-        "client_id": req.client_id,
-        "client_metadata_digest": (
-            req.client.snapshot_digest() if req.client is not None else ""
-        ),
-    }
-    csrf = await get_grant_store(request).create_csrf_token(
-        subject,
-        context=csrf_context,
-    )
-    LOGGER.info(
-        "[connection-hub.oauth] authorize csrf_minted subject=%s client_id=%s resource=%s",
-        subject,
-        req.client_id,
-        req.resource or "",
-    )
     # trusted = a statically pre-registered client (not a dynamically-registered one),
     # so the consent screen can flag unknown clients for anti-phishing.
     trusted = bool(
@@ -1055,6 +1073,71 @@ async def authorize(request: Request) -> Response:
         request, subject=subject, client_id=req.client_id, resource=req.resource,
     )
     catalog_version = await _active_catalog_version_for_consent(request)
+    widget_base = _connection_hub_widget_base(request)
+    if cfg.consent_ui.mode == "connection_hub" and widget_base:
+        draft = await get_grant_store(request).create_consent_draft(
+            subject,
+            context={
+                "schema": _CONSENT_DRAFT_SCHEMA,
+                "authorize_params": {
+                    "client_id": render_req.client_id,
+                    "redirect_uri": render_req.redirect_uri,
+                    "response_type": render_req.response_type,
+                    "scope": " ".join(render_req.scopes),
+                    "resource": render_req.resource or "",
+                    "state": render_req.state or "",
+                    "code_challenge": render_req.code_challenge,
+                    "code_challenge_method": render_req.code_challenge_method,
+                },
+                "client_id": render_req.client_id,
+                "client_metadata_digest": (
+                    render_req.client.snapshot_digest()
+                    if render_req.client is not None
+                    else ""
+                ),
+                "catalog_version": catalog_version,
+            },
+        )
+        separator = "&" if "?" in widget_base else "?"
+        location = (
+            f"{widget_base}{separator}"
+            + urlencode({"tab": "delegatedAccess", "oauth_consent": draft})
+        )
+        LOGGER.info(
+            "[connection-hub.oauth] authorize card_editor_handoff "
+            "subject=%s client_id=%s resource=%s",
+            subject,
+            render_req.client_id,
+            render_req.resource or "",
+        )
+        return RedirectResponse(
+            location,
+            status_code=302,
+            headers={
+                "Cache-Control": "no-store",
+                "Pragma": "no-cache",
+                "Referrer-Policy": "no-referrer",
+            },
+        )
+
+    # Non-hub and headless hosts keep the compact renderer. Its synchronizer
+    # token is single-use and bound to this user and client snapshot.
+    csrf_context = {
+        "client_id": req.client_id,
+        "client_metadata_digest": (
+            req.client.snapshot_digest() if req.client is not None else ""
+        ),
+    }
+    csrf = await get_grant_store(request).create_csrf_token(
+        subject,
+        context=csrf_context,
+    )
+    LOGGER.info(
+        "[connection-hub.oauth] authorize csrf_minted subject=%s client_id=%s resource=%s",
+        subject,
+        req.client_id,
+        req.resource or "",
+    )
     custom = await _render_custom_consent_if_configured(
         request,
         req=render_req,
@@ -1254,6 +1337,477 @@ async def _seed_resource_operations_for_consent(
     except Exception:
         LOGGER.exception("[connection-hub.oauth] consent resource-operation seed failed")
         return {}
+
+
+async def _request_from_consent_draft(
+    request: Request,
+    *,
+    subject: str,
+    context: Mapping[str, Any],
+) -> tuple[AuthorizeRequest | None, OAuthDelegatedClientConfig | None, Response | None]:
+    if str(context.get("schema") or "") != _CONSENT_DRAFT_SCHEMA:
+        return None, None, JSONResponse(
+            status_code=400,
+            content={"error": "oauth_consent_draft_invalid"},
+        )
+    params = context.get("authorize_params")
+    if not isinstance(params, Mapping):
+        return None, None, JSONResponse(
+            status_code=400,
+            content={"error": "oauth_consent_draft_invalid"},
+        )
+    cfg = await _consent_config(request, owner_subject=subject)
+    if cfg is None:
+        return None, None, _catalog_unavailable_response()
+    try:
+        resolver = await _dynamic_client_resolver(
+            request,
+            str(params.get("client_id") or ""),
+        )
+        req = parse_authorize_request(
+            dict(params),
+            client_resolver=resolver,
+            public_client_resolver=lambda cid: get_client(cid, request),
+            supported_scopes=cfg.supported_scopes(str(params.get("resource") or "")),
+        )
+    except ClientMetadataError as error:
+        return None, None, _client_metadata_error_response(error)
+    except AuthorizeError as error:
+        return None, None, _error_response(error, resolve_issuer(request))
+
+    expected_client = str(context.get("client_id") or "")
+    expected_digest = str(context.get("client_metadata_digest") or "")
+    current_digest = req.client.snapshot_digest() if req.client is not None else ""
+    if (
+        req.client_id != expected_client
+        or not expected_digest
+        or current_digest != expected_digest
+    ):
+        return None, None, _client_metadata_error_response(ClientMetadataError(
+            "invalid_client_metadata",
+            "client metadata changed after authorization began; restart authorization",
+        ))
+    active_catalog_version = await _active_catalog_version_for_consent(request)
+    expected_catalog_version = str(context.get("catalog_version") or "")
+    if (
+        not active_catalog_version
+        or active_catalog_version != expected_catalog_version
+    ):
+        return None, None, JSONResponse(
+            status_code=409,
+            content={
+                "error": "consent_catalog_changed",
+                "error_description": "the service catalog changed; restart authorization",
+                "expected_catalog_version": expected_catalog_version,
+                "active_catalog_version": active_catalog_version,
+            },
+        )
+    return req, cfg, None
+
+
+def _account_requirements_payload(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {"providers": [], "choices": [], "unresolved_claims": [], "has_gap": False}
+    return {
+        "providers": [
+            {
+                "provider_id": item.provider_id,
+                "provider_label": item.provider_label,
+                "connector_app_id": item.connector_app_id,
+                "needed_claims": list(item.needed_claims),
+                "satisfied_claims": list(item.satisfied_claims),
+                "missing_claims": list(item.missing_claims),
+                "status": item.status(),
+                "connect_url": item.connect_url,
+                "accounts": [
+                    {
+                        "account_id": account.account_id,
+                        "label": account.label,
+                        "held_claims": list(account.held_claims),
+                    }
+                    for account in item.accounts
+                ],
+            }
+            for item in value.providers
+        ],
+        "choices": [
+            {
+                "label": choice.label,
+                "options": [
+                    {
+                        "provider_id": option.provider_id,
+                        "provider_label": option.provider_label,
+                        "connector_app_id": option.connector_app_id,
+                        "claims": list(option.claims),
+                        "connected": bool(option.connected),
+                        "connect_url": option.connect_url,
+                    }
+                    for option in choice.options
+                ],
+            }
+            for choice in value.choices
+        ],
+        "unresolved_claims": list(value.unresolved_claims),
+        "has_gap": bool(value.has_gap),
+    }
+
+
+def _consent_draft_error(reason: str) -> JSONResponse:
+    status = 410 if reason in {"missing", "not_found"} else 403
+    return JSONResponse(
+        status_code=status,
+        content={
+            "error": "oauth_consent_draft_unavailable",
+            "reason": reason,
+            "error_description": "This authorization review expired or is not available to this account.",
+        },
+        headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+    )
+
+
+@router.get("/oauth/authorize/consent/draft", include_in_schema=False)
+@_normalize_grant_store_unavailable
+async def authorize_consent_draft(request: Request) -> Response:
+    user, denied = await _require_user(request)
+    if denied is not None:
+        return denied
+    subject = _user_subject(user or {})
+    draft_id = str(request.query_params.get("draft_id") or "").strip()
+    ok, reason, context = await get_grant_store(request).read_consent_draft_context(
+        draft_id,
+        subject,
+    )
+    if not ok:
+        return _consent_draft_error(reason)
+    req, cfg, invalid = await _request_from_consent_draft(
+        request,
+        subject=subject,
+        context=context,
+    )
+    if invalid is not None:
+        return invalid
+    if req is None or cfg is None:
+        return _consent_draft_error("invalid")
+
+    inventory = await _platform_grant_inventory(
+        user or {},
+        req.scopes,
+        cfg=cfg,
+        resource=req.resource,
+    )
+    denied_grants = _delegation_denial(req.scopes, inventory, resource=req.resource)
+    if denied_grants is not None:
+        return denied_grants
+
+    service = get_automation_access(request)
+    seed = await service.oauth_consent_card_seed(
+        grantor_subject=subject,
+        client_id=req.client_id,
+        resource=req.resource,
+        client_metadata=req.client.snapshot() if req.client is not None else {},
+    )
+    if seed.get("ok") is not True:
+        return JSONResponse(
+            status_code=int(seed.get("status") or 503),
+            content=seed,
+        )
+    existing = seed.get("access") if isinstance(seed.get("access"), Mapping) else {}
+    resource_grants = {
+        str(resource): [str(grant) for grant in grants or ()]
+        for resource, grants in dict(existing.get("resource_grants") or {}).items()
+    }
+    entry_grants = resource_grants.setdefault(req.resource, [])
+    for grant in req.scopes:
+        if grant not in entry_grants:
+            entry_grants.append(grant)
+    requested_operations = [
+        tool.name
+        for tool in cfg.tools_for_scopes(req.scopes, resource=req.resource)
+    ]
+    if existing:
+        resource_operations = {
+            str(resource): [str(operation) for operation in operations or ()]
+            for resource, operations in dict(existing.get("resource_operations") or {}).items()
+        }
+        entry_operations = resource_operations.setdefault(req.resource, [])
+        for operation in requested_operations:
+            if operation not in entry_operations:
+                entry_operations.append(operation)
+    else:
+        resource_operations = {
+            req.resource: requested_operations
+        }
+    invocation_policies = {
+        resource: {operation: "always" for operation in operations}
+        for resource, operations in resource_operations.items()
+    }
+    for policy in existing.get("invocation_policies") or ():
+        authority = policy.get("authority") if isinstance(policy, Mapping) else {}
+        if not isinstance(authority, Mapping) or authority.get("surface") != "outer":
+            continue
+        resource = str(authority.get("resource") or "")
+        operation = str(authority.get("operation") or "")
+        mode = str(policy.get("mode") or "")
+        if operation in resource_operations.get(resource, ()) and mode in {"always", "once"}:
+            invocation_policies.setdefault(resource, {})[operation] = mode
+
+    connected_accounts = await _connected_accounts_for_consent(subject)
+    requirements = _accounts_needed_for_consent(
+        request,
+        req.scopes,
+        connected_accounts,
+        cfg=cfg,
+    )
+    resource_cfg = cfg.resource_config(req.resource)
+    client = req.client.snapshot() if req.client is not None else {"client_id": req.client_id}
+    derived_label = _oauth_card_label(client, resource=req.resource)
+    payload = {
+        "ok": True,
+        "draft_id": draft_id,
+        "catalog_version": str(context.get("catalog_version") or ""),
+        "card_revision": int(seed.get("card_revision") or 0),
+        "grantor": {
+            "subject": subject,
+            "label": _user_label(user or {}),
+        },
+        "client": client,
+        "trusted": bool(
+            req.client is not None
+            and req.client.registration_kind == CLIENT_REGISTRATION_PRE_REGISTERED
+        ),
+        "entry_door": {
+            "resource": req.resource,
+            "label": (
+                str(getattr(resource_cfg, "label", "") or "")
+                if resource_cfg is not None
+                else req.resource
+            ),
+            "requested_grants": list(req.scopes),
+            "operations": [
+                {
+                    "name": tool.name,
+                    "label": tool.label,
+                    "description": tool.description,
+                    "grants": list(tool.grants),
+                }
+                for tool in cfg.tools_for_scopes(req.scopes, resource=req.resource)
+            ],
+        },
+        "oauth": {
+            "redirect_uri": req.redirect_uri,
+            "redirect_host": urlsplit(req.redirect_uri).netloc,
+            "requested_scopes": list(req.scopes),
+        },
+        "account_requirements": _account_requirements_payload(requirements),
+        "catalog_scope": seed.get("catalog_scope") or {
+            "mode": "entry",
+            "resources": [req.resource],
+        },
+        "selection": {
+            "label": str(existing.get("label") or derived_label),
+            "resource_grants": resource_grants,
+            "resource_operations": resource_operations,
+            "invocation_policies": invocation_policies,
+            "named_service_operations": (
+                existing.get("effective_named_service_operations")
+                or existing.get("named_service_operations")
+                or {}
+            ),
+            "account_scope": existing.get("account_scope") or {},
+            "catalog_row_by_resource": (
+                existing.get("catalog_row_by_resource")
+                or seed.get("catalog_row_by_resource")
+                or {}
+            ),
+        },
+    }
+    return JSONResponse(
+        payload,
+        headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+    )
+
+
+async def _json_data(request: Request) -> dict[str, Any]:
+    try:
+        value = await request.json()
+    except Exception:
+        return {}
+    if not isinstance(value, Mapping):
+        return {}
+    nested = value.get("data")
+    return dict(nested) if isinstance(nested, Mapping) else dict(value)
+
+
+@router.post("/oauth/authorize/consent/decision", include_in_schema=False)
+@_normalize_grant_store_unavailable
+async def authorize_consent_decision(request: Request) -> Response:
+    issuer = resolve_issuer(request)
+    user, denied = await _require_user(request)
+    if denied is not None:
+        return denied
+    subject = _user_subject(user or {})
+    payload = await _json_data(request)
+    draft_id = str(payload.get("draft_id") or "").strip()
+    store = get_grant_store(request)
+    ok, reason, context = await store.read_consent_draft_context(draft_id, subject)
+    if not ok:
+        return _consent_draft_error(reason)
+    req, cfg, invalid = await _request_from_consent_draft(
+        request,
+        subject=subject,
+        context=context,
+    )
+    if invalid is not None:
+        return invalid
+    if req is None or cfg is None:
+        return _consent_draft_error("invalid")
+
+    decision = str(payload.get("decision") or "").strip().lower()
+    if decision not in {"approve", "deny"}:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "oauth_consent_decision_invalid"},
+        )
+    if decision == "deny":
+        consumed, consume_reason, _ = await store.consume_consent_draft_context(
+            draft_id,
+            subject,
+        )
+        if not consumed:
+            return _consent_draft_error(consume_reason)
+        return JSONResponse({
+            "ok": True,
+            "redirect_url": build_redirect(
+                req.redirect_uri,
+                {"error": "access_denied", "state": req.state, "iss": issuer},
+            ),
+        })
+
+    resource_grants = payload.get("resource_grants")
+    resource_operations = payload.get("resource_operations")
+    invocation_policies = payload.get("invocation_policies")
+    account_scope = payload.get("account_scope")
+    if not all(isinstance(value, Mapping) for value in (
+        resource_grants,
+        resource_operations,
+        invocation_policies,
+        account_scope,
+    )):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "oauth_consent_selection_invalid"},
+        )
+    named_service_operations = payload.get("named_service_operations", {})
+    if not isinstance(named_service_operations, (Mapping, str)):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "oauth_consent_selection_invalid"},
+        )
+
+    service = get_automation_access(request)
+    resolved = await service.resolve_oauth_consent_authority(
+        user or {},
+        client_id=req.client_id,
+        entry_resource=req.resource,
+        requested_grants=req.scopes,
+        client_metadata=req.client.snapshot() if req.client is not None else {},
+        resource_grants=resource_grants,
+        resource_operations=resource_operations,
+        named_service_operations=named_service_operations,
+        account_scope=account_scope,
+        expected_card_revision=int(payload.get("expected_card_revision") or 0),
+        expected_catalog_version=str(payload.get("expected_catalog_version") or ""),
+    )
+    if resolved.get("ok") is not True:
+        return JSONResponse(
+            status_code=int(resolved.get("status") or 400),
+            content=resolved,
+        )
+    selected_resource_operations = dict(resolved.get("resource_operations") or {})
+    selected_policy_keys = {
+        (str(resource), str(operation))
+        for resource, operations in selected_resource_operations.items()
+        for operation in operations or ()
+    }
+    submitted_policies = {
+        (str(resource), str(operation)): str(mode or "").strip().lower()
+        for resource, operations in dict(invocation_policies).items()
+        if isinstance(operations, Mapping)
+        for operation, mode in operations.items()
+    }
+    if set(submitted_policies) != selected_policy_keys or any(
+        mode not in {"always", "once"} for mode in submitted_policies.values()
+    ):
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "oauth_consent_invocation_policy_invalid",
+                "error_description": "every selected outer operation requires Once or Always",
+            },
+        )
+
+    selected_grants = sorted({
+        str(grant)
+        for grants in dict(resolved.get("resource_grants") or {}).values()
+        for grant in grants or ()
+        if str(grant).strip()
+    })
+    inventory = await _platform_grant_inventory(
+        user or {},
+        selected_grants,
+        cfg=cfg,
+    )
+    delegation_denied = _delegation_denial(selected_grants, inventory)
+    if delegation_denied is not None:
+        return delegation_denied
+    grantor_authority = _grantor_authority(
+        user or {},
+        scopes=selected_grants,
+        inventory=inventory,
+    )
+    # Consume only after every submitted authority dimension has passed. A
+    # correctable validation error leaves the same editor usable; a successful
+    # decision is still single-use and cannot mint two authorization codes.
+    consumed, consume_reason, consumed_context = await store.consume_consent_draft_context(
+        draft_id,
+        subject,
+    )
+    if not consumed:
+        return _consent_draft_error(consume_reason)
+    if consumed_context != context:
+        return _consent_draft_error("context_changed")
+
+    code = await store.create_auth_code(
+        client_id=req.client_id,
+        redirect_uri=req.redirect_uri,
+        code_challenge=req.code_challenge,
+        sub=subject,
+        scopes=list(
+            dict(resolved.get("resource_grants") or {}).get(req.resource, ())
+        ),
+        operations=list(resolved.get("operations") or ()),
+        resource_grants=dict(resolved.get("resource_grants") or {}),
+        resource_operations=selected_resource_operations,
+        resource=req.resource,
+        identity_scope=str(resolved.get("identity_scope") or ""),
+        grantor_authority=grantor_authority,
+        delegation_edges=list(grantor_authority.get("delegation_edges") or []),
+        named_services=dict(resolved.get("named_services") or {}),
+        named_service_operations=resolved.get("named_service_operations") or {},
+        catalog_version=str(resolved.get("catalog_version") or ""),
+        account_scope=dict(resolved.get("account_scope") or {}),
+        client_metadata=req.client.snapshot() if req.client is not None else {},
+        card_label=str(payload.get("label") or "").strip(),
+        invocation_policies=dict(invocation_policies),
+        expected_card_revision=int(resolved.get("card_revision") or 0),
+    )
+    return JSONResponse({
+        "ok": True,
+        "redirect_url": build_redirect(
+            req.redirect_uri,
+            {"code": code, "state": req.state, "iss": issuer},
+        ),
+    })
 
 
 @router.post("/oauth/authorize/consent", include_in_schema=False)
@@ -1583,6 +2137,10 @@ async def _issue_tokens(
     refresh_token=None,
     account_scope=None,
     client_metadata=None,
+    card_label="",
+    invocation_policies=None,
+    replace_authority=False,
+    expected_card_revision=None,
 ) -> JSONResponse:
     tenant, project = oauth_tenant_project(request)
     grant_map = normalize_resource_grants(resource_grants)
@@ -1690,36 +2248,19 @@ async def _issue_tokens(
         if not metadata_snapshot:
             client_record = await store.get_client_record(client_id) or {}
             metadata_snapshot = dict(client_record.get("metadata") or {})
-        client_label = str(
-            metadata_snapshot.get("client_name")
-            or metadata_snapshot.get("name")
-            or metadata_snapshot.get("client_uri")
-            or ""
-        ).strip()
-        # A client registers ONE fixed name for every connector it opens (every
-        # Claude Code connection registers as "Claude"), so the registered name
-        # alone cannot tell two connections apart. Qualify it with the door this
-        # grant is for - "Claude · productivity" - which is the part the user
-        # actually recognizes. The user can still rename the card afterwards.
-        door_alias = ""
+        client_label = _oauth_card_label(
+            metadata_snapshot,
+            resource=str(resource or ""),
+            explicit=str(card_label or ""),
+        )
         door_path = str(resource or "").split("?", 1)[0].rstrip("*").rstrip("/")
-        if "/mcp/" in door_path:
-            door_alias = door_path.rsplit("/mcp/", 1)[-1].strip("/")
+        door_alias = door_path.rsplit("/mcp/", 1)[-1].strip("/") if "/mcp/" in door_path else ""
         registered_name = str(metadata_snapshot.get("client_name") or "")
-        if door_alias and door_alias.lower() not in client_label.lower():
-            client_label = f"{client_label} · {door_alias}" if client_label else door_alias
         asserted_metadata = (
             metadata_snapshot.get("client_metadata")
             if isinstance(metadata_snapshot.get("client_metadata"), Mapping)
             else {}
         )
-        agent_id = str(
-            asserted_metadata.get("kdcube_agent_id")
-            or asserted_metadata.get("kdcube_worker_id")
-            or ""
-        ).strip()
-        if agent_id and agent_id.lower() not in client_label.lower():
-            client_label = f"{client_label} · {agent_id}" if client_label else agent_id
         # Card naming is derived, not received: log every input so a wrong card
         # title is diagnosable from the proc log instead of by inspecting the
         # rendered UI (grep: connection_hub.oauth card_label).
@@ -1729,7 +2270,7 @@ async def _issue_tokens(
             client_id, registered_name, sorted(metadata_snapshot.keys()),
             str(resource or ""), door_alias, client_label,
         )
-        await service.record_oauth_grant(
+        recorded = await service.record_oauth_grant(
             grantor_subject=sub,
             client_id=client_id,
             client_label=client_label,
@@ -1745,8 +2286,50 @@ async def _issue_tokens(
             named_service_operations=named_service_operations,
             catalog_version=catalog_version,
             client_metadata=asserted_metadata,
+            replace_authority=bool(replace_authority),
+            expected_card_revision=expected_card_revision,
         )
-    except (AutomationAccessUnavailable, CardUnavailable, CardConflict, CardCommitFailed) as exc:
+        if invocation_policies is not None and recorded is not None:
+            await service.apply_oauth_invocation_policies(
+                grantor_subject=sub,
+                access_id=recorded.access_id,
+                resource_operations=operation_map,
+                invocation_policies=invocation_policies,
+            )
+    except CardConflict as exc:
+        if replace_authority and expected_card_revision is not None:
+            try:
+                await store.revoke_access_grant(access_token)
+                if refresh_token:
+                    await store.revoke_refresh_token(str(refresh_token))
+            except Exception:
+                LOGGER.exception(
+                    "[connection-hub.oauth] failed to remove tokens after card conflict "
+                    "client=%s",
+                    client_id,
+                )
+            LOGGER.warning(
+                "[connection-hub.oauth] token withheld: card changed after consent "
+                "client=%s current_revision=%s",
+                client_id,
+                getattr(exc, "current_revision", 0),
+            )
+            return _token_error(
+                "invalid_grant",
+                "The delegated access card changed after approval; restart authorization.",
+            )
+        LOGGER.error(
+            "[connection-hub.oauth] token withheld: delegated card conflict "
+            "client=%s reason=%s",
+            client_id,
+            getattr(exc, "reason", type(exc).__name__),
+        )
+        return _token_error(
+            "temporarily_unavailable",
+            "The delegated access card could not be recorded; retry the request.",
+            status=503,
+        )
+    except (AutomationAccessUnavailable, CardUnavailable, CardCommitFailed) as exc:
         # The card is the authority a governed call resolves; a token whose card
         # was never committed would be denied as revoked on every use. Delegated
         # authority is therefore handed over only after the card commits.
@@ -1824,6 +2407,10 @@ async def token(request: Request) -> Response:
             catalog_version=payload.get("catalog_version") or "",
             account_scope=payload.get("account_scope") or None,
             client_metadata=payload.get("client_metadata") or {},
+            card_label=payload.get("card_label") or "",
+            invocation_policies=payload.get("invocation_policies"),
+            replace_authority=True,
+            expected_card_revision=payload.get("expected_card_revision"),
         )
 
     if grant_type == "refresh_token":

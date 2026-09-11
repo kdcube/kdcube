@@ -1268,7 +1268,16 @@ class BaseEntrypoint:
 
     @staticmethod
     def _ui_source_signature(root: pathlib.Path) -> str:
-        ignored_dirs = {"node_modules", ".git", "dist", "build", ".vite", ".vite-temp", "__pycache__"}
+        ignored_dirs = {
+            "node_modules",
+            ".git",
+            "dist",
+            "build",
+            ".vite",
+            ".vite-temp",
+            "_shared",
+            "__pycache__",
+        }
         ignored_suffixes = {".tsbuildinfo"}
         sha = hashlib.sha256()
         for path in sorted(root.rglob("*")):
@@ -1321,6 +1330,7 @@ class BaseEntrypoint:
             "build",
             ".vite",
             ".vite-temp",
+            "_shared",
             ".react_workspace_git",
             ".git",
             "__pycache__",

@@ -25,6 +25,22 @@ def test_ui_copy_ignores_generated_js_shadow_files(tmp_path):
     assert (dst / "plain.js").exists()
 
 
+def test_ui_copy_ignores_materialized_shared_sources(tmp_path):
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    src.mkdir()
+    (src / "App.tsx").write_text("export default function App() { return null }\n", encoding="utf-8")
+
+    shared = src / "_shared" / "components-core"
+    shared.mkdir(parents=True)
+    (shared / "session").symlink_to(tmp_path / "host-only-session", target_is_directory=True)
+
+    shutil.copytree(src, dst, ignore=BaseEntrypoint._ui_copy_ignore_patterns())
+
+    assert (dst / "App.tsx").exists()
+    assert not (dst / "_shared").exists()
+
+
 def test_ui_signature_ignores_generated_js_shadow_files(tmp_path):
     src = tmp_path / "src"
     src.mkdir()
@@ -35,6 +51,20 @@ def test_ui_signature_ignores_generated_js_shadow_files(tmp_path):
 
     before = BaseEntrypoint._ui_source_signature(src)
     generated.write_text("changed generated residue\n", encoding="utf-8")
+    after = BaseEntrypoint._ui_source_signature(src)
+
+    assert after == before
+
+
+def test_ui_signature_ignores_materialized_shared_sources(tmp_path):
+    src = tmp_path / "src"
+    shared = src / "_shared"
+    shared.mkdir(parents=True)
+    generated = shared / "generated.ts"
+    generated.write_text("export const value = 1\n", encoding="utf-8")
+
+    before = BaseEntrypoint._ui_source_signature(src)
+    generated.write_text("export const value = 2\n", encoding="utf-8")
     after = BaseEntrypoint._ui_source_signature(src)
 
     assert after == before

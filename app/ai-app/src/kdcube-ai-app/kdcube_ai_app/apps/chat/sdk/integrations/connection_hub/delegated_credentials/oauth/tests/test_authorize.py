@@ -25,6 +25,7 @@ from connection_hub.delegated_credentials.oauth.flow import (
     build_redirect,
     parse_authorize_request,
 )
+from connection_hub.delegated_credentials.oauth.clients import PublicClient
 from connection_hub.delegated_credentials.oauth.consent import (
     CONSENT_CONTRACT_VERSION,
     named_service_selection_rows,
@@ -689,6 +690,191 @@ def test_authorize_unknown_client_is_400_not_redirect(client):
         follow_redirects=False,
     )
     assert r.status_code == 400  # must NOT redirect to an unvalidated client
+
+
+def _open_card_editor(client, monkeypatch, *, multi_resource: bool):
+    resource = "https://runtime.example.test/public/mcp/worker_stream"
+    config = oauth_delegated_config(client.app)
+
+    class CardEditorAccess:
+        async def oauth_consent_config(self, *, grantor_subject):
+            assert grantor_subject == "google:admin@example.test"
+            return config
+
+        async def oauth_consent_card_seed(
+            self, *, grantor_subject, client_id, resource, client_metadata
+        ):
+            assert grantor_subject == "google:admin@example.test"
+            assert client_id == "claude"
+            asserted = client_metadata.get("client_metadata") or {}
+            full = asserted.get("kdcube_credential_use") == "multi_resource"
+            return {
+                "ok": True,
+                "access_id": "oauth-card-1",
+                "card_revision": 0,
+                "catalog_scope": {
+                    "mode": "full" if full else "entry",
+                    "resources": [] if full else [resource],
+                },
+                "catalog_row_by_resource": {resource: "*"},
+            }
+
+        async def resolve_oauth_consent_authority(self, _user, **selection):
+            return {
+                "ok": True,
+                "access_id": "oauth-card-1",
+                "catalog_version": selection["expected_catalog_version"],
+                "card_revision": selection["expected_card_revision"],
+                "resource_grants": dict(selection["resource_grants"]),
+                "resource_operations": dict(selection["resource_operations"]),
+                "operations": sorted({
+                    operation
+                    for operations in selection["resource_operations"].values()
+                    for operation in operations
+                }),
+                "named_service_operations": selection["named_service_operations"],
+                "named_services": {},
+                "account_scope": dict(selection["account_scope"]),
+                "identity_scope": "grantor",
+            }
+
+    client.app.state.automation_access_factory = lambda: CardEditorAccess()
+    monkeypatch.setattr(
+        oauth_routes,
+        "_connection_hub_widget_base",
+        lambda _request: "https://runtime.example.test/widgets/connections_settings",
+    )
+    if multi_resource:
+        public_client = PublicClient(
+            client_id="claude",
+            redirect_uris=("http://127.0.0.1/callback",),
+            client_name="Connection Hub CLI",
+            client_metadata={
+                "kdcube_credential_use": "multi_resource",
+                "kdcube_agent_id": "codex:session-1",
+            },
+        )
+        monkeypatch.setattr(
+            oauth_routes,
+            "get_client",
+            lambda client_id, _request=None: public_client if client_id == "claude" else None,
+        )
+    response = client.get(
+        "/oauth/authorize",
+        params=_params(resource=resource),
+        headers={"Authorization": "Bearer admin-tok"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 302
+    location = up.urlsplit(response.headers["location"])
+    assert f"{location.scheme}://{location.netloc}{location.path}" == (
+        "https://runtime.example.test/widgets/connections_settings"
+    )
+    query = dict(up.parse_qsl(location.query))
+    assert query["tab"] == "delegatedAccess"
+    draft_id = query["oauth_consent"]
+    assert len(draft_id) >= 32
+    return resource, draft_id
+
+
+def test_connection_hub_consent_opens_entry_bound_card_editor(client, monkeypatch):
+    resource, draft_id = _open_card_editor(client, monkeypatch, multi_resource=False)
+
+    draft = client.get(
+        "/oauth/authorize/consent/draft",
+        params={"draft_id": draft_id},
+        headers={"Authorization": "Bearer admin-tok"},
+    )
+
+    assert draft.status_code == 200, draft.text
+    payload = draft.json()
+    assert payload["entry_door"]["resource"] == resource
+    assert payload["catalog_scope"] == {"mode": "entry", "resources": [resource]}
+    assert payload["selection"]["resource_grants"] == {resource: ["records:read"]}
+
+    other_user = client.get(
+        "/oauth/authorize/consent/draft",
+        params={"draft_id": draft_id},
+        headers={"Authorization": "Bearer user-tok"},
+    )
+    assert other_user.status_code == 403
+    assert other_user.json()["reason"] == "subject_mismatch"
+
+
+def test_multi_resource_oauth_delivery_opens_full_card_editor(client, monkeypatch):
+    resource, draft_id = _open_card_editor(client, monkeypatch, multi_resource=True)
+
+    draft = client.get(
+        "/oauth/authorize/consent/draft",
+        params={"draft_id": draft_id},
+        headers={"Authorization": "Bearer admin-tok"},
+    )
+
+    assert draft.status_code == 200, draft.text
+    payload = draft.json()
+    assert payload["entry_door"]["resource"] == resource
+    assert payload["catalog_scope"] == {"mode": "full", "resources": []}
+    assert payload["client"]["client_metadata"] == {
+        "kdcube_credential_use": "multi_resource",
+        "kdcube_agent_id": "codex:session-1",
+    }
+    assert payload["selection"]["label"].endswith("codex:session-1")
+
+
+def test_multi_resource_card_decision_carries_full_selection_once(client, monkeypatch):
+    import json
+
+    entry, draft_id = _open_card_editor(client, monkeypatch, multi_resource=True)
+    draft = client.get(
+        "/oauth/authorize/consent/draft",
+        params={"draft_id": draft_id},
+        headers={"Authorization": "Bearer admin-tok"},
+    ).json()
+    second = "https://runtime.example.test/public/mcp/another_service"
+    decision = {
+        "draft_id": draft_id,
+        "decision": "approve",
+        "label": "codex-main on dev-main",
+        "resource_grants": {
+            entry: ["records:read"],
+            second: ["records:read"],
+        },
+        "resource_operations": {
+            entry: ["records_export"],
+            second: [],
+        },
+        "invocation_policies": {
+            entry: {"records_export": "always"},
+            second: {},
+        },
+        "named_service_operations": {},
+        "account_scope": {},
+        "expected_card_revision": draft["card_revision"],
+        "expected_catalog_version": draft["catalog_version"],
+    }
+
+    approved = client.post(
+        "/oauth/authorize/consent/decision",
+        json=decision,
+        headers={"Authorization": "Bearer admin-tok"},
+    )
+
+    assert approved.status_code == 200, approved.text
+    code = dict(up.parse_qsl(up.urlsplit(approved.json()["redirect_url"]).query))["code"]
+    store = client.app.state.oauth_grant_store
+    code_payload = json.loads(store._r.values[store._key("code", code)])
+    assert code_payload["resource_grants"] == decision["resource_grants"]
+    assert code_payload["resource_operations"] == decision["resource_operations"]
+    assert code_payload["card_label"] == "codex-main on dev-main"
+    assert code_payload["expected_card_revision"] == draft["card_revision"]
+    assert code_payload["scopes"] == ["records:read"]
+
+    replay = client.post(
+        "/oauth/authorize/consent/decision",
+        json=decision,
+        headers={"Authorization": "Bearer admin-tok"},
+    )
+    assert replay.status_code == 410
 
 
 def _csrf_token(client, *, token: str = "admin-tok", params: dict | None = None) -> str:
