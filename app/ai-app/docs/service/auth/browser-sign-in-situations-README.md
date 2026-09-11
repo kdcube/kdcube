@@ -4,15 +4,15 @@ title: "Browser Sign-In Situations"
 summary: "Every way a browser page reaches KDCube signed in: who owns the login (KDCube or the host site), where the page lives (same origin, same site, cross-site), what carries the credential (the HttpOnly session cookie, token cookies the host writes, bearer and ID-token headers), how the gateway tells them apart, and what each situation needs configured. With before and after diagrams for the website and the control plane web app."
 status: active
 tags: ["service", "auth", "browser", "session", "cognito", "topology", "website", "control-plane", "diagrams"]
-updated_at: 2026-09-10
-keywords: ["browser sign-in", "session lane", "Cognito lane", "token-bearing host", "same origin", "same site", "cross-site", "X-ID-Token", "return_origins", "accept_upstream_tokens", "kst1"]
+updated_at: 2026-09-11
+keywords: ["browser sign-in", "server-side login lane", "Cognito browser lane", "token-bearing host", "same origin", "same site", "cross-site", "X-ID-Token", "return_origins", "accept_authenticator_tokens", "kst1"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/app-hosted-platform-login-and-session-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/server-side-login-and-platform-session-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-selector-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/npm/components-core/session-README.md
-  - https://github.com/elenaviter/app-ecosystem/blob/main/docs/connection-hub/package/browser-session.md
+  - https://github.com/elenaviter/app-ecosystem/blob/main/docs/connection-hub/package/server-side-login.md
 ---
 
 # Browser Sign-In Situations
@@ -20,7 +20,7 @@ see_also:
 A page in a browser needs to reach KDCube as a signed-in user. Two questions
 decide how:
 
-1. **Who owns the login?** KDCube (the platform hosts the sign-in and holds
+1. **Where does login run?** In KDCube (the platform hosts the sign-in and holds
    the session), or the host site (it had a login before KDCube and keeps
    it).
 2. **Where does the page live?** On the platform origin, on another origin
@@ -29,29 +29,29 @@ decide how:
 
 Every combination is a supported situation. This page names them, shows
 what carries the credential in each, and what a deployment configures. The
-mechanics of the session lane itself are in
-[Application-Hosted Platform Login And Session](app-hosted-platform-login-and-session-README.md).
+mechanics of server-side login are in
+[Server-Side Login And The Platform Session](server-side-login-and-platform-session-README.md).
 
 ## The situations
 
 | # | Login owned by | Page lives | What carries the credential to KDCube | Configure |
 | --- | --- | --- | --- | --- |
-| 1 | KDCube (session lane) | platform origin | the HttpOnly session cookie KDCube set | provider `browser_session`, the two `/api/platform/session/` URLs on the identity provider |
-| 2 | KDCube (session lane) | same site, other origin | the same cookie: same-site requests and iframes carry it | as 1, plus `issuer.return_origins` with the page's origin, and that origin in CORS |
-| 3 | KDCube (session lane) | cross-site | nothing crosses: the cookie is not sent cross-site and no token exists in the browser | not a browser situation; the host must own the login (4 or 5) or embed the platform's pages top-level |
+| 1 | KDCube (server-side lane) | platform origin | the HttpOnly session cookie KDCube set | provider `server_login`, the two `/api/platform/session/` URLs on the identity provider |
+| 2 | KDCube (server-side lane) | same site, other origin | the same cookie: same-site requests and iframes carry it | as 1, plus `issuer.return_origins` with the page's origin, and that origin in CORS |
+| 3 | KDCube (server-side lane) | cross-site | nothing crosses: the cookie is not sent cross-site and no token exists in the browser | the host must own the login (4 or 5) or open the platform's pages top-level |
 | 4 | host site (its own IdP, one KDCube trusts) | same origin | token cookies the host writes (`__Secure-LATC` = access token, `__Secure-LITC` = ID token) | the pool among the platform's trusted Cognito providers; the host's callback and sign-out pages on its app client |
 | 5 | host site (its own IdP, one KDCube trusts) | other origin, same site or cross-site | headers on every call: `Authorization: Bearer <access>` and `X-ID-Token: <id>`, passed to embedded widgets by `CONFIG_RESPONSE` | as 4, plus the page's origin in CORS and frame embedding |
-| 6 | KDCube (Cognito lane, the pre-session default) | platform origin | token cookies the platform's own frontends write after their browser OIDC | provider `cognito`, the frontends' callback and sign-out pages on the app client |
+| 6 | KDCube (browser-side Cognito lane) | platform origin | token cookies the platform's own frontends write after their browser OIDC | app-defined provider such as `cognito_demo`, or inline `auth.type: cognito`; the frontends' callback and sign-out pages on the app client |
 
 Situations 4 and 5 are the same host-owned login; only the transport
 differs with the origin. Situation 6 is what every deployment ran before
-the session lane and what the platform's frontends still run when the
-`cognito` provider is selected.
+server-side login and what the platform's frontends still run when a Cognito
+authenticator is selected.
 
 ## How the gateway tells them apart
 
 The platform authenticator is one object per deployment, chosen by the
-provider `auth.connection_hub` names. On the session lane it is a
+provider `auth.connection_hub` names. On the server-side lane it is a
 dispatcher over two managers, and the credential's shape chooses:
 
 ```text
@@ -59,16 +59,16 @@ credential (header Authorization, or the auth cookie)
    |
    +-- starts with "kst1."  -> session authority: Redis record, user, slide
    |
-   +-- anything else        -> Cognito token manager built from the session
-                                provider's upstream pool and its trusted
+   +-- anything else        -> Cognito token manager built from the referenced
+                                authenticator and its trusted
                                 providers: issuer + client id must match,
                                 the ID token (header or cookie) adds claims
 ```
 
-So a deployment on the session lane accepts both the cookie it set itself
+So a deployment on the server-side lane accepts both the cookie it set itself
 and the tokens a host brought from the same pools, on the same routes,
 with nothing to switch per request. The token manager exists only when the
-session provider's upstream is Cognito; `input.accept_upstream_tokens:
+referenced authenticator is Cognito; `input.accept_authenticator_tokens:
 false` on the provider turns it off for a deployment that wants the session
 cookie to be the only browser credential.
 
@@ -122,7 +122,7 @@ browser page https://<origin>/          (auth.js, server-session branch)
   |-- renewal: the server slides the session on activity
   |
 logout: POST /api/platform/logout?next=<page> -> session ended, return cookie,
-  upstreamLogoutUrl -> Cognito sign-out -> /api/platform/session/signed-out
+  upstreamLogoutUrl (stable response field) -> Cognito sign-out -> /api/platform/session/signed-out
   -> reads the return cookie -> the page
 
 app client needs, per platform origin only:
@@ -153,7 +153,7 @@ browser https://<platform origin>/platform/chat
   |     ... the server walk above ...
   |<- 302 /platform/chat with the HttpOnly session cookie
   |-- API calls carry the cookie; the platform validates the session
-logout: POST /api/platform/logout?next=/platform/chat -> upstream sign-out
+logout: POST /api/platform/logout?next=/platform/chat -> identity-provider sign-out
   -> signed-out -> /platform/chat
 
 app client needs: the same two /api/platform/session/ entries
@@ -188,8 +188,8 @@ host page https://host.example/        (the host's own login)
   |-- no cookie is involved; cross-site is fine
   |-- renewal and logout are the host's
 
-platform needs: the host's pool among the trusted providers (the session
-provider's upstream pool and its trusted_providers rows), the host origin in
+platform needs: the host's pool among the trusted providers (the referenced
+authenticator and its trusted_providers rows), the host origin in
 CORS (5) and frame embedding (5). The identity provider needs the host's own
 pages, not KDCube's.
 ```
@@ -203,13 +203,13 @@ clients run an OIDC flow, per origin:
 | Set | Who talks to the identity provider | Callback URL | Sign-out URLs |
 | --- | --- | --- | --- |
 | S | the platform, server login on (situations 1, 2) | `<platform origin>/api/platform/session/callback` | `<platform origin>/api/platform/session/signed-out` |
-| C | the control plane web app, server login off (situation 6) | `<platform origin>/platform/callback` | `<platform origin>/platform/chat` |
+| C | the control plane web app, browser-side Cognito selected (situation 6) | `<platform origin>/platform/callback` | `<platform origin>/platform/chat` |
 | W | a site running its own OIDC client (situations 4, 5, 6; the KDCube website in `own-oidc`) | `<site origin>/callback.html` | `<site origin>/` and `<site origin>/logout-complete.html` |
 
 Rules:
 
-- A platform origin needs S while it may run server login and C while it
-  may run the Cognito lane. Register both to switch freely.
+- A platform origin needs S while it may run server-side login and C while it
+  may run browser-side Cognito. Register both to switch freely.
 - A site origin needs W only while the site may run its own client. On
   server login it needs nothing, whatever origin it lives on: `return_origins`
   on the platform, not the identity provider, brings it back.
@@ -232,7 +232,7 @@ the local setup that runs it:
 ## What stays, and why
 
 The header lane (`Authorization` and `X-ID-Token`) and the Cognito token
-manager stay for situations 4 and 5, and for machine clients. The session
+manager stay for situations 4 and 5, and for machine clients. The server-side
 lane replaces the platform's own frontends running an identity client in
 the browser; it does not replace a host's right to bring tokens. The
 consumers of the ID token on the server therefore remain, reading identity

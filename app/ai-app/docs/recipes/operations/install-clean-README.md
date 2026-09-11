@@ -1,11 +1,11 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/recipes/operations/install-clean-README.md
 title: "Install KDCube: Clean Bootstrap"
-summary: "Stand up a fresh KDCube runtime with one init: application-hosted login, the configured base complectation, the optional Telegram companion, the first-run checklist, start, and honest verification."
+summary: "Stand up a fresh KDCube runtime with one init: server-side login, the configured base complectation, the optional Telegram companion, the first-run checklist, start, and honest verification."
 status: active
 tags: ["operations", "install", "bootstrap", "cli", "kdcube-cli", "auth"]
-keywords: ["kdcube init", "clean install", "Google sign-in", "application-hosted platform login", "local runtime"]
-updated_at: 2026-08-26
+keywords: ["kdcube init", "clean install", "Google sign-in", "server-side login", "local runtime"]
+updated_at: 2026-09-11
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/operations/operate-runtime-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/operations/install-from-descriptors-README.md
@@ -49,7 +49,7 @@ platform pulls.
 
 ## Init
 
-The default identity is **application-hosted login** (`--auth-type bundle`):
+The default identity uses **server-side login defined by an app** (`--auth-type bundle`):
 the workspace app hosts the Google sign-in page and Connection Hub issues the
 KDCube session, so you need no external IdP. Its one input is a Google **Web
 application** OAuth client id — public, no client secret, because the browser's
@@ -133,7 +133,7 @@ user-memories@2026-06-26    the mem provider + memories widget
 workspace@2026-03-31-13-36  showcase scene + chat wired to everything
 ```
 
-Default identity uses application-hosted platform login: the Workspace app
+Default identity uses server-side login: the Workspace app
 hosts Google sign-in, KDCube validates the Google proof through Connection Hub,
 and KDCube issues the platform session. `--bootstrap-admin-email` is the
 super-admin bootstrap rule in the Connection Hub authority registry.

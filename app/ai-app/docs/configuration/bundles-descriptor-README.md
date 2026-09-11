@@ -4,7 +4,7 @@ title: "Bundles Descriptor"
 summary: "Application registry and non-secret deployment configuration in bundles.yaml: default app, Git or local sources, module paths, readiness policy, and app-scoped config."
 tags: ["service", "configuration", "bundle", "bundle-registry", "deployment", "descriptor", "api-security"]
 keywords: ["bundle registry", "default bundle selection", "git bundle source", "local path bundle source", "bundle module mapping", "bundle configuration", "bundle inventory", "service.readiness", "application readiness policy", "file-backed bundle authority", "bundle reload workflow", "deployment bundle catalog", "operation csrf override"]
-updated_at: 2026-08-18
+updated_at: 2026-09-11
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/descriptors-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/apps/app-with-agents-README.md
@@ -176,11 +176,11 @@ surface exists; `surfaces.as_provider` decides who can see/call it and which
 authority/grants are required.
 
 `connection-hub@1-0.config.authority_registry` is also platform-owned. It is
-the canonical registry for authority realms and provider instances, including
-the Cognito platform authority provider. `assembly.yaml` selects a provider via
-`auth.connection_hub`; the provider's concrete details live here.
+the canonical registry for authority realms and their entries, including
+Cognito authenticators and server-side login lanes. `assembly.yaml` selects an
+entry via `auth.connection_hub`; the entry's concrete details live here.
 
-Example platform Cognito provider:
+Example platform Cognito authenticator:
 
 ```yaml
 bundles:
@@ -193,7 +193,7 @@ bundles:
               label: KDCube platform authority
               platform: true
               providers:
-                cognito:
+                cognito_demo:
                   type: multi_cognito
                   enabled: true
                   authenticator:

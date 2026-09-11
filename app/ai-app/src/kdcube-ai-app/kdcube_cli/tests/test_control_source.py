@@ -196,7 +196,7 @@ def test_initialize_simple_auth_override_stages_before_noninteractive_setup(
         yaml.safe_dump(
             {
                 "context": {"tenant": "default", "project": "default"},
-                "auth": {"type": "bundle", "idp": "session"},
+                "auth": {"type": "bundle"},
             }
         )
     )
@@ -340,7 +340,7 @@ def test_initialize_bundle_auth_stages_google_inputs(
 
     auth = observed["assembly"]["auth"]
     assert auth["type"] == "bundle"
-    assert auth["idp"] == "session"
+    assert "idp" not in auth
     assert auth["bundle"] == {
         "provider": "google",
         "client_id": "client.apps.googleusercontent.com",

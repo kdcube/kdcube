@@ -5,7 +5,7 @@ summary: "Canonical KDCube host map for Connection Hub identity, connected-accou
 status: active
 tags: ["sdk", "solutions", "connections", "connection-hub", "identity", "auth", "authority", "delegated-connections"]
 keywords: ["Connection Hub", "delegated access cards", "invocation policy", "external MCP proxy", "connected accounts", "authority registry", "request authenticators", "connection edges", "OAuth MCP", "direct admission"]
-updated_at: 2026-09-02
+updated_at: 2026-09-11
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/arch/delegated-authority-and-admission-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/runtime/tenant-project-user-and-execution-boundaries-README.md
@@ -125,7 +125,7 @@ authority_registry:
       platform: true
       label: KDCube platform authority
       providers:
-        cognito:
+        cognito_demo:
           type: multi_cognito
           enabled: true
           authenticator:
@@ -153,7 +153,7 @@ authority_registry:
                 app_client_id: peer-client
 
         workspace_google_session:
-          type: bundle_session_login
+          type: bundle
           enabled: true
           label: Workspace Google platform session
           entrypoints:
@@ -204,7 +204,7 @@ authority_registry:
       label: Google Accounts
       providers:
         google_oidc:
-          type: google_id_token
+          type: google
           enabled: true
           authenticator:
             client_id: <google-client-id>.apps.googleusercontent.com
@@ -215,11 +215,11 @@ authority_registry:
   this UI and styling.
 
 `entrypoints.session_issue`
-: Action/callback that validates the upstream proof and asks the Connection Hub
+: Action/callback that validates the authenticator proof and asks the Connection Hub
   SDK to issue the configured KDCube session credential.
 
 `entrypoints.consent`
-: Optional application-hosted delegated credential consent renderer for this
+: Optional app-defined delegated credential consent renderer for this
   authority provider. Connection Hub still owns CSRF validation, grant
   narrowing, authorization-code creation, and token issuance.
 
@@ -270,11 +270,10 @@ In this shape:
 authority -> provider instance
 ```
 
-`providers.<id>` is a configured provider instance. `providers.<id>.type` is the
-implementation type/enum. The id and type may match for the normal single
-instance case, such as `providers.cognito.type: cognito`. They diverge only
-when a deployment registers multiple instances of the same provider type, for
-example `cognito_admin` and `cognito_customer`. A provider instance may have:
+`providers.<id>` is a configured provider instance. `providers.<id>.type` is its
+authenticator kind. The id is operator-owned, such as `cognito_demo`; several
+instances may share the same kind, for example `cognito_admin` and
+`cognito_customer`. A provider instance may have:
 
 - `authenticator`: verifies incoming auth material;
 - `issuer`: mints auth material;
@@ -340,7 +339,7 @@ authority_registry:
     kdcube.platform:
       providers:
         workspace_google_session:
-          type: bundle_session_login
+          type: bundle
           entrypoints:
             login:
               bundle_id: workspace@2026-03-31-13-36
@@ -375,7 +374,7 @@ authority_registry:
                 - kdcube:*:*:*
 ```
 
-The role policy for application-hosted platform-session subjects stays in the
+The role policy for server-side platform-session subjects stays in the
 platform authority:
 
 ```yaml
@@ -419,7 +418,7 @@ The app remains the hosted UI/API surface. The reusable provider runtime is a
 KDCube host binding over Connection Hub:
 
 ```text
-kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.authority_providers.bundle_session_login
+kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.authority_providers.bundle_login
 ```
 
 Connection Hub remains the registry owner for authority ids, platform-ness,
@@ -700,7 +699,7 @@ Current implementation:
   validates the delegated bearer before the route handler runs and returns a
   projected `UserSession` for the approving platform user. This is the
   "delegated devops automation" shape and is independent of whether the
-  approving user signed in through Cognito or an application-hosted platform
+  approving user signed in through Cognito or a server-side platform
   authority.
 - Admin-created delegated automation can also use a configured all-resource
   scope, `resource: "*"`, guarded by `admin_only: true` and the

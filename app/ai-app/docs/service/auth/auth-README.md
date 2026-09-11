@@ -4,13 +4,13 @@ title: "Auth"
 summary: "Authentication providers and token transport across REST/SSE/Socket.IO."
 tags: ["service", "auth", "security", "tokens"]
 keywords: ["delegated auth", "cookie auth", "JWT", "SSE auth", "Socket.IO"]
-updated_at: 2026-09-07
+updated_at: 2026-09-11
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-selector-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-credentials/oauth-delegated-credential-protocol-adapter-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/request-authenticators/request-authenticators-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/app-hosted-platform-login-and-session-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/server-side-login-and-platform-session-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/app-simple-idp-bridge-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/comm/README-comm.md
   - repo:kdcube-ai-app/app/ai-app/docs/arch/architecture-long.md
@@ -134,8 +134,8 @@ That authority projection is documented in
 
 2) Multi-Cognito (mixed trusted runtimes)
 - Implementation: [Multi Cognito auth](../../../src/kdcube-ai-app/kdcube_ai_app/auth/implementations/multi_cognito.py)
-- Selected by the Connection Hub platform authority provider when the selected
-  provider has more than one trusted Cognito user-pool/client pair.
+- Selected by the Connection Hub platform authenticator when it has more than
+  one trusted Cognito user-pool/client pair.
 - Accepts JWTs from every trusted provider declared under
   `connection-hub@1-0.config.authority_registry`. Provider selection is based
   on token claims: `iss` plus `client_id` for access tokens or `aud` for ID
@@ -151,15 +151,15 @@ That authority projection is documented in
 - Bundle-owned sign-in flows can register users through the cached registry
   utility documented in [App SimpleIDP Bridge](app-simple-idp-bridge-README.md).
 
-4) Application-hosted platform login and session
+4) Server-side login and platform session
 - Implementation: [platform session implementation (technical bundle package)](../../../src/kdcube-ai-app/kdcube_ai_app/auth/bundle/sessions.py)
-- `auth.idp: session`.
+- `auth.type: bundle` plus an app-defined registry entry of type `bundle`.
 - An application/front shell validates an external identity and calls the async
   platform session authority to register/login/logout/delete/invalidate users.
 - Session cookies carry a signed `kst1.*` token. Redis stores the active
   session record, user record, and revocation/version state.
-- Details: [Application-Hosted Platform Login And Session](app-hosted-platform-login-and-session-README.md).
-- The platform can host the sign-in itself against a Cognito or OIDC upstream, one HttpOnly cookie for every surface, sliding lifetime: [Platform-Hosted Sign-In](app-hosted-platform-login-and-session-README.md#platform-hosted-sign-in-the-server-held-browser-session).
+- Details: [Server-Side Login And The Platform Session](server-side-login-and-platform-session-README.md).
+- The platform can host the sign-in itself through a Cognito or OIDC authenticator, with one HttpOnly cookie for every surface and a sliding lifetime: [Platform-Hosted Server-Side Login](server-side-login-and-platform-session-README.md#platform-hosted-server-side-login).
 
 5) Delegated auth (proxy login service)
 - Proxy service build: [ProxyLogin Dockerfile](../../../deployment/docker/custom-ui-managed-infra/Dockerfile_ProxyLogin)
@@ -185,19 +185,19 @@ That authority projection is documented in
   MCP tool allowlist to the issued grant.
 - Details: [OAuth delegated credential Protocol Adapter](../../sdk/solutions/connections/delegated-credentials/oauth-delegated-credential-protocol-adapter-README.md).
 
-### Cognito Platform Authority Descriptor Shape
+### Cognito Authenticator Descriptor Shape
 
-`assembly.yaml` selects the platform authority provider. Cognito details live
-in the Connection Hub authority registry, not in `assembly.yaml`.
+`assembly.yaml` selects the platform sign-in entry. Cognito details live in the
+Connection Hub authority registry rather than in `assembly.yaml`.
 
 ```yaml
 # assembly.yaml
 auth:
-  type: cognito
+  type: bundle
   connection_hub:
     bundle_id: connection-hub@1-0
     authority_id: kdcube.platform
-    provider_id: cognito
+    provider_id: cognito_demo
 ```
 
 ```yaml
@@ -211,7 +211,7 @@ items:
             label: KDCube platform authority
             platform: true
             providers:
-              cognito:
+              cognito_demo:
                 type: multi_cognito
                 enabled: true
                 authenticator:
@@ -249,8 +249,8 @@ service; Connection Hub remains their configuration owner.
 | Goal | Read |
 |---|---|
 | Understand how requests choose Cognito/session/Connection Hub authenticators | [Auth Selector](auth-selector-README.md) |
-| Application/front shell performs login and browser should become a platform user | [Application-Hosted Platform Login And Session](app-hosted-platform-login-and-session-README.md) |
-| The platform should host the sign-in against a Cognito or OIDC upstream, with no identity client in the browser | [Platform-Hosted Sign-In](app-hosted-platform-login-and-session-README.md#platform-hosted-sign-in-the-server-held-browser-session) |
+| An app or front shell performs login and the browser should become a platform user | [Server-Side Login And The Platform Session](server-side-login-and-platform-session-README.md) |
+| The platform should host sign-in through a Cognito or OIDC authenticator, with no identity client in the browser | [Platform-Hosted Server-Side Login](server-side-login-and-platform-session-README.md#platform-hosted-server-side-login) |
 | Decide how a page reaches KDCube signed in: who owns the login, where the page lives, cookie or headers, with before/after diagrams for the website and the control plane | [Browser Sign-In Situations](browser-sign-in-situations-README.md) |
 | App writes a SimpleIDP token for local/embedded simple auth | [App SimpleIDP Bridge](app-simple-idp-bridge-README.md) |
 | External tool should access a narrow MCP integration surface after descriptor-governed user/admin consent | [OAuth delegated credential Protocol Adapter](../../sdk/solutions/connections/delegated-credentials/oauth-delegated-credential-protocol-adapter-README.md) |
@@ -333,7 +333,7 @@ items:
         authorities:
           kdcube.platform:
             providers:
-              cognito:
+              cognito_demo:
                 authenticator:
                   id_token_header_name: X-ID-Token
                   cookie:
@@ -359,7 +359,7 @@ Central platform-auth rule:
   returns no roles, platform auth normalizes that user to
   `kdcube:role:registered`;
 - this applies to platform authorities such as Cognito, SimpleIDP, and
-  configured application-hosted platform-session providers;
+  configured app-defined platform authenticators;
 - this does not apply to raw external channel proofs such as Telegram initData
   until they resolve/project to a platform authority.
 

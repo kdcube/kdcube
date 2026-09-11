@@ -688,8 +688,8 @@ def _ensure_connection_hub_simple_provider(
     )
 
 
-def _bundle_session_default_grants() -> Dict[str, object]:
-    """Default and assignable platform grants for a bundle-session provider."""
+def _bundle_login_default_grants() -> Dict[str, object]:
+    """Default and assignable platform grants for a bundle login provider."""
     return {
         "default": {"roles": ["kdcube:role:registered"], "permissions": []},
         "assignable": {
@@ -699,17 +699,17 @@ def _bundle_session_default_grants() -> Dict[str, object]:
     }
 
 
-def _google_upstream_spec(client_id: str) -> Dict[str, object]:
-    """Upstream authenticator spec that verifies Google OIDC ID tokens.
+def _google_authenticator_spec(client_id: str) -> Dict[str, object]:
+    """Authenticator spec that verifies Google OIDC ID tokens.
 
-    Describes the `google.accounts/google_oidc` authority the bundle-session
-    provider trusts and the claim used to bootstrap an admin (verified Google email).
+    Describes the `google.accounts/google_oidc` authenticator the bundle login
+    uses and the verified Google claim that can bootstrap an administrator.
     """
     return {
         "authority_id": "google.accounts",
         "authority_label": "Google Accounts",
         "provider_id": "google_oidc",
-        "provider_type": "google_id_token",
+        "provider_type": "google",
         "authenticator": {"client_id": str(client_id or "")},
         "bootstrap_id": "bootstrap_admin_by_google_email",
         "bootstrap_provider": "google",
@@ -717,7 +717,7 @@ def _google_upstream_spec(client_id: str) -> Dict[str, object]:
     }
 
 
-def _ensure_connection_hub_bundle_session_provider(
+def _ensure_connection_hub_bundle_login_provider(
     bundles_data: Dict[str, object],
     *,
     connection_hub_bundle_id: str,
@@ -729,17 +729,17 @@ def _ensure_connection_hub_bundle_session_provider(
     auth_token_cookie_name: str,
     id_token_cookie_name: str,
     masqueraded_token_cookie_name: str,
-    upstream: Dict[str, object],
+    authenticator_spec: Dict[str, object],
     admin_bootstrap_email: str = "",
     login_operation: str = "platform_login",
     session_issue_operation: str = "auth_google_session",
     consent_operation: str = "delegated_consent",
 ) -> None:
-    """Write the bundle-session platform authority into the Connection Hub descriptor.
+    """Write the bundle login lane into the Connection Hub descriptor.
 
-    Registers the platform authority (`platform: true`), its `bundle_session_login`
-    provider (issuer, grants, and the host-bundle login/session/consent entrypoints),
-    an optional admin bootstrap rule, and the upstream authenticator authority.
+    Registers the platform authority (`platform: true`), its `bundle` provider
+    (issuer, grants, and the host-bundle login/session/consent entrypoints), an
+    optional admin bootstrap rule, and the referenced authenticator authority.
     """
     connection_hub = _ensure_bundle_item(bundles_data, connection_hub_bundle_id)
     config = connection_hub.get("config")
@@ -754,7 +754,7 @@ def _ensure_connection_hub_bundle_session_provider(
 
     if admin_bootstrap_email:
         claims: Dict[str, object] = {"email": admin_bootstrap_email}
-        extra = upstream.get("bootstrap_email_claim")
+        extra = authenticator_spec.get("bootstrap_email_claim")
         if isinstance(extra, dict):
             claims.update(extra)
         _set_nested(
@@ -762,8 +762,8 @@ def _ensure_connection_hub_bundle_session_provider(
             authority_path + ["grants", "bootstrap_rules"],
             [
                 {
-                    "id": str(upstream.get("bootstrap_id") or "bootstrap_admin_by_email"),
-                    "when": {"provider": str(upstream.get("bootstrap_provider") or ""), "claims": claims},
+                    "id": str(authenticator_spec.get("bootstrap_id") or "bootstrap_admin_by_email"),
+                    "when": {"provider": str(authenticator_spec.get("bootstrap_provider") or ""), "claims": claims},
                     "roles": ["kdcube:role:super-admin"],
                     "permissions": ["kdcube:*:*:*"],
                 }
@@ -774,13 +774,13 @@ def _ensure_connection_hub_bundle_session_provider(
         config,
         authority_path + ["providers", provider_id],
         {
-            "type": "bundle_session_login",
+            "type": "bundle",
             "enabled": True,
             "label": provider_label,
             "input": {
                 "authenticator_ref": {
-                    "authority_id": str(upstream.get("authority_id") or ""),
-                    "provider_id": str(upstream.get("provider_id") or ""),
+                    "authority_id": str(authenticator_spec.get("authority_id") or ""),
+                    "provider_id": str(authenticator_spec.get("provider_id") or ""),
                 }
             },
             "issuer": {
@@ -794,7 +794,7 @@ def _ensure_connection_hub_bundle_session_provider(
                     "masqueraded_token_cookie_name": masqueraded_token_cookie_name,
                 },
             },
-            "grants": _bundle_session_default_grants(),
+            "grants": _bundle_login_default_grants(),
             "entrypoints": {
                 "login": {"bundle_id": host_bundle_id, "route": "public", "operation": login_operation},
                 "session_issue": {"bundle_id": host_bundle_id, "route": "public", "operation": session_issue_operation},
@@ -803,18 +803,22 @@ def _ensure_connection_hub_bundle_session_provider(
         },
     )
 
-    upstream_authority = str(upstream.get("authority_id") or "")
-    upstream_provider = str(upstream.get("provider_id") or "")
-    upstream_authority_path = ["authority_registry", "authorities", upstream_authority]
-    _set_nested(config, upstream_authority_path + ["label"], str(upstream.get("authority_label") or ""))
-    _set_nested(config, upstream_authority_path + ["platform"], False)
+    authenticator_authority = str(authenticator_spec.get("authority_id") or "")
+    authenticator_provider = str(authenticator_spec.get("provider_id") or "")
+    authenticator_authority_path = ["authority_registry", "authorities", authenticator_authority]
     _set_nested(
         config,
-        upstream_authority_path + ["providers", upstream_provider],
+        authenticator_authority_path + ["label"],
+        str(authenticator_spec.get("authority_label") or ""),
+    )
+    _set_nested(config, authenticator_authority_path + ["platform"], False)
+    _set_nested(
+        config,
+        authenticator_authority_path + ["providers", authenticator_provider],
         {
-            "type": str(upstream.get("provider_type") or ""),
+            "type": str(authenticator_spec.get("provider_type") or ""),
             "enabled": True,
-            "authenticator": dict(upstream.get("authenticator") or {}),
+            "authenticator": dict(authenticator_spec.get("authenticator") or {}),
         },
     )
 
@@ -938,7 +942,7 @@ def _prune_foreign_platform_login(
     """Reconcile the platform authority to the target auth type's login artifacts.
 
     Keeps only the platform providers in keep_provider_ids (the provider the target auth
-    type just wrote), garbage-collects upstream authorities no longer referenced by any
+    type just wrote), garbage-collects authenticator authorities no longer referenced by any
     surviving provider, optionally removes the admin bootstrap rules, and drops consent_ui
     blocks left without a provider. Platform grants.subjects, the telegram authority, and
     delegated connectors are preserved.
@@ -957,7 +961,7 @@ def _prune_foreign_platform_login(
         return
 
     providers = platform.get("providers")
-    removed_upstreams: set = set()
+    removed_authenticator_authorities: set = set()
     if isinstance(providers, dict):
         for provider_id in list(providers.keys()):
             if provider_id in keep_provider_ids:
@@ -965,16 +969,16 @@ def _prune_foreign_platform_login(
             provider = providers.get(provider_id)
             ref = _get_nested(provider, "input", "authenticator_ref", "authority_id") if isinstance(provider, dict) else None
             if ref:
-                removed_upstreams.add(str(ref))
+                removed_authenticator_authorities.add(str(ref))
             providers.pop(provider_id, None)
 
     surviving_refs = _collect_authenticator_refs(authorities)
-    for orphan in removed_upstreams - surviving_refs - {authority_id}:
+    for orphan in removed_authenticator_authorities - surviving_refs - {authority_id}:
         authorities.pop(orphan, None)
 
     if not keep_bootstrap_rules:
         _delete_nested(platform, ["grants", "bootstrap_rules"])
-        # Drop the empty grant scaffolding left by the bundle-session default,
+        # Drop the empty grant scaffolding left by the bundle-login default,
         # while preserving any real per-subject grants.
         grants = platform.get("grants")
         if isinstance(grants, dict):
@@ -1003,23 +1007,23 @@ def validate_bundle_auth_provider(console: Console, provider: str) -> str:
     return normalized
 
 
-def _bundle_session_existing_values(
+def _bundle_login_existing_values(
     bundles_data: Dict[str, object],
     connection_hub_bundle_id: str,
     authority_id: str,
 ) -> Tuple[str, str]:
-    """Read the current upstream client_id and bootstrap admin email from the descriptor."""
+    """Read the current authenticator client_id and bootstrap admin email."""
     config: Dict[str, object] = {}
     for spec in _iter_bundle_specs(bundles_data):
         if str(spec.get("id") or "").strip() == connection_hub_bundle_id:
             cfg = spec.get("config")
             config = cfg if isinstance(cfg, dict) else {}
             break
-    upstream = _google_upstream_spec("")
+    authenticator = _google_authenticator_spec("")
     client_id = _as_str(
         _get_nested(
-            config, "authority_registry", "authorities", str(upstream["authority_id"]),
-            "providers", str(upstream["provider_id"]), "authenticator", "client_id",
+            config, "authority_registry", "authorities", str(authenticator["authority_id"]),
+            "providers", str(authenticator["provider_id"]), "authenticator", "client_id",
         )
     ) or ""
     admin_email = ""
@@ -1033,7 +1037,7 @@ def _bundle_session_existing_values(
     return client_id, admin_email
 
 
-def apply_bundle_session_auth(
+def apply_bundle_auth(
     *,
     assembly_data: Dict[str, object],
     bundles_data: Dict[str, object],
@@ -1052,7 +1056,7 @@ def apply_bundle_session_auth(
     masqueraded_token_cookie_name: str = "__Secure-LMTC",
     id_token_header_name: str = "X-ID-Token",
 ) -> None:
-    """Apply the application-hosted (bundle-session) auth topology to descriptors and env.
+    """Apply the server-side bundle auth topology to descriptors and env.
 
     Writes assembly.auth (Connection Hub provider selection), the Connection Hub
     authority registry, cookie/AUTH_PROVIDER env, and clears leftover cognito/proxy
@@ -1066,7 +1070,7 @@ def apply_bundle_session_auth(
         update_env_value(env, "ID_TOKEN_HEADER_NAME", id_token_header_name)
 
     _set_nested(assembly_data, ["auth", "type"], "bundle")
-    _set_nested(assembly_data, ["auth", "idp"], "session")
+    _delete_nested(assembly_data, ["auth", "idp"])
     _set_nested(
         assembly_data,
         ["auth", "connection_hub"],
@@ -1096,7 +1100,7 @@ def apply_bundle_session_auth(
     ):
         _delete_nested(assembly_data, legacy_path)
 
-    _ensure_connection_hub_bundle_session_provider(
+    _ensure_connection_hub_bundle_login_provider(
         bundles_data,
         connection_hub_bundle_id=connection_hub_bundle_id,
         authority_id=authority_id,
@@ -1107,7 +1111,7 @@ def apply_bundle_session_auth(
         auth_token_cookie_name=auth_token_cookie_name,
         id_token_cookie_name=id_token_cookie_name,
         masqueraded_token_cookie_name=masqueraded_token_cookie_name,
-        upstream=_google_upstream_spec(client_id),
+        authenticator_spec=_google_authenticator_spec(client_id),
         admin_bootstrap_email=bootstrap_admin_email,
     )
 
@@ -1267,7 +1271,7 @@ def apply_telegram_companion(
     web_app_auth_max_age_seconds: int = 86400,
     link_challenge_ttl_seconds: int = 600,
 ) -> None:
-    """Configure the Telegram companion channel on an application-hosted login runtime.
+    """Configure the Telegram companion channel on a server-side login runtime.
 
     Adds the Telegram webhook integration and Mini App on the login host bundle,
     the Connection Hub identity authenticator, authority, and link flow, and writes
@@ -3668,7 +3672,7 @@ def gather_configuration(
     current_proxy_cfg = env_main.entries.get("NGINX_PROXY_RUNTIME_CONFIG_PATH", (None, None))[1] or ""
     if "delegated" in current_proxy_cfg:
         default_auth = "delegated"
-    # The shipped descriptor and the fresh-install picker both select application-hosted
+    # The shipped descriptor and the fresh-install picker both select server-side
     # login by default. Keep the picker recommendation for older staged defaults, while an
     # explicit user descriptor or --auth-type choice remains authoritative via default_auth.
     recommend_bundle_auth = os.getenv("KDCUBE_RECOMMEND_BUNDLE_AUTH", "").lower() in {
@@ -3714,11 +3718,12 @@ def gather_configuration(
     if auth_choice == "simple":
         auth_provider = "simple"
     elif auth_choice == "bundle":
-        auth_provider = "session"
+        auth_provider = "bundle"
     else:
         auth_provider = "cognito"
-    # Bundle-session leaves AUTH_PROVIDER empty; simple/cognito set it.
-    auth_provider_env = "" if auth_provider == "session" else auth_provider
+    # Bundle login is resolved through Connection Hub; simple/cognito set the
+    # legacy process hint while those readers still consume it.
+    auth_provider_env = "" if auth_provider == "bundle" else auth_provider
     update_env_value(env_ingress, "AUTH_PROVIDER", auth_provider_env)
     update_env_value(env_proc, "AUTH_PROVIDER", auth_provider_env)
     proxy_ssl_env = parse_bool(os.getenv("KDCUBE_PROXY_SSL"))
@@ -3726,14 +3731,14 @@ def gather_configuration(
     proxy_ssl_enabled = proxy_ssl_env if proxy_ssl_env is not None else (proxy_ssl_descriptor or False)
     _set_nested(assembly_data, ["proxy", "ssl"], proxy_ssl_enabled)
 
-    # Telegram companion host defaults; the session branch overrides them with the
-    # application-hosted login's own host/connection-hub bundle ids.
+    # Telegram companion host defaults; the bundle branch overrides them with the
+    # server-side login's own host/connection-hub bundle ids.
     telegram_host_bundle_id = "workspace@2026-03-31-13-36"
     telegram_connection_hub_bundle_id = "connection-hub@1-0"
 
-    if auth_provider == "session":
-        # Application-hosted login: collect the environment-specific inputs, then
-        # apply_bundle_session_auth writes the Workspace/Google topology.
+    if auth_provider == "bundle":
+        # Server-side login: collect the environment-specific inputs, then
+        # apply_bundle_auth writes the Workspace/Google topology.
         bundle_seed = auth_descriptor.get("bundle") if isinstance(auth_descriptor.get("bundle"), dict) else {}
         ch_ref = auth_descriptor.get("connection_hub") if isinstance(auth_descriptor.get("connection_hub"), dict) else {}
 
@@ -3744,7 +3749,7 @@ def gather_configuration(
         authority_id = (
             str(ch_ref.get("authority_id") or ch_ref.get("authorityId") or "").strip() or "kdcube.platform"
         )
-        # The provider id is the bundle-session provider key. It comes from the
+        # The provider id is the bundle login lane key. It comes from the
         # bundle seed or the default, not from auth.connection_hub, whose provider_id
         # reflects whatever auth type is currently active (e.g. cognito).
         provider_id = (
@@ -3753,7 +3758,7 @@ def gather_configuration(
         )
         host_bundle_id = str(bundle_seed.get("host_bundle_id") or "").strip() or "workspace@2026-03-31-13-36"
 
-        existing_client_id, existing_admin_email = _bundle_session_existing_values(
+        existing_client_id, existing_admin_email = _bundle_login_existing_values(
             bundles_data, connection_hub_bundle_id, authority_id
         )
 
@@ -3783,7 +3788,7 @@ def gather_configuration(
         except (TypeError, ValueError):
             ttl_seconds = 43200
 
-        apply_bundle_session_auth(
+        apply_bundle_auth(
             assembly_data=assembly_data,
             bundles_data=bundles_data,
             env_targets=[env_main, env_ingress, env_proc],
@@ -5345,8 +5350,8 @@ def gather_configuration(
     company_name_raw = _get_nested(assembly_data, "company")
     company_name = company_name_raw.strip() if isinstance(company_name_raw, str) else None
 
-    if auth_provider in {"simple", "session"}:
-        # Bundle-session reuses the base proxy config and the hardcoded frontend
+    if auth_provider in {"simple", "bundle"}:
+        # Bundle login reuses the base proxy config and the hardcoded frontend
         # template; the frontend authType is derived from assembly.auth when the
         # config is generated.
         frontend_template = ctx.ai_app_root / "deployment/docker/all_in_one_kdcube/frontend/config.hardcoded.json"
@@ -5498,7 +5503,7 @@ def gather_configuration(
     except Exception:
         pass
 
-    if auth_provider in {"simple", "session"}:
+    if auth_provider in {"simple", "bundle"}:
         dev_ui_config = ctx.ai_app_root / "ui/chat-web-app/public/private/config.hardcoded.json"
     elif auth_mode == "delegated":
         dev_ui_config = ctx.ai_app_root / "ui/chat-web-app/public/private/config.delegated.json"

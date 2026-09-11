@@ -4,7 +4,7 @@ title: "KDCube CLI"
 summary: "Installs and operates KDCube runtimes, manages exact secrets through their selected provider, and exposes typed deployment and management APIs for application-specific CLIs."
 tags: ["kdcube", "cli", "runtime", "deployment-target", "secrets", "python-api"]
 keywords: ["kdcube-cli", "kdcube init", "kdcube start", "kdcube stop", "kdcube secrets", "kdcube bundle delete", "managed bundle deletion", "purge-data", "force-retire", "targeted bundle retirement", "kdcube_cli.control", "kdcube_cli.management"]
-updated_at: 2026-09-10
+updated_at: 2026-09-11
 see_also:
   - repo:kdcube/app/ai-app/docs/service/cicd/cli-README.md
   - repo:kdcube/app/ai-app/docs/service/cicd/deployment-target-control-api-README.md
@@ -242,8 +242,8 @@ tenant and project. Piped and CI invocations do not prompt; use
 The default init stages the **configured base set**: Connection Hub
 (identity, consent, delegated credentials), KDCube Services (managed MCP +
 named services), User Memories, and the workspace showcase app — as a pure
-config overlay on the bundles shipped in the image. Default identity is the
-application-hosted Google path: the workspace app validates Google identity
+config overlay on the bundles shipped in the image. Default identity uses
+server-side Google login: the workspace app validates Google identity
 and Connection Hub issues the KDCube session.
 
 Init ends with a **first-run checklist** of placeholders still unfilled;
@@ -286,12 +286,12 @@ kdcube init --tenant acme --project staging \
 
 ### Authentication
 
-The default identity is application-hosted Google login (the literal CLI value
+The default identity is server-side Google login defined by the Workspace app (the CLI value
 is `bundle`). Select a method in the prompt or pass
 `--auth-type {simple,cognito,delegated,bundle}`:
 
 ```bash
-# Application-hosted (Google) login
+# Server-side Google login
 kdcube init --tenant acme --project staging \
   --non-interactive \
   --auth-type bundle \

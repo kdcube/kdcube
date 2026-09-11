@@ -32,11 +32,11 @@ class _Settings:
 
     def connection_hub_platform_auth_config(self):
         return {
-            "auth_provider": "session",
+            "auth_provider": "bundle",
             "provider": {
                 "id": "workspace_google_session",
                 "provider_id": "workspace_google_session",
-                "type": "bundle_session_login",
+                "type": "bundle",
                 "entrypoints": {
                     "login": {
                         "bundle_id": "workspace@1-0",
@@ -126,7 +126,14 @@ def test_frontend_config_is_public_descriptor_resolution_without_runtime_service
 def test_frontend_config_keeps_cognito_login_and_logout_on_selected_provider(monkeypatch):
     assembly = {
         "context": {"tenant": "tenant-one", "project": "project-one"},
-        "auth": {"type": "cognito"},
+        "auth": {
+            "type": "bundle",
+            "connection_hub": {
+                "bundle_id": "connection-hub@1-0",
+                "authority_id": "kdcube.platform",
+                "provider_id": "cognito_demo",
+            },
+        },
         "proxy": {"route_prefix": "/platform"},
     }
     monkeypatch.setattr(frontend_config, "get_settings", lambda: _CognitoSettings())
@@ -135,6 +142,7 @@ def test_frontend_config_keeps_cognito_login_and_logout_on_selected_provider(mon
     response = frontend_config.cp_frontend_config(_request())
     payload = json.loads(response.body)
 
+    assert payload["auth"]["authType"] == "cognito"
     assert payload["auth"]["oidcConfig"] == {
         "authority": "https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_DEMO",
         "client_id": "demo-client",

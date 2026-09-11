@@ -31,7 +31,7 @@ from kdcube_ai_app.apps.chat.proc.rest.management.human_approval_webauthn import
     registration_options,
     start_enrollment,
 )
-from kdcube_ai_app.auth.bundle.browser_session import sign_in_bounce_path
+from kdcube_ai_app.auth.bundle.login_lane import sign_in_bounce_path
 
 router = APIRouter(prefix="/human-approval")
 

@@ -1,3 +1,15 @@
+---
+id: repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_cli/additional_README.md
+title: "KDCube CLI"
+summary: "Installs, initializes, refreshes, and operates descriptor-owned local KDCube runtime snapshots."
+tags: ["cli", "installation", "runtime", "descriptors"]
+keywords: ["kdcube-cli", "kdcube init", "kdcube refresh", "runtime workdir"]
+updated_at: 2026-09-11
+see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/cli-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/recipes/operations/install-clean-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/recipes/operations/operate-runtime-README.md
+---
 # KDCube CLI
 
 ![KDCube CLI](https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/src/kdcube-ai-app/kdcube_cli/pixel-cubes.png)
@@ -786,13 +798,13 @@ both `kdcube init` and `kdcube config apply`.
   - `auth.totpAppName`
   - `auth.totpIssuer`
 
-**Bundle session** (application-hosted login)
-- `AUTH_PROVIDER=session`
+**Server-side login defined by an app**
+- `AUTH_PROVIDER=bundle`
 - Frontend config auth type: `bundle`
 - Input flags: `--provider google` (currently the only supported provider),
   `--client-id <google-web-oauth-client-id>`, `--bootstrap-admin-email <email>`
   (verified Google email granted `super-admin` on first login).
-- A bundle/front shell validates an external identity, calls the platform bundle
+- An app or front shell validates an authenticator proof, calls the platform
   session authority, and sets the descriptor-configured platform cookies.
 - Requires `services.session_token.secret` in `secrets.yaml`; the CLI generates
   it when missing during init/refresh.
@@ -801,7 +813,7 @@ both `kdcube init` and `kdcube config apply`.
 
 `kdcube config apply --auth-type <mode> [mode flags] [--dry-run] [--restart]` changes the
 auth mode of an existing runtime. It reconciles the descriptors to the target mode:
-the previous mode's platform login provider, its upstream authority, admin bootstrap
+the previous mode's platform login provider, its referenced authenticator, admin bootstrap
 rule, and consent UI are removed, and unrelated configuration (bundles, connectors, the
 Telegram companion) is preserved. `--dry-run` prints the descriptor diff without writing.
 Without `--restart`, run `kdcube refresh` afterward to apply the change to the running stack.

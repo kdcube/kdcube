@@ -1,9 +1,9 @@
 ---
-id: repo:kdcube-ai-app/app/ai-app/docs/service/auth/app-hosted-platform-login-and-session-README.md
-title: "Application-Hosted Platform Login And Session"
-summary: "Application-hosted external sign-in followed by a KDCube-owned, Redis-backed platform session; and the platform-hosted sign-in against a Cognito or OIDC upstream, the server-held browser session with a sliding lifetime."
+id: repo:kdcube-ai-app/app/ai-app/docs/service/auth/server-side-login-and-platform-session-README.md
+title: "Server-Side Login And The Platform Session"
+summary: "How an app-defined login turns an authenticator proof into one KDCube-owned, Redis-backed platform session, including the platform-hosted OIDC lane and its sliding lifetime."
 tags: ["service", "auth", "application", "bundle", "session", "sso"]
-keywords: ["application-hosted platform login", "platform session", "bundle session", "bundle_session_login", "kst1", "front shell", "login", "logout", "register", "invalidate", "platform-hosted sign-in", "browser session", "sliding session", "OIDC", "Cognito hosted UI"]
+keywords: ["server-side login", "app-defined authenticator", "platform session", "bundle", "kst1", "login lane", "login", "logout", "register", "invalidate", "sliding session", "OIDC", "Cognito hosted UI"]
 updated_at: 2026-09-11
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
@@ -13,44 +13,47 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-widget-integration-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-platform-integration-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/platform-settings-live-update-README.md
-  - https://github.com/elenaviter/app-ecosystem/blob/main/docs/connection-hub/package/browser-session.md
+  - https://github.com/elenaviter/app-ecosystem/blob/main/docs/connection-hub/package/server-side-login.md
 ---
-# Application-Hosted Platform Login And Session
+# Server-Side Login And The Platform Session
 
-Application-hosted platform login is the provider pattern for deployments where
-an application or front shell hosts the external sign-in interaction and
-KDCube issues the resulting platform-recognized browser session.
+Server-side login turns an authenticator proof into one KDCube platform
+session. An app can host the user-facing login operation, or KDCube can host
+the OIDC redirect and callback through a definition supplied by that app.
 
-The application validates the external identity itself or delegates validation
-to a trusted KDCube SDK provider. The platform owns the session token, session
-registry, revocation, role lookup, and gateway authentication.
+In both forms, KDCube owns the session token, Redis registry, revocation, role
+lookup, and request authentication. The browser receives one HttpOnly cookie
+and checks `/profile`; it does not manage the identity provider's tokens.
 
 Use this when an app needs to accept identities from Telegram, Google,
 another OAuth/OIDC provider, a front shell, or an embedded app and then make the
 browser authenticated for normal platform routes such as `/profile`,
 `/api/integrations/*`, `/sse`, and `/socket.io`.
 
-The platform can also host the sign-in itself against a Cognito or OIDC
-upstream, with no identity client in the browser: the
-[server-held browser session](#platform-hosted-sign-in-the-server-held-browser-session)
-below.
+The [platform-hosted lane](#platform-hosted-server-side-login) below uses the
+host-neutral `connection_hub.server_side_login` package for Cognito or any
+OIDC issuer.
 
-## Name And Technical Alias
+## Sign-In Model
 
-The reader-facing concept is **application-hosted platform login and session**.
-The older **bundle session** name remains a technical/configuration alias:
+The configuration has two levels. `auth.type` locates the definition. The
+resolved registry entry says what the authenticator is and where login runs.
 
 | Name | Meaning |
 |---|---|
-| Application-hosted platform login | An application package, technically a bundle, hosts the browser login entrypoint or upstream identity interaction. |
+| Authenticator | What proves the user's identity: Cognito, an OIDC issuer, Google, Telegram, the development authenticator, or an app's own login. |
+| Authority | The realm that groups authenticators. `authority_id` names it. |
+| Login lane | Where login runs. A Cognito definition can run in the browser; a registry entry of type `bundle` runs login on the server. |
 | Platform session | The deployment-wide authenticated session KDCube issues and accepts across ingress, proc, APIs, SSE, Socket.IO, and applications. |
-| `bundle_session_login` | Connection Hub authority-provider type implementing this pattern. |
+| `auth.type: bundle` | Resolve the selected authenticator through the app named by `auth.connection_hub.bundle_id`. |
+| Registry `type: bundle` | The app provides the server-side login operation and issues a platform session. |
 | `BundleSessionAuthority` / `BundleSessionAuthManager` | SDK/runtime implementation names. |
 | `kst1` | KDCube's signed, Redis-backed platform-session token format. |
 | `kdcube:auth:bundle-session:*` | Stable Redis storage-key family. |
 
-The word `bundle` identifies the application that hosts the login. It does not
-scope or own the resulting session. The session belongs to the KDCube platform.
+The same word, `bundle`, means the app at both levels. At assembly level it is
+the hop to an app-defined entry. At registry level it is the app's own login
+kind. The platform session is shared by the deployment, not scoped to the app.
 
 ## Runtime Shape
 
@@ -74,7 +77,7 @@ App response sets auth cookie
   v
 Ingress/proc gateway
   |
-  | effective auth provider: session
+  | effective auth provider: bundle
   | validate kst1 token + Redis session + current user record
   v
 Platform UserSession
@@ -84,7 +87,7 @@ Platform UserSession
 
 | Surface | Owner | Purpose |
 |---|---|---|
-| Application public endpoint | Application | Hosts login/issuer UI or operations and validates upstream identity. Normal browser logout uses the platform logout endpoint. |
+| Application public endpoint | Application | Hosts login UI or operations and validates the authenticator proof. Normal browser logout uses the platform logout endpoint. |
 | `kdcube_ai_app.auth.bundle` | Platform | Async API used by the application to register/login/logout/delete/invalidate sessions. The package name is the technical alias. |
 | Browser cookies | Connection Hub provider config | Carry the `kst1.*` auth token under configured cookie names. |
 | Gateway auth manager | Platform | Validates token, Redis session, user record, and roles on each request. |
@@ -93,8 +96,8 @@ Platform UserSession
 
 ## Descriptor Contract
 
-Select the provider in `assembly.yaml`; its type (`bundle_session_login`)
-is what puts the platform on the session lane:
+Select an app-defined authenticator in `assembly.yaml`. `auth.type: bundle`
+means its definition lives in the referenced app:
 
 ```yaml
 auth:
@@ -106,19 +109,13 @@ auth:
     entrypoint: login
 ```
 
-The platform authenticator is resolved in this order: an explicit
-`auth.authenticators.platform` entry, the `AUTH_PROVIDER` environment
-variable, the Connection Hub provider named by `auth.connection_hub`, then
-`auth.idp`, then `auth.type`. With a Connection Hub provider selected,
-`auth.idp` is redundant on the server: it is the fallback for descriptors
-without a Connection Hub provider (`auth.idp: session`, `bundle`,
-`cognito`, `simple`). `auth.type: bundle` is what the browser reads.
-
-When `frontend.config.auth.authType` is omitted, `auth.type: bundle` (or the
-fallback form `auth.idp: session`) derives browser `authType: "bundle"`. That tells the
-control-plane client that login is owned by an app/front shell and that
-platform requests should use the descriptor-configured cookies already present
-in the browser.
+The resolver follows `auth.connection_hub` once and reads the selected entry's
+type and public facts. It does not follow a `bundle` entry's own
+`authenticator_ref` when deciding what the browser should do. A selected
+Cognito entry reaches the frontend as `authType: "cognito"` with its pool
+facts. A selected `bundle` entry reaches it as `authType: "bundle"` with a
+server login URL. Inline deployments use `auth.type: cognito`, `oidc`, or
+`simple` directly and do not declare `auth.connection_hub`.
 
 The browser-facing auth contract is still provider-neutral. A host or scene
 should use the URLs returned by `/api/cp-frontend-config`:
@@ -148,14 +145,14 @@ provider. Every ingress/proc worker must read the same value. Secret rotation
 is an operational restart boundary: rotate the secret, invalidate active platform
 sessions if needed, and restart workers so all processes verify with one value.
 
-Cookie names are provider-driven. They live on the selected Connection Hub
-platform provider, normally under `provider.issuer.cookie` for
-`bundle_session_login` providers:
+Cookie names come from the selected Connection Hub sign-in entry, normally
+under `provider.issuer.cookie` for
+`bundle` providers:
 
 | Descriptor field | Browser credential |
 |---|---|
 | `issuer.cookie.auth_token_cookie_name` | Auth/access cookie consumed by the gateway. |
-| `issuer.cookie.id_token_cookie_name` | Optional compatibility field for clients that display the configured cookie names. Application-hosted platform sessions do not require this cookie. |
+| `issuer.cookie.id_token_cookie_name` | Optional compatibility field for clients that display the configured cookie names. Server-side platform sessions do not require this cookie. |
 
 In app code, read these names from settings:
 
@@ -166,7 +163,7 @@ from kdcube_ai_app.apps.chat.sdk.config import get_settings
 auth_cookie = get_settings().AUTH.AUTH_TOKEN_COOKIE_NAME
 ```
 
-## Platform-Hosted Sign-In: The Server-Held Browser Session
+## Platform-Hosted Server-Side Login
 
 The lane above hosts the login in an application (the Google reference). The
 platform can also host it: the browser is sent to the identity provider by the
@@ -175,28 +172,27 @@ with the session cookie. No JavaScript identity client, no token in a cookie a
 script can read, no per-tab renewal. The session slides on activity: a request
 extends it by the idle limit, never past the maximum since sign-in.
 
-The session itself is the host-neutral `connection_hub.browser_session`
+The session itself is the host-neutral `connection_hub.server_side_login`
 (one-time browser-bound login attempt with PKCE and nonce, the same-origin
-`next` guard, sliding renewal, the OIDC code-flow upstream with a Cognito
+`next` guard, sliding renewal, and an OIDC code-flow authenticator with a Cognito
 preset). The platform supplies the backend over `BundleSessionAuthority`, the
 attempt store in the same Redis namespace, and the routes
-(`kdcube_ai_app/auth/bundle/browser_session.py`,
+(`kdcube_ai_app/auth/bundle/login_lane.py`,
 `kdcube_ai_app/apps/chat/ingress/platform_session.py`).
 
 ### Descriptor
 
-Select a session provider whose `input.authenticator_ref` names a Cognito or
-OIDC authority provider. The upstream's issuer, client id and hosted UI come
-from that provider; nothing about the identity provider reaches the browser
-configuration.
+Select a `bundle` login entry whose `input.authenticator_ref` names a Cognito
+or OIDC authenticator. Its issuer, client id and hosted UI come from that
+referenced entry; secret-bearing details do not reach browser configuration.
 
 ```yaml
 auth:
-  type: "bundle"                 # what the browser reads: the server owns login
+  type: "bundle"                 # the selected definition lives in an app
   connection_hub:
     bundle_id: connection-hub@1-0
     authority_id: kdcube.platform
-    provider_id: browser_session # a bundle_session_login provider: the session lane
+    provider_id: server_login    # registry type bundle: server-side login
 ```
 
 ```yaml
@@ -204,7 +200,7 @@ authority_registry:
   authorities:
     kdcube.platform:
       providers:
-        cognito:                       # the upstream: an existing Cognito provider
+        cognito_demo:                  # an existing Cognito authenticator
           type: multi_cognito
           authenticator:
             type: cognito_id_token
@@ -212,17 +208,17 @@ authority_registry:
             user_pool_id: <pool>
             app_client_id: <client id>
             hosted_ui_domain: https://auth.example.com
-        browser_session:
-          type: bundle_session_login
+        server_login:
+          type: bundle
           enabled: true
-          label: Platform browser session
+          label: Platform server-side login
           input:
             authenticator_ref:
               authority_id: kdcube.platform
-              provider_id: cognito
+              provider_id: cognito_demo
             scopes: [openid, email, profile]
-            groups_claim: cognito:groups      # optional: upstream groups become roles
-            # accept_upstream_tokens: false   # default true: a host may still present tokens from the upstream pools
+            groups_claim: cognito:groups      # optional: authenticator groups become roles
+            # accept_authenticator_tokens: false   # default true: the host may also accept tokens from these pools
             # client_secret_ref: ...           # only for a confidential app client
             # redirect_uri: https://...        # only when it differs from <origin>/api/platform/session/callback
           issuer:
@@ -256,7 +252,7 @@ sign-out:  https://<public origin>/api/platform/session/signed-out
 The sign-out URL is fixed because the destination does not travel through
 the identity provider: the logout stores it in a short-lived return cookie
 and the signed-out route continues there. No page URL of any frontend ever
-needs registering upstream. The app client may stay public: the exchange
+needs registering with the identity provider. The app client may stay public: the exchange
 uses PKCE. What a deployment that can switch between this lane and the
 Cognito lane, or hosts a site with its own OIDC client, registers per origin:
 [What the identity provider must know](browser-sign-in-situations-README.md#what-the-identity-provider-must-know),
@@ -270,7 +266,7 @@ and as a procedure, [Register KDCube On Your Identity Provider](../../recipes/co
 | `GET /api/platform/session/callback?code=&state=` | Takes the attempt (once), requires the attempt cookie of the browser that started it, exchanges the code, verifies the ID token (signature, issuer, audience, nonce), writes the platform user record and the session, sets the session cookie, redirects to `next`. A refused sign-in is a small page with a reason code and a retry link. |
 | `GET /api/platform/session/signed-out` | The identity provider's post-logout target, one fixed URL per origin. Reads and clears the return cookie set by the logout and redirects to that same-origin path, else `/`. |
 | `GET /api/platform/session/status` | Whether the lane is configured, its routes and lifetimes. |
-| `POST /api/platform/logout?next=` | Ends the session and clears the cookies as before, stores the validated `next` in the return cookie, and answers `upstreamLogoutUrl`: the identity provider's sign-out URL that returns to the signed-out route. A client navigates there to end the upstream sign-in too. |
+| `POST /api/platform/logout?next=` | Ends the session and clears the cookies as before, stores the validated `next` in the return cookie, and answers `upstreamLogoutUrl`: the stable response field carrying the identity provider's sign-out URL. A client navigates there to end that provider session too. |
 
 The proxy route matrix carries `/api/platform/` to the chat ingress
 (`deployment/nginx/generate_application_site_routes.py`); without it the
@@ -303,8 +299,8 @@ diagrams for the website and the control plane web app:
 [Browser Sign-In Situations](browser-sign-in-situations-README.md). On this
 lane the gateway dispatches by credential shape: a `kst1.` token goes to the
 session authority, any other token to the Cognito manager built from the
-provider's upstream pool, so a host that keeps its own login keeps working
-(`input.accept_upstream_tokens: false` turns that off).
+referenced authenticator's pools, so a host that keeps its own login keeps working
+(`input.accept_authenticator_tokens: false` turns that off).
 
 `@kdcube/components-core/session` is that contract as code for site shells,
 widgets and application pages, with React bindings in
@@ -329,25 +325,24 @@ platform origin's callback and signed-out URLs do. The website's
 server-session mode in `auth.js` sends its full URL as `next` for this
 reason.
 
-### Switching server-side login on and off
+### Switching the login lane
 
-The switch is two lines in the environment's `assembly.yaml`, `auth.type`
-and `auth.connection_hub.provider_id`, followed by a restart. It needs the
-image to carry the lane's code and, for a cloud environment, the descriptor
-inputs published. No client is rebuilt or redeployed for it: the control
-plane web app, the widgets and the website read `/api/cp-frontend-config`
-at page load and follow what they find. What changes is the browser
-sessions alive at that moment:
+For an app-defined authenticator, the switch changes
+`auth.connection_hub.provider_id` and keeps `auth.type: bundle`. A runtime
+refresh applies the new lane. No browser client is rebuilt: the control-plane
+web app, widgets, and website read `/api/cp-frontend-config` at page load and
+follow the resolved authenticator definition. Existing browser credentials
+behave as follows:
 
-Set `auth.proxy_login.enabled: false` for this session lane. Proxylogin belongs
+Set `auth.proxy_login.enabled: false` for this server-side lane. Proxylogin belongs
 to the legacy `auth.type: delegated` lane; the platform session endpoints run
 in KDCube itself. The process-selection contract is documented in
 [Assembly Descriptor](../../configuration/assembly-descriptor-README.md#platform-auth-selection).
 
 | Switch | Control plane web app, widgets, website on `loginMode: auto` | Website on `own-oidc` | Website on `platform` |
 | --- | --- | --- | --- |
-| off to on (`cognito` to `browser_session`) | The next page load probes `/profile` with the old Cognito token cookies, which the gateway still accepts, so nobody is signed out. When the access token expires, nothing renews it any more, the page sees anonymous, and the user signs in once through the platform route. | unaffected, its tokens stay accepted | unaffected, it already used the server route |
-| on to off (`browser_session` to `cognito`) | The next page load runs the browser OIDC client; the session cookie holds a `kst1` token the Cognito manager cannot read, so the user signs in once, often silently while the hosted UI session lives. The frontend's cookie write replaces the session cookie. | unaffected | breaks by design: it insists on a `loginUrl` the Cognito lane does not advertise. Set the profile to `auto` or `own-oidc` first. |
+| browser-side to server-side (`cognito_demo` to `server_login`) | The next page load probes `/profile` with the old Cognito token cookies, which the gateway still accepts, so nobody is signed out. When the access token expires, the user signs in once through the platform route. | unaffected, its tokens stay accepted | unaffected, it already used the server route |
+| server-side to browser-side (`server_login` to `cognito_demo`) | The next page load runs the browser OIDC client; the `kst1` session cookie is not a Cognito token, so the user signs in once, often silently while the hosted UI session lives. | unaffected | requires `auto` or `own-oidc`, because a browser-side Cognito definition has no platform `loginUrl` |
 
 Never affected: external MCP clients (Claude Desktop, Claude Code and the
 others authenticate to Connection Hub's OAuth server and their cards, not
@@ -361,7 +356,8 @@ switch, and edit the sign-in providers, on the Authenticators tab of
 Connection Hub. The tab reads the platform's selection and every provider
 of the authority registry (`authorities_describe`), and its editor writes
 the staged descriptor files through `kdcube_ai_app.infra.descriptors.edit`:
-the two assembly lines together for the switch (`platform_sign_in_set`),
+the selected `provider_id` for the switch, restoring `auth.type: bundle` if a
+descriptor drifted (`platform_sign_in_set`),
 one provider block at a time for the providers (`authority_provider_set`,
 after `authority_provider_validate` checked the buffer). Comments and every
 other key are kept, the previous file stays beside the new one as
@@ -386,8 +382,8 @@ receives no policy and never touches.
 
 ## Google Login: Setup And Trust Boundaries
 
-The default installation uses Google Identity Services as the upstream identity
-proof for an application-hosted platform login. It uses a public Google Web
+The default installation uses Google Identity Services as the authenticator
+for server-side login hosted by the Workspace app. It uses a public Google Web
 client id and a Google-signed ID token. It does not exchange an authorization
 code and therefore does not use a Google OAuth client secret.
 
@@ -556,7 +552,7 @@ session-invalidating operation across all replicas.
 
 ## Storage Surfaces
 
-Application-hosted platform sessions use Redis as mutable runtime storage. Key
+Server-side platform sessions use Redis as mutable runtime storage. Key
 names are tenant/project namespaced.
 
 | Storage | Shape | Lifetime | Used by |
@@ -735,7 +731,7 @@ application wants a single call for first login and subsequent login.
      GET /api/integrations/bundles
 
 7. Gateway resolves:
-     effective auth provider session
+     effective platform authenticator bundle
      token -> Redis session -> current user record -> UserSession
 ```
 
@@ -769,7 +765,7 @@ POST /api/platform/logout
   v
 Platform reads configured auth cookie
   |
-  +-- if provider type is bundle_session_login:
+  +-- if provider type is bundle:
   |     await logout_bundle_session(token=token)
   |
   +-- delete Redis session record
@@ -785,16 +781,15 @@ POST /api/platform/logout
 ```
 
 It clears `AUTH_TOKEN_COOKIE_NAME`, `ID_TOKEN_COOKIE_NAME`, and
-`MASQUERADED_TOKEN_COOKIE_NAME`. For `auth.idp: session` it also invalidates the
+`MASQUERADED_TOKEN_COOKIE_NAME`. For the resolved `bundle` login kind it also invalidates the
 active platform-session record in Redis. This endpoint is intentionally
-platform generic: the browser does not need to know whether the configured
-authority is Cognito, `bundle_session_login`, or another platform provider.
+platform generic: the browser uses the same route for a Cognito authenticator,
+a `bundle` login lane, or another sign-in choice.
 
-Applications do not need to implement logout for the normal browser shell. An
-application may still expose a branded "signed out" page or an
-upstream-provider sign-out flow, but that is UI/provider cleanup. The KDCube
-platform session must still end through the generic platform logout endpoint
-or the same SDK authority logout primitive.
+The normal browser shell uses this generic logout endpoint. An application may
+also expose a branded "signed out" page or an identity-provider sign-out flow
+for UI and identity-provider cleanup. The KDCube platform session ends through
+the generic platform logout endpoint or the same SDK authority logout primitive.
 
 If an application needs a custom logout operation for a non-browser surface,
 use the same underlying authority primitive:
@@ -876,7 +871,7 @@ Delete invalidates sessions and removes the platform user record.
 
 ## Request-Time Session Validation
 
-When `auth.idp: session`, the gateway uses
+When the selected authenticator resolves to `bundle`, the gateway uses
 the technically named `BundleSessionAuthManager`.
 
 ```text
@@ -978,7 +973,7 @@ after logout, invalidate, delete, or signing-secret rotation.
 
 ## Data Bus Relationship
 
-Application-hosted platform login creates browser/platform authentication. It
+Server-side login creates browser/platform authentication. It
 makes the browser a known platform user for platform routes.
 
 Data Bus federated tokens are short-lived transport capability tokens for
@@ -1001,8 +996,8 @@ for the Data Bus token claim flow.
 
 ## Token Shape
 
-Application-hosted platform sessions use the technically named bundle-session
-token format:
+Server-side platform sessions use the stable `kst1` token format implemented
+by `BundleSessionAuthority`:
 
 ```
 kst1.<b64url-json-claims>.<b64url-hmac-sha256>
@@ -1028,7 +1023,7 @@ themselves.
 |---|---|
 | Cognito | Platform owns login, registration, MFA, and JWT validation. |
 | SimpleIDP bridge | App registers an opaque token in `idp_users.json`; useful for local/embedded simple auth. |
-| Application-hosted platform login | Application owns the login interaction and upstream identity validation; KDCube owns session tokens and Redis-backed revocation. Technical provider type: `bundle_session_login`. |
+| Server-side login | An app-defined login operation validates an authenticator proof; KDCube owns session tokens and Redis-backed revocation. Registry type: `bundle`. |
 | Federated Data Bus token | Short-lived capability token for Socket.IO Data Bus after an identity is already accepted. |
 
 ## Verification
@@ -1058,9 +1053,9 @@ If `/profile` is anonymous, check these items in order:
 
 | Check | Expected |
 |---|---|
-| Descriptor | `auth.connection_hub` naming a `bundle_session_login` provider in `assembly.yaml` (fallback: `auth.idp: session`). |
+| Descriptor | `auth.type: bundle` plus `auth.connection_hub` naming a registry entry of type `bundle`. |
 | Secret | `platform.services.session_token.secret` exists and is identical for ingress/proc. |
-| Cookie name | Browser sends the selected provider auth cookie to the platform origin. |
+| Cookie name | Browser sends the selected sign-in entry's auth cookie to the platform origin. |
 | Token prefix | Cookie value starts with `kst1.`. |
 | Redis session | The backing session key exists until logout/expiry. |
 | User record | The user record exists and is not disabled. |

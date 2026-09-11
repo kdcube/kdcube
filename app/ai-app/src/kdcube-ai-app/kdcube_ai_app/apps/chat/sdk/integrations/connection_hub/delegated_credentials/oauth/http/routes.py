@@ -95,7 +95,7 @@ from connection_hub.authority_registry_config import (
     resolve_authority_provider_instance,
 )
 from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import call_bundle_operation
-from kdcube_ai_app.auth.bundle.browser_session import sign_in_bounce_path
+from kdcube_ai_app.auth.bundle.login_lane import sign_in_bounce_path
 from connection_hub.authority_inventory import (
     AuthorityGrantInventory,
     PlatformAuthorityInventoryProvider,

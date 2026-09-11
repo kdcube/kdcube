@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Elena Viter
 
-"""Connection Hub runtime for bundle-hosted platform session authorities.
+"""Connection Hub runtime for app-defined server-side platform login.
 
 The bundle owns the user-facing login route/UI. This SDK module owns the
-authority-registry lookup, upstream proof verification, role/provisioning
-resolution, and KDCube bundle-session issuance.
+authority-registry lookup, authenticator proof verification, role/provisioning
+resolution, and KDCube platform-session issuance.
 """
 
 from __future__ import annotations
@@ -23,9 +23,9 @@ from kdcube_ai_app.apps.chat.sdk.integrations.telegram import widget_auth as tel
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.authority_registry_client import AuthorityRegistryClient
 from kdcube_ai_app.auth.bundle import get_bundle_session_authority
 
-log = logging.getLogger("kdcube.connection_hub.authority_provider.bundle_session_login")
+log = logging.getLogger("kdcube.connection_hub.authority_provider.bundle_login")
 
-PROVIDER_TYPE = "bundle_session_login"
+PROVIDER_TYPE = "bundle"
 DEFAULT_TELEGRAM_OPERATION = "auth_telegram_session"
 DEFAULT_GOOGLE_OPERATION = "auth_google_session"
 
@@ -70,7 +70,7 @@ def _required_positive_int(config: Mapping[str, Any], key: str) -> int:
     return value
 
 
-async def resolve_bundle_session_login_provider(
+async def resolve_bundle_login_provider(
     entrypoint: Any,
     *,
     bundle_id: str,
@@ -113,14 +113,18 @@ async def resolve_provider_ref(entrypoint: Any, ref: Mapping[str, Any]) -> dict[
 
     authority_id = _str(ref.get("authority_id"))
     provider_id = _str(ref.get("provider_id") or ref.get("authenticator_id"))
-    result = await AuthorityRegistryClient(entrypoint).resolve_provider(
+    bundle_id = _str(ref.get("bundle_id"))
+    result = await AuthorityRegistryClient(
+        entrypoint,
+        connection_hub_bundle_id=bundle_id or None,
+    ).resolve_provider(
         authority_id=authority_id,
         provider_id=provider_id,
     )
     if not result.get("ok"):
         raise HTTPException(
             status_code=500,
-            detail=f"Connection Hub upstream authenticator is not registered: {result.get('error') or 'not_found'}",
+            detail=f"Connection Hub authenticator is not registered: {result.get('error') or 'not_found'}",
         )
     return result
 
@@ -131,8 +135,18 @@ async def authenticator_client_id(authenticator: Mapping[str, Any]) -> str:
     if not client_id and secret_ref:
         client_id = _str(await get_secret(secret_ref, default=None))
     if not client_id:
-        raise HTTPException(status_code=500, detail="Google authority provider authenticator.client_id is not configured")
+        raise HTTPException(status_code=500, detail="Google authenticator client_id is not configured")
     return client_id
+
+
+def require_authenticator_type(result: Mapping[str, Any], expected: str) -> None:
+    provider = _dict(result.get("provider"))
+    actual = _str(provider.get("type") or result.get("provider_type")).lower()
+    if actual != expected:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Referenced authenticator must have type `{expected}`; found `{actual or 'missing'}`",
+        )
 
 
 def _lookup_mapping(mapping: Mapping[str, Any], key: str) -> dict[str, Any]:
@@ -225,7 +239,7 @@ def _bootstrap_rule_matches(
     if not claims_match:
         return bool(configured_subject or configured_provider_subject or rule_provider)
 
-    # Email can be a bootstrap matcher only after the upstream authority proves
+    # Email can be a bootstrap matcher only after the authenticator proves
     # it. The identity key remains the stable authority subject, not email.
     if provider == "google" and "email" in claims_match and bool(verified_claims.get("email_verified")) is not True:
         return False
@@ -304,7 +318,7 @@ def resolve_platform_grants(
 
     `authority.grants.subjects` is the canonical persisted assignment surface.
     `authority.grants.bootstrap_rules` exists for bootstrap cases where an
-    admin knows a verified upstream claim, such as a Google email, before they
+    admin knows a verified authenticator claim, such as a Google email, before they
     know the stable provider subject.
     """
 
@@ -375,7 +389,7 @@ def _session_response(
     response = JSONResponse(
         {
             "ok": True,
-            "auth_surface": "bundle_session",
+            "auth_surface": "bundle",
             "authority_id": authority_id,
             "authority_provider_id": provider_id,
             "provider": provider,
@@ -407,21 +421,22 @@ async def google_login_client_config(
     bundle_id: str,
     operation: str = DEFAULT_GOOGLE_OPERATION,
 ) -> dict[str, Any]:
-    registry_provider = await resolve_bundle_session_login_provider(
+    registry_provider = await resolve_bundle_login_provider(
         entrypoint,
         bundle_id=bundle_id,
         operation=operation,
     )
     provider_cfg = _dict(registry_provider.get("provider"))
     input_authenticator_ref = _dict(_dict(provider_cfg.get("input")).get("authenticator_ref"))
-    upstream = await resolve_provider_ref(entrypoint, input_authenticator_ref)
-    upstream_provider_cfg = _dict(upstream.get("provider"))
-    client_id = await authenticator_client_id(_dict(upstream_provider_cfg.get("authenticator")))
+    authenticator = await resolve_provider_ref(entrypoint, input_authenticator_ref)
+    require_authenticator_type(authenticator, "google")
+    authenticator_provider = _dict(authenticator.get("provider"))
+    client_id = await authenticator_client_id(_dict(authenticator_provider.get("authenticator")))
     return {
         "registry_provider": registry_provider,
         "provider": provider_cfg,
         "input_authenticator_ref": input_authenticator_ref,
-        "upstream": upstream,
+        "authenticator": authenticator,
         "client_id": client_id,
     }
 
@@ -436,7 +451,7 @@ async def issue_telegram_session(
     operation: str = DEFAULT_TELEGRAM_OPERATION,
 ):
     del payload
-    registry_provider = await resolve_bundle_session_login_provider(
+    registry_provider = await resolve_bundle_login_provider(
         entrypoint,
         bundle_id=bundle_id,
         operation=operation,
@@ -497,7 +512,7 @@ async def issue_telegram_session(
     )
 
     log.info(
-        "[bundle_session_login] issued authority=%s authority_provider=%s provider=%s provider_subject=%s sub=%s roles=%s role_binding=%s session_id=%s",
+        "[bundle_login] issued authority=%s authority_provider=%s provider=%s provider_subject=%s sub=%s roles=%s role_binding=%s session_id=%s",
         authority_id,
         provider_id,
         provider,
@@ -534,7 +549,7 @@ async def issue_google_session(
     del request
     payload_map = _dict(payload)
     token = _str(credential or id_token or payload_map.get("credential") or payload_map.get("id_token"))
-    registry_provider = await resolve_bundle_session_login_provider(
+    registry_provider = await resolve_bundle_login_provider(
         entrypoint,
         bundle_id=bundle_id,
         operation=operation,
@@ -544,9 +559,10 @@ async def issue_google_session(
     input_cfg = _dict(provider_cfg.get("input"))
     input_authenticator_ref = _dict(input_cfg.get("authenticator_ref"))
     issuer_cfg = _dict(provider_cfg.get("issuer"))
-    upstream = await resolve_provider_ref(entrypoint, input_authenticator_ref)
-    upstream_provider_cfg = _dict(upstream.get("provider"))
-    authenticator_cfg = _dict(upstream_provider_cfg.get("authenticator"))
+    authenticator = await resolve_provider_ref(entrypoint, input_authenticator_ref)
+    require_authenticator_type(authenticator, "google")
+    authenticator_provider = _dict(authenticator.get("provider"))
+    authenticator_cfg = _dict(authenticator_provider.get("authenticator"))
     client_id = await authenticator_client_id(authenticator_cfg)
     jwks_url = _str(authenticator_cfg.get("jwks_url")) or google_oidc.GOOGLE_JWKS_URL
 
@@ -595,8 +611,8 @@ async def issue_google_session(
             "source": f"{bundle_id}.{operation}",
             "authority_id": authority_id,
             "authority_provider_id": provider_id,
-            "input_authority_id": _str(upstream.get("authority_id")),
-            "input_authority_provider_id": _str(upstream.get("provider_id")),
+            "input_authority_id": _str(authenticator.get("authority_id")),
+            "input_authority_provider_id": _str(authenticator.get("provider_id")),
             "google_sub": provider_subject,
             "google_email": email,
             "google_email_verified": bool(claims.get("email_verified")),
@@ -605,7 +621,7 @@ async def issue_google_session(
         ttl_seconds=ttl_seconds,
     )
     log.info(
-        "[bundle_session_login] issued authority=%s authority_provider=%s provider=%s provider_subject=%s email=%s sub=%s roles=%s role_binding=%s session_id=%s",
+        "[bundle_login] issued authority=%s authority_provider=%s provider=%s provider_subject=%s email=%s sub=%s roles=%s role_binding=%s session_id=%s",
         authority_id,
         provider_id,
         provider,
@@ -638,7 +654,8 @@ __all__ = [
     "google_login_client_config",
     "issue_google_session",
     "issue_telegram_session",
-    "resolve_bundle_session_login_provider",
+    "require_authenticator_type",
+    "resolve_bundle_login_provider",
     "resolve_platform_grants",
     "resolve_provider_ref",
 ]

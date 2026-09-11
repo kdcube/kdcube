@@ -29,7 +29,7 @@ def _is_top_level_html_navigation(request: Request) -> bool:
 
 
 def _sign_in_redirect(request: Request) -> RedirectResponse:
-    from kdcube_ai_app.auth.bundle.browser_session import sign_in_bounce_path
+    from kdcube_ai_app.auth.bundle.login_lane import sign_in_bounce_path
 
     return_to = request.url.path
     if request.url.query:

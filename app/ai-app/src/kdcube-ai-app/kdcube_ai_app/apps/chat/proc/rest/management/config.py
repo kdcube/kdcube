@@ -212,18 +212,18 @@ class HumanApprovalConfig:
                 providers.append(candidate)
 
         raw_google = _mapping(plain("management.human_approval.google", default={}))
-        upstream = _mapping(platform.get("upstream_authority_provider"))
-        upstream_provider = _mapping(upstream.get("provider"))
-        upstream_authenticator = _mapping(upstream_provider.get("authenticator"))
+        resolved_authenticator = _mapping(platform.get("login_authenticator"))
+        authenticator_provider = _mapping(resolved_authenticator.get("provider"))
+        authenticator = _mapping(authenticator_provider.get("authenticator"))
         google = GoogleFreshAuthenticationConfig(
             client_id=_text(
                 raw_google.get("client_id")
-                or upstream_authenticator.get("client_id")
-                or upstream_authenticator.get("audience")
+                or authenticator.get("client_id")
+                or authenticator.get("audience")
             ),
             jwks_url=_text(
                 raw_google.get("jwks_url")
-                or upstream_authenticator.get("jwks_url")
+                or authenticator.get("jwks_url")
                 or "https://www.googleapis.com/oauth2/v3/certs"
             ),
         )

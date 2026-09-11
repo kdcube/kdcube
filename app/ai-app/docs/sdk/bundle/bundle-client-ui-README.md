@@ -4,7 +4,7 @@ title: "App Client UI"
 summary: "Entry page for app-facing frontend integration: source layout for main UI vs widgets, static/integration routes, browser transport links, frame behavior, and widget or operation interoperability."
 tags: ["sdk", "app", "bundle-legacy-path", "frontend", "transport", "auth", "sse", "socketio", "rest", "ui"]
 keywords: ["frontend integration entrypoint", "app ui contract", "main view ui/main", "widget source folder", "widget and operation interoperability", "browser auth and transport", "chat stream lifecycle guidance", "multi tab coordination", "client side app behavior"]
-updated_at: 2026-08-13
+updated_at: 2026-09-11
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-widget-integration-README.md
@@ -188,7 +188,7 @@ app configuration. The CLI does not select or mount websites.
 The app remains responsible for its website composition and browser config.
 Platform/auth metadata comes from `/api/cp-frontend-config`; authenticated
 state comes from `/profile`; app-specific site data comes from an app API. This
-keeps the same site code valid across Cognito and app-hosted platform
+keeps the same site code valid across Cognito and server-side platform
 authorities.
 
 The reference implementation is

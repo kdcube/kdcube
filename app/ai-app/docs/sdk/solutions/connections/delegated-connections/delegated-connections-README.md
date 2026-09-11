@@ -5,7 +5,7 @@ summary: "Connection Hub role for consented connections where a credential/proof
 status: active
 tags: ["sdk", "solutions", "connections", "connection-hub", "delegated-connections", "oauth", "mcp", "consent", "grants"]
 keywords: ["delegated connections", "Delegated by KDCube", "delegated access cards", "OAuth client grant", "manual automation token", "registry_access_id", "grant revocation"]
-updated_at: 2026-09-04
+updated_at: 2026-09-11
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/authority-providers/authority-provider-runtime-README.md
@@ -266,7 +266,7 @@ the Connection Hub authentication surface:
 Connection Hub SDK RequestAuthResolver
   |
   +-- Cognito / platform browser session
-  +-- application-hosted platform session
+  +-- server-side platform session
   +-- ConnectionHubAuthenticationSurface
         |
         +-- role-providing authenticator
@@ -322,15 +322,15 @@ Works without extra patching:
 
 - Cognito or multi-Cognito platform auth.
 - Simple/dev auth.
-- Application-hosted platform login where the browser carries a KDCube
+- Server-side login where the browser carries a KDCube
   platform session verified by the technically named
   `BundleSessionAuthManager` and its Redis-backed authority.
 
 Requires a matching auth resolver:
 
 - A deployment that issues its own stateless `kst1` browser token and sets a
-  custom `AUTH_PROVIDER=session` must have a platform auth manager that verifies
-  that token. If the platform maps `session` to a different manager, the OAuth
+  custom `AUTH_PROVIDER=bundle` must have a platform auth manager that verifies
+  that token. If the platform maps `bundle` to a different manager, the OAuth
   consent step cannot authenticate that browser cookie.
 
 The OAuth delegated credential service itself is not tied to one identity provider. It asks the

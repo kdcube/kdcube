@@ -4,10 +4,10 @@ title: "App SimpleIDP Bridge"
 summary: "How an app can validate an external sign-in flow and issue platform-recognized SimpleIDP cookies."
 tags: ["service", "auth", "simple-idp", "app", "sso"]
 keywords: ["SimpleIDP", "app auth", "external identity", "SSO bridge", "cookie auth", "idp_users.json"]
-updated_at: 2026-08-26
+updated_at: 2026-09-11
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/app-hosted-platform-login-and-session-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/server-side-login-and-platform-session-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-platform-integration-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-firewall-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/comm/data-bus-README.md
@@ -19,9 +19,9 @@ deployments. In this pattern, an app owns one or more external sign-in flows,
 validates the external identity, registers a platform token in the SimpleIDP
 registry, and sets the platform auth cookies for the browser.
 
-For new application-hosted browser login sessions that need logout, delete, and
+For new server-side browser login sessions that need logout, delete, and
 cluster-wide invalidation, use
-[Application-Hosted Platform Login And Session](app-hosted-platform-login-and-session-README.md).
+[Server-Side Login And The Platform Session](server-side-login-and-platform-session-README.md).
 This bridge remains the SimpleIDP-specific path.
 
 The browser then reaches platform routes as a normal authenticated platform

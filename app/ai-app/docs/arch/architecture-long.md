@@ -4,7 +4,7 @@ title: "Architecture Long"
 summary: "Detailed current KDCube architecture: deployment scope, app catalogs and surfaces, ingress, ordered conversation lanes, Data Bus and relay, identity and delegation, cross-runtime context, isolated execution, storage, scaling, sites, and economics."
 status: current
 tags: ["arch", "architecture", "runtime", "apps", "events", "identity", "execution", "storage"]
-updated_at: 2026-08-27
+updated_at: 2026-09-11
 keywords: ["KDCube architecture", "tenant project", "app provider consumer", "conversation event bus", "data bus", "isolated execution", "Connection Hub", "site catalog"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/arch/security-and-trust-model-README.md
@@ -241,9 +241,9 @@ The browser obtains the effective platform contract from
 `profileUrl`, and `logoutUrl`; it does not inspect provider implementation or
 infer login state from visible cookies. `/profile` is the browser-session truth.
 
-Platform authority may be backed by Cognito, multi-Cognito, SimpleIDP, or an
-application-hosted authority flow. Connection Hub owns the platform authority
-provider registry and policy. An app may host login/session/consent UI and
+Platform authority may be backed by Cognito, multi-Cognito, SimpleIDP, or
+server-side login defined by an app. Connection Hub owns the platform authority
+registry and policy. An app may host login/session/consent UI and
 operations without becoming the owner of global authority semantics.
 
 The control plane presents an app's own main view when present, otherwise an

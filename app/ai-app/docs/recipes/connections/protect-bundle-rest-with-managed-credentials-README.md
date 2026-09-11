@@ -4,7 +4,12 @@ title: "Protect REST With Managed Delegated Credentials"
 summary: "Configure application REST operations or platform REST resources so external automation can call them with a Connection Hub delegated bearer token."
 status: active
 tags: ["connection-hub", "delegated-credentials", "rest", "automation", "oauth"]
-updated_at: 2026-07-17
+keywords: ["managed REST guard", "delegated bearer token", "external automation", "operation consent"]
+updated_at: 2026-09-11
+see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-credentials/oauth-delegated-credential-protocol-adapter-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/create-delegated-automation-access-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
 ---
 
 # Protect REST With Managed Delegated Credentials
@@ -13,9 +18,9 @@ Use this recipe when an external automation should call an application REST
 operation or a configured platform REST resource on behalf of a signed-in
 KDCube user.
 
-This is separate from platform login. The approving user may authenticate with
-Cognito, multi-Cognito, or an application-hosted platform authority. The REST
-caller presents a delegated-client bearer token issued by Connection Hub.
+Platform login authenticates the approving user, either in the browser against
+Cognito or through server-side login that issues a platform session. The REST
+caller presents its own delegated-client bearer token issued by Connection Hub.
 
 Related docs:
 

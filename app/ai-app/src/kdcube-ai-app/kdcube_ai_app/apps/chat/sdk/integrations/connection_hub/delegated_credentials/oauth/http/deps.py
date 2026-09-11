@@ -76,7 +76,7 @@ def get_authenticate(request: Request) -> AuthenticateFn:
     from kdcube_ai_app.auth.bundle import BundleSessionAuthManager, get_bundle_session_authority
 
     tenant, project = oauth_tenant_project(request)
-    # (manager, apply_registered_baseline). The bundle-session authority
+    # (manager, apply_registered_baseline). BundleSessionAuthority
     # resolves DELEGATED-CREDENTIAL bearers whose roles are EXACTLY the
     # grant's roles - a bounded token (e.g. feedback-reader) must never widen
     # to registered by transport, so NO baseline. The gateway session manager

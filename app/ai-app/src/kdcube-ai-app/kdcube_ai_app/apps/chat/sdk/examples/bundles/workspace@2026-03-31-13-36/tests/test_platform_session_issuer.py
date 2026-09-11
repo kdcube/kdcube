@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-import kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.authority_providers.bundle_session_login as bundle_session_login
+import kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.authority_providers.bundle_login as bundle_login
 
 
 def _load_platform_session_issuer():
@@ -37,7 +37,7 @@ class _ResourceOperationInputs(HTMLParser):
 
 
 def test_grants_can_assign_google_platform_subject_within_provider_bounds():
-    roles, permissions, source = bundle_session_login.resolve_platform_grants(
+    roles, permissions, source = bundle_login.resolve_platform_grants(
         authority_cfg={
             "grants": {
                 "subjects": {
@@ -124,7 +124,7 @@ def test_custom_consent_renders_owner_connector_operations_and_existing_selectio
 
 def test_role_binding_fails_closed_when_binding_exceeds_provider_bounds():
     with pytest.raises(Exception, match="non-assignable roles"):
-        bundle_session_login.resolve_platform_grants(
+        bundle_login.resolve_platform_grants(
             authority_cfg={
                 "grants": {
                     "subjects": {
@@ -146,7 +146,7 @@ def test_role_binding_fails_closed_when_binding_exceeds_provider_bounds():
 
 
 def test_grants_fall_back_to_provider_default_grants():
-    roles, permissions, source = bundle_session_login.resolve_platform_grants(
+    roles, permissions, source = bundle_login.resolve_platform_grants(
         authority_cfg={"grants": {}},
         provider_cfg={
             "grants": {
@@ -167,7 +167,7 @@ def test_grants_fall_back_to_provider_default_grants():
 
 
 def test_grants_can_bootstrap_by_verified_google_email():
-    roles, permissions, source = bundle_session_login.resolve_platform_grants(
+    roles, permissions, source = bundle_login.resolve_platform_grants(
         authority_cfg={
             "grants": {
                 "subjects": {},
@@ -210,7 +210,7 @@ def test_grants_can_bootstrap_by_verified_google_email():
 
 
 def test_grants_reject_unverified_google_email():
-    roles, permissions, source = bundle_session_login.resolve_platform_grants(
+    roles, permissions, source = bundle_login.resolve_platform_grants(
         authority_cfg={
             "grants": {
                 "bootstrap_rules": [

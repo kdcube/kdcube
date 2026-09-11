@@ -5,7 +5,7 @@ summary: "Design note for which delegated client connection grant records may re
 status: design
 tags: ["sdk", "solutions", "connections", "delegated-connections", "oauth", "mcp", "storage", "redis", "postgres", "durability"]
 keywords: ["grant storage", "delegated credential", "kst1", "Redis session", "OAuth grant"]
-updated_at: 2026-08-26
+updated_at: 2026-09-11
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-connections/delegated-connections-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-credentials/oauth-delegated-credential-protocol-adapter-README.md
@@ -30,8 +30,8 @@ disappear after Redis loss.
 {tenant}:{project}:kdcube:oauth:agrant:<sha256(access_token)>
 ```
 
-The access token itself is also a `kst1` token backed by KDCube's technically
-named bundle-session authority. It is a delegated-client credential, not a
+The access token itself is also a `kst1` token backed by KDCube's
+`BundleSessionAuthority`. It is a delegated-client credential, not a
 browser platform session. The OAuth `agrant` record is not the token; it binds
 that token to the selected MCP tool allowlist.
 

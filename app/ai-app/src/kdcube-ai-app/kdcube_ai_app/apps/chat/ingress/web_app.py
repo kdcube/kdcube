@@ -680,7 +680,7 @@ async def platform_logout(request: Request):
     provider = platform_authenticator_provider(settings)
     token = request.cookies.get(auth_cfg.AUTH_TOKEN_COOKIE_NAME)
     invalidated = False
-    if token and provider in {"session", "bundle", "bundle-session"}:
+    if token and provider == "bundle":
         try:
             from kdcube_ai_app.auth.bundle.sessions import logout_bundle_session
             invalidated = bool(await logout_bundle_session(token=token))
@@ -695,17 +695,17 @@ async def platform_logout(request: Request):
     # route reads, so no per-page URL ever needs registering upstream.
     upstream_logout_url = ""
     return_cookie = None
-    if provider in {"session", "bundle", "bundle-session"}:
+    if provider == "bundle":
         try:
-            from kdcube_ai_app.auth.bundle.browser_session import (
+            from kdcube_ai_app.auth.bundle.login_lane import (
                 RETURN_COOKIE_TTL_SECONDS,
                 SIGNED_OUT_ROUTE,
-                platform_browser_session_flow,
+                platform_login_flow,
                 public_origin,
             )
-            from connection_hub.browser_session.next_url import safe_next_target
+            from connection_hub.server_side_login.next_url import safe_next_target
 
-            flow = await platform_browser_session_flow(origin=public_origin(request))
+            flow = await platform_login_flow(origin=public_origin(request))
             if flow is not None:
                 next_raw = request.query_params.get("next")
                 if not next_raw and "application/x-www-form-urlencoded" in (request.headers.get("content-type") or ""):

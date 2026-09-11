@@ -13,18 +13,18 @@ from types import SimpleNamespace
 
 import pytest
 
-from connection_hub.browser_session.cookies import StandardCookiePolicy
-from connection_hub.browser_session.flow import BrowserSessionFlow, LoginAttemptRejected
-from connection_hub.browser_session.model import LoginAttempt, SessionPolicy, VerifiedIdentity
+from connection_hub.server_side_login.cookies import StandardCookiePolicy
+from connection_hub.server_side_login.flow import BrowserSessionFlow, LoginAttemptRejected
+from connection_hub.server_side_login.model import LoginAttempt, SessionPolicy, VerifiedIdentity
 
 from kdcube_ai_app.auth.AuthManager import AuthenticationError
 from kdcube_ai_app.auth.bundle import BundleSessionAuthManager, BundleSessionAuthority
-from kdcube_ai_app.auth.bundle.browser_session import (
+from kdcube_ai_app.auth.bundle.login_lane import (
     LOGIN_ROUTE,
     PlatformSessionBackend,
     RedisLoginAttemptStore,
-    browser_session_config,
-    upstream_is_oidc,
+    bundle_login_config,
+    login_authenticator_is_oidc,
 )
 from kdcube_ai_app.auth.tests.test_bundle_sessions import FakeRedis
 
@@ -149,7 +149,7 @@ async def test_auth_manager_slides_after_the_touch_interval(monkeypatch):
 async def test_flow_over_the_platform_backend_issues_a_platform_session(monkeypatch):
     clock = Clock()
     monkeypatch.setattr("kdcube_ai_app.auth.bundle.sessions.time.time", clock)
-    monkeypatch.setattr("kdcube_ai_app.auth.bundle.browser_session.time.time", clock)
+    monkeypatch.setattr("kdcube_ai_app.auth.bundle.login_lane.time.time", clock)
     redis = FakeRedis()
     authority = _authority(redis)
     policy = SessionPolicy(idle_ttl_seconds=600, max_ttl_seconds=3600, touch_interval_seconds=60, attempt_ttl_seconds=120)
@@ -219,22 +219,22 @@ async def test_attempt_store_take_is_get_and_delete_and_respects_expiry():
 
 # ---- the lane's configuration ------------------------------------------------
 
-def _platform_auth(upstream_type: str = "multi_cognito", **provider_extra):
+def _platform_auth(authenticator_type: str = "multi_cognito", **provider_extra):
     return {
-        "auth_provider": "session",
+        "auth_provider": "bundle",
         "authority_id": "kdcube.platform",
-        "provider_id": "browser_session",
+        "provider_id": "server_login",
         "authority": {"platform": True, "grants": {}},
         "provider": {
-            "type": "bundle_session_login",
+            "type": "bundle",
             "input": {"authenticator_ref": {"authority_id": "kdcube.platform", "provider_id": "cognito"}, "groups_claim": "cognito:groups", **provider_extra.pop("input", {})},
             "issuer": {"ttl_seconds": 7200, "max_ttl_seconds": 86400, "cookie": {"same_site": "lax"}},
             **provider_extra,
         },
-        "upstream_authority_provider": {
+        "login_authenticator": {
             "ok": True,
             "provider": {
-                "type": upstream_type,
+                "type": authenticator_type,
                 "authenticator": {
                     "type": "cognito_id_token",
                     "region": "eu-west-1",
@@ -254,33 +254,33 @@ def _settings(platform_auth):
     )
 
 
-def test_config_resolves_cognito_upstream_from_the_registry():
-    config = browser_session_config(_settings(_platform_auth()))
+def test_config_resolves_cognito_authenticator_from_the_registry():
+    config = bundle_login_config(_settings(_platform_auth()))
     assert config is not None
     assert config.issuer_url == "https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_POOL"
     assert config.client_id == "client-id"
     assert config.hosted_ui_domain == "https://auth.example.com"
-    assert config.upstream_provider_label == "cognito"
+    assert config.authenticator_kind == "cognito"
     assert config.policy.idle_ttl_seconds == 7200 and config.policy.max_ttl_seconds == 86400
     assert config.session_cookie_name == "__Secure-LATC"
     assert config.groups_claim == "cognito:groups"
     assert LOGIN_ROUTE == "/api/platform/session/login"
 
 
-def test_config_is_absent_without_a_session_provider_or_oidc_upstream():
-    assert upstream_is_oidc({"auth_provider": "cognito"}) is False
-    assert browser_session_config(_settings({"auth_provider": "cognito"})) is None
-    no_upstream = _platform_auth()
-    no_upstream["upstream_authority_provider"] = {}
-    assert upstream_is_oidc(no_upstream) is False
-    assert browser_session_config(_settings(no_upstream)) is None
-    assert upstream_is_oidc(_platform_auth()) is True
+def test_config_is_absent_without_a_bundle_provider_or_oidc_authenticator():
+    assert login_authenticator_is_oidc({"auth_provider": "cognito"}) is False
+    assert bundle_login_config(_settings({"auth_provider": "cognito"})) is None
+    no_authenticator = _platform_auth()
+    no_authenticator["login_authenticator"] = {}
+    assert login_authenticator_is_oidc(no_authenticator) is False
+    assert bundle_login_config(_settings(no_authenticator)) is None
+    assert login_authenticator_is_oidc(_platform_auth()) is True
 
 
 def test_config_max_ttl_is_never_below_idle_ttl():
     platform_auth = _platform_auth()
     platform_auth["provider"]["issuer"] = {"ttl_seconds": 7200, "max_ttl_seconds": 60}
-    config = browser_session_config(_settings(platform_auth))
+    config = bundle_login_config(_settings(platform_auth))
     assert config.policy.max_ttl_seconds == 7200
 
 
@@ -330,11 +330,11 @@ async def test_session_or_token_manager_dispatches_by_credential_shape():
         await manager.authenticate("")
 
 
-def test_upstream_cognito_providers_come_from_the_session_provider_upstream():
-    from kdcube_ai_app.auth.bundle.browser_session import upstream_cognito_providers
+def test_accepted_cognito_providers_come_from_the_lane_authenticator():
+    from kdcube_ai_app.auth.bundle.login_lane import accepted_cognito_providers
 
     platform_auth = _platform_auth()
-    platform_auth["upstream_authority_provider"]["provider"]["authenticator"]["trusted_providers"] = [
+    platform_auth["login_authenticator"]["provider"]["authenticator"]["trusted_providers"] = [
         {"alias": "staging", "kind": "cognito", "region": "eu-west-1", "user_pool_id": "eu-west-1_OTHER", "app_client_id": "other-client"},
     ]
     seen = {}
@@ -344,10 +344,10 @@ def test_upstream_cognito_providers_come_from_the_session_provider_upstream():
 
     settings = _settings(platform_auth)
     settings._resolve_cognito_trusted_providers = resolve
-    config = browser_session_config(settings)
-    assert upstream_cognito_providers(config, settings) == ["primary", "staging"]
+    config = bundle_login_config(settings)
+    assert accepted_cognito_providers(config, settings) == ["primary", "staging"]
     assert seen["primary_pool_id"] == "eu-west-1_POOL" and seen["primary_client_id"] == "client-id"
     assert seen["registry_providers"][0]["alias"] == "staging"
 
-    platform_auth["provider"]["input"]["accept_upstream_tokens"] = False
-    assert upstream_cognito_providers(browser_session_config(settings), settings) == []
+    platform_auth["provider"]["input"]["accept_authenticator_tokens"] = False
+    assert accepted_cognito_providers(bundle_login_config(settings), settings) == []

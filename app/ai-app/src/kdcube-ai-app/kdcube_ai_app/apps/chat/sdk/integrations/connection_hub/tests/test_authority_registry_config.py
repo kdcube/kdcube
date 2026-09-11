@@ -60,7 +60,7 @@ def _registry():
                         },
                     },
                     "workspace_google_session": {
-                        "type": "bundle_session_login",
+                        "type": "bundle",
                         "entrypoints": {
                             "login": {
                                 "bundle_id": "workspace@2026-03-31-13-36",
@@ -96,7 +96,7 @@ def _registry():
                         "grants": {"roles": ["kdcube:role:registered"]},
                     },
                     "disabled_provider": {
-                        "type": "bundle_session_login",
+                        "type": "bundle",
                         "enabled": False,
                     },
                 },
@@ -113,7 +113,7 @@ def _registry():
             "google.accounts": {
                 "providers": {
                     "google_oidc": {
-                        "type": "google_id_token",
+                        "type": "google",
                         "authenticator": {"client_id": "client.apps.googleusercontent.com"},
                     },
                 },
@@ -131,16 +131,16 @@ def test_authority_provider_instances_flatten_configured_instances():
     ] == [
         ("kdcube.platform", "cognito", "multi-cognito", True),
         ("kdcube.platform", "simple", "simple_idp", True),
-        ("kdcube.platform", "workspace_google_session", "bundle_session_login", True),
+        ("kdcube.platform", "workspace_google_session", "bundle", True),
         ("telegram.kdcube_ref", "telegram_bot_init_data", "telegram_init_data", False),
-        ("google.accounts", "google_oidc", "google_id_token", False),
+        ("google.accounts", "google_oidc", "google", False),
     ]
 
 
 def test_resolve_authority_provider_instance_by_host_operation():
     result = resolve_authority_provider_instance(
         _registry(),
-        provider_type="bundle_session_login",
+        provider_type="bundle",
         host_bundle_id="workspace@2026-03-31-13-36",
         host_route="public",
         host_operation="auth_google_session",
@@ -175,7 +175,7 @@ def test_cognito_platform_auth_config_normalizes_registry_provider():
     assert [row["alias"] for row in config["trusted_providers"]] == ["primary", "secondary"]
 
 
-def test_platform_authority_auth_config_normalizes_bundle_session_provider():
+def test_platform_authority_auth_config_normalizes_bundle_provider():
     resolved = resolve_platform_authority_provider(
         _registry(),
         authority_id="kdcube.platform",
@@ -184,7 +184,7 @@ def test_platform_authority_auth_config_normalizes_bundle_session_provider():
 
     config = platform_authority_auth_config(resolved)
 
-    assert config["auth_provider"] == "session"
+    assert config["auth_provider"] == "bundle"
     assert config["id_token_header_name"] == "X-ID-Token"
     assert config["auth_token_cookie_name"] == "__Secure-SESSION-AUTH"
     assert config["id_token_cookie_name"] == "__Secure-SESSION-ID"
@@ -213,7 +213,7 @@ def test_platform_authority_auth_config_normalizes_simple_idp_provider():
 def test_resolve_authority_provider_instance_by_consent_entrypoint():
     result = resolve_authority_provider_instance(
         _registry(),
-        provider_type="bundle_session_login",
+        provider_type="bundle",
         host_bundle_id="workspace@2026-03-31-13-36",
         host_route="public",
         host_operation="delegated_consent",
@@ -232,14 +232,14 @@ def test_resolve_authority_provider_instance_by_authority_and_provider_id():
     )
 
     assert result["ok"] is True
-    assert result["provider_type"] == "google_id_token"
+    assert result["provider_type"] == "google"
     assert result["provider"]["authenticator"]["client_id"] == "client.apps.googleusercontent.com"
 
 
 def test_resolve_authority_provider_instance_fails_closed_when_missing():
     result = resolve_authority_provider_instance(
         _registry(),
-        provider_type="bundle_session_login",
+        provider_type="bundle",
         host_bundle_id="workspace@2026-03-31-13-36",
         host_route="public",
         host_operation="missing",

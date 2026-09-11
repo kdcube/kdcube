@@ -1,3 +1,14 @@
+---
+id: repo:kdcube-ai-app/app/ai-app/deployment/kubernetes/local/README.md
+title: "KDCube Local Kubernetes Setup"
+summary: "Deploys the descriptor-driven KDCube platform stack to a local or managed Kubernetes cluster with the repository Helm charts."
+tags: ["deployment", "kubernetes", "helm", "descriptors"]
+keywords: ["KDCube Kubernetes", "local Kubernetes", "platform Helm chart", "descriptor overlays"]
+updated_at: 2026-09-11
+see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/assembly-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/recipes/operations/install-from-descriptors-README.md
+---
 # KDCube Local Kubernetes Setup
 
 This directory contains the Helm-based Kubernetes deployment for KDCube.
@@ -135,13 +146,13 @@ Set auth routing mode only in `assembly.yaml`:
 Set backend IDP implementation separately:
 - `auth.idp: simple`
 - `auth.idp: cognito`
-- `auth.idp: session`
+- `auth.idp: bundle`
 
 Current chart behavior:
 - `auth.type` drives routing / frontend mode
 - `auth.idp` drives backend `AUTH_PROVIDER`
-- if `auth.idp` is omitted, chart falls back for backward compatibility:
-  `simple` -> backend `AUTH_PROVIDER=simple`; `bundle` -> backend `AUTH_PROVIDER=session`; `cognito` / `delegated` -> backend `AUTH_PROVIDER=cognito`
+- if `auth.idp` is omitted, the chart derives the backend implementation:
+  `simple` -> `simple`; `bundle` -> `bundle`; `cognito` / `delegated` -> `cognito`
 - frontend remains:
   `simple` -> `authType=simple`
   `cognito` / `delegated` -> `authType=cognito`

@@ -16,9 +16,11 @@ logger = logging.getLogger(__name__)
 
 def normalize_platform_auth_provider(value: str) -> str:
     provider = str(value or "").strip().lower()
+    if provider in {"session", "bundle-session"}:
+        raise ValueError(
+            f"platform auth provider '{provider}' was removed; use 'bundle'"
+        )
     aliases = {
-        "bundle": "session",
-        "bundle-session": "session",
         "cognito-multi": "multi-cognito",
         "delegated": "cognito",
     }
@@ -184,25 +186,25 @@ def create_platform_auth_manager(
             runtime_auth_config=settings.AUTH,
         )
 
-    if provider in {"session", "bundle", "bundle-session"}:
+    if provider == "bundle":
         from kdcube_ai_app.auth.bundle import BundleSessionAuthManager, SessionOrTokenAuthManager
-        from kdcube_ai_app.auth.bundle.browser_session import browser_session_config, upstream_cognito_providers
+        from kdcube_ai_app.auth.bundle.login_lane import accepted_cognito_providers, bundle_login_config
 
-        lane = browser_session_config(settings)
+        lane = bundle_login_config(settings)
         session_manager = BundleSessionAuthManager(
             send_validation_error_details=send_validation_error_details,
             sliding=lane.policy if lane is not None else None,
         )
         # A host that keeps its own login against the same Cognito pools may
         # still present its tokens: dispatch by credential shape.
-        token_providers = upstream_cognito_providers(lane, settings) if lane is not None else []
+        token_providers = accepted_cognito_providers(lane, settings) if lane is not None else []
         tokens = None
         if token_providers:
             from kdcube_ai_app.auth.implementations.multi_cognito import MultiCognitoAuthManager
 
             tokens = MultiCognitoAuthManager(token_providers, send_validation_error_details=send_validation_error_details)
         logger.info(
-            "Using BundleSessionAuthManager for %s platform authentication sliding=%s upstream_tokens=%s",
+            "Using BundleSessionAuthManager for %s platform authentication sliding=%s authenticator_tokens=%s",
             service_label,
             "on" if lane is not None else "off",
             len(token_providers),

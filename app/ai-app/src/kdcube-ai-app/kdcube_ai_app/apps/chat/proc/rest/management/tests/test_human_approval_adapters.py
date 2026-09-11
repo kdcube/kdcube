@@ -205,7 +205,7 @@ def test_human_approval_config_inherits_platform_authorities() -> None:
         plain=lambda path, default=None: values.get(path, default),
         AUTH=SimpleNamespace(COGNITO_TRUSTED_PROVIDERS=[cognito_provider]),
         connection_hub_platform_auth_config=lambda: {
-            "upstream_authority_provider": {
+            "login_authenticator": {
                 "provider": {
                     "authenticator": {
                         "client_id": "google-client",

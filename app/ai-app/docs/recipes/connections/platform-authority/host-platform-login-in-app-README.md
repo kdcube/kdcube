@@ -1,17 +1,17 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/platform-authority/host-platform-login-in-app-README.md
-title: "Host A Platform Login Flow In An App"
-summary: "Recipe for an application-hosted login flow: Connection Hub owns authority registration and policy, an app hosts the login UI/operation, and KDCube issues the platform session."
+title: "Host Server-Side Platform Login In An App"
+summary: "Recipe for server-side login defined by an app: Connection Hub owns authority registration and policy, the app hosts the login UI and operation, and KDCube issues the platform session."
 status: draft
-tags: ["recipes", "connections", "connection-hub", "authority-registry", "bundle-session", "platform-auth", "custom-authority"]
-keywords: ["application-hosted platform login", "platform session", "bundle_session_login", "Google sign-in", "kst1"]
-updated_at: 2026-08-26
+tags: ["recipes", "connections", "connection-hub", "authority-registry", "bundle-login", "platform-auth", "custom-authority"]
+keywords: ["server-side login", "platform session", "bundle", "Google sign-in", "kst1"]
+updated_at: 2026-09-11
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/platform-authority/setup-platform-authority-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/authority-providers/authority-provider-runtime-README.md
   - repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/workspace@2026-03-31-13-36/docs/integrations/platform-session-issuer.md
-  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/app-hosted-platform-login-and-session-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/server-side-login-and-platform-session-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
 ---
 # Host A Platform Login Flow In An App
@@ -49,7 +49,7 @@ Browser opens KDCube
   no platform session
       |
       v
-frontend config says auth.loginUrl = application-hosted login page
+frontend config says auth.loginUrl = the app's login page
       |
       v
 Application login page
@@ -62,12 +62,12 @@ Application public operation calls Connection Hub SDK runtime
 Connection Hub registry resolves:
   platform authority
   provider instance
-  upstream authenticator
+  referenced authenticator
   issuer settings
   grants/defaults/bootstrap rules
       |
       v
-SDK runtime verifies upstream proof
+SDK runtime verifies the authenticator proof
       |
       v
 SDK runtime issues standard kst1 platform-session token
@@ -86,7 +86,7 @@ Telegram initData verified by itself
   -> external actor
   -> no platform role
 
-Application-hosted platform login succeeds
+Server-side login succeeds
   -> platform subject
   -> kdcube:role:registered if no stronger role exists
 ```
@@ -100,7 +100,7 @@ normalized centrally to:
 kdcube:role:registered
 ```
 
-This applies to Cognito, SimpleIDP, application-hosted platform-session
+This applies to Cognito, SimpleIDP, server-side platform-session
 providers, and future platform authorities.
 
 It does not apply to raw external proofs such as Telegram initData unless that
@@ -108,15 +108,14 @@ proof is consumed by a configured platform login provider.
 
 ## Assembly Descriptor
 
-Configure the platform to use application-hosted login and the KDCube platform
-session. The canonical login endpoint is declared on the authority provider as
-`entrypoints.login`. `assembly.yaml` only selects the Connection Hub provider
-that owns that entrypoint.
+Configure the platform to use app-defined server-side login and the KDCube
+platform session. The canonical login endpoint is declared on the server-side
+login entry as `entrypoints.login`. `assembly.yaml` only selects the Connection
+Hub entry that owns that endpoint.
 
 ```yaml
 auth:
   type: bundle
-  idp: session
   connection_hub:
     bundle_id: connection-hub@1-0
     authority_id: kdcube.platform
@@ -124,9 +123,9 @@ auth:
     entrypoint: login
   authenticators:
     platform:
-      id: kdcube.bundle-session
+      id: kdcube.bundle
       authority_id: kdcube.platform
-      provider: session
+      provider: bundle
     connection_hub:
       enabled: true
       app_id: connection-hub@1-0
@@ -137,12 +136,11 @@ The browser app asks the Connection Hub SDK client to resolve
 `entrypoints.login` into the tenant/project-specific app-operation URL when it needs a
 platform session. Descriptors should not materialize `auth.login_url`.
 
-When the platform hosts the sign-in itself (a session provider with a Cognito
-or OIDC upstream), `auth.loginUrl` is the platform's own
-`/api/platform/session/login`: [Platform-Hosted Sign-In](../../../service/auth/app-hosted-platform-login-and-session-README.md#platform-hosted-sign-in-the-server-held-browser-session).
+When the selected `bundle` login entry references a Cognito or OIDC
+authenticator, `auth.loginUrl` is the platform's own
+`/api/platform/session/login`: [Platform-Hosted Server-Side Login](../../../service/auth/server-side-login-and-platform-session-README.md#platform-hosted-server-side-login).
 
-The browser app should not know whether this provider is technically
-`bundle_session_login`, Cognito, or another platform authority. It should use
+The browser app does not need to know how the provider was located. It uses
 the auth URLs returned by `/api/cp-frontend-config`:
 
 ```json
@@ -156,7 +154,7 @@ the auth URLs returned by `/api/cp-frontend-config`:
 ```
 
 `profileUrl` is the canonical server-side "am I logged in?" check. `logoutUrl`
-is the canonical browser logout endpoint. For `bundle_session_login`
+is the canonical browser logout endpoint. For `bundle`
 providers, `/api/platform/logout` invalidates the active platform-session
 record and clears the platform auth/session cookie. The hosting app does not need a logout
 operation for the normal browser shell, but the deployment proxy must route the
@@ -207,7 +205,7 @@ items:
                     - kdcube:*:*:*
             providers:
               workspace_google_session:
-                type: bundle_session_login
+                type: bundle
                 enabled: true
                 label: Google sign-in for KDCube
                 login_label: Sign in to KDCube
@@ -253,7 +251,7 @@ items:
             platform: false
             providers:
               google_oidc:
-                type: google_id_token
+                type: google
                 enabled: true
                 authenticator:
                   client_id: "<google OAuth client id>"
@@ -265,19 +263,19 @@ items:
 : This authority may produce the platform subject used by platform surfaces,
   ownership projection, and economics.
 
-`providers.workspace_google_session.type: bundle_session_login`
+`providers.workspace_google_session.type: bundle`
 : This provider instance is implemented by the Connection Hub SDK
-  application-hosted platform-login runtime.
+  server-side platform-login runtime.
 
 `entrypoints.login`
-: The application-hosted browser page for this provider's sign-in UX.
+: The browser page hosted by the app for this provider's sign-in UX.
 
 `entrypoints.session_issue`
-: The app action/callback that verifies the upstream proof and asks the
+: The app action/callback that verifies the authenticator proof and asks the
   Connection Hub SDK to issue the platform session.
 
 `entrypoints.consent`
-: Optional application-hosted delegated credential consent renderer. Use this when
+: Optional app-defined delegated credential consent renderer. Use this when
   the product wants its own complete consent layout. The approve/deny POST
   still targets Connection Hub so CSRF, grant narrowing, authorization-code
   creation, and token issuance remain central.
@@ -306,11 +304,11 @@ same-origin `/oauth/authorize?...` referrer, but correct renderers should not
 depend on that fallback.
 
 `input.authenticator_ref`
-: The upstream proof verifier. In the example, Google ID token verification
+: The referenced authenticator. In the example, Google ID token verification
   lives under `google.accounts.providers.google_oidc`.
 
 `issuer`
-: The KDCube credential issued after upstream proof verification succeeds. This
+: The KDCube credential issued after authenticator verification succeeds. This
   is the standard `kst1` platform-session token, not an application-local
   private token format.
 
@@ -348,8 +346,8 @@ items:
 ## Frontend Auth Descriptor
 
 The platform frontend should not hardcode the app login URL. It should name
-the Connection Hub authority provider. The control-plane frontend-config
-endpoint resolves the provider's `login` entrypoint through the Connection Hub
+the Connection Hub server-side login entry. The control-plane frontend-config
+endpoint resolves the entry's `login` endpoint through the Connection Hub
 SDK client and returns the concrete `auth.loginUrl` to the browser.
 
 ```yaml
@@ -380,7 +378,7 @@ This keeps route construction under the Connection Hub SDK boundary and keeps
 descriptors focused on the authority/provider contract.
 
 For Telegram-hosted login flows, the app also needs the Telegram integration
-secret refs. Those secrets verify the upstream Telegram proof; they do not
+secret refs. Those secrets verify the Telegram authenticator proof; they do not
 define platform grants.
 
 ## App Code
@@ -411,7 +409,7 @@ async def auth_google_session(self, request: Request, **kwargs):
 The reusable implementation lives in:
 
 ```text
-kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.authority_providers.bundle_session_login
+kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.authority_providers.bundle_login
 ```
 
 The Workspace example wrapper lives in:
@@ -518,12 +516,13 @@ Connection Hub.
 
 ## How To Test
 
-1. Start an environment with `auth.type: bundle` / `auth.idp: session`.
+1. Start an environment with `auth.type: bundle` and an `auth.connection_hub` selection.
 
 2. Open the normal platform frontend route.
 
 3. If there is no valid platform session, the frontend should ask Connection
-   Hub for the selected provider `entrypoints.login` URL and redirect there.
+   Hub for the selected server-side lane's `entrypoints.login` URL and redirect
+   there.
 
 4. Complete the hosted login flow.
 
@@ -538,9 +537,9 @@ Connection Hub.
 8. Call the generated `auth.logoutUrl`, or press the shell logout button if it
    uses that URL. Confirm `/profile` returns anonymous and registered-user
    surfaces are hidden. If a local proxy does not route logout yet, clear site
-   data for the test origin before switching to another platform provider.
+   data for the test origin before switching the platform sign-in choice.
 
-9. Confirm an admin bootstrap rule grants admin only when the verified upstream
+9. Confirm an admin bootstrap rule grants admin only when the verified authenticator
    claim matches.
 
 10. Confirm raw Telegram Mini App auth without a platform login/link remains
@@ -554,14 +553,14 @@ The hosted operation must fail closed if:
 - provider registration is disabled;
 - registered authority is not `platform: true`;
 - hosted operation does not match the current app/operation;
-- upstream authenticator is missing or rejects the proof;
+- the referenced authenticator is missing or rejects the proof;
 - subject/bootstrap grants ask for roles or permissions outside
   `grants.assignable`;
 - platform session token secret is missing or inconsistent across workers.
 
 ## Related Recipes
 
-- [Set Up A Platform Authority Provider](setup-platform-authority-README.md)
+- [Set Up Platform Sign-In](setup-platform-authority-README.md)
 - [Link From External Channel](../link-from-external-channel-README.md)
 - [Telegram Integration](../integrations/telegram-README.md)
 - [Delegate A KDCube Service To An External Client](../delegate-kdcube-service-to-external-client-README.md)

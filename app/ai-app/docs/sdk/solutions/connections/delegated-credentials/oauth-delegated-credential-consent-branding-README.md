@@ -5,7 +5,7 @@ summary: "How to configure the product name and application-hosted layout for th
 status: active
 tags: ["service", "auth", "oauth", "mcp", "branding", "descriptor"]
 keywords: ["OAuth consent branding", "application-hosted consent", "delegated credential", "Connection Hub", "MCP authorization"]
-updated_at: 2026-08-26
+updated_at: 2026-09-11
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-credentials/oauth-delegated-credential-protocol-adapter-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-credentials/delegated-credential-protocol-adapters-README.md
@@ -66,7 +66,7 @@ bundles:
               platform: true
               providers:
                 product_google_session:
-                  type: bundle_session_login
+                  type: bundle
                   entrypoints:
                     login:
                       bundle_id: product@1-0

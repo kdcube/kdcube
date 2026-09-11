@@ -4,7 +4,7 @@ title: "Deployment Descriptors Overview"
 summary: "Overview of the deployment descriptor set, what each file owns, and how descriptor authority differs between current local CLI runs, direct local service runs, and AWS deployment."
 tags: ["service", "cicd", "descriptors", "configuration"]
 keywords: ["deployment descriptors", "platform descriptor ownership", "local versus aws authority", "assembly bundles gateway secrets files", "descriptor-driven deployment contract", "runtime configuration entry files"]
-updated_at: 2026-08-26
+updated_at: 2026-09-11
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/cli-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/runtime-read-write-contract-README.md
@@ -173,20 +173,21 @@ Typical use:
 
 ## Auth Descriptor Modes
 
-`auth.type` describes the deployment/routing shape. `auth.connection_hub`
-selects the platform authority/provider. Provider details live under
+`auth.type` says where the authenticator definition lives.
+`auth.connection_hub` selects an app-defined authenticator. Provider details live under
 `connection-hub@1-0.config.authority_registry`.
 
 | `auth.type` | `auth.connection_hub.provider_id` | Provider behavior |
 |---|---|---|
 | `simple` | n/a | SimpleIDP token registry. |
-| `cognito` | `cognito` | Cognito or multi-Cognito JWT validation using the selected Connection Hub provider. |
-| `delegated` | `cognito` | Proxy-login/delegated deployment shape with Cognito backend validation from the selected provider. |
-| `bundle` | application-hosted session provider id | Application/front shell validates external identity and KDCube issues platform-recognized session cookies. Technical provider type: `bundle_session_login`. |
+| `cognito` | n/a | Inline Cognito definition. |
+| `oidc` | n/a | Inline generic OIDC definition. |
+| `delegated` | deployment-specific | Proxy-login/delegated deployment shape. |
+| `bundle` | app-defined provider id | Resolve the entry through the named app. Its type determines browser-side Cognito or server-side login. |
 
-Application-hosted platform sessions require the platform/global secret
+Server-side platform sessions require the platform/global secret
 `platform.services.session_token.secret` in `secrets.yaml` or the configured secret
-provider. See [Application-Hosted Platform Login And Session](../auth/app-hosted-platform-login-and-session-README.md).
+provider. See [Server-Side Login And The Platform Session](../auth/server-side-login-and-platform-session-README.md).
 
 For mixed runtime scenes, keep the selector in `assembly.yaml` and place the
 Cognito trust list in `bundles.yaml`:
@@ -194,11 +195,11 @@ Cognito trust list in `bundles.yaml`:
 ```yaml
 # assembly.yaml
 auth:
-  type: cognito
+  type: bundle
   connection_hub:
     bundle_id: connection-hub@1-0
     authority_id: kdcube.platform
-    provider_id: cognito
+    provider_id: cognito_demo
 ```
 
 ```yaml
@@ -211,7 +212,7 @@ items:
           kdcube.platform:
             platform: true
             providers:
-              cognito:
+              cognito_demo:
                 type: multi_cognito
                 authenticator:
                   region: eu-west-1

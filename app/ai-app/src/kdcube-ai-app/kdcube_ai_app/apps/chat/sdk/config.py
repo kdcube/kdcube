@@ -765,23 +765,24 @@ class Settings(PLATFORM_CONFIG):
 
     def _resolve_auth_provider_from_assembly(self) -> str | None:
         auth_idp = (self._assembly_str("auth.idp") or "").strip().lower()
-        if auth_idp in {"simple", "cognito", "multi-cognito", "cognito-multi", "session", "bundle", "bundle-session"}:
-            if auth_idp in {"bundle", "bundle-session"}:
-                return "session"
+        if auth_idp in {"session", "bundle-session"}:
+            raise ValueError(f"auth.idp `{auth_idp}` was removed; use `bundle`")
+        if auth_idp in {"simple", "cognito", "multi-cognito", "cognito-multi", "bundle"}:
             if auth_idp == "cognito-multi":
                 return "multi-cognito"
             return auth_idp
 
-        # Backward compatibility for older descriptors that overloaded auth.type.
         auth_mode = (self._assembly_str("auth.type") or "").strip().lower()
+        if auth_mode in {"session", "bundle-session"}:
+            raise ValueError(f"auth.type `{auth_mode}` was removed; use `bundle`")
         if auth_mode == "simple":
             return "simple"
         if auth_mode in {"multi-cognito", "cognito-multi"}:
             return "multi-cognito"
         if auth_mode in {"cognito", "delegated"}:
             return "cognito"
-        if auth_mode in {"bundle", "bundle-session"}:
-            return "session"
+        if auth_mode == "bundle":
+            return "bundle"
         return None
 
     def _connection_hub_auth_ref(self) -> dict[str, Any]:
@@ -824,10 +825,22 @@ class Settings(PLATFORM_CONFIG):
         authenticator_ref = (
             dict(authenticator_ref) if isinstance(authenticator_ref, dict) else {}
         )
-        upstream = {}
+        login_authenticator = {}
         if authenticator_ref:
-            upstream = resolve_authority_provider_instance(
-                registry,
+            authenticator_bundle_id = str(
+                authenticator_ref.get("bundle_id") or bundle_id
+            ).strip()
+            authenticator_registry = registry
+            if authenticator_bundle_id != bundle_id:
+                authenticator_registry = authority_registry_config(
+                    {
+                        "authority_registry": _load_bundles_plain(
+                            f"{authenticator_bundle_id}.authority_registry"
+                        )
+                    }
+                )
+            login_authenticator = resolve_authority_provider_instance(
+                authenticator_registry,
                 authority_id=str(
                     authenticator_ref.get("authority_id") or ""
                 ).strip(),
@@ -837,14 +850,14 @@ class Settings(PLATFORM_CONFIG):
                     or ""
                 ).strip(),
             )
-            if not upstream.get("ok"):
-                upstream = {}
+            if not login_authenticator.get("ok"):
+                login_authenticator = {}
         return {
             **normalized,
             "authority_id": str(resolved.get("authority_id") or "").strip(),
             "provider_id": str(resolved.get("provider_id") or "").strip(),
             "provider_type": str(resolved.get("provider_type") or "").strip(),
-            "upstream_authority_provider": upstream,
+            "login_authenticator": login_authenticator,
         }
 
     def connection_hub_platform_auth_config(self) -> dict[str, Any]:

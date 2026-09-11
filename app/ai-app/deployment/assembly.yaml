@@ -7,24 +7,19 @@ context:
 
 # ---------------------------------------------------------------------------
 # Authentication
-# auth.type is what the browser is told about login:
-#   cognito    the platform's own frontends run an OIDC client in the browser (the Cognito lane)
-#   bundle     the server owns login; the browser only probes /profile and follows auth.loginUrl
-#              (the session lane: an application-hosted login such as the Google-backed
-#              workspace_google_session below, or the platform-hosted sign-in browser_session)
-#   simple     SimpleIDP tokens, development only
+# auth.type says where the platform authenticator is defined:
+#   cognito    an inline Cognito definition
+#   oidc       an inline OIDC definition
+#   simple     the inline development authenticator
 #   delegated  the proxy-login service
-# The platform authenticator itself is chosen by auth.connection_hub.provider_id below:
-# a bundle_session_login provider selects the session lane, a cognito provider the
-# Cognito lane. auth.idp is only a fallback for descriptors without auth.connection_hub
-# (simple | cognito | session).
-# Server-side login ON:  type: bundle  + a bundle_session_login provider_id
-# Server-side login OFF: type: cognito + a cognito provider_id (see the commented
-#                        cognito provider in bundles.yaml). Change both, then restart.
+#   bundle     one lookup through auth.connection_hub to a definition in an app
+#
+# The selected app entry tells the frontend how sign-in runs. A Cognito entry
+# runs in the browser. A bundle entry runs login on the server and gives the
+# browser one platform session. Change provider_id, then refresh the runtime.
 # ---------------------------------------------------------------------------
 auth:
-  type: "bundle"   # what the browser is told: simple | cognito | delegated | bundle
-  idp: "session"   # fallback selector only, used when auth.connection_hub is absent
+  type: "bundle"
   turnstile_development_token: ""            # optional local/dev frontend Turnstile bypass token; leave empty outside development
 
   authenticators:
@@ -33,7 +28,7 @@ auth:
       app_id: "connection-hub@1-0"
       operation: "request_authenticate"
 
-  # Select the Google-backed platform session provider declared in the
+  # Select the Google-backed server-side login declared in the
   # Connection Hub authority registry in bundles.yaml. kdcube init collects
   # the Google Web client ID and bootstrap administrator email.
   connection_hub:
@@ -88,7 +83,7 @@ management:
       timeout_seconds: 10
   human_approval:
     # "auto" follows the configured platform authority: Cognito Managed Login
-    # or the Google authenticator behind a bundle-session authority.
+    # or the Google authenticator behind the server-side login lane.
     fresh_authentication_provider: "auto"  # auto | cognito | google
     challenge_ttl_seconds: 180
     http_timeout_seconds: 10
@@ -343,38 +338,36 @@ paths:
 # writing static frontend config and by ingress when serving
 # GET /api/cp-frontend-config. Keep secrets out of this section.
 #
-# If frontend.config.auth is omitted, the frontend authType is derived from
-# top-level auth as follows:
-#   auth.type="simple" or auth.idp="simple"       -> authType "simple"
-#   auth.type="cognito" or auth.idp="cognito"     -> authType "cognito"
-#   auth.type="delegated"                         -> authType "delegated"
-#   auth.type="bundle" or auth.idp="session"      -> authType "bundle"
+# If frontend.config.auth is omitted, frontend auth is derived from the
+# resolved platform authenticator:
+#   auth.type="simple"       -> authType "simple"
+#   auth.type="cognito"      -> authType "cognito"
+#   auth.type="delegated"    -> authType "delegated"
+#   auth.type="bundle"       -> resolve auth.connection_hub once; a Cognito
+#                               entry yields "cognito", a bundle entry yields
+#                               "bundle", and a SimpleIDP entry yields "simple"
 #
-# Keep top-level auth and frontend auth aligned:
-#   - auth.type controls the deployment/nginx shape: simple | cognito | delegated | bundle
-#   - auth.idp controls backend identity validation: simple | cognito | session
-#   - frontend.config.auth.authType controls the browser auth implementation
-#     and overrides the derived value when set explicitly.
+# auth.type says where the authenticator definition lives. An explicit
+# frontend.config.auth.authType overrides the generated browser implementation.
 #
 # Frontend authType values:
 #   - "simple": simple/dev frontend auth. Uses a public test token and must
-#     only be used with auth.idp="simple" or controlled local/dev deployments.
+#     only be used with auth.type="simple" or controlled local/dev deployments.
 #     The old value "hardcoded" is accepted by clients as a legacy alias only.
-#   - "cognito": OSS Cognito frontend auth. OIDC authority/client_id are derived
+#   - "cognito": Cognito frontend auth. OIDC authority/client_id are derived
 #     from platform.auth.cognito.* unless explicitly overridden under oidcConfig.
-#   - "delegated": custom delegated frontend auth via proxy-login. Backend idp
-#     is still usually "cognito"; browser talks to auth.apiBase.
-#   - "bundle": external bundle/front-shell login. The browser already carries
-#     descriptor-configured platform cookies and the platform validates them
-#     with auth.idp="session".
+#   - "delegated": delegated frontend auth via proxy-login; the browser talks
+#     to auth.apiBase.
+#   - "bundle": server-side login. The browser carries the configured platform
+#     session cookie and the platform validates it on each request.
 #   - "none": no browser login handler and no platform login flow.
 #
 # Minimal examples are shown below; normally set only the block matching
-# top-level auth.type/auth.idp.
+# the resolved platform authenticator.
 # ---------------------------------------------------------------------------
 frontend:
  config:
-   # Browser auth derives as "bundle" from auth.type/auth.idp. The Workspace
+   # Browser auth resolves as "bundle" from the selected registry entry. The Workspace
    # login entrypoint issues the platform session cookies.
    # auth:
    #   authType: "simple"

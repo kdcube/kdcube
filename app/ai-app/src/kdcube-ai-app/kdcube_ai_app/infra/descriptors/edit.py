@@ -43,25 +43,24 @@ SECRET_LIKE_KEYS = frozenset({"id_token", "cookie", "client_secret", "secret", "
 EDITING_POLICY_PATH = "management.platform_settings.editing"
 DEFAULT_CONNECTION_HUB_BUNDLE = "connection-hub@1-0"
 
-# The provider types the platform resolver understands
-# (connection_hub.authority_registry_config.platform_authority_auth_config),
-# and what assembly.yaml's auth.type must say when each is the platform's
-# sign-in: a session-login provider means the server owns the login.
+# The provider types the platform resolver understands. Every row here lives
+# in an app registry, so assembly.yaml uses ``auth.type: bundle`` for the hop;
+# the resolved provider type tells the frontend how sign-in actually runs.
 AUTH_TYPE_FOR_PROVIDER_TYPE = {
-    "bundle_session_login": "bundle",
-    "bundle-session-login": "bundle",
-    "bundle_session": "bundle",
-    "session": "bundle",
-    "multi_cognito": "cognito",
-    "multi-cognito": "cognito",
-    "cognito": "cognito",
-    "cognito_id_token": "cognito",
-    "simple_idp": "simple",
-    "simple-idp": "simple",
-    "simple": "simple",
+    "bundle": "bundle",
+    "multi_cognito": "bundle",
+    "multi-cognito": "bundle",
+    "cognito": "bundle",
+    "cognito_id_token": "bundle",
+    "simple_idp": "bundle",
+    "simple-idp": "bundle",
+    "simple": "bundle",
 }
 COGNITO_TYPES = frozenset({"cognito", "multi_cognito", "multi-cognito", "cognito_id_token"})
-SESSION_TYPES = frozenset({"bundle_session_login", "bundle-session-login", "bundle_session", "session"})
+BUNDLE_LOGIN_TYPES = frozenset({"bundle"})
+RETIRED_BUNDLE_LOGIN_TYPES = frozenset(
+    {"bundle_session_login", "bundle-session-login", "bundle_session", "bundle-session", "session"}
+)
 
 
 class DescriptorEditRefused(RuntimeError):
@@ -241,9 +240,12 @@ def validate_authority_provider(provider: Any) -> list[str]:
     if not provider_type:
         problems.append("The provider needs a `type`.")
         return problems
+    if provider_type in RETIRED_BUNDLE_LOGIN_TYPES:
+        problems.append(f"Provider type `{provider_type}` was removed. Use `bundle`.")
+        return problems
     if provider_type not in AUTH_TYPE_FOR_PROVIDER_TYPE:
         problems.append(
-            f"Unknown provider type `{provider_type}`. The platform resolves: cognito, multi_cognito, bundle_session_login, simple_idp."
+            f"Unknown provider type `{provider_type}`. The platform resolves: cognito, multi_cognito, bundle, simple_idp."
         )
         return problems
     enabled = provider.get("enabled", True)
@@ -267,14 +269,14 @@ def validate_authority_provider(provider: Any) -> list[str]:
                     for key in ("alias", "region", "user_pool_id", "app_client_id"):
                         if not str(row.get(key) or "").strip():
                             problems.append(f"trusted_providers[{index}] needs `{key}`.")
-    elif provider_type in SESSION_TYPES:
+    elif provider_type in BUNDLE_LOGIN_TYPES:
         input_cfg = provider.get("input")
         ref = input_cfg.get("authenticator_ref") if isinstance(input_cfg, Mapping) else None
         if not isinstance(ref, Mapping) or not str(ref.get("provider_id") or ref.get("authenticator_id") or "").strip():
-            problems.append("A session-login provider needs `input.authenticator_ref.provider_id`: the upstream provider it signs in through.")
+            problems.append("A bundle login provider needs `input.authenticator_ref.provider_id`: the authenticator it signs in through.")
         issuer = provider.get("issuer")
         if not isinstance(issuer, Mapping) or not str(issuer.get("type") or "").strip():
-            problems.append("A session-login provider needs `issuer.type` (kdcube_session_token).")
+            problems.append("A bundle login provider needs `issuer.type` (kdcube_session_token).")
     return problems
 
 
@@ -433,8 +435,11 @@ def edit_assembly_platform_sign_in(
     bundles: Path | None = None,
     policy_path: Path | None = None,
 ) -> DescriptorEdit:
-    """Point the platform at another sign-in provider of its authority: the
-    two lines `auth.type` and `auth.connection_hub.provider_id`, together."""
+    """Point the platform at another app-defined sign-in provider.
+
+    ``auth.type`` remains ``bundle`` because the definition is in the app;
+    ``provider_id`` selects the concrete authenticator or login lane there.
+    """
     target = path or assembly_path()
     provider_id = str(provider_id or "").strip()
     if not provider_id:

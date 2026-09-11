@@ -12,16 +12,16 @@
 {{- fail (printf "unsupported auth.type=%q (expected one of: simple, cognito, delegated, bundle)" $authMode) -}}
 {{- end -}}
 {{- $authIdp := lower (default "" .Values.auth.idp) -}}
-{{- $validAuthIdps := list "" "simple" "cognito" "session" -}}
+{{- $validAuthIdps := list "" "simple" "cognito" "bundle" -}}
 {{- if not (has $authIdp $validAuthIdps) -}}
-{{- fail (printf "unsupported auth.idp=%q (expected one of: simple, cognito, session)" $authIdp) -}}
+{{- fail (printf "unsupported auth.idp=%q (expected one of: simple, cognito, bundle)" $authIdp) -}}
 {{- end -}}
 {{- $authProvider := $authIdp -}}
 {{- if eq $authProvider "" -}}
   {{- if eq $authMode "simple" -}}
     {{- $authProvider = "simple" -}}
   {{- else if eq $authMode "bundle" -}}
-    {{- $authProvider = "session" -}}
+    {{- $authProvider = "bundle" -}}
   {{- else -}}
     {{- $authProvider = "cognito" -}}
   {{- end -}}

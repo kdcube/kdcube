@@ -6,7 +6,7 @@ from typing import Any, Mapping
 
 from fastapi.responses import HTMLResponse
 
-import kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.authority_providers.bundle_session_login as bundle_session_login
+import kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.authority_providers.bundle_login as bundle_login
 from connection_hub.delegated_credentials.oauth.consent import (
     consent_authorize_fields,
     render_consent_authorize_hidden_inputs,
@@ -82,13 +82,13 @@ async def issue_telegram_session(
     payload: Mapping[str, Any] | None = None,
     bundle_id: str,
 ):
-    return await bundle_session_login.issue_telegram_session(
+    return await bundle_login.issue_telegram_session(
         entrypoint,
         request=request,
         telegram_init_data=telegram_init_data,
         payload=payload,
         bundle_id=bundle_id,
-        operation=bundle_session_login.DEFAULT_TELEGRAM_OPERATION,
+        operation=bundle_login.DEFAULT_TELEGRAM_OPERATION,
     )
 
 
@@ -101,14 +101,14 @@ async def issue_google_session(
     payload: Mapping[str, Any] | None = None,
     bundle_id: str,
 ):
-    return await bundle_session_login.issue_google_session(
+    return await bundle_login.issue_google_session(
         entrypoint,
         request=request,
         credential=credential,
         id_token=id_token,
         payload=payload,
         bundle_id=bundle_id,
-        operation=bundle_session_login.DEFAULT_GOOGLE_OPERATION,
+        operation=bundle_login.DEFAULT_GOOGLE_OPERATION,
     )
 
 
@@ -383,15 +383,15 @@ async def google_login_page(
     request: Any = None,
     bundle_id: str,
 ) -> HTMLResponse:
-    login_cfg = await bundle_session_login.google_login_client_config(
+    login_cfg = await bundle_login.google_login_client_config(
         entrypoint,
         bundle_id=bundle_id,
-        operation=bundle_session_login.DEFAULT_GOOGLE_OPERATION,
+        operation=bundle_login.DEFAULT_GOOGLE_OPERATION,
     )
     provider_cfg = _dict(login_cfg.get("provider"))
     client_id = _str(login_cfg.get("client_id"))
     next_url = _request_query_value(request, "next")
-    auth_url = _same_bundle_operation_url(request, bundle_session_login.DEFAULT_GOOGLE_OPERATION)
+    auth_url = _same_bundle_operation_url(request, bundle_login.DEFAULT_GOOGLE_OPERATION)
     title = _str(provider_cfg.get("login_label") or "Sign in to KDCube")
     subtitle = _str(
         provider_cfg.get("login_description")

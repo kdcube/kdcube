@@ -67,7 +67,7 @@ def test_holder_refuses_live_selection_change_without_building_candidate():
         return manager(f"manager-{len(builds)}")
 
     holder = PlatformAuthManagerHolder(factory, selection_reader=lambda: selected[0])
-    selected[0] = selection(provider_id="browser_session", family="session")
+    selected[0] = selection(provider_id="server_login", family="bundle")
 
     result = holder.rebuild("provider edit")
 

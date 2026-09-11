@@ -3,13 +3,13 @@ id: repo:kdcube-ai-app/app/ai-app/docs/service/cicd/identity-provider-urls-READM
 title: "Identity Provider URLs For The KDCube Deployments"
 summary: "The record of every callback and sign-out URL the KDCube demo and dev Cognito app clients carry, each explained; the end-to-end sign-in setup across a website origin and a platform origin; and the lane-by-mode test matrix that proves every combination locally as a mini cloud before any environment switches server-side login on or off."
 status: active
-tags: ["service", "cicd", "cognito", "identity-provider", "callback-urls", "session-lane", "website", "mini-cloud"]
-keywords: ["Cognito app client", "allowed callback URLs", "allowed sign-out URLs", "server-side login", "session lane", "own OIDC client", "loginMode", "mini cloud", "two-origin emulator", "tunnel origin", "human approval callback"]
-updated_at: 2026-09-10
+tags: ["service", "cicd", "cognito", "identity-provider", "callback-urls", "login-lane", "website", "mini-cloud"]
+keywords: ["Cognito app client", "allowed callback URLs", "allowed sign-out URLs", "server-side login", "login lane", "own OIDC client", "loginMode", "mini cloud", "two-origin emulator", "tunnel origin", "human approval callback"]
+updated_at: 2026-09-11
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/platform-authority/identity-provider-urls-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/browser-sign-in-situations-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/app-hosted-platform-login-and-session-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/server-side-login-and-platform-session-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/descriptors-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/ngrok-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/assembly-descriptor-README.md
@@ -59,9 +59,10 @@ serve a local layout only while it is in use.
 
 ## The switches, and why nothing here changes for them
 
-- The platform lane per environment: `auth.type` and
-  `auth.connection_hub.provider_id` in that environment's `assembly.yaml`,
-  then a restart. Every maintained descriptor carries the comment with both
+- The platform sign-in selection per environment: `auth.type` locates the
+  definition and `auth.connection_hub.provider_id` selects its registry entry
+  in that environment's `assembly.yaml`, followed by a refresh. Every
+  maintained descriptor carries the comment with both
   values ([assembly descriptor](../../configuration/assembly-descriptor-README.md),
   [descriptors overview](descriptors-README.md)).
 - The website's login: `auth.loginMode` per profile in `kdcube.config.json`
@@ -71,7 +72,7 @@ serve a local layout only while it is in use.
 With S and C on every platform origin and W on every website origin, both
 switches are descriptor or config edits only. What each switch does to the
 pages alive at that moment:
-[Switching server-side login on and off](../auth/app-hosted-platform-login-and-session-README.md#switching-server-side-login-on-and-off).
+[Switching server-side login on and off](../auth/server-side-login-and-platform-session-README.md#switching-server-side-login-on-and-off).
 
 ## The end-to-end setup, and testing it as a mini cloud
 
@@ -87,8 +88,8 @@ a laptop before any environment switches.
    |        auth.loginMode: platform | own-oidc | auto
    |
    |  platform: https://runtime.local.kdcube.tech  a local KDCube runtime
-   |        assembly.yaml  auth.type + auth.connection_hub.provider_id   (the lane)
-   |        provider browser_session: issuer.return_origins has the website origin
+   |        assembly.yaml  auth.type + auth.connection_hub.provider_id   (the sign-in selection)
+   |        provider server_login: issuer.return_origins has the website origin
    |        cors.allow_origins + frame_embedding.allowed_origins have both origins
    |
    |  Cognito app client of the pool the runtime selects
@@ -102,7 +103,7 @@ a laptop before any environment switches.
 Bring the local layout up with the
 [setup recipe](../../recipes/setups/test-website-with-kdcube-locally-as-mini-cloud-README.md),
 then walk the matrix. The platform lane is switched in
-the runtime's `assembly.yaml` followed by `kdcube stop` and `kdcube start`;
+the runtime's `assembly.yaml` followed by `kdcube refresh`;
 the website mode is switched in the local `kdcube.config.json`, no deploy.
 
 | Platform lane | Website `loginMode` | What you should see | Pass when |

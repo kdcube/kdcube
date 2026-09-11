@@ -30,7 +30,7 @@ def _registry() -> dict:
                 "platform": True,
                 "providers": {
                     "workspace_google_session": {
-                        "type": "bundle_session_login",
+                        "type": "bundle",
                         "entrypoints": {
                             "login": {
                                 "bundle_id": "workspace@2026-03-31-13-36",
@@ -81,4 +81,4 @@ async def test_authority_registry_client_loads_connection_hub_props_from_store(m
     )
 
     assert result["ok"] is True
-    assert result["provider_type"] == "bundle_session_login"
+    assert result["provider_type"] == "bundle"

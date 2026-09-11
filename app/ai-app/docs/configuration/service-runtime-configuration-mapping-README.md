@@ -4,7 +4,7 @@ title: "Service Runtime Configuration Mapping"
 summary: "Cross-descriptor runtime mapping for the platform: which file or env owns which runtime values across CLI compose, direct local runs, and AWS deployment."
 tags: ["service", "configuration", "env", "descriptors"]
 keywords: ["descriptor to runtime mapping", "compose versus direct run versus aws", "descriptor file locations", "runtime env translation", "application preparation mapping", "bundle descriptor provider mapping", "secrets provider mapping", "workspace backend mapping", "mode specific configuration contract", "local mount variables", "deployment runtime configuration overview"]
-updated_at: 2026-08-26
+updated_at: 2026-09-11
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/descriptors-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/runtime-read-write-contract-README.md
@@ -80,16 +80,16 @@ The valid auth combinations and the legacy omitted-value behavior are owned by
 
 | Env var | Descriptor path | Descriptor file | Modes |
 |---|---|---|---|
-| `AUTH_PROVIDER` | selected provider type from `auth.connection_hub` -> `connection-hub@1-0.config.authority_registry` | `assembly.yaml` + `bundles.yaml` | effective runtime value |
-| `COGNITO_REGION` | selected platform provider `authenticator.region` | `bundles.yaml` | CLI local compose, AWS deployment |
-| `COGNITO_USER_POOL_ID` | selected platform provider `authenticator.user_pool_id` | `bundles.yaml` | CLI local compose, AWS deployment |
-| `COGNITO_APP_CLIENT_ID` | selected platform provider `authenticator.app_client_id` | `bundles.yaml` | CLI local compose, AWS deployment |
-| `COGNITO_SERVICE_CLIENT_ID` | selected platform provider `authenticator.service_client_id` | `bundles.yaml` | CLI local compose, AWS deployment |
-| `AUTH_COGNITO_PROVIDERS_JSON` / `COGNITO_TRUSTED_PROVIDERS_JSON` | selected platform provider `authenticator.trusted_providers` | `bundles.yaml` | optional multi-Cognito trust list |
-| `ID_TOKEN_HEADER_NAME` | selected platform provider `authenticator.id_token_header_name` | `bundles.yaml` | CLI local compose, AWS deployment |
-| `AUTH_TOKEN_COOKIE_NAME` | selected platform provider `authenticator.cookie.auth_token_cookie_name` | `bundles.yaml` | CLI local compose, AWS deployment |
-| `ID_TOKEN_COOKIE_NAME` | selected platform provider `authenticator.cookie.id_token_cookie_name` | `bundles.yaml` | CLI local compose, AWS deployment |
-| `JWKS_CACHE_TTL_SECONDS` | selected platform provider `authenticator.jwks_cache_ttl_seconds` | `bundles.yaml` | CLI local compose, AWS deployment |
+| `AUTH_PROVIDER` | resolved sign-in kind from `auth.connection_hub` -> `connection-hub@1-0.config.authority_registry` | `assembly.yaml` + `bundles.yaml` | effective runtime value |
+| `COGNITO_REGION` | selected authenticator `authenticator.region` | `bundles.yaml` | CLI local compose, AWS deployment |
+| `COGNITO_USER_POOL_ID` | selected authenticator `authenticator.user_pool_id` | `bundles.yaml` | CLI local compose, AWS deployment |
+| `COGNITO_APP_CLIENT_ID` | selected authenticator `authenticator.app_client_id` | `bundles.yaml` | CLI local compose, AWS deployment |
+| `COGNITO_SERVICE_CLIENT_ID` | selected authenticator `authenticator.service_client_id` | `bundles.yaml` | CLI local compose, AWS deployment |
+| `AUTH_COGNITO_PROVIDERS_JSON` / `COGNITO_TRUSTED_PROVIDERS_JSON` | selected authenticator `authenticator.trusted_providers` | `bundles.yaml` | optional multi-Cognito trust list |
+| `ID_TOKEN_HEADER_NAME` | selected authenticator `authenticator.id_token_header_name` | `bundles.yaml` | CLI local compose, AWS deployment |
+| `AUTH_TOKEN_COOKIE_NAME` | selected sign-in entry cookie configuration | `bundles.yaml` | CLI local compose, AWS deployment |
+| `ID_TOKEN_COOKIE_NAME` | selected authenticator `authenticator.cookie.id_token_cookie_name` | `bundles.yaml` | CLI local compose, AWS deployment |
+| `JWKS_CACHE_TTL_SECONDS` | selected authenticator `authenticator.jwks_cache_ttl_seconds` | `bundles.yaml` | CLI local compose, AWS deployment |
 | `COGNITO_ENFORCEMFA` | `auth.proxy_login.enforce_mfa` | `assembly.yaml` | CLI local compose, AWS deployment |
 | `CHAT_APP_PORT` | `ports.ingress` | `assembly.yaml` | CLI local compose |
 | `CHAT_PROCESSOR_PORT` | `ports.proc` | `assembly.yaml` | CLI local compose |
@@ -108,19 +108,19 @@ Notes:
 - in delegated auth deployments, `AUTH_TOKEN_COOKIE_NAME` and
   `ID_TOKEN_COOKIE_NAME` are also passed to the web-proxy so it can distinguish
   already-present real cookies from the proxylogin masquerade/unmask flow
-- `auth.connection_hub` selects the platform authority provider. For Cognito,
-  the selected provider under `connection-hub@1-0.config.authority_registry`
+- `auth.connection_hub` selects the platform sign-in entry. For Cognito,
+  the selected authenticator under `connection-hub@1-0.config.authority_registry`
   supplies both browser-facing OIDC config and server-side token verification.
 - `authenticator.hosted_ui_domain` is public browser metadata read directly
-  from that selected provider and emitted as
+  from that selected authenticator and emitted as
   `auth.oidcConfig.end_session_endpoint`; it has no separate process-setting
   knob.
-- The session lane is selected by the `bundle_session_login` provider that
-  `auth.connection_hub` names (`auth.idp: session` is the fallback selector
-  when no Connection Hub provider is configured). It requires the platform
-  secret `platform.services.session_token.secret`. A session provider whose
-  `input.authenticator_ref` names a Cognito or OIDC provider makes the platform
-  host the sign-in itself: [Platform-Hosted Sign-In](../service/auth/app-hosted-platform-login-and-session-README.md#platform-hosted-sign-in-the-server-held-browser-session).
+- `auth.type: bundle` resolves the platform authenticator through the app that
+  `auth.connection_hub` names. A selected registry entry of type `bundle`
+  chooses server-side login and requires
+  `platform.services.session_token.secret`. Its `input.authenticator_ref`
+  names the Cognito or OIDC authenticator used by the platform-hosted flow:
+  [Platform-Hosted Server-Side Login](../service/auth/server-side-login-and-platform-session-README.md#platform-hosted-server-side-login).
 
 ### Secrets provider and secrets-file inputs
 

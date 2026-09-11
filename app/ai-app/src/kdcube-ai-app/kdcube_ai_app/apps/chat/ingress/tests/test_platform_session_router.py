@@ -13,11 +13,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from connection_hub.browser_session.cookies import StandardCookiePolicy
-from connection_hub.browser_session.flow import BrowserSessionFlow
-from connection_hub.browser_session.memory import MemoryLoginAttemptStore, MemorySessionBackend
-from connection_hub.browser_session.model import LoginAttempt, SessionPolicy, VerifiedIdentity
-from connection_hub.browser_session.protocols import UpstreamRejected
+from connection_hub.server_side_login.cookies import StandardCookiePolicy
+from connection_hub.server_side_login.flow import BrowserSessionFlow
+from connection_hub.server_side_login.memory import MemoryLoginAttemptStore, MemorySessionBackend
+from connection_hub.server_side_login.model import LoginAttempt, SessionPolicy, VerifiedIdentity
+from connection_hub.server_side_login.protocols import UpstreamRejected
 
 from kdcube_ai_app.apps.chat.ingress.platform_session import create_platform_session_router
 
@@ -138,7 +138,7 @@ def test_upstream_rejection_is_a_plain_page_not_a_stack(harness):
 def test_status_and_the_unconfigured_lane(harness):
     client, _, state = harness
     status = client.get("/api/platform/session/status").json()
-    assert status["configured"] is True and status["upstream"] == "fake-idp"
+    assert status["configured"] is True and status["authenticator"] == "fake-idp"
     assert status["loginUrl"] == "/api/platform/session/login" and status["idleTtlSeconds"] == 600
 
     state["flow"] = None

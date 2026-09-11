@@ -23,14 +23,13 @@ from kdcube_ai_app.infra.descriptors.edit import (
 )
 
 ASSEMBLY = """auth:
-  # Server-side login ON:  type: bundle   + connection_hub.provider_id: browser_session
-  # Server-side login OFF: type: cognito  + connection_hub.provider_id: cognito
-  type: cognito
+  # This authenticator is defined in the Connection Hub app.
+  type: bundle
   turnstile_development_token: 1x00000000000000000000AA   # dev only
   connection_hub:
     bundle_id: connection-hub@1-0
     authority_id: kdcube.platform
-    provider_id: cognito
+    provider_id: cognito_demo
 management:
   platform_settings:
     editing:
@@ -56,10 +55,10 @@ BUNDLES = """bundles:
             label: KDCube platform authority
             platform: true
             providers:
-              cognito:
+              cognito_demo:
                 type: multi_cognito
                 enabled: true
-                label: KDCube Cognito platform session   # shown in the widget
+                label: KDCube Cognito authenticator   # shown in the widget
                 authenticator:
                   type: cognito_id_token
                   id_token: ref://cookie-name   # a reference, never a value
@@ -72,13 +71,13 @@ BUNDLES = """bundles:
                     region: eu-west-1
                     user_pool_id: eu-west-1_AAA
                     app_client_id: client-a
-              browser_session:
-                type: bundle_session_login
+              server_login:
+                type: bundle
                 enabled: true
                 input:
                   authenticator_ref:
                     authority_id: kdcube.platform
-                    provider_id: cognito
+                    provider_id: cognito_demo
                 issuer:
                   type: kdcube_session_token
 """
@@ -93,18 +92,34 @@ def files(tmp_path: Path) -> dict[str, Path]:
     return {"assembly": assembly, "bundles": bundles}
 
 
-def test_platform_sign_in_switch_changes_two_lines_and_keeps_the_rest(files):
-    edit = edit_assembly_platform_sign_in(provider_id="browser_session", path=files["assembly"], bundles=files["bundles"])
+def test_platform_sign_in_switch_changes_selection_and_keeps_the_rest(files):
+    edit = edit_assembly_platform_sign_in(provider_id="server_login", path=files["assembly"], bundles=files["bundles"])
     text = files["assembly"].read_text(encoding="utf-8")
-    assert edit.changed == ("auth.type", "auth.connection_hub.provider_id")
+    assert edit.changed == ("auth.connection_hub.provider_id",)
     assert edit.activation == "refresh" and edit.scope == "lane"
-    assert "  type: bundle\n" in text and "    provider_id: browser_session\n" in text
+    assert "  type: bundle\n" in text and "    provider_id: server_login\n" in text
     # comments and unrelated keys survive
-    assert "# Server-side login ON" in text and "# dev only" in text and "kind: local   # keep" in text
+    assert "# This authenticator is defined" in text and "# dev only" in text and "kind: local   # keep" in text
     assert "authority_id: kdcube.platform" in text
     backup = Path(edit.backup)
     assert backup.exists() and backup.read_text(encoding="utf-8") == ASSEMBLY
     assert not [p for p in files["assembly"].parent.iterdir() if p.name.endswith(".tmp")]
+
+
+def test_platform_sign_in_switch_from_inline_to_app_definition_sets_bundle(files):
+    inline = files["assembly"].read_text(encoding="utf-8").replace(
+        "  type: bundle\n", "  type: cognito\n", 1
+    )
+    files["assembly"].write_text(inline, encoding="utf-8")
+
+    edit = edit_assembly_platform_sign_in(
+        provider_id="server_login",
+        path=files["assembly"],
+        bundles=files["bundles"],
+    )
+
+    assert edit.changed == ("auth.type", "auth.connection_hub.provider_id")
+    assert "  type: bundle\n" in files["assembly"].read_text(encoding="utf-8")
 
 
 def test_platform_sign_in_switch_refuses_unknown_and_unsupported(files):
@@ -113,7 +128,7 @@ def test_platform_sign_in_switch_refuses_unknown_and_unsupported(files):
     assert unknown.value.reason == "provider_unknown"
     # no change: nothing written, no backup
     assert files["assembly"].read_text(encoding="utf-8") == ASSEMBLY
-    same = edit_assembly_platform_sign_in(provider_id="cognito", path=files["assembly"], bundles=files["bundles"])
+    same = edit_assembly_platform_sign_in(provider_id="cognito_demo", path=files["assembly"], bundles=files["bundles"])
     assert same.changed == () and same.activation == "none"
 
 
@@ -135,7 +150,7 @@ def test_provider_edit_adds_a_pool_keeps_secrets_and_comments(files):
         },
     }
     edit = edit_bundle_authority_provider(
-        bundle_id="connection-hub@1-0", authority_id="kdcube.platform", provider_id="cognito",
+        bundle_id="connection-hub@1-0", authority_id="kdcube.platform", provider_id="cognito_demo",
         provider=submitted, path=files["bundles"],
     )
     text = files["bundles"].read_text(encoding="utf-8")
@@ -143,7 +158,7 @@ def test_provider_edit_adds_a_pool_keeps_secrets_and_comments(files):
     assert "id_token: ref://cookie-name" in text, "the secret reference is merged back, never retyped"
     assert "alias: staging" in text and "user_pool_id: eu-west-1_BBB" in text
     assert "name: Workspace   # the default app" in text and "authority_id: kdcube.platform" in text
-    assert "browser_session:" in text
+    assert "server_login:" in text
     assert Path(edit.backup).read_text(encoding="utf-8") == BUNDLES
 
 
@@ -154,14 +169,14 @@ def test_provider_edit_refuses_dropping_a_secret_key_unless_allowed(files):
     }
     with pytest.raises(DescriptorEditRefused) as refused:
         edit_bundle_authority_provider(
-            bundle_id="connection-hub@1-0", authority_id="kdcube.platform", provider_id="cognito",
+            bundle_id="connection-hub@1-0", authority_id="kdcube.platform", provider_id="cognito_demo",
             provider=submitted, path=files["bundles"],
         )
     assert refused.value.reason == "secret_key_dropped"
     assert refused.value.problems == ["missing: authenticator.id_token"]
     assert files["bundles"].read_text(encoding="utf-8") == BUNDLES
     allowed = edit_bundle_authority_provider(
-        bundle_id="connection-hub@1-0", authority_id="kdcube.platform", provider_id="cognito",
+        bundle_id="connection-hub@1-0", authority_id="kdcube.platform", provider_id="cognito_demo",
         provider=submitted, allow_secret_removal=True, path=files["bundles"],
     )
     after = files["bundles"].read_text(encoding="utf-8")
@@ -173,7 +188,7 @@ def test_provider_edit_refuses_dropping_a_secret_key_unless_allowed(files):
 def test_provider_edit_refuses_what_cannot_resolve(files):
     with pytest.raises(DescriptorEditRefused) as refused:
         edit_bundle_authority_provider(
-            bundle_id="connection-hub@1-0", authority_id="kdcube.platform", provider_id="cognito",
+            bundle_id="connection-hub@1-0", authority_id="kdcube.platform", provider_id="cognito_demo",
             provider={"type": "multi_cognito", "authenticator": {"id_token": "<unchanged>"}}, path=files["bundles"],
         )
     assert refused.value.reason == "invalid_provider"
@@ -181,7 +196,7 @@ def test_provider_edit_refuses_what_cannot_resolve(files):
     with pytest.raises(DescriptorEditRefused) as missing:
         edit_bundle_authority_provider(
             bundle_id="connection-hub@1-0", authority_id="kdcube.platform", provider_id="oidc",
-            provider={"type": "bundle_session_login"}, path=files["bundles"],
+            provider={"type": "bundle"}, path=files["bundles"],
         )
     assert missing.value.reason == "provider_missing"
 
@@ -190,9 +205,12 @@ def test_validation_speaks_in_sentences():
     assert validate_authority_provider([]) == ["The provider must be a mapping (a YAML block with keys), not a list or a scalar."]
     assert validate_authority_provider({}) == ["The provider needs a `type`."]
     assert validate_authority_provider({"type": "telegram_init_data"})[0].startswith("Unknown provider type")
+    assert validate_authority_provider({"type": "bundle"}) == [
+        "A bundle login provider needs `input.authenticator_ref.provider_id`: the authenticator it signs in through.",
+        "A bundle login provider needs `issuer.type` (kdcube_session_token).",
+    ]
     assert validate_authority_provider({"type": "bundle_session_login"}) == [
-        "A session-login provider needs `input.authenticator_ref.provider_id`: the upstream provider it signs in through.",
-        "A session-login provider needs `issuer.type` (kdcube_session_token).",
+        "Provider type `bundle_session_login` was removed. Use `bundle`."
     ]
     assert validate_authority_provider({"type": "simple_idp"}) == []
 
@@ -207,7 +225,7 @@ def test_edits_require_the_descriptor_owned_section_gate(files):
     disabled = files["assembly"].read_text(encoding="utf-8").replace("enabled: true", "enabled: false", 1)
     files["assembly"].write_text(disabled, encoding="utf-8")
     with pytest.raises(DescriptorEditRefused) as off:
-        edit_assembly_platform_sign_in(provider_id="browser_session", path=files["assembly"], bundles=files["bundles"])
+        edit_assembly_platform_sign_in(provider_id="server_login", path=files["assembly"], bundles=files["bundles"])
     assert off.value.reason == "editing_disabled"
 
 
@@ -215,7 +233,7 @@ def test_edit_refuses_unwritable_descriptor(files):
     os.chmod(files["assembly"], 0o444)
     try:
         with pytest.raises(DescriptorEditRefused) as ro:
-            edit_assembly_platform_sign_in(provider_id="browser_session", path=files["assembly"], bundles=files["bundles"])
+            edit_assembly_platform_sign_in(provider_id="server_login", path=files["assembly"], bundles=files["bundles"])
         assert ro.value.reason == "not_writable"
     finally:
         os.chmod(files["assembly"], 0o644)

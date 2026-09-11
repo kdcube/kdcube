@@ -152,7 +152,7 @@ async def test_bundle_session_auth_manager_returns_gateway_user():
 
 
 @pytest.mark.asyncio
-async def test_bundle_session_login_or_register_embeds_credential_claim():
+async def test_bundle_session_registration_embeds_credential_claim():
     authority = BundleSessionAuthority(
         tenant="tenant-a",
         project="project-a",

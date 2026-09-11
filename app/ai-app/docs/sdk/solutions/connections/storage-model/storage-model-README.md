@@ -5,7 +5,7 @@ summary: "Storage map for Connection Hub data: descriptors, secrets, request-aut
 status: active
 tags: ["sdk", "connections", "connection-hub", "storage", "postgres", "secrets", "connection-edges"]
 keywords: ["connection hub storage", "delegated grant records", "live grant authority", "bundle operation csrf", "redis authorization state"]
-updated_at: 2026-08-26
+updated_at: 2026-09-11
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-token-storage-README.md
@@ -60,7 +60,7 @@ user-scoped secrets
 | Delegated OAuth refresh token / dynamic client registration | Redis `GrantStore`, keys `{tenant}:{project}:kdcube:oauth:{refresh,client}:...` | yes, auth token | Current implementation is Redis-backed; durable production backing is a strengthening target. |
 | Delegated automation access listing | Redis, keys `{tenant}:{project}:kdcube:delegated-access:automation:*` | sensitive metadata | UI-visible records contain label, expiry, last four chars, session id, `resource_grants`, and selected named-service operations when applicable; raw token is shown only at creation. Provider tokens stay in user-scoped connected-account secrets. |
 | Bundle operation CSRF token | Redis, key `{tenant}:{project}:kdcube:bundle-operation-csrf:<sha256(token)>` | short-lived request proof | One-time record binds the authenticated subject and exact bundle operation context. The raw token is returned only to the authenticated browser and is never used as delegated authority. |
-| KDCube `kst1` session record | Redis, technical keys `{tenant}:{project}:kdcube:auth:bundle-session:*` | sensitive auth state | Backs application-hosted platform sessions and delegated-client access tokens. |
+| KDCube `kst1` session record | Redis, technical keys `{tenant}:{project}:kdcube:auth:bundle-session:*` | sensitive auth state | Backs server-side platform sessions and delegated-client access tokens. |
 | Live link update | Data Bus / event delivery | no | Signals original iframe after browser claim completes. |
 
 ## Bundle Storage Root Is Filesystem
@@ -135,7 +135,7 @@ connection-hub@1-0:
                 permissions: [kdcube:*:*:*]
           providers:
             workspace_google_session:
-              type: bundle_session_login
+              type: bundle
               entrypoints:
                 login:
                   bundle_id: workspace@2026-03-31-13-36
@@ -167,12 +167,12 @@ connection-hub@1-0:
           platform: false
           providers:
             google_oidc:
-              type: google_id_token
+              type: google
               authenticator:
                 client_id: <google-client-id>.apps.googleusercontent.com
 ```
 
-The provider instance may reference an application-hosted operation, but roles,
+The provider instance may reference an operation hosted by an app, but roles,
 permissions, TTL, authority id, and `platform` flag belong to Connection Hub.
 The hosting bundle does not keep a separate platform-session policy branch; it
 is resolved by `host.bundle_id`, `host.route`, and `host.operation`.
@@ -181,19 +181,19 @@ Verifier secrets still stay outside this registry and are reached by
 `secret_ref` through the secrets lifecycle.
 
 Descriptor-backed authority grants are a bootstrap/demo policy for
-application-hosted platform-session subjects. They do not make a raw Telegram or Google
+server-side platform-session subjects. They do not make a raw Telegram or Google
 proof a platform user by themselves; they are applied only inside a registered
 platform login provider flow that issues a platform session.
 
 The canonical assignment key is the stable authority subject, for example
 `google:<verified_sub>`. `grants.bootstrap_rules` may help bootstrap an
-assignment from verified upstream claims, such as `email + email_verified`, but
+assignment from verified authenticator claims, such as `email + email_verified`, but
 email is not stored as the identity key.
 
 The runtime that applies this descriptor shape lives in the Connection Hub SDK:
 
 ```text
-kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.authority_providers.bundle_session_login
+kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.authority_providers.bundle_login
 ```
 
 ## Delegated Credential Grant State Today

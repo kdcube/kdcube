@@ -39,15 +39,15 @@ from fastapi import FastAPI, Form, Header, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.testclient import TestClient
 
-from connection_hub.browser_session.cookies import StandardCookiePolicy
-from connection_hub.browser_session.flow import BrowserSessionFlow
-from connection_hub.browser_session.model import SessionPolicy
-from connection_hub.browser_session.oidc import OidcClientConfig, OidcCodeFlow
-from connection_hub.browser_session.oidc_jwt import PyJwtVerifier
+from connection_hub.server_side_login.cookies import StandardCookiePolicy
+from connection_hub.server_side_login.flow import BrowserSessionFlow
+from connection_hub.server_side_login.model import SessionPolicy
+from connection_hub.server_side_login.oidc import OidcClientConfig, OidcCodeFlow
+from connection_hub.server_side_login.oidc_jwt import PyJwtVerifier
 
 from kdcube_ai_app.apps.chat.ingress.platform_session import create_platform_session_router
 from kdcube_ai_app.auth.bundle import BundleSessionAuthManager, BundleSessionAuthority
-from kdcube_ai_app.auth.bundle.browser_session import PlatformSessionBackend, RedisLoginAttemptStore
+from kdcube_ai_app.auth.bundle.login_lane import PlatformSessionBackend, RedisLoginAttemptStore
 from kdcube_ai_app.auth.tests.test_bundle_sessions import FakeRedis
 
 CLIENT_ID = "kdcube-platform"

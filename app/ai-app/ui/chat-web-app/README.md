@@ -1,3 +1,14 @@
+---
+id: repo:kdcube-ai-app/app/ai-app/ui/chat-web-app/README.md
+title: "KDCube Web App"
+summary: "Describes the browser shell, runtime configuration contract, app presentation, authentication, and local development workflow."
+tags: ["frontend", "web-app", "control-plane", "authentication"]
+keywords: ["KDCube web app", "cp-frontend-config", "platform session", "app presentation"]
+updated_at: 2026-09-11
+see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/control-plane-web-app-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/server-side-login-and-platform-session-README.md
+---
 # KDCube Web App
 
 This React application is KDCube's browser shell. It selects an app, presents
@@ -79,14 +90,14 @@ component.
 ## Authentication
 
 The web app supports the backend-provided auth modes in the runtime config,
-including Cognito, simple token, application-hosted session, and no-auth local
+including Cognito, simple token, server-side platform session, and no-auth local
 profiles.
 
 `/profile` is the source of the current browser session. A visible email, local
 OIDC state, or a client-readable cookie is not sufficient evidence that a
 platform user is authenticated.
 
-For application-hosted session auth, the config may provide a concrete
+For server-side session auth, the config may provide a concrete
 `loginUrl` or a Connection Hub authority/provider reference. The client can
 resolve the provider's login entrypoint when no concrete URL is materialized.
 

@@ -231,7 +231,7 @@ export const authMiddleware = (): Middleware => {
                 const userType = String(profile.user_type || "").toLowerCase();
                 const userId = String(profile.user_id || "").trim();
                 if (!userId || userType === "anonymous") {
-                    throw new Error("Bundle session is not authenticated");
+                    throw new Error("Platform session is not authenticated");
                 }
                 store.dispatch(setCredentials({
                     loggedIn: true,
@@ -244,7 +244,7 @@ export const authMiddleware = (): Middleware => {
                     },
                 }));
             } catch (error) {
-                console.debug("Bundle session is not established", error);
+                console.debug("Platform session is not established", error);
                 store.dispatch(setLoggedOut());
                 void redirectToBundleLogin(currentLocation());
             } finally {

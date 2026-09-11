@@ -80,15 +80,15 @@ These env vars are the direct runtime surface for assembly-backed settings.
 | Env var | `assembly.yaml` path | Primary API | Modes |
 |---|---|---|---|
 | `SECRETS_PROVIDER` | `secrets.provider` | `get_settings()` | all modes |
-| `AUTH_PROVIDER` | `auth.connection_hub` selects Connection Hub provider | `get_settings()` | effective runtime value |
-| `COGNITO_REGION` | selected Connection Hub platform provider `authenticator.region` | `get_settings()` | CLI local compose, AWS deployment |
-| `COGNITO_USER_POOL_ID` | selected Connection Hub platform provider `authenticator.user_pool_id` | `get_settings()` | CLI local compose, AWS deployment |
-| `COGNITO_APP_CLIENT_ID` | selected Connection Hub platform provider `authenticator.app_client_id` | `get_settings()` | CLI local compose, AWS deployment |
-| `COGNITO_SERVICE_CLIENT_ID` | selected Connection Hub platform provider `authenticator.service_client_id` | `get_settings()` | CLI local compose, AWS deployment |
-| `ID_TOKEN_HEADER_NAME` | selected Connection Hub platform provider `authenticator.id_token_header_name` | `get_settings()` | CLI local compose, AWS deployment |
-| `AUTH_TOKEN_COOKIE_NAME` | selected Connection Hub platform provider `authenticator.cookie.auth_token_cookie_name` | `get_settings()` / web-proxy env | CLI local compose, AWS deployment |
-| `ID_TOKEN_COOKIE_NAME` | selected Connection Hub platform provider `authenticator.cookie.id_token_cookie_name` | `get_settings()` / web-proxy env | CLI local compose, AWS deployment |
-| `JWKS_CACHE_TTL_SECONDS` | selected Connection Hub platform provider `authenticator.jwks_cache_ttl_seconds` | `get_settings()` | CLI local compose, AWS deployment |
+| `AUTH_PROVIDER` | `auth.connection_hub` selects the Connection Hub sign-in entry | `get_settings()` | effective runtime value |
+| `COGNITO_REGION` | selected Connection Hub authenticator `authenticator.region` | `get_settings()` | CLI local compose, AWS deployment |
+| `COGNITO_USER_POOL_ID` | selected Connection Hub authenticator `authenticator.user_pool_id` | `get_settings()` | CLI local compose, AWS deployment |
+| `COGNITO_APP_CLIENT_ID` | selected Connection Hub authenticator `authenticator.app_client_id` | `get_settings()` | CLI local compose, AWS deployment |
+| `COGNITO_SERVICE_CLIENT_ID` | selected Connection Hub authenticator `authenticator.service_client_id` | `get_settings()` | CLI local compose, AWS deployment |
+| `ID_TOKEN_HEADER_NAME` | selected Connection Hub authenticator `authenticator.id_token_header_name` | `get_settings()` | CLI local compose, AWS deployment |
+| `AUTH_TOKEN_COOKIE_NAME` | selected Connection Hub entry `authenticator.cookie.auth_token_cookie_name` or `issuer.cookie.auth_token_cookie_name` | `get_settings()` / web-proxy env | CLI local compose, AWS deployment |
+| `ID_TOKEN_COOKIE_NAME` | selected Connection Hub authenticator `authenticator.cookie.id_token_cookie_name` | `get_settings()` / web-proxy env | CLI local compose, AWS deployment |
+| `JWKS_CACHE_TTL_SECONDS` | selected Connection Hub authenticator `authenticator.jwks_cache_ttl_seconds` | `get_settings()` | CLI local compose, AWS deployment |
 | `CHAT_APP_PORT` | `ports.ingress` | `get_settings()` | CLI local compose |
 | `CHAT_PROCESSOR_PORT` | `ports.proc` | `get_settings()` | CLI local compose |
 | `METRICS_PORT` | `ports.metrics` | `get_settings()` | CLI local compose |
@@ -177,18 +177,19 @@ configuration under `role_models` or the application's supported-model list.
 
 ### Platform Auth Selection
 
-`assembly.yaml` selects the platform authority provider. Provider details and
-token transport names are registered in Connection Hub.
+`assembly.yaml` selects the platform sign-in entry. Authenticator details,
+server-side login lanes, and token transport names are registered in
+Connection Hub.
 
 Example:
 
 ```yaml
 auth:
-  type: "cognito"               # simple | cognito | delegated | bundle
+  type: "bundle"                # this definition lives in an app
   connection_hub:
     bundle_id: connection-hub@1-0
     authority_id: kdcube.platform
-    provider_id: cognito
+    provider_id: cognito_demo
 
   proxy_login:
     enabled: false
@@ -209,8 +210,8 @@ Descriptors written before this switch remain compatible: an omitted value
 resolves to true for `auth.type: delegated` and false for every other auth
 type. New and regenerated descriptors write the value explicitly.
 
-The auth and identity cookie names are not frontend-only settings. They are
-registered on the selected Connection Hub platform provider and rendered into
+The auth and identity cookie names are shared runtime settings. They are
+registered on the selected Connection Hub sign-in entry and rendered into
 ingress/proc runtime env and into the delegated web-proxy. The proxy uses them
 to detect the non-masquerade path where a top-level login flow has already set
 the real auth and identity cookies. If either cookie is missing, the delegated
@@ -223,31 +224,29 @@ validate tokens using the configured auth provider.
 `auth.proxy_login.enforce_mfa` maps to Proxy Login `COGNITO_ENFORCEMFA`. When
 enabled, Proxy Login enforces MFA during the Cognito login flow.
 
-The session lane (application-hosted platform login, or the platform-hosted
-sign-in) is selected by the Connection Hub provider that `auth.connection_hub`
-names: a `bundle_session_login` provider puts the platform on it. `auth.idp:
-session` is the fallback selector for descriptors without a Connection Hub
-provider. On this lane an application/front shell, or the platform itself,
+`auth.type: bundle` says the platform authenticator is defined in the app that
+`auth.connection_hub` names. The selected entry's own type determines the
+lane: a `bundle` entry selects server-side login; a Cognito entry selects
+browser-side login. On the server-side lane an application/front shell, or the platform itself,
 validates an external identity and the platform session authority issues the
 platform-recognized `kst1.*` cookie. It requires
 `platform.services.session_token.secret` in `secrets.yaml`. See
-[Application-Hosted Platform Login And Session](../service/auth/app-hosted-platform-login-and-session-README.md).
-When the selected session provider's `input.authenticator_ref` names a Cognito
-or OIDC provider, the platform hosts the sign-in itself on
-`/api/platform/session/login`: [Platform-Hosted Sign-In](../service/auth/app-hosted-platform-login-and-session-README.md#platform-hosted-sign-in-the-server-held-browser-session).
+[Server-Side Login And The Platform Session](../service/auth/server-side-login-and-platform-session-README.md).
+When the selected `bundle` entry's `input.authenticator_ref` names a Cognito
+or OIDC authenticator, the platform hosts the sign-in on
+`/api/platform/session/login`: [Platform-Hosted Server-Side Login](../service/auth/server-side-login-and-platform-session-README.md#platform-hosted-server-side-login).
 
 `auth.authenticators` configures request-auth surfaces. The platform
-authenticator itself is derived from the selected Connection Hub platform
-authority provider; assembly does not carry Cognito pool/client/cookie
-configuration.
+authenticator itself is derived from the selected Connection Hub entry;
+assembly does not carry Cognito pool/client/cookie configuration.
 
 ```yaml
 auth:
-  type: cognito
+  type: bundle
   connection_hub:
     bundle_id: "connection-hub@1-0"
     authority_id: "kdcube.platform"
-    provider_id: "cognito"
+    provider_id: "cognito_demo"
 
   authenticators:
     connection_hub:
@@ -256,8 +255,8 @@ auth:
       operation: "request_authenticate"
 ```
 
-`auth.connection_hub` selects which Connection Hub authority/provider instance
-supplies the concrete platform auth configuration. `auth.authenticators` is for
+`auth.connection_hub` selects which Connection Hub sign-in entry supplies the
+concrete platform auth configuration. `auth.authenticators` is for
 additional request-auth surfaces, such as the Connection Hub external-channel
 surface.
 
@@ -285,7 +284,7 @@ items:
           kdcube.platform:
             platform: true
             providers:
-              cognito:
+              cognito_demo:
                 type: multi_cognito
                 authenticator:
                   region: eu-west-1
@@ -327,8 +326,8 @@ bundles:
 ```
 
 Assembly still owns deployment context such as `context.tenant` and
-`context.project`. Platform auth/session settings used by the adapter are
-owned by the selected Connection Hub authority provider.
+`context.project`. Platform authentication and session settings used by the
+adapter are owned by the selected Connection Hub entry.
 
 See [OAuth Delegated Credential Protocol Adapter](../sdk/solutions/connections/delegated-credentials/oauth-delegated-credential-protocol-adapter-README.md).
 
@@ -410,11 +409,10 @@ survive a switch away and back.
 If `frontend.config.auth.authType` is omitted, it is derived from top-level
 auth: `auth.type: simple` emits browser `authType: simple`, `auth.type:
 cognito` emits `authType: cognito`, and `auth.type: delegated` emits
-`authType: delegated`. `auth.type: bundle` or `auth.idp: session` emits
-`authType: bundle`: the server side owns login (an application-hosted page or
-the platform's own sign-in route) and the browser only probes `/profile`;
-the platform validates requests through the session provider selected by
-`auth.connection_hub` (fallback `auth.idp: session`). The older browser value `hardcoded` is a
+`authType: delegated`. With `auth.type: bundle`, the runtime resolves the
+entry selected by `auth.connection_hub`. A Cognito entry emits
+`authType: cognito`; an entry of type `bundle` emits `authType: bundle`, so
+the browser follows the server login URL and probes `/profile`. The older browser value `hardcoded` is a
 legacy alias for `simple`; new descriptors should use `simple`. `oauth` is not
 a deployment auth mode; use `cognito` for the OSS browser Cognito/OIDC flow.
 

@@ -31,10 +31,14 @@ def _text(value: Any) -> str:
 
 def _provider_family(provider_type: str) -> str:
     value = _text(provider_type).lower().replace("-", "_")
+    if value in {"bundle_session_login", "bundle_session", "session"}:
+        raise ValueError(
+            f"authority provider type '{provider_type}' was removed; use 'bundle'"
+        )
     if value in {"cognito", "multi_cognito", "cognito_multi", "cognito_id_token"}:
         return "cognito"
-    if value in {"bundle_session_login", "bundle_session", "session", "bundle"}:
-        return "session"
+    if value == "bundle":
+        return "bundle"
     if value in {"simple", "simple_idp"}:
         return "simple"
     return value

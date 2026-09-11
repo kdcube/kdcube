@@ -4,7 +4,7 @@ title: "Application-Hosted Website"
 summary: "Build an app-owned website, register it by alias and host, and serve it through the KDCube runtime."
 status: current
 tags: ["recipe", "website", "application", "main-view", "routing", "authentication"]
-updated_at: 2026-08-13
+updated_at: 2026-09-11
 keywords:
   [
     "application hosted website",
@@ -246,7 +246,7 @@ its own OIDC client on demand. The situations behind that choice:
 
 For logout, use `auth.logoutUrl` from the same config and then re-check
 `/profile`. This keeps one website implementation valid for Cognito and
-application-hosted platform authorities.
+server-side platform sessions.
 
 The website shell is public. User data and actions remain protected by their
 API, MCP, widget, and event-surface guards.

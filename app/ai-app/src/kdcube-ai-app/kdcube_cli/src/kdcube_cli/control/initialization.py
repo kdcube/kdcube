@@ -160,7 +160,7 @@ class InstallerRuntimeInitializer:
                 assembly["auth"] = auth
             auth["type"] = auth_type
             if auth_type == "bundle":
-                auth["idp"] = "session"
+                auth.pop("idp", None)
                 bundle = auth.get("bundle")
                 if not isinstance(bundle, dict):
                     bundle = {}

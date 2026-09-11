@@ -4,7 +4,7 @@ title: "Connection Hub Token Storage"
 summary: "One-page answer for where Connection Hub stores Claude Code delegated OAuth tokens, manual Delegated by KDCube tokens, connected-account provider tokens, and deployment secrets."
 status: active
 tags: ["sdk", "solutions", "connections", "connection-hub", "tokens", "storage", "oauth", "delegated-credentials", "secrets", "redis"]
-updated_at: 2026-08-26
+updated_at: 2026-09-11
 keywords: ["Connection Hub token storage", "manual automation token", "live grant card", "named_service_operations", "account_scope", "credential isolation"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
@@ -12,7 +12,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/storage-model/storage-model-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-credentials/oauth-delegated-credential-protocol-adapter-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-connections/design/grant-storage-durability-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/app-hosted-platform-login-and-session-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/server-side-login-and-platform-session-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/runtime-configuration-and-secrets-store-README.md
 ---
 # Connection Hub Token Storage

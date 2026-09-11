@@ -1,31 +1,31 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/workspace@2026-03-31-13-36/docs/integrations/platform-session-issuer.md
-title: "Application-Hosted Platform Login Demo"
-summary: "Workspace example for hosting Google sign-in in an application while KDCube owns the resulting platform session."
+title: "Server-Side Platform Login Demo"
+summary: "Workspace example for hosting Google sign-in in an app while KDCube owns the resulting platform session."
 status: active
-tags: ["example", "workspace", "auth", "application-hosted-login", "platform-session"]
-keywords: ["Google sign-in", "platform session", "bundle_session_login", "kst1", "Workspace app"]
-updated_at: 2026-08-26
+tags: ["example", "workspace", "auth", "server-side-login", "platform-session"]
+keywords: ["Google sign-in", "platform session", "bundle", "kst1", "Workspace app"]
+updated_at: 2026-09-11
 see_also:
-  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/app-hosted-platform-login-and-session-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/server-side-login-and-platform-session-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/platform-authority/host-platform-login-in-app-README.md
 ---
-# Application-Hosted Platform Login Demo
+# Server-Side Platform Login Demo
 
-Workspace demonstrates application-hosted platform login: the application owns
+Workspace demonstrates server-side platform login: the application owns
 the login experience, while KDCube owns the resulting platform session.
 
-The application bundle hosts the user-facing operation/UI for an upstream
-proof, currently a Google ID token, then calls the technically named Connection
-Hub SDK `bundle_session_login` provider runtime. The SDK runtime resolves the
-registered provider, verifies or delegates verification of the upstream proof,
+The application bundle hosts the user-facing operation/UI for an authenticator
+proof, currently a Google ID token, then calls the Connection
+Hub SDK `bundle` provider runtime. The SDK runtime resolves the
+registered provider, verifies or delegates verification of the authenticator proof,
 resolves roles/provisioning policy, and calls the KDCube platform-session
 authority.
 
 Plain Telegram channel identity remains an external actor until it is explicitly
 linked to an existing platform identity through a Connection Hub connection edge.
 For the Google-backed platform authority demo, Telegram is a channel
-authenticator only; it is not configured as a platform-session provider.
+authenticator only; it is not the selected platform authenticator.
 
 The platform issues and later verifies the `kst1` session token. Workspace is
 the issuer surface; ingress/proc remain the verifier.
@@ -37,7 +37,7 @@ by its registered host operation. Runtime mechanics live in the Connection Hub
 SDK module:
 
 ```text
-kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.authority_providers.bundle_session_login
+kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.authority_providers.bundle_login
 ```
 
 ## Surfaces
@@ -60,23 +60,25 @@ On success, the response sets the descriptor-configured platform auth cookies.
 
 ## Platform Descriptor
 
-`assembly.yaml` must select application-hosted platform login and session:
+`assembly.yaml` selects the app-defined server-side login:
 
 ```yaml
 auth:
   type: bundle
-  idp: session
-  auth_token_cookie_name: "__Secure-LATC"
-  id_token_cookie_name: "__Secure-LITC"
   authenticators:
     platform:
-      id: kdcube.bundle-session
+      id: kdcube.bundle
       authority_id: kdcube.platform
-      provider: session
+      provider: bundle
     connection_hub:
       enabled: true
       app_id: connection-hub@1-0
       operation: request_authenticate
+  connection_hub:
+    bundle_id: connection-hub@1-0
+    authority_id: kdcube.platform
+    provider_id: workspace_google_session
+    entrypoint: login
 ```
 
 `secrets.yaml` must include the shared verifier secret:
@@ -121,7 +123,7 @@ items:
                     - kdcube:*:*:*
             providers:
               workspace_google_session:
-                type: bundle_session_login
+                type: bundle
                 enabled: true
                 label: Workspace Google platform session
                 entrypoints:
@@ -164,7 +166,7 @@ items:
             platform: false
             providers:
               google_oidc:
-                type: google_id_token
+                type: google
                 enabled: true
                 authenticator:
                   client_id: 960111679915-825b0cenujpavcmognp450l7ius4suje.apps.googleusercontent.com
@@ -197,7 +199,7 @@ bootstrap rule may match verified login claims such as Google
 claim matcher used to discover the subject.
 
 In Cognito, equivalent role data comes from Cognito groups/claims. In a
-production application-hosted platform authority this should become a
+production server-side platform authority this should become a
 Connection Hub UI-managed authority user/role store. The roles are still roles of the platform
 subject, not roles of the raw Telegram channel identity or an email attribute.
 
@@ -228,7 +230,7 @@ items:
 ```
 
 `bundles.secrets.yaml` must provide the referenced Telegram secrets. These
-secrets verify the upstream Telegram proof. They do not define platform grants:
+secrets verify the Telegram authenticator proof. They do not define platform grants:
 
 ```yaml
 items:
@@ -245,12 +247,12 @@ items:
 
 | Responsibility | Owner |
 |---|---|
-| Verify Telegram `initData` | SDK `bundle_session_login` runtime via Workspace Telegram integration |
-| Verify Google ID token | SDK `bundle_session_login` runtime via SDK Google OIDC verifier |
+| Verify Telegram `initData` | SDK `bundle` runtime via Workspace Telegram integration |
+| Verify Google ID token | SDK `bundle` runtime via SDK Google OIDC verifier |
 | Register platform authority and provider instance | Connection Hub `authority_registry` |
 | Default/assignable grants this provider may issue | Connection Hub provider instance |
 | Per-subject grants | Platform authority grants / future user-role store |
-| Issue `kst1` platform session token | SDK `bundle_session_login` runtime via the KDCube platform-session authority |
+| Issue `kst1` platform session token | SDK `bundle` runtime via the KDCube platform-session authority |
 | Verify future requests | ingress/proc `BundleSessionAuthManager` (technical implementation name) |
 | Store active sessions and users | platform Redis session registry |
 
@@ -270,7 +272,7 @@ Browser opens the normal platform UI route
   -> auth.connection_hub points to kdcube.platform.providers.workspace_google_session entrypoint=login
   -> frontend asks Connection Hub to resolve the login entrypoint URL
   -> frontend redirects to Workspace platform_login when no valid platform session exists
-  -> Workspace hosts the page and calls SDK bundle_session_login runtime
+  -> Workspace hosts the page and calls SDK bundle runtime
   -> SDK runtime resolves kdcube.platform.providers.workspace_google_session
   -> SDK runtime resolves google.accounts.providers.google_oidc
   -> page renders Google Identity Services with descriptor client_id
@@ -284,7 +286,5 @@ Browser opens the normal platform UI route
   -> response sets platform auth cookies
 ```
 
-This is the descriptor-owned replacement for app-local
-`AUTH_PROVIDER=session` monkeypatching: the platform verifier uses the shared
-KDCube session authority, while the application only hosts a registered
-provider flow.
+The platform verifier uses the descriptor-selected KDCube session authority,
+while the application hosts only the registered login flow.

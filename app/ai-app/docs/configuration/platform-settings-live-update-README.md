@@ -9,7 +9,7 @@ updated_at: 2026-09-11
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/assembly-descriptor-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-descriptor-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/app-hosted-platform-login-and-session-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/server-side-login-and-platform-session-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/arch/security-and-trust-model-README.md
 ---
 # Live Platform Settings Updates
@@ -69,7 +69,7 @@ descriptor and secret stores.
 | Change | File | Runtime behavior |
 | --- | --- | --- |
 | Provider configuration or trusted pools | `bundles.yaml` | Ingress builds a candidate manager from a fresh descriptor snapshot and swaps it in only after the build succeeds. New requests use it; in-flight requests finish with the manager they already resolved. |
-| Selected provider or sign-in lane | `assembly.yaml` | Saved with a backup and reported as refresh-required. Active processes keep their original selection so running browser sessions are not cut over underneath them. |
+| Selected sign-in entry | `assembly.yaml` | Saved with a backup and reported as refresh-required. Active processes keep their original selection so running browser sessions are not cut over underneath them. |
 
 Connection Hub reports a provider edit as `live` only when Redis reports at
 least one subscriber. If no listener receives the message, the descriptor is

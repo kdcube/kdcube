@@ -50,7 +50,7 @@ context:
 auth:
   # Same type/idp contract as deployment/assembly.yaml.
   type: "simple" # simple | cognito | delegated | bundle
-  idp: "simple" # simple | cognito | session
+  idp: "simple" # simple | cognito | bundle
   cognito:
     region: ""
     user_pool_id: ""

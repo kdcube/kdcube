@@ -2,6 +2,7 @@
 id: repo:kdcube/app/ai-app/docs/service/cicd/deployment-target-control-api-README.md
 title: "KDCube Deployment Target Control API"
 summary: "Documents the supported typed Python API for selecting a KDCube deployment target, inspecting local applications, controlling local lifecycle, and resolving local or remote application surfaces without importing CLI internals."
+updated_at: 2026-09-11
 tags: ["service", "cicd", "cli", "python-api", "deployment-target", "application-control"]
 keywords: ["kdcube_cli.control", "local deployment target", "endpoint deployment target", "application surface", "structured control error", "Connection Hub CLI"]
 see_also:
@@ -203,8 +204,8 @@ Docker. Call `start()` explicitly after initialization.
 For Google login, pass `auth_type="bundle"`, `auth_provider="google"`, and the
 public OAuth Web application client ID in `auth_client_id`. An optional
 `bootstrap_admin_email` grants the verified Google account initial platform
-administration. The initializer stages `auth.type: bundle` and
-`auth.idp: session` before the non-interactive installer runs. This is the
+administration. The initializer stages `auth.type: bundle` and removes any
+redundant `auth.idp` value before the non-interactive installer runs. This is the
 maintained default used by the Connection Hub local setup.
 
 `auth_type="simple"` remains available as an explicit local-development login.

@@ -4,11 +4,11 @@ title: "@kdcube/components-core/session"
 summary: "The browser side of one server-held platform session: probe /profile, redirect to the sign-in with a same-origin next, post the sign-out, hear kdcube-auth-changed. No token in JavaScript."
 status: implementation
 tags: ["sdk", "npm", "components-core", "session", "auth", "browser"]
-updated_at: 2026-09-10
+updated_at: 2026-09-11
 keywords: ["@kdcube/components-core/session", "usePlatformSession", "SessionGate", "kdcube-auth-changed", "profile probe", "sign-in redirect", "server-held session"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/npm/components-core/README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/app-hosted-platform-login-and-session-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/server-side-login-and-platform-session-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-widget-integration-README.md
 ---
 
@@ -76,4 +76,4 @@ into cookies any same-origin script could read, renewing only while one tab
 stayed open. With the server-held session there is nothing to renew and
 nothing to write: a surface asks the server, sends the browser to the
 sign-in, and listens. The platform side is described in
-[Platform-Hosted Sign-In](../../../service/auth/app-hosted-platform-login-and-session-README.md#platform-hosted-sign-in-the-server-held-browser-session).
+[Platform-Hosted Server-Side Login](../../../service/auth/server-side-login-and-platform-session-README.md#platform-hosted-server-side-login).

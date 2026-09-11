@@ -3,12 +3,12 @@ id: repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/platform-authority/id
 title: "Register KDCube On Your Identity Provider"
 summary: "Step by step: which callback and sign-out URLs an identity provider such as Cognito needs for every login configuration KDCube supports, per origin and per app client, so that server-side login can be switched on or off and a site can run its own OIDC client without touching the identity provider again."
 status: active
-tags: ["recipes", "connections", "platform-authority", "cognito", "oidc", "callback-urls", "session-lane", "website"]
-updated_at: 2026-09-10
-keywords: ["Cognito callback URLs", "allowed sign-out URLs", "app client", "server-side login", "session lane", "own OIDC client", "loginMode", "return_origins", "signed-out route"]
+tags: ["recipes", "connections", "platform-authority", "cognito", "oidc", "callback-urls", "login-lane", "website"]
+updated_at: 2026-09-11
+keywords: ["Cognito callback URLs", "allowed sign-out URLs", "app client", "server-side login", "login lane", "own OIDC client", "loginMode", "return_origins", "signed-out route"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/browser-sign-in-situations-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/app-hosted-platform-login-and-session-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/server-side-login-and-platform-session-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/platform-authority/setup-platform-authority-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/assembly-descriptor-README.md
 ---
@@ -91,19 +91,21 @@ In the environment's `assembly.yaml`, two lines together:
 
 ```yaml
 auth:
-  type: bundle                  # server-side login on   (cognito: off)
+  type: bundle                  # the selected definition lives in the app
   connection_hub:
-    provider_id: browser_session  # server-side login on   (cognito: off)
+    provider_id: server_login  # registry type bundle: server-side login
 ```
 
-`auth.connection_hub.provider_id` chooses the authenticator; `auth.type` is
-what the browser is told. Restart the runtime. With S and C both registered,
+`auth.type: bundle` makes one lookup into the app registry.
+`auth.connection_hub.provider_id` selects the entry: `server_login` runs
+server-side, while an app-defined Cognito entry runs browser-side. Refresh the
+runtime after changing the selection. With S and C both registered,
 this switch needs no identity-provider change, and no client is rebuilt or
 redeployed: the pages read the auth contract at load. Browser sessions alive
 at the switch sign in once more at most; a website pinned to
 `loginMode: platform` must be moved to `auto` or `own-oidc` before switching
 off. The full effect table:
-[Switching server-side login on and off](../../../service/auth/app-hosted-platform-login-and-session-README.md#switching-server-side-login-on-and-off).
+[Switching server-side login on and off](../../../service/auth/server-side-login-and-platform-session-README.md#switching-server-side-login-on-and-off).
 
 ## Step 7. Switch the site's login
 

@@ -5,7 +5,7 @@ summary: "Documents KDCube's deployment-scoped management service: Card-governed
 status: current-source; live-deployment-acceptance-pending
 tags: ["service", "cicd", "management", "connection-hub", "delegated-authority", "idempotency"]
 keywords: ["KDCube management resource", "application reload", "request-bound permit", "secret provider", "secret descriptor export", "human approval", "Cognito Managed Login", "Google auth_time", "WebAuthn", "passkey", "PKCE", "effect ledger", "OAuth protected resource"]
-updated_at: 2026-09-06
+updated_at: 2026-09-11
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/deployment-target-control-api-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/arch/delegated-authority-and-admission-README.md
@@ -252,7 +252,7 @@ the one-use export code is issued.
 ### Fresh authentication adapters
 
 The provider is selected from the active platform session. `auto` follows a
-Google bundle-session identity or the exact Cognito issuer and app-client
+Google-backed platform identity or the exact Cognito issuer and app-client
 audience. A deployment with both provider families and no trustworthy session
 hint fails closed instead of choosing one by configuration order.
 

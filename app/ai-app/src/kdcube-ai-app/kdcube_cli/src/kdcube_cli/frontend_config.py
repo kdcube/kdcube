@@ -142,9 +142,12 @@ def _frontend_config_overrides(assembly: Optional[Mapping[str, Any]]) -> dict[st
 def _assembly_auth_type(assembly: Optional[Mapping[str, Any]]) -> str:
     auth_type = as_text(get_nested(assembly or {}, "auth", "type")).lower()
     auth_idp = as_text(get_nested(assembly or {}, "auth", "idp")).lower()
+    for field, value in (("auth.type", auth_type), ("auth.idp", auth_idp)):
+        if value in {"session", "bundle-session"}:
+            raise ValueError(f"{field} `{value}` was removed; use `bundle`")
     if auth_type == "delegated":
         return "delegated"
-    if auth_type in {"bundle", "bundle-session"} or auth_idp in {"session", "bundle", "bundle-session"}:
+    if auth_type == "bundle" or auth_idp == "bundle":
         return "bundle"
     if auth_type == "simple" or auth_idp == "simple":
         return "simple"
@@ -160,6 +163,10 @@ def _assembly_auth_declared(assembly: Optional[Mapping[str, Any]]) -> bool:
 def _normalize_frontend_auth_type(value: Any) -> str:
     auth_type = as_text(value).lower()
     if auth_type == "hardcoded":
+        return "simple"
+    if auth_type in {"multi-cognito", "cognito-multi"}:
+        return "cognito"
+    if auth_type in {"simple-idp", "simple_idp"}:
         return "simple"
     return auth_type
 
@@ -227,16 +234,18 @@ def build_frontend_config(
     assembly_company = as_text(get_nested(assembly or {}, "company"))
     company = as_text(company_name) or assembly_company or "KDCube"
     auth = copy.deepcopy(merged.get("auth") if isinstance(merged.get("auth"), dict) else {})
+    provider_auth = dict(platform_auth_config or {})
     explicit_frontend_auth_type = get_nested(frontend_overrides, "auth", "authType")
     if as_text(explicit_frontend_auth_type):
         auth_type = _normalize_frontend_auth_type(explicit_frontend_auth_type)
+    elif as_text(provider_auth.get("auth_provider")):
+        auth_type = _normalize_frontend_auth_type(provider_auth.get("auth_provider"))
     elif _assembly_auth_declared(assembly):
         auth_type = _assembly_auth_type(assembly)
     else:
         auth_type = _normalize_frontend_auth_type(auth.get("authType")) or _assembly_auth_type(assembly)
     auth["authType"] = auth_type
 
-    provider_auth = dict(platform_auth_config or {})
     id_token_header = (
         as_text(provider_auth.get("id_token_header_name"))
         or as_text(get_nested(assembly or {}, "auth", "id_token_header_name"))
@@ -295,7 +304,6 @@ def build_frontend_config(
             if isinstance(auth.get("connectionHub"), Mapping)
             else get_nested(assembly or {}, "auth", "connection_hub")
             or get_nested(assembly or {}, "auth", "connectionHub")
-            or get_nested(assembly or {}, "auth", "bundle_session", "connection_hub")
         )
         if isinstance(connection_hub_ref, Mapping):
             raw_ref = copy.deepcopy(dict(connection_hub_ref))
@@ -316,7 +324,6 @@ def build_frontend_config(
             as_text(auth.get("loginUrl"))
             or as_text(get_nested(assembly or {}, "auth", "login_url"))
             or as_text(get_nested(assembly or {}, "auth", "login", "url"))
-            or as_text(get_nested(assembly or {}, "auth", "bundle_session", "login_url"))
         )
         if login_url:
             auth["loginUrl"] = login_url

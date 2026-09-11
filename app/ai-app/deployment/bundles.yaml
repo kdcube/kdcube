@@ -2514,7 +2514,7 @@ bundles:
               # Cognito platform-authority alternative. Select it through
               # assembly auth.connection_hub.provider_id after replacing the
               # placeholders; keep login and hosted logout on the same pool.
-              # cognito:
+              # cognito_demo:
               #   type: multi_cognito
               #   enabled: true
               #   label: KDCube Cognito platform session
@@ -2531,19 +2531,18 @@ bundles:
               #       auth_token_cookie_name: __Secure-LATC
               #       id_token_cookie_name: __Secure-LITC
               #       masqueraded_token_cookie_name: __Secure-LMTC
-              # Platform-hosted sign-in (server-held browser session): the platform's
-              # own /api/platform/session/login and /callback, an OIDC or Cognito upstream
-              # named by input.authenticator_ref, sliding lifetime. Select it with
-              # auth.connection_hub.provider_id: browser_session. See
-              # docs/service/auth/app-hosted-platform-login-and-session-README.md.
-              # browser_session:
-              #   type: bundle_session_login
+              # Server-side login: the platform's own /api/platform/session/login
+              # and /callback use the OIDC or Cognito authenticator named by
+              # input.authenticator_ref and issue one sliding platform session.
+              # Select it with auth.connection_hub.provider_id: server_login.
+              # server_login:
+              #   type: bundle
               #   enabled: true
-              #   label: Platform browser session (server-held, Cognito upstream)
+              #   label: Platform server-side login through Cognito
               #   input:
               #     authenticator_ref:
               #       authority_id: kdcube.platform
-              #       provider_id: cognito
+              #       provider_id: cognito_demo
               #     scopes:
               #     - openid
               #     - email
@@ -2572,7 +2571,7 @@ bundles:
               #       - kdcube:*:chat:*;read;write
               #       - kdcube:*:*:*
               workspace_google_session:
-                type: bundle_session_login
+                type: bundle
                 enabled: true
                 label: Workspace Google platform session
                 input:
@@ -2618,7 +2617,7 @@ bundles:
             platform: false
             providers:
               google_oidc:
-                type: google_id_token
+                type: google
                 enabled: true
                 authenticator:
                   client_id: <FILL_ME>

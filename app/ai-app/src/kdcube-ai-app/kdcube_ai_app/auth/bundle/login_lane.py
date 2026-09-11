@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Elena Viter
 
-"""KDCube's side of the server-held browser session.
+"""KDCube's adapter for the server-side login lane.
 
 The session itself (one HttpOnly cookie, a one-time browser-bound login
-attempt, sliding renewal, the OIDC code-flow upstream) is
-``connection_hub.browser_session``, host-neutral. This module is the host:
+attempt, sliding renewal, and the OIDC code flow) is
+``connection_hub.server_side_login``, host-neutral. This module is the host:
 
 - ``PlatformSessionBackend``: the package's ``SessionBackend`` over the
   platform session authority (``BundleSessionAuthority``): the Redis session
@@ -15,10 +15,10 @@ attempt, sliding renewal, the OIDC code-flow upstream) is
   login applies).
 - ``RedisLoginAttemptStore``: one-time login attempts in the same Redis
   namespace as the sessions.
-- ``platform_browser_session_flow``: the flow assembled from the deployment's
+- ``platform_login_flow``: the flow assembled from the deployment's
   descriptors. The selected platform provider (``auth.connection_hub``) must
-  be a session provider (``bundle_session_login``) whose ``input``
-  authenticator is a Cognito or OIDC authority provider; that upstream's
+  be a server-side lane (``bundle``) whose ``input`` authenticator is a
+  Cognito or OIDC provider; that authenticator's
   issuer, client id, secret reference and hosted UI come from the registry,
   never from the browser.
 
@@ -35,17 +35,17 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
-from connection_hub.browser_session.cookies import StandardCookiePolicy
-from connection_hub.browser_session.flow import BrowserSessionFlow
-from connection_hub.browser_session.model import (
+from connection_hub.server_side_login.cookies import StandardCookiePolicy
+from connection_hub.server_side_login.flow import BrowserSessionFlow
+from connection_hub.server_side_login.model import (
     IssuedSession,
     LoginAttempt,
     SessionPolicy,
     SessionState,
     VerifiedIdentity,
 )
-from connection_hub.browser_session.oidc import OidcClientConfig, OidcCodeFlow, OidcEndpoints
-from connection_hub.browser_session.protocols import UpstreamIdentity
+from connection_hub.server_side_login.oidc import OidcClientConfig, OidcCodeFlow, OidcEndpoints
+from connection_hub.server_side_login.protocols import UpstreamIdentity
 
 from kdcube_ai_app.auth.bundle.sessions import (
     BundleSessionAuthority,
@@ -65,8 +65,8 @@ RETURN_COOKIE_TTL_SECONDS = 300
 LOGOUT_ROUTE = "/api/platform/logout"
 PROFILE_ROUTE = "/profile"
 
-SESSION_PROVIDER_TYPES = {"bundle_session_login", "bundle-session-login", "bundle_session", "bundle-session", "session"}
-OIDC_UPSTREAM_TYPES = {"cognito", "multi_cognito", "multi-cognito", "cognito_id_token", "oidc"}
+BUNDLE_LOGIN_TYPES = {"bundle"}
+OIDC_AUTHENTICATOR_TYPES = {"cognito", "multi_cognito", "multi-cognito", "cognito_id_token", "oidc"}
 
 GrantsResolver = Callable[[VerifiedIdentity], tuple[list[str], list[str], str]]
 
@@ -247,15 +247,15 @@ class RedisLoginAttemptStore:
 # ---- configuration from the deployment's descriptors --------------------------
 
 @dataclass(frozen=True)
-class BrowserSessionConfig:
-    """What the session lane needs, resolved from the Connection Hub
+class BundleLoginConfig:
+    """What the server-side login lane needs, resolved from the Connection Hub
     authority registry through the platform's selected provider."""
 
     provider_id: str
     authority_id: str
     provider: dict[str, Any]
     authority: dict[str, Any]
-    upstream_type: str
+    authenticator_type: str
     issuer_url: str
     client_id: str
     client_secret_ref: str
@@ -270,8 +270,8 @@ class BrowserSessionConfig:
     session_cookie_name: str
 
     @property
-    def upstream_provider_label(self) -> str:
-        return "cognito" if "cognito" in self.upstream_type else "oidc"
+    def authenticator_kind(self) -> str:
+        return "cognito" if "cognito" in self.authenticator_type else "oidc"
 
 
 def _cognito_issuer(authenticator: Mapping[str, Any]) -> str:
@@ -285,20 +285,19 @@ def _cognito_issuer(authenticator: Mapping[str, Any]) -> str:
     return ""
 
 
-def upstream_is_oidc(platform_auth: Mapping[str, Any] | None) -> bool:
-    """Whether the selected platform provider is a session provider whose
-    upstream authenticator is a Cognito or OIDC authority provider."""
-    if not isinstance(platform_auth, Mapping) or _str(platform_auth.get("auth_provider")) != "session":
+def login_authenticator_is_oidc(platform_auth: Mapping[str, Any] | None) -> bool:
+    """Whether the selected bundle lane uses a Cognito or OIDC authenticator."""
+    if not isinstance(platform_auth, Mapping) or _str(platform_auth.get("auth_provider")) != "bundle":
         return False
-    upstream = _dict(platform_auth.get("upstream_authority_provider"))
-    upstream_provider = _dict(upstream.get("provider"))
-    upstream_type = _str(upstream_provider.get("type") or upstream.get("provider_type")).lower().replace("-", "_")
-    return bool(upstream_provider) and upstream_type in {t.replace("-", "_") for t in OIDC_UPSTREAM_TYPES}
+    resolved = _dict(platform_auth.get("login_authenticator"))
+    provider = _dict(resolved.get("provider"))
+    provider_type = _str(provider.get("type") or resolved.get("provider_type")).lower().replace("-", "_")
+    return bool(provider) and provider_type in {t.replace("-", "_") for t in OIDC_AUTHENTICATOR_TYPES}
 
 
-def browser_session_config(settings: Any | None = None) -> BrowserSessionConfig | None:
+def bundle_login_config(settings: Any | None = None) -> BundleLoginConfig | None:
     """The lane's configuration, or ``None`` when this deployment does not
-    select a session provider with an OIDC or Cognito upstream."""
+    select a bundle lane with an OIDC or Cognito authenticator."""
     from kdcube_ai_app.apps.chat.sdk.config import get_settings
 
     settings = settings or get_settings()
@@ -307,17 +306,22 @@ def browser_session_config(settings: Any | None = None) -> BrowserSessionConfig 
     except Exception:  # noqa: BLE001 - no registry, no lane
         logger.debug("Connection Hub platform provider lookup failed", exc_info=True)
         return None
-    if not upstream_is_oidc(platform_auth):
+    if not login_authenticator_is_oidc(platform_auth):
         return None
     provider = _dict(platform_auth.get("provider"))
-    upstream = _dict(platform_auth.get("upstream_authority_provider"))
-    upstream_provider = _dict(upstream.get("provider"))
-    upstream_type = _str(upstream_provider.get("type") or upstream.get("provider_type")).lower().replace("-", "_")
-    authenticator = _dict(upstream_provider.get("authenticator")) or upstream_provider
-    issuer_url = _cognito_issuer(authenticator) if "cognito" in upstream_type else _str(authenticator.get("issuer"))
+    resolved_authenticator = _dict(platform_auth.get("login_authenticator"))
+    authenticator_provider = _dict(resolved_authenticator.get("provider"))
+    authenticator_type = _str(
+        authenticator_provider.get("type") or resolved_authenticator.get("provider_type")
+    ).lower().replace("-", "_")
+    authenticator = _dict(authenticator_provider.get("authenticator")) or authenticator_provider
+    issuer_url = _cognito_issuer(authenticator) if "cognito" in authenticator_type else _str(authenticator.get("issuer"))
     client_id = _str(authenticator.get("app_client_id") or authenticator.get("client_id"))
     if not issuer_url or not client_id:
-        logger.warning("Platform session provider %s: the upstream authenticator lacks issuer or client id", platform_auth.get("provider_id"))
+        logger.warning(
+            "Platform server-side login %s: the authenticator lacks issuer or client id",
+            platform_auth.get("provider_id"),
+        )
         return None
     input_cfg = _dict(provider.get("input"))
     issuer_cfg = _dict(provider.get("issuer"))
@@ -332,12 +336,12 @@ def browser_session_config(settings: Any | None = None) -> BrowserSessionConfig 
         attempt_ttl_seconds=_int(issuer_cfg.get("attempt_ttl_seconds"), 600),
     )
     auth_cfg = getattr(settings, "AUTH", None)
-    return BrowserSessionConfig(
+    return BundleLoginConfig(
         provider_id=_str(platform_auth.get("provider_id")),
         authority_id=_str(platform_auth.get("authority_id")),
         provider=provider,
         authority=_dict(platform_auth.get("authority")),
-        upstream_type=upstream_type,
+        authenticator_type=authenticator_type,
         issuer_url=issuer_url,
         client_id=client_id,
         client_secret_ref=_str(input_cfg.get("client_secret_ref") or authenticator.get("app_client_secret_ref") or authenticator.get("client_secret_ref")),
@@ -361,27 +365,28 @@ def sign_in_bounce_path(settings: Any | None = None) -> str:
     platform's own login route when this deployment hosts the sign-in, else
     the application site's sign-in page. One constant, decided here."""
     try:
-        configured = browser_session_config(settings) is not None
+        configured = bundle_login_config(settings) is not None
     except Exception:  # noqa: BLE001 - no settings, no lane
         configured = False
     return LOGIN_ROUTE if configured else SITE_SIGN_IN_PATH
 
 
-def upstream_cognito_providers(config: BrowserSessionConfig, settings: Any | None = None) -> list[Any]:
+def accepted_cognito_providers(config: BundleLoginConfig, settings: Any | None = None) -> list[Any]:
     """The Cognito pools a token-bearing host may present tokens from on the
-    session lane: the provider's upstream authenticator and its
+    server-side lane: the referenced authenticator and its
     ``trusted_providers`` rows, as ``CognitoTrustedProviderConfig`` values.
-    Empty when the upstream is not Cognito or the provider opts out with
-    ``input.accept_upstream_tokens: false``."""
+    Empty when the authenticator is not Cognito or the provider opts out with
+    ``input.accept_authenticator_tokens: false``."""
     from kdcube_ai_app.apps.chat.sdk.config import get_settings
 
-    if config.upstream_provider_label != "cognito":
+    if config.authenticator_kind != "cognito":
         return []
     input_cfg = _dict(config.provider.get("input"))
-    if input_cfg.get("accept_upstream_tokens") is False:
+    if input_cfg.get("accept_authenticator_tokens") is False:
         return []
-    upstream = _dict(_dict(_dict(settings_platform_auth(settings)).get("upstream_authority_provider")).get("provider"))
-    authenticator = _dict(upstream.get("authenticator")) or upstream
+    resolved = _dict(_dict(settings_platform_auth(settings)).get("login_authenticator"))
+    provider = _dict(resolved.get("provider"))
+    authenticator = _dict(provider.get("authenticator")) or provider
     rows = authenticator.get("trusted_providers")
     resolver = (settings or get_settings())._resolve_cognito_trusted_providers
     return list(resolver(
@@ -405,15 +410,15 @@ def settings_platform_auth(settings: Any | None = None) -> Mapping[str, Any]:
 def sliding_policy(settings: Any | None = None) -> SessionPolicy | None:
     """The sliding policy for request-time validation, or ``None`` when the
     lane is not configured (sessions then keep their fixed expiry)."""
-    config = browser_session_config(settings)
+    config = bundle_login_config(settings)
     return config.policy if config is not None else None
 
 
-def grants_resolver(config: BrowserSessionConfig) -> GrantsResolver:
+def grants_resolver(config: BundleLoginConfig) -> GrantsResolver:
     """Roles and permissions for a verified identity: the authority registry's
-    grants (subjects, bootstrap rules, defaults), plus the upstream's group
+    grants (subjects, bootstrap rules, defaults), plus the authenticator's group
     claim when the provider maps it (``input.groups_claim``)."""
-    from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.authority_providers.bundle_session_login import (
+    from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.authority_providers.bundle_login import (
         resolve_platform_grants,
     )
 
@@ -441,15 +446,15 @@ def grants_resolver(config: BrowserSessionConfig) -> GrantsResolver:
 _ENDPOINTS: dict[str, OidcEndpoints] = {}
 
 
-async def _upstream(config: BrowserSessionConfig, *, redirect_uri: str) -> UpstreamIdentity:
+async def _upstream(config: BundleLoginConfig, *, redirect_uri: str) -> UpstreamIdentity:
     from kdcube_ai_app.apps.chat.sdk.config import get_secret
 
-    from connection_hub.browser_session.oidc_jwt import PyJwtVerifier
+    from connection_hub.server_side_login.oidc_jwt import PyJwtVerifier
 
     client_secret = ""
     if config.client_secret_ref:
         client_secret = _str(await get_secret(config.client_secret_ref, default=None))
-    if config.upstream_provider_label == "cognito":
+    if config.authenticator_kind == "cognito":
         client = OidcClientConfig.cognito(
             issuer=config.issuer_url,
             client_id=config.client_id,
@@ -479,8 +484,8 @@ async def _upstream(config: BrowserSessionConfig, *, redirect_uri: str) -> Upstr
 _VERIFIERS: dict[str, Any] = {}
 
 
-def _verifier_for(config: BrowserSessionConfig) -> Any:
-    from connection_hub.browser_session.oidc_jwt import PyJwtVerifier
+def _verifier_for(config: BundleLoginConfig) -> Any:
+    from connection_hub.server_side_login.oidc_jwt import PyJwtVerifier
 
     verifier = _VERIFIERS.get(config.issuer_url)
     if verifier is None:
@@ -500,11 +505,11 @@ def public_origin(request: Any) -> str:
     return f"{proto}://{host}"
 
 
-async def platform_browser_session_flow(*, origin: str, settings: Any | None = None) -> BrowserSessionFlow | None:
+async def platform_login_flow(*, origin: str, settings: Any | None = None) -> BrowserSessionFlow | None:
     """The flow for one request origin, or ``None`` when the lane is not
     configured. The redirect URI is the registry's when set, else this
     origin's callback route (the Cognito app client must list it)."""
-    config = browser_session_config(settings)
+    config = bundle_login_config(settings)
     if config is None:
         return None
     authority = get_bundle_session_authority()
@@ -533,16 +538,17 @@ __all__ = [
     "PROFILE_ROUTE",
     "RETURN_COOKIE_TTL_SECONDS",
     "SIGNED_OUT_ROUTE",
-    "BrowserSessionConfig",
+    "BUNDLE_LOGIN_TYPES",
+    "BundleLoginConfig",
     "PlatformSessionBackend",
     "RedisLoginAttemptStore",
-    "browser_session_config",
+    "accepted_cognito_providers",
+    "bundle_login_config",
     "grants_resolver",
-    "platform_browser_session_flow",
+    "platform_login_flow",
     "public_origin",
     "sign_in_bounce_path",
     "settings_platform_auth",
     "sliding_policy",
-    "upstream_cognito_providers",
-    "upstream_is_oidc",
+    "login_authenticator_is_oidc",
 ]

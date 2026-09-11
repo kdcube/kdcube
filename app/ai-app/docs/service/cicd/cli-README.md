@@ -4,7 +4,7 @@ title: "Current KDCube CLI"
 summary: "Current implemented CLI surface for local environment bootstrapping, workdir preparation, Docker Compose startup, descriptor validation, exact delegated secret management, host-vault activation, maintainer package-source builds, and deployment selection."
 tags: ["service", "cicd", "cli", "env", "deployment", "bundle"]
 keywords: ["kdcube cli", "local environment bootstrap", "workdir setup", "docker compose control", "descriptor validation", "current cli contract", "local deployment tooling", "multiple local runtime snapshots", "single active local deployment", "tenant project workdir namespace", "bundle config patch", "bundle secret patch", "bundle delete", "managed bundle deletion", "purge-data", "force-retire", "targeted bundle retirement", "host vault stage", "host vault activate", "host vault recover", "kdcube bundle command", "bundle reload internals", "reload-authority", "maintainer local Python package", "unpublished package candidate"]
-updated_at: 2026-09-10
+updated_at: 2026-09-11
 see_also:
   - repo:kdcube/app/ai-app/docs/service/cicd/release-README.md
   - repo:kdcube/app/ai-app/docs/service/cicd/descriptors-README.md
@@ -717,7 +717,7 @@ user, and user-bundle values into the ordinary private descriptor pair.
 `kdcube config apply` changes the platform authentication of an already-initialized
 runtime. It takes the same `--auth-type` and per-mode flags as `init` ([§2.3e](#auth-flags)) and
 reconciles the descriptors to the target method: the previous method's platform login
-provider, its upstream authority, admin bootstrap rule, and consent UI are removed, and
+provider, its referenced authenticator authority, admin bootstrap rule, and consent UI are removed, and
 unrelated configuration (bundles, connectors, the Telegram companion) is preserved.
 
 ```bash

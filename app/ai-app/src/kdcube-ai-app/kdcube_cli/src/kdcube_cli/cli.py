@@ -3489,7 +3489,7 @@ def _apply_cors_origins(assembly: dict, origins: list[str]) -> list[str]:
 def _apply_auth_flags(console: Console, assembly: dict, args) -> bool:
     """Seed the staged assembly auth block from init auth flags.
 
-    --auth-type selects the platform method. For bundle (application-hosted
+    --auth-type selects the platform method. For bundle (server-side
     login), --provider/--client-id/--bootstrap-admin-email are written under
     auth.bundle. For cognito/delegated, --cognito-* are written under auth.cognito
     so the setup wizard uses them without prompting. An unsupported bundle provider
@@ -3639,8 +3639,8 @@ def _connection_hub_cognito_provider_has_fields(assembly: dict, bundles_descript
     )
 
 
-def _bundle_session_client_id(assembly: dict, bundles_descriptor: dict | None) -> str:
-    """Resolve the Google client id for an application-hosted login descriptor set.
+def _bundle_login_client_id(assembly: dict, bundles_descriptor: dict | None) -> str:
+    """Resolve the Google client id for a server-side login descriptor set.
 
     Reads assembly auth.bundle.client_id first, then the Connection Hub
     google_oidc provider's authenticator in the bundles descriptor.
@@ -3659,7 +3659,7 @@ def _bundle_session_client_id(assembly: dict, bundles_descriptor: dict | None) -
             for prov in providers.values():
                 if not isinstance(prov, dict):
                     continue
-                if str(prov.get("type") or "").strip().lower() == "google_id_token":
+                if str(prov.get("type") or "").strip().lower() == "google":
                     cid = _get_nested(prov, "authenticator", "client_id")
                     if _has_value(cid):
                         return str(cid).strip()
@@ -3703,12 +3703,12 @@ def _descriptor_fast_path_reasons(
         provider = str(_get_nested(assembly, "auth", "bundle", "provider") or "google").strip().lower()
         if provider not in installer_mod.SUPPORTED_BUNDLE_AUTH_PROVIDERS:
             reasons.append(
-                f"application-hosted authentication provider '{provider}' is not supported "
+                f"server-side authentication provider '{provider}' is not supported "
                 "(currently supported: google)"
             )
-        elif not _has_value(_bundle_session_client_id(assembly, bundles_descriptor)):
+        elif not _has_value(_bundle_login_client_id(assembly, bundles_descriptor)):
             reasons.append(
-                "application-hosted login requires a Google client id "
+                "server-side login requires a Google client id "
                 "(assembly auth.bundle.client_id or the Connection Hub google_oidc provider)"
             )
     if auth_type in {"cognito", "delegated"}:
@@ -4969,7 +4969,7 @@ def main() -> None:
         choices=("bundle", "cognito", "simple", "delegated"),
         default="",
         help=(
-            "Platform authentication method. 'bundle' is application-hosted login "
+            "Platform authentication method. 'bundle' is server-side login "
             "(the app hosts the login page; KDCube accepts the result as a platform "
             "session). Overrides the auth method selected by the staged descriptor."
         ),
@@ -5000,7 +5000,7 @@ def main() -> None:
         "--enable-telegram",
         action="store_true",
         help=(
-            "Configure the Telegram companion after application-hosted login setup. "
+            "Configure the Telegram companion after server-side login setup. "
             "Reads the bot token from KDCUBE_TELEGRAM_BOT_TOKEN and needs --external-https-url."
         ),
     )
@@ -6172,11 +6172,11 @@ def main() -> None:
                     )
                 _bundles = installer_mod.load_release_descriptor_soft(_config_dir / "bundles.yaml")
                 if _effective_type == "bundle":
-                    _client_id = _bundle_session_client_id(_assembly, _bundles)
+                    _client_id = _bundle_login_client_id(_assembly, _bundles)
                     if not args.interactive and not _has_value(_client_id):
                         raise SystemExit(
                             "`kdcube config apply --auth-type bundle` requires a Google client id "
-                            "(--client-id, or an existing application-hosted login runtime)."
+                            "(--client-id, or an existing server-side login runtime)."
                         )
                 _repo = _resolve_subcommand_repo(args.path, workdir=_resolved, path_provided=_arg_provided("--path"))
                 if args.dry_run:
@@ -6647,7 +6647,7 @@ def main() -> None:
             os.environ["KDCUBE_ASSEMBLY_USER_SUPPLIED"] = (
                 "0" if _init_uses_default_descriptors else "1"
             )
-            # Recommend application-hosted login as the interactive default only when the
+            # Recommend server-side login as the interactive default only when the
             # auth type was not chosen explicitly: no user-supplied descriptor set and no
             # --auth-type flag. Otherwise the explicit choice is honored.
             os.environ["KDCUBE_RECOMMEND_BUNDLE_AUTH"] = (

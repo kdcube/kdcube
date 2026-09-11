@@ -4,7 +4,7 @@
 """
 Tests for POST /oauth/token: authorization_code exchange (with PKCE) and
 refresh_token rotation. A fake access-token minter is injected so these stay
-unit tests independent of the bundle-session authority.
+unit tests independent of the platform-session authority.
 """
 from __future__ import annotations
 

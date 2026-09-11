@@ -6,7 +6,7 @@ server-held browser session.
 
     GET /api/platform/session/login?next=<same-origin path>
         starts a one-time login attempt, sets the attempt cookie, redirects
-        the browser to the upstream (Cognito's hosted UI, any OIDC issuer).
+        the browser to the authenticator (Cognito's hosted UI, any OIDC issuer).
     GET /api/platform/session/callback?code=&state=
         completes the attempt: code exchange, ID-token verification, the
         platform user record, the session cookie; redirects to the validated
@@ -20,7 +20,7 @@ server-held browser session.
         whether the lane is configured on this deployment, and its routes.
 
 The flow is built per request from the deployment's descriptors
-(``kdcube_ai_app.auth.bundle.browser_session``); a test injects its own
+(``kdcube_ai_app.auth.bundle.login_lane``); a test injects its own
 through ``flow_provider``.
 """
 
@@ -33,17 +33,17 @@ from typing import Any, Awaitable, Callable
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
-from connection_hub.browser_session.flow import BrowserSessionFlow, LoginAttemptRejected, LoginRejected
-from connection_hub.browser_session.model import CookieSpec
-from connection_hub.browser_session.next_url import safe_next_target
+from connection_hub.server_side_login.flow import BrowserSessionFlow, LoginAttemptRejected, LoginRejected
+from connection_hub.server_side_login.model import CookieSpec
+from connection_hub.server_side_login.next_url import safe_next_target
 
-from kdcube_ai_app.auth.bundle.browser_session import (
+from kdcube_ai_app.auth.bundle.login_lane import (
     CALLBACK_ROUTE,
     LOGIN_ROUTE,
     LOGOUT_ROUTE,
     PROFILE_ROUTE,
     SIGNED_OUT_ROUTE,
-    platform_browser_session_flow,
+    platform_login_flow,
     public_origin,
 )
 
@@ -85,7 +85,7 @@ def _failure_page(reason: str, detail: str, *, retry_url: str) -> HTMLResponse:
 
 
 async def _default_flow_provider(request: Request) -> BrowserSessionFlow | None:
-    return await platform_browser_session_flow(origin=public_origin(request))
+    return await platform_login_flow(origin=public_origin(request))
 
 
 def create_platform_session_router(*, flow_provider: FlowProvider | None = None) -> APIRouter:
@@ -99,7 +99,7 @@ def create_platform_session_router(*, flow_provider: FlowProvider | None = None)
             return JSONResponse({"detail": "platform session sign-in is not configured"}, status_code=404, headers=NO_STORE)
         start = await flow.begin_login(request.query_params.get("next"))
         if not start.redirect_url:
-            return JSONResponse({"detail": "the configured upstream does not redirect"}, status_code=500, headers=NO_STORE)
+            return JSONResponse({"detail": "the configured authenticator does not redirect"}, status_code=500, headers=NO_STORE)
         response = RedirectResponse(start.redirect_url, status_code=302, headers=NO_STORE)
         apply_cookie(response, start.attempt_cookie)
         return response
@@ -116,7 +116,7 @@ def create_platform_session_router(*, flow_provider: FlowProvider | None = None)
             logger.info("platform session sign-in refused: %s", exc.reason)
             return _failure_page(exc.reason, "The sign-in attempt is unknown, expired, or was started in another browser.", retry_url=LOGIN_ROUTE)
         except LoginRejected as exc:
-            logger.warning("platform session sign-in rejected by the upstream: %s %s", exc.reason, exc.detail)
+            logger.warning("platform session sign-in rejected by the authenticator: %s %s", exc.reason, exc.detail)
             return _failure_page(exc.reason, "The identity provider did not confirm the sign-in.", retry_url=LOGIN_ROUTE)
         response = RedirectResponse(done.redirect_to, status_code=302, headers=NO_STORE)
         apply_cookie(response, done.session_cookie)
@@ -155,7 +155,7 @@ def create_platform_session_router(*, flow_provider: FlowProvider | None = None)
             "profileUrl": PROFILE_ROUTE,
         }
         if flow is not None:
-            payload["upstream"] = flow.upstream.name
+            payload["authenticator"] = flow.upstream.name
             payload["idleTtlSeconds"] = flow.policy.idle_ttl_seconds
             payload["maxTtlSeconds"] = flow.policy.max_ttl_seconds
         return JSONResponse(payload, headers=NO_STORE)

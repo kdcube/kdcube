@@ -292,7 +292,7 @@ def test_settings_reads_cognito_from_connection_hub_bundle_items(monkeypatch, tm
     assert [row.alias for row in settings.AUTH.COGNITO_TRUSTED_PROVIDERS] == ["primary", "peer"]
 
 
-def test_settings_reads_bundle_session_transport_from_connection_hub(monkeypatch, tmp_path):
+def test_settings_reads_bundle_login_transport_from_connection_hub(monkeypatch, tmp_path):
     for key in (
         "AUTH_PROVIDER",
         "AUTH_TOKEN_COOKIE_NAME",
@@ -332,9 +332,10 @@ def test_settings_reads_bundle_session_transport_from_connection_hub(monkeypatch
                                             "platform": True,
                                             "providers": {
                                                 "workspace_google_session": {
-                                                    "type": "bundle_session_login",
+                                                    "type": "bundle",
                                                     "input": {
                                                         "authenticator_ref": {
+                                                            "bundle_id": "identity-app@1-0",
                                                             "authority_id": "google.accounts",
                                                             "provider_id": "google_oidc",
                                                         }
@@ -349,11 +350,20 @@ def test_settings_reads_bundle_session_transport_from_connection_hub(monkeypatch
                                                     },
                                                 }
                                             },
-                                        },
+                                        }
+                                    }
+                                }
+                            },
+                        },
+                        {
+                            "id": "identity-app@1-0",
+                            "config": {
+                                "authority_registry": {
+                                    "authorities": {
                                         "google.accounts": {
                                             "providers": {
                                                 "google_oidc": {
-                                                    "type": "google_id_token",
+                                                    "type": "google",
                                                     "authenticator": {
                                                         "client_id": "google-client-id"
                                                     },
@@ -363,7 +373,7 @@ def test_settings_reads_bundle_session_transport_from_connection_hub(monkeypatch
                                     }
                                 }
                             },
-                        }
+                        },
                     ]
                 }
             },
@@ -377,21 +387,46 @@ def test_settings_reads_bundle_session_transport_from_connection_hub(monkeypatch
 
     settings = sdk_config.Settings()
 
-    assert settings.AUTH_PROVIDER == "session"
+    assert settings.AUTH_PROVIDER == "bundle"
     assert settings.AUTH.AUTH_TOKEN_COOKIE_NAME == "__Secure-AUTH"
     assert settings.AUTH.ID_TOKEN_COOKIE_NAME == "__Secure-ID"
     assert settings.AUTH.MASQUERADED_TOKEN_COOKIE_NAME == "__Secure-MASK"
     platform = settings.connection_hub_platform_auth_config()
     assert platform["authority_id"] == "kdcube.platform"
     assert platform["provider_id"] == "workspace_google_session"
-    assert platform["provider_type"] == "bundle_session_login"
-    assert platform["upstream_authority_provider"]["authority_id"] == (
+    assert platform["provider_type"] == "bundle"
+    assert platform["login_authenticator"]["authority_id"] == (
         "google.accounts"
     )
-    assert platform["upstream_authority_provider"]["provider_id"] == "google_oidc"
-    assert platform["upstream_authority_provider"]["provider"]["authenticator"] == {
+    assert platform["login_authenticator"]["provider_id"] == "google_oidc"
+    assert platform["login_authenticator"]["provider"]["authenticator"] == {
         "client_id": "google-client-id"
     }
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (("type", "bundle-session"), ("idp", "session")),
+)
+def test_settings_rejects_retired_bundle_login_spelling(
+    monkeypatch, tmp_path, field, value
+):
+    monkeypatch.delenv("AUTH_PROVIDER", raising=False)
+    assembly_path = tmp_path / "assembly.yaml"
+    assembly_path.write_text(
+        yaml.safe_dump({"auth": {field: value}}, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        sdk_config,
+        "get_secrets_manager",
+        lambda _settings: _NoopSecretsManager(),
+    )
+    monkeypatch.setenv("ASSEMBLY_YAML_DESCRIPTOR_PATH", str(assembly_path))
+
+    with pytest.raises(ValueError, match="use `bundle`"):
+        sdk_config.Settings()
 
 
 def test_get_plain_returns_default_when_path_missing(monkeypatch, tmp_path):

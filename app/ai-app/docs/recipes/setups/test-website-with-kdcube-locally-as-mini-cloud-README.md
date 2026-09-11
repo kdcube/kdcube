@@ -3,8 +3,8 @@ id: repo:kdcube-ai-app/app/ai-app/docs/recipes/setups/test-website-with-kdcube-l
 title: "Test A Website That Uses KDCube Locally, Simulating The Cloud"
 summary: "Step by step: run a website and a local KDCube runtime on two HTTPS hostnames under one parent domain, the same-site cross-origin shape a cloud deployment has, and prove sign-in, cookies, embedded widgets and every login mode there before touching an environment."
 status: active
-tags: ["recipes", "setups", "website", "local", "mini-cloud", "same-site", "cross-origin", "cognito", "session-lane", "scene"]
-updated_at: 2026-09-10
+tags: ["recipes", "setups", "website", "local", "mini-cloud", "same-site", "cross-origin", "cognito", "login-lane", "scene"]
+updated_at: 2026-09-11
 keywords: ["mini cloud", "local emulator", "same-site cross-origin", "local.kdcube.tech", "runtime.local.kdcube.tech", "local CA", "hosts file", "OpenResty patch", "cors.allow_origins", "frame_embedding", "return_origins", "loginMode", "kdcube_profile"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/identity-provider-urls-README.md
@@ -172,7 +172,7 @@ proxy:
       - https://local.kdcube.tech
 ```
 
-If the runtime hosts the sign-in (the `browser_session` provider), the
+If the runtime hosts the sign-in (the `server_login` provider), the
 website origin must also be a return origin on that provider in
 `bundles.yaml`, so a sign-in started from the website comes back to it:
 

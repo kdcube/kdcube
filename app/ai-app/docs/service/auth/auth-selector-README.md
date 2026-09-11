@@ -5,7 +5,7 @@ summary: "Gateway request-authentication boundary: platform auth first, then the
 status: active
 tags: ["service", "auth", "gateway", "connections", "authenticators", "sessions"]
 keywords: ["auth selector", "platform authenticator", "Connection Hub authentication surface", "platform session", "UserSession"]
-updated_at: 2026-08-26
+updated_at: 2026-09-11
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
@@ -36,7 +36,7 @@ FastAPIGatewayAdapter
 RequestAuthResolver
    |
    +-- descriptor-registered platform authenticator
-   |     kdcube.cognito / kdcube.multi-cognito / kdcube.bundle-session / kdcube.simple-idp
+   |     kdcube.cognito / kdcube.multi-cognito / kdcube.bundle / kdcube.simple-idp
    |
    +-- ConnectionHubAuthenticationSurface
          |
@@ -87,7 +87,7 @@ After this point, normal gateway code handles:
 
 KDCube has more than one way a user can arrive:
 
-- browser session with Cognito or an application-hosted KDCube platform-session cookie;
+- browser session with Cognito or a server-side KDCube platform-session cookie;
 - Telegram Mini App `initData`;
 - Telegram webhook signed by a bot;
 - Slack request signature;
@@ -207,10 +207,10 @@ authenticator: kdcube.multi-cognito
   input: Authorization + ID token
   output: identity under kdcube.platform
 
-authenticator: kdcube.bundle-session
+authenticator: kdcube.bundle
   input: kst1 session cookie
   output: identity under kdcube.platform
-  note: technical id for application-hosted platform sessions
+  note: platform authenticator for server-side login
 
 authentication surface: connection-hub
   input: raw request envelope

@@ -4,7 +4,7 @@ title: "Architecture Of What We Built"
 summary: "Current platform-runtime map of KDCube: one tenant/project deployment, browser and external ingress, app loading, ordered conversation eventing, Data Bus, tenant/project/session relay, identity and authority, storage ownership, isolated execution, economics, and deployment profiles."
 status: current
 tags: ["arch", "architecture", "runtime", "services", "ingress", "events", "authority", "execution", "deployment"]
-updated_at: 2026-08-18
+updated_at: 2026-09-11
 keywords: ["platform architecture", "runtime architecture", "tenant project deployment", "conversation event lane", "data bus", "SSE relay", "cross runtime context", "isolated execution", "application site catalog"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/arch/security-and-trust-model-README.md
@@ -108,7 +108,7 @@ browser / webhook / REST client / MCP client / channel
 The browser first consumes `/api/cp-frontend-config`. That response is the
 effective browser contract for app discovery, UI routing, and authentication.
 The browser follows its provider-neutral auth fields instead of hardcoding a
-Cognito, SimpleIDP, or application-hosted login flow.
+Cognito, SimpleIDP, or server-side login flow.
 
 `/profile` is the source of truth for logged-in state. Local OIDC cache, visible
 email, or readable cookies are not sufficient.

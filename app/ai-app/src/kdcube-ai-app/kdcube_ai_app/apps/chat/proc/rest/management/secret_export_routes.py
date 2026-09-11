@@ -43,7 +43,7 @@ from kdcube_ai_app.apps.chat.proc.rest.management.secret_runtime import (
     ManagementSecretsProviderUnavailable,
 )
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
-from kdcube_ai_app.auth.bundle.browser_session import sign_in_bounce_path
+from kdcube_ai_app.auth.bundle.login_lane import sign_in_bounce_path
 
 router = APIRouter()
 LOGGER = logging.getLogger("kdcube.management.secret_export")
