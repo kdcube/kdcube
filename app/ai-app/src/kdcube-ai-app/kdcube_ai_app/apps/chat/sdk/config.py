@@ -854,6 +854,7 @@ class Settings(PLATFORM_CONFIG):
                 login_authenticator = {}
         return {
             **normalized,
+            "bundle_id": bundle_id,
             "authority_id": str(resolved.get("authority_id") or "").strip(),
             "provider_id": str(resolved.get("provider_id") or "").strip(),
             "provider_type": str(resolved.get("provider_type") or "").strip(),

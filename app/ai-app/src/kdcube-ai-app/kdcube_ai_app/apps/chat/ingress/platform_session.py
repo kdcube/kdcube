@@ -37,6 +37,7 @@ from connection_hub.server_side_login.flow import BrowserSessionFlow, LoginAttem
 from connection_hub.server_side_login.model import CookieSpec
 from connection_hub.server_side_login.next_url import safe_next_target
 
+from kdcube_ai_app.auth.AuthManager import AuthenticationError
 from kdcube_ai_app.auth.bundle.login_lane import (
     CALLBACK_ROUTE,
     LOGIN_ROUTE,
@@ -71,7 +72,13 @@ def apply_cookie(response: Response, spec: CookieSpec) -> None:
     )
 
 
-def _failure_page(reason: str, detail: str, *, retry_url: str) -> HTMLResponse:
+def _failure_page(
+    reason: str,
+    detail: str,
+    *,
+    retry_url: str,
+    status_code: int = 400,
+) -> HTMLResponse:
     text = html.escape(detail or reason.replace("_", " "))
     body = (
         "<!doctype html><meta charset='utf-8'><title>Sign-in did not complete</title>"
@@ -81,7 +88,7 @@ def _failure_page(reason: str, detail: str, *, retry_url: str) -> HTMLResponse:
         f"<p>Reason code: <code>{html.escape(reason)}</code></p>"
         f"<p><a href='{html.escape(retry_url)}'>Try again</a></p>"
     )
-    return HTMLResponse(body, status_code=400, headers=NO_STORE)
+    return HTMLResponse(body, status_code=status_code, headers=NO_STORE)
 
 
 async def _default_flow_provider(request: Request) -> BrowserSessionFlow | None:
@@ -118,6 +125,14 @@ def create_platform_session_router(*, flow_provider: FlowProvider | None = None)
         except LoginRejected as exc:
             logger.warning("platform session sign-in rejected by the authenticator: %s %s", exc.reason, exc.detail)
             return _failure_page(exc.reason, "The identity provider did not confirm the sign-in.", retry_url=LOGIN_ROUTE)
+        except AuthenticationError:
+            logger.error("platform session sign-in could not resolve its platform identity", exc_info=True)
+            return _failure_page(
+                "platform_identity_unavailable",
+                "The platform could not resolve this sign-in identity. Try again after the identity service recovers.",
+                retry_url=LOGIN_ROUTE,
+                status_code=503,
+            )
         response = RedirectResponse(done.redirect_to, status_code=302, headers=NO_STORE)
         apply_cookie(response, done.session_cookie)
         apply_cookie(response, done.clear_attempt_cookie)

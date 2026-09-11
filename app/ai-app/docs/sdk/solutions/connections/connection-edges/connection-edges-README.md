@@ -1,10 +1,10 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-edges/connection-edges-README.md
 title: "Connection Edges"
-summary: "Connection Hub role: one graph primitive for linked identities, delegation, authority projection, and identity-family resolution."
+summary: "Connection Hub role: one graph primitive for linked identities, sign-in principals, delegation, authority projection, and identity-family resolution."
 status: active
 tags: ["sdk", "connections", "connection-hub", "connection-edges", "identity", "delegation", "authority"]
-updated_at: 2026-06-29
+updated_at: 2026-09-11
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/identity-family-resolver/identity-family-resolver-README.md
@@ -78,6 +78,27 @@ The edge does not store secrets. It also does not mint roles by itself. Its
 to derive. Roles, permissions, economics authority, and provider-account
 capabilities still come from the authority that owns the target identity, then
 Connection Hub intersects them with the edge grants.
+
+## Platform Sign-In Principal
+
+An OIDC sign-in identity is its verified issuer plus `sub`. On first sign-in,
+KDCube records an edge from that identity to the default platform user ID
+`<provider>:<sub>`. A second authenticator represents that user only after an
+explicit edge points to the original platform user ID. Email is profile data
+and is never an automatic identity link.
+
+Connection Hub keeps the edge in durable bundle storage and projects the
+issuer/subject-to-platform-user lookup into the deployment's shared Redis.
+Every worker reads the same projection. A cache miss reads the durable edge
+and restores the projection; link and unlink operations update it directly.
+The key is the tenant, project, issuer, and subject, so refreshed tokens keep
+the same mapping. The projection contains no provider token or user profile,
+and worker process memory carries no authoritative mapping. Mutations of the
+current shared JSON store use a tenant/project Redis lock; ordinary projection
+reads remain lock-free.
+
+The hosted login timing and legacy raw-`sub` transition are specified in
+[Server-Side Login And The Platform Session](../../../../service/auth/server-side-login-and-platform-session-README.md#platform-hosted-server-side-login).
 
 For platform edges, common grants are:
 

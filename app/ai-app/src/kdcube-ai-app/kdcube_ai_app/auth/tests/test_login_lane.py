@@ -155,8 +155,9 @@ async def test_flow_over_the_platform_backend_issues_a_platform_session(monkeypa
     policy = SessionPolicy(idle_ttl_seconds=600, max_ttl_seconds=3600, touch_interval_seconds=60, attempt_ttl_seconds=120)
     seen: list[VerifiedIdentity] = []
 
-    def grants(identity: VerifiedIdentity):
+    def grants(identity: VerifiedIdentity, platform_user_id: str):
         seen.append(identity)
+        assert platform_user_id == "cognito:abc-123"
         return ["member"], ["chat:use"], "test"
 
     backend = PlatformSessionBackend(authority, grants=grants, policy=policy)
@@ -177,7 +178,7 @@ async def test_flow_over_the_platform_backend_issues_a_platform_session(monkeypa
 
     done = await flow.complete_login({"state": start.attempt.state, "code": "c"}, attempt_binding=start.attempt.binding)
     assert done.redirect_to == "/app?tab=2"
-    assert done.session.subject == "abc-123", "changing the login lane must preserve the Cognito platform principal"
+    assert done.session.subject == "cognito:abc-123"
     assert done.session.user["email"] == "person@example.com"
     assert done.session.user["roles"] == ["member"] and done.session.user["permissions"] == ["chat:use"]
     assert done.session_cookie.name == "__Secure-LATC" and done.session_cookie.http_only
@@ -186,7 +187,7 @@ async def test_flow_over_the_platform_backend_issues_a_platform_session(monkeypa
     assert seen and seen[0].canonical_subject == "cognito:abc-123"
 
     verification = await authority.validate_token(done.session.token)
-    assert verification.user.sub == "abc-123"
+    assert verification.user.sub == "cognito:abc-123"
     assert verification.record["exp"] == clock.now + 600 and verification.record["max_exp"] == clock.now + 3600
     assert verification.record["metadata"]["upstream"] == "fake-idp"
 
@@ -257,6 +258,7 @@ def _settings(platform_auth):
 def test_config_resolves_cognito_authenticator_from_the_registry():
     config = bundle_login_config(_settings(_platform_auth()))
     assert config is not None
+    assert config.connection_hub_bundle_id == "connection-hub@1-0"
     assert config.issuer_url == "https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_POOL"
     assert config.client_id == "client-id"
     assert config.hosted_ui_domain == "https://auth.example.com"
@@ -280,10 +282,10 @@ def test_grants_lookup_uses_the_same_subject_as_direct_cognito(monkeypatch):
     monkeypatch.setattr(bundle_login, "resolve_platform_grants", resolve_platform_grants)
     resolve = grants_resolver(bundle_login_config(_settings(_platform_auth())))
 
-    roles, permissions, source = resolve(_identity())
+    roles, permissions, source = resolve(_identity(), "cognito:abc-123")
 
     assert (roles, permissions, source) == (["member", "staff"], [], "test")
-    assert seen["sub"] == "abc-123"
+    assert seen["sub"] == "cognito:abc-123"
     assert seen["provider"] == "cognito" and seen["provider_subject"] == "abc-123"
 
 
@@ -333,15 +335,27 @@ async def test_session_or_token_manager_dispatches_by_credential_shape():
     await authority.register_user(sub="u1", username="u1")
     grant = await authority.login(sub="u1", ttl_seconds=600)
     tokens = _TokenManager()
-    manager = SessionOrTokenAuthManager(BundleSessionAuthManager(authority=authority), tokens)
+    mapped = []
+
+    async def map_user(user):
+        mapped.append(user.sub)
+        user.sub = f"cognito:{user.sub}"
+        return user
+
+    manager = SessionOrTokenAuthManager(
+        BundleSessionAuthManager(authority=authority),
+        tokens,
+        token_user_mapper=map_user,
+    )
 
     assert (await manager.authenticate(grant.token)).sub == "u1"
     assert (await manager.authenticate_with_both(grant.token, "ignored-id")).sub == "u1"
     assert tokens.calls == []
 
-    assert (await manager.authenticate_with_both("eyJhbGciOi.jwt.sig", "eyJ.id.sig")).sub == "jwt-user"
+    assert (await manager.authenticate_with_both("eyJhbGciOi.jwt.sig", "eyJ.id.sig")).sub == "cognito:jwt-user"
     assert tokens.calls[-1] == ("both", "eyJhbGciOi.jwt.sig", "eyJ.id.sig")
-    assert (await manager.authenticate("eyJhbGciOi.jwt.sig")).sub == "jwt-user"
+    assert (await manager.authenticate("eyJhbGciOi.jwt.sig")).sub == "cognito:jwt-user"
+    assert mapped == ["jwt-user", "jwt-user"]
 
     only_session = SessionOrTokenAuthManager(BundleSessionAuthManager(authority=authority), None)
     with pytest.raises(AuthenticationError):

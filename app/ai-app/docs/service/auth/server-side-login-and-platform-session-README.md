@@ -3,7 +3,7 @@ id: repo:kdcube-ai-app/app/ai-app/docs/service/auth/server-side-login-and-platfo
 title: "Server-Side Login And The Platform Session"
 summary: "How an app-defined login turns an authenticator proof into one KDCube-owned, Redis-backed platform session, including the platform-hosted OIDC lane and its sliding lifetime."
 tags: ["service", "auth", "application", "bundle", "session", "sso"]
-keywords: ["server-side login", "app-defined authenticator", "platform session", "bundle", "kst1", "login lane", "login", "logout", "register", "invalidate", "sliding session", "OIDC", "Cognito hosted UI"]
+keywords: ["server-side login", "app-defined authenticator", "platform session", "platform principal", "connection edge", "bundle", "kst1", "login lane", "login", "logout", "register", "invalidate", "sliding session", "OIDC", "Cognito hosted UI"]
 updated_at: 2026-09-11
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
@@ -180,12 +180,33 @@ attempt store in the same Redis namespace, and the routes
 (`kdcube_ai_app/auth/bundle/login_lane.py`,
 `kdcube_ai_app/apps/chat/ingress/platform_session.py`).
 
-For Cognito and OIDC, the verified upstream `sub` is the platform user ID,
-matching the browser-side authenticators. Moving the same authenticator to the
-server-side lane therefore keeps the user's connected accounts, conversations,
-memory, budgets, and other user-scoped records under the same principal. The
-session record also retains `provider` and `provider_subject` as evidence of
-how that principal was authenticated.
+For Cognito and OIDC, identity is the verified issuer plus the upstream `sub`.
+Connection Hub resolves that identity through a connection edge. The first
+verified sign-in creates an edge to a readable platform user ID of
+`<provider>:<sub>`. A later authenticator reaches that same user only through
+an explicit edge; matching email addresses never link users.
+
+An existing raw-`sub` platform user is preserved during this transition only
+when its Redis user record proves the same provider and provider subject. The
+resolver then writes the explicit edge to that existing user. This keeps the
+user's connected accounts, conversations, memory, budgets, and other
+user-scoped records together without treating email as identity.
+
+The durable edge is stored by Connection Hub. Its Redis projection contains
+only the issuer/subject lookup and platform user ID. Hosted browser login reads
+that projection once while issuing the session; ordinary `kst1` requests do
+not resolve the edge again. A compatible direct Cognito token is mapped through
+the same shared Redis projection, with a durable read-through only after a
+cache miss. Edge link and unlink operations update the projection for every
+worker. The projection key is the tenant, project, verified issuer, and subject;
+token rotation continues to use the same identity mapping. Worker process
+memory carries no authoritative principal mapping.
+
+Connection-edge mutations require shared Redis coordination. The current JSON
+edge store is protected by one tenant/project mutation lock across workers.
+Authentication cache misses wait on that lock before reading the durable edge,
+and unlink invalidates the projection before changing the edge. Ordinary cache
+hits remain lock-free.
 
 ### Descriptor
 
@@ -568,6 +589,7 @@ names are tenant/project namespaced.
 | Session record | `{tenant}:{project}:kdcube:auth:bundle-session:session:{sid}` | Session TTL | Token activation, logout, and token hash match. |
 | User sessions set | `{tenant}:{project}:kdcube:auth:bundle-session:user-sessions:{sub}` | Session TTL window | Invalidate/delete all sessions for a subject. |
 | User version | `{tenant}:{project}:kdcube:auth:bundle-session:user-version:{sub}` | Until delete | Role/session revocation boundary. |
+| Principal edge projection | `{tenant}:{project}:kdcube:connection-edge:principal:<identity-hash>` | Rebuildable | Resolve a verified issuer/subject to its platform user without reading bundle storage. |
 | Signing secret | `platform.services.session_token.secret` | Deployment secret lifecycle | HMAC signature verification. |
 | Browser auth cookie | descriptor-configured name | Cookie lifecycle | Transport from browser to gateway. |
 
@@ -663,7 +685,7 @@ For providers with stable external subjects, use a deterministic subject shape:
 |---|---|
 | Telegram | `telegram:123456789` |
 | Google | `google:10987654321` |
-| OIDC provider | `oidc:<issuer-host>:<subject>` |
+| OIDC provider | `oidc:<subject>`; its issuer remains on the connection edge |
 | Front shell local account | `front-shell:<account-id>` |
 
 ### Login

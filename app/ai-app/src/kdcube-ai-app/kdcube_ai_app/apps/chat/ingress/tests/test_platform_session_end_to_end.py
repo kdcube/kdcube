@@ -197,8 +197,9 @@ class Harness:
         self.policy = SessionPolicy(idle_ttl_seconds=600, max_ttl_seconds=3600, touch_interval_seconds=60, attempt_ttl_seconds=120)
         self.seen: list[str] = []
 
-        def grants(identity):
+        def grants(identity, platform_user_id):
             self.seen.append(identity.subject)
+            assert platform_user_id == "mock-idp:idp-user-1"
             roles = ["kdcube:role:registered", *[g for g in identity.claims.get("cognito:groups", []) if isinstance(g, str)]]
             return roles, [], "test"
 
@@ -282,7 +283,7 @@ def test_sign_in_round_trip_issues_a_platform_session(issuer):
 
     user = asyncio.run(manager.authenticate(token))
     assert user.email == "person@example.com"
-    assert user.sub == "idp-user-1", "server-side OIDC must preserve the principal used by direct OIDC"
+    assert user.sub == "mock-idp:idp-user-1"
     assert "staff" in user.roles and "kdcube:role:registered" in user.roles
 
     verification = asyncio.run(harness.authority.validate_token(token))

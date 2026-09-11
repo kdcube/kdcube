@@ -59,6 +59,11 @@ class FakeRedis:
         del key, ttl
         return True
 
+    async def eval(self, _script, _numkeys, key, token):
+        if self.values.get(key) != token:
+            return 0
+        return await self.delete(key)
+
 
 @pytest.mark.asyncio
 async def test_bundle_session_register_login_validate_logout():

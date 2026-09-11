@@ -33,9 +33,10 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping
+from typing import Any, Awaitable, Callable, Mapping
 
 from connection_hub.server_side_login.cookies import StandardCookiePolicy
+from connection_hub.hub.edges import ConnectionEdgeStore
 from connection_hub.server_side_login.flow import BrowserSessionFlow
 from connection_hub.server_side_login.model import (
     IssuedSession,
@@ -51,6 +52,11 @@ from kdcube_ai_app.auth.bundle.sessions import (
     BundleSessionAuthority,
     BundleSessionError,
     get_bundle_session_authority,
+)
+from kdcube_ai_app.auth.bundle.platform_principal import (
+    PlatformPrincipalResolution,
+    PlatformPrincipalResolver,
+    canonical_platform_user_id,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,7 +74,8 @@ PROFILE_ROUTE = "/profile"
 BUNDLE_LOGIN_TYPES = {"bundle"}
 OIDC_AUTHENTICATOR_TYPES = {"cognito", "multi_cognito", "multi-cognito", "cognito_id_token", "oidc"}
 
-GrantsResolver = Callable[[VerifiedIdentity], tuple[list[str], list[str], str]]
+GrantsResolver = Callable[[VerifiedIdentity, str], tuple[list[str], list[str], str]]
+PrincipalResolver = Callable[[VerifiedIdentity], Awaitable[PlatformPrincipalResolution]]
 
 
 def _str(value: Any) -> str:
@@ -88,12 +95,19 @@ def _int(value: Any, default: int) -> int:
 
 
 def _platform_subject(identity: VerifiedIdentity) -> str:
-    """Keep the principal emitted by KDCube's direct OIDC authenticators."""
+    """Default principal for the first verified sign-in identity."""
 
-    # Moving the same authenticator from the browser to this server-side lane
-    # changes token custody, not the user's platform identity. Cognito and the
-    # existing OAuth manager expose the verified upstream ``sub`` verbatim.
-    return _str(identity.subject)
+    return canonical_platform_user_id(
+        provider=identity.provider,
+        subject=identity.subject,
+    )
+
+
+async def _default_principal_resolver(identity: VerifiedIdentity) -> PlatformPrincipalResolution:
+    return PlatformPrincipalResolution(
+        user_id=_platform_subject(identity),
+        source="canonical_verified_identity",
+    )
 
 
 # ---- the backend over the platform session authority -------------------------
@@ -110,11 +124,13 @@ class PlatformSessionBackend:
         authority: BundleSessionAuthority,
         *,
         grants: GrantsResolver,
+        principal_resolver: PrincipalResolver | None = None,
         policy: SessionPolicy,
         issued_by: str = "kdcube.platform.session",
     ) -> None:
         self._authority = authority
         self._grants = grants
+        self._principal_resolver = principal_resolver or _default_principal_resolver
         self._policy = policy
         self._issued_by = issued_by
 
@@ -126,10 +142,11 @@ class PlatformSessionBackend:
         metadata: Mapping[str, Any] | None = None,
     ) -> IssuedSession:
         now = int(time.time())
-        sub = _platform_subject(identity)
+        principal = await self._principal_resolver(identity)
+        sub = principal.user_id
         email = identity.email.lower()
         username = email or f"{identity.provider}_{identity.subject}"
-        roles, permissions, binding_source = self._grants(identity)
+        roles, permissions, binding_source = self._grants(identity, sub)
         grant = await self._authority.login_or_register(
             sub=sub,
             username=username,
@@ -142,6 +159,8 @@ class PlatformSessionBackend:
             metadata={
                 "source": self._issued_by,
                 "role_binding_source": binding_source,
+                "principal_resolution_source": principal.source,
+                "principal_edge_id": principal.edge_id,
                 "email_verified": bool(identity.email_verified),
                 **{k: v for k, v in dict(metadata or {}).items() if isinstance(v, (str, int, float, bool))},
             },
@@ -260,11 +279,13 @@ class BundleLoginConfig:
     """What the server-side login lane needs, resolved from the Connection Hub
     authority registry through the platform's selected provider."""
 
+    connection_hub_bundle_id: str
     provider_id: str
     authority_id: str
     provider: dict[str, Any]
     authority: dict[str, Any]
     authenticator_type: str
+    identity_provider: str
     issuer_url: str
     client_id: str
     client_secret_ref: str
@@ -323,6 +344,11 @@ def bundle_login_config(settings: Any | None = None) -> BundleLoginConfig | None
     authenticator_type = _str(
         authenticator_provider.get("type") or resolved_authenticator.get("provider_type")
     ).lower().replace("-", "_")
+    identity_provider = (
+        "cognito"
+        if "cognito" in authenticator_type
+        else _str(resolved_authenticator.get("provider_type") or authenticator_type).lower()
+    )
     authenticator = _dict(authenticator_provider.get("authenticator")) or authenticator_provider
     issuer_url = _cognito_issuer(authenticator) if "cognito" in authenticator_type else _str(authenticator.get("issuer"))
     client_id = _str(authenticator.get("app_client_id") or authenticator.get("client_id"))
@@ -346,11 +372,13 @@ def bundle_login_config(settings: Any | None = None) -> BundleLoginConfig | None
     )
     auth_cfg = getattr(settings, "AUTH", None)
     return BundleLoginConfig(
+        connection_hub_bundle_id=_str(platform_auth.get("bundle_id")) or "connection-hub@1-0",
         provider_id=_str(platform_auth.get("provider_id")),
         authority_id=_str(platform_auth.get("authority_id")),
         provider=provider,
         authority=_dict(platform_auth.get("authority")),
         authenticator_type=authenticator_type,
+        identity_provider=identity_provider or "oidc",
         issuer_url=issuer_url,
         client_id=client_id,
         client_secret_ref=_str(input_cfg.get("client_secret_ref") or authenticator.get("app_client_secret_ref") or authenticator.get("client_secret_ref")),
@@ -423,6 +451,34 @@ def sliding_policy(settings: Any | None = None) -> SessionPolicy | None:
     return config.policy if config is not None else None
 
 
+def platform_principal_resolver(
+    config: BundleLoginConfig,
+    *,
+    settings: Any,
+    authority: BundleSessionAuthority,
+) -> PlatformPrincipalResolver:
+    """Build the shared edge resolver for this deployment and login lane."""
+
+    from kdcube_ai_app.infra.plugin.bundle_storage import bundle_storage_dir
+
+    tenant = _str(getattr(settings, "TENANT", "")) or "default"
+    project = _str(getattr(settings, "PROJECT", "")) or "default"
+    return PlatformPrincipalResolver(
+        authority=authority,
+        edge_store=ConnectionEdgeStore(
+            bundle_storage_dir(
+                bundle_id=config.connection_hub_bundle_id,
+                tenant=tenant,
+                project=project,
+                ensure=False,
+            )
+        ),
+        tenant=tenant,
+        project=project,
+        configured_authority_id=config.issuer_url,
+    )
+
+
 def grants_resolver(config: BundleLoginConfig) -> GrantsResolver:
     """Roles and permissions for a verified identity: the authority registry's
     grants (subjects, bootstrap rules, defaults), plus the authenticator's group
@@ -431,11 +487,11 @@ def grants_resolver(config: BundleLoginConfig) -> GrantsResolver:
         resolve_platform_grants,
     )
 
-    def resolve(identity: VerifiedIdentity) -> tuple[list[str], list[str], str]:
+    def resolve(identity: VerifiedIdentity, platform_user_id: str) -> tuple[list[str], list[str], str]:
         roles, permissions, source = resolve_platform_grants(
             authority_cfg=config.authority,
             provider_cfg=config.provider,
-            sub=_platform_subject(identity),
+            sub=platform_user_id,
             provider=identity.provider,
             provider_subject=identity.subject,
             verified_claims=identity.claims,
@@ -479,6 +535,7 @@ async def _upstream(config: BundleLoginConfig, *, redirect_uri: str) -> Upstream
             client_secret=client_secret,
             redirect_uri=redirect_uri,
             scopes=config.scopes,
+            provider=config.identity_provider,
         )
     flow = OidcCodeFlow(client, verifier=_verifier_for(config), discover=None)
     cached = _ENDPOINTS.get(config.issuer_url)
@@ -518,10 +575,17 @@ async def platform_login_flow(*, origin: str, settings: Any | None = None) -> Br
     """The flow for one request origin, or ``None`` when the lane is not
     configured. The redirect URI is the registry's when set, else this
     origin's callback route (the Cognito app client must list it)."""
+    from kdcube_ai_app.apps.chat.sdk.config import get_settings
     config = bundle_login_config(settings)
     if config is None:
         return None
+    settings = settings or get_settings()
     authority = get_bundle_session_authority()
+    principal_resolver = platform_principal_resolver(
+        config,
+        settings=settings,
+        authority=authority,
+    )
     redirect_uri = config.redirect_uri or f"{origin.rstrip('/')}{CALLBACK_ROUTE}"
     upstream = await _upstream(config, redirect_uri=redirect_uri)
     cookies = StandardCookiePolicy(
@@ -530,7 +594,12 @@ async def platform_login_flow(*, origin: str, settings: Any | None = None) -> Br
         same_site=config.cookie_same_site,
         domain=config.cookie_domain,
     )
-    backend = PlatformSessionBackend(authority, grants=grants_resolver(config), policy=config.policy)
+    backend = PlatformSessionBackend(
+        authority,
+        grants=grants_resolver(config),
+        principal_resolver=principal_resolver.resolve,
+        policy=config.policy,
+    )
     return BrowserSessionFlow(
         backend=backend,
         attempts=RedisLoginAttemptStore(authority),
@@ -555,6 +624,7 @@ __all__ = [
     "bundle_login_config",
     "grants_resolver",
     "platform_login_flow",
+    "platform_principal_resolver",
     "public_origin",
     "sign_in_bounce_path",
     "settings_platform_auth",

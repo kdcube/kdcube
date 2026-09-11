@@ -188,7 +188,11 @@ def create_platform_auth_manager(
 
     if provider == "bundle":
         from kdcube_ai_app.auth.bundle import BundleSessionAuthManager, SessionOrTokenAuthManager
-        from kdcube_ai_app.auth.bundle.login_lane import accepted_cognito_providers, bundle_login_config
+        from kdcube_ai_app.auth.bundle.login_lane import (
+            accepted_cognito_providers,
+            bundle_login_config,
+            platform_principal_resolver,
+        )
 
         lane = bundle_login_config(settings)
         session_manager = BundleSessionAuthManager(
@@ -209,7 +213,32 @@ def create_platform_auth_manager(
             "on" if lane is not None else "off",
             len(token_providers),
         )
-        manager = SessionOrTokenAuthManager(session_manager, tokens, send_validation_error_details=send_validation_error_details) if tokens else session_manager
+        if tokens is not None:
+            token_user_mapper = None
+            if lane is not None:
+                principal_resolver = platform_principal_resolver(
+                    lane,
+                    settings=settings,
+                    authority=session_manager.authority,
+                )
+
+                async def map_token_user(user):
+                    return await principal_resolver.map_token_user(
+                        user,
+                        provider="cognito",
+                        configured_authority_id=lane.issuer_url,
+                    )
+
+                token_user_mapper = map_token_user
+
+            manager = SessionOrTokenAuthManager(
+                session_manager,
+                tokens,
+                token_user_mapper=token_user_mapper,
+                send_validation_error_details=send_validation_error_details,
+            )
+        else:
+            manager = session_manager
         return with_authenticator_metadata(
             manager,
             descriptor,

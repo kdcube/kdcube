@@ -21,7 +21,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Awaitable, Callable, Iterable, Mapping, Optional
 
 from kdcube_ai_app.auth.AuthManager import AuthManager, AuthenticationError, User
 from kdcube_ai_app.infra.namespaces import ns_key
@@ -730,6 +730,9 @@ async def login_or_register_bundle_session(**kwargs: Any) -> BundleSessionGrant:
     return await get_bundle_session_authority().login_or_register(**kwargs)
 
 
+TokenUserMapper = Callable[[User], Awaitable[User]]
+
+
 class SessionOrTokenAuthManager(AuthManager):
     """The platform authenticator on the session lane when a host may still
     bring its own tokens.
@@ -744,10 +747,18 @@ class SessionOrTokenAuthManager(AuthManager):
     through the headers it sends.
     """
 
-    def __init__(self, session: BundleSessionAuthManager, tokens: AuthManager | None, *, send_validation_error_details: bool = False):
+    def __init__(
+        self,
+        session: BundleSessionAuthManager,
+        tokens: AuthManager | None,
+        *,
+        token_user_mapper: TokenUserMapper | None = None,
+        send_validation_error_details: bool = False,
+    ):
         super().__init__(send_validation_error_details)
         self.session = session
         self.tokens = tokens
+        self.token_user_mapper = token_user_mapper
 
     @staticmethod
     def is_session_token(token: str | None) -> bool:
@@ -758,10 +769,17 @@ class SessionOrTokenAuthManager(AuthManager):
             return self.session
         return self.tokens
 
+    async def _map_token_user(self, manager: AuthManager, user: User) -> User:
+        if manager is self.tokens and self.token_user_mapper is not None:
+            return await self.token_user_mapper(user)
+        return user
+
     async def authenticate(self, token: str) -> User:
         if not token:
             raise AuthenticationError("No token provided")
-        return await self._pick(token).authenticate(token)
+        manager = self._pick(token)
+        user = await manager.authenticate(token)
+        return await self._map_token_user(manager, user)
 
     async def authenticate_with_both(self, access_token: str, id_token: str | None) -> User:
         if not access_token:
@@ -769,7 +787,8 @@ class SessionOrTokenAuthManager(AuthManager):
         manager = self._pick(access_token)
         if manager is self.session:
             return await manager.authenticate(access_token)
-        return await manager.authenticate_with_both(access_token, id_token)
+        user = await manager.authenticate_with_both(access_token, id_token)
+        return await self._map_token_user(manager, user)
 
     async def get_service_token(self) -> str:
         return await self.session.get_service_token()
