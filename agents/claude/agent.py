@@ -75,6 +75,9 @@ from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.telegram import (  # noq
 from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.workspace import (  # noqa: E402
     DirectTurnWorkspace,
 )
+from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.tool_runtime import (  # noqa: E402
+    DirectToolRuntime,
+)
 from kdcube_ai_app.apps.chat.sdk.runtime.direct_harness import (  # noqa: E402
     DirectAgentHarness,
 )
@@ -455,48 +458,9 @@ async def run_one_turn(
             raise RuntimeError(
                 result.error_message or f"Claude exited with {result.exit_code}"
             )
-        expected = (
-            (
-                "research/research-data.xlsx",
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                "external",
-                EXEC_TOOL_ID,
-            ),
-            (
-                "research/research-brief.html",
-                "text/html",
-                "internal",
-                EXEC_TOOL_ID,
-            ),
-            (
-                "research/research-brief.pdf",
-                "application/pdf",
-                "external",
-                "mcp__kdcube_harness__write_pdf",
-            ),
-        )
-        files: list[dict[str, Any]] = []
-        for relpath, mime, visibility, tool_id in expected:
-            path = turn_workspace.current_file(relpath)
-            if not path.is_file():
-                continue
-            files.append(
-                {
-                    "type": "file",
-                    "output": {
-                        "type": "file",
-                        "path": f"{turn_id}/files/{relpath}",
-                        "filename": path.name,
-                        "mime": mime,
-                        "visibility": visibility,
-                    },
-                    "mime": mime,
-                    "visibility": visibility,
-                    "description": f"Claude demo output: {path.name}",
-                    "resource_id": path.stem,
-                    "tool_id": tool_id,
-                }
-            )
+        # Claude reaches the harness tools through the stdio tool server, so the
+        # declarations were recorded by that process into this turn's workspace.
+        files = DirectToolRuntime.declared_files_for_workspace(turn_workspace)
         if files:
             await turn.host_files(files=files, outdir=turn_workspace.runtime_outdir)
         await turn.persist_workspace(

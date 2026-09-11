@@ -310,6 +310,9 @@ def extract_assistant_files_from_blocks(
             "tool_call_id",
             "call_id",
             "sub_type",
+            "content_sha256",
+            "size",
+            "size_bytes",
         ):
             value = meta.get(key)
             if value:

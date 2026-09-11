@@ -35,6 +35,11 @@ from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
 EXEC_TOOL_ID = "execute_python"
 RENDER_TOOL_IDS = ("write_pdf", "write_docx", "write_pptx")
 
+#: Per-turn record of the files this turn's tools declared, written into the
+#: turn's out directory so the hosting process reads the same declarations the
+#: tool server made.
+DECLARED_FILES_FILENAME = ".declared_files.json"
+
 
 def _error(code: str, message: str) -> dict[str, Any]:
     return {
@@ -46,6 +51,40 @@ def _error(code: str, message: str) -> dict[str, Any]:
             "managed": True,
         },
     }
+
+
+def declared_files_path(workspace: DirectTurnWorkspace) -> Path:
+    return workspace.runtime_outdir / DECLARED_FILES_FILENAME
+
+
+def read_declared_files(
+    workspace: DirectTurnWorkspace,
+) -> dict[str, dict[str, Any]]:
+    """Declarations this turn's tools recorded, keyed by relative path."""
+    try:
+        stored = json.loads(
+            declared_files_path(workspace).read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(stored, dict):
+        return {}
+    return {
+        str(key): dict(value)
+        for key, value in stored.items()
+        if isinstance(value, dict)
+    }
+
+
+def _existing_declared_rows(
+    workspace: DirectTurnWorkspace,
+    declared: Mapping[str, Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for relative, row in declared.items():
+        if resolve_artifact_path(workspace.runtime_outdir, relative).is_file():
+            rows.append(dict(row))
+    return rows
 
 
 @contextmanager
@@ -99,6 +138,12 @@ class DirectToolRuntime:
             if tool_config is None
             else self.tool_config.allowed_tool_names_by_alias
         )
+        # Files this turn's tools declared, keyed by artifact-root-relative
+        # path. A rewrite of the same path replaces the earlier declaration.
+        # Kept in the turn's own out directory because a foreign agent loop can
+        # reach these tools through the stdio tool server, which is a different
+        # process than the one that hosts the turn.
+        self._declared_files: dict[str, dict[str, Any]] = {}
         self.tool_subsystem = ToolSubsystem(
             service=service,
             comm=comm,
@@ -234,7 +279,95 @@ class DirectToolRuntime:
             "contract": contract_rewrites,
             "code": code_rewrites,
         }
+        self._record_declared_files(result, tool_id=EXEC_TOOL_ID)
         return result
+
+    def _record_declared_files(
+        self, result: Mapping[str, Any], *, tool_id: str
+    ) -> None:
+        """Remember the files a tool declared for this turn.
+
+        ``visibility`` comes from the declaration, not from the caller: the
+        docs make the declaring side the authority on whether a file is
+        emitted to the user (``external``) or kept for later agent use
+        (``internal``).
+        """
+        if not isinstance(result, Mapping) or not result.get("ok"):
+            return
+        for item in result.get("items") or []:
+            if not isinstance(item, Mapping) or item.get("error"):
+                continue
+            output = item.get("output")
+            if not isinstance(output, Mapping):
+                continue
+            if str(output.get("type") or "").strip() != "file":
+                continue
+            relative = str(output.get("path") or "").strip()
+            if not relative:
+                continue
+            filename = str(output.get("filename") or "").strip() or Path(relative).name
+            mime = str(output.get("mime") or "").strip() or (
+                mimetypes.guess_type(filename)[0] or "application/octet-stream"
+            )
+            visibility = (
+                str(output.get("visibility") or item.get("visibility") or "external")
+                .strip()
+                .lower()
+                or "external"
+            )
+            description = (
+                str(output.get("description") or item.get("summary") or "").strip()
+                or f"Agent output: {filename}"
+            )
+            self._declared_files[relative] = {
+                "type": "file",
+                "output": {
+                    "type": "file",
+                    "path": relative,
+                    "filename": filename,
+                    "mime": mime,
+                    "visibility": visibility,
+                },
+                "mime": mime,
+                "visibility": visibility,
+                "description": description,
+                "resource_id": str(item.get("artifact_id") or "").strip()
+                or Path(filename).stem,
+                "tool_id": tool_id,
+            }
+        self._write_declared_files()
+
+    @property
+    def _declared_files_path(self) -> Path:
+        return declared_files_path(self.workspace)
+
+    def _write_declared_files(self) -> None:
+        path = self._declared_files_path
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(self._declared_files, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            self.logger.log(
+                f"[direct_hosting.tools] could not record declared files: {exc}",
+                level="WARNING",
+            )
+
+    def declared_files(self) -> list[dict[str, Any]]:
+        """Rows for ``DirectAgentTurn.host_files`` covering every file this
+        turn's tools declared and that exists in the turn workspace."""
+        merged = dict(read_declared_files(self.workspace))
+        merged.update(self._declared_files)
+        return _existing_declared_rows(self.workspace, merged)
+
+    @staticmethod
+    def declared_files_for_workspace(
+        workspace: DirectTurnWorkspace,
+    ) -> list[dict[str, Any]]:
+        """The same rows for a host whose tools ran in the stdio tool server."""
+        return _existing_declared_rows(workspace, read_declared_files(workspace))
 
     def _current_artifact(self, path: str, *, extension: str) -> tuple[str, Path]:
         normalized, _rewrites, error = normalize_exec_contract_for_turn(
@@ -322,7 +455,7 @@ class DirectToolRuntime:
                 "render_output_missing", f"renderer did not create {output_rel}"
             )
         mime = mimetypes.guess_type(output.name)[0] or "application/octet-stream"
-        return {
+        rendered_result = {
             "ok": True,
             "operation": operation,
             "source_path": source_rel,
@@ -345,6 +478,8 @@ class DirectToolRuntime:
                 }
             ],
         }
+        self._record_declared_files(rendered_result, tool_id=operation)
+        return rendered_result
 
     async def write_pdf(
         self, *, source_path: str, output_path: str, title: str = ""

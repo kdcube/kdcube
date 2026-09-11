@@ -228,39 +228,10 @@ async def host_demo_outputs(
     *,
     turn: Any,
     workspace: DirectTurnWorkspace,
+    runtime: DirectToolRuntime,
 ) -> None:
-    expected = (
-        (
-            "research/research-data.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "external",
-            EXEC_TOOL_ID,
-        ),
-        ("research/research-brief.html", "text/html", "internal", EXEC_TOOL_ID),
-        ("research/research-brief.pdf", "application/pdf", "external", "write_pdf"),
-    )
-    files: list[dict[str, Any]] = []
-    for relpath, mime, visibility, tool_id in expected:
-        path = workspace.current_file(relpath)
-        if not path.is_file():
-            continue
-        files.append(
-            {
-                "type": "file",
-                "output": {
-                    "type": "file",
-                    "path": f"{workspace.turn_id}/files/{relpath}",
-                    "filename": path.name,
-                    "mime": mime,
-                    "visibility": visibility,
-                },
-                "mime": mime,
-                "visibility": visibility,
-                "description": f"LangGraph demo output: {path.name}",
-                "resource_id": path.stem,
-                "tool_id": tool_id,
-            }
-        )
+    """Host what the turn's tools declared, with the visibility they declared."""
+    files = runtime.declared_files()
     if files:
         await turn.host_files(files=files, outdir=workspace.runtime_outdir)
 
@@ -311,7 +282,7 @@ async def run_one_turn(
         answer, called_tools = await stream_turn(
             graph, model_prompt, run_config, turn.comm
         )
-        await host_demo_outputs(turn=turn, workspace=workspace)
+        await host_demo_outputs(turn=turn, workspace=workspace, runtime=runtime)
         await turn.persist_workspace(
             outdir=workspace.runtime_outdir,
             workdir=workspace.workdir,

@@ -1589,3 +1589,16 @@ def test_claude_runner_names_a_missing_claude_credential(tmp_path: Path) -> None
     assert "no Claude credential available" in message
     assert "platform.services.anthropic.api_key" in message
     assert "claude_code_session.type: local" in message
+
+
+@pytest.mark.parametrize("adapter", ("langgraph", "claude"))
+def test_framework_neutral_examples_host_what_the_agent_declared(
+    adapter: str,
+) -> None:
+    # These adapters write no harness timeline, so nothing hosts their declared
+    # files unless the example does. Hosting from a fixed list of expected
+    # filenames only holds while the prompt dictates them, and it decides the
+    # visibility that the declaring side owns.
+    source = (AGENTS_ROOT / adapter / "agent.py").read_text(encoding="utf-8")
+    assert "declared_files" in source
+    assert "for relpath, mime, visibility, tool_id in" not in source

@@ -650,6 +650,26 @@ def _artifact_files_from_timeline(timeline: Mapping[str, Any]) -> list[dict[str,
             if _file_delivery_path(file_item) in represented_paths:
                 continue
             _append_file(files, seen, file_item)
+
+    # A framework-neutral adapter writes no harness timeline, so its hosted
+    # files reach the turn log only as the minimal writer's react.tool.result
+    # blocks, whose conv:fi: ref lives in the JSON body rather than the block
+    # path. Read them with the same extractor conversation reload uses.
+    if isinstance(blocks, list):
+        from kdcube_ai_app.apps.chat.sdk.runtime.harness.timeline.turn_view import (
+            extract_assistant_files_from_blocks,
+        )
+
+        for row in extract_assistant_files_from_blocks(list(blocks)):
+            artifact_path = str(row.get("artifact_path") or "").strip()
+            if not artifact_path.startswith("conv:fi:"):
+                continue
+            if ".user.attachments/" in artifact_path or ".external." in artifact_path:
+                continue
+            file_item = _file_item_from_meta(dict(row), logical_path=artifact_path)
+            if _file_delivery_path(file_item) in represented_paths:
+                continue
+            _append_file(files, seen, file_item)
     return files
 
 

@@ -503,6 +503,12 @@ def _assistant_file_block(row: Dict[str, Any], *, turn_id: str, ts: str, index: 
     tool_id = str(row.get("tool_id") or "").strip()
     if tool_id:
         meta_json["tool_id"] = tool_id
+    # The content signature travels with the block so a transport that already
+    # delivered this file identifies it by the same key it recorded then.
+    for signature_key in ("content_sha256", "size", "size_bytes"):
+        value = row.get(signature_key)
+        if value not in ("", None):
+            meta_json[signature_key] = value
     return {
         "type": "react.tool.result",
         "turn_id": turn_id,
