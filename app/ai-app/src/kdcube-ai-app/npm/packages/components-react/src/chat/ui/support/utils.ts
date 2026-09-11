@@ -5,12 +5,9 @@
  * engine package instead of the widget's local `service.ts`.
  */
 
-import remarkGfm from 'remark-gfm'
-import remarkBreaks from 'remark-breaks'
 import type { BannerTone, StepStatus } from '@kdcube/components-core/chat'
 
-/** Plugin list used by every MarkdownBlock invocation. */
-export const markdownPlugins = [remarkGfm, remarkBreaks]
+export { closeStreamingMarkdown, markdownPlugins } from '../../../markdown/support.ts'
 
 export function timestampValue(value?: string): number {
   const parsed = value ? Date.parse(value) : NaN
@@ -68,17 +65,6 @@ export function stepTone(status: StepStatus): string {
     default:
       return 'bg-[var(--accent-soft)] text-[var(--accent)]'
   }
-}
-
-/** Auto-close any unclosed triple-fenced code block so partial markdown
- *  streamed from the model doesn't break the page layout. */
-export function closeStreamingMarkdown(text: string): string {
-  const tripleBackticks = text.match(/```/g)?.length || 0
-  const tripleTildes = text.match(/~~~/g)?.length || 0
-  let next = text
-  if (tripleBackticks % 2 === 1) next += '\n```'
-  if (tripleTildes % 2 === 1) next += '\n~~~'
-  return next
 }
 
 export function safeJsonParse<T>(raw: string, fallback: T): T {

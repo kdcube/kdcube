@@ -17,6 +17,10 @@
       "types": "./dist/chat/index.d.ts",
       "import": "./dist/chat/index.js"
     },
+    "./markdown": {
+      "types": "./dist/markdown/index.d.ts",
+      "import": "./dist/markdown/index.js"
+    },
     "./canvas": {
       "types": "./dist/canvas/index.d.ts",
       "import": "./dist/canvas/index.js"

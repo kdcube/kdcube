@@ -123,6 +123,7 @@ React bindings
 | --- | --- |
 | `@kdcube/components-react` | shared React exports and `CanvasBoard` |
 | `@kdcube/components-react/chat` | chat provider, hooks, default UI |
+| `@kdcube/components-react/markdown` | shared Markdown message renderer |
 | `@kdcube/components-react/canvas` | reusable React canvas/pin-board component |
 
 ## Verification

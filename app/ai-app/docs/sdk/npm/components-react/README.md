@@ -1,15 +1,16 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/npm/components-react/README.md
 title: "@kdcube/components-react"
-summary: "React bindings and reusable UI over @kdcube/components-core: chat provider/hooks/default UI and the CanvasBoard pin-board component."
+summary: "React bindings and reusable UI over @kdcube/components-core: chat, Markdown, scene, and canvas components."
 status: implementation
-tags: ["sdk", "npm", "components-react", "react", "hooks", "provider", "chat", "canvas"]
-updated_at: 2026-06-23
+tags: ["sdk", "npm", "components-react", "react", "hooks", "provider", "chat", "markdown", "canvas"]
+updated_at: 2026-09-11
 keywords:
   [
     "@kdcube/components-react",
     "ChatStoreProvider",
     "Chat",
+    "MarkdownBlock",
     "CanvasBoard",
     "useChatEngine",
     "useChatState",
@@ -29,6 +30,7 @@ and DOM event wiring.
 | --- | --- |
 | `@kdcube/components-react` | Shared React export surface. |
 | `@kdcube/components-react/chat` | `ChatStoreProvider`, hooks, `Chat`, `ChatShell`, `useChatViewModel`. |
+| `@kdcube/components-react/markdown` | `MarkdownBlock`, the GFM and line-break renderer used by chat-like surfaces. |
 | `@kdcube/components-react/canvas` | `CanvasBoard` plus re-exported core canvas types/helpers. |
 | `@kdcube/components-react/scene` | Scene-host shell: component registry, host plumbing, rail/windows, external-panel surface routing (`externalPanelSurfaceRegistrations`). Import `sceneHost.css` for the skin. |
 
@@ -65,6 +67,20 @@ Multiple providers mean multiple isolated chat engines.
 
 `bundleId` is the current field name in the TypeScript config and backend API. In
 builder language, treat it as the app id/version.
+
+## Markdown
+
+```tsx
+import { MarkdownBlock } from '@kdcube/components-react/markdown'
+
+<MarkdownBlock content={message.body} compact />
+```
+
+`MarkdownBlock` is the content renderer used by the reference chat UI. Apps with
+their own message transport or thread model can reuse it without mounting the
+chat engine. It supports GFM, preserves ordinary line breaks, opens links in a
+new tab, and closes an unfinished fenced block while content is streaming. The
+host widget owns the contextual `.markdown-body` styles.
 
 ## Canvas
 
@@ -107,4 +123,3 @@ cd app/ai-app/src/kdcube-ai-app/npm/packages/components-react
 npm run typecheck
 npm run build
 ```
-

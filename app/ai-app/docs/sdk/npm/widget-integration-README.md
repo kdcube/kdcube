@@ -4,7 +4,7 @@ title: "Widget Integration"
 summary: "How SDK widgets consume @kdcube/components-* through npm:// shared sources: app UI config, materialization, Vite aliases, and runtime expectations."
 status: implementation
 tags: ["sdk", "npm", "components", "widget", "vite", "shared-sources", "npm-scheme"]
-updated_at: 2026-06-23
+updated_at: 2026-09-11
 keywords:
   [
     "widget integration",
@@ -118,6 +118,23 @@ main_view:
 ```
 
 This keeps widgets from reaching into another app's private UI code.
+
+## Markdown In App-Owned Threads
+
+An app that owns its message transport and thread model can reuse the same body
+renderer as platform chat without mounting the chat engine:
+
+```yaml
+shared_sources:
+  components_react_markdown:
+    src_folder: npm://components-react/src/markdown
+    target: _shared/components-react/markdown
+```
+
+Alias `@kdcube/components-react/markdown` to the materialized `index.ts`, add
+`react-markdown`, `remark-gfm`, and `remark-breaks` to the widget package, then
+render message bodies with `MarkdownBlock`. Shared sources contain source code;
+the widget's local dependencies continue to supply its `node_modules`.
 
 ## Boundaries
 
