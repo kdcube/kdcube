@@ -2442,3 +2442,221 @@ async def test_resolver_failure_falls_back_to_mapping_required(monkeypatch):
     monkeypatch.setattr(bundle_operations, "call_bundle_operation", _broken)
     monkeypatch.setattr(webapp, "_linked_telegram_user", lambda entrypoint, *, user_id=None: None)
     assert await webapp._resolve_linked_telegram_user(_EdgeFallbackEntrypoint(), user_id="user-1") is None
+
+
+def _minimal_turn_log_file_block(
+    *,
+    turn_id: str,
+    call_id: str,
+    relative: str,
+    filename: str,
+    mime: str,
+    visibility: str,
+) -> dict:
+    """The shape build_minimal_turn_log_payload writes for a hosted file: a
+    tool-call block whose JSON body carries the conv:fi: ref."""
+    return {
+        "type": "react.tool.result",
+        "turn_id": turn_id,
+        "turn": turn_id,
+        "call_id": call_id,
+        "mime": "application/json",
+        "path": f"conv:tc:{turn_id}.{call_id}.result",
+        "text": json.dumps(
+            {
+                "artifact_path": f"conv:fi:conv_c1.{turn_id}.{relative}",
+                "physical_path": f"{turn_id}/{relative}",
+                "mime": mime,
+                "kind": "file",
+                "visibility": visibility,
+                "filename": filename,
+                "hosted_uri": f"file:///store/{filename}",
+                "key": f"cb/attachments/{turn_id}/{relative}",
+            }
+        ),
+        "meta": {"tool_call_id": call_id},
+    }
+
+
+def test_telegram_renderer_delivers_files_a_framework_neutral_adapter_recorded():
+    # LangGraph and Claude Code write no harness timeline, so their hosted
+    # files reach the turn log only in the minimal writer's shape.
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bot import (
+        render_telegram_messages_from_timeline,
+    )
+
+    messages = render_telegram_messages_from_timeline(
+        timeline={
+            "turn_id": "turn_01_abcdef",
+            "blocks": [
+                {"path": "conv:ar:turn_01_abcdef.user.prompt", "text": "research it"},
+                _minimal_turn_log_file_block(
+                    turn_id="turn_01_abcdef",
+                    call_id="code_exec_0",
+                    relative="files/research/research-data.xlsx",
+                    filename="research-data.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    visibility="external",
+                ),
+                _minimal_turn_log_file_block(
+                    turn_id="turn_01_abcdef",
+                    call_id="code_exec_1",
+                    relative="files/research/research-brief.pdf",
+                    filename="research-brief.pdf",
+                    mime="application/pdf",
+                    visibility="external",
+                ),
+            ],
+        },
+        react_turn={"answer": "Done."},
+    )
+
+    delivered = [
+        file_item["filename"] for item in messages for file_item in (item.files or ())
+    ]
+    assert delivered == ["research-data.xlsx", "research-brief.pdf"]
+
+
+def test_telegram_renderer_keeps_an_internal_file_out_of_the_chat():
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bot import (
+        render_telegram_messages_from_timeline,
+    )
+
+    messages = render_telegram_messages_from_timeline(
+        timeline={
+            "turn_id": "turn_01_abcdef",
+            "blocks": [
+                _minimal_turn_log_file_block(
+                    turn_id="turn_01_abcdef",
+                    call_id="code_exec_0",
+                    relative="files/research/research-brief.html",
+                    filename="research-brief.html",
+                    mime="text/html",
+                    visibility="internal",
+                ),
+            ],
+        },
+        react_turn={"answer": "Done."},
+    )
+
+    assert [file_item for item in messages for file_item in (item.files or ())] == []
+
+
+def test_telegram_renderer_does_not_deliver_a_file_twice_from_both_writers():
+    # A harness timeline carries the rich block and the minimal writer's
+    # supplemental block for the same hosted file.
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bot import (
+        render_telegram_messages_from_timeline,
+    )
+
+    turn_id = "turn_02_abcdef"
+    relative = "files/research/research-brief.pdf"
+    messages = render_telegram_messages_from_timeline(
+        timeline={
+            "turn_id": turn_id,
+            "blocks": [
+                {
+                    "type": "react.tool.result",
+                    "turn_id": turn_id,
+                    "turn": turn_id,
+                    "path": f"conv:fi:conv_c1.{turn_id}.{relative}",
+                    "mime": "application/json",
+                    "text": json.dumps(
+                        {
+                            "artifact_path": f"conv:fi:conv_c1.{turn_id}.{relative}",
+                            "filename": "research-brief.pdf",
+                            "mime": "application/pdf",
+                            "kind": "file",
+                            "visibility": "external",
+                            "hosted_uri": "file:///store/research-brief.pdf",
+                            "key": f"cb/attachments/{turn_id}/{relative}",
+                        }
+                    ),
+                    "meta": {},
+                },
+                _minimal_turn_log_file_block(
+                    turn_id=turn_id,
+                    call_id="code_exec_0",
+                    relative=relative,
+                    filename="research-brief.pdf",
+                    mime="application/pdf",
+                    visibility="external",
+                ),
+            ],
+        },
+        react_turn={"answer": "Done."},
+    )
+
+    delivered = [
+        file_item["filename"] for item in messages for file_item in (item.files or ())
+    ]
+    assert delivered == ["research-brief.pdf"]
+
+
+def test_telegram_renderer_still_ignores_a_caller_attachment():
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bot import (
+        render_telegram_messages_from_timeline,
+    )
+
+    messages = render_telegram_messages_from_timeline(
+        timeline={
+            "turn_id": "turn_01_abcdef",
+            "blocks": [
+                _minimal_turn_log_file_block(
+                    turn_id="turn_01_abcdef",
+                    call_id="code_exec_0",
+                    relative="user.attachments/research-request.md",
+                    filename="research-request.md",
+                    mime="text/markdown",
+                    visibility="external",
+                ),
+            ],
+        },
+        react_turn={"answer": "Done."},
+    )
+
+    assert [file_item for item in messages for file_item in (item.files or ())] == []
+
+
+def test_a_streamed_file_is_not_delivered_again_from_the_minimal_record():
+    # A hosted turn streams files live and then excludes them by delivery key.
+    # The key carries a content signature, so the minimal turn-log block must
+    # carry it too or the same file would be sent a second time.
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bot import (
+        _file_delivery_key,
+        render_telegram_messages_from_timeline,
+    )
+    from kdcube_ai_app.apps.chat.sdk.solutions.conversation.record import (
+        _assistant_file_block,
+    )
+
+    turn_id = "turn_01_abcdef"
+    hosted_row = {
+        "filename": "research-brief.pdf",
+        "mime": "application/pdf",
+        "visibility": "external",
+        "logical_path": f"conv:fi:conv_c1.{turn_id}.files/research/research-brief.pdf",
+        "physical_path": f"{turn_id}/files/research/research-brief.pdf",
+        "hosted_uri": "file:///store/research-brief.pdf",
+        "key": f"cb/attachments/{turn_id}/files/research/research-brief.pdf",
+        "content_sha256": "0153" * 16,
+        "size": 66418,
+        "tool_id": "write_pdf",
+    }
+    streamed_key = _file_delivery_key(
+        {
+            "url": hosted_row["hosted_uri"],
+            "filename": hosted_row["filename"],
+            "content_sha256": hosted_row["content_sha256"],
+            "size": hosted_row["size"],
+        }
+    )
+
+    block = _assistant_file_block(hosted_row, turn_id=turn_id, ts="2026-09-11T00:00:00Z", index=0)
+    messages = render_telegram_messages_from_timeline(
+        timeline={"turn_id": turn_id, "blocks": [block]},
+        react_turn={"answer": "Done."},
+        exclude_file_keys={streamed_key},
+    )
+
+    assert [file_item for item in messages for file_item in (item.files or ())] == []

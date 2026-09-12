@@ -75,6 +75,9 @@ from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.telegram import (  # noq
 from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.workspace import (  # noqa: E402
     DirectTurnWorkspace,
 )
+from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.tool_runtime import (  # noqa: E402
+    DirectToolRuntime,
+)
 from kdcube_ai_app.apps.chat.sdk.runtime.direct_harness import (  # noqa: E402
     DirectAgentHarness,
 )
@@ -137,6 +140,26 @@ def load_config(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("configuration root must be a mapping")
     return value
+
+
+def _require_claude_credential(env: dict[str, str]) -> None:
+    """A git transcript store points the CLI at its own config directory.
+
+    The credential is therefore either supplied by the descriptor or linked in
+    from this machine's Claude Code login. With neither, the CLI subprocess
+    reports `Not logged in` and names no cause.
+    """
+    if env.get("ANTHROPIC_API_KEY") or env.get("CLAUDE_CODE_KEY"):
+        return
+    if (Path.home() / ".claude" / ".credentials.json").is_file():
+        return
+    raise RuntimeError(
+        "no Claude credential available: the git transcript store redirects the "
+        "CLI config directory, so this machine's ~/.claude login is linked in "
+        "only when it exists. Authenticate Claude Code here, set "
+        "platform.services.anthropic.api_key in descriptors.local/secrets.yaml, "
+        "or select claude_code_session.type: local."
+    )
 
 
 async def descriptor_claude_cli_credentials() -> dict[str, str]:
@@ -435,48 +458,9 @@ async def run_one_turn(
             raise RuntimeError(
                 result.error_message or f"Claude exited with {result.exit_code}"
             )
-        expected = (
-            (
-                "research/research-data.xlsx",
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                "external",
-                EXEC_TOOL_ID,
-            ),
-            (
-                "research/research-brief.html",
-                "text/html",
-                "internal",
-                EXEC_TOOL_ID,
-            ),
-            (
-                "research/research-brief.pdf",
-                "application/pdf",
-                "external",
-                "mcp__kdcube_harness__write_pdf",
-            ),
-        )
-        files: list[dict[str, Any]] = []
-        for relpath, mime, visibility, tool_id in expected:
-            path = turn_workspace.current_file(relpath)
-            if not path.is_file():
-                continue
-            files.append(
-                {
-                    "type": "file",
-                    "output": {
-                        "type": "file",
-                        "path": f"{turn_id}/files/{relpath}",
-                        "filename": path.name,
-                        "mime": mime,
-                        "visibility": visibility,
-                    },
-                    "mime": mime,
-                    "visibility": visibility,
-                    "description": f"Claude demo output: {path.name}",
-                    "resource_id": path.stem,
-                    "tool_id": tool_id,
-                }
-            )
+        # Claude reaches the harness tools through the stdio tool server, so the
+        # declarations were recorded by that process into this turn's workspace.
+        files = DirectToolRuntime.declared_files_for_workspace(turn_workspace)
         if files:
             await turn.host_files(files=files, outdir=turn_workspace.runtime_outdir)
         await turn.persist_workspace(
@@ -612,6 +596,8 @@ async def main_async(args: argparse.Namespace) -> None:
         print(
             f"Claude transcript branch: {claude_code_session_branch_ref(session_store)}"
         )
+        if not args.check:
+            _require_claude_credential(cfg.env)
     if exec_runtime is not None and not args.check:
         image = verify_docker_image(exec_runtime)
         print(f"isolated code-execution image: {image}")

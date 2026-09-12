@@ -1551,3 +1551,54 @@ async def test_langgraph_file_tools_delegate_to_the_turn_runtime() -> None:
         output_path="files/research/brief.pdf",
         title="Brief",
     )
+
+
+def test_claude_runner_names_a_missing_claude_credential(tmp_path: Path) -> None:
+    """The git transcript store points the CLI at its own config directory, so a
+    login in the operator's ~/.claude is reachable only when the runner links it
+    in. With no credential at all the runner must name the remedies instead of
+    letting the CLI answer `Not logged in` with no cause."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "claude_runner_under_test", AGENTS_ROOT / "claude" / "agent.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    module._require_claude_credential({"ANTHROPIC_API_KEY": "sk-configured"})
+    module._require_claude_credential({"CLAUDE_CODE_KEY": "sk-configured"})
+
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    (home / ".claude" / ".credentials.json").write_text("{}", encoding="utf-8")
+    original = os.environ.get("HOME")
+    os.environ["HOME"] = str(home)
+    try:
+        module._require_claude_credential({})
+        os.environ["HOME"] = str(tmp_path / "no-login")
+        with pytest.raises(RuntimeError) as failure:
+            module._require_claude_credential({})
+    finally:
+        if original is None:
+            os.environ.pop("HOME", None)
+        else:
+            os.environ["HOME"] = original
+
+    message = str(failure.value)
+    assert "no Claude credential available" in message
+    assert "platform.services.anthropic.api_key" in message
+    assert "claude_code_session.type: local" in message
+
+
+@pytest.mark.parametrize("adapter", ("langgraph", "claude"))
+def test_framework_neutral_examples_host_what_the_agent_declared(
+    adapter: str,
+) -> None:
+    # These adapters write no harness timeline, so nothing hosts their declared
+    # files unless the example does. Hosting from a fixed list of expected
+    # filenames only holds while the prompt dictates them, and it decides the
+    # visibility that the declaring side owns.
+    source = (AGENTS_ROOT / adapter / "agent.py").read_text(encoding="utf-8")
+    assert "declared_files" in source
+    assert "for relpath, mime, visibility, tool_id in" not in source

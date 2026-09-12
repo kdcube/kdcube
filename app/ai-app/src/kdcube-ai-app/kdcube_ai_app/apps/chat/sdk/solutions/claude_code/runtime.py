@@ -328,6 +328,70 @@ _LIVE_CONTROL_LEFTOVERS = (
 )
 
 
+CLI_CREDENTIALS_FILENAME = ".credentials.json"
+
+
+def _materialize_cli_credentials(
+    *,
+    local_root: pathlib.Path,
+    env: dict[str, str],
+    logger=None,
+) -> str | None:
+    """Link this machine's Claude CLI credential into the store checkout.
+
+    The checkout is CLAUDE_CONFIG_DIR, so an existing CLI login is invisible to
+    the subprocess without it. Must run after the bootstrap clear/restore, which
+    removes every child except .git. Skipped when the descriptor supplies a key:
+    that deployment has already stated how it authenticates. The link is removed
+    again unless git confirms the path is ignored, so a lineage that once tracked
+    the name can never stage a credential.
+    """
+    log = logger or logging.getLogger("ClaudeCodeRuntime")
+    if env.get("ANTHROPIC_API_KEY") or env.get("CLAUDE_CODE_KEY"):
+        return None
+    source = pathlib.Path.home() / ".claude" / CLI_CREDENTIALS_FILENAME
+    if not source.is_file():
+        return None
+    target = local_root / CLI_CREDENTIALS_FILENAME
+    try:
+        if target.is_symlink() or target.exists():
+            target.unlink()
+        target.symlink_to(source)
+    except OSError as exc:
+        log.warning("[claude.session] cannot link the CLI credential: %s", exc)
+        return None
+    def _is_ignored() -> bool:
+        return subprocess.run(
+            ["git", "-C", str(local_root), "check-ignore", "-q", CLI_CREDENTIALS_FILENAME],
+            capture_output=True,
+        ).returncode == 0
+
+    ignored = _is_ignored()
+    if not ignored:
+        # A lineage created before the managed .gitignore can carry this name as
+        # a tracked path, and ignore rules never apply to tracked paths. Drop it
+        # from the index; the end-of-turn snapshot commits the removal, so the
+        # lineage stops carrying it after one turn.
+        subprocess.run(
+            [
+                "git", "-C", str(local_root), "rm", "--cached", "--ignore-unmatch",
+                "-q", CLI_CREDENTIALS_FILENAME,
+            ],
+            capture_output=True,
+        )
+        ignored = _is_ignored()
+    if not ignored:
+        target.unlink(missing_ok=True)
+        log.warning(
+            "[claude.session] %s is not ignored by this lineage; the CLI login stays "
+            "unused rather than risking a staged credential",
+            CLI_CREDENTIALS_FILENAME,
+        )
+        return None
+    log.info("[claude.session] linked the host CLI credential into %s", local_root)
+    return str(target)
+
+
 def _ensure_session_gitignore(*, local_root: pathlib.Path) -> bool:
     gitignore_path = local_root / ".gitignore"
     if gitignore_path.exists():
@@ -656,6 +720,8 @@ async def run_claude_code_turn(
         and kind in set(session_store.publish_turn_kinds)
     )
     effective_resume_existing = bool(resume_existing)
+    agent_config = getattr(agent, "config", None)
+    agent_env = getattr(agent_config, "env", None) if agent_config is not None else None
 
     # Point the Claude Code CLI at the session-store's local_root so the
     # session JSONL it writes (under <CLAUDE_CONFIG_DIR>/projects/...) lands
@@ -663,8 +729,6 @@ async def run_claude_code_turn(
     # to git. Without this the CLI writes JSONLs to $HOME/.claude/projects/...,
     # local_root stays empty, and publish creates empty lineage branches.
     if session_store is not None and session_store.implementation == "git":
-        agent_config = getattr(agent, "config", None)
-        agent_env = getattr(agent_config, "env", None) if agent_config is not None else None
         if isinstance(agent_env, dict) and "CLAUDE_CONFIG_DIR" not in agent_env:
             agent_env["CLAUDE_CONFIG_DIR"] = str(session_store.local_root)
 
@@ -693,6 +757,13 @@ async def run_claude_code_turn(
                 _retarget_session_project_dir,
                 local_root=pathlib.Path(session_store.local_root),
                 cwd=workspace_cwd,
+                logger=logger,
+            )
+        if session_store.implementation == "git":
+            await asyncio.to_thread(
+                _materialize_cli_credentials,
+                local_root=pathlib.Path(session_store.local_root),
+                env=agent_env if isinstance(agent_env, dict) else {},
                 logger=logger,
             )
         if refresh_support_files is not None:
@@ -734,6 +805,12 @@ async def run_claude_code_turn(
                     cwd=workspace_cwd,
                     logger=logger,
                 )
+            await asyncio.to_thread(
+                _materialize_cli_credentials,
+                local_root=pathlib.Path(session_store.local_root),
+                env=agent_env if isinstance(agent_env, dict) else {},
+                logger=logger,
+            )
             if refresh_support_files is not None:
                 refresh_support_files()
             result = await agent.run_turn(

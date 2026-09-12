@@ -310,7 +310,9 @@ def _prepare_split_writable_tree(path: pathlib.Path) -> None:
     for item in [path, *path.rglob("*")]:
         try:
             if item.is_dir():
-                os.chmod(item, 0o777)
+                # setgid so files a root container creates here inherit the
+                # host group and stay writable by the harness process.
+                os.chmod(item, 0o2777)
             elif item.is_file():
                 os.chmod(item, 0o666)
         except Exception:

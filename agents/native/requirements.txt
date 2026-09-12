@@ -16,6 +16,7 @@ mdit-py-plugins
 linkify-it-py
 pygments
 jinja2
+openpyxl
 python-docx
 python-pptx
 lxml

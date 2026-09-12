@@ -371,10 +371,14 @@ class _RetryingFakeAgent:
     def __init__(self, root: Path):
         self.root = root
         self.calls: list[dict[str, object]] = []
+        self.credential_visible: list[bool] = []
         self.config = SimpleNamespace(env={})
 
     async def run_turn(self, prompt: str, *, kind: str = "regular", resume_existing: bool = False) -> ClaudeCodeRunResult:
         self.calls.append({"prompt": prompt, "kind": kind, "resume_existing": resume_existing})
+        self.credential_visible.append(
+            (self.root / runtime_module.CLI_CREDENTIALS_FILENAME).is_symlink()
+        )
         if len(self.calls) == 1:
             return ClaudeCodeRunResult(
                 status="failed",
@@ -419,10 +423,13 @@ class _RetryingFakeAgent:
 
 
 @pytest.mark.asyncio
-async def test_run_claude_code_turn_self_heals_stale_session_checkout_and_retries(tmp_path: Path):
+async def test_run_claude_code_turn_self_heals_stale_session_checkout_and_retries(
+    tmp_path: Path, monkeypatch
+):
     remote_repo = _init_bare_repo(tmp_path / "remote.git")
     config = _config(tmp_path, git_repo=remote_repo)
     branch_ref = claude_code_session_branch_ref(config)
+    _host_login(tmp_path, monkeypatch)
 
     seed_repo = _init_git_repo(
         tmp_path / "seed-stale-lineage",
@@ -450,6 +457,7 @@ async def test_run_claude_code_turn_self_heals_stale_session_checkout_and_retrie
     assert len(agent.calls) == 2
     assert agent.calls[0]["resume_existing"] is True
     assert agent.calls[1]["resume_existing"] is True
+    assert agent.credential_visible == [True, True]
     assert stale_file.exists() is False
     assert (config.local_root / "projects" / "-fixture" / "history.json").read_text(encoding="utf-8") == "{\"turns\": 4}\n"
 
@@ -732,3 +740,96 @@ async def test_run_claude_code_turn_retargets_project_dir_for_cross_node_resume(
     expected_name = runtime_module._sanitize_cwd_for_claude_projects(current_cwd)
     assert (config.local_root / "projects" / expected_name / "abc.jsonl").is_file()
     assert not (config.local_root / "projects" / "-old-host-bundle-issue").exists()
+
+
+def _checkout(tmp_path: Path, *, ignored: bool = True, tracked_credential: bool = False) -> Path:
+    files = {"README.md": "# store\n"}
+    if ignored:
+        files[".gitignore"] = runtime_module.CLAUDE_CODE_SESSION_GITIGNORE
+    root = _init_git_repo(tmp_path / "checkout", files=files)
+    if tracked_credential:
+        (root / runtime_module.CLI_CREDENTIALS_FILENAME).write_text("stale", encoding="utf-8")
+        subprocess.run(
+            ["git", "-C", str(root), "add", "-f", runtime_module.CLI_CREDENTIALS_FILENAME],
+            check=True, capture_output=True, text=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(root), "commit", "-m", "tracked credential"],
+            check=True, capture_output=True, text=True,
+        )
+    return root
+
+
+def _host_login(tmp_path: Path, monkeypatch) -> Path:
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    source = home / ".claude" / runtime_module.CLI_CREDENTIALS_FILENAME
+    source.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    return source
+
+
+def _is_tracked(root: Path, name: str) -> bool:
+    proc = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "--error-unmatch", name],
+        capture_output=True, text=True,
+    )
+    return proc.returncode == 0
+
+
+def test_a_descriptor_key_leaves_the_host_login_alone(tmp_path: Path, monkeypatch) -> None:
+    root = _checkout(tmp_path)
+    _host_login(tmp_path, monkeypatch)
+
+    linked = runtime_module._materialize_cli_credentials(
+        local_root=root, env={"ANTHROPIC_API_KEY": "sk-configured"}
+    )
+
+    assert linked is None
+    assert not (root / runtime_module.CLI_CREDENTIALS_FILENAME).exists()
+
+
+def test_nothing_is_linked_without_a_host_login(tmp_path: Path, monkeypatch) -> None:
+    root = _checkout(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+
+    linked = runtime_module._materialize_cli_credentials(local_root=root, env={})
+
+    assert linked is None
+    assert not (root / runtime_module.CLI_CREDENTIALS_FILENAME).exists()
+
+
+def test_the_host_login_is_linked_and_stays_out_of_git(tmp_path: Path, monkeypatch) -> None:
+    root = _checkout(tmp_path)
+    source = _host_login(tmp_path, monkeypatch)
+
+    linked = runtime_module._materialize_cli_credentials(local_root=root, env={})
+
+    target = root / runtime_module.CLI_CREDENTIALS_FILENAME
+    assert linked == str(target)
+    assert target.is_symlink() and target.resolve() == source.resolve()
+    assert not _is_tracked(root, runtime_module.CLI_CREDENTIALS_FILENAME)
+
+
+def test_a_lineage_that_tracks_the_credential_is_untracked(tmp_path: Path, monkeypatch) -> None:
+    root = _checkout(tmp_path, tracked_credential=True)
+    _host_login(tmp_path, monkeypatch)
+    assert _is_tracked(root, runtime_module.CLI_CREDENTIALS_FILENAME)
+
+    linked = runtime_module._materialize_cli_credentials(local_root=root, env={})
+
+    assert linked is not None
+    assert (root / runtime_module.CLI_CREDENTIALS_FILENAME).is_symlink()
+    assert not _is_tracked(root, runtime_module.CLI_CREDENTIALS_FILENAME)
+
+
+def test_the_link_is_withdrawn_when_the_name_cannot_become_ignored(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root = _checkout(tmp_path, ignored=False)
+    _host_login(tmp_path, monkeypatch)
+
+    linked = runtime_module._materialize_cli_credentials(local_root=root, env={})
+
+    assert linked is None
+    assert not (root / runtime_module.CLI_CREDENTIALS_FILENAME).exists()

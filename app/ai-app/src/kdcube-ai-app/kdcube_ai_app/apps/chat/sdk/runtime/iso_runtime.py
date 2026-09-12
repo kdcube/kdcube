@@ -615,6 +615,26 @@ def _uses_overlay_tmp(value: Optional[str]) -> bool:
     except Exception:
         return True
 
+#: Where the KDCube images bake Chromium. Its absence is how a host process is
+#: recognised.
+BAKED_BROWSERS_PATH = pathlib.Path("/opt/ms-playwright")
+
+
+def _host_playwright_browsers_path() -> pathlib.Path:
+    home = pathlib.Path.home()
+    if sys.platform == "darwin":
+        cache_root = home / "Library" / "Caches"
+    elif sys.platform == "win32":
+        cache_root = pathlib.Path(
+            os.environ.get("LOCALAPPDATA") or (home / "AppData" / "Local")
+        )
+    else:
+        cache_root = pathlib.Path(
+            os.environ.get("XDG_CACHE_HOME") or (home / ".cache")
+        )
+    return cache_root / "ms-playwright"
+
+
 def _ensure_subprocess_temp_env(env: dict, *, outdir: pathlib.Path) -> None:
     """
     Tool subprocesses must not rely on the container overlay /tmp.
@@ -646,8 +666,17 @@ def _ensure_subprocess_temp_env(env: dict, *, outdir: pathlib.Path) -> None:
         env["MPLCONFIGDIR"] = str(mpl_dir)
     if _uses_overlay_tmp(env.get("FONTCONFIG_PATH")):
         env["FONTCONFIG_PATH"] = str(font_dir)
-    if not env.get("PLAYWRIGHT_BROWSERS_PATH") and pathlib.Path("/opt/ms-playwright").exists():
-        env["PLAYWRIGHT_BROWSERS_PATH"] = "/opt/ms-playwright"
+    if not env.get("PLAYWRIGHT_BROWSERS_PATH"):
+        if BAKED_BROWSERS_PATH.exists():
+            env["PLAYWRIGHT_BROWSERS_PATH"] = str(BAKED_BROWSERS_PATH)
+        else:
+            # No baked browser tree: this is a host process. The cache redirect
+            # above would move Playwright's default browsers path into the
+            # per-turn tree and hide an installed browser, so pin the path this
+            # process itself resolves.
+            host_browsers = _host_playwright_browsers_path()
+            if host_browsers.is_dir():
+                env["PLAYWRIGHT_BROWSERS_PATH"] = str(host_browsers)
 
 async def _run_subprocess(entry_path: pathlib.Path, *,
                           cwd: pathlib.Path,
