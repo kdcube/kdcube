@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import pathlib
 import stat
+import sys
 
 import kdcube_ai_app.apps.chat.sdk.runtime.iso_runtime as iso_runtime
 from kdcube_ai_app.apps.chat.sdk.runtime.external.docker import (
@@ -26,12 +27,13 @@ def test_split_preflight_marks_directories_setgid(tmp_path: pathlib.Path) -> Non
 
     for directory in (root, root / "logs"):
         mode = stat.S_IMODE(directory.stat().st_mode)
-        assert mode & stat.S_ISGID, f"{directory} carries no setgid bit"
+        if sys.platform == "linux":
+            assert mode & stat.S_ISGID, f"{directory} carries no setgid bit"
         assert mode & 0o777 == 0o777
     assert stat.S_IMODE((root / "result.json").stat().st_mode) & 0o666 == 0o666
 
 
-def test_browsers_path_falls_back_to_the_one_this_process_resolves(
+def test_linux_browsers_path_falls_back_to_the_one_this_process_resolves(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
     home = tmp_path / "home"
@@ -39,12 +41,46 @@ def test_browsers_path_falls_back_to_the_one_this_process_resolves(
     installed.mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+    monkeypatch.setattr(iso_runtime.sys, "platform", "linux")
     monkeypatch.setattr(iso_runtime, "BAKED_BROWSERS_PATH", tmp_path / "absent")
 
     env: dict[str, str] = {}
     iso_runtime._ensure_subprocess_temp_env(env, outdir=tmp_path / "turn")
 
     assert env["XDG_CACHE_HOME"].startswith(str(tmp_path / "turn"))
+    assert env["PLAYWRIGHT_BROWSERS_PATH"] == str(installed)
+
+
+def test_darwin_browsers_path_uses_the_native_playwright_cache(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    home = tmp_path / "home"
+    installed = home / "Library" / "Caches" / "ms-playwright"
+    installed.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(iso_runtime.sys, "platform", "darwin")
+    monkeypatch.setattr(iso_runtime, "BAKED_BROWSERS_PATH", tmp_path / "absent")
+
+    env: dict[str, str] = {}
+    iso_runtime._ensure_subprocess_temp_env(env, outdir=tmp_path / "turn")
+
+    assert env["XDG_CACHE_HOME"].startswith(str(tmp_path / "turn"))
+    assert env["PLAYWRIGHT_BROWSERS_PATH"] == str(installed)
+
+
+def test_windows_browsers_path_uses_local_app_data(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    local_app_data = tmp_path / "local-app-data"
+    installed = local_app_data / "ms-playwright"
+    installed.mkdir(parents=True)
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+    monkeypatch.setattr(iso_runtime.sys, "platform", "win32")
+    monkeypatch.setattr(iso_runtime, "BAKED_BROWSERS_PATH", tmp_path / "absent")
+
+    env: dict[str, str] = {}
+    iso_runtime._ensure_subprocess_temp_env(env, outdir=tmp_path / "turn")
+
     assert env["PLAYWRIGHT_BROWSERS_PATH"] == str(installed)
 
 

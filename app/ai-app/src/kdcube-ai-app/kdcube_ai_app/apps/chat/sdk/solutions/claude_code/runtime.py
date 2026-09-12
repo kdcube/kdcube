@@ -720,6 +720,8 @@ async def run_claude_code_turn(
         and kind in set(session_store.publish_turn_kinds)
     )
     effective_resume_existing = bool(resume_existing)
+    agent_config = getattr(agent, "config", None)
+    agent_env = getattr(agent_config, "env", None) if agent_config is not None else None
 
     # Point the Claude Code CLI at the session-store's local_root so the
     # session JSONL it writes (under <CLAUDE_CONFIG_DIR>/projects/...) lands
@@ -727,8 +729,6 @@ async def run_claude_code_turn(
     # to git. Without this the CLI writes JSONLs to $HOME/.claude/projects/...,
     # local_root stays empty, and publish creates empty lineage branches.
     if session_store is not None and session_store.implementation == "git":
-        agent_config = getattr(agent, "config", None)
-        agent_env = getattr(agent_config, "env", None) if agent_config is not None else None
         if isinstance(agent_env, dict) and "CLAUDE_CONFIG_DIR" not in agent_env:
             agent_env["CLAUDE_CONFIG_DIR"] = str(session_store.local_root)
 
@@ -760,12 +760,10 @@ async def run_claude_code_turn(
                 logger=logger,
             )
         if session_store.implementation == "git":
-            agent_config = getattr(agent, "config", None)
-            turn_env = getattr(agent_config, "env", None)
             await asyncio.to_thread(
                 _materialize_cli_credentials,
                 local_root=pathlib.Path(session_store.local_root),
-                env=turn_env if isinstance(turn_env, dict) else {},
+                env=agent_env if isinstance(agent_env, dict) else {},
                 logger=logger,
             )
         if refresh_support_files is not None:
@@ -807,6 +805,12 @@ async def run_claude_code_turn(
                     cwd=workspace_cwd,
                     logger=logger,
                 )
+            await asyncio.to_thread(
+                _materialize_cli_credentials,
+                local_root=pathlib.Path(session_store.local_root),
+                env=agent_env if isinstance(agent_env, dict) else {},
+                logger=logger,
+            )
             if refresh_support_files is not None:
                 refresh_support_files()
             result = await agent.run_turn(

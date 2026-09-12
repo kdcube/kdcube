@@ -620,6 +620,21 @@ def _uses_overlay_tmp(value: Optional[str]) -> bool:
 BAKED_BROWSERS_PATH = pathlib.Path("/opt/ms-playwright")
 
 
+def _host_playwright_browsers_path() -> pathlib.Path:
+    home = pathlib.Path.home()
+    if sys.platform == "darwin":
+        cache_root = home / "Library" / "Caches"
+    elif sys.platform == "win32":
+        cache_root = pathlib.Path(
+            os.environ.get("LOCALAPPDATA") or (home / "AppData" / "Local")
+        )
+    else:
+        cache_root = pathlib.Path(
+            os.environ.get("XDG_CACHE_HOME") or (home / ".cache")
+        )
+    return cache_root / "ms-playwright"
+
+
 def _ensure_subprocess_temp_env(env: dict, *, outdir: pathlib.Path) -> None:
     """
     Tool subprocesses must not rely on the container overlay /tmp.
@@ -659,8 +674,7 @@ def _ensure_subprocess_temp_env(env: dict, *, outdir: pathlib.Path) -> None:
             # above would move Playwright's default browsers path into the
             # per-turn tree and hide an installed browser, so pin the path this
             # process itself resolves.
-            host_cache = os.environ.get("XDG_CACHE_HOME") or (pathlib.Path.home() / ".cache")
-            host_browsers = pathlib.Path(host_cache) / "ms-playwright"
+            host_browsers = _host_playwright_browsers_path()
             if host_browsers.is_dir():
                 env["PLAYWRIGHT_BROWSERS_PATH"] = str(host_browsers)
 

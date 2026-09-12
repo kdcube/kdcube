@@ -371,10 +371,14 @@ class _RetryingFakeAgent:
     def __init__(self, root: Path):
         self.root = root
         self.calls: list[dict[str, object]] = []
+        self.credential_visible: list[bool] = []
         self.config = SimpleNamespace(env={})
 
     async def run_turn(self, prompt: str, *, kind: str = "regular", resume_existing: bool = False) -> ClaudeCodeRunResult:
         self.calls.append({"prompt": prompt, "kind": kind, "resume_existing": resume_existing})
+        self.credential_visible.append(
+            (self.root / runtime_module.CLI_CREDENTIALS_FILENAME).is_symlink()
+        )
         if len(self.calls) == 1:
             return ClaudeCodeRunResult(
                 status="failed",
@@ -419,10 +423,13 @@ class _RetryingFakeAgent:
 
 
 @pytest.mark.asyncio
-async def test_run_claude_code_turn_self_heals_stale_session_checkout_and_retries(tmp_path: Path):
+async def test_run_claude_code_turn_self_heals_stale_session_checkout_and_retries(
+    tmp_path: Path, monkeypatch
+):
     remote_repo = _init_bare_repo(tmp_path / "remote.git")
     config = _config(tmp_path, git_repo=remote_repo)
     branch_ref = claude_code_session_branch_ref(config)
+    _host_login(tmp_path, monkeypatch)
 
     seed_repo = _init_git_repo(
         tmp_path / "seed-stale-lineage",
@@ -450,6 +457,7 @@ async def test_run_claude_code_turn_self_heals_stale_session_checkout_and_retrie
     assert len(agent.calls) == 2
     assert agent.calls[0]["resume_existing"] is True
     assert agent.calls[1]["resume_existing"] is True
+    assert agent.credential_visible == [True, True]
     assert stale_file.exists() is False
     assert (config.local_root / "projects" / "-fixture" / "history.json").read_text(encoding="utf-8") == "{\"turns\": 4}\n"
 
