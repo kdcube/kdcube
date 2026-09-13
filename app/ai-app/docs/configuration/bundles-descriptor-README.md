@@ -398,6 +398,29 @@ run. Removing an app removes its declaration on reconciliation. Adding an
 operation makes it available for future consent, but does not add it to an
 existing delegated Card. Every Card remains exactly what its grantor approved.
 
+#### Move an existing declaration to its app
+
+An existing deployment may already keep an app's catalog rows in
+`connection-hub@1-0.config.connections`. Transfer their ownership in one
+reviewed `bundles.yaml` revision:
+
+1. Add the complete `config.delegated_catalog` declaration to the owning app.
+2. Remove that app's capability rows and complete direct resource from
+   Connection Hub's base catalog.
+3. For a shared named-services resource, retain the resource and every other
+   namespace; remove only the namespace the app now owns.
+4. Apply the complete descriptor revision, then reload the owning app so
+   lifecycle reconciliation publishes the assembled catalog.
+5. Run `kdcube bundle catalog check --workdir <runtime-workdir>` and require an
+   in-sync result before issuing new Cards.
+
+Capability, resource, namespace, and operation IDs stay unchanged during this
+ownership move, so existing Cards retain exactly their previously granted
+operations. The migration grants nothing new. The assembler rejects an
+intermediate descriptor that names both Connection Hub and the app as owner;
+moving only recently added nested operations leaves the older duplicate owner
+in place.
+
 For a managed MCP surface backed by this catalog, the descriptor auth node may
 contain only `mode: managed`, its `authority_id`, and
 `selected_tool_grants: true`. The active catalog supplies per-operation grant

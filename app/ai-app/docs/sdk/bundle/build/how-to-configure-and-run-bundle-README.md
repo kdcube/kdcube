@@ -1405,6 +1405,10 @@ app contributes under that bundle's `config.delegated_catalog`. The app
 descriptor remains the authority; do not merge those rows into Connection Hub.
 The complete schema and ownership rules are in
 [Bundles Descriptor](../../../configuration/bundles-descriptor-README.md#app-owned-delegated-catalog-declarations).
+When an existing Connection Hub base catalog already carries those app rows,
+move their complete ownership in one descriptor revision using
+[the migration procedure](../../../configuration/bundles-descriptor-README.md#move-an-existing-declaration-to-its-app)
+before reloading the app.
 
 After staging and reloading the app, compare descriptor authority with the
 immutable catalog serving requests:

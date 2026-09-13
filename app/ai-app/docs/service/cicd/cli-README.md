@@ -696,6 +696,13 @@ not edit Connection Hub's catalog or use a second merge workflow. Loading,
 reloading, or retiring catalog-contributing apps is what republishes the
 assembled catalog. Existing Cards are never expanded automatically.
 
+For the one-time move from app rows already embedded in Connection Hub's base
+catalog, follow
+[Move an existing declaration to its app](../../configuration/bundles-descriptor-README.md#move-an-existing-declaration-to-its-app).
+That reviewed descriptor revision removes each complete former base owner while
+adding the same IDs under the app; normal operation thereafter remains
+app-owned and merge-free.
+
 ### 2.3c Export and import local runtime descriptors
 
 For local descriptor-backed runtimes, use `kdcube config export` to snapshot
