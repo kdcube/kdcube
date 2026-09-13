@@ -529,3 +529,44 @@ def test_a_hit_the_lexical_arm_never_matched_carries_no_snippet():
         assert hits
         assert all(h.snippet == "" for h in hits if h.id == "b")
 
+
+def test_a_lexical_only_collection_never_calls_the_embedder():
+    """Switching the semantic factor off should stop paying for vectors.
+
+    Search already skipped the semantic arm, but upsert still embedded every
+    new or changed document, so a lexical-only collection paid an embedder call
+    per write for a column nothing would read.
+    """
+
+    calls: list[int] = []
+
+    async def counting_embed(texts):
+        calls.append(len(list(texts)))
+        return [[0.0] * len(VOCAB) for _ in texts]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        index = HybridIndex(IndexConfig(
+            db_path=Path(tmp) / "idx.sqlite",
+            embed_fn=counting_embed,
+            dim=len(VOCAB),
+            vector_store=BruteForceVectorStore(),
+            semantic_enabled=False,
+        ))
+
+        asyncio.run(index.upsert([
+            Document(id="a", text="alpha beta", metadata={"kind": "note"}),
+            Document(id="b", text="gamma delta"),
+        ]))
+
+        assert calls == []
+
+        # Lexical search still works, which is the whole point of the mode.
+        hits = asyncio.run(index.search("gamma", snippets=True))
+        assert [h.id for h in hits] == ["b"]
+        assert "[gamma]" in hits[0].snippet
+
+        # And changed text is still re-indexed lexically.
+        asyncio.run(index.upsert([Document(id="b", text="gamma epsilon")]))
+        assert calls == []
+        assert [h.id for h in asyncio.run(index.search("epsilon"))] == ["b"]
+

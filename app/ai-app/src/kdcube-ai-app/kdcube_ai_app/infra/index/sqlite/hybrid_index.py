@@ -149,14 +149,29 @@ class HybridIndex:
             ).fetchall()
             existing = {r["id"]: r["text"] for r in rows}
             vectored = {r["id"] for r in rows if r["has_vec"]}
-        to_embed = [d for d in docs if existing.get(d.id) != d.text or d.id not in vectored]
+        # With the semantic factor switched off, a vector is work nothing will
+        # read: search never runs the semantic arm, so embedding on write costs
+        # an embedder call per document for a column that stays unused. A
+        # lexical-only collection should not have to supply a real embedder at
+        # all, which it effectively did before this.
+        to_embed = (
+            [d for d in docs if existing.get(d.id) != d.text or d.id not in vectored]
+            if self.cfg.semantic_enabled
+            else []
+        )
         vec_by_id: Dict[str, List[float]] = {}
         embed_failed: set = set()
         if to_embed:
             vec_by_id, embed_failed = await self._embed_documents_tolerant(to_embed)
 
         now = time.time()
-        changed_ids = {d.id for d in to_embed}
+        # Text still has to be re-indexed for the lexical arm when it changes,
+        # whether or not anything was embedded.
+        changed_ids = (
+            {d.id for d in to_embed}
+            if self.cfg.semantic_enabled
+            else {d.id for d in docs if existing.get(d.id) != d.text}
+        )
         vectors_changed = False
         with self._conn() as conn:
             for doc in docs:
