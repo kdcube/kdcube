@@ -262,6 +262,27 @@ class HybridIndex:
         limit = max(1, top_k) * max(1, self.cfg.overfetch)
         rankings: Dict[str, List[str]] = {}
 
+        # An empty query is a browse, not a failed search. Every collection view
+        # built on this index needs "show me this scope, newest first" before a
+        # user has typed anything, and without this each one reimplemented it
+        # against the tables directly. Lexical ranking has nothing to rank on
+        # with no terms, so recency is the whole order.
+        if not self._fts_query(query):
+            with self._conn() as conn:
+                candidates = self.ids(filters)
+                if not candidates:
+                    return []
+                recency = self._recency(conn, candidates)
+                ordered = sorted(
+                    candidates, key=lambda doc_id: recency.get(doc_id, 0.0), reverse=True
+                )[: max(1, top_k)]
+                ranked = [
+                    (doc_id, {"score": recency.get(doc_id, 0.0), "sub": {"recency": rank}})
+                    for rank, doc_id in enumerate(ordered)
+                ]
+                # No snippet: with no terms there is nothing to point at.
+                return self._hydrate(conn, ranked)
+
         do_semantic = mode in ("hybrid", "semantic") and await self._semantic_allowed(query)
         # If semantic was requested but the economical guard denied it, degrade to
         # lexical so the query still returns results (and costs no embed call).

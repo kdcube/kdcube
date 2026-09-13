@@ -570,3 +570,46 @@ def test_a_lexical_only_collection_never_calls_the_embedder():
         assert calls == []
         assert [h.id for h in asyncio.run(index.search("epsilon"))] == ["b"]
 
+
+def test_an_empty_query_browses_the_scope_newest_first():
+    """A collection view needs to show something before anyone has typed.
+
+    Lexical ranking has nothing to rank on with no terms, so an empty query
+    used to return nothing at all and every caller reimplemented browse against
+    the tables directly.
+    """
+
+    with tempfile.TemporaryDirectory() as tmp:
+        index = _index(Path(tmp))
+        now = time.time()
+        asyncio.run(index.upsert([
+            Document(id="old", text="alpha", metadata={"scope": "a"}, timestamp=now - 900),
+            Document(id="new", text="beta", metadata={"scope": "a"}, timestamp=now),
+            Document(id="other", text="gamma", metadata={"scope": "b"}, timestamp=now),
+        ]))
+
+        browsed = asyncio.run(index.search("", filters={"scope": "a"}))
+
+        # Newest first, and the filter still applies.
+        assert [h.id for h in browsed] == ["new", "old"]
+        # Nothing to point at with no terms.
+        assert all(h.snippet == "" for h in browsed)
+
+
+def test_browsing_an_empty_scope_returns_nothing_rather_than_everything():
+    with tempfile.TemporaryDirectory() as tmp:
+        index = _index(Path(tmp))
+        asyncio.run(index.upsert([Document(id="a", text="alpha", metadata={"scope": "a"})]))
+
+        assert asyncio.run(index.search("", filters={"scope": "missing"})) == []
+
+
+def test_a_query_of_only_punctuation_browses_rather_than_failing():
+    """Whatever a user types, the panel should still show its scope."""
+
+    with tempfile.TemporaryDirectory() as tmp:
+        index = _index(Path(tmp))
+        asyncio.run(index.upsert([Document(id="a", text="alpha beta")]))
+
+        assert [h.id for h in asyncio.run(index.search("   ---   "))] == ["a"]
+
