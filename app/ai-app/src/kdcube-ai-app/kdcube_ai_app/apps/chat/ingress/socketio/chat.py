@@ -46,6 +46,9 @@ from kdcube_ai_app.apps.chat.ingress.ingress_core import (
     build_ws_chat_request_context,
 )
 from kdcube_ai_app.apps.chat.ingress.socketio.data_bus import attach_data_bus_socketio_handlers
+from kdcube_ai_app.apps.chat.ingress.socketio.delegated_data_bus_auth import (
+    admit_delegated_data_bus_bearer,
+)
 from kdcube_ai_app.apps.chat.sdk.protocol import external_event_attachment_payloads, external_events_text
 from kdcube_ai_app.infra.service_hub.multimodality import MESSAGE_MAX_BYTES
 from kdcube_ai_app.apps.middleware.token_extract import resolve_socket_auth_tokens
@@ -252,17 +255,55 @@ class SocketIOChatHandler:
         auth = auth or {}
         user_session_id = auth.get("user_session_id")
         federated_claims = None
+        data_bus_scope = None
         federated_token = (
             auth.get("federated_token")
             or auth.get("federated_data_bus_token")
             or auth.get("data_bus_token")
         )
+        delegated_bearer_token = auth.get("delegated_bearer_token")
+        delegated_resource = str(auth.get("delegated_resource") or "").strip()
 
         # Build connect RequestContext from transport. This is used both by
         # ordinary platform sessions and by scoped federated Data Bus sessions.
         ctx = build_ws_connect_request_context(environ, auth)
 
-        if federated_token:
+        if delegated_bearer_token:
+            if federated_token or user_session_id:
+                logger.warning("WS connect rejected: ambiguous Data Bus credentials")
+                return False
+            tenant = str(auth.get("tenant") or "").strip()
+            project = str(auth.get("project") or "").strip()
+            bundle_id = str(auth.get("bundle_id") or "").strip()
+            try:
+                admission = await admit_delegated_data_bus_bearer(
+                    app=self.app,
+                    gateway_adapter=self.gateway_adapter,
+                    tenant=tenant,
+                    project=project,
+                    bundle_id=bundle_id,
+                    resource=delegated_resource,
+                    bearer_token=str(delegated_bearer_token),
+                    context=ctx,
+                )
+                session = admission.session
+                data_bus_scope = admission.scope
+                logger.info(
+                    "WS delegated Card connect verified sid=%s tenant=%s project=%s bundle_id=%s session_id=%s card_id=%s resource=%s",
+                    sid,
+                    tenant,
+                    project,
+                    bundle_id,
+                    session.session_id,
+                    data_bus_scope.get("access_id"),
+                    data_bus_scope.get("resource"),
+                )
+            except Exception as e:
+                logger.warning(
+                    "WS connect rejected: delegated Card admission failed: %s", e
+                )
+                return False
+        elif federated_token:
             tenant = str(auth.get("tenant") or "").strip()
             project = str(auth.get("project") or "").strip()
             bundle_id = str(auth.get("bundle_id") or "").strip()
@@ -284,6 +325,14 @@ class SocketIOChatHandler:
                 )
                 session = verified.session
                 federated_claims = verified.claims
+                data_bus_scope = {
+                    "schema": "kdcube.data_bus.federated_scope.v1",
+                    "credential_kind": "derived_session",
+                    "tenant": tenant,
+                    "project": project,
+                    "bundle_id": bundle_id,
+                    "expires_at": int(federated_claims.get("exp") or 0),
+                }
                 logger.info(
                     "WS federated connect verified sid=%s tenant=%s project=%s bundle_id=%s session_id=%s user_id=%s user_type=%s",
                     sid,
@@ -381,6 +430,7 @@ class SocketIOChatHandler:
                 "turn_id": auth.get("turn_id"),
                 "bundle_id": auth.get("bundle_id"),
                 "federated_claims": federated_claims,
+                "data_bus_scope": data_bus_scope,
             }
 
             await self.sio.save_session(sid, socket_meta)
@@ -403,13 +453,13 @@ class SocketIOChatHandler:
             # the routing index only after its room and Redis subscription are
             # ready, otherwise a concurrent event can be reported as delivered
             # while it has nowhere to fan out.
-            if isinstance(federated_claims, Mapping):
+            if isinstance(data_bus_scope, Mapping):
                 principal = str(
                     getattr(session, "rate_limit_subject", None)
                     or session.user_id
                     or ""
                 ).strip()
-                expires_at = int(federated_claims.get("exp") or 0)
+                expires_at = int(data_bus_scope.get("expires_at") or 0)
                 if not principal or expires_at <= 0:
                     raise ValueError("federated Data Bus session is missing principal or expiry")
                 await DataBusLiveSessionRegistry(
@@ -422,6 +472,7 @@ class SocketIOChatHandler:
                     session_id=session.session_id,
                     socket_id=sid,
                     expires_at=expires_at,
+                    authorization_scope=data_bus_scope,
                 )
 
             await self.sio.emit("session_info", {
@@ -440,7 +491,7 @@ class SocketIOChatHandler:
 
         except Exception as e:
             logger.error("WS connect finalization failed: %s", e)
-            if isinstance(federated_claims, Mapping):
+            if isinstance(data_bus_scope, Mapping):
                 redis = getattr(getattr(self.app, "state", None), "redis_async", None)
                 if redis is not None:
                     try:

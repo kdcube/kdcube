@@ -65,6 +65,12 @@ _REDIS_WRITEBACK_REFRESH_SECONDS = 60.0
 _REDIS_WRITEBACK_STATE: Dict[str, Tuple[Tuple[int, int], float]] = {}
 _REDIS_WRITEBACK_STATE_LOCK = threading.Lock()
 
+# Descriptor normalization is used by request-time inventory reads. Keep the
+# reserved-id warning visible without repeating the same four lines for every
+# CSRF preflight and operation in one process.
+_RESERVED_LOADER_WARNING_KEYS: Set[Tuple[str, Tuple[str, ...]]] = set()
+_RESERVED_LOADER_WARNING_LOCK = threading.Lock()
+
 
 def _redis_writeback_due(key: str, state: Optional[Tuple[int, int]]) -> bool:
     """True when the Redis write-back for `key` should run."""
@@ -93,6 +99,21 @@ def clear_descriptor_read_caches() -> None:
         _DESCRIPTOR_MAPPING_CACHE.clear()
     with _REDIS_WRITEBACK_STATE_LOCK:
         _REDIS_WRITEBACK_STATE.clear()
+    with _RESERVED_LOADER_WARNING_LOCK:
+        _RESERVED_LOADER_WARNING_KEYS.clear()
+
+
+def _warn_reserved_loader_fields_once(bundle_id: str, fields: list[str]) -> None:
+    key = (bundle_id, tuple(fields))
+    with _RESERVED_LOADER_WARNING_LOCK:
+        if key in _RESERVED_LOADER_WARNING_KEYS:
+            return
+        _RESERVED_LOADER_WARNING_KEYS.add(key)
+    _log.warning(
+        "Bundle id '%s' is reserved; ignoring loader fields %s and using built-in bundle entry.",
+        bundle_id,
+        fields,
+    )
 
 
 def _admin_bundle_entry() -> "BundleEntry":
@@ -2416,11 +2437,7 @@ def _to_entry(bid: str, v: Dict[str, Any]) -> BundleEntry:
             if _norm_str(v.get(key))
         ]
         if ignored_loader_fields:
-            _log.warning(
-                "Bundle id '%s' is reserved; ignoring loader fields %s and using built-in bundle entry.",
-                bid,
-                ignored_loader_fields,
-            )
+            _warn_reserved_loader_fields_once(bid, ignored_loader_fields)
         return reserved
     return candidate
 

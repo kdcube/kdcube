@@ -993,8 +993,9 @@ async def resolve_delegated_card_session_projection(
 
     This is the identity-only entrance used before generic gateway admission.
     It reuses the managed guard's bearer verification, live-card restoration,
-    and request-resource boundary. Tool and operation authorization remain with
-    the managed MCP/REST guard that owns the concrete surface call.
+    and request-resource boundary. Concrete operation authorization remains at
+    the guarded service-effect boundary. MCP, REST, and Data Bus adapters may
+    carry the same service-owned operation ID to that boundary.
     """
 
     denial, _user, envelope, grant_record = await _authorize_delegated_managed_request(

@@ -76,6 +76,28 @@ class RequestAuthResolver(_core.RequestAuthResolver):
             debug_enabled=_auth_debug_enabled,
         )
 
+    async def resolve_delegated_resource_session(
+        self,
+        *,
+        app: Any,
+        resource: str,
+        bearer_token: str,
+        context: Any,
+    ) -> Any | None:
+        """Resolve a Card bearer for a trusted non-HTTP resource adapter."""
+
+        surface = getattr(self, "_connection_hub_surface", None)
+        authenticate = getattr(surface, "authenticate_delegated_resource_bearer", None)
+        if not callable(authenticate):
+            return None
+        return await authenticate(
+            app=app,
+            resource=resource,
+            bearer_token=bearer_token,
+            context=context,
+            session_factory=self.session_factory,
+        )
+
 
 def __getattr__(name: str) -> Any:
     return getattr(_core, name)

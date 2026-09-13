@@ -12,6 +12,12 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
+from connection_hub.delegated_credentials.live_grant import (
+    LiveGrantCardError,
+    live_grants_for_resource,
+    resolve_live_grant_card,
+)
+
 LIVE_SESSION_SCHEMA = "kdcube.data_bus.live_session.v1"
 LIVE_SESSION_INDEX_TTL_SECONDS = 3600
 
@@ -61,6 +67,7 @@ class DataBusLiveSessionRegistry:
         session_id: str,
         socket_id: str,
         expires_at: int,
+        authorization_scope: Mapping[str, Any] | None = None,
     ) -> DataBusLiveSession:
         now = int(time.time())
         expiry = max(now + 1, int(expires_at))
@@ -75,6 +82,17 @@ class DataBusLiveSessionRegistry:
             "socket_id": str(socket_id),
             "expires_at": expiry,
         }
+        authority = dict(authorization_scope or {})
+        if str(authority.get("credential_kind") or "") == "delegated_card":
+            record["authorization"] = {
+                "credential_kind": "delegated_card",
+                "access_id": str(authority.get("access_id") or ""),
+                "resource": str(authority.get("resource") or ""),
+                "client_id": str(authority.get("client_id") or ""),
+                "delegate_identity": str(
+                    authority.get("delegate_identity") or ""
+                ),
+            }
         member = json.dumps(
             {"session_id": str(session_id), "socket_id": str(socket_id)},
             ensure_ascii=True,
@@ -163,9 +181,62 @@ class DataBusLiveSessionRegistry:
                 member = json.loads(str(raw))
             except (TypeError, json.JSONDecodeError):
                 continue
-            if isinstance(member, Mapping) and member.get("session_id"):
-                session_ids.add(str(member["session_id"]))
+            if not isinstance(member, Mapping) or not member.get("session_id"):
+                continue
+            socket_id = str(member.get("socket_id") or "").strip()
+            if socket_id:
+                live = await self._live_authority(socket_id=socket_id)
+                if live is False:
+                    await self.unregister(socket_id=socket_id)
+                    continue
+                if live is None:
+                    # Authority lookup is unavailable. Keep the record for a
+                    # later retry, but fail closed for this delivery.
+                    continue
+            session_ids.add(str(member["session_id"]))
         return tuple(sorted(session_ids))
+
+    async def _live_authority(self, *, socket_id: str) -> bool | None:
+        raw = await self.redis.get(self._socket_key(socket_id))
+        if isinstance(raw, (bytes, bytearray)):
+            raw = raw.decode("utf-8")
+        if not raw:
+            return False
+        try:
+            record = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            return False
+        if not isinstance(record, Mapping):
+            return False
+        authorization = record.get("authorization")
+        if not isinstance(authorization, Mapping):
+            return True
+        if str(authorization.get("credential_kind") or "") != "delegated_card":
+            return True
+        access_id = str(authorization.get("access_id") or "").strip()
+        resource = str(authorization.get("resource") or "").strip()
+        if not access_id or not resource:
+            return False
+        try:
+            card = await resolve_live_grant_card(
+                self.redis,
+                tenant=str(record.get("tenant") or ""),
+                project=str(record.get("project") or ""),
+                access_id=access_id,
+                expected_client_id=str(
+                    authorization.get("client_id") or ""
+                ).strip(),
+                expected_delegate_subject=str(
+                    authorization.get("delegate_identity") or ""
+                ).strip(),
+            )
+        except LiveGrantCardError:
+            return None
+        except Exception:
+            return None
+        if card is None:
+            return False
+        return live_grants_for_resource(card, resource) is not None
 
     async def connected(self, **scope: Any) -> bool:
         return bool(await self.sessions(**scope))
