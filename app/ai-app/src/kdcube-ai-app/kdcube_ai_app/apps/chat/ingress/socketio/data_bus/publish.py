@@ -9,6 +9,14 @@ import time
 import uuid
 from typing import Any, Mapping
 
+from connection_hub.delegated_credentials.live_grant import (
+    LiveGrantCardError,
+    live_grants_for_resource,
+    resolve_live_grant_card,
+)
+from connection_hub.delegated_credentials.resource_operations import (
+    operations_for_resource,
+)
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.stream import RedisDataBusStream
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.types import (
@@ -92,6 +100,107 @@ def _actor_from_session(session: UserSession) -> dict[str, Any]:
     }
 
 
+async def _live_delegated_card(
+    *,
+    redis: Any,
+    tenant: str,
+    project: str,
+    scope: Mapping[str, Any],
+) -> tuple[Any | None, dict[str, Any] | None]:
+    access_id = str(scope.get("access_id") or "").strip()
+    resource = str(scope.get("resource") or "").strip()
+    if not access_id or not resource:
+        return None, {
+            "index": None,
+            "error": "delegated Card scope is incomplete",
+            "error_type": "delegated_card_scope_invalid",
+            "status": 401,
+        }
+    try:
+        card = await resolve_live_grant_card(
+            redis,
+            tenant=tenant,
+            project=project,
+            access_id=access_id,
+            expected_client_id=str(scope.get("client_id") or "").strip(),
+            expected_delegate_subject=str(
+                scope.get("delegate_identity") or ""
+            ).strip(),
+        )
+    except LiveGrantCardError as exc:
+        return None, {
+            "index": None,
+            "error": "current delegated Card state is unavailable",
+            "error_type": "delegated_card_unavailable",
+            "reason": exc.reason,
+            "status": 503,
+        }
+    except Exception:
+        logger.warning(
+            "[data_bus.publish] delegated Card lookup failed access_id=%s",
+            access_id,
+            exc_info=True,
+        )
+        return None, {
+            "index": None,
+            "error": "current delegated Card state is unavailable",
+            "error_type": "delegated_card_unavailable",
+            "status": 503,
+        }
+    if card is None:
+        return None, {
+            "index": None,
+            "error": "delegated Card is no longer active",
+            "error_type": "delegated_card_not_active",
+            "status": 403,
+        }
+    if live_grants_for_resource(card, resource) is None:
+        return None, {
+            "index": None,
+            "error": "delegated Card no longer covers this resource",
+            "error_type": "delegated_resource_not_granted",
+            "status": 403,
+        }
+    return card, None
+
+
+def _apply_live_delegated_card(
+    session: UserSession,
+    *,
+    card: Any,
+    resource: str,
+) -> None:
+    grants = live_grants_for_resource(card, resource) or ()
+    operations = operations_for_resource(card.resource_operations, resource)
+    authority = dict(session.identity_authority or {})
+    authority.update(
+        {
+            "delegated_resource": resource,
+            "grants": list(grants),
+            "scopes": list(grants),
+            "operations": list(operations),
+            "resource_grants": {
+                key: list(values)
+                for key, values in card.resource_grants.items()
+            },
+            "resource_operations": {
+                key: list(values)
+                for key, values in card.resource_operations.items()
+            },
+            "delegated_card_binding": {
+                "schema": "connection_hub.delegated_card_binding.v1",
+                "access_id": card.access_id,
+                "client_id": card.client_id,
+                "grantor_user_id": card.grantor_subject,
+                "delegate_identity": card.delegate_subject,
+                "expires_at": card.expires_at,
+            },
+        }
+    )
+    session.identity_authority = authority
+    session.rate_limit_subject = f"card:{card.access_id}"
+
+
 class DataBusSocketIOIngress:
     def __init__(self, *, app: Any, redis: Any | None = None) -> None:
         self.app = app
@@ -122,15 +231,30 @@ class DataBusSocketIOIngress:
         if not bundle_id:
             return self._ack(status="rejected", rejected=[{"index": None, "error": "bundle_id is required"}])
         federated_claims = (socket_session or {}).get("federated_claims")
-        if isinstance(federated_claims, Mapping):
-            scoped_bundle_id = str(federated_claims.get("bundle_id") or "").strip()
+        data_bus_scope = (socket_session or {}).get("data_bus_scope")
+        if not isinstance(data_bus_scope, Mapping) and isinstance(
+            federated_claims, Mapping
+        ):
+            data_bus_scope = {
+                "credential_kind": "derived_session",
+                "bundle_id": federated_claims.get("bundle_id"),
+                "expires_at": federated_claims.get("exp"),
+            }
+        if isinstance(data_bus_scope, Mapping):
+            scope_kind = str(data_bus_scope.get("credential_kind") or "").strip()
+            delegated_scope = scope_kind == "delegated_card"
+            scoped_bundle_id = str(data_bus_scope.get("bundle_id") or "").strip()
             if scoped_bundle_id and scoped_bundle_id != bundle_id:
                 return self._ack(status="rejected", rejected=[{
                     "index": None,
-                    "error": "bundle_id is not allowed by federated token",
+                    "error": (
+                        "bundle_id is not allowed by the delegated Card"
+                        if delegated_scope
+                        else "bundle_id is not allowed by federated token"
+                    ),
                 }])
             try:
-                expires_at = int(federated_claims.get("exp") or 0)
+                expires_at = int(data_bus_scope.get("expires_at") or 0)
             except (TypeError, ValueError):
                 expires_at = 0
             if expires_at <= int(time.time()):
@@ -138,8 +262,16 @@ class DataBusSocketIOIngress:
                     status="rejected",
                     rejected=[{
                         "index": None,
-                        "error": "federated Data Bus session is expired",
-                        "error_type": "federated_token_expired",
+                        "error": (
+                            "delegated Card is expired"
+                            if delegated_scope
+                            else "federated Data Bus session is expired"
+                        ),
+                        "error_type": (
+                            "delegated_card_expired"
+                            if delegated_scope
+                            else "federated_token_expired"
+                        ),
                         "status": 401,
                     }],
                 )
@@ -154,6 +286,36 @@ class DataBusSocketIOIngress:
             return self._ack(status="rejected", rejected=[{"index": None, "error": "tenant/project scope is required"}])
 
         session = _session_from_socket_meta(socket_session)
+        if (
+            isinstance(data_bus_scope, Mapping)
+            and str(data_bus_scope.get("credential_kind") or "").strip()
+            == "delegated_card"
+        ):
+            scoped_tenant = str(data_bus_scope.get("tenant") or "").strip()
+            scoped_project = str(data_bus_scope.get("project") or "").strip()
+            if (scoped_tenant, scoped_project) != (tenant, project):
+                return self._ack(
+                    status="rejected",
+                    rejected=[{
+                        "index": None,
+                        "error": "tenant/project is not allowed by the delegated Card",
+                        "error_type": "delegated_card_scope_mismatch",
+                        "status": 403,
+                    }],
+                )
+            card, rejection = await _live_delegated_card(
+                redis=self._redis(),
+                tenant=tenant,
+                project=project,
+                scope=data_bus_scope,
+            )
+            if rejection is not None:
+                return self._ack(status="rejected", rejected=[rejection])
+            _apply_live_delegated_card(
+                session,
+                card=card,
+                resource=str(data_bus_scope.get("resource") or "").strip(),
+            )
         gateway_adapter = getattr(getattr(self.app, "state", None), "gateway_adapter", None)
         gateway_config = getattr(getattr(gateway_adapter, "gateway", None), "gateway_config", None)
         if gateway_config is None:

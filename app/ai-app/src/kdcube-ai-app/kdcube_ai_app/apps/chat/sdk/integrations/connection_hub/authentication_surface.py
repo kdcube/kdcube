@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Mapping, Optional
+from urllib.parse import urlsplit
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -79,6 +80,59 @@ def _bool(value: Any, default: bool = False) -> bool:
     if isinstance(value, (int, float)):
         return bool(value)
     return str(value).strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
+def _delegated_resource_request(
+    *,
+    app: Any,
+    resource: str,
+    bearer_token: str,
+) -> Request:
+    """Represent a non-HTTP transport's selected protected resource.
+
+    The synthetic request exists only inside the trusted ingress process. It
+    lets Socket.IO reuse the same live Card verifier, catalog readers, and
+    resource-boundary logic as managed HTTP surfaces without treating the
+    Socket.IO endpoint itself as the protected application resource.
+    """
+
+    parsed = urlsplit(_str(resource))
+    token = _str(bearer_token)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise AuthorizationError(
+            "delegated resource must be an absolute HTTP URL without query or fragment"
+        )
+    if not token:
+        raise AuthenticationError("delegated bearer token is required")
+
+    path = parsed.path or "/"
+    default_port = 443 if parsed.scheme == "https" else 80
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": parsed.scheme,
+        "path": path,
+        "raw_path": path.encode("utf-8"),
+        "query_string": b"",
+        "root_path": "",
+        "headers": [
+            (b"host", parsed.netloc.encode("latin-1")),
+            (b"authorization", f"Bearer {token}".encode("latin-1")),
+        ],
+        "server": (parsed.hostname or "", parsed.port or default_port),
+        "client": ("data-bus", 0),
+        "app": app,
+    }
+    return Request(scope)
 
 
 def _authenticator_config() -> dict[str, Any]:
@@ -596,6 +650,51 @@ class ConnectionHubAuthenticationSurface:
                 exc_info=False,
             )
             return None
+
+    async def authenticate_delegated_resource_bearer(
+        self,
+        *,
+        app: Any,
+        resource: str,
+        bearer_token: str,
+        context: RequestContext,
+        session_factory: SessionFactory,
+    ) -> Optional[UserSession]:
+        """Authenticate one Card bearer for an explicitly selected resource.
+
+        Non-HTTP transports call this entrance after proving which application
+        owns ``resource``. It accepts Card credentials only. The returned
+        session carries the selected resource as trusted authority context so
+        the receiving application can re-check every canonical operation
+        against the live Card.
+        """
+
+        request = _delegated_resource_request(
+            app=app,
+            resource=resource,
+            bearer_token=bearer_token,
+        )
+        if self._delegated_platform_resource_config(request) is None:
+            return None
+        projection = await resolve_delegated_card_session_projection(
+            request,
+            authority_id=DEFAULT_DELEGATED_AUTHORITY_ID,
+        )
+        if not projection:
+            return None
+        selected_resource = delegated_request_resource(request)
+        identity_authority = dict(projection.get("identity_authority") or {})
+        identity_authority["delegated_resource"] = selected_resource
+        projection = {
+            **dict(projection),
+            "identity_authority": identity_authority,
+        }
+        return await self._session_from_delegated_projection(
+            request=request,
+            context=context,
+            session_factory=session_factory,
+            projection=projection,
+        )
 
     async def _try_delegated_card_bearer(
         self,

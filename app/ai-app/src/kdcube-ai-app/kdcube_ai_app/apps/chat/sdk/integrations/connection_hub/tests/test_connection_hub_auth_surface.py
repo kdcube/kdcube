@@ -8,6 +8,9 @@ from types import SimpleNamespace
 from starlette.requests import Request
 
 from connection_hub.authenticators.models import AuthenticatedRequest
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub import (
+    authentication_surface as auth_surface,
+)
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.authentication_surface import (
     ConnectionHubAuthenticationSurface,
 )
@@ -418,6 +421,80 @@ async def test_invalid_delegated_card_bearer_resolves_anonymous(monkeypatch):
 
     assert session.user_type == UserType.ANONYMOUS
     assert session.user_id is None
+
+
+async def test_non_http_adapter_authenticates_card_for_selected_resource(monkeypatch):
+    surface = ConnectionHubAuthenticationSurface(
+        redis=None,
+        pg_pool=None,
+        tenant="demo-tenant",
+        project="demo-project",
+    )
+    surface._delegated_platform_resource_config = lambda _request: object()
+    seen = {}
+
+    async def resolve_projection(request, *, authority_id):
+        seen["url"] = str(request.url)
+        seen["authorization"] = request.headers.get("authorization")
+        seen["app"] = request.app
+        assert authority_id == "delegated_client"
+        return {
+            "user_id": "card:access-a",
+            "username": "worker-a",
+            "roles": [],
+            "permissions": ["work:relay"],
+            "card_principal": "card:access-a",
+            "identity_authority": {
+                "delegated_card_binding": {
+                    "access_id": "access-a",
+                    "expires_at": 4_000_000_000,
+                },
+                "gateway_rate_limit_subject": "card:access-a",
+            },
+        }
+
+    monkeypatch.setattr(
+        auth_surface,
+        "resolve_delegated_card_session_projection",
+        resolve_projection,
+    )
+
+    async def session_factory(context, user_type, user_data):
+        return UserSession(
+            session_id="session-card-a",
+            user_type=user_type,
+            user_id=user_data["user_id"],
+            username=user_data["username"],
+            roles=user_data["roles"],
+            permissions=user_data["permissions"],
+            request_context=context,
+            identity_authority=user_data["identity_authority"],
+            rate_limit_subject=user_data.get("rate_limit_subject"),
+        )
+
+    resource = (
+        "https://board.example/api/integrations/bundles/demo-tenant/"
+        "demo-project/problem-board@1-0/public/mcp/problem_board"
+    )
+    app = _App()
+    context = RequestContext(client_ip="127.0.0.1", user_agent="data-bus")
+    session = await surface.authenticate_delegated_resource_bearer(
+        app=app,
+        resource=resource,
+        bearer_token="secret-card-bearer",
+        context=context,
+        session_factory=session_factory,
+    )
+
+    assert session is not None
+    assert session.user_id == "card:access-a"
+    assert session.identity_authority["delegated_resource"] == resource
+    assert seen == {
+        "url": resource,
+        "authorization": "Bearer secret-card-bearer",
+        "app": app,
+    }
+    assert session.request_context.authorization_header is None
 
 
 async def test_connection_hub_surface_accepts_admin_delegated_bearer_for_all_resources(monkeypatch):

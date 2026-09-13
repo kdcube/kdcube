@@ -17,7 +17,7 @@ keywords:
     "remote delegated credential",
     "per agent revocation",
   ]
-updated_at: 2026-08-12
+updated_at: 2026-09-12
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/runtime/cross-app-surface-interoperability-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/runtime/cross-runtime-context-README.md
@@ -272,6 +272,14 @@ upstream client proof
 
 That token is a Data Bus transport capability. It is not a general credential
 for cross-KDCube MCP, REST, jobs, or copied request context.
+
+A caller that already holds a delegated Card for a target service has a
+different path: it can present the same Card bearer directly when opening the
+target Data Bus connection. The Card remains the revocable delegation edge;
+the caller also names its selected target resource, and the target app checks
+the same service-owned canonical operation IDs whether they arrive through
+Data Bus or MCP. No federated-session token is minted for this path. See
+[Data Bus: Delegated Card Clients](../service/comm/data-bus-README.md#delegated-card-clients).
 
 ## Missing Source-Side Contract
 

@@ -1,10 +1,10 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/service/comm/data-bus-README.md
 title: "Data Bus"
-summary: "Runtime contract for the bundle-scoped Data Bus: non-conversation messages, handler registration, ordering, correlated results, and live federated-session fanout."
+summary: "Runtime contract for bundle-scoped Data Bus messages, including direct delegated-Card admission, handler registration, ordering, correlated results, and live-session fanout."
 status: active
 tags: ["service", "comm", "data-bus", "socketio", "sse", "redis-streams", "bundle-runtime"]
-updated_at: 2026-09-09
+updated_at: 2026-09-12
 keywords:
   [
     "data bus",
@@ -13,6 +13,8 @@ keywords:
     "socket.io",
     "object ordering",
     "live data bus session",
+    "delegated card bearer",
+    "canonical operation",
     "correlated handler result",
     "document patch",
     "domain state",
@@ -77,8 +79,8 @@ For the compact routing and partitioning contract, see
 The Data Bus path has one strict ownership boundary:
 
 ```text
-browser/widget
-  -> optional federated token-claim operation
+browser/widget/service client
+  -> platform session, direct delegated Card, or federated session token
   -> Socket.IO data_bus.publish or HTTP POST /sse/data_bus.publish
   -> ingress authenticates, normalizes, and enqueues
   -> proc Data Bus worker loads bundle manifest
@@ -86,8 +88,8 @@ browser/widget
 ```
 
 Ingress owns transport concerns: socket authentication, tenant/project/session
-normalization, payload bounds, federated Data Bus token verification, and
-stream admission.
+normalization, payload bounds, delegated Card or federated token verification,
+and stream admission.
 
 Proc owns bundle execution concerns: loading bundle code, discovering
 `@data_bus_handler(...)`, applying effective bundle props, enforcing
@@ -194,7 +196,63 @@ Cookies are still accepted as fallback by the gateway, but explicit auth in the
 Socket.IO auth payload is the preferred browser contract when the widget has
 runtime config.
 
-### Federated Clients
+### Delegated Card Clients
+
+A caller that already has a Connection Hub delegated Card presents that Card's
+bearer directly. The Card is the delegation edge; Data Bus does not exchange it
+for a second token.
+
+The client also names the one concrete protected resource it is using because a
+Card may cover several resources:
+
+```json
+{
+  "tenant": "tenant-a",
+  "project": "project-a",
+  "bundle_id": "example@1-0",
+  "delegated_bearer_token": "<card-bearer>",
+  "delegated_resource": "https://runtime.example/api/integrations/bundles/tenant-a/project-a/example@1-0/public/mcp/example_service"
+}
+```
+
+Ingress verifies that the resource belongs to the stated tenant, project, and
+bundle, resolves the current Card for that exact resource, and builds the
+server-authored actor. The bearer is used only for admission. It is not written
+to Socket.IO session metadata, Data Bus messages, Redis routing records, app
+actors, or logs. Those places retain only the non-secret Card address and
+resource binding needed for live checks.
+
+Every incoming publish re-resolves the Card before stream admission. Addressed
+outbound delivery also re-resolves it before using a registered live route.
+Revoking the Card or removing the resource therefore stops both directions;
+an authority-store outage fails closed for the current delivery without
+discarding the route needed for a later retry.
+
+Data Bus treats an app payload as opaque, so the app owns operation-level
+authorization. Define each service operation once, then make every transport
+adapter pass that same identifier to one guarded dispatcher:
+
+```text
+Card resource_operations[service resource]
+                    |
+                    v
+        canonical operation: worker.heartbeat
+             /                         \
+Data Bus payload.operation       MCP tool name
+             \                         /
+              -> guarded service dispatcher -> domain effect
+```
+
+The operation ID belongs to the service contract, not to MCP or Data Bus. The
+dispatcher resolves the live Card and checks the exact resource, operation, and
+required grants before domain code runs. Copied operation or grant lists in the
+Data Bus actor are diagnostic context, not authority.
+
+Host clients use `app_foundation.data_bus.DelegatedCardCredential` to produce
+this handshake shape. Credential custody remains with Connection Hub; callers
+resolve the bearer only when opening the socket.
+
+### Federated Session Tokens
 
 Clients that do not have a platform browser session can connect to Data Bus
 through a standardized federated token.
@@ -233,12 +291,13 @@ normalized actor/reply metadata as ordinary platform-authenticated sockets.
 Use the full bundle recipe in
 [Federated Data Bus Session Tokens](../../sdk/bundle/auth-bundle-federated-README.md).
 
-### Addressed Push To Live Federated Sessions
+### Addressed Push To Live Sessions
 
-A federated client may keep its admitted Socket.IO connection open for both
-directions. KDCube registers that session as live only after the socket joined
-its session room and the ingress process acquired the matching Redis relay
-subscription. Disconnect and claim expiry remove it from the live view.
+A delegated-Card or federated-token client may keep its admitted Socket.IO
+connection open for both directions. KDCube registers that session as live only
+after the socket joined its session room and the ingress process acquired the
+matching Redis relay subscription. Disconnect, token expiry, or loss of current
+Card authority removes it from the usable live view.
 
 The routing key is scoped by tenant, project, bundle, and authenticated
 principal. A delegated card uses its Card-scoped rate-limit subject when one is
@@ -267,7 +326,7 @@ await publisher.publish(
 Commit the authoritative domain state before sending this event. Live fanout
 is a prompt to reconcile, not the state record: keep its body to an event kind
 and references, and retain a periodic or reconnect reconciliation path for a
-missed wake. `connected(principal)` reports transport presence; it does not
+missed wake. `connected(principal)` reports an authorized live route; it does not
 prove that a human or model consumed the referenced state.
 
 The client-side `app_foundation.data_bus.FederatedDataBusClient` uses the same

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import errno
 import json
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -815,6 +816,64 @@ async def _federated_handler(monkeypatch, *, identity_authority=None):
     return handler, grant
 
 
+async def _delegated_handler():
+    redis = FakeRedis()
+    session_manager = FakeSessionManager()
+    calls = []
+
+    async def resolve_delegated_resource_session(**kwargs):
+        calls.append(dict(kwargs))
+        resource = str(kwargs["resource"])
+        return UserSession(
+            session_id="session-card-worker-a",
+            user_type=UserType.REGISTERED,
+            fingerprint="fp-card-worker-a",
+            user_id="card:worker-card-a",
+            username="worker-a",
+            roles=["kdcube:role:registered"],
+            permissions=["work:relay"],
+            identity_authority={
+                "delegated_resource": resource,
+                "grants": ["work:relay"],
+                "operations": ["worker.heartbeat"],
+                "delegated_card_binding": {
+                    "schema": "connection_hub.delegated_card_binding.v1",
+                    "access_id": "worker-card-a",
+                    "client_id": "worker-client-a",
+                    "grantor_user_id": "user-a",
+                    "delegate_identity": "worker-a",
+                    "expires_at": int(time.time()) + 3600,
+                },
+            },
+            rate_limit_subject="card:worker-card-a",
+        )
+
+    gateway_adapter = SimpleNamespace(
+        gateway=SimpleNamespace(session_manager=session_manager),
+        request_auth_resolver=SimpleNamespace(
+            resolve_delegated_resource_session=resolve_delegated_resource_session
+        ),
+    )
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            redis_async=redis,
+            gateway_adapter=gateway_adapter,
+        )
+    )
+    handler = socket_chat.SocketIOChatHandler.__new__(
+        socket_chat.SocketIOChatHandler
+    )
+    handler.app = app
+    handler.gateway_adapter = gateway_adapter
+    handler.allowed_origins = ["https://app.example"]
+    handler.sio = FakeSocketServer()
+    handler._comm = FakeComm()
+    handler._sid_to_session_id = {}
+    handler._sid_to_tenant_project = {}
+    handler._session_refcounts = {}
+    return handler, calls
+
+
 @pytest.mark.asyncio
 async def test_socketio_connect_accepts_scoped_federated_data_bus_token(monkeypatch):
     authority = {
@@ -855,6 +914,76 @@ async def test_socketio_connect_accepts_scoped_federated_data_bus_token(monkeypa
         "principal:" in key and rows
         for key, rows in handler.app.state.redis_async.sorted.items()
     )
+
+
+@pytest.mark.asyncio
+async def test_socketio_connect_uses_card_bearer_directly_for_data_bus():
+    handler, calls = await _delegated_handler()
+    resource = (
+        "https://board.example/api/integrations/bundles/tenant-a/project-a/"
+        "task-tracker@1-0/public/mcp/problem_board"
+    )
+
+    ok = await handler._handle_connect(
+        "socket-card-1",
+        {
+            "HTTP_ORIGIN": "https://app.example",
+            "REMOTE_ADDR": "127.0.0.1",
+            "HTTP_USER_AGENT": "pytest",
+        },
+        {
+            "tenant": "tenant-a",
+            "project": "project-a",
+            "bundle_id": "task-tracker@1-0",
+            "delegated_bearer_token": "card-bearer-secret",
+            "delegated_resource": resource,
+            "client_role": "service",
+        },
+    )
+
+    assert ok is True
+    assert len(calls) == 1
+    assert calls[0]["bearer_token"] == "card-bearer-secret"
+    assert calls[0]["resource"] == resource
+    saved = handler.sio.saved_sessions["socket-card-1"]
+    assert saved["data_bus_scope"] == {
+        "schema": "kdcube.data_bus.delegated_card_scope.v1",
+        "credential_kind": "delegated_card",
+        "tenant": "tenant-a",
+        "project": "project-a",
+        "bundle_id": "task-tracker@1-0",
+        "resource": resource,
+        "access_id": "worker-card-a",
+        "client_id": "worker-client-a",
+        "grantor_user_id": "user-a",
+        "delegate_identity": "worker-a",
+        "expires_at": saved["data_bus_scope"]["expires_at"],
+    }
+    assert "card-bearer-secret" not in json.dumps(saved)
+    assert handler._sid_to_session_id["socket-card-1"] == "session-card-worker-a"
+
+
+@pytest.mark.asyncio
+async def test_socketio_connect_rejects_card_resource_for_another_bundle():
+    handler, calls = await _delegated_handler()
+
+    ok = await handler._handle_connect(
+        "socket-card-wrong-bundle",
+        {"REMOTE_ADDR": "127.0.0.1", "HTTP_USER_AGENT": "pytest"},
+        {
+            "tenant": "tenant-a",
+            "project": "project-a",
+            "bundle_id": "task-tracker@1-0",
+            "delegated_bearer_token": "card-bearer-secret",
+            "delegated_resource": (
+                "https://board.example/api/integrations/bundles/tenant-a/"
+                "project-a/other@1-0/public/mcp/problem_board"
+            ),
+        },
+    )
+
+    assert ok is False
+    assert calls == []
 
 
 @pytest.mark.asyncio
@@ -909,6 +1038,112 @@ def test_data_bus_actor_preserves_delegated_authority_for_handler_policy() -> No
 
     assert actor["identity_authority"] == authority
     assert actor["rate_limit_subject"] == "card:worker-card-a"
+
+
+@pytest.mark.asyncio
+async def test_data_bus_publish_refreshes_live_card_authority(monkeypatch):
+    redis = FakeRedis()
+    app = _app(redis)
+    _patch_data_bus_contract(monkeypatch, _manifest())
+    resource = (
+        "https://board.example/api/integrations/bundles/tenant-a/project-a/"
+        "task-tracker@1-0/public/mcp/problem_board"
+    )
+    card = SimpleNamespace(
+        access_id="worker-card-a",
+        client_id="worker-client-a",
+        grantor_subject="user-a",
+        delegate_subject="worker-a",
+        expires_at=int(time.time()) + 3600,
+        resource_grants={resource: ("work:relay", "work:journal:view")},
+        resource_operations={resource: ("worker.heartbeat", "journal.view.publish")},
+    )
+    monkeypatch.setattr(pub, "resolve_live_grant_card", _async_return(card))
+    socket_session = _socket_session()
+    socket_session["user_session"].update(
+        {
+            "user_id": "card:worker-card-a",
+            "identity_authority": {
+                "grants": ["stale:grant"],
+                "delegated_card_binding": {"access_id": "worker-card-a"},
+            },
+            "rate_limit_subject": "card:worker-card-a",
+        }
+    )
+    socket_session["data_bus_scope"] = {
+        "credential_kind": "delegated_card",
+        "tenant": "tenant-a",
+        "project": "project-a",
+        "bundle_id": "task-tracker@1-0",
+        "resource": resource,
+        "access_id": "worker-card-a",
+        "client_id": "worker-client-a",
+        "delegate_identity": "worker-a",
+        "expires_at": card.expires_at,
+    }
+
+    ack = await DataBusSocketIOIngress(app=app).handle_publish(
+        sid="socket-card-1",
+        socket_session=socket_session,
+        data={
+            "bundle_id": "task-tracker@1-0",
+            "messages": [
+                {
+                    "message_id": "m-card-1",
+                    "subject": "task_tracker.canvas.patch",
+                    "object_ref": "canvas:main",
+                    "idempotency_key": "op-card-1",
+                    "payload": {},
+                }
+            ],
+        },
+    )
+
+    assert ack["status"] == "accepted"
+    stream_key = "kdcube:data-bus:tenant-a:project-a:task-tracker@1-0:messages"
+    record = json.loads(redis.streams[stream_key][0][1]["json"])
+    authority = record["actor"]["identity_authority"]
+    assert authority["delegated_resource"] == resource
+    assert authority["grants"] == ["work:relay", "work:journal:view"]
+    assert authority["operations"] == [
+        "journal.view.publish",
+        "worker.heartbeat",
+    ]
+    assert authority["delegated_card_binding"]["access_id"] == "worker-card-a"
+
+
+@pytest.mark.asyncio
+async def test_data_bus_publish_rejects_revoked_card_before_stream_write(monkeypatch):
+    redis = FakeRedis()
+    app = _app(redis)
+    resource = (
+        "https://board.example/api/integrations/bundles/tenant-a/project-a/"
+        "task-tracker@1-0/public/mcp/problem_board"
+    )
+    monkeypatch.setattr(pub, "resolve_live_grant_card", _async_return(None))
+    socket_session = _socket_session()
+    socket_session["data_bus_scope"] = {
+        "credential_kind": "delegated_card",
+        "tenant": "tenant-a",
+        "project": "project-a",
+        "bundle_id": "task-tracker@1-0",
+        "resource": resource,
+        "access_id": "worker-card-a",
+        "expires_at": int(time.time()) + 3600,
+    }
+
+    ack = await DataBusSocketIOIngress(app=app).handle_publish(
+        sid="socket-card-revoked",
+        socket_session=socket_session,
+        data={
+            "bundle_id": "task-tracker@1-0",
+            "messages": [{"subject": "task_tracker.canvas.patch", "payload": {}}],
+        },
+    )
+
+    assert ack["status"] == "rejected"
+    assert ack["rejected"][0]["error_type"] == "delegated_card_not_active"
+    assert redis.streams == {}
 
 
 @pytest.mark.asyncio

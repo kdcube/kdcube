@@ -136,6 +136,32 @@ def _install_example_settings(monkeypatch, *, include_examples: bool, component:
     )
 
 
+def test_reserved_bundle_loader_warning_is_deduplicated_per_field_set(monkeypatch):
+    bundle_id = "reserved.bundle"
+    reserved = _install_reserved_example(monkeypatch, bundle_id)
+    warnings = []
+    monkeypatch.setattr(bundle_store._log, "warning", lambda *args: warnings.append(args))
+    bundle_store.clear_descriptor_read_caches()
+    try:
+        first = bundle_store._to_entry(
+            bundle_id,
+            {"path": "/stale/reserved.bundle", "module": "entrypoint"},
+        )
+        second = bundle_store._to_entry(
+            bundle_id,
+            {"path": "/stale/reserved.bundle", "module": "entrypoint"},
+        )
+        bundle_store._to_entry(bundle_id, {"path": "/another/stale/path"})
+
+        assert first is reserved
+        assert second is reserved
+        assert len(warnings) == 2
+        assert warnings[0][1:] == (bundle_id, ["path", "module"])
+        assert warnings[1][1:] == (bundle_id, ["path"])
+    finally:
+        bundle_store.clear_descriptor_read_caches()
+
+
 @pytest.mark.asyncio
 async def test_reset_registry_from_env_removes_stale_bundle_props(monkeypatch, tmp_path: Path):
     redis = _FakeRedis()

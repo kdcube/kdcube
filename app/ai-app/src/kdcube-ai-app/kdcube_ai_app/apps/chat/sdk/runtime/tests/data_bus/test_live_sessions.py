@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
+from types import SimpleNamespace
+
 import pytest
 
+import kdcube_ai_app.apps.chat.sdk.runtime.data_bus.live_sessions as live_sessions
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.live_sessions import (
     DataBusLiveSessionPublisher,
     DataBusLiveSessionRegistry,
@@ -150,3 +154,87 @@ async def test_publisher_targets_only_addressed_principal_sessions() -> None:
         row.events[0]["type"] == "problem_board.worker.event.v1"
         for row in _Communicator.instances
     )
+
+
+@pytest.mark.asyncio
+async def test_revoked_card_is_removed_before_outbound_delivery(monkeypatch) -> None:
+    async def resolve(redis, **kwargs):
+        del redis, kwargs
+        return None
+
+    monkeypatch.setattr(live_sessions, "resolve_live_grant_card", resolve)
+    redis = _Redis()
+    registry = DataBusLiveSessionRegistry(redis)
+    await registry.register(
+        tenant="tenant-a",
+        project="project-a",
+        bundle_id="problem-board@1-0",
+        principal="card:alpha",
+        session_id="session-alpha",
+        socket_id="socket-alpha",
+        expires_at=2_000_000_000,
+        authorization_scope={
+            "credential_kind": "delegated_card",
+            "access_id": "alpha",
+            "resource": "https://runtime.example/problem-board",
+            "client_id": "worker-alpha",
+            "delegate_identity": "worker:alpha",
+            "delegated_bearer_token": "must-not-be-stored",
+        },
+    )
+
+    stored = json.loads(redis.values[registry._socket_key("socket-alpha")])
+    assert stored["authorization"] == {
+        "credential_kind": "delegated_card",
+        "access_id": "alpha",
+        "resource": "https://runtime.example/problem-board",
+        "client_id": "worker-alpha",
+        "delegate_identity": "worker:alpha",
+    }
+    assert "must-not-be-stored" not in json.dumps(stored)
+
+    assert await registry.sessions(
+        tenant="tenant-a",
+        project="project-a",
+        bundle_id="problem-board@1-0",
+        principal="card:alpha",
+        now=1_900_000_000,
+    ) == ()
+    assert registry._socket_key("socket-alpha") not in redis.values
+
+
+@pytest.mark.asyncio
+async def test_active_card_remains_in_outbound_delivery_index(monkeypatch) -> None:
+    resource = "https://runtime.example/problem-board"
+
+    async def resolve(redis, **kwargs):
+        del redis, kwargs
+        return SimpleNamespace(resource_grants={resource: ("work:relay",)})
+
+    monkeypatch.setattr(live_sessions, "resolve_live_grant_card", resolve)
+    redis = _Redis()
+    registry = DataBusLiveSessionRegistry(redis)
+    await registry.register(
+        tenant="tenant-a",
+        project="project-a",
+        bundle_id="problem-board@1-0",
+        principal="card:alpha",
+        session_id="session-alpha",
+        socket_id="socket-alpha",
+        expires_at=2_000_000_000,
+        authorization_scope={
+            "credential_kind": "delegated_card",
+            "access_id": "alpha",
+            "resource": resource,
+            "client_id": "worker-alpha",
+            "delegate_identity": "worker:alpha",
+        },
+    )
+
+    assert await registry.sessions(
+        tenant="tenant-a",
+        project="project-a",
+        bundle_id="problem-board@1-0",
+        principal="card:alpha",
+        now=1_900_000_000,
+    ) == ("session-alpha",)
