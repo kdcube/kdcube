@@ -5156,7 +5156,14 @@ def main() -> None:
         action="append",
         default=[],
         metavar="DIST=SOURCE_DIR",
-        help=argparse.SUPPRESS,
+        help=(
+            "Build a distribution from a local checkout instead of the package index. "
+            "Required with --build whenever the image pins a version that is only "
+            "in your working tree, which is the normal case for a maintainer: "
+            "without it pip resolves that distribution publicly, finds an unrelated "
+            "placeholder, and the build fails. Repeat per distribution, "
+            "e.g. app-foundation=/path/to/app-ecosystem/packages/app-foundation."
+        ),
     )
     _sp.add_argument(
         "--no-restart",
