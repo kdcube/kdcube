@@ -433,20 +433,34 @@ class RedisNamedServiceDiscovery:
                     exc_info=True,
                 )
                 continue
-        LOGGER.info(
-            "Named-service discovery provider scan:\n"
-            "  scope: tenant=%s project=%s\n"
-            "  namespace: %s\n"
-            "  provider_keys: %s\n"
-            "  usable_records: %s\n"
-            "  missing_records: %s",
-            self.tenant,
-            self.project,
-            namespace or "<all>",
-            len(keys),
-            len(entries),
-            missing,
-        )
+        # This runs per namespace on every discovery pass, so a deployment with
+        # a dozen namespaces writes this block several times a minute, six lines
+        # at a time, to report that nothing is wrong. A scan that found every
+        # record it expected is the normal case and belongs at debug. A scan
+        # that came up short is the one worth seeing, and it says so on one line
+        # rather than six, because a reader scanning for trouble should not have
+        # to read a paragraph to find the number that matters.
+        if missing:
+            LOGGER.warning(
+                "Named-service discovery scan is missing records: "
+                "tenant=%s project=%s namespace=%s provider_keys=%s usable=%s missing=%s",
+                self.tenant,
+                self.project,
+                namespace or "<all>",
+                len(keys),
+                len(entries),
+                missing,
+            )
+        else:
+            LOGGER.debug(
+                "Named-service discovery provider scan: "
+                "tenant=%s project=%s namespace=%s provider_keys=%s usable=%s missing=0",
+                self.tenant,
+                self.project,
+                namespace or "<all>",
+                len(keys),
+                len(entries),
+            )
         return entries
 
     async def list_entries(self) -> list[NamedServiceDiscoveryEntry]:

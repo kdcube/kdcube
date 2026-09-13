@@ -1278,7 +1278,7 @@ def _log_bundle_mcp_response(
     content_type = response.headers.get("content-type", "")
     body = response.content or b""
     if method not in {"server/discover", "initialize", "tools/list", "tools/call"}:
-        logger.info(
+        logger.debug(
             "Bundle MCP response method=%s status=%s content_type=%s body_bytes=%s",
             method or "<unknown>",
             response.status_code,
@@ -1313,13 +1313,32 @@ def _log_bundle_mcp_response(
         )
         return
 
-    logger.info(
-        "Bundle MCP response method=%s status=%s content_type=%s body_bytes=%s error=%s result_keys=%s tool_count=%s tool_names=%s",
+    # A healthy discovery or call says nothing a reader can act on, and
+    # tools/list repeats the whole catalogue on every request: for a bundle with
+    # forty tools that is a kilobyte of names per line, many times a minute. The
+    # count is enough to notice a catalogue that changed shape. Names, keys and
+    # the rest stay one level down, and a response carrying an error is still
+    # reported in full at info, because that one is worth reading.
+    if is_error:
+        logger.info(
+            "Bundle MCP response method=%s status=%s content_type=%s body_bytes=%s error=%s result_keys=%s tool_count=%s tool_names=%s",
+            method,
+            response.status_code,
+            content_type,
+            len(body),
+            is_error,
+            result_keys,
+            len(tool_names),
+            tool_names,
+        )
+        return
+
+    logger.debug(
+        "Bundle MCP response method=%s status=%s content_type=%s body_bytes=%s result_keys=%s tool_count=%s tool_names=%s",
         method,
         response.status_code,
         content_type,
         len(body),
-        is_error,
         result_keys,
         len(tool_names),
         tool_names,

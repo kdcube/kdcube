@@ -266,7 +266,7 @@ async def _run_job_loop(
                 _active_task.cancel()
             return
 
-        _log.info("[scheduler] Tick fired: bundle=%s alias=%s span=%s", bundle_id, job_alias, span)
+        _log.debug("[scheduler] Tick fired: bundle=%s alias=%s span=%s", bundle_id, job_alias, span)
 
         if span == "process":
             if _active_task is not None and not _active_task.done():
@@ -361,13 +361,13 @@ async def _run_with_redis_lock(
         return
 
     if not got_lock:
-        _log.info(
+        _log.debug(
             "[scheduler] Lock held by another; skipping tick: bundle=%s alias=%s span=%s key=%s",
             bundle_id, job_alias, span, lock_key,
         )
         return
 
-    _log.info(
+    _log.debug(
         "[scheduler] Lock acquired: bundle=%s alias=%s span=%s key=%s",
         bundle_id, job_alias, span, lock_key,
     )
@@ -402,7 +402,7 @@ async def _run_with_redis_lock(
             current_val = await redis.get(lock_key)
             if current_val is not None and current_val.decode() == token:
                 await redis.delete(lock_key)
-                _log.info(
+                _log.debug(
                     "[scheduler] Lock released: bundle=%s alias=%s key=%s",
                     bundle_id, job_alias, lock_key,
                 )
@@ -448,7 +448,7 @@ async def _invoke_job(
     except Exception:
         _log.debug("[scheduler] pg_pool not available for bundle=%s; proceeding without", bundle_id)
 
-    _log.info("[scheduler] Job started: bundle=%s method=%s", bundle_id, method_name)
+    _log.debug("[scheduler] Job started: bundle=%s method=%s", bundle_id, method_name)
     try:
         auth_context = AuthContext.for_bundle_job(
             tenant=str(getattr(bundle_config, "tenant", "") or ""),
@@ -513,7 +513,7 @@ async def _invoke_job(
                 await fn()
             else:
                 await asyncio.to_thread(fn)
-        _log.info("[scheduler] Job completed: bundle=%s method=%s", bundle_id, method_name)
+        _log.debug("[scheduler] Job completed: bundle=%s method=%s", bundle_id, method_name)
     except Exception:
         _log.exception("[scheduler] Job raised: bundle=%s method=%s", bundle_id, method_name)
         raise

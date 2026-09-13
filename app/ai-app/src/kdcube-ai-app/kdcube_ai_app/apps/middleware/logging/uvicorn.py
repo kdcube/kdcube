@@ -36,6 +36,7 @@ def configure_logging(
         silenced_paths=("/health", "/landing/health"),
         silenced_prefixes=("/monitoring/", "/metrics"),
         socketio_level="WARNING",
+        mcp_level="WARNING",
 ):
     """
     Call once, as early as possible (before app = FastAPI(...)).
@@ -73,6 +74,15 @@ def configure_logging(
             # Quiet Socket.IO / Engine.IO
             "engineio.server": {"level": socketio_level},
             "socketio.server": {"level": socketio_level},
+
+            # Quiet the MCP SDK's transport bookkeeping. It logs a session
+            # manager starting and shutting down around every single request,
+            # which on a bundle that serves an MCP surface is two lines per
+            # call and says nothing a reader can act on. Failures still carry
+            # their own warnings and exceptions.
+            "mcp.server.streamable_http_manager": {"level": mcp_level},
+            "mcp.server.sse": {"level": mcp_level},
+            "mcp.server.lowlevel.server": {"level": mcp_level},
         },
     }
 

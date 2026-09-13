@@ -1187,18 +1187,32 @@ async def authorize_delegated_mcp_request(
         )
 
     runtime = delegated_mcp_runtime_projection(request)
+    # An accepted request is the normal case and it repeats constantly, so it
+    # logs what identifies this call and what it actually did. The full grant
+    # and operation lists are a property of the card, not of the call: they are
+    # identical on every line, they run to a kilobyte on a card carrying forty
+    # operations, and they bury the one field a reader wants, which is the tool
+    # that was invoked. Counts are enough to notice a card whose shape changed,
+    # and the lists themselves stay one level down. Refusals log in full
+    # elsewhere, because those are worth reading every time.
     LOGGER.info(
         "[connection-hub.oauth.mcp_guard] accepted resource=%s subject=%s grantor=%s "
-        "delegate=%s authority=%s scopes=%s tools=%s identity_scope=%s tool_calls=%s",
+        "delegate=%s authority=%s identity_scope=%s scope_count=%s operation_count=%s tool_calls=%s",
         request_resource,
         user.get("sub") or "",
         runtime.get("grantor_user_id") or "",
         runtime.get("delegate_identity") or "",
         envelope.issuer_authority_id,
+        runtime.get("identity_scope") or "",
+        len(decision.available_grants),
+        len(decision.granted_operations),
+        [tool for _, tool in tool_calls],
+    )
+    LOGGER.debug(
+        "[connection-hub.oauth.mcp_guard] accepted resource=%s scopes=%s tools=%s",
+        request_resource,
         sorted(decision.available_grants),
         sorted(decision.granted_operations),
-        runtime.get("identity_scope") or "",
-        [tool for _, tool in tool_calls],
     )
     return None
 
