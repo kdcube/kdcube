@@ -19,12 +19,20 @@ from kdcube_ai_app.apps.chat.proc.app_deployment.coordinator import (
 from kdcube_ai_app.apps.chat.proc.app_deployment.deprovision import (
     deprovision_loaded_bundle_app_resources,
 )
+from kdcube_ai_app.apps.chat.proc.app_deployment.delegated_catalog import (
+    authoritative_catalog_participant_ids,
+    connection_hub_props_with_authoritative_catalog,
+    publish_authoritative_delegated_catalog,
+)
 from kdcube_ai_app.apps.chat.proc.app_deployment.modes import (
     static_widget_runtime_generation,
 )
 from kdcube_ai_app.apps.chat.proc.app_lifecycle.supervisor import (
     ApplicationLifecycleSupervisor,
     ApplicationPreparation,
+)
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.catalog.assembly import (
+    CONNECTION_HUB_BUNDLE_ID,
 )
 from kdcube_ai_app.infra.plugin.app_readiness import (
     ApplicationLifecycleState,
@@ -51,7 +59,6 @@ from kdcube_ai_app.infra.plugin.bundle_store import (
     bundle_entry_to_spec,
     get_bundle_props_from_authority,
 )
-
 APP_PREPARATION_SCHEMA_VERSION = 1
 
 
@@ -177,7 +184,10 @@ class ProcApplicationLifecycle:
         self.registry = registry
         self.logger = logger or logging.getLogger(__name__)
         self._reconcile_lock = asyncio.Lock()
+        self._catalog_reconcile_lock = asyncio.Lock()
         self._last_registry: BundlesRegistry | None = None
+        self._catalog_participants: set[str] = set()
+        self._catalog_reconcile_error: Exception | None = None
         self._ready_callback: Callable[[ApplicationPreparation], Awaitable[None]] | None = None
         self.supervisor = ApplicationLifecycleSupervisor(
             tenant=self.tenant,
@@ -240,6 +250,10 @@ class ProcApplicationLifecycle:
         """Publish desired state and start, replace, or retain per-app tasks."""
         async with self._reconcile_lock:
             self._last_registry = registry
+            await self._reconcile_delegated_catalog(
+                registry,
+                reason="application_reconcile",
+            )
             entries = [
                 entry
                 for application_id, entry in (registry.bundles or {}).items()
@@ -258,7 +272,60 @@ class ProcApplicationLifecycle:
         """Retire one application while retaining all sibling lifecycle tasks."""
         async with self._reconcile_lock:
             self._last_registry = registry
+            await self._reconcile_delegated_catalog(
+                registry,
+                reason=f"application_retire:{application_id}",
+            )
             await self.supervisor.retire(application_id)
+
+    async def _reconcile_delegated_catalog(
+        self,
+        registry: BundlesRegistry,
+        *,
+        reason: str,
+    ) -> None:
+        async with self._catalog_reconcile_lock:
+            self._catalog_participants = {
+                CONNECTION_HUB_BUNDLE_ID
+            } if CONNECTION_HUB_BUNDLE_ID in registry.bundles else set()
+            try:
+                self._catalog_participants = await authoritative_catalog_participant_ids(
+                    registry=registry,
+                    tenant=self.tenant,
+                    project=self.project,
+                )
+                result = await publish_authoritative_delegated_catalog(
+                    registry=registry,
+                    tenant=self.tenant,
+                    project=self.project,
+                    pg_pool=self.pg_pool,
+                    redis=self.redis,
+                    reason=reason,
+                    logger=self.logger,
+                )
+            except Exception as exc:
+                self._catalog_reconcile_error = exc
+                self.logger.error(
+                    "Delegated catalog reconciliation failed: participants=%s reason=%s error=%s",
+                    sorted(self._catalog_participants),
+                    reason,
+                    exc,
+                    exc_info=True,
+                )
+                return
+            self._catalog_reconcile_error = None
+            if result is not None:
+                self.logger.info(
+                    "Delegated catalog reconciled: version=%s created=%s contributors=%s reason=%s",
+                    result.version,
+                    result.created,
+                    sorted(
+                        self._catalog_participants.difference(
+                            {CONNECTION_HUB_BUNDLE_ID}
+                        )
+                    ),
+                    reason,
+                )
 
     async def deprovision(
         self,
@@ -370,6 +437,23 @@ class ProcApplicationLifecycle:
         if not isinstance(entry, BundleEntry):
             entry = BundleEntry.model_validate(entry)
         resolved_entry = await self._resolve_entry(entry)
+        if (
+            self._catalog_reconcile_error is not None
+            and resolved_entry.id in self._catalog_participants
+        ):
+            if self._last_registry is not None:
+                await self._reconcile_delegated_catalog(
+                    self._last_registry,
+                    reason=f"application_prepare_retry:{resolved_entry.id}",
+                )
+        if (
+            self._catalog_reconcile_error is not None
+            and resolved_entry.id in self._catalog_participants
+        ):
+            raise RuntimeError(
+                "Delegated catalog is not ready for "
+                f"{resolved_entry.id}: {self._catalog_reconcile_error}"
+            ) from self._catalog_reconcile_error
         if not str(resolved_entry.path or "").strip() or not Path(resolved_entry.path).exists():
             raise RuntimeError(
                 f"Application source is not materialized: application={resolved_entry.id} "
@@ -398,6 +482,27 @@ class ProcApplicationLifecycle:
             project=self.project,
             logger=self.logger,
         )
+        effective_props_transform = None
+        if resolved_entry.id == CONNECTION_HUB_BUNDLE_ID:
+
+            async def _effective_props_transform(
+                effective_props: dict[str, Any],
+            ) -> dict[str, Any]:
+                if self._last_registry is None:
+                    raise RuntimeError(
+                        "Application lifecycle has no registry for delegated catalog assembly"
+                    )
+                return await connection_hub_props_with_authoritative_catalog(
+                    effective_props,
+                    registry=self._last_registry,
+                    tenant=self.tenant,
+                    project=self.project,
+                    pg_pool=self.pg_pool,
+                    redis=self.redis,
+                )
+
+            effective_props_transform = _effective_props_transform
+
         await deploy_loaded_bundle_app_resources(
             workflow=workflow,
             module=module,
@@ -407,6 +512,7 @@ class ProcApplicationLifecycle:
             project=self.project,
             pg_pool=self.pg_pool,
             redis=self.redis,
+            effective_props_transform=effective_props_transform,
         )
 
     async def wait_for_current(self) -> None:
