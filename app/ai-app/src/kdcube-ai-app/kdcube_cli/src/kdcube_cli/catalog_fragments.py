@@ -384,7 +384,8 @@ def _apply_value(
     *,
     path: str,
     changes: list[dict[str, Any]],
-) -> None:
+    overwrite_conflicts: bool,
+) -> Any:
     if isinstance(expected, dict) and isinstance(actual, dict):
         for key, expected_value in expected.items():
             child_path = _mapping_path(path, str(key))
@@ -394,16 +395,47 @@ def _apply_value(
                     {"kind": "added", "path": child_path, "value": copy.deepcopy(expected_value)}
                 )
                 continue
-            _apply_value(
+            actual[key] = _apply_value(
                 expected_value,
                 actual[key],
                 path=child_path,
                 changes=changes,
+                overwrite_conflicts=overwrite_conflicts,
             )
-        return
+        return actual
     if isinstance(expected, list) and isinstance(actual, list):
         if not _is_scalar_list(expected) or not _is_scalar_list(actual):
-            return
+            if overwrite_conflicts and expected != actual:
+                changes.append(
+                    {
+                        "kind": "updated",
+                        "path": path,
+                        "before": copy.deepcopy(actual),
+                        "value": copy.deepcopy(expected),
+                    }
+                )
+                return copy.deepcopy(expected)
+            return actual
+        if overwrite_conflicts and _is_exact_set_path(path):
+            missing = any(
+                not any(_same_scalar(expected_item, actual_item) for actual_item in actual)
+                for expected_item in expected
+            )
+            extra = any(
+                not any(_same_scalar(actual_item, expected_item) for expected_item in expected)
+                for actual_item in actual
+            )
+            if missing or extra:
+                changes.append(
+                    {
+                        "kind": "updated",
+                        "path": path,
+                        "before": copy.deepcopy(actual),
+                        "value": copy.deepcopy(expected),
+                    }
+                )
+                return copy.deepcopy(expected)
+            return actual
         for expected_item in expected:
             if any(_same_scalar(expected_item, actual_item) for actual_item in actual):
                 continue
@@ -415,6 +447,18 @@ def _apply_value(
                     "value": copy.deepcopy(expected_item),
                 }
             )
+        return actual
+    if overwrite_conflicts and not _same_scalar(expected, actual):
+        changes.append(
+            {
+                "kind": "updated",
+                "path": path,
+                "before": copy.deepcopy(actual),
+                "value": copy.deepcopy(expected),
+            }
+        )
+        return copy.deepcopy(expected)
+    return actual
 
 
 def _apply_keyed_items(
@@ -424,6 +468,7 @@ def _apply_keyed_items(
     key: str,
     path: str,
     changes: list[dict[str, Any]],
+    overwrite_conflicts: bool,
 ) -> None:
     if not expected:
         return
@@ -451,12 +496,15 @@ def _apply_keyed_items(
                 {"kind": "added", "path": item_path, "value": copy.deepcopy(expected_item)}
             )
             continue
-        _apply_value(
+        indexed[identity] = _apply_value(
             expected_item,
             actual_item,
             path=item_path,
             changes=changes,
+            overwrite_conflicts=overwrite_conflicts,
         )
+        if indexed[identity] is not actual_item:
+            actual[actual.index(actual_item)] = indexed[identity]
 
 
 def apply_catalog_fragment_to_descriptor(
@@ -464,6 +512,7 @@ def apply_catalog_fragment_to_descriptor(
     *,
     fragment: dict[str, Any],
     connection_hub_bundle_id: str = DEFAULT_CONNECTION_HUB_BUNDLE_ID,
+    overwrite_conflicts: bool = False,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     updated = copy.deepcopy(descriptor)
     bundle = _find_bundle(updated, connection_hub_bundle_id)
@@ -479,6 +528,7 @@ def apply_catalog_fragment_to_descriptor(
         key="grant",
         path="capabilities",
         changes=changes,
+        overwrite_conflicts=overwrite_conflicts,
     )
     _apply_keyed_items(
         fragment["resources"],
@@ -486,6 +536,7 @@ def apply_catalog_fragment_to_descriptor(
         key="resource",
         path="resources",
         changes=changes,
+        overwrite_conflicts=overwrite_conflicts,
     )
     return updated, changes
 
@@ -644,9 +695,12 @@ def process_catalog_fragment(
     fragment_path: Path,
     action: str,
     connection_hub_bundle_id: str = DEFAULT_CONNECTION_HUB_BUNDLE_ID,
+    overwrite_conflicts: bool = False,
 ) -> dict[str, Any]:
     if action not in {"check", "apply"}:
         raise CatalogFragmentError(f"Unsupported catalog fragment action: {action}")
+    if overwrite_conflicts and action != "apply":
+        raise CatalogFragmentError("overwrite_conflicts is supported only for catalog apply")
     descriptor, descriptor_raw = _load_yaml_mapping(bundles_path, label="bundles descriptor")
     raw_fragment, _fragment_raw = _load_yaml_mapping(fragment_path, label="catalog fragment")
     fragment = validate_catalog_fragment(raw_fragment)
@@ -660,6 +714,7 @@ def process_catalog_fragment(
             descriptor,
             fragment=fragment,
             connection_hub_bundle_id=connection_hub_bundle_id,
+            overwrite_conflicts=overwrite_conflicts,
         )
         updated_bundle = _find_bundle(updated, connection_hub_bundle_id)
         effective_catalog = _read_catalog(updated_bundle)
@@ -686,6 +741,7 @@ def process_catalog_fragment(
     result = {
         "schema": CATALOG_FRAGMENT_SCHEMA,
         "action": action,
+        "overwrite_conflicts": overwrite_conflicts,
         "status": status,
         "in_sync": in_sync,
         "changed": bool(changes),

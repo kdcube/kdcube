@@ -2131,6 +2131,7 @@ def run_catalog_fragment_command(
     fragment_path: Path,
     action: str,
     connection_hub_bundle_id: str = DEFAULT_CONNECTION_HUB_BUNDLE_ID,
+    overwrite_conflicts: bool = False,
     json_output: bool = False,
 ) -> dict[str, object]:
     config_dir = _canonical_descriptor_dir_from_initialized_workdir(workdir)
@@ -2148,6 +2149,7 @@ def run_catalog_fragment_command(
             fragment_path=fragment_path.expanduser().resolve(),
             action=action,
             connection_hub_bundle_id=connection_hub_bundle_id,
+            overwrite_conflicts=overwrite_conflicts,
         )
     except CatalogFragmentError as exc:
         raise SystemExit(str(exc)) from exc
@@ -4838,6 +4840,14 @@ def main() -> None:
         default=DEFAULT_CONNECTION_HUB_BUNDLE_ID,
         help="With `bundle catalog check|apply`, target Connection Hub bundle ID",
     )
+    _sp.add_argument(
+        "--overwrite-conflicts",
+        action="store_true",
+        help=(
+            "With `bundle catalog apply`, replace conflicting values at paths declared "
+            "by the fragment; unrelated declarations remain unchanged"
+        ),
+    )
 
     _sp = subparsers.add_parser("config", help="Export or import runtime descriptors")
     _add_quiet_arg(_sp)
@@ -5580,10 +5590,13 @@ def main() -> None:
                 ]
             )
             if _bundle_arg != "catalog" and (
-                bool(args.catalog_fragment) or _arg_provided("--connection-hub-bundle-id")
+                bool(args.catalog_fragment)
+                or _arg_provided("--connection-hub-bundle-id")
+                or bool(args.overwrite_conflicts)
             ):
                 raise SystemExit(
-                    "--catalog-fragment and --connection-hub-bundle-id are only supported with "
+                    "--catalog-fragment, --connection-hub-bundle-id, and "
+                    "--overwrite-conflicts are only supported with "
                     "`kdcube bundle catalog check|apply`."
                 )
             if _bundle_arg == "catalog":
@@ -5610,12 +5623,18 @@ def main() -> None:
                     raise SystemExit(
                         "--catalog-fragment is required with `kdcube bundle catalog check|apply`."
                     )
+                if args.overwrite_conflicts and _status_bundle_arg != "apply":
+                    raise SystemExit(
+                        "--overwrite-conflicts is supported only with "
+                        "`kdcube bundle catalog apply`."
+                    )
                 result = run_catalog_fragment_command(
                     console,
                     workdir=_resolved,
                     fragment_path=Path(str(args.catalog_fragment)),
                     action=_status_bundle_arg,
                     connection_hub_bundle_id=str(args.connection_hub_bundle_id).strip(),
+                    overwrite_conflicts=bool(args.overwrite_conflicts),
                     json_output=bool(args.json_output),
                 )
                 if not bool(result.get("in_sync")):
