@@ -1,4 +1,5 @@
 import json
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -80,6 +81,25 @@ def _gateway_config():
             "hard_limit": int(actual * 0.98),
         },
     )
+
+
+@pytest.mark.asyncio
+async def test_successful_capacity_checks_are_debug_diagnostics(caplog):
+    manager = AtomicBackpressureManager("redis://example", _gateway_config(), monitor=None)
+    manager.redis = _EvalRedis()
+    logger_name = "kdcube_ai_app.infra.gateway.backpressure"
+
+    with caplog.at_level(logging.INFO, logger=logger_name):
+        success, _, _ = await manager._atomic_capacity_check(UserType.PRIVILEGED)
+
+    assert success is True
+    assert "Gateway capacity check passed" not in caplog.text
+
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG, logger=logger_name):
+        await manager._atomic_capacity_check(UserType.PRIVILEGED)
+
+    assert "Gateway capacity check passed: privileged, queue=3/12" in caplog.text
 
 
 @pytest.mark.asyncio

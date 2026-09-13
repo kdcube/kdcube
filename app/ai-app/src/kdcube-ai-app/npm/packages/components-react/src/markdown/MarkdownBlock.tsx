@@ -1,20 +1,24 @@
 import { memo, useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
 
-import { closeStreamingMarkdown, markdownPlugins } from './support.ts'
+import { closeStreamingMarkdown, markdownPlugins, standardMarkdownPlugins } from './support.ts'
+
+export type MarkdownSoftBreakBehavior = 'line-break' | 'space'
 
 export interface MarkdownBlockProps {
   content: string
   compact?: boolean
+  softBreakBehavior?: MarkdownSoftBreakBehavior
 }
 
-function MarkdownBlockImpl({ content, compact = false }: MarkdownBlockProps) {
+function MarkdownBlockImpl({ content, compact = false, softBreakBehavior = 'line-break' }: MarkdownBlockProps) {
   const normalized = useMemo(() => closeStreamingMarkdown(content), [content])
+  const plugins = softBreakBehavior === 'space' ? standardMarkdownPlugins : markdownPlugins
 
   return (
     <div className={`markdown-body ${compact ? 'markdown-body--compact text-[13px]' : 'text-[14px]'}`}>
       <ReactMarkdown
-        remarkPlugins={markdownPlugins}
+        remarkPlugins={plugins}
         components={{
           a: ({ children, href }) => (
             <a href={href} target="_blank" rel="noreferrer">

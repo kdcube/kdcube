@@ -855,7 +855,12 @@ class AtomicBackpressureManager:
             }
 
             if success:
-                logger.info(f"Gateway capacity check passed: {user_type.value}, queue={current_queue_size}/{actual_capacity}")
+                logger.debug(
+                    "Gateway capacity check passed: %s, queue=%s/%s",
+                    user_type.value,
+                    current_queue_size,
+                    actual_capacity,
+                )
             else:
                 logger.warning(f"Gateway capacity check failed: {user_type.value}, reason={reason}, queue={current_queue_size}/{actual_capacity}")
 

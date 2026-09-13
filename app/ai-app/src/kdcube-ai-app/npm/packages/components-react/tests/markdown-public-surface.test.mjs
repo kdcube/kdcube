@@ -25,3 +25,23 @@ test('the public Markdown renderer closes an unfinished fenced block', () => {
   assert.match(html, /<pre><code class="language-ts">/)
   assert.match(html, /const ready = true/)
 })
+
+test('the public Markdown renderer can preserve standard soft-line semantics', () => {
+  const html = renderToStaticMarkup(createElement(MarkdownBlock, {
+    content: 'A sentence wraps in the\nsource without ending the paragraph.\n\nA new paragraph starts here.',
+    softBreakBehavior: 'space',
+  }))
+
+  assert.doesNotMatch(html, /<br/)
+  assert.equal((html.match(/<p /g) || []).length, 2)
+  assert.match(html, /A sentence wraps in the\nsource without ending the paragraph\.<\/p>/)
+  assert.match(html, /<p class="my-2 leading-6">A new paragraph starts here\.<\/p>/)
+})
+
+test('the public Markdown renderer keeps chat-style soft breaks by default', () => {
+  const html = renderToStaticMarkup(createElement(MarkdownBlock, {
+    content: 'first line\nsecond line',
+  }))
+
+  assert.match(html, /first line<br\/>\nsecond line/)
+})
