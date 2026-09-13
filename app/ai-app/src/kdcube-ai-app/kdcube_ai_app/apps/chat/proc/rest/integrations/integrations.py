@@ -120,6 +120,9 @@ from kdcube_ai_app.apps.chat.proc.app_deployment.coordinator import (
     props_fingerprint,
     source_generation_for_spec,
 )
+from kdcube_ai_app.apps.chat.proc.app_deployment.delegated_catalog import (
+    check_authoritative_delegated_catalog,
+)
 from kdcube_ai_app.apps.chat.proc.app_deployment.modes import static_widget_delivery_mode
 from kdcube_ai_app.apps.chat.proc.app_deployment.policy import (
     enabled_section as _enabled_section,
@@ -152,6 +155,9 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentia
     delegated_rest_runtime_projection,
     mcp_auth_mode,
     rest_auth_mode,
+)
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.catalog.assembly import (
+    CatalogAssemblyError,
 )
 from kdcube_ai_app.apps.chat.proc.rest.integrations.operation_csrf import (
     OPERATION_CSRF_HEADER,
@@ -1566,6 +1572,11 @@ class BundleStatusRequest(BaseModel):
     bundle_id: str
 
 
+class BundleCatalogCheckRequest(BaseModel):
+    tenant: Optional[str] = None
+    project: Optional[str] = None
+
+
 class BundlePreparationRetryRequest(BaseModel):
     tenant: Optional[str] = None
     project: Optional[str] = None
@@ -2789,6 +2800,59 @@ async def internal_bundle_status(payload: BundleStatusRequest, request: Request)
             },
             "authority": describe_authoritative_bundle_store(tenant_id, project_id),
         }
+
+
+@internal_router.post("/internal/bundles/catalog/check", status_code=200)
+async def internal_delegated_catalog_check(
+        payload: BundleCatalogCheckRequest,
+        request: Request,
+):
+    """Compare app-owned declarations with the catalog serving requests."""
+    client_ip = request.client.host if request.client else ""
+    if client_ip not in _LOCALHOST:
+        raise HTTPException(status_code=403, detail="Internal endpoint: localhost only")
+
+    settings = get_settings()
+    tenant_id = payload.tenant or settings.TENANT
+    project_id = payload.project or settings.PROJECT
+    redis = _get_app_redis(request)
+    try:
+        registry = await load_registry(redis, tenant_id, project_id)
+        result = await check_authoritative_delegated_catalog(
+            registry=registry,
+            tenant=tenant_id,
+            project=project_id,
+            pg_pool=_get_app_pg_pool(request),
+            redis=redis,
+        )
+    except CatalogAssemblyError as exc:
+        result = {
+            "schema": "kdcube.delegated-catalog-check.v1",
+            "status": "invalid",
+            "in_sync": False,
+            "contributors": list(exc.owners),
+            "differences": [
+                {
+                    "kind": "declaration_error",
+                    **exc.to_dict(),
+                }
+            ],
+        }
+    except Exception as exc:
+        logger.exception("Delegated catalog check failed")
+        result = {
+            "schema": "kdcube.delegated-catalog-check.v1",
+            "status": "unavailable",
+            "in_sync": False,
+            "contributors": [],
+            "differences": [],
+            "reason": f"{type(exc).__name__}: {exc}",
+        }
+    return {
+        "tenant": tenant_id,
+        "project": project_id,
+        **result,
+    }
 
 
 async def _retry_application_preparation(

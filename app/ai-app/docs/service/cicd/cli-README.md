@@ -1,10 +1,10 @@
 ---
 id: repo:kdcube/app/ai-app/docs/service/cicd/cli-README.md
 title: "Current KDCube CLI"
-summary: "Current implemented CLI surface for local environment bootstrapping, workdir preparation, Docker Compose startup, descriptor validation, exact delegated secret management, host-vault activation, maintainer package-source builds, and deployment selection."
+summary: "Current implemented CLI surface for local environment bootstrapping, workdir preparation, Docker Compose startup, descriptor validation, serving-catalog checks, exact delegated secret management, host-vault activation, maintainer package-source builds, and deployment selection."
 tags: ["service", "cicd", "cli", "env", "deployment", "bundle"]
-keywords: ["kdcube cli", "local environment bootstrap", "workdir setup", "docker compose control", "descriptor validation", "current cli contract", "local deployment tooling", "multiple local runtime snapshots", "single active local deployment", "tenant project workdir namespace", "bundle config patch", "bundle secret patch", "bundle delete", "managed bundle deletion", "purge-data", "force-retire", "targeted bundle retirement", "host vault stage", "host vault activate", "host vault recover", "kdcube bundle command", "bundle reload internals", "reload-authority", "maintainer local Python package", "unpublished package candidate"]
-updated_at: 2026-09-11
+keywords: ["kdcube cli", "local environment bootstrap", "workdir setup", "docker compose control", "descriptor validation", "app-owned delegated catalog", "catalog drift check", "current cli contract", "local deployment tooling", "multiple local runtime snapshots", "single active local deployment", "tenant project workdir namespace", "bundle config patch", "bundle secret patch", "bundle delete", "managed bundle deletion", "purge-data", "force-retire", "targeted bundle retirement", "host vault stage", "host vault activate", "host vault recover", "kdcube bundle command", "bundle reload internals", "reload-authority", "maintainer local Python package", "unpublished package candidate"]
+updated_at: 2026-09-13
 see_also:
   - repo:kdcube/app/ai-app/docs/service/cicd/release-README.md
   - repo:kdcube/app/ai-app/docs/service/cicd/descriptors-README.md
@@ -666,6 +666,35 @@ IDs are reloaded and removed IDs are retired after staging. This is inventory
 reconciliation: a removed ID does not run `on_app_deprovision(...)` and does
 not receive purge permission. Each runtime operation targets only its changed
 ID; unchanged bundles keep running.
+
+### Check the serving delegated catalog<a id="catalog-check"></a>
+
+Each app owns its contributed capabilities and operations under
+`config.delegated_catalog` in `bundles.yaml`. Application reconciliation
+assembles all current app declarations with Connection Hub's base catalog and
+publishes one immutable catalog. Check descriptor authority against the catalog
+that is actually serving authorization requests:
+
+```bash
+kdcube bundle catalog check --workdir <runtime-workdir>
+```
+
+The command requires the selected local runtime's `chat-proc` to be running.
+It is read-only: it changes no descriptor, catalog, application, or delegated
+Card. Exit status is `0` when descriptor authority and the active catalog match.
+Exit status is `1` for any of these states:
+
+- a missing, extra, type-mismatched, or value-mismatched catalog path;
+- an active catalog that cannot be resolved;
+- an invalid app declaration, including two apps claiming the same capability,
+  direct resource, or namespace on a shared named-services resource.
+
+Human output names each path and, for ownership errors, both app IDs. `--json`
+returns the same complete `differences`, contributor IDs, content hashes, and
+active catalog version. Fix the owning app descriptor and reload that app; do
+not edit Connection Hub's catalog or use a second merge workflow. Loading,
+reloading, or retiring catalog-contributing apps is what republishes the
+assembled catalog. Existing Cards are never expanded automatically.
 
 ### 2.3c Export and import local runtime descriptors
 

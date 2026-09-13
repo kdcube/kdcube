@@ -3,8 +3,8 @@ id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run
 title: "How To Configure And Run A Bundle"
 summary: "Current bundle-development runtime workflow: tenant/project environment setup, descriptor staging, local-path and git bundles, configuration translation, start/stop/reload loop, configuration/secret scopes, bundle events, and the rule that one machine may hold many local deployment snapshots but should not be treated as running many local compose-backed KDCubes at once."
 tags: ["sdk", "bundle", "configuration", "runtime", "cli", "bundles.yaml"]
-keywords: ["local bundle development workflow", "tenant project deployment scope", "descriptor driven runtime setup", "local path bundle loop", "git bundle loop", "bundle reload workflow", "runtime directory selection", "bundle config and secret scopes", "shared sdk widget sources", "bundle events", "event sources", "artifact rehosters", "bundle configurator workflow", "bundle deployer workflow", "current kdcube cli workflow", "multiple local runtime snapshots", "single active local compose deployment", "run multiple kdcubes on one machine", "kdcube bundle command", "patch bundle config cli", "patch bundle secret cli"]
-updated_at: 2026-07-16
+keywords: ["local bundle development workflow", "tenant project deployment scope", "descriptor driven runtime setup", "local path bundle loop", "git bundle loop", "bundle reload workflow", "runtime directory selection", "bundle config and secret scopes", "app-owned delegated catalog", "catalog drift check", "shared sdk widget sources", "bundle events", "event sources", "artifact rehosters", "bundle configurator workflow", "bundle deployer workflow", "current kdcube cli workflow", "multiple local runtime snapshots", "single active local compose deployment", "run multiple kdcubes on one machine", "kdcube bundle command", "patch bundle config cli", "patch bundle secret cli"]
+updated_at: 2026-09-13
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
@@ -1397,6 +1397,28 @@ not contain `bundles.secrets.yaml`, the existing runtime secrets descriptor is
 preserved. Host local bundle paths in the source descriptor are translated to
 the runtime-visible `/bundles/...` path before writing the active runtime
 descriptor.
+
+### App-owned delegated catalog
+
+Put the capabilities, direct resources, and shared named-service namespaces an
+app contributes under that bundle's `config.delegated_catalog`. The app
+descriptor remains the authority; do not merge those rows into Connection Hub.
+The complete schema and ownership rules are in
+[Bundles Descriptor](../../../configuration/bundles-descriptor-README.md#app-owned-delegated-catalog-declarations).
+
+After staging and reloading the app, compare descriptor authority with the
+immutable catalog serving requests:
+
+```bash
+kdcube bundle catalog check \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+```
+
+Exit `0` means they match. Exit `1` names every drift path, catalog
+unavailability, or conflicting declaration owner. Correct the owning app
+descriptor and reload that app. The check changes no descriptor, catalog, or
+Card. The command contract is in
+[Current KDCube CLI](../../../service/cicd/cli-README.md#catalog-check).
 
 ### If you changed `bundles.yaml` or `bundles.secrets.yaml` inside the active runtime
 

@@ -276,6 +276,10 @@ async def deploy_loaded_bundle_app_resources(
     project: str,
     pg_pool: Any = None,
     redis: Any = None,
+    effective_props_transform: Callable[
+        [dict[str, Any]], Awaitable[Mapping[str, Any]] | Mapping[str, Any]
+    ]
+    | None = None,
 ) -> AppStaticSurfaceManifest | None:
     """Reconcile the resources required by one desired app generation.
 
@@ -291,6 +295,13 @@ async def deploy_loaded_bundle_app_resources(
         bundle_id=bundle_id,
     ) or {}
     effective_props = apply_effective_props(workflow, descriptor_props)
+    if effective_props_transform is not None:
+        transformed = effective_props_transform(copy.deepcopy(effective_props))
+        if inspect.isawaitable(transformed):
+            transformed = await transformed
+        if not isinstance(transformed, Mapping):
+            raise TypeError("effective_props_transform must return a mapping")
+        effective_props = apply_effective_props(workflow, transformed)
     storage_root = await resolve_app_storage_root(
         spec=bundle_spec,
         tenant=tenant,
@@ -337,7 +348,15 @@ async def deploy_loaded_bundle_app_resources(
             project=project,
             bundle_id=bundle_id,
         ) or {}
-        return apply_effective_props(workflow, fresh)
+        reread = apply_effective_props(workflow, fresh)
+        if effective_props_transform is not None:
+            transformed = effective_props_transform(copy.deepcopy(reread))
+            if inspect.isawaitable(transformed):
+                transformed = await transformed
+            if not isinstance(transformed, Mapping):
+                raise TypeError("effective_props_transform must return a mapping")
+            reread = apply_effective_props(workflow, transformed)
+        return reread
 
     async def _deploy_app_resources() -> None:
         await _invoke_on_app_deploy(

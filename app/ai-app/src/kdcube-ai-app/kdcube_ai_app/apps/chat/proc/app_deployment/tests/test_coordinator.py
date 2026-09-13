@@ -223,3 +223,83 @@ async def test_app_resources_barrier_runs_without_static_widget_deployment(
     assert manifest is None
     assert workflow.deploy_calls == 1
     assert workflow.build_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_app_deploy_receives_transformed_effective_props_on_read_and_reread(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    storage_root = tmp_path / "storage"
+    descriptor = {"connections": {"generation": 1}}
+    seen: list[dict] = []
+
+    class Workflow(_Workflow):
+        async def on_app_deploy(self, **kwargs) -> None:
+            seen.append(kwargs["props"])
+            descriptor["connections"]["generation"] = 2
+            seen.append(await kwargs["reread_props"]())
+
+    async def props(**kwargs):
+        del kwargs
+        return descriptor
+
+    async def storage(**kwargs):
+        del kwargs
+        return storage_root
+
+    async def transform(value):
+        result = dict(value)
+        result["connections"] = {
+            **value["connections"],
+            "assembled": True,
+        }
+        return result
+
+    monkeypatch.setattr(coordinator, "static_widget_deployment_enabled", lambda: False)
+    monkeypatch.setattr(coordinator, "get_bundle_props_from_authority", props)
+    monkeypatch.setattr(coordinator, "resolve_app_storage_root", storage)
+    monkeypatch.setattr(
+        coordinator,
+        "get_settings",
+        lambda: SimpleNamespace(
+            PLATFORM=SimpleNamespace(
+                APPLICATIONS=SimpleNamespace(
+                    BUNDLES_PRELOAD_LOCK_TTL_SECONDS=30,
+                    BUNDLES_PRELOAD_BUNDLE_LOCK_TTL_SECONDS=30,
+                )
+            )
+        ),
+    )
+    bundle_spec = SimpleNamespace(
+        id="connection-hub@1-0",
+        path=str(source_root),
+        module="entrypoint",
+        singleton=True,
+        repo=None,
+        ref=None,
+        subdir=None,
+        git_commit="commit-1",
+    )
+
+    await deploy_loaded_bundle_app_resources(
+        workflow=Workflow(storage_root),
+        module=SimpleNamespace(),
+        agentic_spec=BundleSpec(
+            id="connection-hub@1-0",
+            path=str(source_root),
+            module="entrypoint",
+            singleton=True,
+        ),
+        bundle_spec=bundle_spec,
+        tenant="tenant-a",
+        project="project-a",
+        effective_props_transform=transform,
+    )
+
+    assert seen == [
+        {"connections": {"generation": 1, "assembled": True}},
+        {"connections": {"generation": 2, "assembled": True}},
+    ]

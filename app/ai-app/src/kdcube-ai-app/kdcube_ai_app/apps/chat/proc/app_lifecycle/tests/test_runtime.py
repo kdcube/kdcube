@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -184,6 +185,47 @@ async def test_explicit_retry_reprepares_only_the_selected_application(
     await asyncio.wait_for(lifecycle.wait_for_current(), timeout=1)
 
     assert calls == ["app@1-0", "app@1-0"]
+    await lifecycle.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_catalog_participant_retries_transient_publication_before_ready(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "app"
+    source.mkdir()
+    calls = _patch_preparation(monkeypatch)
+    attempts = 0
+
+    async def participants(**kwargs):
+        del kwargs
+        return {"app@1-0"}
+
+    async def publish(**kwargs):
+        nonlocal attempts
+        del kwargs
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("catalog cache unavailable")
+        return SimpleNamespace(version="catalog-v2", created=True)
+
+    monkeypatch.setattr(runtime, "authoritative_catalog_participant_ids", participants)
+    monkeypatch.setattr(runtime, "publish_authoritative_delegated_catalog", publish)
+    registry = ApplicationReadinessRegistry()
+    lifecycle = _lifecycle(registry)
+
+    await lifecycle.reconcile(_registry(source))
+    await asyncio.wait_for(lifecycle.wait_for_current(), timeout=1)
+
+    snapshot = registry.snapshot(
+        tenant="tenant-a",
+        project="project-a",
+        application_id="app@1-0",
+    )
+    assert snapshot is not None and snapshot.ready
+    assert attempts == 2
+    assert calls == ["app@1-0"]
     await lifecycle.shutdown()
 
 

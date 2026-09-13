@@ -81,6 +81,7 @@ from connection_hub.hub.resolver import (
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.named_service_admission import (
     DELEGATED_CARD_BINDING_SCHEMA,
     delegated_card_binding_from_request,
+    delegated_resource_from_request,
     store_managed_named_service_admission_snapshot,
 )
 
@@ -639,6 +640,7 @@ def _delegated_runtime_projection(
     effective_resource = request_resource or _request_resource(request)
     grants = sorted(_credential_grants_for_resource(envelope, effective_resource))
     credential_view = DelegatedCredentialView.from_parts(credential, grant_record)
+    delegated_resource = delegated_resource_from_request(request)
     resource_operations = {
         resource: list(operations)
         for resource, operations in credential_view.resource_operations.items()
@@ -670,6 +672,7 @@ def _delegated_runtime_projection(
             "operations": list(operations),
             "resource_operations": resource_operations,
             "resource_grants": resource_grants,
+            "delegated_resource": delegated_resource,
             "identity_scope": normalize_delegated_identity_scope(attrs.get("identity_scope")),
             "delegation": dict(projection.get("delegation") or {}),
             "provenance": dict(projection.get("provenance") or economics.get("provenance") or {}),
@@ -706,7 +709,7 @@ def _delegated_runtime_projection(
         or _as_list(user.get("permissions"))
         or tuple(grants)
     )
-    return {
+    runtime = {
         "schema": f"connection_hub.delegated_{surface}_runtime_projection.v1",
         "user_id": grantor_user_id,
         "user_type": "external",
@@ -721,6 +724,9 @@ def _delegated_runtime_projection(
         "operations": list(operations),
         "resource_operations": resource_operations,
     }
+    if delegated_resource:
+        runtime["delegated_resource"] = delegated_resource
+    return runtime
 
 
 def delegated_mcp_runtime_projection(request: Request) -> dict[str, Any]:

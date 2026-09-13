@@ -1248,6 +1248,9 @@ def test_live_card_identity_is_carried_in_the_runtime_projection(monkeypatch):
         "delegate_identity": card.delegate_subject,
         "expires_at": card.expires_at,
     }
+    projection = response.json()["projection"]
+    assert projection["delegated_resource"] == GUARD_RESOURCE
+    assert projection["identity_authority"]["delegated_resource"] == GUARD_RESOURCE
 
 
 def test_managed_guard_enforces_grants_per_called_tool(monkeypatch):
