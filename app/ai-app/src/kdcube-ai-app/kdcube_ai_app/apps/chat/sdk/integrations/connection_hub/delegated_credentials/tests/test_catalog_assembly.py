@@ -175,6 +175,53 @@ def test_named_service_extension_requires_a_declared_resource():
     assert captured.value.code == "named_service_resource_not_declared"
 
 
+def test_existing_base_rows_move_to_app_without_disturbing_shared_catalog():
+    legacy = assemble_delegated_catalog(
+        base_connections=_base(),
+        app_props={"example@1-0": _props()},
+    ).connections
+
+    with pytest.raises(CatalogAssemblyError) as captured:
+        assemble_delegated_catalog(
+            base_connections=legacy,
+            app_props={"example@1-0": _props()},
+        )
+    assert captured.value.code == "duplicate_capability"
+    assert captured.value.owners == ("connection-hub@1-0", "example@1-0")
+
+    oauth = legacy["delegated_credentials"]["oauth"]
+    oauth["capabilities"] = [
+        row for row in oauth["capabilities"] if row["grant"] != "example:read"
+    ]
+    oauth["resources"] = [
+        row for row in oauth["resources"] if row["resource"] != "*/public/mcp/example*"
+    ]
+    shared = next(
+        row for row in oauth["resources"] if row["resource"] == NAMED_SERVICES_RESOURCE
+    )
+    shared["named_services"]["namespaces"].pop("example")
+
+    migrated = assemble_delegated_catalog(
+        base_connections=legacy,
+        app_props={"example@1-0": _props()},
+    ).connections["delegated_credentials"]["oauth"]
+
+    assert [row["grant"] for row in migrated["capabilities"]] == [
+        "base:read",
+        "example:read",
+    ]
+    assert [row["resource"] for row in migrated["resources"]] == [
+        NAMED_SERVICES_RESOURCE,
+        "*/public/mcp/example*",
+    ]
+    assert migrated["resources"][0]["named_services"]["namespaces"] == {
+        "base": {"label": "Base"},
+        "example": _props()["delegated_catalog"]["named_service_namespaces"][0][
+            "namespaces"
+        ]["example"],
+    }
+
+
 def test_declaration_version_is_explicit():
     props = _props()
     props["delegated_catalog"].pop("version")
