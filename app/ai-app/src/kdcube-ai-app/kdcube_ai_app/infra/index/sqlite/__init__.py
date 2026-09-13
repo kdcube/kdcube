@@ -1,20 +1,27 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Elena Viter
-"""Generic SQLite + vector hybrid index.
+"""Compatibility surface for the hybrid index, which now lives in the foundation.
 
-A reusable, per-scope search index that internalizes SQLite lexical (FTS5/bm25),
-embed-on-write vectors, vector-store build/eval, recency decay, and RRF fusion —
-so any "searchable collection" (pins, tasks, memories, …) gets semantic + lexical
-+ recency + reciprocal-rank-fusion search by handing it Documents and a query.
+The implementation moved to `app_foundation.index.sqlite` because both the
+platform and host-side tools need it and neither owns it. This module re-exports
+the same objects so existing platform imports keep working unchanged.
 
-Vector backend is pluggable via the `VectorStore` protocol. Default is the
-dependency-free `BruteForceVectorStore` (in `kdcube_ai_app.infra.index.vector_store`);
-faiss backends live in `kdcube_ai_app.infra.index.faiss` — this index *uses* a
-backend, it does not contain faiss.
+These are re-exports, not subclasses or wrappers: the classes here are the same
+objects as the foundation's, so isinstance checks and identity comparisons hold
+across the boundary. Nothing is redefined below, on purpose. A second definition
+would drift from the first the moment either changed, which is the exact problem
+the move exists to end.
 """
-from .hybrid_index import HybridIndex
-from .types import Document, SearchHit, IndexConfig, FusionWeights, VectorStore, EmbedFn
-from ..vector_store import BruteForceVectorStore
+from app_foundation.index.sqlite import (
+    Document,
+    EmbedFn,
+    FusionWeights,
+    HybridIndex,
+    IndexConfig,
+    SearchHit,
+    VectorStore,
+)
+from app_foundation.index.vector_store import BruteForceVectorStore
 
 __all__ = [
     "HybridIndex",
