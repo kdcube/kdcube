@@ -242,6 +242,7 @@ class HybridIndex:
         top_k: int = 20,
         filters: Dict[str, Any] | None = None,
         mode: SearchMode = "hybrid",
+        snippets: bool = False,
     ) -> List[SearchHit]:
         limit = max(1, top_k) * max(1, self.cfg.overfetch)
         rankings: Dict[str, List[str]] = {}
@@ -278,7 +279,7 @@ class HybridIndex:
                 recency = self._recency(conn, candidates)
             contrib = rrf_fuse(rankings, weights=self.cfg.weights, k=self.cfg.rrf_k, recency=recency)
             ranked = sorted(contrib.items(), key=lambda kv: kv[1]["score"], reverse=True)[: max(1, top_k)]
-            return self._hydrate(conn, ranked)
+            return self._hydrate(conn, ranked, query=query if snippets else "")
 
     # ---- internals ----
     @staticmethod
@@ -423,7 +424,44 @@ class HybridIndex:
             for r in rows
         }
 
-    def _hydrate(self, conn, ranked: List[tuple[str, dict]]) -> List[SearchHit]:
+    def _snippets(self, conn, ids: Sequence[str], query: str) -> Dict[str, str]:
+        """The matching passage per id, asked for only once the ranking is known.
+
+        Built here rather than in the lexical arm because the arm ranks many
+        more candidates than are returned, and a snippet is only wanted for the
+        handful that survive fusion. One extra FTS pass over a known id list is
+        cheaper than carrying text through the whole ranking path.
+        """
+
+        match = self._fts_query(query)
+        if not match or not ids:
+            return {}
+        placeholders = ",".join("?" * len(ids))
+        sql = (
+            "SELECT d.id AS id, snippet(docs_fts, 0, ?, ?, ?, ?) AS snippet "
+            "FROM docs_fts JOIN docs d ON d.rowid = docs_fts.rowid "
+            f"WHERE docs_fts MATCH ? AND d.id IN ({placeholders})"
+        )
+        params = [
+            self.cfg.snippet_open,
+            self.cfg.snippet_close,
+            self.cfg.snippet_ellipsis,
+            int(self.cfg.snippet_tokens),
+            match,
+            *ids,
+        ]
+        try:
+            rows = conn.execute(sql, params).fetchall()
+        except sqlite3.OperationalError:
+            # A snippet is a nicety. A query shape FTS will not snippet must not
+            # take the results down with it.
+            logger.debug("[hybrid_index] snippet pass failed", exc_info=True)
+            return {}
+        return {r["id"]: str(r["snippet"] or "") for r in rows}
+
+    def _hydrate(
+        self, conn, ranked: List[tuple[str, dict]], *, query: str = ""
+    ) -> List[SearchHit]:
         if not ranked:
             return []
         ids = [doc_id for doc_id, _ in ranked]
@@ -432,9 +470,18 @@ class HybridIndex:
             f"SELECT id, metadata_json FROM docs WHERE id IN ({placeholders})", ids
         ).fetchall()
         meta = {r["id"]: json.loads(r["metadata_json"] or "{}") for r in rows}
+        snippets = self._snippets(conn, ids, query) if query else {}
         out: List[SearchHit] = []
         for doc_id, entry in ranked:
             if doc_id not in meta:
                 continue
-            out.append(SearchHit(id=doc_id, score=entry["score"], metadata=meta[doc_id], sub=entry["sub"]))
+            out.append(
+                SearchHit(
+                    id=doc_id,
+                    score=entry["score"],
+                    metadata=meta[doc_id],
+                    sub=entry["sub"],
+                    snippet=snippets.get(doc_id, ""),
+                )
+            )
         return out

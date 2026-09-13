@@ -466,3 +466,66 @@ def test_vectors_are_stored_compactly_and_the_scope_is_bounded():
     assert cache.stats()["max_entries"] == 2
     # what survives still reads back
     assert asyncio.run(cache.get("third")) is not None
+
+
+def test_a_snippet_points_at_the_matched_terms_only_when_asked():
+    """Callers that render results need the passage, not just the score.
+
+    Opt-in because building one costs an extra FTS pass, and a caller listing
+    ids does not want to pay for text it will not show.
+    """
+
+    with tempfile.TemporaryDirectory() as tmp:
+        index = _index(Path(tmp))
+        asyncio.run(index.upsert([
+            Document(
+                id="a",
+                text="alpha beta gamma delta zeta eta alpha beta gamma delta",
+                metadata={"kind": "note"},
+            ),
+        ]))
+
+        plain = asyncio.run(index.search("gamma", mode="lexical"))
+        assert plain[0].snippet == ""
+
+        marked = asyncio.run(index.search("gamma", mode="lexical", snippets=True))
+        assert marked[0].id == "a"
+        assert "[gamma]" in marked[0].snippet
+
+
+def test_snippet_markers_are_configurable_for_the_caller_that_renders():
+    with tempfile.TemporaryDirectory() as tmp:
+        index = HybridIndex(IndexConfig(
+            db_path=Path(tmp) / "idx.sqlite",
+            embed_fn=fake_embed,
+            dim=len(VOCAB),
+            vector_store=BruteForceVectorStore(),
+            snippet_open="<b>",
+            snippet_close="</b>",
+        ))
+        asyncio.run(index.upsert([Document(id="a", text="alpha beta gamma")]))
+
+        hit = asyncio.run(index.search("beta", mode="lexical", snippets=True))[0]
+
+        assert "<b>beta</b>" in hit.snippet
+
+
+def test_a_hit_the_lexical_arm_never_matched_carries_no_snippet():
+    """A semantic-only hit has no matched terms to point at.
+
+    Returning a leading fragment would suggest the query appears in text where
+    it does not, which is worse than returning nothing.
+    """
+
+    with tempfile.TemporaryDirectory() as tmp:
+        index = _index(Path(tmp))
+        asyncio.run(index.upsert([
+            Document(id="a", text="alpha alpha alpha"),
+            Document(id="b", text="zeta zeta zeta"),
+        ]))
+
+        hits = asyncio.run(index.search("alpha", mode="semantic", snippets=True))
+
+        assert hits
+        assert all(h.snippet == "" for h in hits if h.id == "b")
+

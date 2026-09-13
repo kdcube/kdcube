@@ -35,6 +35,12 @@ class SearchHit:
     score: float
     metadata: Dict[str, Any]
     sub: Dict[str, Any] = field(default_factory=dict)  # per-ranker ranks/scores (telemetry)
+    # The matching passage, with the matched terms marked. Empty unless the
+    # caller asked for it, because building one costs an extra FTS pass, and
+    # empty for a hit the lexical arm never matched: a semantic-only hit has no
+    # matched terms to point at, and inventing a leading fragment would suggest
+    # the query appears in text where it does not.
+    snippet: str = ""
 
 
 @dataclass
@@ -67,6 +73,16 @@ class IndexConfig:
     #   > 0 (e.g. 0.3): semantic ON, drop hits at/below this cosine similarity so
     #                   clearly-unrelated docs don't leak in. Use for filter UX.
     min_semantic_score: float = 0.0
+
+    # --- snippets (opt-in per search, see HybridIndex.search(snippets=True)) ---
+    # What the matched passage looks like when a caller asks for one. Markers
+    # are plain text rather than HTML on purpose: this index does not know
+    # whether its caller renders to a terminal, a widget or a document, and a
+    # caller that wants markup can ask for markers it will recognise.
+    snippet_open: str = "["
+    snippet_close: str = "]"
+    snippet_ellipsis: str = "..."
+    snippet_tokens: int = 12
 
     # --- economical guard on semantic search (the embedder call costs money) ---
     # When the guard denies, search degrades to lexical + recency (no embed call).
