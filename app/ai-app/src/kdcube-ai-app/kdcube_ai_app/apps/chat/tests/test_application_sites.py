@@ -8,10 +8,19 @@ from fastapi.responses import RedirectResponse
 from starlette.requests import Request
 
 from kdcube_ai_app.apps.chat.proc.rest.integrations import integrations
+from kdcube_ai_app.apps.chat.proc.rest.integrations.application_site_readiness import (
+    application_site_wait_response,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.sites import (
     ApplicationSite,
     ApplicationSiteTarget,
     compile_application_site_catalog,
+)
+from kdcube_ai_app.infra.plugin.app_readiness import (
+    ApplicationLifecycleState,
+    ApplicationNotReadyError,
+    ApplicationReadinessMode,
+    ApplicationReadinessSnapshot,
 )
 
 
@@ -22,19 +31,45 @@ _SITE_TARGET = ApplicationSiteTarget(
 )
 
 
-def _request(*, host: str = "runtime.example.com") -> Request:
+def _request(
+    *,
+    host: str = "runtime.example.com",
+    path: str = "/",
+    query_string: bytes = b"",
+) -> Request:
     return Request(
         {
             "type": "http",
             "method": "GET",
-            "path": "/",
-            "query_string": b"",
+            "path": path,
+            "query_string": query_string,
             "headers": [(b"host", host.encode("utf-8"))],
             "scheme": "https",
             "server": (host, 443),
             "client": ("127.0.0.1", 12345),
             "http_version": "1.1",
         }
+    )
+
+
+def _readiness_snapshot(
+    state: ApplicationLifecycleState,
+) -> ApplicationReadinessSnapshot:
+    return ApplicationReadinessSnapshot(
+        tenant="tenant-a",
+        project="project-a",
+        application_id="website@1",
+        readiness=ApplicationReadinessMode.INDEPENDENT,
+        state=state,
+        desired_generation="generation-2",
+        ready_generation="generation-1",
+        attempt=2,
+        error_code=None,
+        error_message=None,
+        retry_at=None,
+        started_at="2026-09-13T03:00:00Z",
+        finished_at=None,
+        updated_at="2026-09-13T03:00:01Z",
     )
 
 
@@ -74,6 +109,75 @@ async def test_site_alias_delegates_to_standard_static_serving(monkeypatch) -> N
     assert captured["html_context"]["catalog_revision"] == catalog.revision
     assert captured["resolved_spec"].id == "website@1"
     assert captured["resolved_spec"].path == _SITE_TARGET.path
+
+
+@pytest.mark.asyncio
+async def test_site_route_translates_readiness_json_into_browser_wait_page(monkeypatch) -> None:
+    catalog = compile_application_site_catalog(
+        tenant="tenant-a",
+        project="project-a",
+        sites=[ApplicationSite("website@1", "docs", False, (), _SITE_TARGET)],
+    )
+
+    async def _catalog(_request):
+        return catalog
+
+    async def _serve_static_asset(**_kwargs):
+        raise ApplicationNotReadyError(
+            _readiness_snapshot(ApplicationLifecycleState.PREPARING)
+        )
+
+    monkeypatch.setattr(integrations, "_application_site_catalog", _catalog)
+    monkeypatch.setattr(integrations, "serve_static_asset", _serve_static_asset)
+
+    response = await integrations.application_site_path(
+        site_alias="docs",
+        path="projects/alpha",
+        request=_request(
+            path="/sites/docs/projects/alpha",
+            query_string=b"conversation=conv-7&message=mail-9",
+        ),
+    )
+    body = response.body.decode("utf-8")
+
+    assert response.status_code == 503
+    assert response.media_type == "text/html"
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["retry-after"] == "2"
+    assert response.headers["content-security-policy"].startswith("default-src 'none'")
+    assert "This site is getting ready" in body
+    assert '"autoRetry":true' in body
+    assert '"maxAttempts":8' in body
+    assert "window.location.reload()" in body
+    assert "window.fetch(window.location.href" in body
+    assert "window.location.replace(window.location.href)" in body
+    assert "window.location.href" in body
+    assert "application_not_ready" not in body
+
+
+@pytest.mark.parametrize(
+    ("state", "expected_title", "auto_retry"),
+    [
+        (ApplicationLifecycleState.RETRYING, "This site is recovering", True),
+        (ApplicationLifecycleState.FAILED, "This site needs attention", False),
+        (ApplicationLifecycleState.DEPROVISIONING, "This site needs attention", False),
+    ],
+)
+def test_site_wait_page_only_auto_retries_transient_states(
+    state: ApplicationLifecycleState,
+    expected_title: str,
+    auto_retry: bool,
+) -> None:
+    response = application_site_wait_response(
+        snapshot=_readiness_snapshot(state)
+    )
+    body = response.body.decode("utf-8")
+
+    assert expected_title in body
+    assert f'"autoRetry":{str(auto_retry).lower()}' in body
+    assert response.headers["x-kdcube-site-retryable"] == str(auto_retry).lower()
+    assert response.headers["x-kdcube-application-state"] == state.value
+    assert "Automatic checks are paused because preparation is taking longer" in body
 
 
 @pytest.mark.asyncio

@@ -171,6 +171,9 @@ from kdcube_ai_app.apps.chat.proc.rest.integrations.operation_csrf import (
 from kdcube_ai_app.apps.chat.proc.rest.integrations.widget_navigation_auth import (
     enforce_protected_widget_user,
 )
+from kdcube_ai_app.apps.chat.proc.rest.integrations.application_site_readiness import (
+    application_site_wait_response,
+)
 from kdcube_ai_app.infra.secrets import (
     SecretsManagerError,
     SecretsManagerWriteError,
@@ -3933,25 +3936,28 @@ async def _serve_application_site(
         singleton=site.target.singleton,
     )
 
-    return await serve_static_asset(
-        tenant=catalog.tenant,
-        project=catalog.project,
-        bundle_id=site.application_id,
-        path=path or "index.html",
-        request=request,
-        base_href=public_base,
-        html_context={
-            "schema_version": 1,
-            "tenant": catalog.tenant,
-            "project": catalog.project,
-            "application_id": site.application_id,
-            "site_alias": site.alias,
-            "public_base": public_base,
-            "catalog_revision": catalog.revision,
-        },
-        resolved_spec=site_spec,
-        session=_build_public_api_request_session(request),
-    )
+    try:
+        return await serve_static_asset(
+            tenant=catalog.tenant,
+            project=catalog.project,
+            bundle_id=site.application_id,
+            path=path or "index.html",
+            request=request,
+            base_href=public_base,
+            html_context={
+                "schema_version": 1,
+                "tenant": catalog.tenant,
+                "project": catalog.project,
+                "application_id": site.application_id,
+                "site_alias": site.alias,
+                "public_base": public_base,
+                "catalog_revision": catalog.revision,
+            },
+            resolved_spec=site_spec,
+            session=_build_public_api_request_session(request),
+        )
+    except ApplicationNotReadyError as exc:
+        return application_site_wait_response(snapshot=exc.snapshot)
 
 
 @router.get("/site-root")
