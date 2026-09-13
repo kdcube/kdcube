@@ -113,6 +113,39 @@ When the client has bundle-owned upstream identity instead of a platform
 browser session, expose a bundle public `federated_token_claim` operation and
 use a scoped federated Data Bus token.
 
+## Use What The SDK Already Has
+
+Before writing anything general-purpose in a bundle — indexing, search,
+storage, retries, caching, auth, transport — look for it in the SDK first:
+
+```text
+kdcube_ai_app/infra/...              cross-cutting infrastructure
+kdcube_ai_app/apps/chat/sdk/...      agent-facing building blocks
+```
+
+If something there fits, use it. That is the whole rule for a bundle author.
+It is not a style preference: a capability you write yourself is one you own
+forever, while the SDK version is maintained, tested against every other
+bundle, and improved underneath you without a migration.
+
+`kdcube_ai_app/infra/index/sqlite` is a worked example. `HybridIndex` gives any
+per-scope collection lexical FTS5 ranking, recency decay, an embed-on-write
+vector cache and reciprocal-rank fusion, behind `upsert` and `search`. A bundle
+that wants searchable notes, entries, or records hands it documents and a query
+rather than writing SQL.
+
+**If the SDK nearly fits but not quite**, say so rather than forking it into
+your bundle. Improving the SDK construct, or adding a missing one, is the
+platform maintainers' job, and a gap you report becomes a capability every
+bundle gets. A local fork becomes a thing only you maintain, and it will drift.
+
+**If the SDK genuinely does not cover it and you cannot wait**, keep your
+implementation small, keep it in its own module, and keep it behind an
+interface you could swap. Do not spread it through the bundle.
+
+The one thing to avoid in every case is discovering, after shipping, that the
+platform already did it. Grep first; it costs a minute.
+
 ## Common Recipe: Choose A Model For One Agent Call
 
 Use this when an API, widget, chat request, or job lets the caller choose a

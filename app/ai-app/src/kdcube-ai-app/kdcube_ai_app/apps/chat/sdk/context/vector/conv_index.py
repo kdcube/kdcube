@@ -889,6 +889,87 @@ class ConvIndex:
             rows = await con.fetch(q, *args)
         return [dict(r) for r in rows]
 
+    async def fetch_message_page(
+            self,
+            *,
+            user_id: Optional[str] = None,
+            conversation_id: Optional[str] = None,
+            roles: tuple[str, ...] = ("user", "assistant", "artifact"),
+            any_tags: Optional[Sequence[str]] = None,
+            all_tags: Optional[Sequence[str]] = None,
+            not_tags: Optional[Sequence[str]] = None,
+            limit: int = 30,
+            days: int = 30,
+            bundle_id: Optional[str] = None,
+            agent_id: Optional[str] = None,
+            before_ts: Optional[Union[str, datetime]] = None,
+            before_id: Optional[int] = None,
+            ctx: Optional[dict] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return one newest-first keyset page from authoritative message rows.
+
+        The caller owns cursor encoding. Supplying ``before_ts`` and
+        ``before_id`` continues strictly before the previous page's last
+        ``(ts, id)`` pair, so equal timestamps neither duplicate nor hide a
+        row.
+        """
+        user_id, conversation_id, bundle_id = self._scope_from_ctx(
+            self._load_ctx(ctx),
+            user_id=user_id,
+            conversation_id=conversation_id,
+            bundle_id=bundle_id,
+        )
+        if not user_id:
+            return []
+        if (before_ts is None) != (before_id is None):
+            raise ValueError("before_ts and before_id must be supplied together")
+        if before_id is not None and (
+            isinstance(before_id, bool) or not isinstance(before_id, int) or before_id < 1
+        ):
+            raise ValueError("before_id must be a positive integer")
+
+        page_limit = max(1, min(int(limit), 1000))
+        args: List[Any] = [user_id, list(roles), str(days)]
+        where = [
+            "user_id = $1",
+            "role = ANY($2)",
+            "ts >= now() - ($3::text || ' days')::interval",
+            "ts + (ttl_days || ' days')::interval >= now()",
+        ]
+        if conversation_id:
+            args.append(conversation_id)
+            where.append(f"conversation_id = ${len(args)}")
+        if bundle_id:
+            args.append(bundle_id)
+            where.append(f"bundle_id = ${len(args)}")
+        if agent_id:
+            args.append(agent_id)
+            where.append(f"agent_id = ${len(args)}")
+        if any_tags:
+            args.append(list(any_tags))
+            where.append(f"tags && ${len(args)}::text[]")
+        if all_tags:
+            args.append(list(all_tags))
+            where.append(f"tags @> ${len(args)}::text[]")
+        if not_tags:
+            args.append(list(not_tags))
+            where.append(f"NOT (tags && ${len(args)}::text[])")
+        if before_ts is not None:
+            args.extend((_coerce_ts(before_ts), before_id))
+            where.append(f"(ts, id) < (${len(args) - 1}::timestamptz, ${len(args)}::bigint)")
+
+        q = f"""
+          SELECT id, message_id, role, text, hosted_uri, ts, tags, turn_id,
+                 bundle_id, agent_id, conversation_id
+          FROM {self.schema}.conv_messages
+          WHERE {' AND '.join(where)}
+          ORDER BY ts DESC, id DESC
+          LIMIT {page_limit}
+        """
+        async with self._pool.acquire() as con:
+            rows = await con.fetch(q, *args)
+        return [dict(row) for row in rows]
+
     async def fetch_latest_reactions(
             self,
             *,
