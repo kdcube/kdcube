@@ -515,6 +515,42 @@ selector, refresh checks out that selected ref and then uses the staged
 If a deployment is currently recorded as running (`~/.kdcube/cli-lock.json`),
 `kdcube refresh --build` with no flags targets it automatically.
 
+#### Building a distribution from a local checkout
+
+The platform imports packages that are released separately, such as
+`app-foundation` and `connection-hub`. A maintainer who is editing one of those
+packages needs the image built from that working tree, not from the package
+index, and the image's requirements usually pin a version that only exists
+locally. `--maintainer-local-python-package` selects the source for one
+distribution, and is repeated per distribution:
+
+```bash
+export APP_ECOSYSTEM_REPO=/path/to/app-ecosystem
+
+kdcube refresh --tenant <t> --project <p> --build \
+  --path /path/to/kdcube-ai-app \
+  --maintainer-local-python-package \
+    "app-foundation=$APP_ECOSYSTEM_REPO/packages/app-foundation" \
+  --maintainer-local-python-package \
+    "connection-hub=$APP_ECOSYSTEM_REPO/products/connection-hub/packages/connection-hub"
+```
+
+It requires `--build`, since it only affects how the image is built. The
+selected sources are installed after the ordinary requirements, with the extras
+those requirements asked for, so the ordinary layer stays cached while a
+maintainer edits a selected source.
+
+Without it, pip resolves the pinned distribution against the public index,
+finds an unrelated or placeholder version, and the build fails during
+`pip install` with a message naming the version it could not satisfy. That error
+points at the package index rather than at the missing flag, so recognise the
+shape: a version floor that no published release meets is the normal state for a
+maintainer, and this flag is how it is met.
+
+Add a `service-foundation` override only when code running inside a platform
+image imports it. A host-side process takes that package in its own virtual
+environment instead.
+
 Behaviour:
 
 - refuses if the workdir is not initialized (no `install-meta.json`);

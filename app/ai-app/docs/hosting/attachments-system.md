@@ -54,6 +54,41 @@ Both flows:
 4) If allowed, store via `ConversationStore.put_attachment(...)`.
 5) Emit attachment metadata into the message payload.
 
+### 2.1.1 What the preflight accepts
+
+`preflight_async` dispatches on the resolved mime and denies anything it does
+not recognise, with the reason in `reasons`:
+
+| Family | Handling |
+|---|---|
+| PDF | page, object, object-stream and update limits from `PreflightConfig` |
+| ZIP and OOXML | file count, uncompressed total, compression ratio, nested archives. A generic archive needs `allow_zip` |
+| Raster images | `image/jpeg`, `image/png`, `image/gif`, `image/webp`, accepted as-is |
+| SVG | parsed and accepted only when it is a drawing (below) |
+| Text | `text/*` and the text-like mimes, size-limited |
+| anything else | denied, `Unsupported or unknown type: <mime>` |
+
+**SVG is treated as a document, not as an image**, because it executes while it
+is being drawn. A surface that renders an arbitrary one has become an execution
+surface. `preflight_svg` parses it with the stdlib XML parser rather than
+matching patterns, and denies:
+
+- `<script>`, `<foreignObject>`, `<iframe>`, `<embed>`, `<object>`, `<audio>`,
+  `<video>`, and the animation elements;
+- any `on*` event attribute;
+- a `javascript:`, `vbscript:` or `data:text/html` URI in any attribute;
+- an external `href` or `src`. This one is about disclosure rather than
+  execution: drawing the image would become a request from the reader's browser
+  to whoever hosts that URL, revealing who opened the document and when;
+- a declared `DOCTYPE` or entity, which is the shape of an XXE read;
+- anything that does not parse as well-formed XML, rather than guessing.
+
+`allow_svg` (default on) and `svg_max_bytes` (default 2 MB) sit alongside
+`allow_zip` and the PDF limits in `PreflightConfig`.
+
+A surface that accepts SVG should still render it as an image, for instance in
+an `<img>` element, and not inline it into its own document.
+
 ### 2.2 Multimodal LLM usage (base64 artifacts)
 
 In the workflow (example: `kdcube_ai_app/apps/chat/sdk/examples/bundles/eco@2026-02-18-15-06/entrypoint.py`):
