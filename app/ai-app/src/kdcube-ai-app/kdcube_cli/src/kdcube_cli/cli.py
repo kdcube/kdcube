@@ -32,11 +32,6 @@ from kdcube_cli.bundle_delete_transaction import (
     clear_bundle_delete_transaction,
     load_bundle_delete_transaction,
 )
-from kdcube_cli.catalog_fragments import (
-    DEFAULT_CONNECTION_HUB_BUNDLE_ID,
-    CatalogFragmentError,
-    process_catalog_fragment,
-)
 from kdcube_cli.control import (
     AmbiguousTargetError,
     ControlEvent,
@@ -2076,87 +2071,83 @@ def apply_bundle_config_descriptors(
     }
 
 
-def _print_catalog_fragment_result(console: Console, result: dict[str, object]) -> None:
-    action = str(result.get("action") or "check")
+def _print_catalog_check_result(console: Console, result: dict[str, object]) -> None:
     in_sync = bool(result.get("in_sync"))
-    changes = result.get("changes") if isinstance(result.get("changes"), list) else []
     differences = (
         result.get("differences") if isinstance(result.get("differences"), list) else []
     )
-    state = "in sync" if in_sync else "drift found"
-    console.print(f"[bold]Connection Hub catalog fragment {action}:[/bold] {state}")
-    console.print("[dim]fragment:[/dim]", Text(str(result.get("fragment_path") or "")))
-    console.print("[dim]descriptor:[/dim]", Text(str(result.get("bundles_path") or "")))
-    declared = result.get("declared") if isinstance(result.get("declared"), dict) else {}
-    present = result.get("present") if isinstance(result.get("present"), dict) else {}
+    status = str(result.get("status") or "unknown")
+    state = "in sync" if in_sync else status.replace("_", " ")
+    console.print(f"[bold]Delegated catalog:[/bold] {state}")
     console.print(
-        "[dim]declared/present:[/dim] "
-        f"capabilities {declared.get('capabilities', 0)}/{present.get('capabilities', 0)}, "
-        f"resources {declared.get('resources', 0)}/{present.get('resources', 0)}, "
-        f"direct tools {declared.get('direct_tools', 0)}/{present.get('direct_tools', 0)}, "
-        "named-service operations "
-        f"{declared.get('named_service_operations', 0)}/"
-        f"{present.get('named_service_operations', 0)}"
+        "[dim]runtime:[/dim] "
+        f"{result.get('tenant') or '<unknown>'}/{result.get('project') or '<unknown>'}"
     )
-    for change in changes:
-        if isinstance(change, dict):
-            line = Text("+ ", style="green")
-            line.append(str(change.get("path") or ""))
-            console.print(line)
+    if result.get("active_catalog_version"):
+        console.print(f"[dim]serving version:[/dim] {result.get('active_catalog_version')}")
+    contributors = result.get("contributors")
+    if isinstance(contributors, list):
+        console.print(
+            "[dim]app declarations:[/dim] "
+            + (", ".join(str(value) for value in contributors) or "<none>")
+        )
+    if result.get("reason"):
+        console.print(f"[red]Unavailable:[/red] {result.get('reason')}")
     for difference in differences:
         if isinstance(difference, dict):
             line = Text("! ", style="yellow")
             line.append(str(difference.get("path") or ""))
             line.append(f" ({difference.get('kind')})", style="yellow")
             console.print(line)
+            if difference.get("message"):
+                console.print(Text(f"    {difference.get('message')}", style="dim"))
+            owners = difference.get("owners")
+            if isinstance(owners, list) and owners:
+                console.print(Text(f"    owners: {', '.join(str(v) for v in owners)}", style="dim"))
             if difference.get("kind") == "value_mismatch":
                 expected = difference.get("expected")
                 actual = difference.get("actual")
                 if not isinstance(expected, (dict, list)) and not isinstance(actual, (dict, list)):
                     console.print(Text(f"    declared: {expected!r}", style="dim"))
-                    console.print(Text(f"    present:  {actual!r}", style="dim"))
-    if action == "check":
-        console.print("[dim]Check does not modify the descriptor or reload the runtime.[/dim]")
-    elif changes:
-        console.print(
-            "[dim]Descriptor additions are staged. Review them, then explicitly reload "
-            f"{result.get('connection_hub_bundle_id')} when ready.[/dim]"
-        )
+                    console.print(Text(f"    serving:  {actual!r}", style="dim"))
+    console.print("[dim]Check is read-only. App declarations remain descriptor-owned.[/dim]")
 
 
-def run_catalog_fragment_command(
+def run_catalog_check_command(
     console: Console,
     *,
+    repo_root: Path,
     workdir: Path,
-    fragment_path: Path,
-    action: str,
-    connection_hub_bundle_id: str = DEFAULT_CONNECTION_HUB_BUNDLE_ID,
-    overwrite_conflicts: bool = False,
+    verbose: bool = False,
     json_output: bool = False,
 ) -> dict[str, object]:
-    config_dir = _canonical_descriptor_dir_from_initialized_workdir(workdir)
-    if config_dir is None:
+    ctx = _build_paths_for_repo(repo_root, workdir)
+    env_main_path = ctx.config_dir / ".env"
+    env_proc_path = ctx.config_dir / ".env.proc"
+    if not env_main_path.exists() or not env_proc_path.exists():
         raise SystemExit(
-            f"Workdir is not initialized: {workdir}\n"
-            "`kdcube bundle catalog` operates on an existing runtime created by `kdcube init`."
+            f"Runtime env files not found under {ctx.config_dir}. "
+            "Run the installer first for this workdir."
         )
-    bundles_path = config_dir / "bundles.yaml"
-    if not bundles_path.exists():
-        raise SystemExit(f"Active bundle descriptor not found: {bundles_path}")
-    try:
-        result = process_catalog_fragment(
-            bundles_path=bundles_path,
-            fragment_path=fragment_path.expanduser().resolve(),
-            action=action,
-            connection_hub_bundle_id=connection_hub_bundle_id,
-            overwrite_conflicts=overwrite_conflicts,
+    if "chat-proc" not in _compose_running_services(ctx.docker_dir, env_main_path):
+        raise SystemExit(
+            "chat-proc is not running for this workdir. "
+            "Start the stack before checking its delegated catalog."
         )
-    except CatalogFragmentError as exc:
-        raise SystemExit(str(exc)) from exc
+    result = _post_local_bundle_control(
+        console,
+        ctx=ctx,
+        env_main_path=env_main_path,
+        endpoint="/internal/bundles/catalog/check",
+        payload={},
+        label="Delegated catalog check",
+        verbose=verbose,
+        require_ok_status=False,
+    )
     if json_output:
         _print_json(result)
     else:
-        _print_catalog_fragment_result(console, result)
+        _print_catalog_check_result(console, result)
     return result
 
 
@@ -2821,6 +2812,7 @@ def _post_local_bundle_control(
     payload: dict[str, object],
     label: str,
     verbose: bool,
+    require_ok_status: bool = True,
 ) -> dict[str, object]:
     payload_json = json.dumps(payload)
     script = (
@@ -2866,7 +2858,7 @@ def _post_local_bundle_control(
         raise SystemExit(message) from exc
     if not isinstance(result, dict):
         raise SystemExit(f"{label} returned an unexpected response shape.")
-    if result.get("status") != "ok":
+    if require_ok_status and result.get("status") != "ok":
         detail = json.dumps(result, ensure_ascii=False, indent=2)
         raise SystemExit(f"{label} failed.\n{detail}")
     return result
@@ -4692,12 +4684,12 @@ def main() -> None:
         "--json",
         action="store_true",
         dest="json_output",
-        help="With `bundle status`, `bundle reload`, `bundle config apply`, or `bundle catalog`, print JSON",
+        help="With `bundle status`, `bundle reload`, `bundle config apply`, or `bundle catalog check`, print JSON",
     )
     _sp.add_argument(
         "--verbose",
         action="store_true",
-        help="With `bundle reload`, `bundle delete`, or `bundle config apply --reload`, show the raw docker compose command and proc response",
+        help="With `bundle reload`, `bundle delete`, `bundle catalog check`, or `bundle config apply --reload`, show the raw docker compose command and proc response",
     )
     _sp.add_argument(
         "--live",
@@ -4827,28 +4819,6 @@ def main() -> None:
         dest="reload_changed",
         help="With `bundle config apply`, reload changed IDs and retire removed IDs after staging descriptors",
     )
-    _sp.add_argument(
-        "--catalog-fragment",
-        default="",
-        help=(
-            "With `bundle catalog check|apply`, app-owned "
-            "connection-hub.catalog.fragment.yaml to inspect or merge"
-        ),
-    )
-    _sp.add_argument(
-        "--connection-hub-bundle-id",
-        default=DEFAULT_CONNECTION_HUB_BUNDLE_ID,
-        help="With `bundle catalog check|apply`, target Connection Hub bundle ID",
-    )
-    _sp.add_argument(
-        "--overwrite-conflicts",
-        action="store_true",
-        help=(
-            "With `bundle catalog apply`, replace conflicting values at paths declared "
-            "by the fragment; unrelated declarations remain unchanged"
-        ),
-    )
-
     _sp = subparsers.add_parser("config", help="Export or import runtime descriptors")
     _add_quiet_arg(_sp)
     _sp.add_argument("config_action", choices=("export", "import", "apply"), help="Descriptor operation")
@@ -5589,52 +5559,33 @@ def main() -> None:
                     bool(args.delete),
                 ]
             )
-            if _bundle_arg != "catalog" and (
-                bool(args.catalog_fragment)
-                or _arg_provided("--connection-hub-bundle-id")
-                or bool(args.overwrite_conflicts)
-            ):
-                raise SystemExit(
-                    "--catalog-fragment, --connection-hub-bundle-id, and "
-                    "--overwrite-conflicts are only supported with "
-                    "`kdcube bundle catalog check|apply`."
-                )
             if _bundle_arg == "catalog":
-                if _status_bundle_arg not in {"check", "apply"}:
-                    raise SystemExit(
-                        "Usage: kdcube bundle catalog check|apply "
-                        "--catalog-fragment <path> --workdir <workdir>"
-                    )
+                if _status_bundle_arg != "check":
+                    raise SystemExit("Usage: kdcube bundle catalog check --workdir <workdir>")
                 if _has_bundle_patch_flags:
                     raise SystemExit(
                         "`kdcube bundle catalog` cannot be combined with bundle mutation flags."
                     )
-                if _purge_data or _force_retire or args.live_status or args.verbose:
+                if _purge_data or _force_retire or args.live_status:
                     raise SystemExit(
-                        "--purge-data, --force-retire, --live, and --verbose are not supported "
+                        "--purge-data, --force-retire, and --live are not supported "
                         "with `kdcube bundle catalog`."
                     )
                 if args.descriptors_location or args.dry_run or args.reload_changed:
                     raise SystemExit(
                         "--descriptors-location, --dry-run, and --reload are not supported with "
-                        "`kdcube bundle catalog`; check is read-only and apply never reloads."
+                        "`kdcube bundle catalog check`; the check is read-only."
                     )
-                if not str(args.catalog_fragment or "").strip():
-                    raise SystemExit(
-                        "--catalog-fragment is required with `kdcube bundle catalog check|apply`."
-                    )
-                if args.overwrite_conflicts and _status_bundle_arg != "apply":
-                    raise SystemExit(
-                        "--overwrite-conflicts is supported only with "
-                        "`kdcube bundle catalog apply`."
-                    )
-                result = run_catalog_fragment_command(
-                    console,
+                _repo = _resolve_subcommand_repo(
+                    args.path,
                     workdir=_resolved,
-                    fragment_path=Path(str(args.catalog_fragment)),
-                    action=_status_bundle_arg,
-                    connection_hub_bundle_id=str(args.connection_hub_bundle_id).strip(),
-                    overwrite_conflicts=bool(args.overwrite_conflicts),
+                    path_provided=_arg_provided("--path"),
+                )
+                result = run_catalog_check_command(
+                    console,
+                    repo_root=_repo,
+                    workdir=_resolved,
+                    verbose=bool(args.verbose),
                     json_output=bool(args.json_output),
                 )
                 if not bool(result.get("in_sync")):
@@ -5774,7 +5725,7 @@ def main() -> None:
                 raise SystemExit(
                     "--json is only supported with `kdcube bundle status`, "
                     "`kdcube bundle reload`, `kdcube bundle config apply`, or "
-                    "`kdcube bundle catalog check|apply`."
+                    "`kdcube bundle catalog check`."
                 )
             if args.live_status:
                 raise SystemExit("--live is only supported with `kdcube bundle status <bundle_id>`.")
