@@ -274,6 +274,16 @@ def delegated_card_binding_from_request(request: Any) -> dict[str, Any]:
     )
 
 
+def delegated_resource_from_request(request: Any) -> str:
+    """Return the canonical catalog resource admitted for this request."""
+    snapshot = getattr(
+        getattr(request, "state", None), MANAGED_ADMISSION_STATE_ATTR, None
+    )
+    if not isinstance(snapshot, ManagedNamedServiceAdmissionSnapshot):
+        return ""
+    return _clean(snapshot.resource)
+
+
 def native_agent_admission_selector(
     *,
     source_bundle_id: str,
@@ -326,6 +336,7 @@ __all__ = [
     "NamedServiceAdmissionResolutionError",
     "admission_from_relay_selector",
     "delegated_card_binding_from_request",
+    "delegated_resource_from_request",
     "managed_named_service_admission",
     "managed_named_service_catalog_operations",
     "managed_named_service_dispatch_config",
