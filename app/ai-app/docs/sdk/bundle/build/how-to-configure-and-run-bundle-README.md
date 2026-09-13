@@ -3,8 +3,8 @@ id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run
 title: "How To Configure And Run A Bundle"
 summary: "Current bundle-development runtime workflow: tenant/project environment setup, descriptor staging, local-path and git bundles, configuration translation, start/stop/reload loop, configuration/secret scopes, bundle events, and the rule that one machine may hold many local deployment snapshots but should not be treated as running many local compose-backed KDCubes at once."
 tags: ["sdk", "bundle", "configuration", "runtime", "cli", "bundles.yaml"]
-keywords: ["local bundle development workflow", "tenant project deployment scope", "descriptor driven runtime setup", "local path bundle loop", "git bundle loop", "bundle reload workflow", "runtime directory selection", "bundle config and secret scopes", "shared sdk widget sources", "bundle events", "event sources", "artifact rehosters", "bundle configurator workflow", "bundle deployer workflow", "current kdcube cli workflow", "multiple local runtime snapshots", "single active local compose deployment", "run multiple kdcubes on one machine", "kdcube bundle command", "patch bundle config cli", "patch bundle secret cli"]
-updated_at: 2026-07-16
+keywords: ["local bundle development workflow", "tenant project deployment scope", "descriptor driven runtime setup", "local path bundle loop", "git bundle loop", "bundle reload workflow", "runtime directory selection", "bundle config and secret scopes", "connection hub catalog fragment", "catalog drift check", "shared sdk widget sources", "bundle events", "event sources", "artifact rehosters", "bundle configurator workflow", "bundle deployer workflow", "current kdcube cli workflow", "multiple local runtime snapshots", "single active local compose deployment", "run multiple kdcubes on one machine", "kdcube bundle command", "patch bundle config cli", "patch bundle secret cli"]
+updated_at: 2026-09-13
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
@@ -1397,6 +1397,38 @@ not contain `bundles.secrets.yaml`, the existing runtime secrets descriptor is
 preserved. Host local bundle paths in the source descriptor are translated to
 the runtime-visible `/bundles/...` path before writing the active runtime
 descriptor.
+
+### App-owned Connection Hub catalog fragments
+
+An app may ship `config/connection-hub.catalog.fragment.yaml` with the
+capabilities and operations its users need to grant. Check whether the active
+Connection Hub catalog carries that declaration before issuing Cards:
+
+```bash
+kdcube bundle catalog check \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id> \
+  --catalog-fragment /abs/path/to/app/config/connection-hub.catalog.fragment.yaml
+```
+
+The check is read-only and names every missing or conflicting path. After
+reviewing it, add only the absent declarations and check again:
+
+```bash
+kdcube bundle catalog apply \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id> \
+  --catalog-fragment /abs/path/to/app/config/connection-hub.catalog.fragment.yaml
+
+kdcube bundle catalog check \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id> \
+  --catalog-fragment /abs/path/to/app/config/connection-hub.catalog.fragment.yaml
+```
+
+Apply is additive and idempotent. It preserves unrelated declarations and
+conflicting live values for operator review. It does not reload Connection Hub
+or change an existing Card. Review the active `bundles.yaml`, resolve any
+reported conflict, then run `kdcube bundle reload connection-hub@1-0` explicitly.
+The complete command and conflict contract is in
+[Current KDCube CLI](../../../service/cicd/cli-README.md#catalog-fragments).
 
 ### If you changed `bundles.yaml` or `bundles.secrets.yaml` inside the active runtime
 

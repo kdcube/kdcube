@@ -3,8 +3,8 @@ id: repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-descriptor-README.m
 title: "Bundles Descriptor"
 summary: "Application registry and non-secret deployment configuration in bundles.yaml: default app, Git or local sources, module paths, readiness policy, and app-scoped config."
 tags: ["service", "configuration", "bundle", "bundle-registry", "deployment", "descriptor", "api-security"]
-keywords: ["bundle registry", "default bundle selection", "git bundle source", "local path bundle source", "bundle module mapping", "bundle configuration", "bundle inventory", "service.readiness", "application readiness policy", "file-backed bundle authority", "bundle reload workflow", "deployment bundle catalog", "operation csrf override"]
-updated_at: 2026-09-11
+keywords: ["bundle registry", "default bundle selection", "git bundle source", "local path bundle source", "bundle module mapping", "bundle configuration", "bundle inventory", "service.readiness", "application readiness policy", "file-backed bundle authority", "bundle reload workflow", "deployment bundle catalog", "connection hub catalog fragment", "operation csrf override"]
+updated_at: 2026-09-13
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/descriptors-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/apps/app-with-agents-README.md
@@ -329,6 +329,13 @@ bundles:
 The adapter is served by the `connection-hub@1-0` public `oauth` operation. It
 issues delegated credentials that can be consumed by managed bundle surfaces,
 for example a bundle MCP endpoint with `surfaces.as_provider.mcp.<alias>.auth`.
+
+An app-owned `config/connection-hub.catalog.fragment.yaml` can contribute
+capabilities and operation rows to this descriptor without replacing other
+apps' declarations. Use the CLI's
+[catalog-fragment check and apply flow](../service/cicd/cli-README.md#catalog-fragments)
+to detect drift, add absent rows, and review the descriptor before reloading
+Connection Hub.
 
 `config.execution.runtime` controls per-bundle execution runtime routing and
 per-run ISO runtime limits. `config.exec_runtime` is the legacy alias.

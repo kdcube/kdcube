@@ -1,10 +1,10 @@
 ---
 id: repo:kdcube/app/ai-app/docs/service/cicd/cli-README.md
 title: "Current KDCube CLI"
-summary: "Current implemented CLI surface for local environment bootstrapping, workdir preparation, Docker Compose startup, descriptor validation, exact delegated secret management, host-vault activation, maintainer package-source builds, and deployment selection."
+summary: "Current implemented CLI surface for local environment bootstrapping, workdir preparation, Docker Compose startup, descriptor validation, app catalog-fragment checks, exact delegated secret management, host-vault activation, maintainer package-source builds, and deployment selection."
 tags: ["service", "cicd", "cli", "env", "deployment", "bundle"]
-keywords: ["kdcube cli", "local environment bootstrap", "workdir setup", "docker compose control", "descriptor validation", "current cli contract", "local deployment tooling", "multiple local runtime snapshots", "single active local deployment", "tenant project workdir namespace", "bundle config patch", "bundle secret patch", "bundle delete", "managed bundle deletion", "purge-data", "force-retire", "targeted bundle retirement", "host vault stage", "host vault activate", "host vault recover", "kdcube bundle command", "bundle reload internals", "reload-authority", "maintainer local Python package", "unpublished package candidate"]
-updated_at: 2026-09-11
+keywords: ["kdcube cli", "local environment bootstrap", "workdir setup", "docker compose control", "descriptor validation", "connection hub catalog fragment", "catalog drift check", "catalog fragment apply", "current cli contract", "local deployment tooling", "multiple local runtime snapshots", "single active local deployment", "tenant project workdir namespace", "bundle config patch", "bundle secret patch", "bundle delete", "managed bundle deletion", "purge-data", "force-retire", "targeted bundle retirement", "host vault stage", "host vault activate", "host vault recover", "kdcube bundle command", "bundle reload internals", "reload-authority", "maintainer local Python package", "unpublished package candidate"]
+updated_at: 2026-09-13
 see_also:
   - repo:kdcube/app/ai-app/docs/service/cicd/release-README.md
   - repo:kdcube/app/ai-app/docs/service/cicd/descriptors-README.md
@@ -666,6 +666,60 @@ IDs are reloaded and removed IDs are retired after staging. This is inventory
 reconciliation: a removed ID does not run `on_app_deprovision(...)` and does
 not receive purge permission. Each runtime operation targets only its changed
 ID; unchanged bundles keep running.
+
+### Check and apply an app catalog fragment<a id="catalog-fragments"></a>
+
+An app may ship `config/connection-hub.catalog.fragment.yaml` to declare the
+capabilities and operations that Connection Hub must be able to grant. Check
+that declaration against the active runtime descriptor before issuing Cards:
+
+```bash
+FRAGMENT=/path/to/app/config/connection-hub.catalog.fragment.yaml
+
+kdcube bundle catalog check \
+  --workdir <runtime-workdir> \
+  --catalog-fragment "$FRAGMENT"
+```
+
+The check is read-only. It prints declared-versus-present counts and names
+every missing, conflicting, duplicate, or invalid path. Exit status is `0`
+when the active catalog carries the complete fragment and `1` when differences
+remain. Add `--json` for the same result as structured data.
+
+After reviewing the differences, merge absent declarations into the active
+`bundles.yaml`:
+
+```bash
+kdcube bundle catalog apply \
+  --workdir <runtime-workdir> \
+  --catalog-fragment "$FRAGMENT"
+
+kdcube bundle catalog check \
+  --workdir <runtime-workdir> \
+  --catalog-fragment "$FRAGMENT"
+```
+
+Apply is additive and idempotent. It adds absent capabilities, resources,
+tools, namespaces, nested operations, fields, and scalar grant values. It
+preserves catalog entries not declared by this fragment and never deletes an
+entry merely because a later fragment omits it. A conflicting existing value
+remains operator-owned; apply preserves it, reports the unresolved path, and
+exits `1`. This lets one shared named-services resource collect declarations
+from several apps without one fragment replacing another app's catalog.
+Operation `grants` and capability `delegable_roles` /
+`delegable_permissions` are compared as exact unordered sets because an extra
+value changes the authorization contract.
+
+Apply changes only the descriptor. It does not reload Connection Hub and does
+not grant a new operation to an existing Card. Review the resulting
+`bundles.yaml`, then activate it explicitly:
+
+```bash
+kdcube bundle reload connection-hub@1-0 --workdir <runtime-workdir>
+```
+
+If the deployment uses a different Connection Hub bundle ID, pass
+`--connection-hub-bundle-id <id>` to both catalog commands.
 
 ### 2.3c Export and import local runtime descriptors
 
