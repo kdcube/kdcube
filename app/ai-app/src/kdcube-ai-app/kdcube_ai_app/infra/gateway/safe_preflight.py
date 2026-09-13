@@ -45,6 +45,12 @@ class PreflightConfig:
     # Policy: generic ZIP archives (non-OOXML)
     allow_zip: bool = False
 
+    # Policy: SVG. An SVG is a document that can execute, so it is accepted
+    # only when it carries nothing executable and nothing that reaches off the
+    # page. A viewer that renders one must still render it as an image.
+    allow_svg: bool = True
+    svg_max_bytes: int = 2 * 1024 * 1024
+
     # PDF limits
     pdf_max_pages: int = 500
     pdf_max_objects_hint: int = 100_000
@@ -273,6 +279,77 @@ def preflight_text(data: bytes, cfg: PreflightConfig) -> PreflightResult:
 def preflight_image(data: bytes, mime: str) -> PreflightResult:
     return PreflightResult(allowed=True, meta={"type": "image", "mime": mime, "bytes": len(data)})
 
+# ---------- SVG preflight ----------
+
+# Every construct below either runs code or fetches something while the image is
+# being drawn. An SVG carrying none of them is a picture; one carrying any of
+# them is a page, and a surface that renders it has become an execution surface.
+_SVG_FORBIDDEN_ELEMENTS = (
+    "script", "foreignobject", "iframe", "embed", "object", "audio", "video",
+    "animate", "animatetransform", "animatemotion", "set", "handler",
+)
+_SVG_FORBIDDEN_ATTR_PREFIXES = ("on",)          # onload, onclick, onbegin, ...
+_SVG_FORBIDDEN_URI_SCHEMES = ("javascript:", "vbscript:", "data:text/html")
+
+
+def preflight_svg(data: bytes, cfg: PreflightConfig) -> PreflightResult:
+    """Accept an SVG only when it is a drawing, and say which construct refused it."""
+
+    r = PreflightResult(allowed=True, meta={"type": "image", "mime": "image/svg+xml", "bytes": len(data)})
+    if not cfg.allow_svg:
+        return r.deny("SVG not allowed by policy")
+    if len(data) > cfg.svg_max_bytes:
+        return r.deny(f"SVG too large: {len(data)}>{cfg.svg_max_bytes}")
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return r.deny("SVG is not valid UTF-8")
+
+    # Parsed, not pattern-matched: a regex over the source is defeated by
+    # entities and encoding, and the parser is what the renderer will use.
+    import xml.etree.ElementTree as ElementTree
+
+    parser = ElementTree.XMLParser()
+    try:
+        # Entity declarations are how an XML document reads local files and
+        # expands until it exhausts memory. The stdlib parser does not expand
+        # external entities, and a document that declares any is refused rather
+        # than trusted to the parser's defaults.
+        if "<!ENTITY" in text or "<!DOCTYPE" in text:
+            return r.deny("SVG declares a DOCTYPE or entity")
+        root = ElementTree.fromstring(text, parser=parser)
+    except ElementTree.ParseError as exc:
+        return r.deny(f"SVG is not well-formed XML: {exc}")
+
+    def local(tag: str) -> str:
+        return tag.rsplit("}", 1)[-1].lower()
+
+    if local(root.tag) != "svg":
+        return r.deny(f"Root element is {local(root.tag)}, not svg")
+
+    elements = 0
+    for node in root.iter():
+        elements += 1
+        name = local(node.tag)
+        if name in _SVG_FORBIDDEN_ELEMENTS:
+            r.deny(f"SVG contains <{name}>")
+        for raw_attr, value in node.attrib.items():
+            attr = local(raw_attr)
+            if attr.startswith(_SVG_FORBIDDEN_ATTR_PREFIXES) and len(attr) > 2:
+                r.deny(f"SVG contains the event attribute {attr}")
+            lowered = str(value or "").strip().lower().replace(" ", "")
+            if lowered.startswith(_SVG_FORBIDDEN_URI_SCHEMES):
+                r.deny(f"SVG references a script URI in {attr}")
+            # An external reference makes rendering the image a network request
+            # from the reader's browser, which leaks who opened it and when.
+            if attr in ("href", "src") and lowered.startswith(("http://", "https://", "//")):
+                r.deny(f"SVG references an external resource in {attr}")
+
+    r.meta["elements"] = elements
+    return r
+
+
 # ---------- Dispatcher (async) ----------
 
 async def preflight_async(
@@ -313,6 +390,14 @@ async def preflight_async(
         if r.meta.get("ooxml_kind") is None and not cfg.allow_zip:
             return res.deny("Archives (ZIP) are disallowed by policy")
 
+        if not r.allowed:
+            res.allowed = False
+            res.reasons.extend(r.reasons)
+        return res
+
+    if mime == "image/svg+xml":
+        r = preflight_svg(data, cfg)
+        res.meta.update(r.meta)
         if not r.allowed:
             res.allowed = False
             res.reasons.extend(r.reasons)
