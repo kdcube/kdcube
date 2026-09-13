@@ -276,6 +276,7 @@ async def deploy_loaded_bundle_app_resources(
     project: str,
     pg_pool: Any = None,
     redis: Any = None,
+    application_generation: str | None = None,
     effective_props_transform: Callable[
         [dict[str, Any]], Awaitable[Mapping[str, Any]] | Mapping[str, Any]
     ]
@@ -408,6 +409,7 @@ async def deploy_loaded_bundle_app_resources(
         storage_root=storage_root,
         logger=logger,
         source_generation=source_generation,
+        application_generation=application_generation,
         source_fingerprint=source_fingerprint,
         descriptor_props_hash=descriptor_props_hash,
         lock_ttl=lock_ttl,
@@ -426,6 +428,7 @@ async def _reconcile_static_surfaces(
     storage_root: pathlib.Path,
     logger: AgentLogger,
     source_generation: str,
+    application_generation: str | None,
     source_fingerprint: str,
     descriptor_props_hash: str,
     lock_ttl: int,
@@ -441,6 +444,7 @@ async def _reconcile_static_surfaces(
         "project": project,
         "bundle_id": bundle_id,
         "source_generation": source_generation,
+        "application_generation": application_generation,
         "props_fingerprint": descriptor_props_hash,
         "bundle_enabled": bundle_enabled,
         "bundle_allowed_roles": bundle_allowed_roles,

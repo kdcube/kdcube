@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from types import SimpleNamespace
 
 from fastapi import FastAPI
@@ -66,7 +67,11 @@ def test_internal_reload_authority_reapplies_registry(monkeypatch):
     monkeypatch.setattr(
         integrations,
         "get_settings",
-        lambda: SimpleNamespace(TENANT="demo-tenant", PROJECT="demo-project"),
+        lambda: SimpleNamespace(
+            TENANT="demo-tenant",
+            PROJECT="demo-project",
+            INSTANCE_ID="proc-test",
+        ),
     )
     monkeypatch.setattr(integrations, "_LOCALHOST", {"testclient", "127.0.0.1", "::1"})
 
@@ -92,6 +97,9 @@ def test_internal_reload_authority_reapplies_registry(monkeypatch):
     }
     assert calls["cleared"] is True
     assert calls["publish"][0] == "kdcube:config:bundles:update:demo-tenant:demo-project"
+    published = json.loads(calls["publish"][1])
+    assert published["origin_instance_id"] == "proc-test"
+    assert published["origin_process_id"] == os.getpid()
 
 
 def test_internal_reload_authority_evicts_requested_bundle_scope(monkeypatch):
@@ -99,6 +107,10 @@ def test_internal_reload_authority_evicts_requested_bundle_scope(monkeypatch):
     mount_integrations_routers(app)
 
     calls: dict[str, object] = {}
+
+    class _Lifecycle:
+        async def reconcile(self, registry, *, force=None):
+            calls["lifecycle"] = (registry, force)
 
     async def fake_reload_registry_from_authority(redis, tenant, project):
         calls["reload"] = (redis, tenant, project)
@@ -137,11 +149,16 @@ def test_internal_reload_authority_evicts_requested_bundle_scope(monkeypatch):
             return 1
 
     app.state.redis_async = _Redis()
+    app.state.application_lifecycle = _Lifecycle()
 
     monkeypatch.setattr(
         integrations,
         "get_settings",
-        lambda: SimpleNamespace(TENANT="demo-tenant", PROJECT="demo-project"),
+        lambda: SimpleNamespace(
+            TENANT="demo-tenant",
+            PROJECT="demo-project",
+            INSTANCE_ID="proc-test",
+        ),
     )
     monkeypatch.setattr(integrations, "_LOCALHOST", {"testclient", "127.0.0.1", "::1"})
 
@@ -153,6 +170,15 @@ def test_internal_reload_authority_evicts_requested_bundle_scope(monkeypatch):
     monkeypatch.setattr(bundle_registry, "set_registry_async", fake_set_registry_async)
     monkeypatch.setattr(bundle_loader, "clear_bundle_loader_caches", fake_clear_bundle_loader_caches)
     monkeypatch.setattr(bundle_loader, "evict_bundle_scope", fake_evict_bundle_scope)
+
+    async def fake_invalidate_deployed(**kwargs):
+        calls["deployed"] = kwargs
+
+    monkeypatch.setattr(
+        integrations,
+        "_invalidate_deployed_widget_manifests",
+        fake_invalidate_deployed,
+    )
 
     client = TestClient(app)
     response = client.post("/internal/bundles/reload-authority", json={"bundle_id": "demo.bundle@1.0.0"})
@@ -167,6 +193,12 @@ def test_internal_reload_authority_evicts_requested_bundle_scope(monkeypatch):
         "singleton": True,
         "drop_sys_modules": True,
     }
+    assert calls["deployed"] == {
+        "tenant": "demo-tenant",
+        "project": "demo-project",
+        "bundle_ids": ["demo.bundle@1.0.0"],
+    }
+    assert calls["lifecycle"][1] == {"demo.bundle@1.0.0"}
     assert "cleared" not in calls
 
 

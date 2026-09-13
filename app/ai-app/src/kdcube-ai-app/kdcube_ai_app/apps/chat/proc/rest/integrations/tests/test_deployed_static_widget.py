@@ -124,6 +124,67 @@ async def test_deployed_widget_serves_without_loading_workflow(monkeypatch, tmp_
 
 
 @pytest.mark.asyncio
+async def test_deployed_widget_refuses_manifest_from_older_application_generation(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    entry = SimpleNamespace(
+        id="app@1-0",
+        path="/bundles/app",
+        module="entrypoint",
+        singleton=True,
+        repo=None,
+        ref=None,
+        subdir=None,
+        git_commit="commit-1",
+    )
+    manifest = AppStaticSurfaceManifest(
+        tenant="tenant-a",
+        project="project-a",
+        bundle_id="app@1-0",
+        source_generation=source_generation_for_spec(entry),
+        application_generation="application-generation-old",
+        props_fingerprint=props_fingerprint({}),
+        deployment_signature="deploy-old",
+        generated_at="2026-07-27T00:00:00+00:00",
+        widgets={},
+    )
+    await write_deployment_manifest(tmp_path, manifest)
+
+    async def _load_registry(*args, **kwargs):
+        del args, kwargs
+        return SimpleNamespace(bundles={"app@1-0": entry})
+
+    monkeypatch.setattr(integrations, "_resolve_path_scope", lambda **kwargs: ("tenant-a", "project-a"))
+    monkeypatch.setattr(integrations, "_get_app_redis", lambda request: object())
+    monkeypatch.setattr(integrations, "load_registry", _load_registry)
+    monkeypatch.setattr(bundle_storage, "bundle_storage_dir", lambda **kwargs: tmp_path)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await integrations._try_serve_deployed_static_widget_app(
+            tenant="tenant-a",
+            project="project-a",
+            bundle_id="app@1-0",
+            widget_alias="stats",
+            widget_path="index.html",
+            request=_request(),
+            session=SimpleNamespace(),
+            application_generation="application-generation-current",
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.headers == {"Retry-After": "2"}
+    assert exc_info.value.detail == {
+        "type": "application_not_ready",
+        "application_id": "app@1-0",
+        "state": "widget_artifact_stale",
+        "retryable": True,
+        "widget_alias": "stats",
+        "reason": "application_generation_mismatch",
+    }
+
+
+@pytest.mark.asyncio
 async def test_deployed_widget_policy_denial_does_not_fall_back(monkeypatch, tmp_path: Path) -> None:
     entry = SimpleNamespace(
         id="app@1-0",
@@ -312,6 +373,37 @@ async def test_deployed_mode_labels_legacy_fallback(monkeypatch) -> None:
         session=SimpleNamespace(),
     )
     assert response.headers["X-KDCube-Widget-Delivery"] == "legacy-fallback"
+
+
+@pytest.mark.asyncio
+async def test_deployed_mode_checks_manifest_against_ready_application_generation(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(integrations, "static_widget_delivery_mode", lambda: "deployed")
+    monkeypatch.setattr(
+        integrations,
+        "_require_application_ready",
+        lambda **kwargs: SimpleNamespace(desired_generation="application-generation-current"),
+    )
+    seen: dict[str, object] = {}
+
+    async def _deployed(**kwargs):
+        seen.update(kwargs)
+        return Response("current")
+
+    monkeypatch.setattr(integrations, "_try_serve_deployed_static_widget_app", _deployed)
+    response = await integrations._serve_static_widget_app(
+        tenant="tenant-a",
+        project="project-a",
+        bundle_id="app@1-0",
+        widget_alias="stats",
+        widget_path="index.html",
+        request=_request(),
+        session=SimpleNamespace(),
+    )
+
+    assert response.body == b"current"
+    assert seen["application_generation"] == "application-generation-current"
 
 
 @pytest.mark.asyncio

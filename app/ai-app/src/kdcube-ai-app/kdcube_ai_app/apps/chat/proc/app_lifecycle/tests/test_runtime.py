@@ -161,6 +161,44 @@ async def test_required_policy_blocks_aggregate_but_does_not_change_generation(
 
 
 @pytest.mark.asyncio
+async def test_source_edit_creates_a_new_generation_and_reprepares_application(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "app"
+    source.mkdir()
+    widget_source = source / "widget.tsx"
+    widget_source.write_text("export const value = 'one';\n", encoding="utf-8")
+    calls = _patch_preparation(monkeypatch)
+    registry = ApplicationReadinessRegistry()
+    lifecycle = _lifecycle(registry)
+
+    await lifecycle.reconcile(_registry(source))
+    await asyncio.wait_for(lifecycle.wait_for_current(), timeout=1)
+    before = registry.snapshot(
+        tenant="tenant-a",
+        project="project-a",
+        application_id="app@1-0",
+    )
+    assert before is not None and before.ready
+
+    widget_source.write_text("export const value = 'two-with-new-source';\n", encoding="utf-8")
+    await lifecycle.reconcile(_registry(source))
+    await asyncio.wait_for(lifecycle.wait_for_current(), timeout=1)
+    after = registry.snapshot(
+        tenant="tenant-a",
+        project="project-a",
+        application_id="app@1-0",
+    )
+
+    assert after is not None and after.ready
+    assert after.desired_generation != before.desired_generation
+    assert after.ready_generation == after.desired_generation
+    assert calls == ["app@1-0", "app@1-0"]
+    await lifecycle.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_explicit_retry_reprepares_only_the_selected_application(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

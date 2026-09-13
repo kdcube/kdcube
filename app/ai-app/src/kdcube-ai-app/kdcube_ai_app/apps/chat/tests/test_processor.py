@@ -646,10 +646,24 @@ async def test_config_listener_secrets_update_invalidates_config_secret_cache(mo
 
 
 @pytest.mark.asyncio
-async def test_config_listener_remove_event_retires_only_requested_bundle(monkeypatch):
+@pytest.mark.parametrize(
+    ("event_op", "changed_bundle_id", "same_origin"),
+    [
+        pytest.param("remove", "removed@1-0", False, id="peer-remove"),
+        pytest.param("remove", "removed@1-0", True, id="same-process-remove"),
+        pytest.param("replace", "stable@1-0", True, id="same-process-reload"),
+    ],
+)
+async def test_config_listener_does_not_repeat_same_process_bundle_mutation(
+    monkeypatch,
+    event_op,
+    changed_bundle_id,
+    same_origin,
+):
     settings = SimpleNamespace(
         TENANT="tenant-a",
         PROJECT="project-a",
+        INSTANCE_ID="proc-test",
         plain=lambda *_args, **_kwargs: "",
     )
     import kdcube_ai_app.apps.chat.sdk.config as sdk_config_mod
@@ -746,11 +760,16 @@ async def test_config_listener_remove_event_retires_only_requested_bundle(monkey
 
     event = {
         "type": "bundles.update",
-        "op": "remove",
+        "op": event_op,
         "bundles": {},
-        "changed_bundle_ids": ["removed@1-0"],
+        "changed_bundle_ids": [changed_bundle_id],
         "default_bundle_id": "stable@1-0",
     }
+    if same_origin:
+        event.update(
+            origin_instance_id="proc-test",
+            origin_process_id=os.getpid(),
+        )
     redis = _RedisWithMessagePubSub(
         asyncio.Event(),
         [{"type": "message", "data": json.dumps(event)}],
@@ -764,13 +783,15 @@ async def test_config_listener_remove_event_retires_only_requested_bundle(monkey
     await processor._config_listener_loop()
 
     assert len(lifecycle_reconciles) == 1
-    assert len(scheduler_reconciles) == 2
-    assert len(data_bus_reconciles) == 2
-    assert lifecycle_retires == [("removed@1-0", current)]
-    assert scheduler_removes == ["removed@1-0"]
-    assert data_bus_removes == ["removed@1-0"]
-    assert evictions == ["removed@1-0"]
-    assert targeted_sidecar_stops == [{"removed@1-0"}]
+    expected_reconciles = 3 if event_op == "replace" else 2
+    assert len(scheduler_reconciles) == expected_reconciles
+    assert len(data_bus_reconciles) == expected_reconciles
+    expected_removed = [changed_bundle_id] if event_op == "remove" else []
+    assert lifecycle_retires == ([] if same_origin else [(changed_bundle_id, current)])
+    assert scheduler_removes == expected_removed
+    assert data_bus_removes == expected_removed
+    assert evictions == ([] if same_origin else [changed_bundle_id])
+    assert targeted_sidecar_stops == ([] if same_origin else [{changed_bundle_id}])
 
 
 def test_processor_defaults_to_legacy_lists_scheduler_backend():

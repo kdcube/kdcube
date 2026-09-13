@@ -1657,9 +1657,23 @@ proc publishes bundles.update with changed_bundle_ids=["<bundle_id>"]
 other proc workers receive the config event and evict the same bundle
         |
         v
-the next request imports fresh Python source and rebuilds widget output when
+each proc marks that application generation pending and starts supervised
+preparation
+        |
+        v
+preparation fingerprints the mounted source and rebuilds widget output when
 the UI source signature changed
+        |
+        v
+the complete widget manifest is published and the application becomes ready
 ```
+
+`kdcube bundle reload <bundle_id>` is the complete app-source and app-widget
+reload command. `kdcube refresh --build` rebuilds KDCube platform images; it is
+the command for platform-source changes. While the replacement widget is
+building, requests receive a retryable `503 application_not_ready`. Requests
+serve only the manifest published for the current application generation;
+older manifests are reported as stale.
 
 Bundle Admin uses the same reload authority path through the admin API:
 

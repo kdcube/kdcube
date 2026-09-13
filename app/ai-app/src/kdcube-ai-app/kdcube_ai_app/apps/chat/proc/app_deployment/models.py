@@ -27,6 +27,7 @@ class AppStaticSurfaceManifest(BaseModel):
     project: str
     bundle_id: str
     source_generation: str
+    application_generation: str | None = None
     props_fingerprint: str
     deployment_signature: str
     generated_at: str

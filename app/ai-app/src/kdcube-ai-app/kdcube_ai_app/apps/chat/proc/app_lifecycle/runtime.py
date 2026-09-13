@@ -12,9 +12,9 @@ from pathlib import Path
 from typing import Any
 
 from kdcube_ai_app.apps.chat.proc.app_deployment.coordinator import (
+    app_source_fingerprint,
     deploy_loaded_bundle_app_resources,
     props_fingerprint,
-    source_generation_for_spec,
 )
 from kdcube_ai_app.apps.chat.proc.app_deployment.deprovision import (
     deprovision_loaded_bundle_app_resources,
@@ -228,7 +228,7 @@ class ProcApplicationLifecycle:
             )
             props_hash = "unavailable"
 
-        source_hash = source_generation_for_spec(bundle_entry_to_spec(entry))
+        source_hash = await app_source_fingerprint(bundle_entry_to_spec(entry))
 
         return ApplicationPreparation(
             application_id=entry.id,
@@ -512,6 +512,7 @@ class ProcApplicationLifecycle:
             project=self.project,
             pg_pool=self.pg_pool,
             redis=self.redis,
+            application_generation=preparation.generation,
             effective_props_transform=effective_props_transform,
         )
 

@@ -4,7 +4,7 @@ title: "UI Components Lifecycle"
 summary: "How supervised application preparation discovers, builds, atomically publishes, serves, and reloads app UI components across concurrent proc workers."
 tags: ["sdk", "bundle", "ui", "widget", "main-view", "lifecycle", "application-readiness", "concurrency", "efs", "iframe"]
 keywords: ["bundle ui lifecycle", "bundle widget lifecycle", "ui.widgets", "ui.main_view", "ui_widget decorator", "supervised UI build", "shared storage ui build", "worker-local node_modules", "bundle ui locks", "bundle ui signatures", "static widget route", "concurrent proc workers", "atomic UI publication", "application readiness"]
-updated_at: 2026-08-18
+updated_at: 2026-09-13
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-lifecycle-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/app-deployment-and-static-widget-delivery-README.md
@@ -447,9 +447,21 @@ Changes become desired runtime state through the normal application lifecycle:
 - A staged runtime refresh or proc restart publishes generations for the
   complete active registry.
 
-Directly editing a local source tree does not make a browser request a build
-trigger. Use the supported app reload/runtime refresh operation so every proc
-process observes the same desired state and supersedes its old preparation.
+After editing a mounted app's main-view or widget source, run the app reload:
+
+```bash
+kdcube bundle reload <bundle_id> --workdir <runtime-workdir>
+```
+
+This command makes every proc process observe the source change, marks the new
+application generation pending, and starts the supervised build. The browser
+continues once that generation has published a complete manifest. During the
+build it receives a retryable `503 application_not_ready`; an absent artifact
+or a manifest from another application generation is reported rather than
+served as current.
+
+`kdcube refresh --build` rebuilds KDCube platform images. A mounted app source
+or app widget source change uses `kdcube bundle reload`.
 
 The target reload path is documented here:
 
