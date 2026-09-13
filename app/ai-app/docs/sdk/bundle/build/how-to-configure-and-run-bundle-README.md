@@ -1465,6 +1465,10 @@ kdcube bundle reload <bundle_id> --workdir ~/.kdcube/kdcube-runtime/<tenant_id>_
 - drops matching dynamic bundle modules from `sys.modules`
 - invalidates static widget entrypoint load state for that bundle
 - broadcasts `changed_bundle_ids` so other proc workers evict the same bundle
+- fingerprints the mounted app source and starts supervised preparation for a
+  changed application generation
+- rebuilds changed main-view and widget sources, publishes their complete
+  manifest, and then marks that application generation ready
 
 Use this for:
 
@@ -1514,22 +1518,20 @@ Use a full reinstall only when code changes depend on wider runtime/platform cha
 For `ui.main_view` bundles, source changes belong in the bundle `ui/main`
 directory.
 
-Do not fix stale UI by manually building into:
+After changing `ui/main` or `ui/widgets/<alias>`, run:
 
-```text
-<bundle_storage_root>/ui
+```bash
+kdcube bundle reload my.bundle@1-0 --workdir ~/.kdcube/kdcube-runtime/mytenant__myproject
 ```
 
-The supported path is:
+The app lifecycle fingerprints the mounted source, builds the changed UI into
+bundle storage, publishes a generation-fenced manifest, and marks the app
+ready. Requests made while that work is running receive a retryable 503. A
+request serves only a manifest matching the current app generation; supervised
+preparation owns every repair build.
 
-- the bundle UI requests the HTML entrypoint through `/api/integrations/static/{tenant}/{project}/{bundle_id}`
-- the bundle UI loader checks the `ui/main` signature
-- the loader builds into bundle storage when needed
-- the static route serves the refreshed hashed assets
-
-After changing `ui/main`, reload or reselect the bundle so the bundle UI requests
-the HTML entrypoint again. If the UI is still stale, inspect loader logs and the
-served hashed asset before changing runtime storage manually.
+Use `kdcube refresh --build` when KDCube platform source or runtime topology
+changed. App source and app widget changes use the targeted bundle reload above.
 
 ### If you changed a file-producing tool
 

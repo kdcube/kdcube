@@ -112,6 +112,7 @@ from kdcube_ai_app.infra.plugin.bundle_loader import (
 )
 from kdcube_ai_app.infra.plugin.app_readiness import (
     ApplicationNotReadyError,
+    ApplicationReadinessSnapshot,
     application_readiness_registry,
 )
 from kdcube_ai_app.infra.plugin.bundle_registry import ADMIN_BUNDLE_ID
@@ -540,10 +541,15 @@ def _resolve_path_scope(*, tenant: str, project: str) -> tuple[str, str]:
     return tenant_id, project_id
 
 
-def _require_application_ready(*, tenant: str, project: str, application_id: str) -> None:
+def _require_application_ready(
+        *,
+        tenant: str,
+        project: str,
+        application_id: str,
+) -> ApplicationReadinessSnapshot | None:
     if application_id == ADMIN_BUNDLE_ID:
-        return
-    application_readiness_registry.require_ready(
+        return None
+    return application_readiness_registry.require_ready(
         tenant=tenant,
         project=project,
         application_id=application_id,
@@ -1598,6 +1604,14 @@ def _application_preparation_diagnostic(
 
 def _bundles_channel(fmt: str, *, tenant: str, project: str) -> str:
     return fmt.format(tenant=tenant, project=project)
+
+
+def _bundle_update_origin(settings: Any) -> Dict[str, Any]:
+    """Identify the process that already applied a managed bundle mutation."""
+    return {
+        "origin_instance_id": str(getattr(settings, "INSTANCE_ID", "") or ""),
+        "origin_process_id": os.getpid(),
+    }
 
 
 def _bundle_props_key(*, tenant: str, project: str, bundle_id: str) -> str:
@@ -3135,6 +3149,7 @@ async def _do_set_bundles(
             "project": project_id,
             "updated_by": session.username or session.user_id or "unknown",
             "ts": datetime.utcnow().isoformat() + "Z",
+            **_bundle_update_origin(settings),
         }
         await redis.publish(
             _bundles_channel(namespaces.CONFIG.BUNDLES.UPDATE_CHANNEL, tenant=tenant_id, project=project_id),
@@ -3288,6 +3303,7 @@ async def _do_reload_bundles_from_authority(
         "project": project_id,
         "updated_by": session.username or session.user_id or "unknown",
         "ts": datetime.utcnow().isoformat() + "Z",
+        **_bundle_update_origin(settings),
     }
     reload_channel = _bundles_channel(namespaces.CONFIG.BUNDLES.UPDATE_CHANNEL, tenant=tenant_id, project=project_id)
     receivers = await redis.publish(
@@ -3431,6 +3447,7 @@ async def _do_remove_bundle_from_authority(
         "project": project_id,
         "updated_by": session.username or session.user_id or "unknown",
         "ts": datetime.utcnow().isoformat() + "Z",
+        **_bundle_update_origin(settings),
     }
     reload_channel = _bundles_channel(
         namespaces.CONFIG.BUNDLES.UPDATE_CHANNEL,
@@ -4637,6 +4654,29 @@ def _static_widget_iframe_html(
 _DEPLOYED_STATIC_WIDGET_MISS = object()
 
 
+def _deployed_widget_unavailable(
+        *,
+        bundle_id: str,
+        widget_alias: str,
+        state: str,
+        reason: str | None = None,
+) -> HTTPException:
+    detail = {
+        "type": "application_not_ready",
+        "application_id": bundle_id,
+        "state": state,
+        "retryable": True,
+        "widget_alias": widget_alias,
+    }
+    if reason:
+        detail["reason"] = reason
+    return HTTPException(
+        status_code=503,
+        detail=detail,
+        headers={"Retry-After": "2"},
+    )
+
+
 async def _try_serve_deployed_static_widget_app(
         *,
         tenant: str,
@@ -4647,6 +4687,7 @@ async def _try_serve_deployed_static_widget_app(
         request: Request,
         session: UserSession,
         public: bool = False,
+        application_generation: str | None = None,
 ):
     """Serve a predeployed widget without importing or instantiating the app.
 
@@ -4669,6 +4710,12 @@ async def _try_serve_deployed_static_widget_app(
     )
     manifest = await load_deployment_manifest(storage_root)
     if manifest is None:
+        if application_generation:
+            raise _deployed_widget_unavailable(
+                bundle_id=bundle_id,
+                widget_alias=widget_alias,
+                state="widget_artifact_missing",
+            )
         return _DEPLOYED_STATIC_WIDGET_MISS
     if (
         manifest.schema_version != 1
@@ -4677,7 +4724,24 @@ async def _try_serve_deployed_static_widget_app(
         or manifest.bundle_id != bundle_id
         or manifest.source_generation != source_generation_for_spec(entry)
     ):
+        if application_generation:
+            raise _deployed_widget_unavailable(
+                bundle_id=bundle_id,
+                widget_alias=widget_alias,
+                state="widget_artifact_stale",
+                reason="deployment_manifest_mismatch",
+            )
         return _DEPLOYED_STATIC_WIDGET_MISS
+    if (
+        application_generation
+        and manifest.application_generation != application_generation
+    ):
+        raise _deployed_widget_unavailable(
+            bundle_id=bundle_id,
+            widget_alias=widget_alias,
+            state="widget_artifact_stale",
+            reason="application_generation_mismatch",
+        )
 
     props = await store_read_bundle_props_from_authority(
         tenant=tenant_id,
@@ -4685,6 +4749,13 @@ async def _try_serve_deployed_static_widget_app(
         bundle_id=bundle_id,
     ) or {}
     if manifest.props_fingerprint != props_fingerprint(props):
+        if application_generation:
+            raise _deployed_widget_unavailable(
+                bundle_id=bundle_id,
+                widget_alias=widget_alias,
+                state="widget_artifact_stale",
+                reason="application_properties_mismatch",
+            )
         return _DEPLOYED_STATIC_WIDGET_MISS
 
     widget = manifest.widgets.get(widget_alias)
@@ -4701,6 +4772,12 @@ async def _try_serve_deployed_static_widget_app(
     if not widget.static:
         return _DEPLOYED_STATIC_WIDGET_MISS
     if not widget.artifact_relpath:
+        if application_generation:
+            raise _deployed_widget_unavailable(
+                bundle_id=bundle_id,
+                widget_alias=widget_alias,
+                state="widget_artifact_missing",
+            )
         return _DEPLOYED_STATIC_WIDGET_MISS
 
     try:
@@ -4712,6 +4789,12 @@ async def _try_serve_deployed_static_widget_app(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid widget path") from exc
     if not await deployed_widget_target_is_file(target):
+        if application_generation:
+            raise _deployed_widget_unavailable(
+                bundle_id=bundle_id,
+                widget_alias=widget_alias,
+                state="widget_artifact_missing",
+            )
         return _DEPLOYED_STATIC_WIDGET_MISS
 
     delivery_headers = {
@@ -4881,7 +4964,7 @@ async def _serve_static_widget_app(
 ):
     tenant_id = str(tenant or "").strip()
     project_id = str(project or "").strip()
-    _require_application_ready(
+    readiness = _require_application_ready(
         tenant=tenant_id,
         project=project_id,
         application_id=bundle_id,
@@ -4897,6 +4980,9 @@ async def _serve_static_widget_app(
             request=request,
             session=session,
             public=public,
+            application_generation=(
+                readiness.desired_generation if readiness is not None else None
+            ),
         )
         if deployed_response is not _DEPLOYED_STATIC_WIDGET_MISS:
             return deployed_response

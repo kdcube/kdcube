@@ -2082,6 +2082,8 @@ class EnhancedChatRequestProcessor:
         settings = get_settings()
         tenant = settings.TENANT
         project = settings.PROJECT
+        runtime_instance_id = str(getattr(settings, "INSTANCE_ID", "") or "")
+        runtime_process_id = os.getpid()
         update_channel = namespaces.CONFIG.BUNDLES.UPDATE_CHANNEL.format(tenant=tenant, project=project)
         cleanup_channel = namespaces.CONFIG.BUNDLES.CLEANUP_CHANNEL.format(tenant=tenant, project=project)
         props_update_channel = namespaces.CONFIG.BUNDLES.PROPS_UPDATE_CHANNEL.format(tenant=tenant, project=project)
@@ -2131,6 +2133,7 @@ class EnhancedChatRequestProcessor:
             reason: str,
             changed_bundle_ids: Optional[set[str]] = None,
             removed_bundle_ids: Optional[set[str]] = None,
+            local_bundle_changes_applied: bool = False,
         ) -> None:
             previous_bundles = get_all()
             current = await store_load(self.redis, tenant, project)
@@ -2177,7 +2180,7 @@ class EnhancedChatRequestProcessor:
                 normalized_changed_bundle_ids,
             )
             evictions: dict[str, dict[str, int]] = {}
-            if normalized_changed_bundle_ids:
+            if normalized_changed_bundle_ids and not local_bundle_changes_applied:
                 for bundle_id in normalized_changed_bundle_ids:
                     entry = (current.bundles or {}).get(bundle_id) or previous_bundles.get(bundle_id)
                     if entry is None:
@@ -2217,6 +2220,16 @@ class EnhancedChatRequestProcessor:
                             reason,
                             exc_info=True,
                         )
+            elif normalized_changed_bundle_ids:
+                logger.info(
+                    "Bundle runtime catch-up preserved changes already applied by this process: "
+                    "reason=%s tenant=%s project=%s pid=%s bundles=%s",
+                    reason,
+                    tenant,
+                    project,
+                    runtime_process_id,
+                    normalized_changed_bundle_ids,
+                )
             else:
                 logger.info(
                     "Bundle runtime catch-up has no changed bundle ids; preserving local loader caches: "
@@ -2235,7 +2248,7 @@ class EnhancedChatRequestProcessor:
                     os.getpid(),
                     evictions,
                 )
-            if normalized_changed_bundle_ids:
+            if normalized_changed_bundle_ids and not local_bundle_changes_applied:
                 try:
                     from kdcube_ai_app.apps.chat.sdk.runtime.local_sidecars import stop_local_sidecars_for_bundle_ids
 
@@ -2276,7 +2289,7 @@ class EnhancedChatRequestProcessor:
                         )
                 except Exception:
                     logger.warning("Failed to stop inactive local sidecars after bundle runtime catch-up", exc_info=True)
-            if self._application_lifecycle is not None:
+            if self._application_lifecycle is not None and not local_bundle_changes_applied:
                 if normalized_removed_bundle_ids:
                     for bundle_id in normalized_removed_bundle_ids:
                         await self._application_lifecycle.retire(bundle_id, current)
@@ -2413,15 +2426,27 @@ class EnhancedChatRequestProcessor:
                                 for bid in ((bundles_patch or {}).keys() if isinstance(bundles_patch, dict) else [])
                                 if str(bid).strip()
                             }
+                        origin_instance_id = str(evt.get("origin_instance_id") or "")
+                        try:
+                            origin_process_id = int(evt.get("origin_process_id"))
+                        except (TypeError, ValueError):
+                            origin_process_id = -1
+                        local_bundle_changes_applied = bool(
+                            runtime_instance_id
+                            and origin_instance_id == runtime_instance_id
+                            and origin_process_id == runtime_process_id
+                        )
                         logger.info(
-                            "Received bundles.update broadcast: tenant=%s project=%s pid=%s changed_bundles=%s default=%s updated_by=%s ts=%s",
+                            "Received bundles.update broadcast: tenant=%s project=%s pid=%s changed_bundles=%s "
+                            "default=%s updated_by=%s ts=%s local_changes_applied=%s",
                             tenant,
                             project,
-                            os.getpid(),
+                            runtime_process_id,
                             sorted(changed_bundle_ids),
                             evt.get("default_bundle_id"),
                             evt.get("updated_by"),
                             evt.get("ts"),
+                            local_bundle_changes_applied,
                         )
                         for bundle_id in changed_bundle_ids:
                             _invalidate_config_secret_cache(
@@ -2438,6 +2463,7 @@ class EnhancedChatRequestProcessor:
                                 "bundles.update",
                                 changed_bundle_ids=changed_bundle_ids,
                                 removed_bundle_ids=removed_bundle_ids,
+                                local_bundle_changes_applied=local_bundle_changes_applied,
                             )
                         except Exception:
                             logger.warning("Bundle runtime catch-up failed after bundles.update", exc_info=True)

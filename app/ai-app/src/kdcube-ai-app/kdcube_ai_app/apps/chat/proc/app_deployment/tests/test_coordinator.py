@@ -128,6 +128,7 @@ async def test_deployment_runs_once_and_persists_resolved_policy(monkeypatch, tm
         bundle_spec=bundle_spec,
         tenant="tenant-a",
         project="project-a",
+        application_generation="application-generation-1",
     )
     second = await deploy_loaded_bundle_app_resources(
         workflow=workflow,
@@ -136,9 +137,11 @@ async def test_deployment_runs_once_and_persists_resolved_policy(monkeypatch, tm
         bundle_spec=bundle_spec,
         tenant="tenant-a",
         project="project-a",
+        application_generation="application-generation-1",
     )
 
     assert first is not None and second is not None
+    assert first.application_generation == "application-generation-1"
     assert first.deployment_signature == second.deployment_signature
     assert workflow.deploy_calls == 1
     assert workflow.build_calls == 1
@@ -157,11 +160,28 @@ async def test_deployment_runs_once_and_persists_resolved_policy(monkeypatch, tm
         bundle_spec=bundle_spec,
         tenant="tenant-a",
         project="project-a",
+        application_generation="application-generation-1",
     )
     assert third is not None
     assert third.widgets["stats"].roles == ["admin"]
     assert workflow.deploy_calls == 2
     assert workflow.build_calls == 2
+
+    (source_root / "entrypoint.py").write_text("APP = 'changed'\n", encoding="utf-8")
+    fourth = await deploy_loaded_bundle_app_resources(
+        workflow=workflow,
+        module=SimpleNamespace(),
+        agentic_spec=agentic_spec,
+        bundle_spec=bundle_spec,
+        tenant="tenant-a",
+        project="project-a",
+        application_generation="application-generation-1",
+    )
+    assert fourth is not None
+    assert fourth.application_generation == "application-generation-1"
+    assert fourth.deployment_signature != third.deployment_signature
+    assert workflow.deploy_calls == 3
+    assert workflow.build_calls == 3
 
 
 @pytest.mark.asyncio
