@@ -3,7 +3,7 @@ id: repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-descriptor-README.m
 title: "Bundles Descriptor"
 summary: "Application registry and non-secret deployment configuration in bundles.yaml: default app, Git or local sources, module paths, readiness policy, and app-scoped config."
 tags: ["service", "configuration", "bundle", "bundle-registry", "deployment", "descriptor", "api-security"]
-keywords: ["bundle registry", "default bundle selection", "git bundle source", "local path bundle source", "bundle module mapping", "bundle configuration", "bundle inventory", "service.readiness", "application readiness policy", "file-backed bundle authority", "bundle reload workflow", "deployment bundle catalog", "connection hub catalog fragment", "operation csrf override"]
+keywords: ["bundle registry", "default bundle selection", "git bundle source", "local path bundle source", "bundle module mapping", "bundle configuration", "bundle inventory", "service.readiness", "application readiness policy", "file-backed bundle authority", "bundle reload workflow", "app-owned delegated catalog", "delegated_catalog", "operation csrf override"]
 updated_at: 2026-09-13
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/descriptors-README.md
@@ -330,12 +330,85 @@ The adapter is served by the `connection-hub@1-0` public `oauth` operation. It
 issues delegated credentials that can be consumed by managed bundle surfaces,
 for example a bundle MCP endpoint with `surfaces.as_provider.mcp.<alias>.auth`.
 
-An app-owned `config/connection-hub.catalog.fragment.yaml` can contribute
-capabilities and operation rows to this descriptor without replacing other
-apps' declarations. Use the CLI's
-[catalog-fragment check and apply flow](../service/cicd/cli-README.md#catalog-fragments)
-to detect drift, add absent rows, and review the descriptor before reloading
-Connection Hub.
+### App-owned delegated catalog declarations
+
+An app declares the capabilities and operations it contributes under its own
+`config.delegated_catalog`. The declaration travels with that app's descriptor;
+operators do not copy it into `connection-hub@1-0`.
+
+```yaml
+bundles:
+  items:
+    - id: "reports@1-0"
+      config:
+        delegated_catalog:
+          version: "1"
+          capabilities:
+            - grant: "reports:write"
+              label: "Create reports"
+              description: "Create a report in the signed-in user's workspace."
+              delegable_roles: ["kdcube:role:registered"]
+          resources:
+            - resource: "*/api/integrations/bundles/*/*/reports@1-0/public/mcp/reports*"
+              label: "Reports"
+              tools:
+                report.create:
+                  label: "Create report"
+                  description: "Create one report from approved inputs."
+                  grants: ["reports:write"]
+          named_service_namespaces:
+            - resource: "*/api/integrations/bundles/*/*/kdcube-services@1-0/public/mcp/named_services*"
+              namespaces:
+                reports:
+                  label: "Reports"
+                  description: "Find and create reports."
+                  authority_id: "delegated_client"
+                  tools:
+                    action:
+                      operation: "object.action"
+                      label: "Report action"
+                      operations:
+                        object.action.report.create:
+                          label: "Create report"
+                          grants: ["named_services:use", "reports:write"]
+```
+
+The three declaration groups have different ownership:
+
+| Field | What the app owns | Uniqueness rule |
+|---|---|---|
+| `capabilities` | Grant definitions shown and enforced by Connection Hub | One owner per `grant` in the deployment |
+| `resources` | A complete direct protected resource and its canonical operations | One owner per `resource` in the deployment |
+| `named_service_namespaces` | One namespace added to an existing shared named-services resource | The resource must already exist; one owner per namespace on that resource |
+
+Operation IDs belong to the service contract, not to MCP, REST, or Data Bus.
+Every adapter carrying the same operation uses the same ID and reaches the same
+authorization policy.
+
+During application reconciliation, the runtime starts with Connection Hub's
+effective base `connections` configuration and assembles declarations from all
+current app descriptors in bundle-ID order. It publishes one immutable catalog
+under the shared catalog lock. Request guards continue reading the previously
+active catalog until the complete replacement is published.
+
+A duplicate capability, direct resource, or named-service namespace is an
+explicit configuration error naming both owners. Catalog participants do not
+become ready while their declarations are invalid; unrelated apps continue to
+run. Removing an app removes its declaration on reconciliation. Adding an
+operation makes it available for future consent, but does not add it to an
+existing delegated Card. Every Card remains exactly what its grantor approved.
+
+For a managed MCP surface backed by this catalog, the descriptor auth node may
+contain only `mode: managed`, its `authority_id`, and
+`selected_tool_grants: true`. The active catalog supplies per-operation grant
+requirements. App code may still declare the same operation IDs at its
+dispatcher/decorator boundary so implementation and catalog parity can be
+tested.
+
+After loading or reloading an app, use the CLI's read-only
+[serving-catalog check](../service/cicd/cli-README.md#catalog-check) to compare
+all descriptor-owned declarations with the immutable catalog actually serving
+authorization requests.
 
 `config.execution.runtime` controls per-bundle execution runtime routing and
 per-run ISO runtime limits. `config.exec_runtime` is the legacy alias.

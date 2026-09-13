@@ -447,9 +447,10 @@ This stages only `bundles.yaml` and optional `bundles.secrets.yaml`. Host local
 bundle paths are translated to runtime-visible `/bundles/...` paths before the
 runtime copy is written.
 
-For an app-owned Connection Hub catalog fragment, run `kdcube bundle catalog
-check --catalog-fragment <path>` before the additive `apply`. The command does
-not reload Connection Hub.
+Apps declare delegated catalog additions under their own
+`config.delegated_catalog`. After loading or reloading an app, run `kdcube
+bundle catalog check --workdir <runtime-workdir>` to compare descriptor
+authority with the catalog serving requests. The check changes nothing.
 
 For local runtimes where the operator wants to snapshot, review, edit, and
 reapply the full runtime descriptor authority, use `kdcube config`:
@@ -586,7 +587,7 @@ what is incomplete.
 | `kdcube bundle reload <bundle_id> [--workdir <path>] [--json] [--quiet] [--verbose]` | Reapply `bundles.yaml` from the active runtime and clear proc bundle caches. Normal output is concise; `--json` is scriptable; `--verbose` shows the raw Docker Compose command and proc response. |
 | `kdcube reload <bundle_id> [--workdir <path>] [--json] [--quiet] [--verbose]` | Compatibility alias for bundle reload. |
 | `kdcube bundle config apply [--workdir <path>] [--tenant <id>] [--project <id>] --descriptors-location <dir> [--dry-run] [--reload]` | User/operator descriptor-sync flow. Reapply seed `bundles.yaml` and optional `bundles.secrets.yaml` to an existing runtime; with `--reload`, reload changed declared bundle ids. Does not touch platform descriptors, rebuild images, or restart Docker. |
-| `kdcube bundle catalog check\|apply [--workdir <path>] --catalog-fragment <path> [--connection-hub-bundle-id <id>] [--json]` | Check whether the active Connection Hub catalog carries an app fragment or add its absent declarations. Apply is additive, preserves conflicts for review, and never reloads the runtime. |
+| `kdcube bundle catalog check [--workdir <path>] [--json] [--verbose]` | Compare app-owned descriptor declarations with the active immutable delegated catalog. Reports every drift or duplicate owner and changes nothing. |
 | `kdcube config apply [--workdir <path>] [--tenant <id>] [--project <id>] --auth-type {simple,cognito,delegated,bundle} [--provider google] [--client-id <id>] [--bootstrap-admin-email <email>] [--cognito-region <r>] [--cognito-user-pool-id <id>] [--cognito-app-client-id <id>] [--cognito-service-client-id <id>] [-i] [--dry-run] [--restart]` | Reconfigure the platform authentication of an initialized runtime. Reconciles the descriptors to `--auth-type`, removing the previous method's platform login artifacts and preserving unrelated configuration (including the Telegram companion). Bundle fields come from `--provider`/`--client-id`/`--bootstrap-admin-email`; Cognito/delegated fields from the `--cognito-*` flags. `-i` prompts for fields not passed as flags. `--dry-run` prints a per-descriptor semantic diff and writes nothing. Without `--restart`, descriptors are updated and `kdcube refresh` (or a later `--restart`) applies them to the running stack. |
 | `kdcube config export [--workdir <path>] [--tenant <id>] [--project <id>] --out-dir <dir> [--include-platform-descriptors]` | Export live local runtime descriptors. By default exports `bundles.yaml` and `bundles.secrets.yaml`; with `--include-platform-descriptors`, also exports `assembly.yaml`, `secrets.yaml`, and `gateway.yaml`. |
 | `kdcube config import [--workdir <path>] [--tenant <id>] [--project <id>] --descriptors-location <dir> [--include-platform-descriptors] [--dry-run] [--reload]` | Import reviewed descriptors into an existing local runtime. Bundle descriptors are path-normalized; with `--include-platform-descriptors`, platform descriptors are overwritten exactly and runtime env/config files are regenerated. |

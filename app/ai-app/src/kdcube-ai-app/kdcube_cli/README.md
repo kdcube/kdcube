@@ -1,9 +1,9 @@
 ---
 id: repo:kdcube/app/ai-app/src/kdcube-ai-app/kdcube_cli/README.md
 title: "KDCube CLI"
-summary: "Installs and operates KDCube runtimes, checks and applies app catalog fragments, manages exact secrets through their selected provider, and exposes typed deployment and management APIs for application-specific CLIs."
+summary: "Installs and operates KDCube runtimes, checks the active app-owned delegated catalog, manages exact secrets through their selected provider, and exposes typed deployment and management APIs for application-specific CLIs."
 tags: ["kdcube", "cli", "runtime", "deployment-target", "secrets", "python-api"]
-keywords: ["kdcube-cli", "kdcube init", "kdcube start", "kdcube stop", "kdcube secrets", "kdcube bundle catalog check", "kdcube bundle catalog apply", "connection hub catalog fragment", "kdcube bundle delete", "managed bundle deletion", "purge-data", "force-retire", "targeted bundle retirement", "kdcube_cli.control", "kdcube_cli.management"]
+keywords: ["kdcube-cli", "kdcube init", "kdcube start", "kdcube stop", "kdcube secrets", "kdcube bundle catalog check", "app-owned delegated catalog", "kdcube bundle delete", "managed bundle deletion", "purge-data", "force-retire", "targeted bundle retirement", "kdcube_cli.control", "kdcube_cli.management"]
 updated_at: 2026-09-13
 see_also:
   - repo:kdcube/app/ai-app/docs/service/cicd/cli-README.md
@@ -539,7 +539,7 @@ kdcube defaults \
 | `kdcube bundle reload <bundle_id> [--json] [--quiet]` | Reapply bundle config and clear proc caches — no full restart needed |
 | `kdcube bundle <bundle_id>` | Create, update, or delete a staged bundle entry |
 | `kdcube bundle config apply --descriptors-location <dir> [--dry-run] [--reload]` | User/operator flow to reapply seed `bundles.yaml` / `bundles.secrets.yaml` to an existing runtime — no platform refresh |
-| `kdcube bundle catalog check\|apply --catalog-fragment <path>` | Detect whether Connection Hub carries an app's declared capabilities and operations, or add absent rows without deleting shared catalog entries; apply never reloads the runtime |
+| `kdcube bundle catalog check [--json] [--verbose]` | Compare all app-owned descriptor declarations with the immutable delegated catalog serving requests; report every drift or duplicate owner without changing runtime state |
 | `kdcube config apply --auth-type <mode> [mode flags] [-i] [--dry-run] [--restart]` | Reconfigure the platform authentication of an initialized runtime; reconciles descriptors to the target mode and preserves unrelated config. `--dry-run` shows the diff without writing |
 | `kdcube config export --out-dir <dir> [--include-platform-descriptors]` | Export live local runtime descriptors for review/reuse |
 | `kdcube config export --tenant <t> --project <p> --aws-region <r> --out-dir <dir>` | Export deployment-scoped bundle descriptors from AWS Secrets Manager |
@@ -663,9 +663,11 @@ reloaded and removed IDs are retired. Removed IDs follow inventory retirement;
 they do not run `on_app_deprovision(...)`. Each operation targets only its
 changed ID; unchanged bundles keep running.
 
-For an app-owned Connection Hub catalog fragment, run `kdcube bundle catalog
-check --catalog-fragment <path>` before the additive `apply`. The complete
-contract is in [Current KDCube CLI](../../../docs/service/cicd/cli-README.md#catalog-fragments).
+Apps own their delegated catalog additions under `config.delegated_catalog`.
+After loading or reloading an app, run `kdcube bundle catalog check --workdir
+<runtime-workdir>`. The command compares complete descriptor authority with the
+catalog serving requests and changes nothing. The complete contract is in
+[Current KDCube CLI](../../../docs/service/cicd/cli-README.md#catalog-check).
 
 **Status** — inspect one explicit bundle entry:
 

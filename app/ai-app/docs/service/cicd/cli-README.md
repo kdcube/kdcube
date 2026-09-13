@@ -1,9 +1,9 @@
 ---
 id: repo:kdcube/app/ai-app/docs/service/cicd/cli-README.md
 title: "Current KDCube CLI"
-summary: "Current implemented CLI surface for local environment bootstrapping, workdir preparation, Docker Compose startup, descriptor validation, app catalog-fragment checks, exact delegated secret management, host-vault activation, maintainer package-source builds, and deployment selection."
+summary: "Current implemented CLI surface for local environment bootstrapping, workdir preparation, Docker Compose startup, descriptor validation, serving-catalog checks, exact delegated secret management, host-vault activation, maintainer package-source builds, and deployment selection."
 tags: ["service", "cicd", "cli", "env", "deployment", "bundle"]
-keywords: ["kdcube cli", "local environment bootstrap", "workdir setup", "docker compose control", "descriptor validation", "connection hub catalog fragment", "catalog drift check", "catalog fragment apply", "current cli contract", "local deployment tooling", "multiple local runtime snapshots", "single active local deployment", "tenant project workdir namespace", "bundle config patch", "bundle secret patch", "bundle delete", "managed bundle deletion", "purge-data", "force-retire", "targeted bundle retirement", "host vault stage", "host vault activate", "host vault recover", "kdcube bundle command", "bundle reload internals", "reload-authority", "maintainer local Python package", "unpublished package candidate"]
+keywords: ["kdcube cli", "local environment bootstrap", "workdir setup", "docker compose control", "descriptor validation", "app-owned delegated catalog", "catalog drift check", "current cli contract", "local deployment tooling", "multiple local runtime snapshots", "single active local deployment", "tenant project workdir namespace", "bundle config patch", "bundle secret patch", "bundle delete", "managed bundle deletion", "purge-data", "force-retire", "targeted bundle retirement", "host vault stage", "host vault activate", "host vault recover", "kdcube bundle command", "bundle reload internals", "reload-authority", "maintainer local Python package", "unpublished package candidate"]
 updated_at: 2026-09-13
 see_also:
   - repo:kdcube/app/ai-app/docs/service/cicd/release-README.md
@@ -667,59 +667,34 @@ reconciliation: a removed ID does not run `on_app_deprovision(...)` and does
 not receive purge permission. Each runtime operation targets only its changed
 ID; unchanged bundles keep running.
 
-### Check and apply an app catalog fragment<a id="catalog-fragments"></a>
+### Check the serving delegated catalog<a id="catalog-check"></a>
 
-An app may ship `config/connection-hub.catalog.fragment.yaml` to declare the
-capabilities and operations that Connection Hub must be able to grant. Check
-that declaration against the active runtime descriptor before issuing Cards:
-
-```bash
-FRAGMENT=/path/to/app/config/connection-hub.catalog.fragment.yaml
-
-kdcube bundle catalog check \
-  --workdir <runtime-workdir> \
-  --catalog-fragment "$FRAGMENT"
-```
-
-The check is read-only. It prints declared-versus-present counts and names
-every missing, conflicting, duplicate, or invalid path. Exit status is `0`
-when the active catalog carries the complete fragment and `1` when differences
-remain. Add `--json` for the same result as structured data.
-
-After reviewing the differences, merge absent declarations into the active
-`bundles.yaml`:
+Each app owns its contributed capabilities and operations under
+`config.delegated_catalog` in `bundles.yaml`. Application reconciliation
+assembles all current app declarations with Connection Hub's base catalog and
+publishes one immutable catalog. Check descriptor authority against the catalog
+that is actually serving authorization requests:
 
 ```bash
-kdcube bundle catalog apply \
-  --workdir <runtime-workdir> \
-  --catalog-fragment "$FRAGMENT"
-
-kdcube bundle catalog check \
-  --workdir <runtime-workdir> \
-  --catalog-fragment "$FRAGMENT"
+kdcube bundle catalog check --workdir <runtime-workdir>
 ```
 
-Apply is additive and idempotent. It adds absent capabilities, resources,
-tools, namespaces, nested operations, fields, and scalar grant values. It
-preserves catalog entries not declared by this fragment and never deletes an
-entry merely because a later fragment omits it. A conflicting existing value
-remains operator-owned; apply preserves it, reports the unresolved path, and
-exits `1`. This lets one shared named-services resource collect declarations
-from several apps without one fragment replacing another app's catalog.
-Operation `grants` and capability `delegable_roles` /
-`delegable_permissions` are compared as exact unordered sets because an extra
-value changes the authorization contract.
+The command requires the selected local runtime's `chat-proc` to be running.
+It is read-only: it changes no descriptor, catalog, application, or delegated
+Card. Exit status is `0` when descriptor authority and the active catalog match.
+Exit status is `1` for any of these states:
 
-Apply changes only the descriptor. It does not reload Connection Hub and does
-not grant a new operation to an existing Card. Review the resulting
-`bundles.yaml`, then activate it explicitly:
+- a missing, extra, type-mismatched, or value-mismatched catalog path;
+- an active catalog that cannot be resolved;
+- an invalid app declaration, including two apps claiming the same capability,
+  direct resource, or namespace on a shared named-services resource.
 
-```bash
-kdcube bundle reload connection-hub@1-0 --workdir <runtime-workdir>
-```
-
-If the deployment uses a different Connection Hub bundle ID, pass
-`--connection-hub-bundle-id <id>` to both catalog commands.
+Human output names each path and, for ownership errors, both app IDs. `--json`
+returns the same complete `differences`, contributor IDs, content hashes, and
+active catalog version. Fix the owning app descriptor and reload that app; do
+not edit Connection Hub's catalog or use a second merge workflow. Loading,
+reloading, or retiring catalog-contributing apps is what republishes the
+assembled catalog. Existing Cards are never expanded automatically.
 
 ### 2.3c Export and import local runtime descriptors
 
