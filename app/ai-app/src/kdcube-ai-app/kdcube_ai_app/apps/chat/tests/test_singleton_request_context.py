@@ -102,12 +102,62 @@ def test_singleton_workflow_rebinds_request_context(monkeypatch):
     )
     cfg = _DummyConfig(bundle_id="kdcube.admin")
 
-    first, _ = get_workflow_instance(spec, cfg, comm_context=_ctx(user_type="registered"))
+    first_pool = object()
+    first, _ = get_workflow_instance(
+        spec,
+        cfg,
+        comm_context=_ctx(user_type="registered"),
+        pg_pool=first_pool,
+    )
     assert first.user_type_from_comm_ctx(first.comm) == "registered"
+    assert first.pg_pool is first_pool
 
-    second, _ = get_workflow_instance(spec, cfg, comm_context=_ctx(user_type="privileged"))
+    rebound_pool = object()
+    second, _ = get_workflow_instance(
+        spec,
+        cfg,
+        comm_context=_ctx(user_type="privileged"),
+        pg_pool=rebound_pool,
+    )
     assert second is first
     assert second.user_type_from_comm_ctx(second.comm) == "privileged"
+    assert second.pg_pool is rebound_pool
+
+    clear_bundle_loader_caches()
+
+
+def test_non_singleton_workflow_receives_pool_from_host(monkeypatch):
+    clear_bundle_loader_caches()
+    monkeypatch.setattr(entrypoint_mod, "get_settings", lambda: SimpleNamespace(TENANT="demo", PROJECT="demo-project"))
+    monkeypatch.setattr(entrypoint_mod, "create_kv_cache_from_env", lambda: None)
+
+    admin = _admin_bundle_entry()
+    spec = BundleSpec(
+        id=admin.id,
+        path=admin.path,
+        module=admin.module,
+        singleton=False,
+    )
+    cfg = _DummyConfig(bundle_id="kdcube.admin")
+    first_pool = object()
+    second_pool = object()
+
+    first, _ = get_workflow_instance(
+        spec,
+        cfg,
+        comm_context=_ctx(user_type="registered"),
+        pg_pool=first_pool,
+    )
+    second, _ = get_workflow_instance(
+        spec,
+        cfg,
+        comm_context=_ctx(user_type="privileged"),
+        pg_pool=second_pool,
+    )
+
+    assert first is not second
+    assert first.pg_pool is first_pool
+    assert second.pg_pool is second_pool
 
     clear_bundle_loader_caches()
 

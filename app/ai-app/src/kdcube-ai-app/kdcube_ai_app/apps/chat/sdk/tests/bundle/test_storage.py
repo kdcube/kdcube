@@ -13,7 +13,6 @@ Run with:
 from __future__ import annotations
 
 import pathlib
-import asyncio
 import pytest
 
 
@@ -124,14 +123,16 @@ class TestOnBundleLoad:
         assert hasattr(bundle, "on_bundle_load")
         assert callable(bundle.on_bundle_load)
 
-    def test_on_bundle_load_does_not_raise_with_no_args(self, bundle):
+    def test_on_bundle_load_does_not_raise_with_no_args(
+        self, bundle, bundle_runtime_loop
+    ):
         """on_bundle_load() called with no extra kwargs does not raise."""
         original_redis = bundle.redis
         original_kv_cache = bundle.kv_cache
         try:
             bundle.redis = None
             bundle.kv_cache = None
-            asyncio.run(bundle.on_bundle_load())
+            bundle_runtime_loop.run_until_complete(bundle.on_bundle_load())
         except Exception as exc:
             pytest.fail(f"on_bundle_load() raised unexpectedly: {exc}")
         finally:

@@ -93,7 +93,17 @@ def redis_client():
 
 
 @pytest.fixture(scope="session")
-def pg_pool():
+def bundle_runtime_loop():
+    """Event loop that owns async infrastructure for the selected bundle."""
+    loop = asyncio.new_event_loop()
+    try:
+        yield loop
+    finally:
+        loop.close()
+
+
+@pytest.fixture(scope="session")
+def pg_pool(bundle_runtime_loop):
     """Real asyncpg connection pool using Postgres settings.
 
     Returns None if Postgres is unreachable — tests that don't invoke
@@ -114,10 +124,17 @@ def pg_pool():
             max_size=3,
         )
 
+    pool = None
     try:
-        return asyncio.run(_create())
+        pool = bundle_runtime_loop.run_until_complete(_create())
     except Exception:
-        return None
+        pass
+
+    try:
+        yield pool
+    finally:
+        if pool is not None:
+            bundle_runtime_loop.run_until_complete(pool.close())
 
 
 @pytest.fixture
