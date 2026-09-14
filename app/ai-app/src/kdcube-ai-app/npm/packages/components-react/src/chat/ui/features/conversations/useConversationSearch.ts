@@ -19,7 +19,7 @@ import type {
   ConversationSearchWeights,
 } from '@kdcube/components-core/chat'
 import { DEFAULT_SEARCH_WEIGHTS } from '@kdcube/components-core/chat'
-import { useStableCallback } from '../../support/hooks.ts'
+import { useStableCallback } from '../../support/useStableCallback.ts'
 
 export type ConversationSearchScope = 'titles' | 'current' | 'all'
 export type ConversationSearchTimePreset = 'any' | '7' | '30' | '90' | 'custom'
@@ -127,11 +127,14 @@ export function useConversationSearch({
   search,
   activeConversationId,
   initialScope = 'titles',
+  allowBrowse = true,
 }: {
   search: (request: ConversationSearchParams) => Promise<ConversationSearchResponse>
   activeConversationId: string | null
   /** Surfaces without a local chat list (the undocked window) start deep. */
   initialScope?: ConversationSearchScope
+  /** Enable blank-query temporal browsing when the host persists turn catalogs. */
+  allowBrowse?: boolean
 }): ConversationSearchVm {
   const [query, setQuery] = useState('')
   const [scope, setScopeState] = useState<ConversationSearchScope>(initialScope)
@@ -159,7 +162,7 @@ export function useConversationSearch({
   const canSearch =
     scope !== 'titles' &&
     (scope !== 'current' || Boolean(activeConversationId)) &&
-    (Boolean(query.trim()) || timeRange !== null)
+    (Boolean(query.trim()) || (allowBrowse && timeRange !== null))
 
   /** Titles scope is the free local filter — leaving results mode with it. */
   const setScope = useStableCallback((next: ConversationSearchScope) => {
@@ -190,7 +193,7 @@ export function useConversationSearch({
     if (scope === 'titles' || searching) return
     const trimmed = query.trim()
     const range = resolveSearchTimeRange(timePreset, dateFrom, dateTo)
-    if (!trimmed && !range) return
+    if (!trimmed && (!allowBrowse || !range)) return
     if (scope === 'current' && !activeConversationId) return
     const isBrowse = !trimmed
     setSearching(true)

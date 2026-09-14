@@ -4,7 +4,7 @@ title: "@kdcube/components-react"
 summary: "React bindings and reusable UI over @kdcube/components-core: chat, Markdown, scene, and canvas components."
 status: implementation
 tags: ["sdk", "npm", "components-react", "react", "hooks", "provider", "chat", "markdown", "canvas"]
-updated_at: 2026-09-11
+updated_at: 2026-09-14
 keywords:
   [
     "@kdcube/components-react",
@@ -12,9 +12,14 @@ keywords:
     "Chat",
     "MarkdownBlock",
     "CanvasBoard",
+    "ConversationSearchControls",
+    "useConversationSearch",
     "useChatEngine",
     "useChatState",
   ]
+see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/npm/widget-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/npm/components-core/chat-engine-README.md
 ---
 
 # `@kdcube/components-react`
@@ -29,7 +34,8 @@ and DOM event wiring.
 | Export | Purpose |
 | --- | --- |
 | `@kdcube/components-react` | Shared React export surface. |
-| `@kdcube/components-react/chat` | `ChatStoreProvider`, hooks, `Chat`, `ChatShell`, `useChatViewModel`. |
+| `@kdcube/components-react/chat` | `ChatStoreProvider`, hooks, `Chat`, `ChatShell`, `ConversationSearchControls`, `useConversationSearch`, `useChatViewModel`. |
+| `@kdcube/components-react/chat/search` | Focused `ConversationSearchControls` and `useConversationSearch` entry for app-owned conversation surfaces. |
 | `@kdcube/components-react/markdown` | `MarkdownBlock`, the GFM and line-break renderer used by chat-like surfaces. |
 | `@kdcube/components-react/canvas` | `CanvasBoard` plus re-exported core canvas types/helpers. |
 | `@kdcube/components-react/scene` | Scene-host shell: component registry, host plumbing, rail/windows, external-panel surface routing (`externalPanelSurfaceRegistrations`). Import `sceneHost.css` for the skin. |
@@ -64,6 +70,39 @@ Multiple providers mean multiple isolated chat engines.
 | `useChatState(selector?)` | Subscribes to Redux chat state. |
 | `useChatStatus(selector?)` | Subscribes to engine status outside Redux. |
 | `Chat` / `ChatShell` | Reference React chat UI over the engine view model. |
+| `ConversationSearchControls` | Shared query and WHERE / WHEN / HOW / RANK controls driven by a `ConversationSearchVm`. |
+| `useConversationSearch` | Owns the control state and calls the host-supplied authenticated search function. |
+
+App-owned conversation surfaces can reuse the search controls without mounting
+the chat engine. The app supplies the authenticated search transport and the
+active conversation coordinate; the hook owns query, scope, time, target, and
+ranking state:
+
+```tsx
+import {
+  ConversationSearchControls,
+  useConversationSearch,
+} from '@kdcube/components-react/chat/search'
+
+const search = useConversationSearch({
+  search: searchConversations,
+  activeConversationId,
+  initialScope: 'current',
+  allowBrowse: true,
+})
+
+<ConversationSearchControls
+  vm={search}
+  disabled={!activeConversationId}
+  availableScopes={['current', 'all']}
+/>
+```
+
+The hosting surface owns the contextual `.kcs-*`, `.k-input`, `.k-iconbtn`,
+`.k-btn`, and notice styles. Search results do not reorder an app-owned source
+collection unless that surface explicitly presents a separate ranked result
+view. The default `allowBrowse: true` serves hosts that persist a temporal turn
+catalog. Topic search accepts the same time bounds independently.
 
 `bundleId` is the current field name in the TypeScript config and backend API. In
 builder language, treat it as the app id/version.

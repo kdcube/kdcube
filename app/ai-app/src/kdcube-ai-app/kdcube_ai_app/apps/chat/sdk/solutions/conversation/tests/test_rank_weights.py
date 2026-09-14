@@ -104,7 +104,7 @@ class _RecordingBackend:
         self.catalog_kwargs = kwargs
         return []
 
-    async def get_turn_log(self, *, turn_id, conversation_id=None):
+    async def get_turn_log(self, *, turn_id, conversation_id=None, bundle_id=None):
         return {}
 
 

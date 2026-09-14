@@ -1749,11 +1749,18 @@ class ContextBrowser:
         except Exception:
             pass
 
-    async def get_turn_log(self, *, turn_id: str, conversation_id: Optional[str] = None) -> Dict[str, Any]:
+    async def get_turn_log(
+            self,
+            *,
+            turn_id: str,
+            conversation_id: Optional[str] = None,
+            bundle_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         if not turn_id:
             return {}
         effective_conversation_id = str(conversation_id or self._runtime_ctx.conversation_id or "").strip()
-        cache_key = f"{effective_conversation_id}\n{turn_id}"
+        effective_bundle_id = bundle_id or self._runtime_ctx.bundle_id
+        cache_key = f"{effective_bundle_id or ''}\n{effective_conversation_id}\n{turn_id}"
         if cache_key in self._turn_log_cache:
             return self._turn_log_cache[cache_key]
         try:
@@ -1761,6 +1768,7 @@ class ContextBrowser:
                 user_id=self._runtime_ctx.user_id,
                 conversation_id=effective_conversation_id,
                 turn_id=turn_id,
+                bundle_id=effective_bundle_id,
                 scope="conversation",
                 days=365,
                 with_payload=True,
@@ -2024,6 +2032,7 @@ class ContextBrowser:
             timestamp_filters: Optional[List[Dict[str, Any]]] = None,
             include_recovery_sessions: bool = False,
             agent_id: Optional[str] = None,
+            bundle_id: Optional[str] = None,
             rank_weights: Optional[Dict[str, float]] = None,
             conv_idx: Optional[Any] = None,
             ctx_client: Optional[ContextRAGClient] = None,
@@ -2038,6 +2047,7 @@ class ContextBrowser:
         ctx_client = ctx_client or self.ctx_client
         conv_idx = conv_idx or (getattr(ctx_client, "idx", None) if ctx_client else None)
         model_service = model_service or self.svc
+        bundle_id = bundle_id or self._runtime_ctx.bundle_id
         if not conv_idx:
             raise ValueError("ContextBrowser.search requires conv_idx.")
         return await search_context(
@@ -2059,6 +2069,7 @@ class ContextBrowser:
             timestamp_filters=timestamp_filters,
             include_recovery_sessions=include_recovery_sessions,
             agent_id=agent_id,
+            bundle_id=bundle_id,
             rank_weights=rank_weights,
             logger=self.log,
         )
@@ -2076,6 +2087,7 @@ class ContextBrowser:
             from_ts: Optional[Any] = None,
             to_ts: Optional[Any] = None,
             agent_id: Optional[str] = None,
+            bundle_id: Optional[str] = None,
             conv_idx: Optional[Any] = None,
             ctx_client: Optional[ContextRAGClient] = None,
     ) -> List[Dict[str, Any]]:
@@ -2084,6 +2096,7 @@ class ContextBrowser:
         """
         ctx_client = ctx_client or self.ctx_client
         conv_idx = conv_idx or (getattr(ctx_client, "idx", None) if ctx_client else None)
+        bundle_id = bundle_id or self._runtime_ctx.bundle_id
         if not conv_idx:
             raise ValueError("ContextBrowser.search_turn_catalog requires conv_idx.")
         return await conv_idx.fetch_turn_catalog(
@@ -2097,9 +2110,11 @@ class ContextBrowser:
             from_ts=from_ts,
             to_ts=to_ts,
             agent_id=agent_id,
+            bundle_id=bundle_id,
             ctx={
                 "user_id": user,
                 "conversation_id": conv,
+                "bundle_id": bundle_id,
             },
         )
 

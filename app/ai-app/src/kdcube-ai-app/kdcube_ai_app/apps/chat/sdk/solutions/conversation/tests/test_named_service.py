@@ -38,7 +38,7 @@ class FakeBackend:
     async def search_turn_catalog(self, **kwargs):
         return []
 
-    async def get_turn_log(self, *, turn_id, conversation_id=None):
+    async def get_turn_log(self, *, turn_id, conversation_id=None, bundle_id=None):
         return {
             "blocks": [{
                 "type": "conv.working.summary",

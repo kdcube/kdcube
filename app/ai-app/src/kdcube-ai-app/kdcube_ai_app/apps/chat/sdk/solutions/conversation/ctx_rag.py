@@ -3276,6 +3276,7 @@ async def search_context(
         timestamp_filters: Optional[List[Dict[str, Any]]] = None,
         include_recovery_sessions: bool = False,
         agent_id: Optional[str] = None,
+        bundle_id: Optional[str] = None,
         rank_weights: Optional[Dict[str, float]] = None,
         logger = None,
 ) -> tuple[str | None, list[dict]]:
@@ -3340,6 +3341,7 @@ async def search_context(
                 timestamp_filters=timestamp_filters,
                 include_recovery_sessions=include_recovery_sessions,
                 agent_id=agent_id,
+                bundle_id=bundle_id,
             )
             return res or []
         except Exception as e:
@@ -3363,6 +3365,7 @@ async def search_context(
                 timestamp_filters=timestamp_filters,
                 include_recovery_sessions=include_recovery_sessions,
                 agent_id=agent_id,
+                bundle_id=bundle_id,
             )
             return res or []
         except Exception as e:
@@ -3386,6 +3389,7 @@ async def search_context(
                 timestamp_filters=timestamp_filters,
                 include_recovery_sessions=include_recovery_sessions,
                 agent_id=agent_id,
+                bundle_id=bundle_id,
             )
             return res or []
         except Exception as e:
@@ -3459,6 +3463,7 @@ async def search_context(
             "source_query": query,
             "source_where": where,
             "text": r.get("text", ""),
+            "matched_text": r.get("matched_text", ""),
             "hosted_uri": r.get("hosted_uri"),
         }
         if extra:
@@ -3602,7 +3607,7 @@ async def search_context(
             for k in ("score", "sim", "rec", "original_score", "rrf_score",
                       "sem_rank", "lex_rank", "primary_source",
                       "matched_via_role", "source_query", "source_where",
-                      "text", "hosted_uri", "role", "ts"):
+                      "text", "matched_text", "hosted_uri", "role", "ts"):
                 if k in h:
                     prev[k] = h[k]
     hits = list(deduped.values())

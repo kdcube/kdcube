@@ -4,6 +4,7 @@ export default defineConfig({
   entry: {
     index: 'src/index.ts',
     'chat/index': 'src/chat/index.tsx',
+    'chat/search': 'src/chat/search.ts',
     'markdown/index': 'src/markdown/index.ts',
     'canvas/index': 'src/canvas/index.ts',
     'scene/index': 'src/scene/index.ts',

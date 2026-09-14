@@ -26,6 +26,7 @@ class FakeBackend:
     def __init__(self):
         self.search_kwargs = {}
         self.catalog_kwargs = {}
+        self.turn_log_kwargs = {}
         self._turn_logs = {}
 
     async def search(self, **kwargs):
@@ -55,7 +56,12 @@ class FakeBackend:
             "first_user_text": "check the medicine news",
         }]
 
-    async def get_turn_log(self, *, turn_id, conversation_id=None):
+    async def get_turn_log(self, *, turn_id, conversation_id=None, bundle_id=None):
+        self.turn_log_kwargs = {
+            "turn_id": turn_id,
+            "conversation_id": conversation_id,
+            "bundle_id": bundle_id,
+        }
         return self._turn_logs.get((conversation_id or "", turn_id), self._turn_logs.get(turn_id, {}))
 
 
@@ -93,8 +99,10 @@ async def test_hybrid_search_uses_explicit_context_no_ambient_state():
     # alias of the assistant arm.
     assert backend.search_kwargs["user"] == "user_explicit"
     assert backend.search_kwargs["conv"] == "conv_explicit"
+    assert backend.search_kwargs["bundle_id"] == "bundle_x"
     assert backend.search_kwargs["scope"] == "conversation"
     assert backend.search_kwargs["targets"] == [{"where": "summary", "query": "invoice"}]
+    assert backend.turn_log_kwargs["bundle_id"] == "bundle_x"
 
     assert not result.missing_query
     assert result.effective_mode == "hybrid"
@@ -108,7 +116,12 @@ async def test_hybrid_search_uses_explicit_context_no_ambient_state():
 @pytest.mark.asyncio
 async def test_catalog_ordinal_routes_to_turn_catalog_without_query():
     backend = FakeBackend()
-    context = ConversationSearchContext(user_id="u1", conversation_id="c1", turn_id="t_now")
+    context = ConversationSearchContext(
+        user_id="u1",
+        conversation_id="c1",
+        turn_id="t_now",
+        bundle_id="bundle_catalog",
+    )
     params = ConversationSearchParams.from_tool_params({
         "query": "",
         "targets": ["summary", "user"],
@@ -121,6 +134,7 @@ async def test_catalog_ordinal_routes_to_turn_catalog_without_query():
     assert backend.catalog_kwargs["ordinal"] == 2
     assert backend.catalog_kwargs["user"] == "u1"
     assert backend.catalog_kwargs["conv"] == "c1"
+    assert backend.catalog_kwargs["bundle_id"] == "bundle_catalog"
     assert backend.catalog_kwargs["days"] == 3650
     assert result.effective_mode == "ordinal"
     assert result.hits[0]["turn_id"] == "turn_second"

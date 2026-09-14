@@ -132,6 +132,7 @@ class _ArmRecorder:
             return {
                 "search_roles": tuple(kwargs.get("search_roles") or ()),
                 "search_tags": list(kwargs.get("search_tags") or []) or None,
+                "bundle_id": kwargs.get("bundle_id"),
             }
 
         monkeypatch.setattr(ConvIndex, "search_turn_logs_via_content", _content)
@@ -221,6 +222,20 @@ async def test_missing_turn_log_falls_back_to_retrieval_row_text(monkeypatch, tm
 
 
 @pytest.mark.asyncio
+async def test_unreadable_turn_log_prefers_the_direct_matched_text(monkeypatch, tmp_path):
+    store = ConversationStore(f"file://{tmp_path}")
+    row = _index_row(matched_role="assistant")
+    row.update(text="opaque turn-log row", matched_text=ROW_TEXT)
+    _ArmRecorder(monkeypatch, rows=[row], turn_log_rows=[])
+
+    result = await _search(_make_backend(store), targets=["assistant"])
+
+    assert result.hits[0]["snippets"][0]["text"] != "opaque turn-log row"
+    assert result.hits[0]["snippets"][0]["text"] == ROW_TEXT
+    assert result.hits[0]["snippets"][0]["meta"] == {"source": "retrieval_row"}
+
+
+@pytest.mark.asyncio
 async def test_unreadable_hosted_uri_falls_back_to_retrieval_row_text(monkeypatch, tmp_path):
     # Index has the turn-log row, but its blob is missing from the store (the
     # live mis-wired-store shape): assembly degrades to the row text.
@@ -272,6 +287,7 @@ async def test_summary_target_scopes_to_working_summary_rows_and_labels_summary(
     for call in recorder.arm_calls:
         assert call["search_roles"] == ("assistant",)
         assert "kind:working.summary" in (call["search_tags"] or [])
+        assert call["bundle_id"] == "bundle-default"
 
     assert len(result.hits) == 1
     hit = result.hits[0]

@@ -87,6 +87,7 @@ def _make_idx() -> ConvIndex:
 # unconditionally, so we match the filter form specifically.
 _FILTER = "m.agent_id = $"
 _NAMED = "research.agent"
+_BUNDLE = "problem-board@1-0"
 
 
 # --------------------------------------------------------------------------- #
@@ -117,6 +118,20 @@ async def test_fetch_turn_catalog_filters_when_agent_present():
     assert _NAMED in args
 
 
+@pytest.mark.asyncio
+async def test_fetch_turn_catalog_filters_when_bundle_present():
+    idx = _make_idx()
+    await idx.fetch_turn_catalog(
+        user_id="u",
+        conversation_id="c",
+        bundle_id=_BUNDLE,
+        ctx={"user_id": "u", "conversation_id": "c"},
+    )
+    q, args = idx._pool.conn.calls[-1]
+    assert "m.bundle_id = $" in q
+    assert _BUNDLE in args
+
+
 # --------------------------------------------------------------------------- #
 # ConvIndex.search_turn_logs_via_content  (backs ctx_browser.search)
 # --------------------------------------------------------------------------- #
@@ -139,6 +154,41 @@ async def test_search_turn_logs_filters_when_agent_present():
     q, args = idx._pool.conn.calls[-1]
     assert _FILTER in q
     assert _NAMED in args
+
+
+@pytest.mark.asyncio
+async def test_search_turn_logs_filters_when_bundle_present():
+    idx = _make_idx()
+    await idx.search_turn_logs_via_content(
+        user_id="u",
+        conversation_id="c",
+        scope="user",
+        bundle_id=_BUNDLE,
+    )
+    q, args = idx._pool.conn.calls[-1]
+    assert "m.bundle_id = $" in q
+    assert _BUNDLE in args
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method_name", "extra"),
+    [
+        ("search_turn_logs_via_content", {}),
+        ("search_turn_logs_via_content_lexical", {"query_text": "find message"}),
+        ("search_turn_logs_via_content_trigram", {"query_text": "find message"}),
+    ],
+)
+async def test_search_arms_keep_indexed_turn_when_rich_turn_log_is_absent(method_name, extra):
+    idx = _make_idx()
+    method = getattr(idx, method_name)
+    await method(user_id="u", conversation_id="c", scope="user", **extra)
+    q, _args = idx._pool.conn.calls[-1]
+    assert "LEFT JOIN LATERAL" in q
+    assert "COALESCE(log.text, ut.matched_text) AS text" in q
+    assert "ut.matched_text AS matched_text" in q
+    assert "COALESCE(log.turn_id, ut.turn_id) AS turn_id" in q
+    assert "bundle_id IS NOT DISTINCT FROM ut.matched_bundle_id" in q
 
 
 # --------------------------------------------------------------------------- #
@@ -171,6 +221,14 @@ async def test_ctx_browser_search_turn_catalog_forwards_agent():
 
 
 @pytest.mark.asyncio
+async def test_ctx_browser_search_turn_catalog_forwards_bundle():
+    idx = _RecordingIdx()
+    cb = ContextBrowser()
+    await cb.search_turn_catalog(user="u", conv="c", conv_idx=idx, bundle_id=_BUNDLE)
+    assert idx.kwargs["bundle_id"] == _BUNDLE
+
+
+@pytest.mark.asyncio
 async def test_ctx_browser_search_defaults_agent_none(monkeypatch):
     recorded: dict = {}
 
@@ -199,3 +257,20 @@ async def test_ctx_browser_search_forwards_agent(monkeypatch):
         agent_id=_NAMED,
     )
     assert recorded["agent_id"] == _NAMED
+
+
+@pytest.mark.asyncio
+async def test_ctx_browser_search_forwards_bundle(monkeypatch):
+    recorded: dict = {}
+
+    async def _fake_search_context(**kwargs):
+        recorded.update(kwargs)
+        return (None, [])
+
+    monkeypatch.setattr(browser_mod, "search_context", _fake_search_context)
+    cb = ContextBrowser()
+    await cb.search(
+        targets=[], user="u", conv="c", conv_idx=object(), model_service=object(),
+        bundle_id=_BUNDLE,
+    )
+    assert recorded["bundle_id"] == _BUNDLE

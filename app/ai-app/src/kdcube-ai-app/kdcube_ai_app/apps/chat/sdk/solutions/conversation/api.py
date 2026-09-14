@@ -117,7 +117,13 @@ class ConversationSearchBackend(Protocol):
 
     async def search_turn_catalog(self, **kwargs: Any) -> Any: ...
 
-    async def get_turn_log(self, *, turn_id: str, conversation_id: Optional[str] = None) -> Any: ...
+    async def get_turn_log(
+        self,
+        *,
+        turn_id: str,
+        conversation_id: Optional[str] = None,
+        bundle_id: Optional[str] = None,
+    ) -> Any: ...
 
 
 @dataclass
@@ -468,6 +474,7 @@ async def run_conversation_search(
             rows = await search_backend.search_turn_catalog(
                 user=user,
                 conv=conversation_id,
+                bundle_id=context.bundle_id,
                 scope=backend_scope,
                 agent_id=agent_filter,
                 top_k=top_k,
@@ -558,6 +565,7 @@ async def run_conversation_search(
             targets=search_targets,
             user=user,
             conv=conversation_id,
+            bundle_id=context.bundle_id,
             scope=backend_scope,
             agent_id=agent_filter,
             scoring_mode="rrf_hybrid",
@@ -618,7 +626,11 @@ async def run_conversation_search(
         # matched row text below instead of shipping a blank result.
         blocks: List[Dict[str, Any]] = []
         try:
-            turn_log = await search_backend.get_turn_log(turn_id=tid, conversation_id=hit_conversation_id)
+            turn_log = await search_backend.get_turn_log(
+                turn_id=tid,
+                conversation_id=hit_conversation_id,
+                **({"bundle_id": context.bundle_id} if context.bundle_id else {}),
+            )
             blocks = list((turn_log or {}).get("blocks") or [])
         except Exception:
             LOGGER.warning(
@@ -753,7 +765,7 @@ async def run_conversation_search(
         # ship that text instead of a blank hit — labeled with the matched
         # target vocabulary so UI kind chips stay honest.
         if not any(_as_str(sn.get("text")) for sn in snippets):
-            fallback_text = _clip(h.get("text"))
+            fallback_text = _clip(h.get("matched_text") or h.get("text"))
             if fallback_text:
                 matched_label = _as_str(h.get("matched_via_role")) or "assistant"
                 fallback_role = (

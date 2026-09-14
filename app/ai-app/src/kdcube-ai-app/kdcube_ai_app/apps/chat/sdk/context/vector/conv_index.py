@@ -1367,6 +1367,7 @@ class ConvIndex:
           FROM {self.schema}.conv_messages s
           WHERE s.user_id = $1
             AND s.conversation_id = o.conversation_id
+            AND s.bundle_id IS NOT DISTINCT FROM o.bundle_id
             AND (s.turn_id = o.turn_key OR s.tags @> ARRAY[('turn:' || o.turn_key)]::text[])
             AND s.role = 'assistant'
             AND s.tags @> ARRAY['kind:working.summary']::text[]
@@ -1379,6 +1380,7 @@ class ConvIndex:
           FROM {self.schema}.conv_messages s
           WHERE s.user_id = $1
             AND s.conversation_id = o.conversation_id
+            AND s.bundle_id IS NOT DISTINCT FROM o.bundle_id
             AND (s.turn_id = o.turn_key OR s.tags @> ARRAY[('turn:' || o.turn_key)]::text[])
             AND s.role = 'user'
             AND s.ts + (s.ttl_days || ' days')::interval >= now()
@@ -1390,6 +1392,7 @@ class ConvIndex:
           FROM {self.schema}.conv_messages s
           WHERE s.user_id = $1
             AND s.conversation_id = o.conversation_id
+            AND s.bundle_id IS NOT DISTINCT FROM o.bundle_id
             AND (s.turn_id = o.turn_key OR s.tags @> ARRAY[('turn:' || o.turn_key)]::text[])
             AND s.role = 'assistant'
             AND NOT (s.tags && ARRAY['kind:working.summary', 'chat:summary']::text[])
@@ -2027,10 +2030,17 @@ class ConvIndex:
         q = f"""
         WITH content_matches AS (
             SELECT 
+                m.id AS matched_id,
+                m.message_id AS matched_message_id,
                 m.turn_id,
                 m.conversation_id,
                 m.role AS matched_role,
+                m.text AS matched_text,
+                m.hosted_uri AS matched_hosted_uri,
                 m.ts AS matched_ts,
+                m.tags AS matched_tags,
+                m.bundle_id AS matched_bundle_id,
+                m.agent_id AS matched_agent_id,
                 {sim_sql},
                 exp(-ln(2) * EXTRACT(EPOCH FROM (now() - m.ts)) / ({half_life_days_param}*24*3600.0)) AS rec,
                 ROW_NUMBER() OVER (PARTITION BY m.conversation_id, m.turn_id ORDER BY m.ts DESC) AS rn
@@ -2042,10 +2052,17 @@ class ConvIndex:
         ),
         unique_turns AS (
             SELECT 
+                matched_id,
+                matched_message_id,
                 turn_id, 
                 conversation_id,
                 matched_role, 
+                matched_text,
+                matched_hosted_uri,
                 matched_ts, 
+                matched_tags,
+                matched_bundle_id,
+                matched_agent_id,
                 sim,
                 rec,
                 (0.80 * sim + 0.20 * rec) AS score
@@ -2055,8 +2072,18 @@ class ConvIndex:
             LIMIT {int(top_k)}
         )
         SELECT 
-            log.id, log.message_id, log.role, log.text, log.hosted_uri, log.ts, log.tags,
-            log.turn_id, log.conversation_id, log.bundle_id, log.agent_id,
+            COALESCE(log.id, ut.matched_id) AS id,
+            COALESCE(log.message_id, ut.matched_message_id) AS message_id,
+            COALESCE(log.role, ut.matched_role) AS role,
+            COALESCE(log.text, ut.matched_text) AS text,
+            COALESCE(log.hosted_uri, ut.matched_hosted_uri) AS hosted_uri,
+            COALESCE(log.ts, ut.matched_ts) AS ts,
+            COALESCE(log.tags, ut.matched_tags) AS tags,
+            COALESCE(log.turn_id, ut.turn_id) AS turn_id,
+            COALESCE(log.conversation_id, ut.conversation_id) AS conversation_id,
+            COALESCE(log.bundle_id, ut.matched_bundle_id) AS bundle_id,
+            COALESCE(log.agent_id, ut.matched_agent_id) AS agent_id,
+            ut.matched_text AS matched_text,
             ut.sim,
             ut.rec,
             ut.score,
@@ -2064,12 +2091,13 @@ class ConvIndex:
             ut.matched_role,
             ut.matched_ts
         FROM unique_turns ut
-        JOIN LATERAL (
+        LEFT JOIN LATERAL (
             SELECT *
             FROM {self.schema}.conv_messages
             WHERE user_id = $1
               AND turn_id = ut.turn_id
               AND conversation_id = ut.conversation_id
+              AND bundle_id IS NOT DISTINCT FROM ut.matched_bundle_id
               AND role = 'artifact'
               AND tags @> ARRAY['artifact:turn.log']::text[]
               AND ts + (ttl_days || ' days')::interval >= now()
@@ -2185,10 +2213,17 @@ class ConvIndex:
         q = f"""
         WITH content_matches AS (
             SELECT
+                m.id AS matched_id,
+                m.message_id AS matched_message_id,
                 m.turn_id,
                 m.conversation_id,
                 m.role AS matched_role,
+                m.text AS matched_text,
+                m.hosted_uri AS matched_hosted_uri,
                 m.ts AS matched_ts,
+                m.tags AS matched_tags,
+                m.bundle_id AS matched_bundle_id,
+                m.agent_id AS matched_agent_id,
                 ts_rank_cd(
                     m.search_tsv,
                     websearch_to_tsquery('simple',  $3) || websearch_to_tsquery('english', $3),
@@ -2204,10 +2239,17 @@ class ConvIndex:
         ),
         unique_turns AS (
             SELECT
+                matched_id,
+                matched_message_id,
                 turn_id,
                 conversation_id,
                 matched_role,
+                matched_text,
+                matched_hosted_uri,
                 matched_ts,
+                matched_tags,
+                matched_bundle_id,
+                matched_agent_id,
                 sim,
                 rec,
                 (0.80 * sim + 0.20 * rec) AS score
@@ -2217,8 +2259,18 @@ class ConvIndex:
             LIMIT {int(top_k)}
         )
         SELECT
-            log.id, log.message_id, log.role, log.text, log.hosted_uri, log.ts, log.tags,
-            log.turn_id, log.conversation_id, log.bundle_id, log.agent_id,
+            COALESCE(log.id, ut.matched_id) AS id,
+            COALESCE(log.message_id, ut.matched_message_id) AS message_id,
+            COALESCE(log.role, ut.matched_role) AS role,
+            COALESCE(log.text, ut.matched_text) AS text,
+            COALESCE(log.hosted_uri, ut.matched_hosted_uri) AS hosted_uri,
+            COALESCE(log.ts, ut.matched_ts) AS ts,
+            COALESCE(log.tags, ut.matched_tags) AS tags,
+            COALESCE(log.turn_id, ut.turn_id) AS turn_id,
+            COALESCE(log.conversation_id, ut.conversation_id) AS conversation_id,
+            COALESCE(log.bundle_id, ut.matched_bundle_id) AS bundle_id,
+            COALESCE(log.agent_id, ut.matched_agent_id) AS agent_id,
+            ut.matched_text AS matched_text,
             ut.sim,
             ut.rec,
             ut.score,
@@ -2226,12 +2278,13 @@ class ConvIndex:
             ut.matched_role,
             ut.matched_ts
         FROM unique_turns ut
-        JOIN LATERAL (
+        LEFT JOIN LATERAL (
             SELECT *
             FROM {self.schema}.conv_messages
             WHERE user_id = $1
               AND turn_id = ut.turn_id
               AND conversation_id = ut.conversation_id
+              AND bundle_id IS NOT DISTINCT FROM ut.matched_bundle_id
               AND role = 'artifact'
               AND tags @> ARRAY['artifact:turn.log']::text[]
               AND ts + (ttl_days || ' days')::interval >= now()
@@ -2379,10 +2432,17 @@ class ConvIndex:
         q = f"""
         WITH content_matches AS (
             SELECT
+                m.id AS matched_id,
+                m.message_id AS matched_message_id,
                 m.turn_id,
                 m.conversation_id,
                 m.role AS matched_role,
+                m.text AS matched_text,
+                m.hosted_uri AS matched_hosted_uri,
                 m.ts AS matched_ts,
+                m.tags AS matched_tags,
+                m.bundle_id AS matched_bundle_id,
+                m.agent_id AS matched_agent_id,
                 GREATEST(
                     COALESCE((SELECT AVG(word_similarity(tok, m.anchors_text))
                               FROM unnest($3::text[]) AS tok
@@ -2402,10 +2462,17 @@ class ConvIndex:
         ),
         unique_turns AS (
             SELECT
+                matched_id,
+                matched_message_id,
                 turn_id,
                 conversation_id,
                 matched_role,
+                matched_text,
+                matched_hosted_uri,
                 matched_ts,
+                matched_tags,
+                matched_bundle_id,
+                matched_agent_id,
                 sim,
                 rec,
                 (0.80 * sim + 0.20 * rec) AS score
@@ -2415,8 +2482,18 @@ class ConvIndex:
             LIMIT {int(top_k)}
         )
         SELECT
-            log.id, log.message_id, log.role, log.text, log.hosted_uri, log.ts, log.tags,
-            log.turn_id, log.conversation_id, log.bundle_id, log.agent_id,
+            COALESCE(log.id, ut.matched_id) AS id,
+            COALESCE(log.message_id, ut.matched_message_id) AS message_id,
+            COALESCE(log.role, ut.matched_role) AS role,
+            COALESCE(log.text, ut.matched_text) AS text,
+            COALESCE(log.hosted_uri, ut.matched_hosted_uri) AS hosted_uri,
+            COALESCE(log.ts, ut.matched_ts) AS ts,
+            COALESCE(log.tags, ut.matched_tags) AS tags,
+            COALESCE(log.turn_id, ut.turn_id) AS turn_id,
+            COALESCE(log.conversation_id, ut.conversation_id) AS conversation_id,
+            COALESCE(log.bundle_id, ut.matched_bundle_id) AS bundle_id,
+            COALESCE(log.agent_id, ut.matched_agent_id) AS agent_id,
+            ut.matched_text AS matched_text,
             ut.sim,
             ut.rec,
             ut.score,
@@ -2424,12 +2501,13 @@ class ConvIndex:
             ut.matched_role,
             ut.matched_ts
         FROM unique_turns ut
-        JOIN LATERAL (
+        LEFT JOIN LATERAL (
             SELECT *
             FROM {self.schema}.conv_messages
             WHERE user_id = $1
               AND turn_id = ut.turn_id
               AND conversation_id = ut.conversation_id
+              AND bundle_id IS NOT DISTINCT FROM ut.matched_bundle_id
               AND role = 'artifact'
               AND tags @> ARRAY['artifact:turn.log']::text[]
               AND ts + (ttl_days || ' days')::interval >= now()

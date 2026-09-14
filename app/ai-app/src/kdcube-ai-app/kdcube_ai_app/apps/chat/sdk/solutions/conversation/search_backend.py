@@ -144,8 +144,18 @@ class _PooledSearchBackend:
     async def search_turn_catalog(self, **kwargs: Any) -> List[Dict[str, Any]]:
         return await self._ensure_browser().search_turn_catalog(**kwargs)
 
-    async def get_turn_log(self, *, turn_id: str, conversation_id: Optional[str] = None) -> Dict[str, Any]:
-        return await self._ensure_browser().get_turn_log(turn_id=turn_id, conversation_id=conversation_id)
+    async def get_turn_log(
+        self,
+        *,
+        turn_id: str,
+        conversation_id: Optional[str] = None,
+        bundle_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return await self._ensure_browser().get_turn_log(
+            turn_id=turn_id,
+            conversation_id=conversation_id,
+            bundle_id=bundle_id,
+        )
 
     async def materialize_file(self, *, fi_ref: str, conversation_id: str = "") -> Dict[str, Any]:
         """Materialize a `conv:fi:` artifact to bytes via the browser's runtime (user-scoped)."""

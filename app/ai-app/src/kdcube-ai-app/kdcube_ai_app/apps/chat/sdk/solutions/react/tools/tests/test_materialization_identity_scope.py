@@ -33,6 +33,7 @@ async def test_cross_conversation_turn_lookup_keeps_runtime_bound_user():
         user_id="user-a",
         conversation_id="conversation-a",
         turn_id="turn-current",
+        bundle_id="bundle-a",
     )
     browser = ContextBrowser(ctx_client=client, runtime_ctx=runtime)
 
@@ -45,6 +46,7 @@ async def test_cross_conversation_turn_lookup_keeps_runtime_bound_user():
     assert client.calls[0]["user_id"] == "user-a"
     assert client.calls[0]["conversation_id"] == "conversation-requested"
     assert client.calls[0]["turn_id"] == "turn-requested"
+    assert client.calls[0]["bundle_id"] == "bundle-a"
 
 
 def test_cross_conversation_git_lineage_keeps_tenant_project_and_user():

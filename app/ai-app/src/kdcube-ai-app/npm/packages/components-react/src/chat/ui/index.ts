@@ -18,6 +18,7 @@ export {
 } from './features/composer/CapabilityPickerStandalone.tsx'
 export { SubagentThreads } from './features/chat/SubagentThreads.tsx'
 export { ConversationSearchPage } from './features/conversations/ConversationSearchPage.tsx'
+export { ConversationSearchControls } from './features/conversations/ConversationSearchControls.tsx'
 export {
   useConversationSearch,
   type ConversationSearchSeed,

@@ -59,7 +59,7 @@ class FakeSearchBackend:
             "first_user_ts": "2026-05-01T00:00:00+00:00",
         }]
 
-    async def get_turn_log(self, *, turn_id, conversation_id=None):
+    async def get_turn_log(self, *, turn_id, conversation_id=None, bundle_id=None):
         return {
             "blocks": [{
                 "type": "user.prompt",

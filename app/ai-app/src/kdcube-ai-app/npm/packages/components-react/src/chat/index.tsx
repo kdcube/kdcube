@@ -34,6 +34,7 @@ export {
   type ComposerMenuSectionContext,
   type ComposerMenuSectionDescriptor,
   ConversationSearchPage,
+  ConversationSearchControls,
   useConversationSearch,
   type ConversationSearchSeed,
   type ConversationSearchVm,

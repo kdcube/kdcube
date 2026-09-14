@@ -17,6 +17,10 @@
       "types": "./dist/chat/index.d.ts",
       "import": "./dist/chat/index.js"
     },
+    "./chat/search": {
+      "types": "./dist/chat/search.d.ts",
+      "import": "./dist/chat/search.js"
+    },
     "./markdown": {
       "types": "./dist/markdown/index.d.ts",
       "import": "./dist/markdown/index.js"
