@@ -4,7 +4,7 @@ title: "Application-Hosted Website"
 summary: "Build an app-owned website, register it by alias and host, and serve it through the KDCube runtime."
 status: current
 tags: ["recipe", "website", "application", "main-view", "routing", "authentication"]
-updated_at: 2026-09-11
+updated_at: 2026-09-14
 keywords:
   [
     "application hosted website",
@@ -498,6 +498,13 @@ https://<public-host>/sites/<site-alias>/
 https://<public-host>/platform/chat
   -> KDCube control plane
 ```
+
+Caddy makes only this routing choice. KDCube decides whether the control-plane
+or application-site document requires a platform session. In a server-side
+login deployment, a signed-out protected document returns `302` into login;
+the authenticated request returns its `200` shell. The complete result matrix
+and checks are in
+[Serving Local KDCube With Ngrok](../../service/cicd/ngrok-README.md#browser-entry-and-login-ownership).
 
 The separate website owns `/`, so a KDCube host-selected/default site cannot
 also appear at that root on the same hostname. Route another hostname wholly

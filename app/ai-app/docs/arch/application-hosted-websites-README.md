@@ -4,7 +4,7 @@ title: "Application-Hosted Website Architecture"
 summary: "Architecture and ownership map for serving app-owned complete websites through one KDCube installation by stable alias, request host, or one default root."
 status: current
 tags: ["arch", "website", "application", "routing", "sites", "browser"]
-updated_at: 2026-08-13
+updated_at: 2026-09-14
 keywords: ["KDCube website architecture", "application hosted website", "multiple websites", "virtual host routing", "site alias", "site catalog"]
 see_also:
   - repo:kdcube/app/ai-app/docs/sdk/solutions/sites/application-sites-README.md
@@ -133,6 +133,9 @@ In this composed-origin topology, the separate website owns `/`. A KDCube
 host-selected or default site cannot also own that root on the same hostname;
 KDCube sites remain available through `/sites/{alias}/`. Another hostname can
 be routed wholly to KDCube when a clean-root KDCube site is also required.
+Caddy selects the upstream only; KDCube resolves platform sessions and each
+site's descriptor-owned authentication policy. The signed-out result matrix is
+owned by [Serving Local KDCube With Ngrok](../service/cicd/ngrok-README.md#browser-entry-and-login-ownership).
 
 ### Several clean public roots
 

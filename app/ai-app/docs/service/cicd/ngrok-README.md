@@ -3,12 +3,14 @@ id: repo:kdcube/app/ai-app/docs/service/cicd/ngrok-README.md
 title: "Serving Local KDCube With Ngrok"
 summary: "Operational recipe for exposing local KDCube through one ngrok HTTPS origin while preserving host, request-scheme, authentication, and streaming contracts."
 tags: ["service", "cicd", "local", "ngrok", "caddy", "proxy", "cognito", "telegram"]
-keywords: ["ngrok local kdcube", "kdcube web proxy", "caddy reverse proxy", "trusted forwarded proto", "signed upload URL scheme", "cognito callback ngrok", "telegram webhook ngrok", "socket.io websocket ngrok"]
-updated_at: 2026-08-13
+keywords: ["ngrok local kdcube", "kdcube web proxy", "caddy reverse proxy", "trusted forwarded proto", "signed-out browser redirect", "protected app site", "signed upload URL scheme", "cognito callback ngrok", "telegram webhook ngrok", "socket.io websocket ngrok"]
+updated_at: 2026-09-14
 see_also:
   - repo:kdcube/app/ai-app/docs/service/cicd/cli-README.md
   - repo:kdcube/app/ai-app/docs/configuration/assembly-descriptor-README.md
   - repo:kdcube/app/ai-app/docs/configuration/bundles-descriptor-README.md
+  - repo:kdcube/app/ai-app/docs/service/auth/server-side-login-and-platform-session-README.md
+  - repo:kdcube/app/ai-app/docs/sdk/solutions/sites/application-sites-README.md
 ---
 # Serving Local KDCube With Ngrok
 
@@ -156,6 +158,66 @@ In this shape the KDCube web proxy does not serve the website root. It only
 serves runtime/API/platform paths behind Caddy. If ngrok reports
 `config.addr: "http://localhost:18080"`, the public website origin is entering
 through Caddy first.
+
+## Browser Entry And Login Ownership
+
+ngrok publishes the origin and Caddy routes it. Neither component decides who
+is signed in. KDCube resolves the platform session and the application-site
+policy.
+
+For platform-hosted server-side login, the generated KDCube web proxy asks
+chat ingress to resolve the session before serving a control-plane document.
+A signed-out navigation to `/platform/chat` receives a login redirect before
+the app shell is downloaded, so a cached shell cannot leave the browser on a
+blank authenticated page. Static control-plane assets remain public.
+
+Application-site authentication is descriptor-owned. A site with
+`auth.mode: platform_session` enters the same configured sign-in lane before
+its document is served; `auth.mode: public` serves its shell anonymously:
+
+```yaml
+ui:
+  main_view:
+    site:
+      alias: workspace
+      auth:
+        mode: platform_session
+```
+
+Expected browser-entry results depend on the selected lane and site policy:
+
+| Request | Caller/configuration | Expected result |
+|---|---|---|
+| `/platform/chat` | signed out, platform-hosted server-side login | `302` into platform login |
+| `/platform/chat` | signed in | `200` application shell |
+| `/platform/chat` | frontend-owned Cognito/SimpleIDP lane | `200` shell; the frontend owns its login transition |
+| `/sites/<alias>/` | signed out, `site.auth.mode: platform_session` | `302` into the configured platform login |
+| `/sites/<alias>/` | `site.auth.mode: public` | `200` site shell |
+| `/platform/assets/<hash>.js` | signed out | `200` static asset |
+
+When Caddy forwards to the CLI-started KDCube web proxy, this behavior comes
+from KDCube automatically. Do not add a second login implementation to Caddy.
+A staged runtime built before the page-entry contract must be refreshed from a
+platform source or release that contains it. A temporary development
+`forward_auth` guard may call KDCube's own session decision route while that
+refresh is coordinated; it must not inspect credentials, mint sessions, or
+become deployment authority.
+
+Test document navigation with an HTML `Accept` header and without an existing
+session cookie:
+
+```bash
+curl -sS -o /dev/null -D - -H 'Accept: text/html' \
+  https://<ngrok-domain>/platform/chat
+curl -sS -o /dev/null -D - -H 'Accept: text/html' \
+  https://<ngrok-domain>/sites/<protected-site-alias>/
+curl -sS -o /dev/null -D - -H 'Accept: text/html' \
+  https://<ngrok-domain>/<public-website-page>
+```
+
+For the server-side-login and protected-site case, expect `302`, `302`, and
+`200`. Follow both login redirects and verify their callback uses the same
+public HTTPS origin, never `localhost`.
 
 ## Descriptor Rule
 
@@ -371,6 +433,11 @@ Use the actual port where the frontend process listens.
 > host-selected/default site therefore does not own that root. Reserving
 > `/sites` and `/sites/*` keeps every enabled KDCube application site
 > reachable through its descriptor alias.
+>
+> Caddy only chooses the website or KDCube upstream. KDCube still decides
+> whether `/platform/chat` or a protected application site enters login. See
+> [Browser Entry And Login Ownership](#browser-entry-and-login-ownership) for
+> the signed-out acceptance matrix.
 >
 > If `/platform/chat` loads HTML but then requests `/assets/...`, `/img/...`, or
 > `/config.json`, the frontend artifact is stale and must be rebuilt from a

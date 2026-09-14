@@ -1,10 +1,10 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/service/auth/server-side-login-and-platform-session-README.md
 title: "Server-Side Login And The Platform Session"
-summary: "How an app-defined login turns an authenticator proof into one KDCube-owned, Redis-backed platform session, including the platform-hosted OIDC lane and its sliding lifetime."
+summary: "How an app-defined login turns an authenticator proof into one KDCube-owned, Redis-backed platform session, including protected browser entry, the platform-hosted OIDC lane, and its sliding lifetime."
 tags: ["service", "auth", "application", "bundle", "session", "sso"]
 keywords: ["server-side login", "app-defined authenticator", "platform session", "platform principal", "connection edge", "bundle", "kst1", "login lane", "login", "logout", "register", "invalidate", "sliding session", "OIDC", "Cognito hosted UI"]
-updated_at: 2026-09-11
+updated_at: 2026-09-14
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/app-simple-idp-bridge-README.md
@@ -291,14 +291,19 @@ and as a procedure, [Register KDCube On Your Identity Provider](../../recipes/co
 | Route | What it does |
 |---|---|
 | `GET /api/platform/session/login?next=<same-origin path>` | Starts a one-time attempt, sets the attempt cookie (`__Host-kdcube-login`), redirects to the identity provider. `next` must be a same-origin absolute path, else `/`. |
+| `GET /api/platform/require-session` | Internal proxy check for control-plane page entry. A verified platform user receives `204`. A signed-out request receives `401` plus `X-KDCube-Login-Location`, containing the login route and the safely encoded original path and query. When the server-held lane is not configured, it returns `204` so the deployment's existing frontend authentication can run. |
 | `GET /api/platform/session/callback?code=&state=` | Takes the attempt (once), requires the attempt cookie of the browser that started it, exchanges the code, verifies the ID token (signature, issuer, audience, nonce), writes the platform user record and the session, sets the session cookie, redirects to `next`. A refused sign-in is a small page with a reason code and a retry link. |
 | `GET /api/platform/session/signed-out` | The identity provider's post-logout target, one fixed URL per origin. Reads and clears the return cookie set by the logout and redirects to that same-origin path, else `/`. |
 | `GET /api/platform/session/status` | Whether the lane is configured, its routes and lifetimes. |
 | `POST /api/platform/logout?next=` | Ends the session and clears the cookies as before, stores the validated `next` in the return cookie, and answers `upstreamLogoutUrl`: the stable response field carrying the identity provider's sign-out URL. A client navigates there to end that provider session too. |
 
-The proxy route matrix carries `/api/platform/` to the chat ingress
-(`deployment/nginx/generate_application_site_routes.py`); without it the
-callback would land on the application-site fallback as a 200 HTML page.
+The proxy route matrix carries `/api/platform/` to the chat ingress and asks
+`/api/platform/require-session` before serving a control-plane page
+(`deployment/nginx/generate_application_site_routes.py`). A signed-out browser
+therefore enters login before downloading the app shell, including when an
+older shell is cached. Hashed assets, icons, and the public runtime config stay
+outside this page-entry check. Application sites use their own descriptor-owned
+`site.auth.mode`; the proxy does not keep an application list.
 
 ### Testing the lane
 

@@ -155,6 +155,29 @@ class ProxyConfigContractTest(unittest.TestCase):
                 self.assertIn("location = ${ROUTE_PREFIX} {", template)
                 self.assertIn("location ^~ ${ROUTE_PREFIX}/ {", template)
                 self.assertIn(
+                    "location = /_kdcube_platform_require_session {",
+                    template,
+                )
+                self.assertIn(
+                    "proxy_pass http://chat_api/api/platform/require-session;",
+                    template,
+                )
+                self.assertIn(
+                    "auth_request /_kdcube_platform_require_session;",
+                    template,
+                )
+                self.assertIn(
+                    "error_page 401 = @kdcube_platform_login;",
+                    template,
+                )
+                login_redirect = template.split(
+                    "location @kdcube_platform_login {", 1
+                )[1].split("}", 1)[0]
+                self.assertIn("absolute_redirect off;", login_redirect)
+                self.assertIn("location ^~ ${ROUTE_PREFIX}/assets/ {", template)
+                self.assertIn("location ^~ ${ROUTE_PREFIX}/img/ {", template)
+                self.assertIn("location = ${ROUTE_PREFIX}/config.json {", template)
+                self.assertIn(
                     "rewrite ^/sites/(.*)$ /api/integrations/sites/$1 break;",
                     template,
                 )
@@ -228,6 +251,10 @@ class ProxyConfigContractTest(unittest.TestCase):
         self.assertIn("location = /health {", chart)
         self.assertIn("location = {{ $routePrefix }} {", chart)
         self.assertIn("location ^~ {{ $routePrefix }}/ {", chart)
+        self.assertIn(
+            "auth_request /_kdcube_platform_require_session;",
+            chart,
+        )
         self.assertIn("rewrite ^/$ /api/integrations/site-root break;", chart)
         self.assertIn("rewrite ^/sites/(.*)$ /api/integrations/sites/$1 break;", chart)
         self._assert_oauth_discovery_routes(chart)

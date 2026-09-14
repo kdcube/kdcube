@@ -19,7 +19,13 @@ from connection_hub.server_side_login.memory import MemoryLoginAttemptStore, Mem
 from connection_hub.server_side_login.model import LoginAttempt, SessionPolicy, VerifiedIdentity
 from connection_hub.server_side_login.protocols import UpstreamRejected
 
-from kdcube_ai_app.apps.chat.ingress.platform_session import create_platform_session_router
+from kdcube_ai_app.auth.sessions import UserSession, UserType
+from kdcube_ai_app.apps.chat.ingress.platform_session import (
+    LOGIN_LOCATION_HEADER,
+    REQUIRE_SESSION_ROUTE,
+    create_platform_session_router,
+)
+from kdcube_ai_app.apps.middleware.gateway import STATE_SESSION
 
 
 class FakeUpstream:
@@ -70,6 +76,21 @@ def harness():
         return state["flow"]
 
     app = FastAPI()
+
+    @app.middleware("http")
+    async def bind_test_session(request, call_next):
+        if request.headers.get("x-test-platform-user") == "registered":
+            setattr(
+                request.state,
+                STATE_SESSION,
+                UserSession(
+                    session_id="session-1",
+                    user_type=UserType.REGISTERED,
+                    user_id="user-1",
+                ),
+            )
+        return await call_next(request)
+
     app.include_router(create_platform_session_router(flow_provider=provide))
     client = TestClient(app, base_url="https://kdcube.example")
     return client, upstream, state
@@ -85,6 +106,45 @@ def test_login_redirects_to_the_upstream_with_a_bound_attempt_cookie(harness):
     attempt = jar["__Host-kdcube-login"]
     assert attempt["httponly"] and attempt["secure"] and attempt["path"] == "/"
     assert int(attempt["max-age"]) == 120
+
+
+def test_require_session_redirect_contract_preserves_the_full_return_uri(harness):
+    client, _, _ = harness
+    response = client.get(
+        REQUIRE_SESSION_ROUTE,
+        headers={
+            "x-kdcube-original-uri": (
+                "/sites/problem-board/?view=inbox&message="
+                "work%3Ainbox%3Aone"
+            ),
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 401
+    assert response.headers[LOGIN_LOCATION_HEADER] == (
+        "/api/platform/session/login?next=%2Fsites%2Fproblem-board%2F%3Fview%3Dinbox%26message%3Dwork%253Ainbox%253Aone"
+    )
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_require_session_allows_a_registered_platform_user(harness):
+    client, _, _ = harness
+    response = client.get(
+        REQUIRE_SESSION_ROUTE,
+        headers={"x-test-platform-user": "registered"},
+    )
+
+    assert response.status_code == 204
+
+
+def test_require_session_defers_when_server_side_login_is_not_configured(harness):
+    client, _, state = harness
+    state["flow"] = None
+
+    response = client.get(REQUIRE_SESSION_ROUTE)
+
+    assert response.status_code == 204
 
 
 def test_callback_sets_the_session_cookie_and_clears_the_attempt(harness):

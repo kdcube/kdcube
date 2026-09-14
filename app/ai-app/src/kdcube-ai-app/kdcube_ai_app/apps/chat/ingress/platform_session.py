@@ -29,6 +29,7 @@ from __future__ import annotations
 import html
 import logging
 from typing import Any, Awaitable, Callable
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -47,12 +48,25 @@ from kdcube_ai_app.auth.bundle.login_lane import (
     platform_login_flow,
     public_origin,
 )
+from kdcube_ai_app.auth.sessions import UserType
+from kdcube_ai_app.apps.middleware.gateway import STATE_SESSION
 
 logger = logging.getLogger(__name__)
 
 FlowProvider = Callable[[Request], Awaitable[BrowserSessionFlow | None]]
 
 NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+REQUIRE_SESSION_ROUTE = "/api/platform/require-session"
+LOGIN_LOCATION_HEADER = "X-KDCube-Login-Location"
+
+
+def _has_platform_user(request: Request) -> bool:
+    session = getattr(request.state, STATE_SESSION, None)
+    if session is None:
+        return False
+    user_type = getattr(session, "user_type", UserType.ANONYMOUS)
+    value = str(getattr(user_type, "value", user_type)).lower()
+    return value != UserType.ANONYMOUS.value
 
 
 def apply_cookie(response: Response, spec: CookieSpec) -> None:
@@ -110,6 +124,33 @@ def create_platform_session_router(*, flow_provider: FlowProvider | None = None)
         response = RedirectResponse(start.redirect_url, status_code=302, headers=NO_STORE)
         apply_cookie(response, start.attempt_cookie)
         return response
+
+    @router.get(REQUIRE_SESSION_ROUTE, include_in_schema=False)
+    async def require_session(request: Request) -> Response:
+        """Authorize a protected browser page before its app shell is served."""
+
+        if _has_platform_user(request):
+            return Response(status_code=204, headers=NO_STORE)
+
+        flow = await provider(request)
+        if flow is None:
+            # Deployments without the server-held session lane keep their
+            # existing frontend-owned authentication flow.
+            return Response(status_code=204, headers=NO_STORE)
+
+        requested = request.headers.get("x-kdcube-original-uri") or "/"
+        destination = safe_next_target(
+            requested,
+            allowed_origins=flow.policy.return_origins,
+        )
+        login_location = f"{LOGIN_ROUTE}?{urlencode({'next': destination})}"
+        return Response(
+            status_code=401,
+            headers={
+                **NO_STORE,
+                LOGIN_LOCATION_HEADER: login_location,
+            },
+        )
 
     @router.get(CALLBACK_ROUTE)
     async def session_callback(request: Request) -> Response:
@@ -178,4 +219,9 @@ def create_platform_session_router(*, flow_provider: FlowProvider | None = None)
     return router
 
 
-__all__ = ["apply_cookie", "create_platform_session_router"]
+__all__ = [
+    "LOGIN_LOCATION_HEADER",
+    "REQUIRE_SESSION_ROUTE",
+    "apply_cookie",
+    "create_platform_session_router",
+]
