@@ -9,6 +9,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram.topics import (
+    normalize_message_thread_id,
+    telegram_topic_conversation_id,
+)
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -22,7 +27,7 @@ def _safe_segment(raw: str, *, fallback: str = "default") -> str:
 class TelegramUserAdminStorage:
     """File-backed Telegram user registry shared by Telegram integrations."""
 
-    SCHEMA_VERSION = "telegram-user-admin.v1"
+    SCHEMA_VERSION = "telegram-user-admin.v2"
     ALLOWED_ROLES = ("anonymous", "registered", "admin")
 
     def __init__(self, root: str | Path):
@@ -93,16 +98,29 @@ class TelegramUserAdminStorage:
         created_at: str = "",
         updated_at: str = "",
         source: str = "telegram",
+        telegram_chat_id: str = "",
+        telegram_integration_id: str = "",
+        message_thread_id: str | int | None = None,
     ) -> Dict[str, Any]:
         conv_id = str(conversation_id or "").strip()
         now = _utc_now()
-        return {
+        row = {
             "conversation_id": conv_id,
             "title": str(title or "").strip() or "Telegram chat",
             "source": str(source or "telegram").strip() or "telegram",
             "created_at": str(created_at or now).strip(),
             "updated_at": str(updated_at or now).strip(),
         }
+        chat_id = str(telegram_chat_id or "").strip()
+        integration_id = str(telegram_integration_id or "").strip()
+        thread_id = normalize_message_thread_id(message_thread_id)
+        if chat_id:
+            row["telegram_chat_id"] = chat_id
+        if integration_id:
+            row["telegram_integration_id"] = integration_id
+        if thread_id:
+            row["message_thread_id"] = thread_id
+        return row
 
     @classmethod
     def _normalize_conversations(cls, user: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -122,6 +140,11 @@ class TelegramUserAdminStorage:
                     created_at=str(raw.get("created_at") or "").strip(),
                     updated_at=str(raw.get("updated_at") or "").strip(),
                     source=str(raw.get("source") or "telegram").strip(),
+                    telegram_chat_id=str(raw.get("telegram_chat_id") or "").strip(),
+                    telegram_integration_id=str(
+                        raw.get("telegram_integration_id") or ""
+                    ).strip(),
+                    message_thread_id=raw.get("message_thread_id"),
                 )
             )
         active = str(user.get("conversation_id") or "").strip()
@@ -307,6 +330,180 @@ class TelegramUserAdminStorage:
             "user": user,
             "active_conversation_id": str(user.get("conversation_id") or "").strip(),
             "conversations": user.get("conversations") or [],
+        }
+
+    def bind_topic_conversation(
+        self,
+        *,
+        telegram_user_id: str,
+        telegram_chat_id: str,
+        message_thread_id: str | int,
+        telegram_username: str = "",
+        integration_id: str = "",
+        title: str = "",
+    ) -> Dict[str, Any]:
+        """Create or recover the stable conversation bound to one Telegram topic."""
+        telegram_id = str(telegram_user_id or "").strip()
+        chat_id = str(telegram_chat_id or "").strip()
+        telegram_integration_id = str(integration_id or "").strip()
+        thread_id = normalize_message_thread_id(message_thread_id)
+        if not telegram_id or not chat_id or not thread_id:
+            return {
+                "ok": False,
+                "error": {
+                    "code": "telegram_topic_required",
+                    "message": "telegram_user_id, telegram_chat_id, and message_thread_id are required.",
+                },
+            }
+
+        resolved = self.resolve_telegram_user(
+            telegram_user_id=telegram_id,
+            telegram_chat_id=chat_id,
+            telegram_username=telegram_username,
+            create_if_missing=True,
+        )
+        data = self._read()
+        users = [item for item in data.get("users") or [] if isinstance(item, dict)]
+        user = next(
+            (item for item in users if str(item.get("telegram_user_id") or "") == telegram_id),
+            None,
+        )
+        if user is None:
+            return {
+                "ok": False,
+                "error": {
+                    "code": "telegram_user_not_found",
+                    "message": "Telegram user mapping was not found.",
+                },
+            }
+
+        conversations = self._normalize_conversations(user)
+        row = next(
+            (
+                item
+                for item in conversations
+                if str(item.get("telegram_chat_id") or "") == chat_id
+                and str(item.get("telegram_integration_id") or "")
+                == telegram_integration_id
+                and normalize_message_thread_id(item.get("message_thread_id")) == thread_id
+            ),
+            None,
+        )
+        changed = False
+        now = _utc_now()
+        if row is None:
+            conversation_id = telegram_topic_conversation_id(
+                chat_id=chat_id,
+                message_thread_id=thread_id,
+                integration_id=telegram_integration_id,
+            )
+            row = next(
+                (
+                    item
+                    for item in conversations
+                    if str(item.get("conversation_id") or "") == conversation_id
+                ),
+                None,
+            )
+            if row is None:
+                row = self._conversation_row(
+                    conversation_id,
+                    title=title or f"Telegram topic {thread_id}",
+                    source="telegram_topic",
+                    created_at=now,
+                    updated_at=now,
+                    telegram_chat_id=chat_id,
+                    telegram_integration_id=telegram_integration_id,
+                    message_thread_id=thread_id,
+                )
+                conversations.insert(0, row)
+            else:
+                row["telegram_chat_id"] = chat_id
+                if telegram_integration_id:
+                    row["telegram_integration_id"] = telegram_integration_id
+                row["message_thread_id"] = thread_id
+                row["source"] = "telegram_topic"
+            changed = True
+
+        requested_title = str(title or "").strip()
+        if requested_title and requested_title != str(row.get("title") or ""):
+            row["title"] = requested_title
+            row["updated_at"] = now
+            changed = True
+
+        if changed:
+            user["conversations"] = conversations
+            user["updated_at"] = now
+            data["users"] = users
+            self._write(data)
+
+        listing = self.list_conversations(
+            telegram_user_id=telegram_id,
+            telegram_chat_id=chat_id,
+            telegram_username=str(resolved.get("telegram_username") or telegram_username),
+        )
+        stored_row = next(
+            (
+                item
+                for item in listing.get("conversations") or []
+                if str(item.get("telegram_chat_id") or "") == chat_id
+                and str(item.get("telegram_integration_id") or "")
+                == telegram_integration_id
+                and normalize_message_thread_id(item.get("message_thread_id")) == thread_id
+            ),
+            row,
+        )
+        return {
+            "ok": True,
+            "topic_bound": True,
+            "conversation_id": str(stored_row.get("conversation_id") or ""),
+            "conversation": stored_row,
+            **listing,
+        }
+
+    def resolve_conversation_for_message(
+        self,
+        *,
+        telegram_user_id: str,
+        telegram_chat_id: str = "",
+        telegram_username: str = "",
+        message_thread_id: str | int | None = None,
+        integration_id: str = "",
+        topic_name: str = "",
+    ) -> Dict[str, Any]:
+        """Resolve a topic-bound conversation or the user's active legacy chat."""
+        thread_id = normalize_message_thread_id(message_thread_id)
+        if thread_id:
+            return self.bind_topic_conversation(
+                telegram_user_id=telegram_user_id,
+                telegram_chat_id=telegram_chat_id,
+                telegram_username=telegram_username,
+                message_thread_id=thread_id,
+                integration_id=integration_id,
+                title=topic_name,
+            )
+
+        listing = self.list_conversations(
+            telegram_user_id=telegram_user_id,
+            telegram_chat_id=telegram_chat_id,
+            telegram_username=telegram_username,
+            create_if_missing=True,
+        )
+        conversation_id = str(listing.get("active_conversation_id") or "").strip()
+        row = next(
+            (
+                item
+                for item in listing.get("conversations") or []
+                if str(item.get("conversation_id") or "") == conversation_id
+            ),
+            {},
+        )
+        return {
+            "ok": True,
+            "topic_bound": False,
+            "conversation_id": conversation_id,
+            "conversation": row,
+            **listing,
         }
 
     def create_conversation(

@@ -5,12 +5,12 @@ import html
 import json
 import logging
 import re
-import urllib.parse
 import time
+import urllib.parse
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Mapping
 
-from .bot import (
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bot import (
     TelegramMessage,
     _file_delivery_key,
     _file_item_from_meta,
@@ -19,7 +19,9 @@ from .bot import (
     edit_telegram_text_message,
     send_telegram_messages,
 )
-
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram.topics import (
+    normalize_message_thread_id,
+)
 
 log = logging.getLogger("kdcube.integrations.telegram.stream")
 
@@ -55,6 +57,7 @@ class TelegramActivityStreamer:
         comm: Any,
         bot_token: str,
         chat_id: str | int,
+        message_thread_id: str | int | None = None,
         turn_id: str | None = None,
         enabled: bool = True,
         show_progress: bool = True,
@@ -67,6 +70,7 @@ class TelegramActivityStreamer:
         self.comm = comm
         self.bot_token = str(bot_token or "").strip()
         self.chat_id = str(chat_id or "").strip()
+        self.message_thread_id = normalize_message_thread_id(message_thread_id)
         self.turn_id = str(turn_id or "").strip()
         self.enabled = bool(enabled and self.bot_token and self.chat_id)
         # When False, suppress the activity/thinking/step progress display
@@ -656,6 +660,7 @@ class TelegramActivityStreamer:
             result = await send_telegram_messages(
                 bot_token=self.bot_token,
                 chat_id=self.chat_id,
+                message_thread_id=self.message_thread_id or None,
                 messages=[TelegramMessage(kind="text", text=body, parse_mode=parse_mode)],
             )
         self._remember_progress_message_id(result)
@@ -704,6 +709,7 @@ class TelegramActivityStreamer:
         return await send_telegram_messages(
             bot_token=self.bot_token,
             chat_id=self.chat_id,
+            message_thread_id=self.message_thread_id or None,
             messages=messages,
         )
 
@@ -750,11 +756,13 @@ async def deliver_messages_preserving_progress_card(
     *,
     bot_token: str,
     chat_id: str | int,
+    message_thread_id: str | int | None = None,
     telegram_messages: list[TelegramMessage],
     progress_message_id: str | int | None = None,
     progress_summary: str = "",
 ) -> dict[str, Any]:
     """Append final text to the progress card; send files or overflow normally."""
+    thread_id = normalize_message_thread_id(message_thread_id)
     messages_to_send = list(telegram_messages or [])
     edit_result: dict[str, Any] | None = None
     edit_text = ""
@@ -794,6 +802,7 @@ async def deliver_messages_preserving_progress_card(
         await send_telegram_messages(
             bot_token=bot_token,
             chat_id=chat_id,
+            message_thread_id=thread_id or None,
             messages=messages_to_send,
         )
         if messages_to_send

@@ -1,9 +1,10 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/telegram-external-prereq-README.md
 title: "Telegram External Prerequisites"
-summary: "External Telegram Bot API, BotFather, webhook, public URL, and Mini App setup required before KDCube Telegram SDK integrations can work."
-tags: ["sdk", "integrations", "telegram", "webhook", "mini-app", "prerequisites"]
-keywords: ["telegram prerequisites", "telegram botfather", "telegram webhook", "telegram mini app", "telegram bot token"]
+summary: "External Telegram Bot API, BotFather, webhook, private-chat topic, public URL, and Mini App setup required before KDCube Telegram SDK integrations can work."
+tags: ["sdk", "integrations", "telegram", "topics", "webhook", "mini-app", "prerequisites"]
+keywords: ["telegram prerequisites", "telegram botfather", "telegram webhook", "topics in private chats", "has_topics_enabled", "allows_users_to_create_topics", "telegram mini app", "telegram bot token"]
+updated_at: 2026-09-14
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/telegram-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/telegram-webhook-submit-and-delivery-README.md
@@ -32,6 +33,7 @@ External setup includes:
 - Webhook secret generation outside source control.
 - Telegram Bot API `setWebhook` call.
 - Optional BotFather command list and Mini App / menu button configuration.
+- Optional BotFather **Topics in Private Chats** setting.
 - Web client download expectations for Mini Apps.
 
 The bundle or platform still owns:
@@ -57,6 +59,10 @@ Official references:
   <https://core.telegram.org/bots/api#setwebhook>
 - Mini Apps / Web Apps:
   <https://core.telegram.org/bots/webapps>
+- Topics in private chats:
+  <https://core.telegram.org/bots/features#topics-in-private-chats>
+- Telegram Bot API 9.4 topic controls:
+  <https://core.telegram.org/bots/api-changelog#february-9-2026>
 
 Human/operator actions:
 
@@ -68,7 +74,55 @@ Human/operator actions:
 | 4 | Operator workstation or secret workflow | Generate a random webhook secret token. | `TELEGRAM_WEBHOOK_SECRET`. |
 | 5 | KDCube descriptors/config/secrets | Fill Telegram config and secrets, then reload/restart as required. | Updated bundle config and secrets. |
 | 6 | Telegram Bot API | Register the webhook with Telegram after the public route exists. | Successful `setWebhook` result. |
-| 7 | Telegram `@BotFather` | Configure bot commands and optional Mini App/menu button. | User-visible command list and web app launch point. |
+| 7 | Telegram `@BotFather` | Configure bot commands, optional private-chat topics, and optional Mini App/menu button. | User-visible commands and chat surfaces. |
+
+## Private Chat Topics
+
+Private-chat topics are enabled per bot in the **BotFather Mini App**. The
+classic `/mybots` chat keyboard does not contain the thread controls:
+
+```text
+1. Open the @BotFather chat and then open the @BotFather profile.
+2. Choose Open App to enter the BotFather Mini App.
+3. Select the bot, then open Bot Settings > Thread Settings.
+4. Turn on Threaded Mode.
+5. Leave "Disallow users to create new threads" off when users should create
+   and delete their own workspaces in the chat.
+```
+
+Topic-aware routing activates directly when Telegram includes
+`message_thread_id` in an update; the existing KDCube descriptor remains
+unchanged. The SDK uses the routing contract documented in
+[Native Private-Chat Topics](telegram-README.md#native-private-chat-topics).
+
+Verify the BotFather setting through `getMe` without printing the token:
+
+```bash
+read -r -s -p "Telegram bot token: " TELEGRAM_BOT_TOKEN; echo
+curl -sS "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe" \
+  | jq '{ok, username: .result.username, has_topics_enabled: .result.has_topics_enabled, allows_users_to_create_topics: .result.allows_users_to_create_topics}'
+unset TELEGRAM_BOT_TOKEN
+```
+
+Expected after enablement:
+
+```json
+{
+  "ok": true,
+  "username": "<BOT_USERNAME>",
+  "has_topics_enabled": true,
+  "allows_users_to_create_topics": true
+}
+```
+
+`has_topics_enabled` proves that the private bot chat is topic-aware.
+`allows_users_to_create_topics` proves that users may create and delete those
+topics themselves. KDCube routing works for topics created by either the bot or
+the user; the second flag is required for the user-created-topic workflow.
+
+Create two topics in the private bot chat and send a message in each. Each
+reply should stay in its source topic. This verifies Telegram configuration and
+the deployed KDCube topic-aware delivery path together.
 
 ## Webhook URL
 

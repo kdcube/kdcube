@@ -4,8 +4,8 @@ title: "Recipe: Run the Agent Harness from Python"
 summary: "Run the KDCube Native ReAct agent, a LangGraph agent, or Claude Code from Python and give it durable recall, web research, isolated code and file work, document rendering, and inspectable usage."
 status: current
 tags: ["recipe", "quickstart", "agent-harness", "python", "native-react", "langgraph", "claude-code", "self-hosted", "terminal", "telegram", "conversation-search", "web-search", "web-fetch", "rendering"]
-keywords: ["run agent harness", "direct SDK agent", "cross-conversation search", "conversation_tools.search", "terminal chat", "local Telegram webhook", "KDCube Web Search", "KDCube Web Fetch", "standard descriptors", "Redis", "Postgres", "Git transcript", "isolated code execution", "write_pdf", "write_docx", "write_pptx"]
-updated_at: 2026-09-08
+keywords: ["run agent harness", "direct SDK agent", "cross-conversation search", "conversation_tools.search", "terminal chat", "local Telegram webhook", "telegram private chat topics", "KDCube Web Search", "KDCube Web Fetch", "standard descriptors", "Redis", "Postgres", "Git transcript", "isolated code execution", "write_pdf", "write_docx", "write_pptx"]
+updated_at: 2026-09-14
 see_also:
   - repo:kdcube-ai-app/agents/README.md
   - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/README.md
@@ -703,10 +703,15 @@ Telegram update
   -> user_id         = telegram_<sender-id>
   -> session_id      = telegram_chat_<chat-id>
   -> conversation_id = telegram_chat_<chat-id>
+     or telegram_chat_<chat-id>_topic_<message-thread-id> inside a topic
   -> invoke one direct harness turn inline
   -> read the persisted turn log
-  -> send its answer and external files through the Telegram SDK
+  -> send its answer and external files back to the same chat topic
 ```
+
+The operator enables native private-chat topics in BotFather. The canonical
+topic routing and authorization boundary is documented in
+[Telegram SDK Integration](../../sdk/integrations/telegram/telegram-README.md#native-private-chat-topics).
 
 The Telegram sender ID is a transport-authenticated local storage identity.
 KDCube platform identity and delegated authority begin when the agent is

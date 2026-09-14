@@ -1,12 +1,7 @@
 from __future__ import annotations
 
-from .bot import (
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bot import (
     TelegramMessage,
-    edit_telegram_text_message,
-    hydrate_telegram_attachments,
-    render_telegram_messages_from_timeline,
-    send_telegram_messages,
-    summarize_telegram_update,
     _file_delivery_key,
     _file_item_bytes,
     _file_item_filename,
@@ -14,8 +9,13 @@ from .bot import (
     _markdown_to_telegram_html,
     _telegram_file_kind,
     _telegram_text,
+    edit_telegram_text_message,
+    hydrate_telegram_attachments,
+    render_telegram_messages_from_timeline,
+    send_telegram_messages,
+    summarize_telegram_update,
 )
-from .chat_submit import (
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram.chat_submit import (
     decode_inline_attachment_bytes,
     raw_attachments_from_telegram,
     role_to_user_type,
@@ -24,7 +24,14 @@ from .chat_submit import (
     telegram_request_context,
     telegram_user_session,
 )
-from .signed_downloads import (
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram.router import (
+    deliver_react_turn_to_telegram,
+    deliver_turn_to_telegram,
+    message_log_items,
+    render_react_turn_messages,
+    render_turn_messages,
+)
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram.signed_downloads import (
     SignedLink,
     SignedLinkToken,
     SignedLinkTokenError,
@@ -35,20 +42,22 @@ from .signed_downloads import (
     make_signed_link_token,
     verify_signed_link_token,
 )
-from kdcube_ai_app.apps.chat.sdk.integrations.telegram.router import (
-    deliver_react_turn_to_telegram,
-    deliver_turn_to_telegram,
-    message_log_items,
-    render_react_turn_messages,
-    render_turn_messages,
-)
-from .stream import (
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram.stream import (
     TelegramActivityStreamer,
     deliver_messages_preserving_progress_card,
     progress_final_card,
 )
-from .user_storage import TelegramUserAdminStorage
-from .webapp_auth import (
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram.topics import (
+    create_telegram_topic,
+    delete_telegram_topic,
+    edit_telegram_topic,
+    normalize_message_thread_id,
+    telegram_topic_conversation_id,
+)
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram.user_storage import (
+    TelegramUserAdminStorage,
+)
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram.webapp_auth import (
     INIT_DATA_HEADER,
     TelegramWebAppInitData,
     extract_telegram_init_data_from_request,
@@ -67,32 +76,6 @@ __all__ = [
     "TelegramMessage",
     "TelegramUserAdminStorage",
     "TelegramWebAppInitData",
-    "decode_inline_attachment_bytes",
-    "deliver_messages_preserving_progress_card",
-    "deliver_react_turn_to_telegram",
-    "deliver_turn_to_telegram",
-    "edit_telegram_text_message",
-    "extract_telegram_init_data_from_request",
-    "hydrate_telegram_attachments",
-    "append_signed_link_token",
-    "message_log_items",
-    "parse_telegram_init_user",
-    "progress_final_card",
-    "raw_attachments_from_telegram",
-    "render_react_turn_messages",
-    "render_turn_messages",
-    "render_telegram_messages_from_timeline",
-    "make_signed_link",
-    "make_signed_link_token",
-    "role_to_user_type",
-    "send_telegram_messages",
-    "summarize_telegram_update",
-    "telegram_command_kind_and_text",
-    "telegram_ingress_config",
-    "telegram_request_context",
-    "telegram_user_session",
-    "validate_telegram_init_data",
-    "verify_signed_link_token",
     "_file_delivery_key",
     "_file_item_bytes",
     "_file_item_filename",
@@ -100,4 +83,35 @@ __all__ = [
     "_markdown_to_telegram_html",
     "_telegram_file_kind",
     "_telegram_text",
+    "append_signed_link_token",
+    "create_telegram_topic",
+    "decode_inline_attachment_bytes",
+    "delete_telegram_topic",
+    "deliver_messages_preserving_progress_card",
+    "deliver_react_turn_to_telegram",
+    "deliver_turn_to_telegram",
+    "edit_telegram_text_message",
+    "edit_telegram_topic",
+    "extract_telegram_init_data_from_request",
+    "hydrate_telegram_attachments",
+    "make_signed_link",
+    "make_signed_link_token",
+    "message_log_items",
+    "normalize_message_thread_id",
+    "parse_telegram_init_user",
+    "progress_final_card",
+    "raw_attachments_from_telegram",
+    "render_react_turn_messages",
+    "render_telegram_messages_from_timeline",
+    "render_turn_messages",
+    "role_to_user_type",
+    "send_telegram_messages",
+    "summarize_telegram_update",
+    "telegram_command_kind_and_text",
+    "telegram_ingress_config",
+    "telegram_request_context",
+    "telegram_topic_conversation_id",
+    "telegram_user_session",
+    "validate_telegram_init_data",
+    "verify_signed_link_token",
 ]

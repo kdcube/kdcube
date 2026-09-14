@@ -1,10 +1,10 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/telegram-webhook-submit-and-delivery-README.md
 title: "Telegram Webhook Submit And Queued Delivery"
-summary: "Exact runtime data path for Telegram bot messages: webhook acknowledgement, shared chat ingress, processor-side app execution, activity streaming, and final Telegram delivery."
-tags: ["sdk", "integrations", "telegram", "webhook", "chat-ingress", "queued-delivery", "agent-runtime"]
-keywords: ["telegram webhook", "telegram submitter", "telegram queued delivery", "submit_telegram_turn", "run_with_queued_telegram_delivery", "TelegramActivityStreamer", "deliver_turn_to_telegram"]
-updated_at: 2026-09-07
+summary: "Exact runtime data path for Telegram bot messages and private-chat topics: webhook acknowledgement, shared chat ingress, processor-side app execution, activity streaming, and final delivery."
+tags: ["sdk", "integrations", "telegram", "topics", "webhook", "chat-ingress", "queued-delivery", "agent-runtime"]
+keywords: ["telegram webhook", "telegram private chat topics", "message_thread_id", "telegram submitter", "telegram queued delivery", "submit_telegram_turn", "run_with_queued_telegram_delivery", "TelegramActivityStreamer", "deliver_turn_to_telegram"]
+updated_at: 2026-09-14
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/telegram-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/telegram-react-events-and-artifact-history-README.md
@@ -55,12 +55,13 @@ app telegram_webhook(...)
        - claim update_id for idempotency
        - hydrate Telegram files when needed
        - resolve registered/admin Telegram user
+       - bind (integration_id, chat_id, message_thread_id) to a conversation when present
        - call submit_telegram_turn(...)
             |
             v
             ChatIngressSubmitter.submit(...)
               message_data.payload.source = "telegram"
-              message_data.payload.telegram = {chat_id, update_id, turn_id, ...}
+              message_data.payload.telegram = {chat_id, message_thread_id, update_id, turn_id, ...}
               message_data.agent_id = surfaces.as_consumer.default_agent
               message_data.external_events[] = event.user.prompt/followup/steer + attachments
             |
@@ -79,6 +80,7 @@ processor later claims queued chat turn
           |
           +-- deliver_turn_to_telegram(...)
                 renders final Telegram messages from runner result and turn log
+                sends them to the originating message_thread_id when present
 ```
 
 There is no webhook-side agent-execution fallback. If shared chat ingress is
@@ -108,6 +110,13 @@ The effective runtime turn id is still the chat ingress
 `ExternalEventPayload.routing.turn_id`; see
 [Event Ingress To React Turn](../../events/event-ingress-to-react-turn-README.md).
 
+Private-chat topic identity and application authorization are separate
+contracts. The webhook uses `message_thread_id` to select a stable conversation
+and the delivery path uses it to return output to the same topic. The app still
+checks which domain resources that authenticated user may access. The canonical
+topic contract is
+[Native Private-Chat Topics](telegram-README.md#native-private-chat-topics).
+
 ## Boundary Diagram
 
 ```text
@@ -128,7 +137,7 @@ The effective runtime turn id is still the chat ingress
 │   - verify webhook secret                                             │
 │   - claim update_id                                                   │
 │   - hydrate Telegram files                                            │
-│   - resolve Telegram user and conversation                            │
+│   - resolve Telegram user and main-chat or topic-bound conversation     │
 │   - submit external_events[] to chat ingress                          │
 │                                                                      │
 │ forbidden work on normal path:                                        │
@@ -147,7 +156,7 @@ The effective runtime turn id is still the chat ingress
 │ stores/queues:                                                        │
 │   - tenant/project/bundle/user/session/conversation/turn ids           │
 │   - request payload with payload.source="telegram"                    │
-│   - request payload with payload.telegram={chat_id, update_id, ...}    │
+│   - payload.telegram={chat_id, message_thread_id, update_id, ...}      │
 │   - external_events[] lane entries                                    │
 │                                                                      │
 │ does not know:                                                        │
@@ -234,7 +243,7 @@ async def telegram_webhook(self, **update):
 
 | Step | Data | Result |
 | --- | --- | --- |
-| Extract update | raw Telegram JSON | normalized summary with text, chat id, user id, files |
+| Extract update | raw Telegram JSON | normalized summary with text, chat id, optional topic id, user id, files |
 | Claim update | `update_id` | duplicate updates are acknowledged and ignored |
 | Hydrate files | Telegram file ids | byte payloads ready for hosting/submission |
 | Resolve user | Telegram user/chat | KDCube user id, role, conversation id |
@@ -259,7 +268,7 @@ are:
   "tenant": "demo-tenant",
   "project": "demo-project",
   "bundle_id": "my.bundle@1-0",
-  "conversation_id": "telegram_chat_12345",
+  "conversation_id": "telegram_integration_telegram_default_chat_12345_topic_73",
   "turn_id": "turn_2026-06-18-12-00-00-000",
   "agent_id": "main",
   "payload": {
@@ -267,11 +276,12 @@ are:
     "agent_id": "main",
     "telegram": {
       "chat_id": "12345",
+      "message_thread_id": "73",
       "update_id": "98765",
       "message_id": 222,
       "kdcube_user_id": "internal:telegram:12345",
       "role": "registered",
-      "conversation_id": "telegram_chat_12345",
+      "conversation_id": "telegram_integration_telegram_default_chat_12345_topic_73",
       "turn_id": "turn_2026-06-18-12-00-00-000"
     }
   },
@@ -412,7 +422,7 @@ When Telegram delivery looks wrong, inspect these facts in order:
 | Webhook log | `telegram submitter result` exists for the `update_id`. |
 | Ingress result | accepted turn has `payload.telegram` and `external_events[]`. |
 | Processor log | app run path calls `run_with_queued_telegram_delivery(...)`. |
-| Wrapper metadata | `_queued_telegram_meta(...)` finds `chat_id`, `update_id`, and `turn_id`. |
+| Wrapper metadata | `_queued_telegram_meta(...)` finds `chat_id`, optional `message_thread_id`, `update_id`, and `turn_id`. |
 | Runner result | returned dict has either a correct `answer` or useful answer blocks in `turn_log.blocks[]`. |
 | Renderer log | `telegram response rendered` shows message count and source `turn_log` or `timeline`. |
 | Delivery log | `telegram delivery finished` shows sent count or Bot API error. |

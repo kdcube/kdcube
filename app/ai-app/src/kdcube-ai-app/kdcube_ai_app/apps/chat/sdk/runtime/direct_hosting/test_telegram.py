@@ -6,24 +6,28 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
-
 from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.channels import (
     DirectTurnResult,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.telegram import (
+    TELEGRAM_WEBHOOK_SECRET_HEADER,
     DirectTelegramConfig,
     DirectTelegramCredentials,
     DirectTelegramRequestError,
     DirectTelegramWebhook,
-    TELEGRAM_WEBHOOK_SECRET_HEADER,
     configured_direct_telegram,
     create_direct_telegram_app,
     resolve_direct_telegram_credentials,
 )
 
 
-def _update(update_id: int, *, text: str = "hello") -> dict:
-    return {
+def _update(
+    update_id: int,
+    *,
+    text: str = "hello",
+    message_thread_id: int | None = None,
+) -> dict:
+    update = {
         "update_id": update_id,
         "message": {
             "message_id": update_id + 10,
@@ -32,6 +36,10 @@ def _update(update_id: int, *, text: str = "hello") -> dict:
             "text": text,
         },
     }
+    if message_thread_id is not None:
+        update["message"]["message_thread_id"] = message_thread_id
+        update["message"]["is_topic_message"] = True
+    return update
 
 
 def _result(turn_id: str = "turn-1") -> DirectTurnResult:
@@ -219,6 +227,27 @@ async def test_webhook_maps_identity_hydrates_files_and_delivers_durable_turn() 
     assert request.attachments[0].content == b"png-bytes"
     assert deliver.await_args.kwargs["chat_id"] == 700
     assert deliver.await_args.kwargs["turn_result"]["turn_log"]["turn_id"] == ("turn-1")
+
+
+@pytest.mark.asyncio
+async def test_webhook_keeps_private_topic_identity_through_run_and_delivery() -> None:
+    runner = AsyncMock(return_value=_result())
+    deliver = AsyncMock(return_value={"telegram_delivery": {"ok": True}})
+    webhook = DirectTelegramWebhook(
+        credentials=DirectTelegramCredentials("bot-token", "expected"),
+        run_turn=runner,
+        deliver=deliver,
+    )
+
+    await webhook.process(
+        provided_secret="expected",
+        update=_update(5, message_thread_id=73),
+    )
+
+    request = runner.await_args.args[0]
+    assert request.session_id == "telegram_chat_700_topic_73"
+    assert request.conversation_id == "telegram_chat_700_topic_73"
+    assert deliver.await_args.kwargs["message_thread_id"] == "73"
 
 
 @pytest.mark.asyncio

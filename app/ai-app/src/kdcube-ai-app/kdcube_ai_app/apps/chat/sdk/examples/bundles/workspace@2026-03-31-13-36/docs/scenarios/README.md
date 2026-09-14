@@ -1,8 +1,15 @@
 ---
+id: repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/workspace@2026-03-31-13-36/docs/scenarios/README.md
 title: Workspace Runtime Scenarios
+summary: "Maintainer map of the cooperating runtime surfaces demonstrated by the Workspace reference app, including chat, agents, Telegram, memory, and delivery."
+tags: ["bundle", "workspace", "runtime", "scenarios", "telegram", "agents"]
+keywords: ["workspace runtime scenarios", "telegram topic conversation", "workspace workflow", "reference bundle flows"]
 kind: scenarios
 bundle_id: workspace@2026-03-31-13-36
-updated_at: 2026-06-23
+updated_at: 2026-09-14
+see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/workspace-reference-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/telegram-webhook-submit-and-delivery-README.md
 ---
 
 # Workspace Runtime Scenarios
@@ -76,9 +83,9 @@ telegram update idempotency claim
   |     create or refresh anonymous registry row
   |
   +-- registered/admin user:
-        resolve KDCube user scope + conversation id
+        resolve KDCube user scope + main-chat or topic-bound conversation id
         run normal WorkspaceWorkflow turn
-        deliver text/files back to Telegram
+        deliver text/files back to the originating Telegram chat topic
 ```
 
 The webhook route is public but bundle-authenticated by Telegram's webhook

@@ -438,6 +438,8 @@ async def test_telegram_unlinked_user_gets_direct_connect_response_without_agent
         update_id="upd-unlinked",
         message={
             "message_id": 80,
+            "message_thread_id": 73,
+            "is_topic_message": True,
             "chat": {"id": 1001, "type": "private"},
             "from": {"id": 2002, "username": "elena"},
             "text": "hello",
@@ -448,6 +450,7 @@ async def test_telegram_unlinked_user_gets_direct_connect_response_without_agent
     assert result["stage"] == "connection-required"
     assert result["chat_ingress"] is None
     assert "Connect your Telegram account" in delivered["turn_result"]["answer"]
+    assert delivered["message_thread_id"] == "73"
 
 
 @pytest.mark.asyncio
@@ -554,6 +557,7 @@ async def test_queued_telegram_delivery_uses_processor_payload_telegram(monkeypa
                 payload={
                     "telegram": {
                         "chat_id": "1001",
+                        "message_thread_id": "73",
                         "update_id": "upd-queued",
                         "turn_id": "turn_queued",
                     }
@@ -603,11 +607,14 @@ async def test_queued_telegram_delivery_uses_processor_payload_telegram(monkeypa
 
     assert result["telegram"]["queued_delivery"] is True
     assert result["telegram"]["chat_id"] == "1001"
+    assert result["telegram"]["message_thread_id"] == "73"
     assert delivered["chat_id"] == "1001"
+    assert delivered["message_thread_id"] == "73"
     assert delivered["update_id"] == "upd-queued"
     assert delivered["turn_result"]["answer"] == "Queued answer"
     assert delivered["turn_result"]["turn_log"]["turn_id"] == "turn_queued"
     assert streamer_kwargs[0]["show_progress"] is False
+    assert streamer_kwargs[0]["message_thread_id"] == "73"
 
 
 def test_telegram_user_admin_uses_bound_comm_bundle_id(tmp_path):
@@ -2211,6 +2218,7 @@ async def test_telegram_delivery_uploads_local_document(monkeypatch, tmp_path):
     result = await telegram.send_telegram_messages(
         bot_token="token",
         chat_id=1001,
+        message_thread_id=73,
         messages=[
             telegram.TelegramMessage(
                 kind="document",
@@ -2231,7 +2239,11 @@ async def test_telegram_delivery_uploads_local_document(monkeypatch, tmp_path):
         {
             "bot_token": "token",
             "method": "sendDocument",
-            "data": {"chat_id": "1001", "caption": "Generated report"},
+            "data": {
+                "chat_id": "1001",
+                "message_thread_id": "73",
+                "caption": "Generated report",
+            },
             "file_field": "document",
             "filename": "tech_news.xlsx",
             "file_data": b"excel-bytes",

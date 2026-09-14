@@ -15,12 +15,14 @@ from kdcube_ai_app.apps.chat.sdk.integrations.telegram import (
     raw_attachments_from_telegram,
     summarize_telegram_update,
 )
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram.topics import (
+    telegram_topic_conversation_id,
+)
 from kdcube_ai_app.apps.chat.sdk.runtime.direct_hosting.channels import (
     DirectInputAttachment,
     DirectTurnRequest,
     DirectTurnRunner,
 )
-
 
 TELEGRAM_WEBHOOK_SECRET_HEADER = "X-Telegram-Bot-Api-Secret-Token"
 DIRECT_TELEGRAM_UPDATE_WINDOW = 2048
@@ -142,12 +144,21 @@ def _direct_request(
         raise DirectTelegramRequestError(400, "telegram_chat_id_missing")
     if not telegram_user_id:
         raise DirectTelegramRequestError(400, "telegram_user_id_missing")
+    message_thread_id = summary.get("message_thread_id")
+    conversation_id = (
+        telegram_topic_conversation_id(
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+        )
+        if message_thread_id
+        else f"telegram_chat_{chat_id}"
+    )
     return DirectTurnRequest(
         prompt=_telegram_prompt(summary),
         user_id=f"telegram_{telegram_user_id}",
         user_type="external",
-        session_id=f"telegram_chat_{chat_id}",
-        conversation_id=f"telegram_chat_{chat_id}",
+        session_id=conversation_id,
+        conversation_id=conversation_id,
         attachments=attachments,
         source="telegram-local",
         source_id=str(summary.get("update_id") or ""),
@@ -261,6 +272,7 @@ class DirectTelegramWebhook:
                     bundle_id="direct-agent-local",
                     bot_token=self.credentials.bot_token,
                     chat_id=summary.get("chat_id"),
+                    message_thread_id=summary.get("message_thread_id"),
                     update_id=update_id,
                     turn_result=result.transport_payload(),
                 )
@@ -338,12 +350,12 @@ async def serve_direct_telegram(
 
 
 __all__ = [
+    "DIRECT_TELEGRAM_UPDATE_WINDOW",
+    "TELEGRAM_WEBHOOK_SECRET_HEADER",
     "DirectTelegramConfig",
     "DirectTelegramCredentials",
     "DirectTelegramRequestError",
     "DirectTelegramWebhook",
-    "DIRECT_TELEGRAM_UPDATE_WINDOW",
-    "TELEGRAM_WEBHOOK_SECRET_HEADER",
     "configured_direct_telegram",
     "create_direct_telegram_app",
     "resolve_direct_telegram_credentials",

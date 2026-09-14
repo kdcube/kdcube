@@ -8,13 +8,16 @@ import logging
 import mimetypes
 import pathlib
 import re
-import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram.topics import (
+    normalize_message_thread_id,
+)
 
 MESSAGE_UPDATE_KEYS = (
     "message",
@@ -64,6 +67,7 @@ def summarize_telegram_update(update: Mapping[str, Any]) -> dict[str, Any]:
 
     chat = message.get("chat") if isinstance(message, Mapping) else {}
     sender = message.get("from") if isinstance(message, Mapping) else {}
+    topic = _message_topic(message)
 
     return {
         "update_id": update.get("update_id"),
@@ -73,6 +77,7 @@ def summarize_telegram_update(update: Mapping[str, Any]) -> dict[str, Any]:
         "chat_type": chat.get("type") if isinstance(chat, Mapping) else None,
         "user_id": sender.get("id") if isinstance(sender, Mapping) else None,
         "username": sender.get("username") if isinstance(sender, Mapping) else None,
+        **topic,
         "text": _message_text(message),
         "attachments": _message_attachments(message),
     }
@@ -101,6 +106,39 @@ def _message_text(message: Mapping[str, Any]) -> str | None:
         return None
     value = message.get("text") or message.get("caption") or message.get("data")
     return str(value) if value is not None else None
+
+
+def _message_topic(message: Mapping[str, Any]) -> dict[str, Any]:
+    if not isinstance(message, Mapping):
+        return {
+            "message_thread_id": None,
+            "is_topic_message": False,
+            "topic_event": "",
+            "topic_name": "",
+        }
+
+    thread_id = normalize_message_thread_id(message.get("message_thread_id"))
+    event_name = ""
+    topic_name = ""
+    for key in (
+        "forum_topic_created",
+        "forum_topic_edited",
+        "forum_topic_closed",
+        "forum_topic_reopened",
+    ):
+        value = message.get(key)
+        if value is None:
+            continue
+        event_name = key
+        if isinstance(value, Mapping):
+            topic_name = str(value.get("name") or "").strip()
+        break
+    return {
+        "message_thread_id": thread_id or None,
+        "is_topic_message": bool(message.get("is_topic_message") or thread_id),
+        "topic_event": event_name,
+        "topic_name": topic_name,
+    }
 
 
 def _message_attachments(message: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -302,16 +340,28 @@ async def send_telegram_messages(
     bot_token: str,
     chat_id: str | int,
     messages: list[TelegramMessage],
+    message_thread_id: str | int | None = None,
 ) -> dict[str, Any]:
     if not str(bot_token or "").strip():
         return {"ok": False, "error": "telegram bot token is not configured", "sent": 0}
     if not str(chat_id or "").strip():
         return {"ok": False, "error": "telegram chat id is unavailable", "sent": 0}
 
+    thread_id = normalize_message_thread_id(message_thread_id)
+    thread_was_supplied = message_thread_id is not None and bool(
+        str(message_thread_id).strip()
+    )
+    if thread_was_supplied and not thread_id:
+        return {
+            "ok": False,
+            "error": "telegram message thread id is invalid",
+            "sent": 0,
+        }
     sent: list[dict[str, Any]] = []
     log.info(
-        "[telegram.send] start chat_id=%s messages=%s files=%s",
+        "[telegram.send] start chat_id=%s message_thread_id=%s messages=%s files=%s",
         chat_id,
+        thread_id,
         len(messages),
         sum(1 for message in messages if message.files),
     )
@@ -323,6 +373,8 @@ async def send_telegram_messages(
             "text": message.text,
             "disable_web_page_preview": "true",
         }
+        if thread_id:
+            data["message_thread_id"] = thread_id
         if parse_mode:
             data["parse_mode"] = parse_mode
         log.info(
@@ -347,6 +399,8 @@ async def send_telegram_messages(
                     "caption": message.text[:1024],
                     "photo" if message.kind == "photo" else "document": file_url,
                 }
+                if thread_id:
+                    data["message_thread_id"] = thread_id
                 if parse_mode:
                     data["parse_mode"] = parse_mode
             else:
@@ -363,6 +417,8 @@ async def send_telegram_messages(
                     fields = {
                         "chat_id": str(chat_id),
                     }
+                    if thread_id:
+                        fields["message_thread_id"] = thread_id
                     if message.text:
                         fields["caption"] = message.text[:1024]
                     if parse_mode:
@@ -928,7 +984,9 @@ async def _read_storage_blob_candidate(candidate: str) -> bytes | None:
     if value.startswith(("http://", "https://", "rn:")):
         return None
     try:
-        from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import ConversationStore
+        from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import (
+            ConversationStore,
+        )
 
         store = ConversationStore()
         return await store.get_blob_bytes(value)

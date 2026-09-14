@@ -107,6 +107,7 @@ def telegram_ingress_config(
     chat_id: str,
     update_id: str,
     message_id: str | int | None = None,
+    message_thread_id: str | int | None = None,
     entrypoint: str = "/telegram/webhook",
     component: str = "chat.telegram",
     instance_id: str = "telegram-webhook",
@@ -122,6 +123,7 @@ def telegram_ingress_config(
             "chat_id": str(chat_id or "").strip(),
             "update_id": str(update_id or "").strip(),
             "message_id": message_id,
+            "message_thread_id": message_thread_id,
             "entrypoint": entrypoint,
         },
     )

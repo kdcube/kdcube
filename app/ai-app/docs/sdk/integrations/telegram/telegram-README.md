@@ -1,9 +1,10 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/telegram-README.md
 title: "Telegram SDK Integration"
-summary: "Reusable Telegram transport helpers for KDCube bundles: Bot API rendering, attachment hydration, activity streaming, Mini App auth, chat submitter helpers, and signed download links."
-tags: ["sdk", "integrations", "telegram", "webhooks", "mini-apps", "bundles"]
-keywords: ["telegram bot", "telegram webhook", "telegram mini app", "telegram web app", "telegram activity streamer", "chat submitter", "signed download"]
+summary: "Reusable Telegram transport helpers for KDCube bundles: Bot API rendering, private-chat topic routing, attachment hydration, activity streaming, Mini App auth, chat submitter helpers, and signed download links."
+tags: ["sdk", "integrations", "telegram", "webhooks", "mini-apps", "topics", "bundles"]
+keywords: ["telegram bot", "telegram webhook", "telegram topics in private chats", "message_thread_id", "telegram mini app", "telegram web app", "telegram activity streamer", "chat submitter", "signed download"]
+updated_at: 2026-09-14
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/telegram-webhook-submit-and-delivery-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/telegram-react-events-and-artifact-history-README.md
@@ -68,6 +69,68 @@ bundle demonstrates that bot transport and also includes a compact Mini App
 reference (`ui/widgets/telegram_miniapp`) for memory canvas, chat channel
 selection, and Telegram admin. Add Mini App APIs only when the product also
 needs Telegram-hosted controls.
+
+## Native Private-Chat Topics
+
+Telegram can divide one private bot chat into native topics. Once the operator
+enables **Threaded Mode** for the bot in the BotFather Mini App, Telegram adds
+a `message_thread_id` to updates sent inside a topic. Within one configured bot,
+KDCube uses `(chat_id, message_thread_id)` as a stable
+transport-to-conversation binding. The integration id scopes that binding when
+an app configures more than one Telegram bot:
+
+```text
+Telegram integration telegram.kdcube_ref, private chat 1001, topic 73
+  -> conversation_id = telegram_integration_telegram_kdcube_ref_chat_1001_topic_73
+
+Telegram integration telegram.kdcube_ref, private chat 1001, topic 74
+  -> conversation_id = telegram_integration_telegram_kdcube_ref_chat_1001_topic_74
+```
+
+Messages without a `message_thread_id` retain the existing active conversation
+selected for the main bot chat. A topic message selects its topic-bound
+conversation without changing that main-chat selection. The thread id travels
+with the queued turn and is reused for progress updates, files, final replies,
+and direct-hosted agent delivery, so every response returns to its originating
+topic.
+
+Topic creation and rename service messages populate the reusable Telegram
+registry. If the creation event was not observed, the first message in the
+topic creates the same deterministic binding with a fallback title. The SDK
+also exports server-side Bot API helpers:
+
+```python
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram import (
+    create_telegram_topic,
+    delete_telegram_topic,
+    edit_telegram_topic,
+)
+
+created = await create_telegram_topic(
+    bot_token=bot_token,
+    chat_id=chat_id,
+    name="Boat Aurora",
+)
+```
+
+The Bot API calls these operations `createForumTopic`, `editForumTopic`, and
+`deleteForumTopic`, including for private bot chats. Deleting a Telegram topic
+is a transport action; the app owns any corresponding conversation-retention
+or domain-data policy.
+
+`message_thread_id` is routing metadata. Authorization remains app-owned and
+must be evaluated from the authenticated user and current domain policy. For
+example, one user may own several boats and use one Telegram topic per boat;
+the boat app maps each topic-bound conversation to its selected boat and checks
+the user's access whenever work is requested. The app's authenticated resource
+policy remains the authority for boat ownership.
+
+Native topics and the Mini App conversation selector can coexist. Topics give
+the user a Telegram-native workspace; the Mini App continues to provide the
+bundle's broader conversation and administration surfaces. BotFather setup and
+verification cover both topic mode and permission for users to create topics;
+they are in
+[Telegram External Prerequisites](telegram-external-prereq-README.md#private-chat-topics).
 
 ### 2. Configure The Reusable SDK Subsystems In `entrypoint.py`
 
@@ -321,6 +384,8 @@ Before calling the bundle done, prove:
 kdcube_ai_app.apps.chat.sdk.integrations.telegram
   bot.py              Telegram Bot API calls, update summaries, attachment hydration,
                       timeline rendering, Markdown/HTML normalization, file sends
+  topics.py           private-topic id normalization, stable conversation identity,
+                      and create/edit/delete Bot API operations
   stream.py           TelegramActivityStreamer for live app-turn progress updates
                       and progress-card finalization
   router.py           framework-neutral turn-result rendering and delivery
@@ -377,6 +442,7 @@ The registry stores:
 telegram_user_id, telegram_chat_id, telegram_username
 kdcube_user_id, role
 active conversation_id and conversation list
+topic-bound conversation rows with integration id, telegram_chat_id, and message_thread_id
 webhook update claim/completion/failure state
 ```
 
@@ -475,7 +541,7 @@ The summary is log-safe and normalized around:
 
 ```text
 update_id, update_type, message_id, chat_id, chat_type, user_id, username,
-text, attachments[]
+message_thread_id, is_topic_message, topic_event, topic_name, text, attachments[]
 ```
 
 Hydrated file attachments are converted to the common bundle attachment shape:
@@ -543,6 +609,7 @@ ingress = telegram_ingress_config(
     chat_id=chat_id,
     update_id=update_id,
     message_id=message_id,
+    message_thread_id=message_thread_id,
 )
 raw_attachments = raw_attachments_from_telegram(attachments)
 ```
@@ -609,6 +676,7 @@ delivery = await deliver_turn_to_telegram(
     bundle_id="my.bundle@1-0",
     bot_token=bot_token,
     chat_id=chat_id,
+    message_thread_id=message_thread_id,
     update_id=update_id,
     turn_result=turn_result,
     delivered_file_keys=already_streamed_file_keys,
@@ -626,7 +694,12 @@ Use the lower-level calls only when a bundle needs custom delivery:
 
 ```python
 messages = render_telegram_messages_from_timeline(...)
-result = await send_telegram_messages(bot_token=bot_token, chat_id=chat_id, messages=messages)
+result = await send_telegram_messages(
+    bot_token=bot_token,
+    chat_id=chat_id,
+    message_thread_id=message_thread_id,
+    messages=messages,
+)
 ```
 
 The sender handles:

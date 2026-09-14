@@ -3,9 +3,13 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict
 
-from .bot import TelegramMessage, render_telegram_messages_from_timeline
-from .stream import deliver_messages_preserving_progress_card
-
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bot import (
+    TelegramMessage,
+    render_telegram_messages_from_timeline,
+)
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram.stream import (
+    deliver_messages_preserving_progress_card,
+)
 
 log = logging.getLogger("kdcube.integrations.telegram.router")
 
@@ -41,6 +45,7 @@ async def deliver_turn_to_telegram(
     bundle_id: str,
     bot_token: str,
     chat_id: str | int,
+    message_thread_id: str | int | None = None,
     update_id: str = "",
     turn_result: Dict[str, Any],
     delivered_file_keys: set[str] | None = None,
@@ -53,9 +58,10 @@ async def deliver_turn_to_telegram(
         delivered_file_keys=delivered_file_keys,
     )
     log.info(
-        "[%s] telegram response rendered | update_id=%s source=%s messages=%s files=%s details=%s",
+        "[%s] telegram response rendered | update_id=%s message_thread_id=%s source=%s messages=%s files=%s details=%s",
         bundle_id,
         update_id or "",
+        message_thread_id,
         (
             "turn_log"
             if isinstance(turn_result, dict) and isinstance(turn_result.get("turn_log"), dict) and turn_result.get("turn_log")
@@ -72,6 +78,7 @@ async def deliver_turn_to_telegram(
         delivery_result = await deliver_messages_preserving_progress_card(
             bot_token=bot_token,
             chat_id=chat_id,
+            message_thread_id=message_thread_id,
             telegram_messages=telegram_messages,
             progress_message_id=progress_message_id,
             progress_summary=progress_summary,
@@ -128,6 +135,7 @@ async def deliver_react_turn_to_telegram(
     bundle_id: str,
     bot_token: str,
     chat_id: str | int,
+    message_thread_id: str | int | None = None,
     update_id: str = "",
     react_turn: Dict[str, Any],
     delivered_file_keys: set[str] | None = None,
@@ -140,6 +148,7 @@ async def deliver_react_turn_to_telegram(
         bundle_id=bundle_id,
         bot_token=bot_token,
         chat_id=chat_id,
+        message_thread_id=message_thread_id,
         update_id=update_id,
         turn_result=react_turn,
         delivered_file_keys=delivered_file_keys,

@@ -1,10 +1,10 @@
 ---
 id: ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/workspace@2026-03-31-13-36/docs/integrations/telegram-setup.md
 title: "KDCube Companion Telegram Setup"
-summary: "Compact operator commands for configuring the KDCube Companion Telegram bot webhook, Telegram Mini App menu button, bot commands, and Connection Hub link flow."
-tags: ["bundle", "workspace", "telegram", "webhook", "mini-app", "botfather", "operator-setup"]
-keywords: ["kdcube companion telegram setup", "telegram webhook", "setWebhook", "secret_token", "getWebhookInfo", "setChatMenuButton", "setMyCommands", "telegram_miniapp", "connection hub", "telegram link"]
-updated_at: 2026-05-16
+summary: "Compact operator commands for configuring the KDCube Companion Telegram webhook, private-chat topics, Mini App menu button, bot commands, and Connection Hub link flow."
+tags: ["bundle", "workspace", "telegram", "topics", "webhook", "mini-app", "botfather", "operator-setup"]
+keywords: ["kdcube companion telegram setup", "telegram private chat topics", "has_topics_enabled", "allows_users_to_create_topics", "message_thread_id", "telegram webhook", "setWebhook", "secret_token", "getWebhookInfo", "setChatMenuButton", "setMyCommands", "telegram_miniapp", "connection hub", "telegram link"]
+updated_at: 2026-09-14
 see_also:
   - ks:docs/sdk/bundle/workspace-reference-bundle-README.md
   - ks:docs/sdk/integrations/telegram/telegram-README.md
@@ -65,6 +65,24 @@ curl "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo"
 
 If `result.url` is empty, `/start` will not reach KDCube.
 
+To use native topics, open the `@BotFather` profile and choose **Open App**.
+Inside the BotFather Mini App, select the bot, open **Bot Settings > Thread
+Settings**, and turn on **Threaded Mode**. Leave **Disallow users to create new
+threads** off for the user-created-workspace flow. Confirm both settings:
+
+```bash
+curl -sS "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe" \
+  | jq '{ok, username: .result.username, has_topics_enabled: .result.has_topics_enabled, allows_users_to_create_topics: .result.allows_users_to_create_topics}'
+```
+
+Both flags must be `true` when users create the topics. The existing bundle
+descriptor remains unchanged.
+Workspace binds each `(integration_id, chat_id, message_thread_id)` to a
+separate conversation and returns progress, files, errors, and final replies
+to that topic. See the
+[canonical SDK topic contract](../../../../../../../../../../../docs/sdk/integrations/telegram/telegram-README.md#native-private-chat-topics)
+for resource-authorization and retention boundaries.
+
 Create the Mini App in `@BotFather` before registering the menu button:
 
 ```text
@@ -113,6 +131,8 @@ Test:
    no additional turn is created.
 7. Send `/stop` while the conversation is idle; confirm it is acknowledged and
    no turn starts.
+8. Create two topics, send one message in each, and confirm replies and history
+   remain in their originating topic.
 ```
 
 Visible Mini App surfaces:

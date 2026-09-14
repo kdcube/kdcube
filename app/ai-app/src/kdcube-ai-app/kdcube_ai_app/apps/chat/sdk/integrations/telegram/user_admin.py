@@ -1,35 +1,49 @@
 from __future__ import annotations
 
-import logging
-import uuid
 import asyncio
 import hmac
 import inspect
+import logging
+import uuid
 from dataclasses import asdict
 from datetime import datetime
 from typing import Any, Callable, Dict
 
+from connection_hub.authority_projection import (
+    authority_has_platform_privilege,
+)
 from fastapi import HTTPException
-
 from kdcube_ai_app.apps.chat.ids import new_turn_id
 from kdcube_ai_app.apps.chat.ingress.ingress_core import IngressConfig, RawAttachment
+from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.sdk.event_identity import (
     DEFAULT_REACT_AGENT_ID,
     build_event_logical_path,
     normalize_agent_id,
 )
 from kdcube_ai_app.apps.chat.sdk.identity_authority import resolve_platform_authority
-from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.connection_edges import ConnectionEdgesClient
-from connection_hub.authority_projection import (
-    authority_has_platform_privilege,
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.connection_edges import (
+    ConnectionEdgesClient,
 )
-from kdcube_ai_app.auth.sessions import RequestContext, UserSession, UserType
-from kdcube_ai_app.apps.chat.sdk.config import get_secret, get_settings
 from kdcube_ai_app.apps.chat.sdk.integrations.integration_config import (
     configured_integrations,
     integration_definition_value,
     integration_secret_value,
     select_integration,
+)
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram import (
+    TelegramActivityStreamer,
+    TelegramMessage,
+    deliver_turn_to_telegram,
+    hydrate_telegram_attachments,
+    send_telegram_messages,
+    summarize_telegram_update,
+)
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram import (
+    raw_attachments_from_telegram as sdk_raw_attachments_from_telegram,
+)
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram import (
+    telegram_command_kind_and_text as sdk_telegram_command_kind_and_text,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bundle_registry import (
     configured_bundle_id,
@@ -40,16 +54,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import (
     get_current_bundle_id,
     get_current_request_context,
 )
-from kdcube_ai_app.apps.chat.sdk.integrations.telegram import (
-    TelegramMessage,
-    TelegramActivityStreamer,
-    deliver_turn_to_telegram,
-    hydrate_telegram_attachments,
-    raw_attachments_from_telegram as sdk_raw_attachments_from_telegram,
-    send_telegram_messages,
-    summarize_telegram_update,
-    telegram_command_kind_and_text as sdk_telegram_command_kind_and_text,
-)
+from kdcube_ai_app.auth.sessions import RequestContext, UserSession, UserType
 
 BUNDLE_ID = ""
 log = logging.getLogger(__name__)
@@ -573,6 +578,10 @@ def _telegram_payload_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
         "chat_type": summary.get("chat_type"),
         "user_id": summary.get("user_id"),
         "username": summary.get("username"),
+        "message_thread_id": summary.get("message_thread_id"),
+        "is_topic_message": bool(summary.get("is_topic_message")),
+        "topic_event": summary.get("topic_event"),
+        "topic_name": summary.get("topic_name"),
         "integration_id": summary.get("integration_id"),
         "attachments": _attachment_log_items(list(summary.get("attachments") or [])),
     }
@@ -608,7 +617,7 @@ async def submit_telegram_turn(entrypoint: Any, *, summary: Dict[str, Any]) -> D
             "The user sent Telegram attachment(s) without text. "
             "Inspect the attachment(s), describe what is present, and ask a focused follow-up if the user intent is unclear."
         )
-    if not text and not attachments:
+    if not text and not attachments and not summary.get("message_thread_id"):
         return {"mode": "empty", "accepted": True}
 
     chat_id = str(summary.get("chat_id") or "unknown").strip()
@@ -621,10 +630,35 @@ async def submit_telegram_turn(entrypoint: Any, *, summary: Dict[str, Any]) -> D
     )
     kdcube_user_id = str(telegram_identity.get("kdcube_user_id") or "").strip()
     role = str(telegram_identity.get("role") or "anonymous").strip().lower() or "anonymous"
-    conversation_id = (
-        str(telegram_identity.get("conversation_id") or "").strip()
-        or f"telegram_chat_{chat_id}"
+    conversation_resolution = storage(entrypoint).resolve_conversation_for_message(
+        telegram_user_id=telegram_user_id,
+        telegram_chat_id=chat_id,
+        telegram_username=str(summary.get("username") or "").strip(),
+        message_thread_id=summary.get("message_thread_id"),
+        integration_id=str(summary.get("integration_id") or "").strip(),
+        topic_name=str(summary.get("topic_name") or "").strip(),
     )
+    if not conversation_resolution.get("ok", False):
+        raise RuntimeError(
+            str(
+                (conversation_resolution.get("error") or {}).get("message")
+                or "Telegram conversation could not be resolved."
+            )
+        )
+    conversation_id = str(conversation_resolution.get("conversation_id") or "").strip()
+    if not conversation_id:
+        conversation_id = (
+            str(telegram_identity.get("conversation_id") or "").strip()
+            or f"telegram_chat_{chat_id}"
+        )
+    if not text and not attachments:
+        return {
+            "mode": "topic_event",
+            "accepted": True,
+            "conversation_id": conversation_id,
+            "telegram_identity": telegram_identity,
+            "topic_bound": bool(conversation_resolution.get("topic_bound")),
+        }
     turn_id = new_turn_id()
     actor_user_id = f"telegram_{telegram_user_id}"
     identity_authority = await _telegram_platform_authority(
@@ -692,6 +726,7 @@ async def submit_telegram_turn(entrypoint: Any, *, summary: Dict[str, Any]) -> D
             "role": role,
             "conversation_id": conversation_id,
             "turn_id": turn_id,
+            "topic_bound": bool(conversation_resolution.get("topic_bound")),
         }
     )
     payload: Dict[str, Any] = {
@@ -734,6 +769,7 @@ async def submit_telegram_turn(entrypoint: Any, *, summary: Dict[str, Any]) -> D
             "chat_id": chat_id,
             "update_id": update_id,
             "message_id": summary.get("message_id"),
+            "message_thread_id": summary.get("message_thread_id"),
             "entrypoint": "/telegram/webhook",
         },
     )
@@ -765,6 +801,7 @@ async def submit_telegram_turn(entrypoint: Any, *, summary: Dict[str, Any]) -> D
         "conversation_id": conversation_id,
         "turn_id": turn_id,
         "telegram_identity": telegram_identity,
+        "topic_bound": bool(conversation_resolution.get("topic_bound")),
         "ingress": result_payload,
     }
 
@@ -790,6 +827,7 @@ async def run_with_queued_telegram_delivery(entrypoint: Any, *, runner: Any) -> 
     bundle_id = _bundle_id(entrypoint)
 
     chat_id = str(telegram_meta.get("chat_id") or "").strip()
+    message_thread_id = telegram_meta.get("message_thread_id")
     update_id = str(telegram_meta.get("update_id") or "").strip()
     integration_id = str(telegram_meta.get("integration_id") or "").strip()
     comm_context = getattr(entrypoint, "comm_context", None)
@@ -809,6 +847,7 @@ async def run_with_queued_telegram_delivery(entrypoint: Any, *, runner: Any) -> 
         comm=getattr(entrypoint, "comm", None),
         bot_token=await _bot_token_value(entrypoint, integration_id=integration_id),
         chat_id=chat_id,
+        message_thread_id=message_thread_id,
         turn_id=turn_id,
         enabled=stream_enabled,
         show_progress=stream_show_progress,
@@ -820,6 +859,7 @@ async def run_with_queued_telegram_delivery(entrypoint: Any, *, runner: Any) -> 
         bundle_id=bundle_id,
         bot_token=await _bot_token_value(entrypoint, integration_id=integration_id),
         chat_id=chat_id,
+        message_thread_id=message_thread_id,
         update_id=update_id,
         turn_result=result,
         delivered_file_keys=telegram_streamer.delivered_file_keys() if telegram_streamer else set(),
@@ -830,6 +870,7 @@ async def run_with_queued_telegram_delivery(entrypoint: Any, *, runner: Any) -> 
     result["telegram"] = {
         "queued_delivery": True,
         "chat_id": chat_id,
+        "message_thread_id": message_thread_id,
         "update_id": update_id,
         **delivery,
     }
@@ -847,11 +888,12 @@ async def handle_webhook(entrypoint: Any, request: Any = None, **update) -> Dict
     update_id = str(summary.get("update_id") or "").strip()
     bundle_id = _bundle_id(entrypoint)
     log.info(
-        "[%s] telegram update extracted | update_id=%s type=%s chat_id=%s user_id=%s username=%s text_chars=%s attachments=%s",
+        "[%s] telegram update extracted | update_id=%s type=%s chat_id=%s message_thread_id=%s user_id=%s username=%s text_chars=%s attachments=%s",
         bundle_id,
         summary.get("update_id"),
         summary.get("update_type"),
         summary.get("chat_id"),
+        summary.get("message_thread_id"),
         summary.get("user_id"),
         summary.get("username") or "",
         len(str(summary.get("text") or "")),
@@ -914,6 +956,7 @@ async def handle_webhook(entrypoint: Any, request: Any = None, **update) -> Dict
                 bundle_id=bundle_id,
                 bot_token=await _bot_token_value(entrypoint, integration_id=str(summary.get("integration_id") or "")),
                 chat_id=summary.get("chat_id") or "",
+                message_thread_id=summary.get("message_thread_id"),
                 update_id=update_id,
                 turn_result=response_turn,
                 send_responses=bool(
@@ -955,7 +998,9 @@ async def handle_webhook(entrypoint: Any, request: Any = None, **update) -> Dict
 
     ingress = submitted_turn.get("ingress") if isinstance(submitted_turn.get("ingress"), dict) else {}
     stage = "webhook-ack"
-    if mode == "submitted":
+    if mode == "topic_event":
+        stage = "topic-bound"
+    elif mode == "submitted":
         ingress_reason = str(ingress.get("reason") or "")
         if ingress_reason.startswith("active_turn_control_"):
             stage = "telegram-control-noop"

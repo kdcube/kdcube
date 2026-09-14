@@ -1,8 +1,15 @@
 ---
+id: repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/workspace@2026-03-31-13-36/README.md
 title: Workspace Reference Bundle
+summary: "Reference app showing KDCube chat, agents, tools, storage, Telegram, MCP, UI widgets, jobs, economics, and other bundle surfaces in one maintained package."
+tags: ["bundle", "reference-app", "workspace", "agents", "telegram", "mcp", "widgets"]
+keywords: ["workspace reference bundle", "kdcube app example", "telegram private chat topics", "bundle surfaces", "reference app"]
 kind: reference-bundle
 bundle_id: workspace@2026-03-31-13-36
-updated_at: 2026-06-23
+updated_at: 2026-09-14
+see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/workspace-reference-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/telegram-README.md
 ---
 
 # workspace bundle
@@ -81,6 +88,8 @@ documentation expected from real bundles:
   - queued Telegram turns are wrapped with
     `telegram_user_admin.run_with_queued_telegram_delivery(...)`, so the normal
     workflow result is rendered back to Telegram as text and files
+  - BotFather-enabled private-chat topics bind to separate conversations and
+    keep progress, files, errors, and final replies inside their source topic
 - The bundle is a memory consumer only. It derives from
   `BaseEntrypointWithEconomics` and exposes no `memories_widget_*` operations
   and no `sdk.memory` provider:
