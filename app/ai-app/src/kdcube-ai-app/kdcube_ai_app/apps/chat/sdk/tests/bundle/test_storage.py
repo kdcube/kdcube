@@ -124,9 +124,15 @@ class TestOnBundleLoad:
         assert callable(bundle.on_bundle_load)
 
     def test_on_bundle_load_does_not_raise_with_no_args(
-        self, bundle, bundle_runtime_loop
+        self, bundle, bundle_runtime_loop, pg_pool
     ):
-        """on_bundle_load() called with no extra kwargs does not raise."""
+        """on_bundle_load() runs with the host-owned Postgres pool."""
+        if pg_pool is None:
+            pytest.skip(
+                "Postgres is unavailable; the bundle lifecycle requires its host pool"
+            )
+
+        assert bundle.pg_pool is pg_pool
         original_redis = bundle.redis
         original_kv_cache = bundle.kv_cache
         try:
