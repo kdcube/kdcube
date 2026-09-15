@@ -2275,9 +2275,14 @@ async def _issue_tokens(
             client_id=client_id,
             client_label=client_label,
             scopes=scopes,
-            operations=operations,
-            resource_grants=grant_map,
-            resource_operations=operation_map,
+            # A refresh token is issued from the live effective authority,
+            # which may be narrowed by a project-control Card. That projection
+            # governs the new tokens but must never replace the caller Card's
+            # durable authority. Omitting these fields activates the registry's
+            # documented carry-forward path for refresh rotations.
+            operations=operations if replace_authority else None,
+            resource_grants=grant_map if replace_authority else None,
+            resource_operations=operation_map if replace_authority else None,
             resource=str(resource or ""),
             identity_scope=identity_scope,
             access_token=access_token,

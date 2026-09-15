@@ -455,8 +455,28 @@ async def test_refresh_token_rejects_malformed_live_card_without_rotation(ctx):
 
 
 @pytest.mark.asyncio
-async def test_refresh_token_applies_empty_live_grant_narrowing(ctx):
+async def test_refresh_token_applies_effective_narrowing_without_rewriting_card(ctx):
     client, store = ctx
+    recorded_cards = []
+    record_calls = []
+    service_factory = client.app.state.automation_access_factory
+
+    class RecordingAutomationAccess:
+        def __init__(self, service):
+            self._service = service
+
+        def __getattr__(self, name):
+            return getattr(self._service, name)
+
+        async def record_oauth_grant(self, **kwargs):
+            record_calls.append(dict(kwargs))
+            recorded = await self._service.record_oauth_grant(**kwargs)
+            recorded_cards.append(recorded)
+            return recorded
+
+    client.app.state.automation_access_factory = lambda: RecordingAutomationAccess(
+        service_factory()
+    )
     code = await _seed_code(store)
     first = client.post("/oauth/token", data={
         "grant_type": "authorization_code",
@@ -465,6 +485,8 @@ async def test_refresh_token_applies_empty_live_grant_narrowing(ctx):
         "client_id": "claude",
         "code_verifier": VERIFIER,
     }).json()
+    initial_card = recorded_cards[-1]
+    assert initial_card.resource_operations == {"*": ("records_export",)}
     refresh_token = first["refresh_token"]
     refresh_record = await store.validate_refresh_token(refresh_token)
     resource = str(refresh_record.get("resource") or "") or "*"
@@ -485,6 +507,13 @@ async def test_refresh_token_applies_empty_live_grant_narrowing(ctx):
     rotated = await store.validate_refresh_token(body["refresh_token"])
     assert rotated["operations"] == []
     assert rotated["scopes"] == []
+    assert record_calls[-1]["operations"] is None
+    assert record_calls[-1]["resource_grants"] is None
+    assert record_calls[-1]["resource_operations"] is None
+    refreshed_card = recorded_cards[-1]
+    assert refreshed_card.card_revision == initial_card.card_revision + 1
+    assert refreshed_card.resource_operations == initial_card.resource_operations
+    assert refreshed_card.resource_grants == initial_card.resource_grants
 
 
 def test_unknown_refresh_token_is_invalid_grant(ctx):
