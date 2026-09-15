@@ -123,6 +123,8 @@ class TurnEvidence:
                 str(event_data.get("title") or ""),
                 str(detail.get("tool") or ""),
                 str(payload_data.get("tool") or ""),
+                # Native ReAct tool events name the tool here only.
+                str(payload_data.get("tool_id") or ""),
             )
             haystack = " ".join(fields).lower()
             if any(needle in haystack for needle in needles):
@@ -396,12 +398,14 @@ class RuntimeChatClient:
         evidence_path: Path,
         raw_events: bool = False,
         connect_timeout: float = 15.0,
+        accounting_grace_seconds: float = 10.0,
     ) -> None:
         self.runtime = runtime
         self.bearer_token = bearer_token
         self.evidence_path = evidence_path
         self.raw_events = raw_events
         self.connect_timeout = connect_timeout
+        self.accounting_grace_seconds = accounting_grace_seconds
         self.stream_id = f"harness-demo-{uuid.uuid4().hex}"
         self._queue: asyncio.Queue[LaneEvent | BaseException] = asyncio.Queue()
         self._ready = asyncio.Event()
@@ -589,7 +593,26 @@ class RuntimeChatClient:
                 continue
             evidence.events.append(item)
             completed = item.type in {"chat.complete", "chat.error"}
+        if item.type == "chat.complete" and not evidence.has_accounting:
+            await self._collect_late_accounting(evidence, turn_id=turn_id)
         return evidence
+
+    async def _collect_late_accounting(self, evidence: TurnEvidence, *, turn_id: str) -> None:
+        # A run-to-completion lane emits chat.complete from its own loop, and the
+        # economics door emits accounting.usage only after it settles the turn.
+        deadline = time.monotonic() + self.accounting_grace_seconds
+        while not evidence.has_accounting:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            try:
+                item = await asyncio.wait_for(self._queue.get(), timeout=remaining)
+            except asyncio.TimeoutError:
+                return
+            if isinstance(item, BaseException):
+                return
+            if item.turn_id == turn_id:
+                evidence.events.append(item)
 
 
 def default_research_prompt() -> str:

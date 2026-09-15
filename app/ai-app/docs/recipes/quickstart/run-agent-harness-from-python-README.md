@@ -723,7 +723,16 @@ ingress.
 The local process serializes turn execution so state is mutated by one turn at
 a time. Concurrent HTTP request order is unspecified. Update claims have
 process lifetime, and the webhook request remains open for the complete agent
-run. A KDCube app with hosted chat ingress supplies ordered admission, retry
+run.
+
+Telegram waits only a limited time for that response. A research turn that
+searches, runs code, and renders a document usually outlasts it, so
+`getWebhookInfo` reports `Read timeout expired` and Telegram sends the same
+update again. The adapter recognizes the repeated update and does not start a
+second turn; the answer and files still arrive once. Treat the timeout as a
+property of this inline mode, not as a failed turn.
+
+A KDCube app with hosted chat ingress supplies ordered admission, retry
 recovery, multiworker coordination, and a live steer/follow-up lane. For a
 custom standalone host, build a durable queue around the direct callback to
 provide the ordering and recovery guarantees your product requires.

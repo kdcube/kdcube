@@ -89,6 +89,7 @@ def _request(
     connections=CONNECTIONS,
     card_boundary=_DEFAULT_CARD_BOUNDARY,
     snapshot: bool = True,
+    client_id: str = "claude",
 ):
     boundary = (
         copy.deepcopy(NAMED_SERVICES)
@@ -96,10 +97,10 @@ def _request(
         else copy.deepcopy(card_boundary)
     )
     grant_record = {
-        "client_id": "claude",
+        "client_id": client_id,
         "registry_access_id": "oauth-5aa44826664a0bdd",
         "grantor_subject": "user-1",
-        "delegate_subject": "integration:claude:user-1",
+        "delegate_subject": f"integration:{client_id}:user-1",
         "card_revision": 8,
         "catalog_version": CARD_VERSION,
         "resource_grants": {RESOURCE: ["named_services:use"]},
@@ -108,9 +109,9 @@ def _request(
     if card_boundary is not None:
         grant_record["named_services"] = boundary
     credential = CredentialEnvelope(
-        subject="integration:claude:user-1",
+        subject=f"integration:{client_id}:user-1",
         attrs={
-            "client_id": "claude",
+            "client_id": client_id,
             "grantor_subject": "user-1",
             "grants": ["named_services:use"],
             "resource": RESOURCE,
@@ -225,6 +226,53 @@ async def test_a_delegated_card_with_an_empty_boundary_reaches_no_operation(monk
     assert payload["error"]["code"] == "delegated_capability_not_granted"
     assert payload["ret"]["recovery"]["request_user_consent"] is True
 
+
+async def test_a_hosted_agent_card_missing_the_operation_carries_a_consent_block(monkeypatch):
+    # The card holds every claim the operation needs but not the operation
+    # itself. A hosted agent's chat can only raise a banner from a
+    # self-describing block, so this denial must carry one like a missing claim.
+    module = _bridge_module()
+    agent = "kdcube-agent:ported-langgraph-agents@2026-07-13:lg-react"
+    bridge = _bridge(module, _request(card_boundary={"namespaces": {}}, client_id=agent))
+
+    async def _never(*_args, **_kwargs):
+        raise AssertionError("provider must not be reached")
+
+    monkeypatch.setattr(named_service_api_client, "_call_bundle_registry_endpoint", _never)
+    payload = await bridge.call(
+        tool_name="search",
+        operation="object.search",
+        namespace="mail",
+    )
+
+    assert payload["error"]["code"] == "delegated_capability_not_granted"
+    consent = payload["consent"]
+    assert consent["kind"] == "delegated_agent_grant"
+    assert consent["reason"] == "delegated_capability_not_granted"
+    assert consent["agent_client_id"] == agent
+    assert consent["resource"]
+    assert consent["namespace"] == "mail"
+    assert consent["operation"] == "object.search"
+    assert consent["claims"] == []
+    assert consent["grant"]["payload"]["named_service_operations"] == {"mail": ["object.search"]}
+
+
+async def test_an_external_client_card_denial_keeps_no_grant_action(monkeypatch):
+    module = _bridge_module()
+    bridge = _bridge(module, _request(card_boundary={"namespaces": {}}))
+
+    async def _never(*_args, **_kwargs):
+        raise AssertionError("provider must not be reached")
+
+    monkeypatch.setattr(named_service_api_client, "_call_bundle_registry_endpoint", _never)
+    payload = await bridge.call(
+        tool_name="search",
+        operation="object.search",
+        namespace="mail",
+    )
+
+    assert payload["error"]["code"] == "delegated_capability_not_granted"
+    assert "grant" not in payload.get("consent", {})
 
 async def test_a_pre_boundary_card_fails_closed_at_dispatch():
     decision = await _decision(_request(card_boundary=None))

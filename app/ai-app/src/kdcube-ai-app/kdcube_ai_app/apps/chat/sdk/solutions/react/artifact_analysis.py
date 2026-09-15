@@ -234,12 +234,17 @@ def analyze_write_tool_output(
         if mime_check == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
             try:
                 import openpyxl
-                wb = openpyxl.load_workbook(p, read_only=True, data_only=True)
-                visible = [ws for ws in wb.worksheets if ws.sheet_state == "visible"]
-                if not visible:
-                    stats["write_error"] = "xlsx_no_visible_sheets"
-            except Exception as exc:
-                stats["write_error"] = f"xlsx_open_failed: {exc}"
+            except ImportError:
+                # The workbook is not shown to be broken; this process cannot open it.
+                stats.setdefault("write_warning", "xlsx_not_validated: openpyxl is not installed")
+            else:
+                try:
+                    wb = openpyxl.load_workbook(p, read_only=True, data_only=True)
+                    visible = [ws for ws in wb.worksheets if ws.sheet_state == "visible"]
+                    if not visible:
+                        stats["write_error"] = "xlsx_no_visible_sheets"
+                except Exception as exc:
+                    stats["write_error"] = f"xlsx_open_failed: {exc}"
     except Exception:
         stats["write_warning"] = "file_stat_failed"
     logger.info(

@@ -270,3 +270,69 @@ def test_rows_are_shaped_for_host_files(tmp_path: Path) -> None:
         (workspace.runtime_outdir / DECLARED_FILES_FILENAME).read_text()
     )
     assert relative in stored
+
+
+def test_a_failing_sibling_does_not_discard_the_artifacts_that_validated(tmp_path: Path) -> None:
+    # One artifact failed validation, so the call is `ok: false`; the brief
+    # still validated and is reported in `succeeded`.
+    workspace = _workspace(tmp_path)
+    runtime = _runtime(workspace)
+    relative = f"{TURN_ID}/files/research/brief.pdf"
+    _write_artifact(workspace, relative)
+
+    runtime._record_declared_files(
+        {
+            "ok": False,
+            "succeeded": [{"artifact_id": "brief", "filepath": relative}],
+            "items": [
+                _file_item(
+                    artifact_id="brief",
+                    relative=relative,
+                    mime="application/pdf",
+                    visibility="external",
+                )
+            ],
+            "errors": [{"artifact_id": "data", "code": "artifact_invalid"}],
+        },
+        tool_id="execute_python",
+    )
+
+    assert [row["output"]["filename"] for row in runtime.declared_files()] == ["brief.pdf"]
+
+
+def test_an_uncontracted_relisting_keeps_the_earlier_declaration(tmp_path: Path) -> None:
+    # A later call that does not contract the brief still lists it, as internal.
+    workspace = _workspace(tmp_path)
+    runtime = _runtime(workspace)
+    relative = f"{TURN_ID}/files/research/brief.html"
+    _write_artifact(workspace, relative)
+    item = dict(artifact_id="brief", relative=relative, mime="text/html")
+
+    runtime._record_declared_files(
+        {"ok": True, "succeeded": [{"artifact_id": "brief"}],
+         "items": [_file_item(visibility="external", **item)]},
+        tool_id="execute_python",
+    )
+    runtime._record_declared_files(
+        {"ok": False, "succeeded": [],
+         "items": [_file_item(visibility="internal", **item)]},
+        tool_id="execute_python",
+    )
+
+    assert runtime.declared_files()[0]["visibility"] == "external"
+
+
+def test_an_uncontracted_file_nobody_declared_is_kept_internal(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    runtime = _runtime(workspace)
+    relative = f"{TURN_ID}/files/research/chart.png"
+    _write_artifact(workspace, relative)
+
+    runtime._record_declared_files(
+        {"ok": True, "succeeded": [],
+         "items": [_file_item(artifact_id="chart", relative=relative,
+                              mime="image/png", visibility="internal")]},
+        tool_id="execute_python",
+    )
+
+    assert runtime.declared_files()[0]["visibility"] == "internal"

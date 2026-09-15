@@ -441,6 +441,9 @@ def _outer_operation_consent_payload(
         claims=missing_grants,
         hub_bundle_id=hub_bundle_id,
         outer_operation=operation,
+        # The denied card by id: an OAuth card id is derived from the concrete
+        # URL the client consented at, which the declared resource above is not.
+        access_id=str(ret.get("access_id") or "").strip(),
     )
     consent: dict[str, Any] = {
         "kind": "delegated_agent_grant",
