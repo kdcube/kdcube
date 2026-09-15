@@ -16,6 +16,7 @@ agent_client_id_from_request = _core.agent_client_id_from_request
 granted_resource_from_request = _core.granted_resource_from_request
 connection_hub_grant_url = _core.connection_hub_grant_url
 agent_grant_consent_denial = _core.agent_grant_consent_denial
+card_capability_consent_denial = _core.card_capability_consent_denial
 
 AGENT_CLIENT_PREFIX = _core.AGENT_CLIENT_PREFIX
 CONSENT_NEEDED_CODE = _core.CONSENT_NEEDED_CODE

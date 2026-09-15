@@ -11,6 +11,7 @@ from kdcube_ai_app.apps.chat.sdk.examples.tests.hosted_agent_harness.runtime_cli
     AgentTarget,
     DemoError,
     LaneEvent,
+    RuntimeChatClient,
     TurnEvidence,
     iter_sse_frames,
     load_bearer_token,
@@ -204,6 +205,65 @@ def test_prompt_text_does_not_count_as_web_activity() -> None:
     assert not evidence.has_web_activity
     with pytest.raises(DemoError, match="web-search/fetch activity"):
         validate_demonstration(evidence, evidence)
+
+
+def _collect(events, *, grace: float) -> TurnEvidence:
+    async def run() -> TurnEvidence:
+        client = RuntimeChatClient(
+            None,  # type: ignore[arg-type]
+            bearer_token="token",
+            evidence_path=Path("unused.jsonl"),
+            accounting_grace_seconds=grace,
+        )
+        for event in events:
+            await client._queue.put(event)
+        return await client._collect_turn(
+            turn_id="turn-1", conversation_id="conv-1", timeout_seconds=5
+        )
+
+    return asyncio.run(run())
+
+
+def test_turn_keeps_accounting_that_settles_after_complete() -> None:
+    # A run-to-completion lane (hosted LangGraph) emits chat.complete from its
+    # own loop; the economics door settles and emits accounting.usage after it.
+    evidence = _collect(
+        [
+            _event("chat.delta", delta={"marker": "answer", "index": 0, "text": "answer"}),
+            _event("chat.complete"),
+            _event("chat.delta", turn="turn-2"),
+            _event("accounting.usage"),
+        ],
+        grace=2,
+    )
+
+    assert evidence.event_types == ["chat.delta", "chat.complete", "accounting.usage"]
+    assert evidence.has_accounting
+
+
+def test_turn_without_accounting_ends_after_the_grace() -> None:
+    evidence = _collect([_event("chat.complete")], grace=0.2)
+
+    assert evidence.event_types == ["chat.complete"]
+    assert not evidence.has_accounting
+
+
+def test_native_react_tool_call_counts_as_web_activity() -> None:
+    # The native ReAct lane names the tool in `data.tool_id`; its step and title
+    # carry only the call id ("react.tool.call.tc_…", "ReAct Tool Call").
+    evidence = TurnEvidence(
+        turn_id="turn-1",
+        conversation_id="conv-1",
+        events=[
+            _event(
+                "react.tool.call",
+                data={"tool_id": "web_tools.web_search", "tool_call_id": "tc_32e31ef6b5c9"},
+                step="react.tool.call.tc_32e31ef6b5c9",
+            ),
+        ],
+    )
+
+    assert evidence.has_web_activity
 
 
 def test_claude_tool_metadata_counts_as_web_activity() -> None:

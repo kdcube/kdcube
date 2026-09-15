@@ -814,6 +814,33 @@ def test_hosted_agent_outer_operation_denial_carries_exact_grant_action(monkeypa
     }
 
 
+def test_external_client_outer_operation_denial_links_the_denied_card(monkeypatch):
+    # An OAuth card id is derived from the concrete URL the client consented
+    # at, while the denial names the declared resource pattern; the hub cannot
+    # re-derive the card from the link, so the link names it.
+    redis = _Redis()
+    _store_live_card(redis, _live_card(operations=()))
+    client = _client(
+        monkeypatch,
+        grant_record=_pointer_grant(),
+        redis=redis,
+    )
+
+    response = client.post(
+        "/guard",
+        json=_rpc_tool_call(),
+        headers={"Authorization": "Bearer reader"},
+    )
+
+    assert response.status_code == 200
+    body = json.loads(response.json()["result"]["content"][0]["text"])
+    assert body["ret"]["access_id"] == "oauth-access-1"
+    consent = body["consent"]
+    assert consent["agent_client_id"] == "claude"
+    assert "grant" not in consent
+    assert "access_id=oauth-access-1" in consent["connection_hub_url"]
+
+
 def test_managed_guard_uses_connection_hub_resource_policy(monkeypatch):
     config = {
         "enabled": True,

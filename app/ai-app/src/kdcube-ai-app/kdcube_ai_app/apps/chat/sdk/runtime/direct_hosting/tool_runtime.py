@@ -292,7 +292,22 @@ class DirectToolRuntime:
         emitted to the user (``external``) or kept for later agent use
         (``internal``).
         """
-        if not isinstance(result, Mapping) or not result.get("ok"):
+        if not isinstance(result, Mapping):
+            return
+        # Execution reports each contracted artifact that validated in
+        # `succeeded`; one failing artifact makes the whole call `ok: false`
+        # without invalidating its siblings. Renderers report no `succeeded`.
+        succeeded = result.get("succeeded")
+        succeeded_ids = (
+            {
+                str(entry.get("artifact_id") or "")
+                for entry in succeeded
+                if isinstance(entry, Mapping)
+            }
+            if isinstance(succeeded, list)
+            else None
+        )
+        if succeeded_ids is None and not result.get("ok"):
             return
         for item in result.get("items") or []:
             if not isinstance(item, Mapping) or item.get("error"):
@@ -303,6 +318,14 @@ class DirectToolRuntime:
             if str(output.get("type") or "").strip() != "file":
                 continue
             relative = str(output.get("path") or "").strip()
+            contracted = (
+                succeeded_ids is None
+                or str(item.get("artifact_id") or "") in succeeded_ids
+            )
+            # Execution also re-lists uncontracted files already under files/
+            # as internal; that listing must not change an earlier declaration.
+            if not contracted and relative in self._declared_files:
+                continue
             if not relative:
                 continue
             filename = str(output.get("filename") or "").strip() or Path(relative).name

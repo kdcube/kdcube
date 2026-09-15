@@ -579,6 +579,23 @@ class NamedServicesMcpBridge:
             )
             raise
         payload = _response_payload(response)
+        # The card may hold every claim yet not cover this operation; that denial
+        # carries the same consent block as a missing claim so a chat can raise it.
+        from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.consent_denial import (
+            card_capability_consent_denial,
+        )
+
+        payload = dict(
+            card_capability_consent_denial(
+                self._request,
+                payload,
+                namespace=ns,
+                tool=tool_name,
+                operation=authorization_operation,
+                tenant=self._tenant,
+                project=self._project,
+            )
+        )
         LOGGER.info(
             "[kdcube-services.named_services_mcp] complete tool=%s operation=%s namespace=%s ok=%s status=%s error=%s count=%s",
             tool_name,
