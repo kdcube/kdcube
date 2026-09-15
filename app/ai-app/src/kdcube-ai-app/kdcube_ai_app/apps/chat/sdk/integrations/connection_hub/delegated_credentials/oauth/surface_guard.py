@@ -50,7 +50,10 @@ from connection_hub.delegated_credentials.credential_view import (
 )
 from connection_hub.delegated_credentials.live_grant import (
     LiveGrantCardError,
-    resolve_live_grant_card,
+    resolve_live_grant_composition,
+)
+from connection_hub.delegated_credentials.controls.attribution import (
+    ResolvedCardComposition,
 )
 from connection_hub.delegated_credentials.catalog.authorization import (
     ActiveCatalogCapabilities,
@@ -109,6 +112,7 @@ class DelegatedRestAdmissionResult:
     grant_record: Mapping[str, Any] | None = None
     decision: SurfacePolicyDecision | None = None
     catalog: ActiveCatalogCapabilities | None = None
+    card_composition: ResolvedCardComposition | None = None
     request_resource: str = ""
     operation: str = ""
 
@@ -342,7 +346,27 @@ def _surface_policy_denial_response(
             denial.rpc_message or denial.description or "delegated request denied",
         )
     if isinstance(denial.payload, Mapping):
-        return JSONResponse(status_code=denial.status, content=dict(denial.payload))
+        content = dict(denial.payload)
+        if not str(content.get("error_description") or "").strip():
+            error = content.get("error")
+            error = error if isinstance(error, Mapping) else {}
+            description = str(denial.description or error.get("message") or "").strip()
+            if denial.reason == "operation_not_consented":
+                ret = content.get("ret")
+                ret = ret if isinstance(ret, Mapping) else {}
+                requested = ret.get("requested_capability")
+                requested = requested if isinstance(requested, Mapping) else {}
+                operation = str(requested.get("outer_operation") or "").strip()
+                if operation:
+                    description = (
+                        "operation not consented for this connection: " + operation
+                    )
+            if description:
+                # Existing REST clients read this OAuth-shaped compatibility
+                # field. Keep it beside the structured denial rather than
+                # forcing callers to migrate atomically.
+                content["error_description"] = description
+        return JSONResponse(status_code=denial.status, content=content)
     return _json_response(
         denial.status,
         denial.error,
@@ -376,11 +400,26 @@ def _outer_operation_consent_payload(
     The catalog denial remains intact. The consent block gives chat clients and
     external MCP clients one concrete route to extend this caller's live card.
     """
+    ret = payload.get("ret")
+    ret = ret if isinstance(ret, Mapping) else {}
+    authority = ret.get("authority_composition")
+    authority = authority if isinstance(authority, Mapping) else {}
+    blocking_cards = authority.get("blocking_cards")
+    if isinstance(blocking_cards, list) and blocking_cards:
+        roles = {
+            str(card.get("role") or "").strip()
+            for card in blocking_cards
+            if isinstance(card, Mapping)
+        }
+        # Caller-card consent can repair only an exclusively caller-caused
+        # denial. Control or multi-card denials retain their exact coordinates
+        # and wait for an identity-authorized editor route.
+        if roles != {"caller"}:
+            return dict(payload)
+
     client_id = _grant_record_client_id(grant_record)
     if not client_id or not resource or not operation:
         return dict(payload)
-    ret = payload.get("ret")
-    ret = ret if isinstance(ret, Mapping) else {}
     missing_grants = sorted(set(_as_list(ret.get("missing_grants"))))
     from connection_hub.delegated_credentials.consent_denial import (
         AGENT_CLIENT_PREFIX,
@@ -494,12 +533,32 @@ async def _authenticate_delegated_client_access_token(token: str) -> dict[str, A
 
 
 
+_LIVE_CARD_COMPOSITION_STATE_ATTR = "_delegated_live_card_composition"
+
+
+def _store_live_card_composition(
+    request: Any,
+    composition: ResolvedCardComposition | None,
+) -> None:
+    setattr(request.state, _LIVE_CARD_COMPOSITION_STATE_ATTR, composition)
+
+
+def _live_card_composition(request: Any) -> ResolvedCardComposition | None:
+    value = getattr(
+        getattr(request, "state", None),
+        _LIVE_CARD_COMPOSITION_STATE_ATTR,
+        None,
+    )
+    return value if isinstance(value, ResolvedCardComposition) else None
+
+
 async def _live_grant_record(request: Any, grant_record: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """The registry card is the authority: a binding carrying
     ``registry_access_id`` re-derives its grant facts from the card AS IT IS
     NOW — a hub-side extension applies to this bearer's next call, a narrowing
     narrows it, and a revoked (absent) card ends its authority. A binding
     without the pointer keeps its embedded snapshot (legacy)."""
+    _store_live_card_composition(request, None)
     if not isinstance(grant_record, dict):
         return grant_record
     access_id = str(grant_record.get("registry_access_id") or "").strip()
@@ -515,7 +574,7 @@ async def _live_grant_record(request: Any, grant_record: Optional[Dict[str, Any]
     # revision restores it. Expired or revoked durable state still denies and
     # is not re-cached.
     resolvers = delegated_serving_resolvers(request)
-    card = await resolve_live_grant_card(
+    composition = await resolve_live_grant_composition(
         store.redis,
         tenant=tenant,
         project=project,
@@ -525,9 +584,11 @@ async def _live_grant_record(request: Any, grant_record: Optional[Dict[str, Any]
         expected_delegate_subject=str(credential.get("subject") or ""),
         card_store=getattr(resolvers, "cards", None),
     )
-    if card is None:
+    if composition is None:
         LOGGER.info("[connection-hub.oauth.guard] registry card %s gone — binding treated as revoked", access_id)
         return None
+    _store_live_card_composition(request, composition)
+    card = composition.effective_card
     LOGGER.info(
         "[connection-hub.oauth.guard] registry card resolved access_id=%s client_id=%s "
         "resources=%s account_scope_providers=%s",
@@ -1138,6 +1199,7 @@ async def authorize_delegated_mcp_request(
         user_roles=user.get("roles") or (),
         user_permissions=user.get("permissions") or (),
         tool_calls=tool_calls,
+        card_composition=_live_card_composition(request),
     )
     if not decision.allowed:
         assert decision.denial is not None
@@ -1174,6 +1236,7 @@ async def authorize_delegated_mcp_request(
             resource=decision.matched_resource,
             request_resource=request_resource,
             outer_operation=tool_calls[0][1] if tool_calls else "",
+            card_composition=_live_card_composition(request),
         )
     except ValueError as exc:
         LOGGER.warning(
@@ -1252,12 +1315,14 @@ async def evaluate_delegated_rest_admission(
         token=token,
         request_resource=effective_resource,
     )
+    card_composition = _live_card_composition(request)
     if denial is not None:
         return DelegatedRestAdmissionResult(
             denial=denial,
             user=user,
             envelope=envelope,
             grant_record=grant_record,
+            card_composition=card_composition,
             request_resource=effective_resource,
             operation=operation_name,
         )
@@ -1275,6 +1340,7 @@ async def evaluate_delegated_rest_admission(
             user=user,
             envelope=envelope,
             grant_record=grant_record,
+            card_composition=card_composition,
             request_resource=effective_resource,
             operation=operation_name,
         )
@@ -1302,6 +1368,7 @@ async def evaluate_delegated_rest_admission(
             request,
             request_resource=effective_resource,
         ),
+        card_composition=card_composition,
     )
     if not decision.allowed:
         assert decision.denial is not None
@@ -1318,6 +1385,7 @@ async def evaluate_delegated_rest_admission(
             grant_record=grant_record,
             decision=decision,
             catalog=catalog,
+            card_composition=card_composition,
             request_resource=effective_resource,
             operation=operation_name,
         )
@@ -1360,6 +1428,7 @@ async def evaluate_delegated_rest_admission(
         grant_record=grant_record,
         decision=decision,
         catalog=catalog,
+        card_composition=card_composition,
         request_resource=effective_resource,
         operation=operation_name,
     )

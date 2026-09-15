@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import time
 
@@ -35,6 +36,8 @@ from connection_hub.delegated_credentials.cards.cache import (
 
 from connection_hub.delegated_credentials.cards.model import (
     CARD_STATE_REVOKED,
+    CardAuthority,
+    ControlCardBinding,
     NamedServiceSelection,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.cards.service import (
@@ -519,6 +522,16 @@ def _store_live_card(redis: _Redis, card: AutomationAccessRecord) -> None:
     )
 
 
+def _store_card_authority(redis: _Redis, authority: CardAuthority) -> None:
+    redis.values[_card_key(authority.access_id)] = encode_cache_value(
+        {
+            "kind": "card",
+            "card_revision": authority.card_revision,
+            "authority": authority.to_dict(),
+        }
+    )
+
+
 def test_managed_mcp_guard_fails_closed_when_live_card_is_malformed(monkeypatch):
     redis = _Redis()
     redis.values[_card_key("oauth-access-1")] = "{"
@@ -551,6 +564,64 @@ def test_managed_rest_guard_fails_closed_when_live_lookup_is_unavailable(monkeyp
 
     assert response.status_code == 503
     assert response.json()["error"] == "temporarily_unavailable"
+
+
+def test_control_card_tool_denial_names_control_and_has_no_caller_consent(monkeypatch):
+    redis = _Redis()
+    caller = card_authority_from_record(
+        _live_card(resource_operations={GUARD_RESOURCE: ("records_export",)})
+    )
+    control = CardAuthority(
+        access_id="control-card-1",
+        client_id="",
+        grantor_subject=caller.grantor_subject,
+        delegate_subject="",
+        source="control",
+        label="Project policy",
+        card_revision=8,
+        resource_grants={GUARD_RESOURCE: ("records:read",)},
+        resource_operations={GUARD_RESOURCE: ()},
+        named_service_operations=NamedServiceSelection.none(),
+        identity_scope=caller.identity_scope,
+        issuer_ref="work:project:demo",
+        issuer_kind="application",
+        issuer_label="Demo project",
+        composition_mode="and",
+    )
+    caller = dataclasses.replace(
+        caller,
+        control_card=ControlCardBinding(
+            control_id=control.access_id,
+            issuer_ref=control.issuer_ref,
+            issuer_kind=control.issuer_kind,
+            issuer_label=control.issuer_label,
+            control_revision=control.card_revision,
+        ),
+    )
+    _store_card_authority(redis, caller)
+    _store_card_authority(redis, control)
+    client = _client(
+        monkeypatch,
+        grant_record=_pointer_grant(),
+        redis=redis,
+    )
+
+    response = client.post(
+        "/guard",
+        json=_rpc_tool_call(),
+        headers={"Authorization": "Bearer reader"},
+    )
+
+    assert response.status_code == 200
+    body = json.loads(response.json()["result"]["content"][0]["text"])
+    assert body["error"]["code"] == "delegated_capability_not_granted"
+    assert body["ret"]["required_grants"] == ["records:read"]
+    assert body["ret"]["missing_grants"] == []
+    assert body["ret"]["available_grants"] == ["records:read"]
+    assert body["ret"]["blocking_card"]["access_id"] == "control-card-1"
+    assert body["ret"]["blocking_card"]["role"] == "control"
+    assert body["ret"]["recovery"]["edit_route_available"] is False
+    assert "consent" not in body
 
 
 def test_managed_mcp_guard_reports_grant_store_unavailable(monkeypatch, caplog):

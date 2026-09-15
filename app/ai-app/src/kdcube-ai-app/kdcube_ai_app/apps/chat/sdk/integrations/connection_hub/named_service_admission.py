@@ -25,6 +25,9 @@ from connection_hub.named_service_admission import (
     snapshot_from_grant,
     validate_relay_selector,
 )
+from connection_hub.delegated_credentials.controls.attribution import (
+    ResolvedCardComposition,
+)
 
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.admission import (
     NamedServiceAdmission,
@@ -225,6 +228,7 @@ def store_managed_named_service_admission_snapshot(
     resource: str,
     request_resource: str,
     outer_operation: str = "",
+    card_composition: ResolvedCardComposition | None = None,
 ) -> ManagedNamedServiceAdmissionSnapshot:
     snapshot = snapshot_from_grant(
         catalog=catalog,
@@ -233,6 +237,7 @@ def store_managed_named_service_admission_snapshot(
         resource=resource,
         request_resource=request_resource,
         outer_operation=outer_operation,
+        card_composition=card_composition,
     )
     setattr(request.state, MANAGED_ADMISSION_STATE_ATTR, snapshot)
     return snapshot
