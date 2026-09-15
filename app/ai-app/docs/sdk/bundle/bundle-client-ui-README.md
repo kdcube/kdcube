@@ -4,7 +4,7 @@ title: "App Client UI"
 summary: "Entry page for app-facing frontend integration: source layout for main UI vs widgets, static/integration routes, browser transport links, frame behavior, and widget or operation interoperability."
 tags: ["sdk", "app", "bundle-legacy-path", "frontend", "transport", "auth", "sse", "socketio", "rest", "ui"]
 keywords: ["frontend integration entrypoint", "app ui contract", "main view ui/main", "widget source folder", "widget and operation interoperability", "browser auth and transport", "chat stream lifecycle guidance", "multi tab coordination", "client side app behavior"]
-updated_at: 2026-09-11
+updated_at: 2026-09-14
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-widget-integration-README.md
@@ -174,6 +174,8 @@ ui:
     site:
       enabled: true
       alias: workspace
+      auth:
+        mode: platform_session
       default: true
       hosts:
         - workspace.example.com
@@ -185,10 +187,13 @@ sites with unique aliases. Root `/` selects a host match first, then one
 explicit default. OpenResty only forwards stable routes; proc resolves active
 app configuration. The CLI does not select or mount websites.
 
-The app remains responsible for its website composition and browser config.
-Platform/auth metadata comes from `/api/cp-frontend-config`; authenticated
-state comes from `/profile`; app-specific site data comes from an app API. This
-keeps the same site code valid across Cognito and server-side platform
+Set `site.auth.mode` to `platform_session` when the site starts with a signed-in
+platform user. The shared site route redirects anonymous browser documents
+through the configured login lane and returns them to the complete requested
+path and query. Use `public` when anonymous visitors should receive the shell;
+that shell can read authenticated state from `/profile`. App-specific site data
+comes from an app API, and protected surfaces retain their own authorization
+checks. This keeps site code valid across Cognito and server-side platform
 authorities.
 
 The reference implementation is

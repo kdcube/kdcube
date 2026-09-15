@@ -14,8 +14,10 @@ from kdcube_ai_app.apps.chat.proc.rest.integrations.application_site_readiness i
 from kdcube_ai_app.apps.chat.sdk.solutions.sites import (
     ApplicationSite,
     ApplicationSiteTarget,
+    SITE_AUTH_PLATFORM_SESSION,
     compile_application_site_catalog,
 )
+from kdcube_ai_app.auth.sessions import UserSession, UserType
 from kdcube_ai_app.infra.plugin.app_readiness import (
     ApplicationLifecycleState,
     ApplicationNotReadyError,
@@ -36,6 +38,7 @@ def _request(
     host: str = "runtime.example.com",
     path: str = "/",
     query_string: bytes = b"",
+    headers: tuple[tuple[bytes, bytes], ...] = (),
 ) -> Request:
     return Request(
         {
@@ -43,12 +46,22 @@ def _request(
             "method": "GET",
             "path": path,
             "query_string": query_string,
-            "headers": [(b"host", host.encode("utf-8"))],
+            "headers": [(b"host", host.encode("utf-8")), *headers],
             "scheme": "https",
             "server": (host, 443),
             "client": ("127.0.0.1", 12345),
             "http_version": "1.1",
         }
+    )
+
+
+def _user_session() -> UserSession:
+    return UserSession(
+        session_id="session-1",
+        user_type=UserType.REGISTERED,
+        user_id="user-1",
+        roles=[],
+        permissions=[],
     )
 
 
@@ -109,6 +122,144 @@ async def test_site_alias_delegates_to_standard_static_serving(monkeypatch) -> N
     assert captured["html_context"]["catalog_revision"] == catalog.revision
     assert captured["resolved_spec"].id == "website@1"
     assert captured["resolved_spec"].path == _SITE_TARGET.path
+
+
+@pytest.mark.asyncio
+async def test_platform_session_site_redirects_signed_out_browser_before_serving(
+    monkeypatch,
+) -> None:
+    catalog = compile_application_site_catalog(
+        tenant="tenant-a",
+        project="project-a",
+        sites=[
+            ApplicationSite(
+                "board@1",
+                "problem-board",
+                False,
+                (),
+                _SITE_TARGET,
+                SITE_AUTH_PLATFORM_SESSION,
+            )
+        ],
+    )
+
+    async def _catalog(_request):
+        return catalog
+
+    monkeypatch.setattr(integrations, "_application_site_catalog", _catalog)
+    monkeypatch.setattr(
+        integrations,
+        "serve_static_asset",
+        lambda **_kwargs: pytest.fail("signed-out site shell was served"),
+    )
+    response = await integrations.application_site_path(
+        site_alias="problem-board",
+        path="inbox",
+        request=_request(
+            path="/sites/problem-board/inbox",
+            query_string=b"worker=codex-ui&message=mail-9",
+            headers=(
+                (b"accept", b"text/html,application/xhtml+xml"),
+                (b"sec-fetch-dest", b"document"),
+                (b"sec-fetch-mode", b"navigate"),
+            ),
+        ),
+    )
+
+    assert response.status_code == 302
+    assert response.headers["location"].endswith(
+        "?next=%2Fsites%2Fproblem-board%2Finbox%3Fworker%3Dcodex-ui%26message%3Dmail-9"
+    )
+    assert response.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.asyncio
+async def test_platform_session_site_rejects_signed_out_non_document_request(
+    monkeypatch,
+) -> None:
+    catalog = compile_application_site_catalog(
+        tenant="tenant-a",
+        project="project-a",
+        sites=[
+            ApplicationSite(
+                "board@1",
+                "problem-board",
+                False,
+                (),
+                _SITE_TARGET,
+                SITE_AUTH_PLATFORM_SESSION,
+            )
+        ],
+    )
+
+    async def _catalog(_request):
+        return catalog
+
+    monkeypatch.setattr(integrations, "_application_site_catalog", _catalog)
+    monkeypatch.setattr(
+        integrations,
+        "serve_static_asset",
+        lambda **_kwargs: pytest.fail("signed-out site asset was served"),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await integrations.application_site_path(
+            site_alias="problem-board",
+            path="assets/app.js",
+            request=_request(
+                path="/sites/problem-board/assets/app.js",
+                headers=(
+                    (b"accept", b"*/*"),
+                    (b"sec-fetch-dest", b"script"),
+                    (b"sec-fetch-mode", b"no-cors"),
+                ),
+            ),
+        )
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "User is required."
+
+
+@pytest.mark.asyncio
+async def test_platform_session_site_serves_for_authenticated_user(monkeypatch) -> None:
+    catalog = compile_application_site_catalog(
+        tenant="tenant-a",
+        project="project-a",
+        sites=[
+            ApplicationSite(
+                "board@1",
+                "problem-board",
+                False,
+                (),
+                _SITE_TARGET,
+                SITE_AUTH_PLATFORM_SESSION,
+            )
+        ],
+    )
+    captured = {}
+
+    async def _catalog(_request):
+        return catalog
+
+    async def _serve_static_asset(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(status_code=200)
+
+    request = _request(
+        path="/sites/problem-board/",
+        headers=((b"accept", b"text/html"),),
+    )
+    request.state.user_session = _user_session()
+    monkeypatch.setattr(integrations, "_application_site_catalog", _catalog)
+    monkeypatch.setattr(integrations, "serve_static_asset", _serve_static_asset)
+
+    response = await integrations.application_site_root(
+        site_alias="problem-board",
+        request=request,
+    )
+
+    assert response.status_code == 200
+    assert captured["session"] is request.state.user_session
 
 
 @pytest.mark.asyncio

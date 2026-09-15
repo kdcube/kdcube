@@ -8,6 +8,9 @@ from typing import Any, Iterable, Mapping, Optional, Sequence
 
 
 _ALIAS_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+SITE_AUTH_PUBLIC = "public"
+SITE_AUTH_PLATFORM_SESSION = "platform_session"
+_SITE_AUTH_MODES = frozenset({SITE_AUTH_PUBLIC, SITE_AUTH_PLATFORM_SESSION})
 
 
 class SiteRegistryError(ValueError):
@@ -43,15 +46,21 @@ class ApplicationSite:
     default: bool
     hosts: tuple[str, ...]
     target: Optional[ApplicationSiteTarget] = None
+    auth_mode: str = SITE_AUTH_PUBLIC
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        value = {
             "application_id": self.application_id,
             "alias": self.alias,
             "default": self.default,
             "hosts": list(self.hosts),
             "target": self.target.to_dict() if self.target is not None else None,
         }
+        # Omitting the default preserves revisions for catalogs written before
+        # site authentication became descriptor-owned.
+        if self.auth_mode != SITE_AUTH_PUBLIC:
+            value["auth"] = {"mode": self.auth_mode}
+        return value
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "ApplicationSite":
@@ -73,6 +82,7 @@ class ApplicationSite:
                 if isinstance(raw_target, Mapping)
                 else None
             ),
+            auth_mode=_site_auth_mode(value.get("auth")),
         )
 
 
@@ -153,6 +163,17 @@ def _enabled(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _site_auth_mode(value: Any) -> str:
+    raw_mode = value.get("mode") if isinstance(value, Mapping) else value
+    mode = str(raw_mode or SITE_AUTH_PUBLIC).strip().lower()
+    if mode not in _SITE_AUTH_MODES:
+        allowed = ", ".join(sorted(_SITE_AUTH_MODES))
+        raise SiteRegistryError(
+            f"application site auth.mode must be one of: {allowed}"
+        )
+    return mode
+
+
 def _normalize_host(value: Any) -> str:
     host = str(value or "").strip().lower().rstrip(".")
     if not host:
@@ -207,6 +228,7 @@ def application_site_from_props(
             if isinstance(application_spec, Mapping)
             else None
         ),
+        auth_mode=_site_auth_mode(site.get("auth")),
     )
 
 
@@ -267,6 +289,10 @@ def compile_application_site_catalog(
     for site in catalog:
         if not site.application_id or not _ALIAS_RE.fullmatch(site.alias) or site.alias == "_root":
             raise SiteRegistryError("application site catalog contains an invalid site declaration")
+        if site.auth_mode not in _SITE_AUTH_MODES:
+            raise SiteRegistryError(
+                f"application site {site.alias!r} has unsupported auth mode: {site.auth_mode}"
+            )
         if site.alias in aliases:
             raise SiteRegistryError(f"duplicate application site alias: {site.alias}")
         aliases[site.alias] = site
@@ -348,6 +374,8 @@ __all__ = [
     "ApplicationSite",
     "ApplicationSiteCatalog",
     "ApplicationSiteTarget",
+    "SITE_AUTH_PLATFORM_SESSION",
+    "SITE_AUTH_PUBLIC",
     "SiteRegistryError",
     "application_site_from_props",
     "build_application_site_catalog",

@@ -4,7 +4,7 @@ title: "Bundles Descriptor"
 summary: "Application registry and non-secret deployment configuration in bundles.yaml: default app, Git or local sources, module paths, readiness policy, and app-scoped config."
 tags: ["service", "configuration", "bundle", "bundle-registry", "deployment", "descriptor", "api-security"]
 keywords: ["bundle registry", "default bundle selection", "git bundle source", "local path bundle source", "bundle module mapping", "bundle configuration", "bundle inventory", "service.readiness", "application readiness policy", "file-backed bundle authority", "bundle reload workflow", "app-owned delegated catalog", "delegated_catalog", "operation csrf override"]
-updated_at: 2026-09-13
+updated_at: 2026-09-14
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/descriptors-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/apps/app-with-agents-README.md
@@ -103,7 +103,7 @@ for preparation, admission, and health behavior.
 
 ### Application-hosted websites
 
-An app with a built `ui.main_view` may register a public site:
+An app with a built `ui.main_view` may register an application-hosted site:
 
 ```yaml
 bundles:
@@ -115,6 +115,8 @@ bundles:
             site:
               enabled: true
               alias: workspace
+              auth:
+                mode: platform_session
               default: true
               hosts:
                 - workspace.example.com
@@ -126,6 +128,11 @@ Every enabled site is reachable at `/sites/{alias}`. Many apps may register
 sites, but aliases must be unique. Root `/` resolves the single matching
 `hosts` declaration first and otherwise the single site with `default: true`.
 Multiple defaults or ambiguous host matches are configuration errors.
+`auth.mode` names the browser authentication owner. `public` is the default
+and serves the shell to anonymous visitors. `platform_session` redirects a
+signed-out browser document through the configured platform sign-in lane while
+preserving its complete path and query. Protected app surfaces keep their own
+authorization checks in both modes.
 
 OpenResty forwards stable root and alias routes. Proc projects authoritative
 app config into a versioned Redis site catalog and keeps an immutable copy in

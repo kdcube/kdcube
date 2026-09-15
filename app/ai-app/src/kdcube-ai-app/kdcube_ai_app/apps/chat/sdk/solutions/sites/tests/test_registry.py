@@ -4,6 +4,8 @@ import pytest
 
 from kdcube_ai_app.apps.chat.sdk.solutions.sites.registry import (
     ApplicationSiteCatalog,
+    SITE_AUTH_PLATFORM_SESSION,
+    SITE_AUTH_PUBLIC,
     SiteRegistryError,
     application_site_from_props,
     build_application_site_catalog,
@@ -28,6 +30,54 @@ def _site(application_id: str, alias: str, *, default: bool = False, hosts=None)
             }
         },
     )
+
+
+def test_site_auth_mode_is_descriptor_owned() -> None:
+    public_site = _site("public@1", "public")
+    protected_site = application_site_from_props(
+        application_id="protected@1",
+        props={
+            "ui": {
+                "main_view": {
+                    "site": {
+                        "enabled": True,
+                        "alias": "protected",
+                        "auth": {"mode": "platform_session"},
+                    }
+                }
+            }
+        },
+    )
+
+    assert public_site.auth_mode == SITE_AUTH_PUBLIC
+    assert protected_site.auth_mode == SITE_AUTH_PLATFORM_SESSION
+    assert "auth" not in public_site.to_dict()
+    assert protected_site.to_dict()["auth"] == {"mode": "platform_session"}
+    assert ApplicationSiteCatalog.from_dict(
+        compile_application_site_catalog(
+            tenant="tenant-a",
+            project="project-a",
+            sites=[public_site, protected_site],
+        ).to_dict()
+    ).resolve(alias="protected").auth_mode == SITE_AUTH_PLATFORM_SESSION
+
+
+def test_site_rejects_unknown_auth_mode() -> None:
+    with pytest.raises(SiteRegistryError, match="auth.mode"):
+        application_site_from_props(
+            application_id="site@1",
+            props={
+                "ui": {
+                    "main_view": {
+                        "site": {
+                            "enabled": True,
+                            "alias": "site",
+                            "auth": {"mode": "implicit"},
+                        }
+                    }
+                }
+            },
+        )
 
 
 def test_disabled_site_is_not_registered() -> None:

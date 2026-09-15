@@ -143,6 +143,7 @@ from kdcube_ai_app.apps.chat.proc.app_deployment.storage import (
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.sites import (
     ApplicationSiteCatalog,
+    SITE_AUTH_PLATFORM_SESSION,
     SiteRegistryError,
     application_site_catalog_runtime,
 )
@@ -167,6 +168,9 @@ from kdcube_ai_app.apps.chat.proc.rest.integrations.operation_csrf import (
     consume_request_operation_csrf_token,
     mint_request_operation_csrf_token,
     request_uses_cookie_auth,
+)
+from kdcube_ai_app.apps.chat.proc.rest.integrations.browser_navigation_auth import (
+    enforce_platform_session_user,
 )
 from kdcube_ai_app.apps.chat.proc.rest.integrations.widget_navigation_auth import (
     enforce_protected_widget_user,
@@ -3941,6 +3945,14 @@ async def _serve_application_site(
         if not site_alias:
             raise HTTPException(status_code=404, detail="Application site path not found")
         raise HTTPException(status_code=404, detail=f"Application site '{site_alias}' not found")
+
+    if site.auth_mode == SITE_AUTH_PLATFORM_SESSION:
+        sign_in = enforce_platform_session_user(
+            request,
+            _build_public_api_request_session(request),
+        )
+        if sign_in is not None:
+            return sign_in
 
     public_base = f"/sites/{site.alias}/" if site_alias else "/"
     if site.target is None or not site.target.path:

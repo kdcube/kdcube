@@ -4,7 +4,7 @@ title: "Application-Hosted Sites"
 summary: "How KDCube apps register directly addressable websites and participate in root host routing."
 status: active
 tags: ["sites", "website", "main-view", "routing", "bundles.yaml"]
-updated_at: 2026-08-13
+updated_at: 2026-09-14
 keywords: ["application site", "site catalog", "host routing", "route prefix", "clean paths"]
 see_also:
   - repo:kdcube/app/ai-app/docs/arch/application-hosted-websites-README.md
@@ -28,6 +28,8 @@ is not interpreted by the CLI.
         site:
           enabled: true
           alias: workspace
+          auth:
+            mode: platform_session
           default: true
           hosts:
             - workspace.example.com
@@ -35,8 +37,9 @@ is not interpreted by the CLI.
 
 | Field | Contract |
 | --- | --- |
-| `enabled` | Registers the already-built public main view as a site. |
+| `enabled` | Registers the already-built main view as a site. |
 | `alias` | Required unique route key. `_root` is reserved. |
+| `auth.mode` | Browser authentication owner: `public` (default) or `platform_session`. A signed-out document request for a `platform_session` site enters the configured sign-in lane before the shell loads. |
 | `default` | Optional root fallback. At most one enabled site may be default. |
 | `hosts` | Optional exact hosts or `*.example.com` patterns used before the default. |
 
@@ -64,6 +67,7 @@ request /sites/{alias}/{path}
         +--> OpenResty stable forward
         +--> proc reads its immutable in-memory SiteCatalog
         +--> alias selects app without Redis or descriptor reads
+        +--> platform_session site requires a verified browser session
         +--> standard app static lifecycle serves main view/assets
 
 request /
@@ -89,8 +93,8 @@ configuration.
 
 ## Catalog Projection And Hot Routing
 
-`bundles.yaml` remains the only authority. Proc projects only the routing fields
-into a versioned catalog:
+`bundles.yaml` remains the only authority. Proc projects the routing and
+browser-authentication fields into a versioned catalog:
 
 ```text
 bundles.yaml application config
@@ -154,6 +158,9 @@ control-plane mount.
 | `/{clean-path}` | no resolved site | Return controlled `404`, not a platform fallback. |
 | `/sites/{alias}` | known alias | Serve that site's `index.html` with base `/sites/{alias}/`. |
 | `/sites/{alias}/{path}` | known alias | Serve file/directory index/SPA fallback for that site. |
+| any `platform_session` site document | signed-out browser | Redirect to the configured sign-in lane with the complete path and query in `next`. |
+| any `platform_session` site non-document request | signed-out caller | Return `401`; site bytes are not served. |
+| any `platform_session` site request | verified platform user | Continue normal site serving; app operations still enforce their own authorization. |
 | `/sites/{alias}` | unknown alias | Return controlled `404`. |
 | any site route | invalid or unavailable catalog | Return `503` while the last valid hot catalog remains active. |
 
@@ -194,9 +201,15 @@ root selection. If a separate website already owns `/`, the adapter must route
 `/sites` and `/sites/*` to KDCube; application sites are then available by
 alias, while the separate website remains the root owner.
 
-The site shell should read platform/auth browser configuration from
-`/api/cp-frontend-config` and authenticated session truth from `/profile`.
-Provider-specific login settings do not belong in site source.
+`site.auth.mode: platform_session` lets the shared platform route initiate
+login before serving the shell. The redirect preserves the requested path and
+query, and the login lane returns the browser there after authentication. This
+is a browser-entry contract, not an authorization grant: every protected
+widget, API, and operation continues to enforce its own user and authority
+requirements. `site.auth.mode: public` serves the shell to anonymous visitors;
+such a shell may read authenticated session truth from `/profile` when it
+offers different anonymous and signed-in experiences. Provider-specific login
+settings do not belong in site source.
 
 The standard main-view static lifecycle supplies cache policy. Entry HTML and
 root-level non-hashed files revalidate with `no-cache`; hashed files under
