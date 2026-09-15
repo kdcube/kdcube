@@ -821,6 +821,173 @@ def test_multi_resource_oauth_delivery_opens_full_card_editor(client, monkeypatc
     assert payload["selection"]["label"].endswith("codex:session-1")
 
 
+def test_card_editor_records_declared_resource_and_keeps_concrete_entry(
+    client,
+    monkeypatch,
+):
+    import json
+
+    pattern = (
+        "*/api/integrations/bundles/*/*/problem-board@1-0/public/mcp/problem_board*"
+    )
+    concrete = (
+        "https://runtime.example.test/api/integrations/bundles/demo-tenant/"
+        "demo-project/problem-board@1-0/public/mcp/problem_board"
+    )
+    publish_delegated_config(client.app, {
+        "enabled": True,
+        "issuer": ISSUER,
+        "capabilities": [{
+            "grant": "records:read",
+            "label": "Read records",
+            "delegable_roles": ["kdcube:role:super-admin"],
+        }],
+        "resources": [{
+            "resource": pattern,
+            "label": "Problem Board",
+            "grants": ["records:read"],
+            "tools": {
+                "records_export": {
+                    "label": "Export records",
+                    "grants": ["records:read"],
+                },
+            },
+        }],
+    })
+    config = oauth_delegated_config(client.app)
+
+    class PatternCardAccess:
+        async def oauth_consent_config(self, *, grantor_subject):
+            assert grantor_subject == "google:admin@example.test"
+            return config
+
+        async def oauth_consent_card_seed(self, **_kwargs):
+            return {
+                "ok": True,
+                "access_id": "oauth-card-pattern",
+                "card_revision": 4,
+                "catalog_scope": {"mode": "entry", "resources": [pattern]},
+                "catalog_row_by_resource": {concrete: pattern},
+                "access": {
+                    "label": "codex-main",
+                    "resource_grants": {
+                        concrete: ["records:read"],
+                        pattern: ["records:read"],
+                    },
+                    "resource_operations": {
+                        concrete: ["records_export"],
+                        pattern: ["records_export"],
+                    },
+                    "invocation_policies": [{
+                        "authority": {
+                            "resource": concrete,
+                            "surface": "outer",
+                            "operation": "records_export",
+                        },
+                        "mode": "once",
+                    }],
+                    "catalog_row_by_resource": {concrete: pattern},
+                },
+            }
+
+        async def resolve_oauth_consent_authority(self, _user, **selection):
+            assert selection["entry_resource"] == concrete
+            assert selection["resource_grants"] == {
+                pattern: ["records:read"],
+            }
+            assert selection["resource_operations"] == {
+                pattern: ["records_export"],
+            }
+            return {
+                "ok": True,
+                "access_id": "oauth-card-pattern",
+                "catalog_version": selection["expected_catalog_version"],
+                "card_revision": selection["expected_card_revision"],
+                "resource_grants": dict(selection["resource_grants"]),
+                "resource_operations": dict(selection["resource_operations"]),
+                "operations": ["records_export"],
+                "named_service_operations": {},
+                "named_services": {},
+                "account_scope": {},
+                "identity_scope": "grantor",
+            }
+
+    client.app.state.automation_access_factory = lambda: PatternCardAccess()
+    monkeypatch.setattr(
+        oauth_routes,
+        "_connection_hub_widget_base",
+        lambda _request: "https://runtime.example.test/widgets/connections_settings",
+    )
+    opened = client.get(
+        "/oauth/authorize",
+        params=_params(resource=concrete),
+        headers={"Authorization": "Bearer admin-tok"},
+        follow_redirects=False,
+    )
+    assert opened.status_code == 302
+    draft_id = dict(up.parse_qsl(up.urlsplit(opened.headers["location"]).query))[
+        "oauth_consent"
+    ]
+    draft = client.get(
+        "/oauth/authorize/consent/draft",
+        params={"draft_id": draft_id},
+        headers={"Authorization": "Bearer admin-tok"},
+    )
+
+    assert draft.status_code == 200, draft.text
+    payload = draft.json()
+    assert payload["entry_door"]["resource"] == concrete
+    assert payload["catalog_scope"] == {
+        "mode": "entry",
+        "resources": [pattern],
+    }
+    assert payload["selection"]["resource_grants"] == {
+        pattern: ["records:read"],
+    }
+    assert payload["selection"]["resource_operations"] == {
+        pattern: ["records_export"],
+    }
+    assert payload["selection"]["invocation_policies"] == {
+        pattern: {"records_export": "once"},
+    }
+    assert payload["selection"]["catalog_row_by_resource"] == {
+        pattern: pattern,
+    }
+
+    approved = client.post(
+        "/oauth/authorize/consent/decision",
+        json={
+            "draft_id": draft_id,
+            "decision": "approve",
+            "label": "codex-main",
+            **payload["selection"],
+            "expected_card_revision": payload["card_revision"],
+            "expected_catalog_version": payload["catalog_version"],
+        },
+        headers={"Authorization": "Bearer admin-tok"},
+    )
+    assert approved.status_code == 200, approved.text
+    code = dict(
+        up.parse_qsl(up.urlsplit(approved.json()["redirect_url"]).query)
+    )["code"]
+    code_payload = json.loads(
+        client.app.state.oauth_grant_store._r.values[
+            client.app.state.oauth_grant_store._key("code", code)
+        ]
+    )
+    assert code_payload["resource"] == concrete
+    assert code_payload["resource_grants"] == {
+        pattern: ["records:read"],
+    }
+    assert code_payload["resource_operations"] == {
+        pattern: ["records_export"],
+    }
+    assert code_payload["invocation_policies"] == {
+        pattern: {"records_export": "once"},
+    }
+    assert code_payload["scopes"] == ["records:read"]
+
+
 def test_multi_resource_card_decision_carries_full_selection_once(client, monkeypatch):
     import json
 

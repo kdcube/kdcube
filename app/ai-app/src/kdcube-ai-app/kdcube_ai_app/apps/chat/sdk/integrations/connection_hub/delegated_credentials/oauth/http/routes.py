@@ -59,6 +59,8 @@ from connection_hub.delegated_credentials.resource_operations import (
     normalize_resource_operations,
     operation_union,
     project_legacy_operations,
+    resolve_declared_resource,
+    resolve_declared_resource_keys,
 )
 from connection_hub.delegated_credentials.cards.resolver import (
     CardUnavailable,
@@ -116,6 +118,71 @@ _AUTHORIZE_FORM_KEYS = (
 )
 
 _CONSENT_DRAFT_SCHEMA = "connection_hub.oauth_consent_draft.v1"
+
+
+def _declared_invocation_policies(
+    config: OAuthDelegatedClientConfig,
+    policies: Mapping[str, Any],
+) -> dict[str, dict[str, str]]:
+    """Key invocation choices by the same declared resources as the Card."""
+
+    resolved: dict[str, dict[str, str]] = {}
+    for raw_resource, raw_operations in dict(policies or {}).items():
+        if not isinstance(raw_operations, Mapping):
+            continue
+        resource, _literal = resolve_declared_resource(config, raw_resource)
+        target = resolved.setdefault(resource, {})
+        for operation, mode in raw_operations.items():
+            operation_value = str(operation or "").strip()
+            mode_value = str(mode or "").strip().lower()
+            if operation_value:
+                target[operation_value] = mode_value
+    return resolved
+
+
+def _declared_named_service_operations(
+    config: OAuthDelegatedClientConfig,
+    selection: Mapping[str, Any] | str,
+) -> Mapping[str, Any] | str:
+    """Canonicalize the resource level of an exact named-service choice."""
+
+    if isinstance(selection, str):
+        return selection
+    resolved: dict[str, dict[str, list[str]]] = {}
+    for raw_resource, raw_namespaces in dict(selection or {}).items():
+        if not isinstance(raw_namespaces, Mapping):
+            continue
+        resource, _literal = resolve_declared_resource(config, raw_resource)
+        target = resolved.setdefault(resource, {})
+        for namespace, raw_operations in raw_namespaces.items():
+            held = target.setdefault(str(namespace), [])
+            values = (
+                [raw_operations]
+                if isinstance(raw_operations, str)
+                else list(raw_operations or ())
+            )
+            for operation in values:
+                operation_value = str(operation or "").strip()
+                if operation_value and operation_value not in held:
+                    held.append(operation_value)
+    return resolved
+
+
+def _declared_catalog_rows(
+    config: OAuthDelegatedClientConfig,
+    rows: Mapping[str, Any],
+) -> dict[str, str]:
+    """Keep presentation rows aligned with canonical authority resources."""
+
+    resolved: dict[str, str] = {}
+    for raw_resource, raw_row in dict(rows or {}).items():
+        resource, _literal = resolve_declared_resource(config, raw_resource)
+        row = str(raw_row or "").strip()
+        if not row:
+            continue
+        row_key, _row_literal = resolve_declared_resource(config, row)
+        resolved[resource] = row_key
+    return resolved
 
 
 def _normalize_grant_store_unavailable(fn):
@@ -1512,11 +1579,19 @@ async def authorize_consent_draft(request: Request) -> Response:
             content=seed,
         )
     existing = seed.get("access") if isinstance(seed.get("access"), Mapping) else {}
-    resource_grants = {
+    raw_resource_grants = {
         str(resource): [str(grant) for grant in grants or ()]
         for resource, grants in dict(existing.get("resource_grants") or {}).items()
     }
-    entry_grants = resource_grants.setdefault(req.resource, [])
+    resource_grants, _rewritten_grants = resolve_declared_resource_keys(
+        cfg,
+        raw_resource_grants,
+    )
+    # RFC 8707 keeps the entry indicator concrete. Card authority uses the
+    # declared selector that covers it. An uncovered URL stays literal; the
+    # catch-all row is never substituted as authority for one requested door.
+    entry_key, _entry_is_literal = resolve_declared_resource(cfg, req.resource)
+    entry_grants = resource_grants.setdefault(entry_key, [])
     for grant in req.scopes:
         if grant not in entry_grants:
             entry_grants.append(grant)
@@ -1525,31 +1600,41 @@ async def authorize_consent_draft(request: Request) -> Response:
         for tool in cfg.tools_for_scopes(req.scopes, resource=req.resource)
     ]
     if existing:
-        resource_operations = {
+        raw_resource_operations = {
             str(resource): [str(operation) for operation in operations or ()]
             for resource, operations in dict(existing.get("resource_operations") or {}).items()
         }
-        entry_operations = resource_operations.setdefault(req.resource, [])
+        resource_operations, _rewritten_operations = resolve_declared_resource_keys(
+            cfg,
+            raw_resource_operations,
+        )
+        entry_operations = resource_operations.setdefault(entry_key, [])
         for operation in requested_operations:
             if operation not in entry_operations:
                 entry_operations.append(operation)
     else:
         resource_operations = {
-            req.resource: requested_operations
+            entry_key: requested_operations
         }
     invocation_policies = {
         resource: {operation: "always" for operation in operations}
         for resource, operations in resource_operations.items()
     }
+    existing_policy_choices: dict[str, dict[str, str]] = {}
     for policy in existing.get("invocation_policies") or ():
         authority = policy.get("authority") if isinstance(policy, Mapping) else {}
         if not isinstance(authority, Mapping) or authority.get("surface") != "outer":
             continue
-        resource = str(authority.get("resource") or "")
+        resource, _literal = resolve_declared_resource(
+            cfg,
+            authority.get("resource"),
+        )
         operation = str(authority.get("operation") or "")
         mode = str(policy.get("mode") or "")
         if operation in resource_operations.get(resource, ()) and mode in {"always", "once"}:
-            invocation_policies.setdefault(resource, {})[operation] = mode
+            existing_policy_choices.setdefault(resource, {})[operation] = mode
+    for resource, operations in existing_policy_choices.items():
+        invocation_policies.setdefault(resource, {}).update(operations)
 
     connected_accounts = await _connected_accounts_for_consent(subject)
     requirements = _accounts_needed_for_consent(
@@ -1609,15 +1694,19 @@ async def authorize_consent_draft(request: Request) -> Response:
             "resource_operations": resource_operations,
             "invocation_policies": invocation_policies,
             "named_service_operations": (
-                existing.get("effective_named_service_operations")
-                or existing.get("named_service_operations")
-                or {}
+                _declared_named_service_operations(
+                    cfg,
+                    existing.get("effective_named_service_operations")
+                    or existing.get("named_service_operations")
+                    or {},
+                )
             ),
             "account_scope": existing.get("account_scope") or {},
-            "catalog_row_by_resource": (
+            "catalog_row_by_resource": _declared_catalog_rows(
+                cfg,
                 existing.get("catalog_row_by_resource")
                 or seed.get("catalog_row_by_resource")
-                or {}
+                or {},
             ),
         },
     }
@@ -1729,9 +1818,13 @@ async def authorize_consent_decision(request: Request) -> Response:
         for resource, operations in selected_resource_operations.items()
         for operation in operations or ()
     }
+    canonical_invocation_policies = _declared_invocation_policies(
+        cfg,
+        invocation_policies,
+    )
     submitted_policies = {
         (str(resource), str(operation)): str(mode or "").strip().lower()
-        for resource, operations in dict(invocation_policies).items()
+        for resource, operations in canonical_invocation_policies.items()
         if isinstance(operations, Mapping)
         for operation, mode in operations.items()
     }
@@ -1777,13 +1870,14 @@ async def authorize_consent_decision(request: Request) -> Response:
     if consumed_context != context:
         return _consent_draft_error("context_changed")
 
+    entry_key, _entry_is_literal = resolve_declared_resource(cfg, req.resource)
     code = await store.create_auth_code(
         client_id=req.client_id,
         redirect_uri=req.redirect_uri,
         code_challenge=req.code_challenge,
         sub=subject,
         scopes=list(
-            dict(resolved.get("resource_grants") or {}).get(req.resource, ())
+            dict(resolved.get("resource_grants") or {}).get(entry_key, ())
         ),
         operations=list(resolved.get("operations") or ()),
         resource_grants=dict(resolved.get("resource_grants") or {}),
@@ -1798,7 +1892,7 @@ async def authorize_consent_decision(request: Request) -> Response:
         account_scope=dict(resolved.get("account_scope") or {}),
         client_metadata=req.client.snapshot() if req.client is not None else {},
         card_label=str(payload.get("label") or "").strip(),
-        invocation_policies=dict(invocation_policies),
+        invocation_policies=canonical_invocation_policies,
         expected_card_revision=int(resolved.get("card_revision") or 0),
     )
     return JSONResponse({
@@ -2022,11 +2116,24 @@ async def authorize_consent(request: Request) -> Response:
         req.resource: direct_operations,
         **child_resource_operations,
     }
+    if req.resource:
+        resource_grants, _rewritten_grants = resolve_declared_resource_keys(
+            cfg,
+            resource_grants,
+        )
+        resource_operations, _rewritten_operations = resolve_declared_resource_keys(
+            cfg,
+            resource_operations,
+        )
     selected_operations = list(operation_union(resource_operations))
     resource_cfg = cfg.resource_config(req.resource)
     named_services = dict(resource_cfg.named_services or {}) if resource_cfg is not None else {}
     named_service_operations = _selected_named_service_operations(
         form, scopes=selected_scopes, cfg=cfg, resource=req.resource,
+    )
+    named_service_operations = _declared_named_service_operations(
+        cfg,
+        named_service_operations,
     )
     grantor_authority = _grantor_authority(user or {}, scopes=selected_scopes, inventory=inventory)
     delegation_edges = list(grantor_authority.get("delegation_edges") or [])
