@@ -31,17 +31,27 @@ const App = () => {
 
     return useMemo(() => {
         if (settingsLoadingError) {
-            return <div>An error has occurred</div>
+            return <main className="app-startup" role="alert">
+                <div className="app-startup__content">
+                    <h1>KDCube could not start</h1>
+                    <p>The runtime configuration is unavailable.</p>
+                    <button type="button" onClick={() => dispatch(loadChatSettings())}>Try again</button>
+                </div>
+            </main>
         }
 
         if (!settingsLoaded) {
-            return null;
+            return <main className="app-startup" role="status" aria-live="polite">
+                <div className="app-startup__content">
+                    <p>Starting KDCube...</p>
+                </div>
+            </main>;
         }
         return <>
             <AppRouter/>
             <PlatformVersionBadge/>
         </>
-    }, [settingsLoaded, settingsLoadingError])
+    }, [dispatch, settingsLoaded, settingsLoadingError])
 }
 
 export default App

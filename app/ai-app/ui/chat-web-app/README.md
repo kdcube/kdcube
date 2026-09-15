@@ -4,7 +4,7 @@ title: "KDCube Web App"
 summary: "Describes the browser shell, runtime configuration contract, app presentation, authentication, and local development workflow."
 tags: ["frontend", "web-app", "control-plane", "authentication"]
 keywords: ["KDCube web app", "cp-frontend-config", "platform session", "app presentation"]
-updated_at: 2026-09-11
+updated_at: 2026-09-14
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/arch/control-plane-web-app-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/server-side-login-and-platform-session-README.md
@@ -26,17 +26,24 @@ At startup the client requests runtime configuration from:
 CHAT_WEB_APP_CONFIG_ENDPOINT=/api/cp-frontend-config
 ```
 
-If that endpoint is unavailable, it falls back to:
+If that endpoint is absent (`404`), it falls back to:
 
 ```text
 CHAT_WEB_APP_CONFIG_FILE_PATH=<control-plane-mount>/config.json
 ```
 
-Use the endpoint in descriptor-driven deployments. The static file is intended
-for local development or static hosting without the control-plane endpoint.
+Use the endpoint in descriptor-driven deployments. A transient failure from
+that authoritative endpoint is retried and then shown as a startup error; it
+does not activate a potentially stale authentication configuration. The static
+file is intended for local development or static hosting where the endpoint is
+not present.
 The default fallback is computed at runtime from the control-plane mount, so a
 single built artifact can use `/platform/config.json` or
 `/control/ui/config.json` without rebuilding.
+
+The shell keeps a visible startup state while it checks configuration and the
+platform session. A signed-out user is sent to the configured login lane and
+retains a visible **Sign in** action until that navigation completes.
 
 The endpoint supplies the effective tenant/project, app catalog, browser auth
 configuration, cookie/header names, and platform routes. The browser should not

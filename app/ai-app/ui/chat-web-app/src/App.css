@@ -1,0 +1,53 @@
+.app-startup {
+    min-height: 100vh;
+    min-height: 100dvh;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: #f7f8fa;
+    color: #172033;
+    font-family: Arial, sans-serif;
+}
+
+.app-startup__content {
+    max-width: 420px;
+    text-align: center;
+}
+
+.app-startup h1 {
+    margin: 0 0 8px;
+    font-size: 24px;
+    line-height: 1.25;
+    letter-spacing: 0;
+}
+
+.app-startup p {
+    margin: 0;
+    color: #596579;
+    font-size: 15px;
+    line-height: 1.5;
+    letter-spacing: 0;
+}
+
+.app-startup button {
+    margin-top: 18px;
+    min-height: 40px;
+    padding: 8px 16px;
+    border: 1px solid #2459a9;
+    border-radius: 6px;
+    background: #2459a9;
+    color: #ffffff;
+    font: inherit;
+    font-weight: 600;
+    letter-spacing: 0;
+    cursor: pointer;
+}
+
+.app-startup button:hover {
+    background: #184784;
+}
+
+.app-startup button:focus-visible {
+    outline: 3px solid #79a8ee;
+    outline-offset: 2px;
+}
