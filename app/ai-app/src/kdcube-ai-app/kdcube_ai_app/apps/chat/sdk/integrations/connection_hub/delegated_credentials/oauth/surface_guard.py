@@ -92,7 +92,9 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_roles imp
 )
 from kdcube_ai_app.apps.chat.sdk.application_operations import (
     APPLICATION_OPERATION_POLICY_PROPERTY,
-    application_operation_policy_enabled,
+    ApplicationOperationPolicyError,
+    application_operation_policy_declared,
+    resolve_application_operation_role_policy,
 )
 
 
@@ -675,6 +677,7 @@ def _delegated_runtime_projection(
     *,
     surface: str,
     request_resource: str = "",
+    application_operation: str = "",
 ) -> dict[str, Any]:
     """Return request-local runtime identity facts for an accepted delegated token.
 
@@ -755,9 +758,10 @@ def _delegated_runtime_projection(
         if isinstance(grant_record.get("properties"), Mapping)
         else {}
     )
-    if application_operation_policy_enabled(properties):
-        identity_authority[APPLICATION_OPERATION_POLICY_PROPERTY] = dict(
-            properties[APPLICATION_OPERATION_POLICY_PROPERTY]
+    if application_operation_policy_declared(properties):
+        raw_policy = properties.get(APPLICATION_OPERATION_POLICY_PROPERTY)
+        identity_authority[APPLICATION_OPERATION_POLICY_PROPERTY] = (
+            dict(raw_policy) if isinstance(raw_policy, Mapping) else raw_policy
         )
     delegated_card_binding = delegated_card_binding_from_request(request)
     if not delegated_card_binding and credential_view.registry_access_id:
@@ -773,6 +777,46 @@ def _delegated_runtime_projection(
         identity_authority["delegated_card_binding"] = delegated_card_binding
         identity_authority["gateway_rate_limit_subject"] = (
             f"card:{delegated_card_binding['access_id']}"
+        )
+
+    resolved_application_operation = str(application_operation or "").strip()
+    if resolved_application_operation and application_operation_policy_declared(
+        identity_authority
+    ):
+        resolved_policy = resolve_application_operation_role_policy(
+            identity_authority
+        )
+        if resolved_policy is None:
+            raise ApplicationOperationPolicyError(
+                "application_operation_policy_invalid"
+            )
+        selected_operations, role_policy = resolved_policy
+        if resolved_application_operation not in selected_operations:
+            raise ApplicationOperationPolicyError(
+                "application_operation_not_granted"
+            )
+        operation_role = role_policy.role_for(resolved_application_operation)
+        identity_authority["card_resource_grants"] = {
+            resource: list(values)
+            for resource, values in resource_grants.items()
+        }
+        identity_authority["card_resource_operations"] = {
+            resource: list(values)
+            for resource, values in resource_operations.items()
+        }
+        grants = [operation_role]
+        operations = [resolved_application_operation]
+        resource_grants = {"*": [operation_role]}
+        resource_operations = {"*": [resolved_application_operation]}
+        identity_authority.update(
+            {
+                "application_operation": resolved_application_operation,
+                "grants": list(grants),
+                "scopes": list(grants),
+                "operations": list(operations),
+                "resource_grants": resource_grants,
+                "resource_operations": resource_operations,
+            }
         )
     fallback_roles = (
         _as_list(identity_authority.get("roles"))
@@ -836,11 +880,13 @@ def delegated_rest_runtime_projection(
     request: Request,
     *,
     request_resource: str = "",
+    application_operation: str = "",
 ) -> dict[str, Any]:
     return _delegated_runtime_projection(
         request,
         surface="rest",
         request_resource=request_resource,
+        application_operation=application_operation,
     )
 
 
@@ -850,7 +896,6 @@ def has_delegated_application_operation_card(request: Request) -> bool:
     delegated = getattr(getattr(request, "state", None), "delegated_credential", None)
     if not isinstance(delegated, Mapping):
         return False
-    credential = delegated.get("credential")
     grant_record = delegated.get("grant_record")
     composition = _live_card_composition(request)
     properties = (
@@ -862,16 +907,7 @@ def has_delegated_application_operation_card(request: Request) -> bool:
             else {}
         )
     )
-    if not application_operation_policy_enabled(properties):
-        return False
-    view = DelegatedCredentialView.from_parts(
-        credential if isinstance(credential, Mapping) else {},
-        grant_record if isinstance(grant_record, Mapping) else {},
-    )
-    return bool(
-        "*" in view.resource_grants
-        and "*" in view.resource_operations
-    )
+    return application_operation_policy_declared(properties)
 
 
 async def delegated_platform_admin_runtime_projection(
@@ -1368,6 +1404,7 @@ async def evaluate_delegated_rest_admission(
     method: str = "",
     token: str = "",
     request_resource: str = "",
+    application_operation: str = "",
     log_identity_details: bool = True,
 ) -> DelegatedRestAdmissionResult:
     """Evaluate one managed REST operation against live card/catalog state.
@@ -1470,10 +1507,34 @@ async def evaluate_delegated_rest_admission(
             operation=operation_name,
         )
 
-    runtime = delegated_rest_runtime_projection(
-        request,
-        request_resource=effective_resource,
-    )
+    try:
+        runtime = delegated_rest_runtime_projection(
+            request,
+            request_resource=effective_resource,
+            application_operation=application_operation,
+        )
+    except ApplicationOperationPolicyError as exc:
+        REST_LOGGER.info(
+            "[connection-hub.oauth.rest_guard] denied reason=%s resource=%s operation=%s",
+            exc.reason,
+            effective_resource,
+            operation_name,
+        )
+        return DelegatedRestAdmissionResult(
+            denial=_json_response(
+                403,
+                "insufficient_scope",
+                f"delegated application operation policy denied this request: {exc.reason}",
+            ),
+            user=user,
+            envelope=envelope,
+            grant_record=grant_record,
+            decision=decision,
+            catalog=catalog,
+            card_composition=card_composition,
+            request_resource=effective_resource,
+            operation=operation_name,
+        )
     if log_identity_details:
         REST_LOGGER.info(
             "[connection-hub.oauth.rest_guard] accepted resource=%s method=%s operation=%s "
@@ -1584,6 +1645,7 @@ async def authorize_delegated_application_operation_request(
         operation=operation,
         method=method,
         request_resource="*",
+        application_operation=operation,
     )
     return result.denial
 

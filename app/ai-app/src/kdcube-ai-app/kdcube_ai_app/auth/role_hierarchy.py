@@ -49,6 +49,23 @@ def _roles(values: Iterable[Any] | None) -> tuple[str, ...]:
     )
 
 
+def platform_role_rank(role: Any) -> int | None:
+    """Return the platform authority tier, or ``None`` for an exact role."""
+
+    return _PLATFORM_ROLE_RANK.get(_role_text(role))
+
+
+def strongest_platform_role(roles: Iterable[Any] | None) -> str:
+    """Return one strongest platform role from a role collection."""
+
+    candidates = tuple(
+        role for role in _roles(roles) if role in _PLATFORM_ROLE_RANK
+    )
+    if not candidates:
+        return ""
+    return max(candidates, key=lambda role: (_PLATFORM_ROLE_RANK[role], role))
+
+
 def role_satisfies(actual_role: Any, required_role: Any) -> bool:
     """Return whether one held role satisfies one admission requirement.
 
@@ -125,7 +142,9 @@ __all__ = [
     "REGISTERED_ROLE",
     "SUPER_ADMIN_ROLE",
     "missing_required_roles",
+    "platform_role_rank",
     "role_satisfies",
     "roles_satisfy_all",
     "roles_satisfy_any",
+    "strongest_platform_role",
 ]

@@ -16,6 +16,7 @@ from starlette.requests import Request as StarletteRequest
 
 from kdcube_ai_app.apps.chat.sdk.application_operations import (
     APPLICATION_OPERATION_POLICY_PROPERTY,
+    APPLICATION_OPERATION_POLICY_SCHEMA_V2,
     application_operation_policy,
     application_operation_ref,
 )
@@ -45,6 +46,9 @@ from connection_hub.delegated_credentials.cards.model import (
     CardAuthority,
     ControlCardBinding,
     NamedServiceSelection,
+)
+from connection_hub.delegated_credentials.controls.snapshot import (
+    materialize_control_snapshot,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.cards.service import (
     replace_state,
@@ -593,6 +597,11 @@ def test_control_card_tool_denial_names_control_and_has_no_caller_consent(monkey
         issuer_kind="application",
         issuer_label="Demo project",
         composition_mode="and",
+    )
+    control = materialize_control_snapshot(
+        control,
+        basis_catalog_version="catalog-test-v1",
+        origin="test",
     )
     caller = dataclasses.replace(
         caller,
@@ -1280,6 +1289,160 @@ def test_application_operation_guard_requires_explicit_card_policy_marker():
         APPLICATION_OPERATION_POLICY_PROPERTY: application_operation_policy(),
     }
     assert surface_guard.has_delegated_application_operation_card(request) is True
+
+
+def test_application_operation_projection_uses_only_the_invocation_role():
+    publish = application_operation_ref(
+        application_id="records@1-0",
+        operation_id="records.publish",
+    )
+    read = application_operation_ref(
+        application_id="records@1-0",
+        operation_id="records.read",
+    )
+    credential = _authority(
+        scopes=["kdcube:role:registered"],
+        resource="*",
+    )
+    credential["attrs"]["resource_operations"] = {"*": [publish, read]}
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/guard",
+            "query_string": b"",
+            "headers": [],
+            "scheme": "http",
+            "server": ("testserver", 80),
+        }
+    )
+    request.state.delegated_credential = {
+        "credential": credential,
+        "grant_record": {
+            "credential": credential,
+            "properties": {
+                APPLICATION_OPERATION_POLICY_PROPERTY: {
+                    "schema": APPLICATION_OPERATION_POLICY_SCHEMA_V2,
+                    "mode": "selected",
+                    "default_role": "kdcube:role:registered",
+                    "operation_roles": {
+                        publish: "kdcube:role:super-admin",
+                    },
+                }
+            },
+            "grantor_authority": {
+                "grantor_roles": ["kdcube:role:super-admin"],
+                "grantor_permissions": ["kdcube:*"],
+            },
+        },
+        "user": {
+            "sub": credential["subject"],
+            "roles": ["kdcube:role:delegated-client"],
+            "permissions": ["kdcube:*"],
+        },
+    }
+
+    elevated = surface_guard.delegated_rest_runtime_projection(
+        request,
+        request_resource="*",
+        application_operation=publish,
+    )
+    ordinary = surface_guard.delegated_rest_runtime_projection(
+        request,
+        request_resource="*",
+        application_operation=read,
+    )
+
+    assert elevated["roles"] == ["kdcube:role:super-admin"]
+    assert elevated["permissions"] == ["kdcube:role:super-admin"]
+    assert elevated["operations"] == [publish]
+    assert elevated["identity_authority"]["resource_operations"] == {
+        "*": [publish]
+    }
+    assert elevated["identity_authority"]["card_resource_operations"] == {
+        "*": [publish, read]
+    }
+    assert ordinary["roles"] == ["kdcube:role:registered"]
+    assert ordinary["permissions"] == ["kdcube:role:registered"]
+    assert ordinary["operations"] == [read]
+    assert "kdcube:role:super-admin" not in ordinary["roles"]
+
+
+def test_application_operation_guard_rejects_a_mismatched_role_policy(monkeypatch):
+    selected = application_operation_ref(
+        application_id="records@1-0",
+        operation_id="records.export",
+    )
+    credential = _authority(
+        scopes=["kdcube:role:registered"],
+        resource="*",
+    )
+    credential["attrs"]["resource_operations"] = {"*": [selected]}
+
+    async def fake_authenticate(token: str):
+        assert token == "reader"
+        return {
+            "sub": "integration:automation:admin",
+            "roles": ["kdcube:role:delegated-client"],
+            "permissions": ["kdcube:*"],
+        }
+
+    monkeypatch.setattr(
+        surface_guard,
+        "_authenticate_delegated_client_access_token",
+        fake_authenticate,
+    )
+    app = FastAPI()
+    app.state.oauth_grant_store = _GrantStore(
+        {
+            "operations": [selected],
+            "properties": {
+                APPLICATION_OPERATION_POLICY_PROPERTY: {
+                    "schema": APPLICATION_OPERATION_POLICY_SCHEMA_V2,
+                    "mode": "selected",
+                    "default_role": "kdcube:role:super-admin",
+                    "operation_roles": {},
+                }
+            },
+            "credential": credential,
+        }
+    )
+    app.state.oauth_delegated_config = {"tenant": "home", "project": "demo"}
+    bind_delegated_catalog(
+        app,
+        {
+            "delegated_credentials": {
+                "oauth": {
+                    "enabled": True,
+                    "resources": [
+                        {
+                            "resource": "*",
+                            "grants": ["kdcube:role:registered"],
+                        }
+                    ],
+                }
+            }
+        },
+    )
+
+    @app.post("/selected")
+    async def selected_operation(request: Request):
+        denial = await surface_guard.authorize_delegated_application_operation_request(
+            request=request,
+            operation=selected,
+            method="POST",
+        )
+        return denial or JSONResponse({"ok": True})
+
+    response = TestClient(app).post(
+        "/selected",
+        headers={"Authorization": "Bearer reader"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error_description"].endswith(
+        "application_default_role_mismatch"
+    )
 
 
 def test_application_operation_guard_ignores_a_non_delegated_bearer(monkeypatch):

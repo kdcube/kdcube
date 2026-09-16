@@ -5375,7 +5375,11 @@ def _apply_delegated_rest_runtime_projection(
     bundle_id: str,
     operation: str,
 ) -> None:
-    projection = delegated_rest_runtime_projection(request)
+    projection = delegated_rest_runtime_projection(
+        request,
+        request_resource="*",
+        application_operation=operation,
+    )
     if not projection:
         return
 
@@ -6274,7 +6278,7 @@ async def _call_bundle_op_inner(
             session=session,
             comm_context=comm_context,
             bundle_id=spec_resolved.id,
-            operation=endpoint_spec.alias,
+            operation=application_operation,
         )
     if not _endpoint_visible(endpoint_spec.user_types, endpoint_spec.roles, session, endpoint_auth):
         raise HTTPException(status_code=403, detail=f"Bundle operation {operation} is not visible to this user")

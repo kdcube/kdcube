@@ -12,16 +12,53 @@ action.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any, Mapping
 from urllib.parse import quote, unquote
+
+from kdcube_ai_app.auth.role_hierarchy import (
+    ADMIN_ROLE,
+    PAID_ROLE,
+    PRIVILEGED_ROLE,
+    REGISTERED_ROLE,
+    SUPER_ADMIN_ROLE,
+    strongest_platform_role,
+)
 
 
 APPLICATION_OPERATION_URN_PREFIX = "urn:kdcube:application-operation:"
 APPLICATION_OPERATION_POLICY_PROPERTY = "kdcube.application_operations"
-APPLICATION_OPERATION_POLICY_SCHEMA = "kdcube.application_operations.v1"
+APPLICATION_OPERATION_POLICY_SCHEMA_V1 = "kdcube.application_operations.v1"
+APPLICATION_OPERATION_POLICY_SCHEMA_V2 = "kdcube.application_operations.v2"
+# Preserve the original exported name for callers that intentionally create a
+# v1 compatibility marker.
+APPLICATION_OPERATION_POLICY_SCHEMA = APPLICATION_OPERATION_POLICY_SCHEMA_V1
 APPLICATION_OPERATION_POLICY_MODE_SELECTED = "selected"
 _SAFE_COMPONENT = "-._~"
 _MAX_COMPONENT_LENGTH = 512
+_PLATFORM_ROLES = {
+    REGISTERED_ROLE,
+    PAID_ROLE,
+    PRIVILEGED_ROLE,
+    ADMIN_ROLE,
+    SUPER_ADMIN_ROLE,
+}
+
+
+class ApplicationOperationPolicyError(ValueError):
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+@dataclass(frozen=True)
+class ApplicationOperationRolePolicy:
+    default_role: str
+    operation_roles: Mapping[str, str] = field(default_factory=dict)
+
+    def role_for(self, operation_ref: object) -> str:
+        operation = str(operation_ref or "").strip()
+        return self.operation_roles.get(operation, self.default_role)
 
 
 def normalize_application_operation_id(value: object) -> str:
@@ -161,6 +198,11 @@ def application_operation_policy() -> dict[str, str]:
     }
 
 
+def application_operation_policy_declared(properties: Mapping[str, Any] | None) -> bool:
+    values = properties if isinstance(properties, Mapping) else {}
+    return APPLICATION_OPERATION_POLICY_PROPERTY in values
+
+
 def application_operation_policy_enabled(properties: Mapping[str, Any] | None) -> bool:
     """Whether a Card explicitly opted into selected application operations.
 
@@ -175,10 +217,122 @@ def application_operation_policy_enabled(properties: Mapping[str, Any] | None) -
     return bool(
         isinstance(policy, Mapping)
         and str(policy.get("schema") or "").strip()
-        == APPLICATION_OPERATION_POLICY_SCHEMA
+        in {
+            APPLICATION_OPERATION_POLICY_SCHEMA_V1,
+            APPLICATION_OPERATION_POLICY_SCHEMA_V2,
+        }
         and str(policy.get("mode") or "").strip()
         == APPLICATION_OPERATION_POLICY_MODE_SELECTED
     )
+
+
+def _string_values(value: Any) -> tuple[str, ...]:
+    if isinstance(value, str):
+        source = value.replace(",", " ").split()
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        source = value
+    else:
+        source = ()
+    return tuple(
+        dict.fromkeys(
+            item
+            for raw in source
+            if (item := str(raw or "").strip())
+        )
+    )
+
+
+def _application_operation_selection(
+    identity_authority: Mapping[str, Any],
+) -> frozenset[str]:
+    resource_operations = identity_authority.get("resource_operations")
+    if not isinstance(resource_operations, Mapping) or "*" not in resource_operations:
+        raise ApplicationOperationPolicyError(
+            "application_operation_selection_missing"
+        )
+    return frozenset(_string_values(resource_operations.get("*")))
+
+
+def _application_operation_role_policy(
+    identity_authority: Mapping[str, Any],
+    *,
+    selected_operations: frozenset[str],
+) -> ApplicationOperationRolePolicy:
+    raw = identity_authority.get(APPLICATION_OPERATION_POLICY_PROPERTY)
+    if not isinstance(raw, Mapping):
+        raise ApplicationOperationPolicyError("application_operation_policy_invalid")
+    if (
+        str(raw.get("mode") or "").strip()
+        != APPLICATION_OPERATION_POLICY_MODE_SELECTED
+    ):
+        raise ApplicationOperationPolicyError(
+            "application_operation_policy_mode_invalid"
+        )
+    resource_grants = identity_authority.get("resource_grants")
+    if not isinstance(resource_grants, Mapping) or "*" not in resource_grants:
+        raise ApplicationOperationPolicyError("application_default_role_missing")
+    stored_roles = _string_values(resource_grants.get("*"))
+    schema = str(raw.get("schema") or "").strip()
+    if schema == APPLICATION_OPERATION_POLICY_SCHEMA_V1:
+        default_role = strongest_platform_role(stored_roles)
+        if not default_role:
+            raise ApplicationOperationPolicyError("application_default_role_missing")
+        return ApplicationOperationRolePolicy(default_role=default_role)
+    if schema != APPLICATION_OPERATION_POLICY_SCHEMA_V2:
+        raise ApplicationOperationPolicyError(
+            "application_operation_policy_schema_invalid"
+        )
+
+    default_role = str(raw.get("default_role") or "").strip()
+    if default_role not in _PLATFORM_ROLES:
+        raise ApplicationOperationPolicyError("application_default_role_invalid")
+    if set(stored_roles) != {default_role}:
+        raise ApplicationOperationPolicyError("application_default_role_mismatch")
+    raw_overrides = raw.get("operation_roles")
+    if raw_overrides is None:
+        raw_overrides = {}
+    if not isinstance(raw_overrides, Mapping):
+        raise ApplicationOperationPolicyError("application_operation_roles_invalid")
+    overrides: dict[str, str] = {}
+    for raw_operation, raw_role in raw_overrides.items():
+        operation = str(raw_operation or "").strip()
+        role = str(raw_role or "").strip()
+        if not operation or operation not in selected_operations:
+            raise ApplicationOperationPolicyError(
+                "application_operation_override_not_selected"
+            )
+        if role not in _PLATFORM_ROLES:
+            raise ApplicationOperationPolicyError(
+                "application_operation_override_role_invalid"
+            )
+        if role != default_role:
+            overrides[operation] = role
+    return ApplicationOperationRolePolicy(
+        default_role=default_role,
+        operation_roles=overrides,
+    )
+
+
+def resolve_application_operation_role_policy(
+    identity_authority: Mapping[str, Any] | None,
+) -> tuple[frozenset[str], ApplicationOperationRolePolicy] | None:
+    """Resolve a declared application policy from authenticated authority facts.
+
+    Card binding is deliberately not required here. Older OAuth grants can
+    carry a reviewed v1 policy snapshot without a live Card pointer. Callers
+    that specifically require a live Card use the ``delegated_*`` helpers
+    below, which add that binding requirement.
+    """
+
+    authority = identity_authority if isinstance(identity_authority, Mapping) else {}
+    if not application_operation_policy_declared(authority):
+        return None
+    selected = _application_operation_selection(authority)
+    policy = _application_operation_role_policy(
+        authority,
+        selected_operations=selected,
+    )
+    return selected, policy
 
 
 def delegated_application_operation_selection(
@@ -196,34 +350,54 @@ def delegated_application_operation_selection(
     binding = authority.get("delegated_card_binding")
     if not isinstance(binding, Mapping) or not str(binding.get("access_id") or "").strip():
         return None
-    if not application_operation_policy_enabled(authority):
+    resolved = resolve_application_operation_role_policy(authority)
+    if resolved is None:
         return None
-    resource_operations = authority.get("resource_operations")
-    if not isinstance(resource_operations, Mapping) or "*" not in resource_operations:
+    selected, _policy = resolved
+    return selected
+
+
+def delegated_application_operation_role(
+    identity_authority: Mapping[str, Any] | None,
+    *,
+    operation_ref: object,
+) -> str | None:
+    """Resolve one invocation-local role from a delegated Card policy."""
+
+    authority = identity_authority if isinstance(identity_authority, Mapping) else {}
+    binding = authority.get("delegated_card_binding")
+    if not isinstance(binding, Mapping) or not str(binding.get("access_id") or "").strip():
         return None
-    raw = resource_operations.get("*")
-    if isinstance(raw, str):
-        values = raw.replace(",", " ").split()
-    elif isinstance(raw, (list, tuple, set)):
-        values = raw
-    else:
-        values = ()
-    return frozenset(str(value).strip() for value in values if str(value).strip())
+    resolved = resolve_application_operation_role_policy(authority)
+    if resolved is None:
+        return None
+    selected, policy = resolved
+    operation = str(operation_ref or "").strip()
+    if not operation or operation not in selected:
+        raise ApplicationOperationPolicyError("application_operation_not_granted")
+    return policy.role_for(operation)
 
 
 __all__ = [
     "APPLICATION_OPERATION_POLICY_MODE_SELECTED",
     "APPLICATION_OPERATION_POLICY_PROPERTY",
     "APPLICATION_OPERATION_POLICY_SCHEMA",
+    "APPLICATION_OPERATION_POLICY_SCHEMA_V1",
+    "APPLICATION_OPERATION_POLICY_SCHEMA_V2",
     "APPLICATION_OPERATION_URN_PREFIX",
+    "ApplicationOperationPolicyError",
+    "ApplicationOperationRolePolicy",
     "api_application_operation_id",
     "api_application_operation_ref",
     "application_operation_policy",
+    "application_operation_policy_declared",
     "application_operation_policy_enabled",
     "application_operation_ref",
     "data_bus_application_operation_ref",
     "data_bus_application_operation_id",
     "delegated_application_operation_selection",
+    "delegated_application_operation_role",
     "normalize_application_operation_id",
     "parse_application_operation_ref",
+    "resolve_application_operation_role_policy",
 ]

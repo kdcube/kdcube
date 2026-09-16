@@ -21,8 +21,10 @@ from connection_hub.delegated_credentials.resource_operations import (
 from kdcube_ai_app.apps.chat.emitters import ChatCommunicator, ChatRelayCommunicator
 from kdcube_ai_app.apps.chat.sdk.application_operations import (
     APPLICATION_OPERATION_POLICY_PROPERTY,
-    application_operation_policy_enabled,
+    ApplicationOperationPolicyError,
+    application_operation_policy_declared,
     data_bus_application_operation_ref,
+    delegated_application_operation_role,
     delegated_application_operation_selection,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_roles import (
@@ -291,14 +293,77 @@ async def _resolve_live_delegated_actor(
         }
     )
     card_properties = getattr(card, "properties", None)
-    if application_operation_policy_enabled(card_properties):
-        authority[APPLICATION_OPERATION_POLICY_PROPERTY] = dict(
-            card_properties[APPLICATION_OPERATION_POLICY_PROPERTY]
+    if application_operation_policy_declared(card_properties):
+        raw_policy = card_properties.get(APPLICATION_OPERATION_POLICY_PROPERTY)
+        authority[APPLICATION_OPERATION_POLICY_PROPERTY] = (
+            dict(raw_policy) if isinstance(raw_policy, Mapping) else raw_policy
         )
     else:
         authority.pop(APPLICATION_OPERATION_POLICY_PROPERTY, None)
     current_actor["identity_authority"] = authority
     current_actor["rate_limit_subject"] = f"card:{card.access_id}"
+    return current_actor
+
+
+def _project_application_operation_actor(
+    actor: Mapping[str, Any] | None,
+    *,
+    operation_ref: str,
+) -> dict[str, Any]:
+    """Narrow one Data Bus invocation to its selected operation role."""
+
+    current_actor = dict(actor or {})
+    authority = (
+        dict(current_actor.get("identity_authority") or {})
+        if isinstance(current_actor.get("identity_authority"), Mapping)
+        else {}
+    )
+    role = delegated_application_operation_role(
+        authority,
+        operation_ref=operation_ref,
+    )
+    if not role:
+        return current_actor
+    role_projection = delegated_role_projection((role,))
+    resource_grants = authority.get("resource_grants")
+    resource_operations = authority.get("resource_operations")
+    authority.update(
+        {
+            "application_operation": operation_ref,
+            "card_resource_grants": (
+                {
+                    resource: list(values)
+                    for resource, values in resource_grants.items()
+                }
+                if isinstance(resource_grants, Mapping)
+                else {}
+            ),
+            "card_resource_operations": (
+                {
+                    resource: list(values)
+                    for resource, values in resource_operations.items()
+                }
+                if isinstance(resource_operations, Mapping)
+                else {}
+            ),
+            "grants": [role],
+            "scopes": [role],
+            "operations": [operation_ref],
+            "resource_grants": {"*": [role]},
+            "resource_operations": {"*": [operation_ref]},
+            "roles": list(role_projection.roles),
+            "permissions": [role],
+            "delegated_roles_selected": True,
+        }
+    )
+    current_actor.update(
+        {
+            "roles": list(role_projection.roles),
+            "permissions": [role],
+            "user_type": role_projection.user_type,
+            "identity_authority": authority,
+        }
+    )
     return current_actor
 
 
@@ -534,9 +599,20 @@ class DataBusBundleWorker:
         if current_actor != message.actor:
             message = replace(message, actor=current_actor)
             claim = replace(claim, message=message)
-        application_operations = delegated_application_operation_selection(
-            (message.actor or {}).get("identity_authority")
-        )
+        try:
+            application_operations = delegated_application_operation_selection(
+                (message.actor or {}).get("identity_authority")
+            )
+        except ApplicationOperationPolicyError as exc:
+            result = DataBusResult.error_result(
+                message,
+                code="application_operation_policy_invalid",
+                message_text="Data Bus application operation policy is invalid",
+                details={"reason": exc.reason},
+                status="rejected",
+            )
+            await self._complete_terminal_result(claim, result)
+            return
         if application_operations is not None and handler_spec.operation_id_explicit:
             operation_ref = data_bus_application_operation_ref(
                 application_id=message.bundle_id,
@@ -553,6 +629,23 @@ class DataBusBundleWorker:
                 )
                 await self._complete_terminal_result(claim, result)
                 return
+            try:
+                operation_actor = _project_application_operation_actor(
+                    message.actor,
+                    operation_ref=operation_ref,
+                )
+            except ApplicationOperationPolicyError as exc:
+                result = DataBusResult.error_result(
+                    message,
+                    code="application_operation_policy_invalid",
+                    message_text="Data Bus application operation policy is invalid",
+                    details={"reason": exc.reason},
+                    status="rejected",
+                )
+                await self._complete_terminal_result(claim, result)
+                return
+            message = replace(message, actor=operation_actor)
+            claim = replace(claim, message=message)
         if not _raw_roles_visible(self.bundle_allowed_roles, message.actor):
             result = DataBusResult.error_result(
                 message,

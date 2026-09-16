@@ -9,6 +9,7 @@ import pytest
 from connection_hub.delegated_credentials.live_grant import LiveGrantCardError
 from kdcube_ai_app.apps.chat.sdk.application_operations import (
     APPLICATION_OPERATION_POLICY_PROPERTY,
+    APPLICATION_OPERATION_POLICY_SCHEMA_V2,
     application_operation_policy,
     application_operation_ref,
 )
@@ -102,18 +103,31 @@ def _live_card(
     operations: tuple[str, ...] = (),
     policy_enabled: bool = True,
     grants: tuple[str, ...] = ("kdcube:role:registered",),
+    default_role: str = "",
+    operation_roles: dict[str, str] | None = None,
 ):
+    policy = application_operation_policy()
+    if default_role:
+        policy = {
+            "schema": APPLICATION_OPERATION_POLICY_SCHEMA_V2,
+            "mode": "selected",
+            "default_role": default_role,
+            "operation_roles": dict(operation_roles or {}),
+        }
     return SimpleNamespace(
         access_id="card-a",
         client_id="worker-client-a",
         grantor_subject="grantor-user",
         delegate_subject="worker-a",
         expires_at=2_000_000_000,
-        resource_grants={_DELEGATED_RESOURCE: grants},
+        resource_grants={
+            _DELEGATED_RESOURCE: grants,
+            "*": (default_role,) if default_role else grants,
+        },
         resource_operations={"*": operations},
         properties=(
             {
-                APPLICATION_OPERATION_POLICY_PROPERTY: application_operation_policy(),
+                APPLICATION_OPERATION_POLICY_PROPERTY: policy,
             }
             if policy_enabled
             else {}
@@ -253,6 +267,59 @@ async def test_worker_rechecks_selected_application_operation_before_invocation(
 
 
 @pytest.mark.asyncio
+async def test_worker_rejects_malformed_application_operation_policy(
+    monkeypatch,
+) -> None:
+    stream = _RecordingStream()
+    operation = application_operation_ref(
+        application_id="reports@1-0",
+        operation_id="report.publish",
+    )
+    handler = DataBusHandlerSpec(
+        method_name="handle_publish",
+        subject="report.publish.requested",
+        operation_id="report.publish",
+        operation_id_explicit=True,
+    )
+    worker = _worker_with_handler(stream, handler)
+    card = _live_card(
+        operations=(operation,),
+        default_role="kdcube:role:registered",
+    )
+    card.properties[APPLICATION_OPERATION_POLICY_PROPERTY]["default_role"] = (
+        "kdcube:role:super-admin"
+    )
+    _patch_live_card(monkeypatch, card)
+
+    async def _invoke_handler(*_args, **_kwargs):
+        raise AssertionError("bundle code must not run")
+
+    async def _send_default_reply(_message, _result) -> None:
+        stream.calls.append("reply")
+
+    worker._invoke_handler = _invoke_handler
+    worker._send_default_reply = _send_default_reply
+    message = DataBusMessage(
+        message_id="message-invalid-policy",
+        tenant="tenant-data-bus",
+        project="project-data-bus",
+        bundle_id="reports@1-0",
+        subject=handler.subject,
+        actor=_delegated_actor(selected_operations=(operation,)),
+    )
+
+    await worker._process_claim(_claim(message))
+
+    assert stream.calls == ["result", "reply", "ack"]
+    assert stream.results[0].error["code"] == (
+        "application_operation_policy_invalid"
+    )
+    assert stream.results[0].error["details"] == {
+        "reason": "application_default_role_mismatch"
+    }
+
+
+@pytest.mark.asyncio
 async def test_pre_policy_empty_wildcard_row_stays_compatible_and_live_role_downscopes(
     monkeypatch,
 ) -> None:
@@ -380,6 +447,74 @@ async def test_live_registered_card_cannot_enter_privileged_handler(monkeypatch)
 
     assert stream.calls == ["result", "reply", "ack"]
     assert stream.results[0].error["code"] == "handler_not_visible"
+
+
+@pytest.mark.asyncio
+async def test_operation_role_override_is_local_to_one_data_bus_invocation(
+    monkeypatch,
+) -> None:
+    publish = application_operation_ref(
+        application_id="reports@1-0",
+        operation_id="report.publish",
+    )
+    read = application_operation_ref(
+        application_id="reports@1-0",
+        operation_id="report.read",
+    )
+    _patch_live_card(
+        monkeypatch,
+        _live_card(
+            operations=(publish, read),
+            default_role="kdcube:role:registered",
+            operation_roles={publish: "kdcube:role:super-admin"},
+        ),
+    )
+
+    observed_roles: list[list[str]] = []
+    for subject, operation_id, required_user_type in (
+        ("report.publish.requested", "report.publish", "privileged"),
+        ("report.read.requested", "report.read", "registered"),
+    ):
+        stream = _RecordingStream()
+        handler = DataBusHandlerSpec(
+            method_name="handle_report",
+            subject=subject,
+            operation_id=operation_id,
+            operation_id_explicit=True,
+            user_types=(required_user_type,),
+        )
+        worker = _worker_with_handler(stream, handler)
+
+        async def _invoke_handler(claim, _handler):
+            observed_roles.append(list(claim.message.actor["roles"]))
+            authority = claim.message.actor["identity_authority"]
+            assert authority["operations"] == [
+                application_operation_ref(
+                    application_id="reports@1-0",
+                    operation_id=operation_id,
+                )
+            ]
+            return DataBusResult.ok(claim.message, {"handled": True}), True
+
+        worker._invoke_handler = _invoke_handler
+        message = DataBusMessage(
+            message_id=f"message-{operation_id}",
+            tenant="tenant-data-bus",
+            project="project-data-bus",
+            bundle_id="reports@1-0",
+            subject=subject,
+            actor=_delegated_actor(selected_operations=(publish, read)),
+        )
+
+        await worker._process_claim(_claim(message))
+
+        assert stream.calls == ["result", "ack"]
+        assert stream.results[0].status == "ok"
+
+    assert observed_roles == [
+        ["kdcube:role:super-admin"],
+        ["kdcube:role:registered"],
+    ]
 
 
 @pytest.mark.asyncio

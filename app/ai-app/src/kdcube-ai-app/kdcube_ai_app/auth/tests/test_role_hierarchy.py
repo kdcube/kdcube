@@ -13,6 +13,7 @@ from kdcube_ai_app.auth.role_hierarchy import (
     role_satisfies,
     roles_satisfy_all,
     roles_satisfy_any,
+    strongest_platform_role,
 )
 
 
@@ -40,6 +41,13 @@ def test_legacy_admin_is_the_privileged_tier():
     assert role_satisfies(PRIVILEGED_ROLE, ADMIN_ROLE) is True
     assert role_satisfies(SUPER_ADMIN_ROLE, ADMIN_ROLE) is True
     assert role_satisfies(ADMIN_ROLE, SUPER_ADMIN_ROLE) is False
+
+
+def test_strongest_platform_role_ignores_unordered_custom_capabilities():
+    assert strongest_platform_role(
+        [REGISTERED_ROLE, "kdcube:role:finance", SUPER_ADMIN_ROLE]
+    ) == SUPER_ADMIN_ROLE
+    assert strongest_platform_role(["kdcube:role:finance"]) == ""
 
 
 def test_unknown_and_service_roles_remain_exact_capabilities():

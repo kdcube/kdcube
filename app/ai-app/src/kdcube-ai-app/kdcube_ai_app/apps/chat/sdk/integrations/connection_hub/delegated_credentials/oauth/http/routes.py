@@ -1693,6 +1693,7 @@ async def authorize_consent_draft(request: Request) -> Response:
             "resource_grants": resource_grants,
             "resource_operations": resource_operations,
             "invocation_policies": invocation_policies,
+            "properties": dict(existing.get("properties") or {}),
             "named_service_operations": (
                 _declared_named_service_operations(
                     cfg,
@@ -1812,6 +1813,7 @@ async def authorize_consent_decision(request: Request) -> Response:
         account_scope=account_scope,
         expected_card_revision=int(payload.get("expected_card_revision") or 0),
         expected_catalog_version=str(payload.get("expected_catalog_version") or ""),
+        properties=properties,
     )
     if resolved.get("ok") is not True:
         return JSONResponse(
@@ -1897,7 +1899,7 @@ async def authorize_consent_decision(request: Request) -> Response:
         catalog_version=str(resolved.get("catalog_version") or ""),
         account_scope=dict(resolved.get("account_scope") or {}),
         client_metadata=req.client.snapshot() if req.client is not None else {},
-        properties=dict(properties or {}),
+        properties=dict(resolved.get("properties") or {}),
         card_label=str(payload.get("label") or "").strip(),
         invocation_policies=canonical_invocation_policies,
         expected_card_revision=int(resolved.get("card_revision") or 0),

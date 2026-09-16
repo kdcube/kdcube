@@ -1575,10 +1575,18 @@ async def test_application_card_runtime_role_cannot_inherit_grantor_admin(monkey
         "authorize_delegated_application_operation_request",
         _authorize,
     )
-    monkeypatch.setattr(
-        integrations,
-        "delegated_rest_runtime_projection",
-        lambda request: {
+    def _runtime_projection(
+        request,
+        *,
+        request_resource,
+        application_operation,
+    ):
+        del request
+        assert request_resource == "*"
+        assert application_operation == (
+            "urn:kdcube:application-operation:reports%401-0:report.admin"
+        )
+        return {
             "user_id": "grantor-user",
             "user_type": "registered",
             "roles": ["kdcube:role:registered"],
@@ -1588,7 +1596,12 @@ async def test_application_card_runtime_role_cannot_inherit_grantor_admin(monkey
                 "delegated_roles_selected": True,
             },
             "delegated_roles_selected": True,
-        },
+        }
+
+    monkeypatch.setattr(
+        integrations,
+        "delegated_rest_runtime_projection",
+        _runtime_projection,
     )
     grantor_session = _session(
         user_type="privileged",
@@ -1611,6 +1624,94 @@ async def test_application_card_runtime_role_cannot_inherit_grantor_admin(monkey
     assert grantor_session.user_type is UserType.REGISTERED
     assert grantor_session.roles == ["kdcube:role:registered"]
     assert called is False
+
+
+@pytest.mark.asyncio
+async def test_application_card_operation_override_enters_admin_api(monkeypatch):
+    called = False
+
+    class _Workflow:
+        @api(
+            method="POST",
+            alias="admin_report",
+            route="public",
+            operation_id="report.admin",
+            user_types=("privileged",),
+            roles=("kdcube:role:super-admin",),
+        )
+        async def admin_report(self, **kwargs):
+            nonlocal called
+            called = True
+            return {"ok": True, "roles": kwargs.get("roles", [])}
+
+    async def _load_bundle_workflow(**kwargs):
+        del kwargs
+        return _Workflow(), SimpleNamespace(id="reports@1-0"), "tenant-a", "project-a"
+
+    async def _authorize(**kwargs):
+        del kwargs
+        return None
+
+    def _runtime_projection(
+        request,
+        *,
+        request_resource,
+        application_operation,
+    ):
+        del request
+        assert request_resource == "*"
+        assert application_operation == (
+            "urn:kdcube:application-operation:reports%401-0:report.admin"
+        )
+        return {
+            "user_id": "grantor-user",
+            "user_type": "privileged",
+            "roles": ["kdcube:role:super-admin"],
+            "permissions": ["kdcube:role:super-admin"],
+            "identity_authority": {
+                "authority_id": "delegated_client",
+                "application_operation": application_operation,
+                "delegated_roles_selected": True,
+            },
+            "delegated_roles_selected": True,
+        }
+
+    monkeypatch.setattr(integrations, "_load_bundle_workflow", _load_bundle_workflow)
+    monkeypatch.setattr(
+        integrations,
+        "has_delegated_application_operation_card",
+        lambda request: True,
+    )
+    monkeypatch.setattr(
+        integrations,
+        "authorize_delegated_application_operation_request",
+        _authorize,
+    )
+    monkeypatch.setattr(
+        integrations,
+        "delegated_rest_runtime_projection",
+        _runtime_projection,
+    )
+    delegated_session = _session(
+        user_type="registered",
+        roles=["kdcube:role:registered"],
+    )
+
+    response = await integrations._call_bundle_op_inner(
+        tenant="tenant-a",
+        project="project-a",
+        bundle_id="reports@1-0",
+        payload=integrations.BundleSuggestionsRequest(data={}),
+        request=_request(method="POST"),
+        operation="admin_report",
+        route="public",
+        session=delegated_session,
+    )
+
+    assert response["admin_report"]["ok"] is True
+    assert delegated_session.user_type is UserType.PRIVILEGED
+    assert delegated_session.roles == ["kdcube:role:super-admin"]
+    assert called is True
 
 
 @pytest.mark.asyncio

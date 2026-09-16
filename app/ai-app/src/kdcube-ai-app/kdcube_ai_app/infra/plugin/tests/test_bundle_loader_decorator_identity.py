@@ -26,12 +26,15 @@ from kdcube_ai_app.infra.plugin.bundle_loader import (
 )
 from kdcube_ai_app.apps.chat.sdk.application_operations import (
     APPLICATION_OPERATION_POLICY_PROPERTY,
+    APPLICATION_OPERATION_POLICY_SCHEMA_V2,
+    ApplicationOperationPolicyError,
     api_application_operation_id,
     api_application_operation_ref,
     application_operation_policy,
     application_operation_policy_enabled,
     application_operation_ref,
     data_bus_application_operation_ref,
+    delegated_application_operation_role,
     delegated_application_operation_selection,
     parse_application_operation_ref,
 )
@@ -346,6 +349,7 @@ def test_application_operation_selection_distinguishes_absent_and_empty_rows():
         {
             **policy,
             "delegated_card_binding": binding,
+            "resource_grants": {"*": ["kdcube:role:registered"]},
             "resource_operations": {"*": []},
         }
     ) == frozenset()
@@ -353,6 +357,7 @@ def test_application_operation_selection_distinguishes_absent_and_empty_rows():
         {
             **policy,
             "delegated_card_binding": binding,
+            "resource_grants": {"*": ["kdcube:role:registered"]},
             "resource_operations": {
                 "*": [
                     "urn:kdcube:application-operation:"
@@ -368,3 +373,61 @@ def test_application_operation_selection_distinguishes_absent_and_empty_rows():
     )
     assert application_operation_policy_enabled(policy) is True
     assert application_operation_policy_enabled({}) is False
+
+
+def test_application_operation_role_is_resolved_per_selected_operation():
+    publish = application_operation_ref(
+        application_id="reports@1-0",
+        operation_id="report.publish",
+    )
+    read = application_operation_ref(
+        application_id="reports@1-0",
+        operation_id="report.read",
+    )
+    authority = {
+        APPLICATION_OPERATION_POLICY_PROPERTY: {
+            "schema": APPLICATION_OPERATION_POLICY_SCHEMA_V2,
+            "mode": "selected",
+            "default_role": "kdcube:role:registered",
+            "operation_roles": {publish: "kdcube:role:super-admin"},
+        },
+        "delegated_card_binding": {"access_id": "card-a"},
+        "resource_grants": {"*": ["kdcube:role:registered"]},
+        "resource_operations": {"*": [publish, read]},
+    }
+
+    assert delegated_application_operation_role(
+        authority,
+        operation_ref=publish,
+    ) == "kdcube:role:super-admin"
+    assert delegated_application_operation_role(
+        authority,
+        operation_ref=read,
+    ) == "kdcube:role:registered"
+
+
+def test_application_operation_role_policy_rejects_stale_overrides():
+    selected = application_operation_ref(
+        application_id="reports@1-0",
+        operation_id="report.read",
+    )
+    removed = application_operation_ref(
+        application_id="reports@1-0",
+        operation_id="report.removed",
+    )
+    authority = {
+        APPLICATION_OPERATION_POLICY_PROPERTY: {
+            "schema": APPLICATION_OPERATION_POLICY_SCHEMA_V2,
+            "mode": "selected",
+            "default_role": "kdcube:role:registered",
+            "operation_roles": {removed: "kdcube:role:super-admin"},
+        },
+        "delegated_card_binding": {"access_id": "card-a"},
+        "resource_grants": {"*": ["kdcube:role:registered"]},
+        "resource_operations": {"*": [selected]},
+    }
+
+    with pytest.raises(ApplicationOperationPolicyError) as exc_info:
+        delegated_application_operation_selection(authority)
+
+    assert exc_info.value.reason == "application_operation_override_not_selected"

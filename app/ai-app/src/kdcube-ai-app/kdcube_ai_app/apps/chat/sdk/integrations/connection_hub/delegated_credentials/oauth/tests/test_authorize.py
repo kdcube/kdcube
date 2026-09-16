@@ -736,6 +736,7 @@ def _open_card_editor(client, monkeypatch, *, multi_resource: bool):
                 "named_services": {},
                 "account_scope": dict(selection["account_scope"]),
                 "identity_scope": "grantor",
+                "properties": dict(selection.get("properties") or {}),
             }
 
     client.app.state.automation_access_factory = lambda: CardEditorAccess()
@@ -887,6 +888,12 @@ def test_card_editor_records_declared_resource_and_keeps_concrete_entry(
                         "mode": "once",
                     }],
                     "catalog_row_by_resource": {concrete: pattern},
+                    "properties": {
+                        "kdcube.application_operations": {
+                            "schema": "kdcube.application_operations.v1",
+                            "mode": "selected",
+                        }
+                    },
                 },
             }
 
@@ -897,6 +904,12 @@ def test_card_editor_records_declared_resource_and_keeps_concrete_entry(
             }
             assert selection["resource_operations"] == {
                 pattern: ["records_export"],
+            }
+            assert selection["properties"] == {
+                "kdcube.application_operations": {
+                    "schema": "kdcube.application_operations.v1",
+                    "mode": "selected",
+                }
             }
             return {
                 "ok": True,
@@ -910,6 +923,7 @@ def test_card_editor_records_declared_resource_and_keeps_concrete_entry(
                 "named_services": {},
                 "account_scope": {},
                 "identity_scope": "grantor",
+                "properties": dict(selection["properties"]),
             }
 
     client.app.state.automation_access_factory = lambda: PatternCardAccess()
@@ -952,6 +966,12 @@ def test_card_editor_records_declared_resource_and_keeps_concrete_entry(
     }
     assert payload["selection"]["catalog_row_by_resource"] == {
         pattern: pattern,
+    }
+    assert payload["selection"]["properties"] == {
+        "kdcube.application_operations": {
+            "schema": "kdcube.application_operations.v1",
+            "mode": "selected",
+        }
     }
 
     approved = client.post(
