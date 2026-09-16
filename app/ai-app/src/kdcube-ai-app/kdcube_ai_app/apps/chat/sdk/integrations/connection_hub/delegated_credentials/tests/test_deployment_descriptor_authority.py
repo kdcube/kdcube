@@ -34,7 +34,7 @@ def _connection_hub_oauth() -> dict:
     return bundle["config"]["connections"]["delegated_credentials"]["oauth"]
 
 
-def test_default_descriptor_can_downscope_application_operations_by_role() -> None:
+def test_default_descriptor_uses_one_role_ceiling_for_application_downscoping() -> None:
     oauth = _connection_hub_oauth()
     capabilities = {
         capability["grant"]: capability
@@ -45,7 +45,7 @@ def test_default_descriptor_can_downscope_application_operations_by_role() -> No
     )
 
     assert all_applications["admin_only"] is True
-    assert all_applications["grants"] == DELEGABLE_PLATFORM_ROLES
+    assert all_applications["grants"] == ["kdcube:role:super-admin"]
     assert capabilities["kdcube:role:registered"]["delegable_roles"] == (
         DELEGABLE_PLATFORM_ROLES
     )
@@ -67,7 +67,7 @@ def test_default_descriptor_can_downscope_application_operations_by_role() -> No
         for resource in access_map["resources"]
         if resource.get("resource") == "*"
     )
-    assert all_applications_view["grant_union"] == sorted(DELEGABLE_PLATFORM_ROLES)
+    assert all_applications_view["grant_union"] == ["kdcube:role:super-admin"]
     assert {
         grant["grant"]: grant["delegable_roles"]
         for grant in access_map["grants"]

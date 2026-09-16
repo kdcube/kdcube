@@ -450,12 +450,9 @@ bundles:
             resources:
             - resource: '*'
               label: All platform and application APIs
-              description: Administrator-issued delegated scope for selected KDCube platform and application APIs.
+              description: Administrator-issued ceiling for selected KDCube platform and application APIs; a Card may project a lower role.
               admin_only: true
               grants:
-              - kdcube:role:registered
-              - kdcube:role:paid
-              - kdcube:role:privileged
               - kdcube:role:super-admin
             - resource: urn:kdcube:management:deployment:*:*
               label: KDCube deployment management
