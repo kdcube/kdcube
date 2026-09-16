@@ -26,7 +26,10 @@ from kdcube_ai_app.infra.plugin.bundle_loader import (
 )
 from kdcube_ai_app.apps.chat.sdk.application_operations import (
     api_application_operation_id,
+    api_application_operation_ref,
     application_operation_ref,
+    data_bus_application_operation_ref,
+    delegated_application_operation_selection,
     parse_application_operation_ref,
 )
 
@@ -286,6 +289,17 @@ def test_explicit_operation_id_can_join_api_and_data_bus_exposures():
         application_id=manifest.bundle_id,
         operation_id=handler_spec.operation_id,
     )
+    assert api_application_operation_ref(
+        application_id=manifest.bundle_id,
+        alias=api_spec.alias,
+        method=api_spec.http_method,
+        route=api_spec.route,
+        operation_id=api_spec.operation_id,
+    ) == data_bus_application_operation_ref(
+        application_id=manifest.bundle_id,
+        subject=handler_spec.subject,
+        operation_id=handler_spec.operation_id,
+    )
 
 
 def test_implicit_operation_ids_keep_api_exposures_distinct():
@@ -307,3 +321,34 @@ def test_implicit_operation_ids_keep_api_exposures_distinct():
         "api.operations.post.status",
         "api.public.get.status",
     }
+
+
+def test_application_operation_selection_distinguishes_absent_and_empty_rows():
+    binding = {"access_id": "card-a"}
+
+    assert delegated_application_operation_selection({}) is None
+    assert delegated_application_operation_selection(
+        {"delegated_card_binding": binding, "resource_operations": {}}
+    ) is None
+    assert delegated_application_operation_selection(
+        {
+            "delegated_card_binding": binding,
+            "resource_operations": {"*": []},
+        }
+    ) == frozenset()
+    assert delegated_application_operation_selection(
+        {
+            "delegated_card_binding": binding,
+            "resource_operations": {
+                "*": [
+                    "urn:kdcube:application-operation:"
+                    "reports%401-0:report.publish"
+                ]
+            },
+        }
+    ) == frozenset(
+        {
+            "urn:kdcube:application-operation:"
+            "reports%401-0:report.publish"
+        }
+    )

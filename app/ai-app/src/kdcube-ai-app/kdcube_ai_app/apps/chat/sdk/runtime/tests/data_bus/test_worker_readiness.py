@@ -24,14 +24,16 @@ from kdcube_ai_app.infra.plugin.app_readiness import (
 class _RecordingStream:
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.results = []
 
     async def ack(self, claim) -> None:
         del claim
         self.calls.append("ack")
 
     async def write_result(self, *args, **kwargs) -> None:
-        del args, kwargs
+        del kwargs
         self.calls.append("result")
+        self.results.append(args[0])
 
     async def write_dlq(self, *args, **kwargs) -> None:
         del args, kwargs
@@ -81,6 +83,67 @@ async def test_unready_application_claim_is_deferred_without_acknowledgement() -
             project=project,
             clear=True,
         )
+
+
+@pytest.mark.asyncio
+async def test_worker_rechecks_selected_application_operation_before_invocation() -> None:
+    stream = _RecordingStream()
+    worker = object.__new__(DataBusBundleWorker)
+    worker.stream = stream
+    worker.bundle_allowed_roles = ()
+    worker.handler_specs = {
+        "report.publish.requested": DataBusHandlerSpec(
+            method_name="handle_publish",
+            subject="report.publish.requested",
+            operation_id="report.publish",
+            operation_id_explicit=True,
+        )
+    }
+    invoked = False
+
+    async def _invoke_handler(*args, **kwargs):
+        nonlocal invoked
+        del args, kwargs
+        invoked = True
+        raise AssertionError("bundle code must not run")
+
+    worker._invoke_handler = _invoke_handler
+    message = DataBusMessage(
+        message_id="message-card-denial",
+        tenant="tenant-data-bus",
+        project="project-data-bus",
+        bundle_id="reports@1-0",
+        subject="report.publish.requested",
+        actor={
+            "user_id": "grantor-user",
+            "user_type": "registered",
+            "roles": ["kdcube:role:registered"],
+            "identity_authority": {
+                "delegated_card_binding": {"access_id": "card-a"},
+                "resource_operations": {
+                    "*": [
+                        "urn:kdcube:application-operation:reports%401-0:report.read"
+                    ]
+                },
+            },
+        },
+    )
+    claim = DataBusClaim(
+        stream_key="messages",
+        stream_id="1-0",
+        consumer_name="worker-a",
+        fields={},
+        message=message,
+    )
+
+    await worker._process_claim(claim)
+
+    assert invoked is False
+    assert stream.calls == ["result", "ack"]
+    assert stream.results[0].error["code"] == "application_operation_not_granted"
+    assert stream.results[0].error["details"]["operation_ref"] == (
+        "urn:kdcube:application-operation:reports%401-0:report.publish"
+    )
 
 
 @pytest.mark.asyncio

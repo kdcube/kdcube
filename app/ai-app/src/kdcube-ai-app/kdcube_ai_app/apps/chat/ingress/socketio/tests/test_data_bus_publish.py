@@ -14,6 +14,9 @@ from kdcube_ai_app.apps.chat.ingress.ingress_core import GatewayCheckResult, Ing
 from kdcube_ai_app.apps.chat.ingress.socketio import chat as socket_chat
 from kdcube_ai_app.apps.chat.ingress.socketio.data_bus import publish as pub
 from kdcube_ai_app.apps.chat.ingress.socketio.data_bus.publish import DataBusSocketIOIngress
+from kdcube_ai_app.apps.chat.sdk.application_operations import (
+    data_bus_application_operation_ref,
+)
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.policy import DataBusPublishLimit, DataBusSettings
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.types import DataBusHandlerSpec
 
@@ -280,8 +283,6 @@ def _manifest():
 
 
 def _patch_data_bus_contract(monkeypatch, manifest):
-    del manifest
-
     async def fake_load_registry(_redis, tenant, project):
         return SimpleNamespace(
             bundles={
@@ -297,6 +298,7 @@ def _patch_data_bus_contract(monkeypatch, manifest):
         return {}
 
     monkeypatch.setattr(pub, "load_registry", fake_load_registry)
+    monkeypatch.setattr(pub, "load_bundle_manifest", lambda *args, **kwargs: manifest)
     monkeypatch.setattr(pub, "get_bundle_props", fake_get_bundle_props)
     monkeypatch.setattr(pub, "get_settings", lambda: SimpleNamespace(TENANT="tenant-a", PROJECT="project-a"))
 
@@ -1110,6 +1112,159 @@ async def test_data_bus_publish_refreshes_live_card_authority(monkeypatch):
         "worker.heartbeat",
     ]
     assert authority["delegated_card_binding"]["access_id"] == "worker-card-a"
+
+
+@pytest.mark.asyncio
+async def test_data_bus_publish_enforces_application_operation_and_card_role(monkeypatch):
+    redis = FakeRedis()
+    app = _app(redis)
+    handler = DataBusHandlerSpec(
+        method_name="handle_publish",
+        subject="report.publish.requested",
+        operation_id="report.publish",
+        operation_id_explicit=True,
+        user_types=("registered",),
+    )
+    manifest = SimpleNamespace(
+        allowed_roles=(),
+        allowed_roles_config=None,
+        data_bus_handlers=(handler,),
+    )
+    _patch_data_bus_contract(monkeypatch, manifest)
+    resource = (
+        "https://board.example/api/integrations/bundles/tenant-a/project-a/"
+        "task-tracker@1-0/public/mcp/problem_board"
+    )
+    operation_ref = data_bus_application_operation_ref(
+        application_id="task-tracker@1-0",
+        subject=handler.subject,
+        operation_id=handler.operation_id,
+    )
+    card = SimpleNamespace(
+        access_id="worker-card-a",
+        client_id="worker-client-a",
+        grantor_subject="user-a",
+        delegate_subject="worker-a",
+        expires_at=int(time.time()) + 3600,
+        resource_grants={"*": ("kdcube:role:registered", "reports:write")},
+        resource_operations={"*": (operation_ref,)},
+    )
+    monkeypatch.setattr(pub, "resolve_live_grant_card", _async_return(card))
+    socket_session = _socket_session()
+    socket_session["user_session"].update(
+        {
+            "user_type": "privileged",
+            "roles": ["kdcube:role:super-admin"],
+            "permissions": ["kdcube:*"],
+        }
+    )
+    socket_session["data_bus_scope"] = {
+        "credential_kind": "delegated_card",
+        "tenant": "tenant-a",
+        "project": "project-a",
+        "bundle_id": "task-tracker@1-0",
+        "resource": resource,
+        "access_id": "worker-card-a",
+        "client_id": "worker-client-a",
+        "delegate_identity": "worker-a",
+        "expires_at": card.expires_at,
+    }
+
+    ack = await DataBusSocketIOIngress(app=app).handle_publish(
+        sid="socket-card-operation",
+        socket_session=socket_session,
+        data={
+            "bundle_id": "task-tracker@1-0",
+            "messages": [
+                {
+                    "message_id": "m-card-operation",
+                    "subject": handler.subject,
+                    "payload": {},
+                }
+            ],
+        },
+    )
+
+    assert ack["status"] == "accepted"
+    stream_key = "kdcube:data-bus:tenant-a:project-a:task-tracker@1-0:messages"
+    record = json.loads(redis.streams[stream_key][0][1]["json"])
+    assert record["actor"]["user_type"] == "registered"
+    assert record["actor"]["roles"] == ["kdcube:role:registered"]
+    assert record["actor"]["permissions"] == [
+        "kdcube:role:registered",
+        "reports:write",
+    ]
+    assert "kdcube:role:super-admin" not in record["actor"]["roles"]
+
+
+@pytest.mark.asyncio
+async def test_data_bus_publish_rejects_unselected_application_operation(monkeypatch):
+    redis = FakeRedis()
+    app = _app(redis)
+    handler = DataBusHandlerSpec(
+        method_name="handle_publish",
+        subject="report.publish.requested",
+        operation_id="report.publish",
+        operation_id_explicit=True,
+    )
+    manifest = SimpleNamespace(
+        allowed_roles=(),
+        allowed_roles_config=None,
+        data_bus_handlers=(handler,),
+    )
+    _patch_data_bus_contract(monkeypatch, manifest)
+    resource = (
+        "https://board.example/api/integrations/bundles/tenant-a/project-a/"
+        "task-tracker@1-0/public/mcp/problem_board"
+    )
+    card = SimpleNamespace(
+        access_id="worker-card-a",
+        client_id="worker-client-a",
+        grantor_subject="user-a",
+        delegate_subject="worker-a",
+        expires_at=int(time.time()) + 3600,
+        resource_grants={"*": ("kdcube:role:registered",)},
+        resource_operations={
+            "*": (
+                data_bus_application_operation_ref(
+                    application_id="task-tracker@1-0",
+                    subject="report.read.requested",
+                    operation_id="report.read",
+                ),
+            )
+        },
+    )
+    monkeypatch.setattr(pub, "resolve_live_grant_card", _async_return(card))
+    socket_session = _socket_session()
+    socket_session["data_bus_scope"] = {
+        "credential_kind": "delegated_card",
+        "tenant": "tenant-a",
+        "project": "project-a",
+        "bundle_id": "task-tracker@1-0",
+        "resource": resource,
+        "access_id": "worker-card-a",
+        "client_id": "worker-client-a",
+        "delegate_identity": "worker-a",
+        "expires_at": card.expires_at,
+    }
+
+    ack = await DataBusSocketIOIngress(app=app).handle_publish(
+        sid="socket-card-unselected",
+        socket_session=socket_session,
+        data={
+            "bundle_id": "task-tracker@1-0",
+            "messages": [{"subject": handler.subject, "payload": {}}],
+        },
+    )
+
+    assert ack["status"] == "rejected"
+    assert ack["rejected"][0]["error_type"] == "application_operation_not_granted"
+    assert ack["rejected"][0]["operation_ref"] == data_bus_application_operation_ref(
+        application_id="task-tracker@1-0",
+        subject=handler.subject,
+        operation_id=handler.operation_id,
+    )
+    assert redis.streams == {}
 
 
 @pytest.mark.asyncio

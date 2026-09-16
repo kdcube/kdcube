@@ -209,7 +209,7 @@ def _should_trace_auth_attempt(summary: Mapping[str, Any]) -> bool:
 
 def _roles_user_type(roles: list[str] | tuple[str, ...] | None) -> UserType:
     role_set = set(roles or [])
-    if authority_has_platform_privilege(role_set):
+    if authority_has_platform_privilege(role_set) or "kdcube:role:privileged" in role_set:
         return UserType.PRIVILEGED
     if PAID_ROLES & role_set:
         return UserType.PAID
@@ -570,7 +570,11 @@ class ConnectionHubAuthenticationSurface:
         permissions = list(projection.get("permissions") or [])
         identity_authority = dict(projection.get("identity_authority") or {})
         card_principal = _str(projection.get("card_principal"))
-        if card_principal and REGISTERED_ROLE not in roles:
+        roles_selected = bool(projection.get("delegated_roles_selected"))
+        if card_principal and not roles_selected and REGISTERED_ROLE not in roles:
+            # Compatibility for Cards written before explicit runtime-role
+            # selection. A current Card role set is authoritative and must not
+            # be widened from either the grantor or this historical baseline.
             roles.append(REGISTERED_ROLE)
         user_id = _str(projection.get("user_id"))
         if not user_id:

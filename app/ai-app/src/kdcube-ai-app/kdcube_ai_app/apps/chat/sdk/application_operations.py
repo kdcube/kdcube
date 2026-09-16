@@ -12,6 +12,7 @@ action.
 
 from __future__ import annotations
 
+from typing import Any, Mapping
 from urllib.parse import quote, unquote
 
 
@@ -82,7 +83,7 @@ def api_application_operation_id(
 ) -> tuple[str, bool]:
     """Resolve an API's local operation id and whether the app chose it."""
 
-    if operation_id is not None:
+    if str(operation_id or "").strip():
         return normalize_application_operation_id(operation_id), True
     resolved_alias = normalize_application_operation_id(alias)
     resolved_method = str(method or "POST").strip().upper() or "POST"
@@ -102,17 +103,88 @@ def data_bus_application_operation_id(
 ) -> tuple[str, bool]:
     """Resolve a Data Bus handler's local operation id and provenance."""
 
-    if operation_id is not None:
+    if str(operation_id or "").strip():
         return normalize_application_operation_id(operation_id), True
     resolved_subject = normalize_application_operation_id(subject)
     return normalize_application_operation_id(f"data_bus.{resolved_subject}"), False
 
 
+def api_application_operation_ref(
+    *,
+    application_id: object,
+    alias: object,
+    method: object,
+    route: object,
+    operation_id: object | None = None,
+) -> str:
+    """Build the canonical reference for one declared API exposure."""
+
+    resolved, _explicit = api_application_operation_id(
+        alias=alias,
+        method=method,
+        route=route,
+        operation_id=operation_id,
+    )
+    return application_operation_ref(
+        application_id=application_id,
+        operation_id=resolved,
+    )
+
+
+def data_bus_application_operation_ref(
+    *,
+    application_id: object,
+    subject: object,
+    operation_id: object | None = None,
+) -> str:
+    """Build the canonical reference for one declared Data Bus exposure."""
+
+    resolved, _explicit = data_bus_application_operation_id(
+        subject=subject,
+        operation_id=operation_id,
+    )
+    return application_operation_ref(
+        application_id=application_id,
+        operation_id=resolved,
+    )
+
+
+def delegated_application_operation_selection(
+    identity_authority: Mapping[str, Any] | None,
+) -> frozenset[str] | None:
+    """Return the Card's all-application selection, or ``None`` when absent.
+
+    Presence is distinct from an empty selection. A delegated Card with a
+    ``"*"`` operation row opted into application-operation authority and is
+    default-closed even when that row currently selects nothing. Other caller
+    identities and older resource-specific Cards keep their existing gates.
+    """
+
+    authority = identity_authority if isinstance(identity_authority, Mapping) else {}
+    binding = authority.get("delegated_card_binding")
+    if not isinstance(binding, Mapping) or not str(binding.get("access_id") or "").strip():
+        return None
+    resource_operations = authority.get("resource_operations")
+    if not isinstance(resource_operations, Mapping) or "*" not in resource_operations:
+        return None
+    raw = resource_operations.get("*")
+    if isinstance(raw, str):
+        values = raw.replace(",", " ").split()
+    elif isinstance(raw, (list, tuple, set)):
+        values = raw
+    else:
+        values = ()
+    return frozenset(str(value).strip() for value in values if str(value).strip())
+
+
 __all__ = [
     "APPLICATION_OPERATION_URN_PREFIX",
     "api_application_operation_id",
+    "api_application_operation_ref",
     "application_operation_ref",
+    "data_bus_application_operation_ref",
     "data_bus_application_operation_id",
+    "delegated_application_operation_selection",
     "normalize_application_operation_id",
     "parse_application_operation_ref",
 ]

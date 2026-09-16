@@ -125,7 +125,11 @@ def test_api_dashboard_descriptor_exposes_effective_csrf_override():
         },
     }
 
-    descriptor = integrations._api_spec_descriptor(spec, props)
+    descriptor = integrations._api_spec_descriptor(
+        spec,
+        props,
+        bundle_id="example@1-0",
+    )
 
     assert descriptor["csrf"] is False
     assert descriptor["csrf_default"] is True
@@ -157,7 +161,11 @@ def test_api_dashboard_descriptor_reports_explicit_default_value_as_override():
         },
     }
 
-    descriptor = integrations._api_spec_descriptor(spec, props)
+    descriptor = integrations._api_spec_descriptor(
+        spec,
+        props,
+        bundle_id="example@1-0",
+    )
 
     assert descriptor["csrf"] is True
     assert descriptor["csrf_default"] is True
@@ -187,7 +195,11 @@ def test_api_dashboard_csrf_reset_marker_restores_decorator_default():
         },
     }
 
-    descriptor = integrations._api_spec_descriptor(spec, props)
+    descriptor = integrations._api_spec_descriptor(
+        spec,
+        props,
+        bundle_id="example@1-0",
+    )
 
     assert descriptor["csrf"] is False
     assert descriptor["csrf_default"] is False

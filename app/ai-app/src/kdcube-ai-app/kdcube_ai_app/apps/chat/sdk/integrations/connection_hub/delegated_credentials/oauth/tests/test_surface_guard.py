@@ -13,6 +13,9 @@ from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 from starlette.requests import Request as StarletteRequest
 
+from kdcube_ai_app.apps.chat.sdk.application_operations import (
+    application_operation_ref,
+)
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth import (
     surface_guard,
 )
@@ -1160,6 +1163,132 @@ def test_managed_rest_guard_resource_policy_requires_selected_operation(monkeypa
     )
 
 
+def test_application_operation_guard_uses_the_cards_wildcard_selection(monkeypatch):
+    selected = application_operation_ref(
+        application_id="records@1-0",
+        operation_id="records.export",
+    )
+    unselected = application_operation_ref(
+        application_id="records@1-0",
+        operation_id="records.delete",
+    )
+    credential = _authority(
+        scopes=["kdcube:role:registered"],
+        resource="*",
+    )
+    credential["attrs"]["resource_operations"] = {"*": [selected]}
+
+    async def fake_authenticate(token: str):
+        assert token == "reader"
+        return {
+            "sub": "integration:automation:admin",
+            "roles": ["kdcube:role:delegated-client"],
+            "permissions": ["kdcube:*"],
+        }
+
+    monkeypatch.setattr(
+        surface_guard,
+        "_authenticate_delegated_client_access_token",
+        fake_authenticate,
+    )
+    app = FastAPI()
+    app.state.oauth_grant_store = _GrantStore(
+        {
+            "operations": [selected],
+            "credential": credential,
+        }
+    )
+    app.state.oauth_delegated_config = {"tenant": "home", "project": "demo"}
+    bind_delegated_catalog(
+        app,
+        {
+            "delegated_credentials": {
+                "oauth": {
+                    "enabled": True,
+                    "resources": [
+                        {
+                            "resource": "*",
+                            "grants": ["kdcube:role:registered"],
+                        }
+                    ],
+                }
+            }
+        },
+    )
+
+    @app.post("/selected")
+    async def selected_operation(request: Request):
+        denial = await surface_guard.authorize_delegated_application_operation_request(
+            request=request,
+            operation=selected,
+            method="POST",
+        )
+        return denial or JSONResponse({"ok": True})
+
+    @app.post("/unselected")
+    async def unselected_operation(request: Request):
+        denial = await surface_guard.authorize_delegated_application_operation_request(
+            request=request,
+            operation=unselected,
+            method="POST",
+        )
+        return denial or JSONResponse({"ok": True})
+
+    client = TestClient(app)
+
+    allowed = client.post(
+        "/selected",
+        headers={"Authorization": "Bearer reader"},
+    )
+    denied = client.post(
+        "/unselected",
+        headers={"Authorization": "Bearer reader"},
+    )
+
+    assert allowed.status_code == 200
+    assert allowed.json() == {"ok": True}
+    assert denied.status_code == 403
+    assert denied.json()["error_description"] == (
+        f"operation not consented for this connection: {unselected}"
+    )
+
+
+def test_application_operation_guard_ignores_a_non_delegated_bearer(monkeypatch):
+    checked_tokens: list[str] = []
+
+    async def fake_authenticate(token: str):
+        checked_tokens.append(token)
+        return None
+
+    monkeypatch.setattr(
+        surface_guard,
+        "_authenticate_delegated_client_access_token",
+        fake_authenticate,
+    )
+    app = FastAPI()
+
+    @app.post("/direct")
+    async def direct_operation(request: Request):
+        denial = await surface_guard.authorize_delegated_application_operation_request(
+            request=request,
+            operation=application_operation_ref(
+                application_id="records@1-0",
+                operation_id="records.export",
+            ),
+            method="POST",
+        )
+        return denial or JSONResponse({"ok": True})
+
+    response = TestClient(app).post(
+        "/direct",
+        headers={"Authorization": "Bearer platform-token"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert checked_tokens == ["platform-token"]
+
+
 def test_managed_guard_prefers_connection_hub_resource_policy_over_surface_tools(monkeypatch):
     config = {
         "enabled": True,
@@ -1315,6 +1444,57 @@ def test_managed_guard_exposes_runtime_projection_for_proc_bridge(monkeypatch):
     assert authority["economics_user_id"] == "a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
     assert authority["budget_bypass"] is True
     assert authority["actor_identity"] == "integration:claude:a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
+
+
+def test_card_selected_registered_role_does_not_inherit_grantor_admin() -> None:
+    credential = _authority(
+        scopes=["kdcube:role:registered", "records:read"],
+        resource="*",
+    )
+    credential["attrs"]["resource_operations"] = {
+        "*": ["urn:kdcube:app:records@1-0:records.export"]
+    }
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/guard",
+            "query_string": b"",
+            "headers": [],
+            "scheme": "http",
+            "server": ("testserver", 80),
+        }
+    )
+    request.state.delegated_credential = {
+        "credential": credential,
+        "grant_record": {
+            "credential": credential,
+            "grantor_authority": {
+                "grantor_roles": ["kdcube:role:super-admin"],
+                "grantor_permissions": ["kdcube:*"],
+            },
+        },
+        "user": {
+            "sub": credential["subject"],
+            "roles": ["kdcube:role:delegated-client"],
+            "permissions": ["kdcube:*"],
+        },
+    }
+
+    projection = surface_guard.delegated_rest_runtime_projection(
+        request,
+        request_resource="*",
+    )
+
+    assert projection["user_type"] == "registered"
+    assert projection["roles"] == ["kdcube:role:registered"]
+    assert projection["permissions"] == [
+        "kdcube:role:registered",
+        "records:read",
+    ]
+    assert projection["delegated_roles_selected"] is True
+    assert "kdcube:role:super-admin" not in projection["roles"]
+    assert "kdcube:*" not in projection["permissions"]
 
 
 def test_live_card_identity_is_carried_in_the_runtime_projection(monkeypatch):

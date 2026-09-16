@@ -17,7 +17,14 @@ from connection_hub.delegated_credentials.live_grant import (
 from connection_hub.delegated_credentials.resource_operations import (
     operations_for_resource,
 )
+from kdcube_ai_app.apps.chat.sdk.application_operations import (
+    data_bus_application_operation_ref,
+    delegated_application_operation_selection,
+)
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_roles import (
+    delegated_role_projection,
+)
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.stream import RedisDataBusStream
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.types import (
     DATA_BUS_INGRESS_SCHEMA,
@@ -34,6 +41,7 @@ from kdcube_ai_app.infra.gateway.data_bus_limiter import (
     DataBusPublishLimitResult,
     check_data_bus_publish_limits,
 )
+from kdcube_ai_app.infra.plugin.bundle_loader import BundleSpec, load_bundle_manifest
 from kdcube_ai_app.infra.plugin.bundle_store import get_bundle_props, load_registry
 
 logger = logging.getLogger("kdcube.data_bus.socketio")
@@ -172,6 +180,14 @@ def _apply_live_delegated_card(
 ) -> None:
     grants = live_grants_for_resource(card, resource) or ()
     operations = operations_for_resource(card.resource_operations, resource)
+    role_projection = delegated_role_projection(
+        grants,
+        fallback_roles=session.roles,
+    )
+    if role_projection.selected_on_card:
+        session.roles = list(role_projection.roles)
+        session.permissions = list(grants)
+        session.user_type = UserType(role_projection.user_type)
     authority = dict(session.identity_authority or {})
     authority.update(
         {
@@ -187,6 +203,9 @@ def _apply_live_delegated_card(
                 key: list(values)
                 for key, values in card.resource_operations.items()
             },
+            "roles": list(session.roles or []),
+            "permissions": list(session.permissions or []),
+            "delegated_roles_selected": role_projection.selected_on_card,
             "delegated_card_binding": {
                 "schema": "connection_hub.delegated_card_binding.v1",
                 "access_id": card.access_id,
@@ -346,7 +365,7 @@ class DataBusSocketIOIngress:
             return self._ack(status="rejected", rejected=[self._limit_rejection(limit_result)])
 
         try:
-            await self._ensure_registered_bundle(
+            handler_specs = await self._ensure_registered_bundle(
                 tenant=tenant,
                 project=project,
                 bundle_id=bundle_id,
@@ -383,6 +402,9 @@ class DataBusSocketIOIngress:
         )
         accepted: list[dict[str, Any]] = []
         rejected: list[dict[str, Any]] = []
+        application_operations = delegated_application_operation_selection(
+            session.identity_authority
+        )
         for index, item in enumerate(messages):
             try:
                 message = self._normalize_message(
@@ -395,6 +417,39 @@ class DataBusSocketIOIngress:
                     sid=sid,
                     reply_transport=reply_transport,
                 )
+                if application_operations is not None:
+                    handler_spec = handler_specs.get(message.subject)
+                    if handler_spec is None:
+                        rejected.append(
+                            {
+                                "index": index,
+                                "message_id": message.message_id,
+                                "error": (
+                                    "Data Bus application operation is no longer "
+                                    f"available: {message.subject}"
+                                ),
+                                "error_type": "application_operation_unavailable",
+                                "status": 403,
+                            }
+                        )
+                        continue
+                    operation_ref = data_bus_application_operation_ref(
+                        application_id=bundle_id,
+                        subject=handler_spec.subject,
+                        operation_id=handler_spec.operation_id,
+                    )
+                    if operation_ref not in application_operations:
+                        rejected.append(
+                            {
+                                "index": index,
+                                "message_id": message.message_id,
+                                "error": "Data Bus application operation is not granted",
+                                "error_type": "application_operation_not_granted",
+                                "operation_ref": operation_ref,
+                                "status": 403,
+                            }
+                        )
+                        continue
                 logger.info(
                     "[data_bus.publish] received message tenant=%s project=%s bundle=%s subject=%s object_ref=%s message_id=%s sid=%s index=%s",
                     tenant,
@@ -440,11 +495,33 @@ class DataBusSocketIOIngress:
         tenant: str,
         project: str,
         bundle_id: str,
-    ) -> tuple[Any, dict[str, DataBusHandlerSpec]]:
+    ) -> dict[str, DataBusHandlerSpec]:
         reg = await load_registry(self._redis(), tenant, project)
         entry = (getattr(reg, "bundles", None) or {}).get(bundle_id)
         if entry is None:
             raise ValueError("bundle not found")
+        path = entry.path if hasattr(entry, "path") else entry.get("path", "")
+        module = entry.module if hasattr(entry, "module") else entry.get("module")
+        singleton = (
+            entry.singleton
+            if hasattr(entry, "singleton")
+            else entry.get("singleton", False)
+        )
+        if not path:
+            raise ValueError("bundle path is unavailable")
+        manifest = load_bundle_manifest(
+            BundleSpec(
+                id=bundle_id,
+                path=path,
+                module=module,
+                singleton=bool(singleton),
+            ),
+            bundle_id=bundle_id,
+        )
+        return {
+            handler.subject: handler
+            for handler in manifest.data_bus_handlers
+        }
 
     def _normalize_message(
         self,

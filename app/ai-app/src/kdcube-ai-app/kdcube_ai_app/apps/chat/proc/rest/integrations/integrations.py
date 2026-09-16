@@ -148,16 +148,21 @@ from kdcube_ai_app.apps.chat.sdk.solutions.sites import (
     application_site_catalog_runtime,
 )
 from kdcube_ai_app.apps.chat.sdk.application_operations import (
+    api_application_operation_id,
+    api_application_operation_ref,
     application_operation_ref,
+    data_bus_application_operation_id,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.surface_guard import (
     DELEGATED_PROXY_MCP_AUTH_MODE,
     MANAGED_MCP_AUTH_MODE,
+    authorize_delegated_application_operation_request,
     authorize_delegated_mcp_proxy_request,
     authorize_delegated_mcp_request,
     authorize_delegated_rest_request,
     delegated_mcp_runtime_projection,
     delegated_rest_runtime_projection,
+    has_delegated_application_operation_card,
     mcp_auth_mode,
     rest_auth_mode,
 )
@@ -1872,6 +1877,12 @@ def _api_spec_descriptor(
     bundle_id: str,
 ) -> Dict[str, Any]:
     effective = apply_api_overrides(spec, props or {})
+    operation_id, _ = api_application_operation_id(
+        alias=spec.alias,
+        method=spec.http_method,
+        route=spec.route,
+        operation_id=spec.operation_id,
+    )
     csrf_override = provider_surface_csrf(
         props,
         alias=spec.alias,
@@ -1893,10 +1904,10 @@ def _api_spec_descriptor(
     )
     return {
         "alias": spec.alias,
-        "operation_id": spec.operation_id,
+        "operation_id": operation_id,
         "operation_ref": application_operation_ref(
             application_id=bundle_id,
-            operation_id=spec.operation_id,
+            operation_id=operation_id,
         ),
         "operation_id_explicit": bool(spec.operation_id_explicit),
         "http_method": spec.http_method,
@@ -2051,10 +2062,16 @@ def _manifest_to_descriptor(
             {
                 "method_name": spec.method_name,
                 "subject": spec.subject,
-                "operation_id": spec.operation_id,
+                "operation_id": data_bus_application_operation_id(
+                    subject=spec.subject,
+                    operation_id=spec.operation_id,
+                )[0],
                 "operation_ref": application_operation_ref(
                     application_id=manifest.bundle_id,
-                    operation_id=spec.operation_id,
+                    operation_id=data_bus_application_operation_id(
+                        subject=spec.subject,
+                        operation_id=spec.operation_id,
+                    )[0],
                 ),
                 "operation_id_explicit": bool(spec.operation_id_explicit),
                 "partition_by": spec.partition_by,
@@ -5315,7 +5332,7 @@ def _apply_delegated_mcp_runtime_projection(
 
     session.user_id = user_id
     session.username = username
-    session.user_type = UserType.EXTERNAL
+    session.user_type = UserType(user_type)
     session.roles = roles
     session.permissions = permissions
     session.identity_authority = dict(identity_authority)
@@ -5326,16 +5343,17 @@ def _apply_delegated_mcp_runtime_projection(
     # bearer, so the upgrade is strictly post-verification.
     setattr(request.state, STATE_SESSION, session)
 
-    user = getattr(comm_context, "user", None)
-    if user is None:
-        comm_context.user = ExternalEventUser(user_type=user_type, user_id=user_id)
-        user = comm_context.user
-    user.user_id = user_id
-    user.username = username
-    user.user_type = user_type
-    user.roles = roles
-    user.permissions = permissions
-    user.identity_authority = dict(identity_authority)
+    if comm_context is not None:
+        user = getattr(comm_context, "user", None)
+        if user is None:
+            comm_context.user = ExternalEventUser(user_type=user_type, user_id=user_id)
+            user = comm_context.user
+        user.user_id = user_id
+        user.username = username
+        user.user_type = user_type
+        user.roles = roles
+        user.permissions = permissions
+        user.identity_authority = dict(identity_authority)
 
     logger.info(
         "Managed MCP runtime projection applied tenant=%s project=%s bundle=%s endpoint=%s user_id=%s user_type=%s delegate=%s grantor=%s authority=%s grants=%s identity_scope=%s",
@@ -5377,21 +5395,22 @@ def _apply_delegated_rest_runtime_projection(
 
     session.user_id = user_id
     session.username = username
-    session.user_type = UserType.EXTERNAL
+    session.user_type = UserType(user_type)
     session.roles = roles
     session.permissions = permissions
     session.identity_authority = dict(identity_authority)
 
-    user = getattr(comm_context, "user", None)
-    if user is None:
-        comm_context.user = ExternalEventUser(user_type=user_type, user_id=user_id)
-        user = comm_context.user
-    user.user_id = user_id
-    user.username = username
-    user.user_type = user_type
-    user.roles = roles
-    user.permissions = permissions
-    user.identity_authority = dict(identity_authority)
+    if comm_context is not None:
+        user = getattr(comm_context, "user", None)
+        if user is None:
+            comm_context.user = ExternalEventUser(user_type=user_type, user_id=user_id)
+            user = comm_context.user
+        user.user_id = user_id
+        user.username = username
+        user.user_type = user_type
+        user.roles = roles
+        user.permissions = permissions
+        user.identity_authority = dict(identity_authority)
 
     logger.info(
         "Managed REST runtime projection applied tenant=%s project=%s bundle=%s operation=%s user_id=%s user_type=%s delegate=%s grantor=%s authority=%s grants=%s identity_scope=%s",
@@ -6222,6 +6241,21 @@ async def _call_bundle_op_inner(
         http_method=endpoint_spec.http_method,
         route=endpoint_spec.route,
     )
+    application_operation = api_application_operation_ref(
+        application_id=spec_resolved.id,
+        alias=endpoint_spec.alias,
+        method=endpoint_spec.http_method,
+        route=endpoint_spec.route,
+        operation_id=endpoint_spec.operation_id or None,
+    )
+    denial = await authorize_delegated_application_operation_request(
+        request=request,
+        operation=application_operation,
+        method=request_method,
+    )
+    if denial is not None:
+        return denial
+    application_card = has_delegated_application_operation_card(request)
     managed_rest_auth = rest_auth_mode(endpoint_auth) == "managed"
     if managed_rest_auth:
         denial = await authorize_delegated_rest_request(
@@ -6232,6 +6266,13 @@ async def _call_bundle_op_inner(
         )
         if denial is not None:
             return denial
+    elif route == "operations" and not _internal_peer_call:
+        # Direct operations HTTP requests require an authenticated user. A
+        # nested server-side app call has already crossed its caller's route
+        # boundary; target visibility below remains authoritative for the peer
+        # operation itself.
+        _ensure_operations_session_authorized(session)
+    if application_card or managed_rest_auth:
         _apply_delegated_rest_runtime_projection(
             request=request,
             session=session,
@@ -6239,12 +6280,6 @@ async def _call_bundle_op_inner(
             bundle_id=spec_resolved.id,
             operation=endpoint_spec.alias,
         )
-    elif route == "operations" and not _internal_peer_call:
-        # Direct operations HTTP requests require an authenticated user. A
-        # nested server-side app call has already crossed its caller's route
-        # boundary; target visibility below remains authoritative for the peer
-        # operation itself.
-        _ensure_operations_session_authorized(session)
     if not _endpoint_visible(endpoint_spec.user_types, endpoint_spec.roles, session, endpoint_auth):
         raise HTTPException(status_code=403, detail=f"Bundle operation {operation} is not visible to this user")
     await _apply_rest_bundle_props_to_workflow(workflow=workflow, props=_props)

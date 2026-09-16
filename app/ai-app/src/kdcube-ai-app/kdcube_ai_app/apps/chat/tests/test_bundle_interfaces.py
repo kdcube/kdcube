@@ -1476,6 +1476,144 @@ async def test_call_bundle_api_inner_enforces_auth_from_code_defaults(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_application_card_denies_unselected_api_before_bundle_code(monkeypatch):
+    called = False
+
+    class _Workflow:
+        @api(
+            method="POST",
+            alias="publish_report",
+            route="public",
+            operation_id="report.publish",
+        )
+        async def publish_report(self, **kwargs):
+            nonlocal called
+            called = True
+            return kwargs
+
+    async def _load_bundle_workflow(**kwargs):
+        del kwargs
+        return _Workflow(), SimpleNamespace(id="reports@1-0"), "tenant-a", "project-a"
+
+    captured = {}
+
+    async def _authorize(*, request, operation, method):
+        del request
+        captured.update(operation=operation, method=method)
+        return JSONResponse(
+            {"error": "application_operation_not_granted"},
+            status_code=403,
+        )
+
+    monkeypatch.setattr(integrations, "_load_bundle_workflow", _load_bundle_workflow)
+    monkeypatch.setattr(
+        integrations,
+        "has_delegated_application_operation_card",
+        lambda request: True,
+    )
+    monkeypatch.setattr(
+        integrations,
+        "authorize_delegated_application_operation_request",
+        _authorize,
+    )
+
+    response = await integrations._call_bundle_op_inner(
+        tenant="tenant-a",
+        project="project-a",
+        bundle_id="reports@1-0",
+        payload=integrations.BundleSuggestionsRequest(data={}),
+        request=_request(method="POST"),
+        operation="publish_report",
+        route="public",
+        session=_session(),
+    )
+
+    assert response.status_code == 403
+    assert captured == {
+        "operation": (
+            "urn:kdcube:application-operation:reports%401-0:report.publish"
+        ),
+        "method": "POST",
+    }
+    assert called is False
+
+
+@pytest.mark.asyncio
+async def test_application_card_runtime_role_cannot_inherit_grantor_admin(monkeypatch):
+    called = False
+
+    class _Workflow:
+        @api(
+            method="POST",
+            alias="admin_report",
+            route="public",
+            operation_id="report.admin",
+            user_types=("privileged",),
+            roles=("kdcube:role:super-admin",),
+        )
+        async def admin_report(self, **kwargs):
+            nonlocal called
+            called = True
+            return kwargs
+
+    async def _load_bundle_workflow(**kwargs):
+        del kwargs
+        return _Workflow(), SimpleNamespace(id="reports@1-0"), "tenant-a", "project-a"
+
+    async def _authorize(**kwargs):
+        del kwargs
+        return None
+
+    monkeypatch.setattr(integrations, "_load_bundle_workflow", _load_bundle_workflow)
+    monkeypatch.setattr(
+        integrations,
+        "has_delegated_application_operation_card",
+        lambda request: True,
+    )
+    monkeypatch.setattr(
+        integrations,
+        "authorize_delegated_application_operation_request",
+        _authorize,
+    )
+    monkeypatch.setattr(
+        integrations,
+        "delegated_rest_runtime_projection",
+        lambda request: {
+            "user_id": "grantor-user",
+            "user_type": "registered",
+            "roles": ["kdcube:role:registered"],
+            "permissions": [],
+            "identity_authority": {
+                "authority_id": "delegated_client",
+                "delegated_roles_selected": True,
+            },
+            "delegated_roles_selected": True,
+        },
+    )
+    grantor_session = _session(
+        user_type="privileged",
+        roles=["kdcube:role:super-admin"],
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await integrations._call_bundle_op_inner(
+            tenant="tenant-a",
+            project="project-a",
+            bundle_id="reports@1-0",
+            payload=integrations.BundleSuggestionsRequest(data={}),
+            request=_request(method="POST"),
+            operation="admin_report",
+            route="public",
+            session=grantor_session,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert grantor_session.user_type is UserType.REGISTERED
+    assert grantor_session.roles == ["kdcube:role:registered"]
+    assert called is False
+
+
+@pytest.mark.asyncio
 async def test_call_bundle_mcp_inner_dispatches_into_bundle_mcp_app(monkeypatch):
     async def _load_bundle_workflow(**kwargs):
         del kwargs

@@ -11,6 +11,10 @@ from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Optional, Tuple
 
 from kdcube_ai_app.apps.chat.emitters import ChatCommunicator, ChatRelayCommunicator
+from kdcube_ai_app.apps.chat.sdk.application_operations import (
+    data_bus_application_operation_ref,
+    delegated_application_operation_selection,
+)
 from kdcube_ai_app.apps.chat.sdk.protocol import (
     ConversationCtx,
     ExternalEventActor,
@@ -308,6 +312,26 @@ class DataBusBundleWorker:
             await self.stream.write_dlq(message, reason="handler_not_found", details={"stream_id": claim.stream_id})
             await self.stream.ack(claim)
             return
+        application_operations = delegated_application_operation_selection(
+            (message.actor or {}).get("identity_authority")
+        )
+        if application_operations is not None:
+            operation_ref = data_bus_application_operation_ref(
+                application_id=message.bundle_id,
+                subject=handler_spec.subject,
+                operation_id=handler_spec.operation_id,
+            )
+            if operation_ref not in application_operations:
+                result = DataBusResult.error_result(
+                    message,
+                    code="application_operation_not_granted",
+                    message_text="Data Bus application operation is not granted",
+                    details={"operation_ref": operation_ref},
+                    status="rejected",
+                )
+                await self.stream.write_result(result, stream_id=claim.stream_id)
+                await self.stream.ack(claim)
+                return
         if self.bundle_allowed_roles and not bool(_actor_raw_roles(message.actor) & set(self.bundle_allowed_roles)):
             result = DataBusResult.error_result(
                 message,
@@ -619,7 +643,7 @@ class DataBusRuntimeManager:
             handler_specs = {handler.subject: handler for handler in effective_manifest.data_bus_handlers}
             bundle_allowed_roles = tuple(effective_manifest.allowed_roles or ())
             signature = "|".join(
-                f"{item.subject}:{item.method_name}:{item.partition_by}:{item.ordering}:{item.idempotency}:{','.join(item.user_types)}:{','.join(item.roles)}"
+                f"{item.subject}:{item.operation_id}:{item.method_name}:{item.partition_by}:{item.ordering}:{item.idempotency}:{','.join(item.user_types)}:{','.join(item.roles)}"
                 for item in sorted(handler_specs.values(), key=lambda spec_item: spec_item.subject)
             )
             if bundle_allowed_roles:

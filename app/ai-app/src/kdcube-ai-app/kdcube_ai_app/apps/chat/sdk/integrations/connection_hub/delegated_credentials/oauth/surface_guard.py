@@ -87,6 +87,9 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.named_service_admis
     delegated_resource_from_request,
     store_managed_named_service_admission_snapshot,
 )
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_roles import (
+    delegated_role_projection,
+)
 
 
 MANAGED_MCP_AUTH_MODE = MANAGED_AUTH_MODE
@@ -757,26 +760,43 @@ def _delegated_runtime_projection(
         identity_authority["gateway_rate_limit_subject"] = (
             f"card:{delegated_card_binding['access_id']}"
         )
-    identity_authority = {
-        key: value for key, value in identity_authority.items()
-        if value not in ("", None, [], {})
-    }
-
-    roles = (
+    fallback_roles = (
         _as_list(identity_authority.get("roles"))
         or _as_list(grantor_authority.get("grantor_roles"))
         or _as_list(user.get("roles"))
     )
-    permissions = (
-        _as_list(identity_authority.get("permissions"))
-        or _as_list(grantor_authority.get("grantor_permissions"))
-        or _as_list(user.get("permissions"))
-        or tuple(grants)
+    role_projection = delegated_role_projection(
+        grants,
+        fallback_roles=fallback_roles,
     )
+    roles = role_projection.roles
+    if role_projection.selected_on_card:
+        # The selected role is part of the Card authority as well as the
+        # projected role set. Preserve it in permissions for existing policy
+        # readers, while never copying an unselected grantor role into either.
+        permissions = tuple(grants)
+    else:
+        permissions = (
+            _as_list(identity_authority.get("permissions"))
+            or _as_list(grantor_authority.get("grantor_permissions"))
+            or _as_list(user.get("permissions"))
+            or tuple(grants)
+        )
+    identity_authority.update(
+        {
+            "roles": list(roles),
+            "permissions": list(permissions),
+            "delegated_roles_selected": role_projection.selected_on_card,
+        }
+    )
+    identity_authority = {
+        key: value for key, value in identity_authority.items()
+        if value not in ("", None, [], {})
+    }
     runtime = {
         "schema": f"connection_hub.delegated_{surface}_runtime_projection.v1",
         "user_id": grantor_user_id,
-        "user_type": "external",
+        "user_type": role_projection.user_type,
         "username": delegate_identity or str(user.get("sub") or "").strip() or None,
         "roles": list(roles),
         "permissions": list(permissions),
@@ -787,6 +807,7 @@ def _delegated_runtime_projection(
         "grants": grants,
         "operations": list(operations),
         "resource_operations": resource_operations,
+        "delegated_roles_selected": role_projection.selected_on_card,
     }
     if delegated_resource:
         runtime["delegated_resource"] = delegated_resource
@@ -806,6 +827,24 @@ def delegated_rest_runtime_projection(
         request,
         surface="rest",
         request_resource=request_resource,
+    )
+
+
+def has_delegated_application_operation_card(request: Request) -> bool:
+    """Whether the live request Card carries the all-application authority row."""
+
+    delegated = getattr(getattr(request, "state", None), "delegated_credential", None)
+    if not isinstance(delegated, Mapping):
+        return False
+    credential = delegated.get("credential")
+    grant_record = delegated.get("grant_record")
+    view = DelegatedCredentialView.from_parts(
+        credential if isinstance(credential, Mapping) else {},
+        grant_record if isinstance(grant_record, Mapping) else {},
+    )
+    return bool(
+        "*" in view.resource_grants
+        and "*" in view.resource_operations
     )
 
 
@@ -871,6 +910,18 @@ async def delegated_platform_admin_runtime_projection(
     required_grants = set(_as_list(getattr(resource_cfg, "grants", ())))
     credential_grants = set(boundary.stored_grants)
     if required_grants and not required_grants.issubset(credential_grants):
+        return {}
+
+    grantor_authority = grant_record.get("grantor_authority")
+    grantor_authority = (
+        grantor_authority if isinstance(grantor_authority, Mapping) else {}
+    )
+    if not authority_has_platform_privilege(
+        _as_list(grantor_authority.get("grantor_roles"))
+    ):
+        # A Card-selected role is delegated authority, not evidence that the
+        # grantor held that role. The all-resource administrator entrance must
+        # verify the grantor ceiling independently.
         return {}
 
     try:
@@ -1455,6 +1506,62 @@ async def authorize_delegated_rest_request(
     return result.denial
 
 
+async def authorize_delegated_application_operation_request(
+    *,
+    request: Request,
+    operation: str,
+    method: str = "",
+) -> Response | None:
+    """Enforce one Card-selected application operation before app dispatch.
+
+    The synthetic ``*`` request resource deliberately selects the Card's
+    all-application row. The actual HTTP route remains transport metadata; the
+    operation reference is the service-owned authority identity shared with
+    other transports. This entrance also resolves a delegated bearer when the
+    generic gateway layer intentionally left it without a platform session.
+    Ordinary platform bearers and legacy Cards without an application row keep
+    their existing authorization path.
+    """
+
+    if not has_delegated_application_operation_card(request):
+        token = _extract_bearer(request)
+        if not token:
+            return None
+        if await _authenticate_delegated_client_access_token(token) is None:
+            return None
+        denial, _user, _envelope, _grant_record = (
+            await _authorize_delegated_managed_request(
+                request=request,
+                auth=None,
+                authority_id="delegated_client",
+                roles=(),
+                permissions=(),
+                logger=REST_LOGGER,
+                surface_label="application_operation",
+                token=token,
+                request_resource="*",
+                match_request_resource=False,
+            )
+        )
+        if denial is not None:
+            return denial
+        if not has_delegated_application_operation_card(request):
+            return None
+
+    result = await evaluate_delegated_rest_admission(
+        request=request,
+        auth={
+            "mode": MANAGED_AUTH_MODE,
+            "authority_id": "delegated_client",
+            "selected_operation_grants": True,
+        },
+        operation=operation,
+        method=method,
+        request_resource="*",
+    )
+    return result.denial
+
+
 __all__ = [
     "DELEGATED_PROXY_MCP_AUTH_MODE",
     "MANAGED_MCP_AUTH_MODE",
@@ -1464,6 +1571,7 @@ __all__ = [
     "ManagedRestAuthPolicy",
     "ManagedRestOperationPolicy",
     "DelegatedRestAdmissionResult",
+    "authorize_delegated_application_operation_request",
     "authorize_delegated_mcp_proxy_request",
     "authorize_delegated_mcp_request",
     "authorize_delegated_rest_request",
@@ -1472,6 +1580,7 @@ __all__ = [
     "delegated_mcp_runtime_projection",
     "delegated_rest_runtime_projection",
     "extract_mcp_tool_calls",
+    "has_delegated_application_operation_card",
     "evaluate_delegated_rest_admission",
     "managed_mcp_auth_policy",
     "managed_rest_auth_policy",
