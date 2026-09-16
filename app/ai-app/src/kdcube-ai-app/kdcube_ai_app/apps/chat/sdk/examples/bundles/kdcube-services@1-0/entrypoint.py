@@ -398,6 +398,7 @@ class KDCubeServicesEntrypoint(BaseEntrypoint):
                 storage_path=str(getattr(self.settings, "STORAGE_PATH", "") or ""),
                 bundle_id=self._named_services_bundle_id(),
                 file_url_factory=self._conversation_file_url,
+                bundle_validator=self._conversation_bundle_registered,
             )
         )
         providers.append(
@@ -498,6 +499,17 @@ class KDCubeServicesEntrypoint(BaseEntrypoint):
         if not value and bundle:
             value = await get_secret(f"bundles.{bundle}.secrets.{ref}")
         return str(value or "").strip()
+
+    async def _conversation_bundle_registered(self, ns_ctx: Any, bundle_id: str) -> bool:
+        """Whether a bundle id a conv search asked for is in the caller's registry."""
+        from kdcube_ai_app.infra.plugin.bundle_store import load_registry
+
+        registry = await load_registry(
+            self.redis,
+            str(getattr(ns_ctx, "tenant", "") or "") or None,
+            str(getattr(ns_ctx, "project", "") or "") or None,
+        )
+        return bundle_id in (getattr(registry, "bundles", None) or {})
 
     async def _conversation_file_url(self, ns_ctx: Any, info: Any) -> Dict[str, Any] | None:
         """Mint a short-lived absolute download URL for a binary conv:fi: artifact.

@@ -3,7 +3,7 @@ id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/conversation/search-README.
 title: "Conversation Search"
 summary: "Recover decisions, sources, and prior work from the same user's current or earlier conversations through one identity-safe search used by agents, apps, MCP clients, REST, and the chat UI."
 tags: ["sdk", "solutions", "conversation", "search", "conv", "memory-realm", "agent-tools", "named-service-provider", "rank-weights", "rrf"]
-updated_at: 2026-09-08
+updated_at: 2026-09-16
 keywords:
   [
     "conversation search",
@@ -266,10 +266,12 @@ flow are in
 The provider (`sdk/solutions/conversation/named_service.py`, provider id
 `sdk.conversation`) mirrors the memory provider's shape: decorated class,
 spec factory, search scopes, `intro`. The **kdcube-services** app registers it,
-supplying the two seams — `conversation_search_context_from_ns` as the context
-factory and a pooled `make_conversation_search_backend` bound per request to
-the caller's tenant/project — and publishes `conv` on its `named_services` MCP
-surface. From there the realm is reachable by connected external agents and by
+supplying the seams — a context factory built on
+`conversation_search_context_from_ns`, a pooled `make_conversation_search_backend`
+bound per request to the caller's tenant/project, and a registry check for a
+requested bundle — and publishes `conv` on its `named_services` MCP surface.
+From there the realm is reachable by connected external agents, by hosted
+application agents over delegated MCP or the native named-service door, and by
 generated code in isolated runtimes over the relay (see the
 [isolated-runtime doc](../kdcube-services/named-services-from-isolated-runtime-README.md)).
 The provider advertises read operations only and carries advisory grant hints
@@ -277,6 +279,25 @@ The provider advertises read operations only and carries advisory grant hints
 consent and enforcement live at the managed boundary, and registration follows
 the [discovery registry](../../namespace-services/discovery-README.md) like
 every other provider.
+
+Every `conv` call is served by kdcube-services, so the bundle on the provider's
+own request context names the provider, never the caller, and never scopes a
+search. The application scope of a search is decided in this order:
+
+1. **`filters.bundle_id` passed by the caller** — the search is confined to that
+   application, whoever calls. An id that is not in the tenant/project registry
+   answers `404 conversation_bundle_not_found`.
+2. **A hosted application caller** — its own application. The caller is what
+   admission established for the invocation: the delegated client id
+   `kdcube-agent:<bundle>:<agent>` (managed MCP door, native door, relayed
+   agent card), or the validated source bundle a relayed application call
+   carries. `named_service_caller(...)` in
+   `sdk/integrations/connection_hub/named_service_caller.py` reads it.
+3. **Anyone else** (an external OAuth client, a plain user call) — no application
+   scope: all of the user's conversations, like `object.list` / `object.get`.
+
+The model never supplies caller identity; `bundle_id` is a search choice like
+`scope`. Turn logs of an unscoped search are read from each hit's own bundle.
 
 ### Let a person search their own conversations
 

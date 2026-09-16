@@ -104,6 +104,22 @@ def test_external_client_link_names_the_card_it_was_denied_on():
     assert "access_id=oauth-fc766127dbc54c2e" in operation["consent"]["connection_hub_url"]
 
 
+def test_external_client_instructions_name_a_missing_operation():
+    # The card holds every claim and lacks only the operation. The text read to
+    # the model used to end in "approve: . Then retry the same call."
+    denial = card_capability_consent_denial(
+        _request("claude", registry_access_id="oauth-fc766127dbc54c2e"),
+        {"ok": False, "error": {"code": "delegated_capability_not_granted"}},
+        namespace="conv", tool="search", operation="object.search",
+        tenant="demo-tenant", project="demo-project",
+    )
+    assert denial["consent"]["claims"] == []
+    assert "approve: the operation conv · object.search. Then retry" in denial["instructions"]
+
+    claim = _denial("claude")
+    assert "approve: slack:read. Then retry" in claim["instructions"]
+
+
 def test_manual_automation_is_not_sent_to_the_pending_pane():
     """The pending pane's only save is delegated_agent_grant_create, which
     cannot serve a record keyed by a random access_id. Sending an automation

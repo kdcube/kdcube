@@ -114,6 +114,35 @@ async def test_hybrid_search_uses_explicit_context_no_ambient_state():
 
 
 @pytest.mark.asyncio
+async def test_an_unscoped_search_reads_each_turn_log_from_its_own_bundle():
+    backend = FakeBackend()
+
+    async def _search(**kwargs):
+        backend.search_kwargs = kwargs
+        return "turn_prev", [{
+            "turn_id": "turn_prev",
+            "conversation_id": "conv_other_app",
+            "bundle_id": "workspace@2026-03-31-13-36",
+            "score": 0.9,
+            "matched_via_role": "assistant",
+            "ts": "2026-05-05T10:00:00Z",
+        }]
+
+    backend.search = _search
+    context = ConversationSearchContext(user_id="u1", conversation_id="conv_now")
+    params = ConversationSearchParams(query="invoice", targets=["summary"], scope="user")
+
+    await run_conversation_search(context=context, params=params, search_backend=backend)
+
+    assert backend.search_kwargs["bundle_id"] is None
+    assert backend.turn_log_kwargs == {
+        "turn_id": "turn_prev",
+        "conversation_id": "conv_other_app",
+        "bundle_id": "workspace@2026-03-31-13-36",
+    }
+
+
+@pytest.mark.asyncio
 async def test_catalog_ordinal_routes_to_turn_catalog_without_query():
     backend = FakeBackend()
     context = ConversationSearchContext(
