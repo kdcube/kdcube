@@ -40,7 +40,11 @@ from kdcube_ai_app.apps.chat.sdk.protocol import (
 )
 from kdcube_ai_app.apps.chat.sdk.infra.auth_context import AuthContext, bind_auth_context
 from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import (
+    bind_bundle_operation_caller,
+    bind_bundle_operation_stream_caller,
     bind_bundle_named_service_caller,
+    make_local_bundle_operation_caller,
+    make_local_bundle_operation_stream_caller,
     make_local_bundle_named_service_caller,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import bind_current_request_context
@@ -796,11 +800,27 @@ class DataBusBundleWorker:
             pg_pool=pg_pool,
             comm_context=comm_context,
         )
-        with bind_auth_context(auth_context), bind_current_request_context(
-            comm_context,
-            comm=reply_comm,
-            bundle_id=message.bundle_id,
-        ), bind_bundle_named_service_caller(named_service_caller):
+        operation_caller = make_local_bundle_operation_caller(
+            redis=self.redis,
+            pg_pool=pg_pool,
+            comm_context=comm_context,
+        )
+        operation_stream_caller = make_local_bundle_operation_stream_caller(
+            redis=self.redis,
+            pg_pool=pg_pool,
+            comm_context=comm_context,
+        )
+        with (
+            bind_auth_context(auth_context),
+            bind_current_request_context(
+                comm_context,
+                comm=reply_comm,
+                bundle_id=message.bundle_id,
+            ),
+            bind_bundle_operation_caller(operation_caller),
+            bind_bundle_operation_stream_caller(operation_stream_caller),
+            bind_bundle_named_service_caller(named_service_caller),
+        ):
             if inspect.iscoroutinefunction(fn):
                 result = await asyncio.wait_for(fn(ctx, message), timeout=DATA_BUS_HANDLER_TIMEOUT_SECONDS)
             else:

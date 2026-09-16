@@ -13,6 +13,9 @@ from kdcube_ai_app.apps.chat.sdk.application_operations import (
     application_operation_ref,
 )
 from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import (
+    call_bundle_operation,
+    get_current_bundle_operation_caller,
+    get_current_bundle_operation_stream_caller,
     get_current_bundle_named_service_caller,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.stream import DataBusClaim
@@ -586,16 +589,36 @@ async def test_exhausted_partition_lock_retry_returns_terminal_result(
 
 
 @pytest.mark.asyncio
-async def test_handler_binds_local_named_service_caller_for_its_lifetime(
+async def test_handler_binds_local_bundle_callers_for_its_lifetime(
     monkeypatch,
 ) -> None:
-    sentinel = object()
+    operation_calls = []
+
+    async def operation_caller(call):
+        operation_calls.append(call)
+        return {"ok": True, "control_id": call.data["control_id"]}
+
+    operation_stream_caller = object()
+    named_service_caller = object()
 
     class _Bundle:
         async def handle(self, ctx, message):
             del ctx, message
-            assert get_current_bundle_named_service_caller() is sentinel
-            return {"status": "ok", "data": {"handled": True}}
+            assert get_current_bundle_operation_caller() is operation_caller
+            assert (
+                get_current_bundle_operation_stream_caller()
+                is operation_stream_caller
+            )
+            assert (
+                get_current_bundle_named_service_caller()
+                is named_service_caller
+            )
+            peer = await call_bundle_operation(
+                bundle_id="connection-hub@1-0",
+                operation="control_card_get",
+                data={"control_id": "control-project-one"},
+            )
+            return {"status": "ok", "data": dict(peer)}
 
     async def _workflow(*_args, **_kwargs):
         return _Bundle(), None
@@ -610,8 +633,18 @@ async def test_handler_binds_local_named_service_caller_for_its_lifetime(
     monkeypatch.setattr(worker_module, "_refresh_bundle_props", _refresh)
     monkeypatch.setattr(
         worker_module,
+        "make_local_bundle_operation_caller",
+        lambda **_kwargs: operation_caller,
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "make_local_bundle_operation_stream_caller",
+        lambda **_kwargs: operation_stream_caller,
+    )
+    monkeypatch.setattr(
+        worker_module,
         "make_local_bundle_named_service_caller",
-        lambda **_kwargs: sentinel,
+        lambda **_kwargs: named_service_caller,
     )
     monkeypatch.setattr(
         "kdcube_ai_app.apps.chat.ingress.resolvers.get_pg_pool",
@@ -647,6 +680,14 @@ async def test_handler_binds_local_named_service_caller_for_its_lifetime(
     result, reply_sent = await worker._invoke_handler(claim, handler)
 
     assert result.status == "ok"
-    assert result.data == {"handled": True}
+    assert result.data == {
+        "ok": True,
+        "control_id": "control-project-one",
+    }
+    assert len(operation_calls) == 1
+    assert operation_calls[0].bundle_id == "connection-hub@1-0"
+    assert operation_calls[0].operation == "control_card_get"
     assert reply_sent is False
+    assert get_current_bundle_operation_caller() is None
+    assert get_current_bundle_operation_stream_caller() is None
     assert get_current_bundle_named_service_caller() is None
