@@ -184,6 +184,12 @@ async def test_auth_code_consume_returns_bound_payload(store):
         scopes=["records:read"],
         operations=["records_export"],
         client_metadata={"client_name": "Verified client"},
+        properties={
+            "kdcube.application_operations": {
+                "schema": "kdcube.application_operations.v1",
+                "mode": "selected",
+            }
+        },
     )
     payload = await store.consume_auth_code(code)
     assert payload["client_id"] == "claude"
@@ -192,6 +198,12 @@ async def test_auth_code_consume_returns_bound_payload(store):
     assert payload["operations"] == ["records_export"]
     assert payload["redirect_uri"] == "http://localhost:9999/callback"
     assert payload["client_metadata"]["client_name"] == "Verified client"
+    assert payload["properties"] == {
+        "kdcube.application_operations": {
+            "schema": "kdcube.application_operations.v1",
+            "mode": "selected",
+        }
+    }
 
 
 @pytest.mark.asyncio

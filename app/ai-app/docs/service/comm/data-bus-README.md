@@ -94,8 +94,8 @@ operation selection in the actor context; it does not load application code to
 map a subject to an operation.
 
 Proc owns bundle execution concerns: loading bundle code, discovering
-`@data_bus_handler(...)`, applying effective bundle props, enforcing
-the exact Card-selected application operation plus bundle/handler visibility,
+`@data_bus_handler(...)`, applying effective bundle props, enforcing an
+explicit Card-selected application operation plus bundle/handler visibility,
 acquiring partition locks, and calling handler code.
 
 Ingress does not import bundle modules. That is intentional because ingress
@@ -239,24 +239,24 @@ handler. This keeps application source and execution dependencies out of
 ingress while preserving a pre-application-code authorization boundary.
 
 Data Bus treats an app payload as opaque, so the app owns operation-level
-authorization. Define each service operation once, then make every transport
-adapter pass that same identifier to one guarded dispatcher:
+authorization. Define each service operation once, then declare that same
+identifier on every transport adapter that performs the effect:
 
 ```text
-Card resource_operations[service resource]
-                    |
-                    v
-        canonical operation: worker.heartbeat
+canonical app operation: worker.heartbeat
              /                         \
-Data Bus payload.operation       MCP tool name
+@data_bus_handler(                @api(
+  operation_id="worker.heartbeat"  operation_id="worker.heartbeat"
+)                                  )
              \                         /
-              -> guarded service dispatcher -> domain effect
+              -> live Card decision -> domain effect
 ```
 
-The operation ID belongs to the service contract, not to MCP or Data Bus. The
-dispatcher resolves the live Card and checks the exact resource, operation, and
-required grants before domain code runs. Copied operation or grant lists in the
-Data Bus actor are diagnostic context, not authority.
+The operation ID belongs to the application contract, not to REST or Data Bus.
+KDCube scopes it by application id before storing or checking it. The processor
+resolves the live Card and checks the exact app-scoped operation before domain
+code runs. Copied operation or grant lists in the Data Bus actor are diagnostic
+context, not authority.
 
 Host clients use `app_foundation.data_bus.DelegatedCardCredential` to produce
 this handshake shape. Credential custody remains with Connection Hub; callers
@@ -430,6 +430,7 @@ The SDK runtime must own this guarantee when a handler requests it:
 ```python
 @data_bus_handler(
     subject="example.document.patch",
+    operation_id="document.patch",
     partition_by="object_ref",
     ordering="serial_per_partition",
     idempotency="required",
@@ -468,6 +469,7 @@ from kdcube_ai_app.apps.chat.sdk.data_bus import data_bus_handler
 
 @data_bus_handler(
     subject="example.document.patch",
+    operation_id="document.patch",
     partition_by="object_ref",
     ordering="serial_per_partition",
     idempotency="required",
@@ -491,6 +493,20 @@ Runtime code:
   bundle with registered handlers.
 
 The bundle manifest exposes registered subjects as `data_bus_handlers`.
+
+`operation_id` is the application-owned permission identity. An explicit value
+opts this handler into delegated application-operation Card enforcement and can
+be shared with an `@api` declaration for the same effect. KDCube then checks
+the canonical reference
+`urn:kdcube:application-operation:<application-id>:<operation-id>`.
+
+When `operation_id` is omitted, the manifest derives
+`data_bus.<subject>` as a distinct identity, but the handler retains the
+pre-policy Data Bus behavior. This compatibility rule prevents an upgrade from
+silently denying existing handlers whose Cards could not previously select a
+Data Bus-only operation. New delegated handlers should declare the operation
+explicitly. Do not reuse one explicit id for handlers that have different
+effects or authorization requirements.
 
 ## Producer APIs From Bundle Runtimes
 
@@ -653,8 +669,9 @@ Processing flow:
 3. The runtime loads the active bundle manifest and effective bundle props.
 4. The runtime verifies the bundle is enabled and visible to the actor.
 5. The runtime finds the registered handler by `subject`.
-6. For a delegated application-operation Card, the runtime derives the exact
-   operation from the handler declaration and verifies that it is selected.
+6. For a delegated application-operation Card and a handler with explicit
+   `operation_id`, the runtime derives the exact app-scoped reference and
+   verifies that it is selected.
 7. The runtime verifies handler `user_types` / `roles` visibility.
 8. If no handler exists or access is denied, the runtime writes a failure
    result, emits the correlated error when reply metadata exists, and then
@@ -720,7 +737,8 @@ Proc must:
 
 - load bundle manifests and handler metadata;
 - apply effective bundle props;
-- enforce the exact Card-selected application operation before handler code;
+- enforce an explicitly declared Card-selected application operation before
+  handler code;
 - enforce bundle `allowed_roles` and handler `user_types` / `roles`;
 - reject unknown subjects;
 - enforce handler idempotency and partition policy before invoking bundle code;

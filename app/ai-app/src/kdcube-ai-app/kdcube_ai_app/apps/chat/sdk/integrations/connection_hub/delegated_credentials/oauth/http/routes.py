@@ -1776,12 +1776,18 @@ async def authorize_consent_decision(request: Request) -> Response:
     resource_operations = payload.get("resource_operations")
     invocation_policies = payload.get("invocation_policies")
     account_scope = payload.get("account_scope")
+    properties = payload.get("properties")
     if not all(isinstance(value, Mapping) for value in (
         resource_grants,
         resource_operations,
         invocation_policies,
         account_scope,
     )):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "oauth_consent_selection_invalid"},
+        )
+    if properties is not None and not isinstance(properties, Mapping):
         return JSONResponse(
             status_code=400,
             content={"error": "oauth_consent_selection_invalid"},
@@ -1891,6 +1897,7 @@ async def authorize_consent_decision(request: Request) -> Response:
         catalog_version=str(resolved.get("catalog_version") or ""),
         account_scope=dict(resolved.get("account_scope") or {}),
         client_metadata=req.client.snapshot() if req.client is not None else {},
+        properties=dict(properties or {}),
         card_label=str(payload.get("label") or "").strip(),
         invocation_policies=canonical_invocation_policies,
         expected_card_revision=int(resolved.get("card_revision") or 0),
@@ -2244,6 +2251,7 @@ async def _issue_tokens(
     refresh_token=None,
     account_scope=None,
     client_metadata=None,
+    properties=None,
     card_label="",
     invocation_policies=None,
     replace_authority=False,
@@ -2398,6 +2406,7 @@ async def _issue_tokens(
             named_service_operations=named_service_operations,
             catalog_version=catalog_version,
             client_metadata=asserted_metadata,
+            properties=(properties if replace_authority else None),
             replace_authority=bool(replace_authority),
             expected_card_revision=expected_card_revision,
         )
@@ -2519,6 +2528,7 @@ async def token(request: Request) -> Response:
             catalog_version=payload.get("catalog_version") or "",
             account_scope=payload.get("account_scope") or None,
             client_metadata=payload.get("client_metadata") or {},
+            properties=payload.get("properties") or {},
             card_label=payload.get("card_label") or "",
             invocation_policies=payload.get("invocation_policies"),
             replace_authority=True,

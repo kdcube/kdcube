@@ -1016,6 +1016,12 @@ def test_multi_resource_card_decision_carries_full_selection_once(client, monkey
         },
         "named_service_operations": {},
         "account_scope": {},
+        "properties": {
+            "kdcube.application_operations": {
+                "schema": "kdcube.application_operations.v1",
+                "mode": "selected",
+            }
+        },
         "expected_card_revision": draft["card_revision"],
         "expected_catalog_version": draft["catalog_version"],
     }
@@ -1033,6 +1039,7 @@ def test_multi_resource_card_decision_carries_full_selection_once(client, monkey
     assert code_payload["resource_grants"] == decision["resource_grants"]
     assert code_payload["resource_operations"] == decision["resource_operations"]
     assert code_payload["card_label"] == "codex-main on dev-main"
+    assert code_payload["properties"] == decision["properties"]
     assert code_payload["expected_card_revision"] == draft["card_revision"]
     assert code_payload["scopes"] == ["records:read"]
 

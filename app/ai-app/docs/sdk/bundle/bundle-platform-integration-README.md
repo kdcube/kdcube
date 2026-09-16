@@ -3,8 +3,8 @@ id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-platform-integration-RE
 title: "Bundle Platform Integration"
 summary: "Declarative platform contract for exposing bundle capabilities through decorators, manifest metadata, REST operations, widgets, MCP routes, static UI, public routes, Data Bus handlers, scheduled jobs, and background job handlers."
 tags: ["sdk", "bundle", "integration", "decorators", "widgets", "operations", "mcp", "ui", "manifest", "cron", "scheduled-jobs", "background-jobs", "data-bus"]
-keywords: ["decorator based integration", "bundle manifest contract", "rest operations exposure", "operation csrf protection", "widget exposure", "mcp route exposure", "static ui exposure", "public route exposure", "data bus handler", "scheduled job exposure", "on_job background job handler"]
-updated_at: 2026-08-01
+keywords: ["decorator based integration", "bundle manifest contract", "rest operations exposure", "application operation identity", "operation csrf protection", "widget exposure", "mcp route exposure", "static ui exposure", "public route exposure", "data bus handler", "scheduled job exposure", "on_job background job handler"]
+updated_at: 2026-09-16
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-agent-integration-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-entrypoint-classes-README.md
@@ -549,6 +549,7 @@ Current signature:
 @api(
     method="POST",
     alias="preferences_exec_report",
+    operation_id="preferences.report.generate",
     route="operations",
     user_types=("registered",),
     csrf=True,
@@ -565,6 +566,17 @@ Current fields:
 - `alias`
   - public operation alias in the URL
   - default: Python method name
+- `operation_id`
+  - optional logical operation name owned by the application
+  - Connection Hub Card authority uses the app-scoped canonical reference
+    `urn:kdcube:application-operation:<application-id>:<operation-id>`
+  - when omitted, KDCube derives
+    `api.<route>.<lowercase-method>.<alias>`; route and method are therefore
+    distinct exposures by default
+  - use the same explicit value on REST, Data Bus, or another supported
+    exposure only when those adapters perform the same governed action
+  - the application id remains part of the canonical reference, so equal
+    operation ids in two applications never collide
 - `route`
   - `operations` or `public`
   - default: `operations`
@@ -624,6 +636,13 @@ Important current rule:
 
 - only methods decorated with `@api(...)` are remotely callable through bundle
   operation routes
+- a delegated Card with explicit application-operation policy must select this
+  endpoint's canonical app-scoped operation before the method is called
+- Card admission and endpoint visibility both apply: a selected operation does
+  not bypass `user_types`, `roles`, enabled state, or descriptor auth policy
+- the delegated platform role selected on the Card is what visibility checks
+  observe; unselected grantor admin roles are not copied into that runtime
+  identity
 - if both `user_types` and `roles` are provided, both must match for the
   endpoint to be visible/callable
 - `user_types` are evaluated by minimum required level, not exact equality
@@ -689,6 +708,34 @@ Route mapping:
   `/api/integrations/bundles/.../operations/{alias}`
 - `@api(route="public")` is callable through
   `/api/integrations/bundles/.../public/{alias}`
+
+Operation identity is separate from route mapping. For example, these two
+adapters intentionally share one Card decision because they perform the same
+domain effect:
+
+```python
+@api(
+    alias="report_publish",
+    route="operations",
+    operation_id="report.publish",
+    user_types=("registered",),
+)
+async def report_publish(self, **kwargs):
+    return await self.reports.publish(**kwargs)
+
+@data_bus_handler(
+    subject="reports.publish",
+    operation_id="report.publish",
+    idempotency="required",
+    user_types=("registered",),
+)
+async def report_publish_message(self, ctx, message):
+    return await self.reports.publish(**message.payload)
+```
+
+Both declarations produce the same app-scoped operation reference. Without an
+explicit `operation_id`, the API and Data Bus declarations keep separate,
+exposure-specific defaults.
 
 ### 1.5 `@mcp(...)`
 

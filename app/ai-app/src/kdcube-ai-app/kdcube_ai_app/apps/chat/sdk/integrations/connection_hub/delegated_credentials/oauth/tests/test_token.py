@@ -477,7 +477,22 @@ async def test_refresh_token_applies_effective_narrowing_without_rewriting_card(
     client.app.state.automation_access_factory = lambda: RecordingAutomationAccess(
         service_factory()
     )
-    code = await _seed_code(store)
+    application_policy = {
+        "kdcube.application_operations": {
+            "schema": "kdcube.application_operations.v1",
+            "mode": "selected",
+        }
+    }
+    code = await store.create_auth_code(
+        client_id="claude",
+        redirect_uri="http://127.0.0.1:9000/callback",
+        code_challenge=CHALLENGE,
+        sub="google:admin@example.test",
+        scopes=["records:read"],
+        operations=["records_export"],
+        identity_scope="grantor_identity_family",
+        properties=application_policy,
+    )
     first = client.post("/oauth/token", data={
         "grant_type": "authorization_code",
         "code": code,
@@ -487,6 +502,8 @@ async def test_refresh_token_applies_effective_narrowing_without_rewriting_card(
     }).json()
     initial_card = recorded_cards[-1]
     assert initial_card.resource_operations == {"*": ("records_export",)}
+    assert initial_card.properties == application_policy
+    assert record_calls[-1]["properties"] == application_policy
     refresh_token = first["refresh_token"]
     refresh_record = await store.validate_refresh_token(refresh_token)
     resource = str(refresh_record.get("resource") or "") or "*"
@@ -510,10 +527,12 @@ async def test_refresh_token_applies_effective_narrowing_without_rewriting_card(
     assert record_calls[-1]["operations"] is None
     assert record_calls[-1]["resource_grants"] is None
     assert record_calls[-1]["resource_operations"] is None
+    assert record_calls[-1]["properties"] is None
     refreshed_card = recorded_cards[-1]
     assert refreshed_card.card_revision == initial_card.card_revision + 1
     assert refreshed_card.resource_operations == initial_card.resource_operations
     assert refreshed_card.resource_grants == initial_card.resource_grants
+    assert refreshed_card.properties == initial_card.properties
 
 
 def test_unknown_refresh_token_is_invalid_grant(ctx):
