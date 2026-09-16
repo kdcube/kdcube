@@ -114,6 +114,27 @@ bundles:
               allowed_domains: []
               allow_subdomains: true
             capabilities:
+            - grant: kdcube:role:registered
+              label: Use APIs as a registered user
+              description: Run selected platform and application operations with registered-user authority.
+              delegable_roles:
+              - kdcube:role:registered
+              - kdcube:role:paid
+              - kdcube:role:privileged
+              - kdcube:role:super-admin
+            - grant: kdcube:role:paid
+              label: Use APIs as a paid user
+              description: Run selected platform and application operations with paid-user authority.
+              delegable_roles:
+              - kdcube:role:paid
+              - kdcube:role:privileged
+              - kdcube:role:super-admin
+            - grant: kdcube:role:privileged
+              label: Use APIs as a privileged user
+              description: Run selected platform and application operations with privileged-user authority.
+              delegable_roles:
+              - kdcube:role:privileged
+              - kdcube:role:super-admin
             - grant: kdcube:role:super-admin
               label: Use all platform and application APIs
               description: Admin-only delegated automation access to every authenticated KDCube platform and application API.
@@ -429,9 +450,12 @@ bundles:
             resources:
             - resource: '*'
               label: All platform and application APIs
-              description: Admin-only delegated automation scope for every authenticated KDCube platform and application API.
+              description: Administrator-issued delegated scope for selected KDCube platform and application APIs.
               admin_only: true
               grants:
+              - kdcube:role:registered
+              - kdcube:role:paid
+              - kdcube:role:privileged
               - kdcube:role:super-admin
             - resource: urn:kdcube:management:deployment:*:*
               label: KDCube deployment management
