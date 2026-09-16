@@ -27,6 +27,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Tuple, Any, Dict, List, Mapping
 
+from kdcube_ai_app.apps.chat.sdk.application_operations import (
+    api_application_operation_id,
+    data_bus_application_operation_id,
+)
 from kdcube_ai_app.apps.chat.sdk.protocol import (
     ExternalEventActor,
     ExternalEventPayload,
@@ -93,6 +97,8 @@ _BUNDLE_VENV_STRIP_ENV_KEYS = {
 class APIEndpointSpec:
     method_name: str
     alias: str
+    operation_id: str = ""
+    operation_id_explicit: bool = False
     http_method: str = "POST"
     route: str = "operations"
     user_types: tuple[str, ...] = ()
@@ -866,6 +872,7 @@ def api(
         *,
         method: str = "POST",
         alias: str | None = None,
+        operation_id: str | None = None,
         route: str = "operations",
         csrf: bool = False,
         user_types: List[str] | Tuple[str, ...] | None = None,
@@ -894,12 +901,20 @@ def api(
     def _wrap(fn):
         method_name = getattr(fn, "__name__", "api_method")
         resolved_alias = _clean_alias(alias, method_name)
+        resolved_operation_id, operation_id_explicit = api_application_operation_id(
+            alias=resolved_alias,
+            method=http_method,
+            route=resolved_route,
+            operation_id=operation_id,
+        )
         setattr(
             fn,
             API_METHOD_ATTR,
             APIEndpointSpec(
                 method_name=method_name,
                 alias=resolved_alias,
+                operation_id=resolved_operation_id,
+                operation_id_explicit=operation_id_explicit,
                 http_method=http_method,
                 route=resolved_route,
                 csrf=bool(csrf),
@@ -1290,6 +1305,7 @@ def cron(
 def data_bus_handler(
         *,
         subject: str,
+        operation_id: str | None = None,
         partition_by: str = "none",
         ordering: str = "parallel",
         idempotency: str = "optional",
@@ -1317,6 +1333,10 @@ def data_bus_handler(
         user_types=user_types,
         roles=roles,
     )
+    resolved_operation_id, operation_id_explicit = data_bus_application_operation_id(
+        subject=resolved_subject,
+        operation_id=operation_id,
+    )
 
     def _wrap(fn):
         method_name = getattr(fn, "__name__", "data_bus_handler")
@@ -1326,6 +1346,8 @@ def data_bus_handler(
             DataBusHandlerSpec(
                 method_name=method_name,
                 subject=resolved_subject,
+                operation_id=resolved_operation_id,
+                operation_id_explicit=operation_id_explicit,
                 partition_by=resolved_partition_by,
                 ordering=resolved_ordering,
                 idempotency=resolved_idempotency,
@@ -2627,6 +2649,7 @@ def _iter_bundle_callable_members(target: Any):
         PROCESS_OFFLINE_EVENTS_ATTR,
         UI_MAIN_ATTR,
         CRON_JOB_ATTR,
+        DATA_BUS_HANDLER_ATTR,
         AUTHORITY_PROVIDER_ATTR,
     )
     for name, member in inspect.getmembers(cls, predicate=callable):
@@ -2687,6 +2710,17 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
             resolved = APIEndpointSpec(
                 method_name=member_name,
                 alias=str(getattr(api_spec, "alias", "") or ""),
+                operation_id=(
+                    str(getattr(api_spec, "operation_id", "") or "")
+                    or api_application_operation_id(
+                        alias=getattr(api_spec, "alias", ""),
+                        method=getattr(api_spec, "http_method", "POST"),
+                        route=getattr(api_spec, "route", "operations"),
+                    )[0]
+                ),
+                operation_id_explicit=bool(
+                    getattr(api_spec, "operation_id_explicit", False)
+                ),
                 http_method=str(getattr(api_spec, "http_method", "POST") or "POST"),
                 route=str(getattr(api_spec, "route", "operations") or "operations"),
                 csrf=bool(getattr(api_spec, "csrf", False)),
@@ -2813,6 +2847,13 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
             data_bus_handlers.append(DataBusHandlerSpec(
                 method_name=member_name,
                 subject=subject,
+                operation_id=(
+                    str(getattr(data_bus_spec, "operation_id", "") or "")
+                    or data_bus_application_operation_id(subject=subject)[0]
+                ),
+                operation_id_explicit=bool(
+                    getattr(data_bus_spec, "operation_id_explicit", False)
+                ),
                 partition_by=partition_by,
                 ordering=ordering,
                 idempotency=idempotency,

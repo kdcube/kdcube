@@ -147,6 +147,9 @@ from kdcube_ai_app.apps.chat.sdk.solutions.sites import (
     SiteRegistryError,
     application_site_catalog_runtime,
 )
+from kdcube_ai_app.apps.chat.sdk.application_operations import (
+    application_operation_ref,
+)
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.surface_guard import (
     DELEGATED_PROXY_MCP_AUTH_MODE,
     MANAGED_MCP_AUTH_MODE,
@@ -1862,7 +1865,12 @@ async def _get_bundle_manifest(
         return None
 
 
-def _api_spec_descriptor(spec: APIEndpointSpec, props: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def _api_spec_descriptor(
+    spec: APIEndpointSpec,
+    props: Optional[Dict[str, Any]],
+    *,
+    bundle_id: str,
+) -> Dict[str, Any]:
     effective = apply_api_overrides(spec, props or {})
     csrf_override = provider_surface_csrf(
         props,
@@ -1885,6 +1893,12 @@ def _api_spec_descriptor(spec: APIEndpointSpec, props: Optional[Dict[str, Any]])
     )
     return {
         "alias": spec.alias,
+        "operation_id": spec.operation_id,
+        "operation_ref": application_operation_ref(
+            application_id=bundle_id,
+            operation_id=spec.operation_id,
+        ),
+        "operation_id_explicit": bool(spec.operation_id_explicit),
         "http_method": spec.http_method,
         "route": spec.route,
         "user_types": list(effective.user_types),
@@ -2023,7 +2037,10 @@ def _manifest_to_descriptor(
         "allowed_roles_default": list(manifest.allowed_roles),
         "allowed_roles_path": f"{canonical_provider_surface_path('bundle')}.visibility.allowed_roles",
         "allowed_roles_overridden": tuple(effective.allowed_roles) != tuple(manifest.allowed_roles),
-        "apis": [_api_spec_descriptor(s, props) for s in manifest.api_endpoints],
+        "apis": [
+            _api_spec_descriptor(s, props, bundle_id=manifest.bundle_id)
+            for s in manifest.api_endpoints
+        ],
         "mcp_endpoints": [_mcp_spec_descriptor(s, props) for s in manifest.mcp_endpoints],
         "widgets": [_widget_spec_descriptor(s, props) for s in manifest.ui_widgets],
         "on_message": manifest.on_message.method_name if manifest.on_message else None,
@@ -2034,6 +2051,12 @@ def _manifest_to_descriptor(
             {
                 "method_name": spec.method_name,
                 "subject": spec.subject,
+                "operation_id": spec.operation_id,
+                "operation_ref": application_operation_ref(
+                    application_id=manifest.bundle_id,
+                    operation_id=spec.operation_id,
+                ),
+                "operation_id_explicit": bool(spec.operation_id_explicit),
                 "partition_by": spec.partition_by,
                 "ordering": spec.ordering,
                 "idempotency": spec.idempotency,
@@ -2071,7 +2094,9 @@ def _manifest_to_descriptor_filtered(
             route=effective.route,
         )
         if is_api_enabled(props, effective) and _endpoint_visible(effective.user_types, effective.roles, session, auth):
-            visible_api_descriptors.append(_api_spec_descriptor(spec, props))
+            visible_api_descriptors.append(
+                _api_spec_descriptor(spec, props, bundle_id=manifest.bundle_id)
+            )
 
     visible_widget_descriptors: list[Dict[str, Any]] = []
     for spec in manifest.ui_widgets:

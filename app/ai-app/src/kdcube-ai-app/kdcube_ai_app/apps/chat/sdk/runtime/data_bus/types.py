@@ -97,6 +97,8 @@ def data_bus_group_name(*, tenant: str, project: str, bundle_id: str) -> str:
 class DataBusHandlerSpec:
     method_name: str
     subject: str
+    operation_id: str = ""
+    operation_id_explicit: bool = False
     partition_by: str = DATA_BUS_PARTITION_NONE
     ordering: str = DATA_BUS_ORDERING_PARALLEL
     idempotency: str = DATA_BUS_IDEMPOTENCY_OPTIONAL

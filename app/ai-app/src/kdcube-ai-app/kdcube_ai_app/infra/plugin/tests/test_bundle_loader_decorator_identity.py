@@ -21,7 +21,13 @@ from kdcube_ai_app.infra.plugin.bundle_loader import (
     UIWidgetSpec as CurrentUIWidgetSpec,
     API_METHOD_ATTR,
     api,
+    data_bus_handler,
     discover_bundle_interface_manifest,
+)
+from kdcube_ai_app.apps.chat.sdk.application_operations import (
+    api_application_operation_id,
+    application_operation_ref,
+    parse_application_operation_ref,
 )
 
 
@@ -223,3 +229,81 @@ def test_api_decorator_preserves_csrf_metadata_and_limits_it_to_operations_post(
         api(alias="bad_get", method="GET", csrf=True)
     with pytest.raises(ValueError, match="POST on the operations route"):
         api(alias="bad_public", route="public", csrf=True)
+
+
+def test_application_operation_reference_is_app_scoped_and_round_trips():
+    operation_id, explicit = api_application_operation_id(
+        alias="same_alias",
+        method="POST",
+        route="operations",
+    )
+    assert operation_id == "api.operations.post.same_alias"
+    assert explicit is False
+
+    first = application_operation_ref(
+        application_id="first@1-0",
+        operation_id=operation_id,
+    )
+    second = application_operation_ref(
+        application_id="second@1-0",
+        operation_id=operation_id,
+    )
+    assert first != second
+    assert parse_application_operation_ref(first) == (
+        "first@1-0",
+        operation_id,
+    )
+
+
+def test_explicit_operation_id_can_join_api_and_data_bus_exposures():
+    class SharedOperationBundle:
+        @api(alias="publish_report", operation_id="report.publish")
+        async def publish_report(self):
+            return None
+
+        @data_bus_handler(
+            subject="report.publish.requested",
+            operation_id="report.publish",
+        )
+        async def publish_report_from_bus(self):
+            return None
+
+    manifest = discover_bundle_interface_manifest(
+        SharedOperationBundle,
+        bundle_id="reports@1-0",
+    )
+    api_spec = manifest.api_endpoints[0]
+    handler_spec = manifest.data_bus_handlers[0]
+
+    assert api_spec.operation_id == "report.publish"
+    assert api_spec.operation_id_explicit is True
+    assert handler_spec.operation_id == "report.publish"
+    assert handler_spec.operation_id_explicit is True
+    assert application_operation_ref(
+        application_id=manifest.bundle_id,
+        operation_id=api_spec.operation_id,
+    ) == application_operation_ref(
+        application_id=manifest.bundle_id,
+        operation_id=handler_spec.operation_id,
+    )
+
+
+def test_implicit_operation_ids_keep_api_exposures_distinct():
+    class DistinctExposuresBundle:
+        @api(alias="status", method="GET", route="public")
+        async def public_status(self):
+            return None
+
+        @api(alias="status", method="POST", route="operations")
+        async def private_status(self):
+            return None
+
+    manifest = discover_bundle_interface_manifest(
+        DistinctExposuresBundle,
+        bundle_id="status@1-0",
+    )
+    operation_ids = {spec.operation_id for spec in manifest.api_endpoints}
+    assert operation_ids == {
+        "api.operations.post.status",
+        "api.public.get.status",
+    }
