@@ -282,7 +282,7 @@ def _manifest():
     )
 
 
-def _patch_data_bus_contract(monkeypatch, manifest):
+def _patch_registered_bundle(monkeypatch):
     async def fake_load_registry(_redis, tenant, project):
         return SimpleNamespace(
             bundles={
@@ -298,7 +298,6 @@ def _patch_data_bus_contract(monkeypatch, manifest):
         return {}
 
     monkeypatch.setattr(pub, "load_registry", fake_load_registry)
-    monkeypatch.setattr(pub, "load_bundle_manifest", lambda *args, **kwargs: manifest)
     monkeypatch.setattr(pub, "get_bundle_props", fake_get_bundle_props)
     monkeypatch.setattr(pub, "get_settings", lambda: SimpleNamespace(TENANT="tenant-a", PROJECT="project-a"))
 
@@ -320,10 +319,24 @@ def _async_noop():
 
 
 @pytest.mark.asyncio
+async def test_registered_bundle_check_does_not_load_application_source(monkeypatch):
+    redis = FakeRedis()
+    _patch_registered_bundle(monkeypatch)
+
+    await DataBusSocketIOIngress(app=_app(redis))._ensure_registered_bundle(
+        tenant="tenant-a",
+        project="project-a",
+        bundle_id="task-tracker@1-0",
+    )
+
+    assert not hasattr(pub, "load_bundle_manifest")
+
+
+@pytest.mark.asyncio
 async def test_data_bus_publish_accepts_messages_into_bundle_stream(monkeypatch):
     redis = FakeRedis()
     app = _app(redis)
-    _patch_data_bus_contract(monkeypatch, _manifest())
+    _patch_registered_bundle(monkeypatch)
 
     ingress = DataBusSocketIOIngress(app=app)
     ack = await ingress.handle_publish(
@@ -412,7 +425,7 @@ async def test_data_bus_publish_package_message_limit_rejection_does_not_write_s
             "registered": DataBusPublishLimit(max_messages_per_package=0),
         }),
     )
-    _patch_data_bus_contract(monkeypatch, _manifest())
+    _patch_registered_bundle(monkeypatch)
 
     ingress = DataBusSocketIOIngress(app=app)
     ack = await ingress.handle_publish(
@@ -453,7 +466,7 @@ async def test_data_bus_publish_limits_can_be_disabled_for_prototyping(monkeypat
             },
         ),
     )
-    _patch_data_bus_contract(monkeypatch, _manifest())
+    _patch_registered_bundle(monkeypatch)
 
     ingress = DataBusSocketIOIngress(app=app)
     ack = await ingress.handle_publish(
@@ -493,7 +506,7 @@ async def test_data_bus_publish_package_rate_limit_rejection_does_not_write_seco
             ),
         }),
     )
-    _patch_data_bus_contract(monkeypatch, _manifest())
+    _patch_registered_bundle(monkeypatch)
 
     ingress = DataBusSocketIOIngress(app=app)
     payload = {
@@ -527,7 +540,7 @@ async def test_data_bus_publish_package_rate_limit_rejection_does_not_write_seco
 async def test_data_bus_publish_defaults_to_timestamp_message_id(monkeypatch):
     redis = FakeRedis()
     app = _app(redis)
-    _patch_data_bus_contract(monkeypatch, _manifest())
+    _patch_registered_bundle(monkeypatch)
 
     ingress = DataBusSocketIOIngress(app=app)
     ack = await ingress.handle_publish(
@@ -558,7 +571,7 @@ async def test_data_bus_publish_defaults_to_timestamp_message_id(monkeypatch):
 async def test_data_bus_publish_can_target_sse_reply_stream(monkeypatch):
     redis = FakeRedis()
     app = _app(redis)
-    _patch_data_bus_contract(monkeypatch, _manifest())
+    _patch_registered_bundle(monkeypatch)
 
     ingress = DataBusSocketIOIngress(app=app)
     ack = await ingress.handle_publish(
@@ -591,22 +604,10 @@ async def test_data_bus_publish_can_target_sse_reply_stream(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_data_bus_publish_anonymous_threshold_handler_accepts_platform_registered_session(monkeypatch):
+async def test_data_bus_publish_queues_platform_registered_session_for_proc_visibility(monkeypatch):
     redis = FakeRedis()
     app = _app(redis)
-    manifest = SimpleNamespace(
-        allowed_roles=(),
-        allowed_roles_config=None,
-        data_bus_handlers=(
-            DataBusHandlerSpec(
-                method_name="handle_echo",
-                subject="workspace.echo",
-                idempotency="required",
-                user_types=("anonymous",),
-            ),
-        ),
-    )
-    _patch_data_bus_contract(monkeypatch, manifest)
+    _patch_registered_bundle(monkeypatch)
 
     ingress = DataBusSocketIOIngress(app=app)
     ack = await ingress.handle_publish(
@@ -635,7 +636,7 @@ async def test_data_bus_publish_anonymous_threshold_handler_accepts_platform_reg
 async def test_data_bus_publish_queues_unknown_subject_for_proc_side_rejection(monkeypatch):
     redis = FakeRedis()
     app = _app(redis)
-    _patch_data_bus_contract(monkeypatch, _manifest())
+    _patch_registered_bundle(monkeypatch)
 
     ingress = DataBusSocketIOIngress(app=app)
     ack = await ingress.handle_publish(
@@ -665,14 +666,7 @@ async def test_data_bus_publish_queues_unknown_subject_for_proc_side_rejection(m
 async def test_data_bus_publish_rejects_bundle_outside_federated_token_scope(monkeypatch):
     redis = FakeRedis()
     app = _app(redis)
-    manifest = SimpleNamespace(
-        allowed_roles=(),
-        allowed_roles_config=None,
-        data_bus_handlers=(
-            DataBusHandlerSpec(method_name="handle_known", subject="known.subject"),
-        ),
-    )
-    _patch_data_bus_contract(monkeypatch, manifest)
+    _patch_registered_bundle(monkeypatch)
 
     socket_session = _socket_session()
     socket_session["federated_claims"] = {
@@ -705,7 +699,7 @@ async def test_data_bus_publish_rejects_bundle_outside_federated_token_scope(mon
 async def test_socketio_chat_message_and_data_bus_publish_coexist_without_cross_routing(monkeypatch):
     redis = FakeRedis()
     app = _app(redis)
-    _patch_data_bus_contract(monkeypatch, _manifest())
+    _patch_registered_bundle(monkeypatch)
 
     captured_chat: dict[str, dict] = {}
 
@@ -1046,7 +1040,7 @@ def test_data_bus_actor_preserves_delegated_authority_for_handler_policy() -> No
 async def test_data_bus_publish_refreshes_live_card_authority(monkeypatch):
     redis = FakeRedis()
     app = _app(redis)
-    _patch_data_bus_contract(monkeypatch, _manifest())
+    _patch_registered_bundle(monkeypatch)
     resource = (
         "https://board.example/api/integrations/bundles/tenant-a/project-a/"
         "task-tracker@1-0/public/mcp/problem_board"
@@ -1115,7 +1109,7 @@ async def test_data_bus_publish_refreshes_live_card_authority(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_data_bus_publish_enforces_application_operation_and_card_role(monkeypatch):
+async def test_data_bus_publish_carries_selected_operation_and_card_role(monkeypatch):
     redis = FakeRedis()
     app = _app(redis)
     handler = DataBusHandlerSpec(
@@ -1125,12 +1119,7 @@ async def test_data_bus_publish_enforces_application_operation_and_card_role(mon
         operation_id_explicit=True,
         user_types=("registered",),
     )
-    manifest = SimpleNamespace(
-        allowed_roles=(),
-        allowed_roles_config=None,
-        data_bus_handlers=(handler,),
-    )
-    _patch_data_bus_contract(monkeypatch, manifest)
+    _patch_registered_bundle(monkeypatch)
     resource = (
         "https://board.example/api/integrations/bundles/tenant-a/project-a/"
         "task-tracker@1-0/public/mcp/problem_board"
@@ -1198,7 +1187,7 @@ async def test_data_bus_publish_enforces_application_operation_and_card_role(mon
 
 
 @pytest.mark.asyncio
-async def test_data_bus_publish_rejects_unselected_application_operation(monkeypatch):
+async def test_data_bus_publish_carries_unselected_operation_to_worker_guard(monkeypatch):
     redis = FakeRedis()
     app = _app(redis)
     handler = DataBusHandlerSpec(
@@ -1207,12 +1196,7 @@ async def test_data_bus_publish_rejects_unselected_application_operation(monkeyp
         operation_id="report.publish",
         operation_id_explicit=True,
     )
-    manifest = SimpleNamespace(
-        allowed_roles=(),
-        allowed_roles_config=None,
-        data_bus_handlers=(handler,),
-    )
-    _patch_data_bus_contract(monkeypatch, manifest)
+    _patch_registered_bundle(monkeypatch)
     resource = (
         "https://board.example/api/integrations/bundles/tenant-a/project-a/"
         "task-tracker@1-0/public/mcp/problem_board"
@@ -1257,14 +1241,16 @@ async def test_data_bus_publish_rejects_unselected_application_operation(monkeyp
         },
     )
 
-    assert ack["status"] == "rejected"
-    assert ack["rejected"][0]["error_type"] == "application_operation_not_granted"
-    assert ack["rejected"][0]["operation_ref"] == data_bus_application_operation_ref(
-        application_id="task-tracker@1-0",
-        subject=handler.subject,
-        operation_id=handler.operation_id,
-    )
-    assert redis.streams == {}
+    assert ack["status"] == "accepted"
+    stream_key = "kdcube:data-bus:tenant-a:project-a:task-tracker@1-0:messages"
+    record = json.loads(redis.streams[stream_key][0][1]["json"])
+    assert record["actor"]["identity_authority"]["resource_operations"]["*"] == [
+        data_bus_application_operation_ref(
+            application_id="task-tracker@1-0",
+            subject="report.read.requested",
+            operation_id="report.read",
+        )
+    ]
 
 
 @pytest.mark.asyncio

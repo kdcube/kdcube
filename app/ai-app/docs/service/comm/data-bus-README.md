@@ -4,7 +4,7 @@ title: "Data Bus"
 summary: "Runtime contract for bundle-scoped Data Bus messages, including direct delegated-Card admission, handler registration, ordering, correlated results, and live-session fanout."
 status: active
 tags: ["service", "comm", "data-bus", "socketio", "sse", "redis-streams", "bundle-runtime"]
-updated_at: 2026-09-12
+updated_at: 2026-09-16
 keywords:
   [
     "data bus",
@@ -89,11 +89,14 @@ browser/widget/service client
 
 Ingress owns transport concerns: socket authentication, tenant/project/session
 normalization, payload bounds, delegated Card or federated token verification,
-and stream admission.
+and stream admission. For a delegated Card it carries the server-resolved Card
+operation selection in the actor context; it does not load application code to
+map a subject to an operation.
 
 Proc owns bundle execution concerns: loading bundle code, discovering
 `@data_bus_handler(...)`, applying effective bundle props, enforcing
-bundle/handler visibility, acquiring partition locks, and calling handler code.
+the exact Card-selected application operation plus bundle/handler visibility,
+acquiring partition locks, and calling handler code.
 
 Ingress does not import bundle modules. That is intentional because ingress
 should not require bundle execution dependencies and should not decide handler
@@ -227,6 +230,13 @@ outbound delivery also re-resolves it before using a registered live route.
 Revoking the Card or removing the resource therefore stops both directions;
 an authority-store outage fails closed for the current delivery without
 discarding the route needed for a later retry.
+
+Stream admission and operation authorization are distinct. Ingress records the
+live Card selection and acknowledges accepted transport work. The processor
+then resolves the message subject against its loaded handler manifest and
+checks the resulting canonical application operation before invoking the
+handler. This keeps application source and execution dependencies out of
+ingress while preserving a pre-application-code authorization boundary.
 
 Data Bus treats an app payload as opaque, so the app owns operation-level
 authorization. Define each service operation once, then make every transport
@@ -643,19 +653,21 @@ Processing flow:
 3. The runtime loads the active bundle manifest and effective bundle props.
 4. The runtime verifies the bundle is enabled and visible to the actor.
 5. The runtime finds the registered handler by `subject`.
-6. The runtime verifies handler `user_types` / `roles` visibility.
-7. If no handler exists or access is denied, the runtime writes a failure result and
+6. For a delegated application-operation Card, the runtime derives the exact
+   operation from the handler declaration and verifies that it is selected.
+7. The runtime verifies handler `user_types` / `roles` visibility.
+8. If no handler exists or access is denied, the runtime writes a failure result and
    acknowledges the stream item.
-8. If the handler uses `serial_per_partition`, the runtime acquires the
+9. If the handler uses `serial_per_partition`, the runtime acquires the
    partition token lock before invoking bundle code.
-9. The handler mutates bundle-owned durable storage.
-10. The runtime writes a result record and emits an optional reply when reply
+10. The handler mutates bundle-owned durable storage.
+11. The runtime writes a result record and emits an optional reply when reply
    metadata exists.
-11. The runtime acknowledges the stream item after the durable mutation and
+12. The runtime acknowledges the stream item after the durable mutation and
    result handling path completes.
-12. Retryable failures remain pending or are requeued according to the runtime
+13. Retryable failures remain pending or are requeued according to the runtime
    retry policy.
-13. Non-retryable failures or exhausted retries go to the DLQ.
+14. Non-retryable failures or exhausted retries go to the DLQ.
 
 Suggested result record shape:
 
@@ -700,6 +712,7 @@ Proc must:
 
 - load bundle manifests and handler metadata;
 - apply effective bundle props;
+- enforce the exact Card-selected application operation before handler code;
 - enforce bundle `allowed_roles` and handler `user_types` / `roles`;
 - reject unknown subjects;
 - enforce handler idempotency and partition policy before invoking bundle code;
