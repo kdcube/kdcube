@@ -25,3 +25,10 @@ def test_legacy_card_without_role_keeps_existing_projection() -> None:
     assert projection.selected_on_card is False
     assert projection.roles == ("kdcube:role:super-admin",)
     assert projection.user_type == "external"
+
+
+def test_explicit_privileged_role_projects_privileged_user_type() -> None:
+    projection = delegated_role_projection(["kdcube:role:privileged"])
+
+    assert projection.roles == ("kdcube:role:privileged",)
+    assert projection.user_type == "privileged"

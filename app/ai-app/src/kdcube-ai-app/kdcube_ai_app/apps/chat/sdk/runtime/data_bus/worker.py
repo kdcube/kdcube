@@ -28,6 +28,7 @@ from kdcube_ai_app.apps.chat.sdk.application_operations import (
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_roles import (
     delegated_role_projection,
 )
+from kdcube_ai_app.auth.role_hierarchy import roles_satisfy_any
 from kdcube_ai_app.apps.chat.sdk.protocol import (
     ConversationCtx,
     ExternalEventActor,
@@ -132,10 +133,7 @@ def _actor_raw_roles(actor: Mapping[str, Any] | None) -> set[str]:
 
 
 def _raw_roles_visible(required_roles: tuple[str, ...] | list[str] | None, actor: Mapping[str, Any] | None) -> bool:
-    roles = tuple(str(role or "").strip() for role in (required_roles or ()) if str(role or "").strip())
-    if not roles:
-        return True
-    return bool(_actor_raw_roles(actor) & set(roles))
+    return roles_satisfy_any(_actor_raw_roles(actor), required_roles)
 
 
 def _user_types_visible(
@@ -555,7 +553,7 @@ class DataBusBundleWorker:
                 )
                 await self._complete_terminal_result(claim, result)
                 return
-        if self.bundle_allowed_roles and not bool(_actor_raw_roles(message.actor) & set(self.bundle_allowed_roles)):
+        if not _raw_roles_visible(self.bundle_allowed_roles, message.actor):
             result = DataBusResult.error_result(
                 message,
                 code="bundle_not_visible",

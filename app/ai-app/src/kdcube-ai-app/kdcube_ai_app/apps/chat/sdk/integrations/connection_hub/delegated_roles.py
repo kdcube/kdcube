@@ -8,17 +8,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable
 
+from kdcube_ai_app.auth.role_hierarchy import (
+    PAID_ROLE,
+    PRIVILEGED_ROLES,
+    REGISTERED_ROLE,
+)
+
 
 PLATFORM_ROLE_PREFIX = "kdcube:role:"
-REGISTERED_ROLE = "kdcube:role:registered"
-PAID_ROLE = "kdcube:role:paid"
-PRIVILEGED_ROLES = frozenset(
-    {
-        "kdcube:role:admin",
-        "kdcube:role:privileged",
-        "kdcube:role:super-admin",
-    }
-)
 
 
 def _values(items: Iterable[Any] | None) -> tuple[str, ...]:

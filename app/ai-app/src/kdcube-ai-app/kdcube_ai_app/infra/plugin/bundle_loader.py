@@ -818,9 +818,9 @@ def bundle_entrypoint(
 
     allowed_roles: optional list of non-derived (external) role names such as
         "kdcube:role:<custom-role>" that restrict bundle visibility in the
-        bundle listing. Only users whose raw roles (kdcube:role:* entries from
-        the session) intersect with allowed_roles will see this bundle.
-        Empty or None means visible to all authenticated users.
+        bundle listing. Platform roles use the canonical authority hierarchy;
+        custom roles require exact identity. Empty or None means visible to
+        all authenticated users.
 
     Bundle-level feature gating uses the canonical bundle-props path
     ``enabled.bundle`` (resolved by the platform). When that value is falsy,

@@ -2293,6 +2293,36 @@ def test_user_type_visibility_uses_minimum_threshold_order():
     assert integrations._user_types_visible(("registered", "privileged"), _session(user_type="paid")) is True
 
 
+def test_rest_role_visibility_uses_platform_dominance_only():
+    super_admin = _session(
+        user_type="privileged",
+        roles=["kdcube:role:super-admin"],
+    )
+
+    assert integrations._raw_roles_visible(
+        ("kdcube:role:registered",),
+        super_admin,
+    ) is True
+    assert integrations._raw_roles_visible(
+        ("kdcube:role:paid",),
+        super_admin,
+    ) is True
+    assert integrations._raw_roles_visible(
+        ("kdcube:role:finance",),
+        super_admin,
+    ) is False
+
+    @bundle_entrypoint(allowed_roles=("kdcube:role:registered",))
+    class _RegisteredBundle:
+        pass
+
+    manifest = discover_bundle_interface_manifest(
+        _RegisteredBundle(),
+        bundle_id="registered.bundle",
+    )
+    assert integrations._bundle_allowed_for_session(manifest, super_admin) is True
+
+
 def test_visible_specs_apply_threshold_user_types():
     class _VisibilityWorkflow:
         @api(alias="reg_only", user_types=("registered",))

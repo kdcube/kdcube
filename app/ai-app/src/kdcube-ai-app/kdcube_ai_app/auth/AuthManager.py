@@ -8,14 +8,19 @@ from typing import Optional, Tuple
 
 from pydantic import BaseModel
 
+from kdcube_ai_app.auth.role_hierarchy import (
+    PAID_ROLES,
+    PRIVILEGED_ROLES,
+    REGISTERED_ROLE,
+    missing_required_roles,
+    roles_satisfy_any,
+)
+
 logger = logging.getLogger("AuthManager")
 
 HTTP_401_UNAUTHORIZED = 401
 HTTP_403_FORBIDDEN = 403
 
-PRIVILEGED_ROLES = {"kdcube:role:super-admin", "kdcube:role:admin"}
-PAID_ROLES = {"kdcube:role:paid"}
-REGISTERED_ROLE = "kdcube:role:registered"
 # Read-only integration role granted through Connection Hub delegated
 # credentials; never grants write/admin access.
 FEEDBACK_READER_ROLE = "kdcube:role:feedback-reader"
@@ -137,17 +142,17 @@ class RequireRoles(RequirementBase):
             return RequirementValidationError("User has no roles assigned.", HTTP_403_FORBIDDEN)
 
         required = set(self.roles)
-        actual = set(user.roles)
+        actual = tuple(user.roles)
 
         if self.require_all:
-            missing = required - actual
+            missing = set(missing_required_roles(actual, required))
             if missing:
                 return RequirementValidationError(
                     f"User missing required roles: {', '.join(sorted(missing))}",
                     HTTP_403_FORBIDDEN
                 )
         else:
-            if not (required & actual):
+            if not roles_satisfy_any(actual, required):
                 return RequirementValidationError(
                     f"User must have at least one of these roles: {', '.join(sorted(required))}",
                     HTTP_403_FORBIDDEN

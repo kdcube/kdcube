@@ -7,6 +7,7 @@ from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import (
     BundleMCPResult,
     BundleOperationCall,
     _apply_request_projection_to_session,
+    _raw_roles_visible,
     _target_comm_context,
     bind_bundle_mcp_caller,
     bind_bundle_operation_caller,
@@ -23,6 +24,18 @@ from kdcube_ai_app.apps.chat.sdk.protocol import (
     ExternalEventUser,
 )
 from kdcube_ai_app.auth.sessions import UserSession, UserType
+
+
+def test_bundle_operation_role_visibility_uses_platform_dominance_only():
+    session = UserSession(
+        session_id="session-role-hierarchy",
+        user_type=UserType.PRIVILEGED,
+        roles=["kdcube:role:super-admin"],
+    )
+
+    assert _raw_roles_visible(("kdcube:role:registered",), session) is True
+    assert _raw_roles_visible(("kdcube:role:paid",), session) is True
+    assert _raw_roles_visible(("kdcube:role:service",), session) is False
 
 
 @pytest.mark.asyncio

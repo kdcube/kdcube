@@ -32,6 +32,7 @@ from kdcube_ai_app.apps.chat.ingress.resolvers import (
 )
 from kdcube_ai_app.apps.middleware.gateway import STATE_SESSION, STATE_STREAM_ID, extract_stream_id
 from kdcube_ai_app.auth.AuthManager import RequireUser
+from kdcube_ai_app.auth.role_hierarchy import roles_satisfy_any
 from kdcube_ai_app.auth.sessions import RequestContext, UserSession, UserType
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.infra.service_hub.inventory import (
@@ -815,10 +816,7 @@ def _user_raw_roles(session: UserSession) -> set[str]:
 
 
 def _raw_roles_visible(required_roles: tuple[str, ...] | list[str] | None, session: UserSession) -> bool:
-    roles = tuple(str(role or "").strip() for role in (required_roles or ()) if str(role or "").strip())
-    if not roles:
-        return True
-    return bool(_user_raw_roles(session) & set(roles))
+    return roles_satisfy_any(_user_raw_roles(session), required_roles)
 
 
 def _policy_list(value: Any) -> tuple[str, ...]:
@@ -896,9 +894,7 @@ def _bundle_allowed_for_session(
     if manifest is None:
         return True
     effective = apply_bundle_overrides(manifest, props or {})
-    if not effective.allowed_roles:
-        return True
-    return bool(_user_raw_roles(session) & set(effective.allowed_roles))
+    return _raw_roles_visible(effective.allowed_roles, session)
 
 
 router = APIRouter()

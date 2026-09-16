@@ -3,8 +3,8 @@ id: repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
 title: "Auth"
 summary: "Authentication providers and token transport across REST/SSE/Socket.IO."
 tags: ["service", "auth", "security", "tokens"]
-keywords: ["delegated auth", "cookie auth", "JWT", "SSE auth", "Socket.IO"]
-updated_at: 2026-09-11
+keywords: ["delegated auth", "cookie auth", "JWT", "SSE auth", "Socket.IO", "role hierarchy", "role admission"]
+updated_at: 2026-09-16
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-selector-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-credentials/oauth-delegated-credential-protocol-adapter-README.md
@@ -38,7 +38,7 @@ resolves linked authority.
 
 3) **User type classification**  
 User type is derived from roles:
-- **Privileged**: any role in `PRIVILEGED_ROLES` (`kdcube:role:super-admin`, `kdcube:role:admin`)
+- **Privileged**: any role in `PRIVILEGED_ROLES` (`kdcube:role:super-admin`, `kdcube:role:privileged`, `kdcube:role:admin`)
 - **Paid**: any role in `PAID_ROLES` (`kdcube:role:paid`)
 - **Registered**: authenticated user with any other role
 - **External**: authenticated/proven identity with no platform roles
@@ -346,12 +346,29 @@ items:
 
 Common role names in this codebase (non‑exhaustive):
 - `kdcube:role:super-admin` → privileged
+- `kdcube:role:privileged` → privileged
 - `kdcube:role:admin` → privileged
 - `kdcube:role:paid` → paid
 - `kdcube:role:registered` → baseline platform user
 - `kdcube:role:service` → service accounts (registered unless explicitly privileged)
 
-Role sets are defined in `kdcube_ai_app/auth/AuthManager.py`.
+Platform role admission is hierarchical:
+
+```text
+kdcube:role:super-admin
+  >= kdcube:role:privileged (legacy alias: kdcube:role:admin)
+  >= kdcube:role:paid
+  >= kdcube:role:registered
+```
+
+A held role satisfies gates for its own tier and every lower tier. The
+hierarchy applies only when a gate asks whether a caller has sufficient
+platform authority. Checks that classify the caller's role retain exact role
+identity. Custom, identity-provider, and service roles are independent
+capabilities and require an exact match; super-admin does not imply them.
+
+The canonical role constants and admission predicates are defined in
+`kdcube_ai_app/auth/role_hierarchy.py`.
 
 Central platform-auth rule:
 

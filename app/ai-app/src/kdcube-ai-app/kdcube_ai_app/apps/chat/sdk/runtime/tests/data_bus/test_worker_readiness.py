@@ -35,6 +35,23 @@ from kdcube_ai_app.infra.plugin.app_readiness import (
 )
 
 
+def test_data_bus_role_visibility_uses_platform_dominance_only() -> None:
+    actor = {"roles": ["kdcube:role:super-admin"]}
+
+    assert worker_module._raw_roles_visible(
+        ("kdcube:role:registered",),
+        actor,
+    ) is True
+    assert worker_module._raw_roles_visible(
+        ("kdcube:role:paid",),
+        actor,
+    ) is True
+    assert worker_module._raw_roles_visible(
+        ("kdcube:role:service",),
+        actor,
+    ) is False
+
+
 class _RecordingStream:
     def __init__(self) -> None:
         self.calls: list[str] = []
@@ -278,6 +295,51 @@ async def test_pre_policy_empty_wildcard_row_stays_compatible_and_live_role_down
     assert APPLICATION_OPERATION_POLICY_PROPERTY not in observed_actor[
         "identity_authority"
     ]
+
+
+@pytest.mark.asyncio
+async def test_super_admin_card_enters_lower_tier_bundle_and_handler(
+    monkeypatch,
+) -> None:
+    stream = _RecordingStream()
+    handler = DataBusHandlerSpec(
+        method_name="handle_publish",
+        subject="report.publish.requested",
+        user_types=("registered",),
+        roles=("kdcube:role:registered",),
+    )
+    worker = _worker_with_handler(stream, handler)
+    worker.bundle_allowed_roles = ("kdcube:role:paid",)
+    _patch_live_card(
+        monkeypatch,
+        _live_card(
+            grants=("kdcube:role:super-admin",),
+            policy_enabled=False,
+        ),
+    )
+    invoked = False
+
+    async def _invoke_handler(claim, _handler):
+        nonlocal invoked
+        invoked = True
+        assert claim.message.actor["roles"] == ["kdcube:role:super-admin"]
+        return DataBusResult.ok(claim.message, {"handled": True}), True
+
+    worker._invoke_handler = _invoke_handler
+    message = DataBusMessage(
+        message_id="message-dominant-role",
+        tenant="tenant-data-bus",
+        project="project-data-bus",
+        bundle_id="reports@1-0",
+        subject=handler.subject,
+        actor=_delegated_actor(),
+    )
+
+    await worker._process_claim(_claim(message))
+
+    assert invoked is True
+    assert stream.calls == ["result", "ack"]
+    assert stream.results[0].status == "ok"
 
 
 @pytest.mark.asyncio

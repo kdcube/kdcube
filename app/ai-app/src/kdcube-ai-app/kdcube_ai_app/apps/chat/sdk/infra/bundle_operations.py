@@ -28,6 +28,7 @@ from kdcube_ai_app.apps.chat.sdk.protocol import (
     ExternalEventRouting,
     ExternalEventUser,
 )
+from kdcube_ai_app.auth.role_hierarchy import roles_satisfy_any
 
 
 LOGGER = logging.getLogger("kdcube.sdk.bundle_operations")
@@ -179,15 +180,12 @@ def _session_user_type(session: Any) -> str:
 
 
 def _raw_roles_visible(required_roles: tuple[str, ...] | list[str] | None, session: Any) -> bool:
-    roles = tuple(str(role or "").strip() for role in (required_roles or ()) if str(role or "").strip())
-    if not roles:
-        return True
     session_roles = {
         role
         for role in (getattr(session, "roles", None) or [])
         if isinstance(role, str) and role.startswith("kdcube:role:")
     }
-    return bool(session_roles & set(roles))
+    return roles_satisfy_any(session_roles, required_roles)
 
 
 def _policy_list(value: Any) -> tuple[str, ...]:
