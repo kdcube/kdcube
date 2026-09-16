@@ -143,6 +143,24 @@ either the installed distribution selected for the test or its explicit
 source checkout. A missing import or an unexpected origin is a test-environment
 failure. Correct the environment before assessing product behavior.
 
+When the prepared interpreter runs inside a service container whose installed
+application lives at `/app`, set the container process working directory inside
+the mounted source tree as well as setting `PYTHONPATH`. For example:
+
+```bash
+docker exec \
+  -w /mounted/kdcube/app/ai-app/src/kdcube-ai-app \
+  -e PYTHONPATH=<kdcube-src>:<app-foundation-src>:<connection-hub-src> \
+  <chat-processor-container> \
+  /opt/venv/bin/python -m pytest -q -rs <test-path>
+```
+
+This environment has resolved `kdcube_ai_app` from the older installed `/app`
+tree when the working directory remained there, even with source overlays
+present. That failure appears as a missing new symbol and is easily mistaken
+for a source regression. The printed import-origin check above is authoritative;
+do not interpret test collection until it names the mounted checkout.
+
 ## 3. Run the exact regression first
 
 Start with the smallest test that reproduces the changed behavior:
