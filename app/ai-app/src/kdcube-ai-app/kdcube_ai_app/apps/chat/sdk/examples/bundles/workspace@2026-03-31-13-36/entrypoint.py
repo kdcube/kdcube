@@ -55,6 +55,7 @@ CANVAS_STATE_EVENT_SOURCE_ID = "canvas.state"
 CANVAS_UI_EVENT_TYPE = "canvas.patch.applied"
 CANVAS_ARTIFACT_RESOLVER_NAME = "canvas.bundle_artifact_storage"
 CANVAS_DATA_BUS_SUBJECT = "canvas.patch"
+CANVAS_PATCH_OPERATION_ID = "canvas.patch"
 _log = logging.getLogger("kdcube.bundle.workspace")
 
 
@@ -737,13 +738,20 @@ class WorkspaceEntrypoint(BaseEntrypointWithEconomics):
         payload = payload_from_call(data, **kwargs)
         return await self._canvas_service().write(payload)
 
-    @api(method="POST", alias="canvas_patch", route="operations", **_api_visibility("canvas_patch"))
+    @api(
+        method="POST",
+        alias="canvas_patch",
+        route="operations",
+        operation_id=CANVAS_PATCH_OPERATION_ID,
+        **_api_visibility("canvas_patch"),
+    )
     async def canvas_patch(self, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Dict[str, Any]:
         payload = payload_from_call(data, **kwargs)
         return await self._apply_canvas_patch_payload(payload)
 
     @data_bus_handler(
         subject=CANVAS_DATA_BUS_SUBJECT,
+        operation_id=CANVAS_PATCH_OPERATION_ID,
         partition_by="object_ref",
         ordering="serial_per_partition",
         idempotency="required",
