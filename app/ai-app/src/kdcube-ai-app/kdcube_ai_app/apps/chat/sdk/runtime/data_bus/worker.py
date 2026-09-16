@@ -308,9 +308,11 @@ class DataBusBundleWorker:
                 message_text=f"No Data Bus handler registered for subject {message.subject}",
                 status="rejected",
             )
-            await self.stream.write_result(result, stream_id=claim.stream_id)
-            await self.stream.write_dlq(message, reason="handler_not_found", details={"stream_id": claim.stream_id})
-            await self.stream.ack(claim)
+            await self._complete_terminal_result(
+                claim,
+                result,
+                dlq_reason="handler_not_found",
+            )
             return
         application_operations = delegated_application_operation_selection(
             (message.actor or {}).get("identity_authority")
@@ -329,8 +331,7 @@ class DataBusBundleWorker:
                     details={"operation_ref": operation_ref},
                     status="rejected",
                 )
-                await self.stream.write_result(result, stream_id=claim.stream_id)
-                await self.stream.ack(claim)
+                await self._complete_terminal_result(claim, result)
                 return
         if self.bundle_allowed_roles and not bool(_actor_raw_roles(message.actor) & set(self.bundle_allowed_roles)):
             result = DataBusResult.error_result(
@@ -339,8 +340,7 @@ class DataBusBundleWorker:
                 message_text="Data Bus bundle is not visible to this actor",
                 status="rejected",
             )
-            await self.stream.write_result(result, stream_id=claim.stream_id)
-            await self.stream.ack(claim)
+            await self._complete_terminal_result(claim, result)
             return
         if not _handler_visible(handler_spec, message.actor):
             result = DataBusResult.error_result(
@@ -349,8 +349,7 @@ class DataBusBundleWorker:
                 message_text=f"Data Bus subject is not visible to this actor: {message.subject}",
                 status="rejected",
             )
-            await self.stream.write_result(result, stream_id=claim.stream_id)
-            await self.stream.ack(claim)
+            await self._complete_terminal_result(claim, result)
             return
         if handler_spec.idempotency == DATA_BUS_IDEMPOTENCY_REQUIRED and not message.idempotency_key:
             result = DataBusResult.error_result(
@@ -359,9 +358,11 @@ class DataBusBundleWorker:
                 message_text="Data Bus handler requires idempotency_key",
                 status="rejected",
             )
-            await self.stream.write_result(result, stream_id=claim.stream_id)
-            await self.stream.write_dlq(message, reason="idempotency_key_required", details={"stream_id": claim.stream_id})
-            await self.stream.ack(claim)
+            await self._complete_terminal_result(
+                claim,
+                result,
+                dlq_reason="idempotency_key_required",
+            )
             return
 
         lock = None
@@ -376,9 +377,11 @@ class DataBusBundleWorker:
                         message_text="Data Bus handler requires an object partition",
                         status="rejected",
                     )
-                    await self.stream.write_result(result, stream_id=claim.stream_id)
-                    await self.stream.write_dlq(message, reason="partition_required", details={"stream_id": claim.stream_id})
-                    await self.stream.ack(claim)
+                    await self._complete_terminal_result(
+                        claim,
+                        result,
+                        dlq_reason="partition_required",
+                    )
                     return
                 lock = await self.locker.acquire(partition_key)
                 if lock is None:
@@ -386,6 +389,21 @@ class DataBusBundleWorker:
                         await asyncio.sleep(DATA_BUS_LOCK_RETRY_SLEEP_SECONDS)
                         lock = await self.locker.acquire(partition_key)
                 if lock is None:
+                    retry_count = int((message.trace or {}).get("retry_count") or 0)
+                    if retry_count >= DATA_BUS_LOCK_MAX_RETRIES:
+                        result = DataBusResult.error_result(
+                            message,
+                            code="partition_lock_busy",
+                            message_text="Data Bus partition remained busy after the retry limit",
+                            details={"retry_count": retry_count},
+                        )
+                        await self._complete_terminal_result(
+                            claim,
+                            result,
+                            dlq_reason="partition_lock_busy",
+                            dlq_details={"retry_count": retry_count},
+                        )
+                        return
                     await self.stream.requeue(
                         claim,
                         reason="partition_lock_busy",
@@ -401,41 +419,14 @@ class DataBusBundleWorker:
                     name=f"data-bus-lock-renew:{self.bundle_id}:{message.subject}",
                 )
 
-            result, reply_sent = await self._invoke_handler(claim, handler_spec)
+            try:
+                result, reply_sent = await self._invoke_handler(claim, handler_spec)
+            except Exception as exc:
+                await self._handle_handler_failure(claim, exc)
+                return
             await self.stream.write_result(result, stream_id=claim.stream_id)
             if not reply_sent:
                 await self._send_default_reply(message, result)
-            await self.stream.ack(claim)
-        except Exception as exc:
-            retry_count = int((message.trace or {}).get("retry_count") or 0)
-            if retry_count < DATA_BUS_MAX_RETRIES:
-                _log.warning(
-                    "[data_bus] Handler failed; requeueing: bundle=%s subject=%s message=%s retry=%s",
-                    self.bundle_id,
-                    message.subject,
-                    message.message_id,
-                    retry_count + 1,
-                    exc_info=True,
-                )
-                await self.stream.requeue(
-                    claim,
-                    reason="handler_error",
-                    max_retries=DATA_BUS_MAX_RETRIES,
-                )
-                return
-            result = DataBusResult.error_result(
-                message,
-                code="handler_error",
-                message_text=str(exc),
-                details={"stream_id": claim.stream_id, "retry_count": retry_count},
-            )
-            await self.stream.write_result(result, stream_id=claim.stream_id)
-            await self.stream.write_dlq(
-                message,
-                reason="handler_error",
-                details={"stream_id": claim.stream_id, "retry_count": retry_count, "error": str(exc)},
-            )
-            await self._send_default_reply(message, result)
             await self.stream.ack(claim)
         finally:
             if renew_task is not None:
@@ -451,6 +442,74 @@ class DataBusBundleWorker:
                     await self.locker.release(lock)
                 except Exception:
                     _log.debug("[data_bus] Failed to release partition lock: key=%s", lock.key, exc_info=True)
+
+    async def _handle_handler_failure(
+        self,
+        claim: DataBusClaim,
+        exc: Exception,
+    ) -> None:
+        message = claim.message
+        retry_count = int((message.trace or {}).get("retry_count") or 0)
+        if retry_count < DATA_BUS_MAX_RETRIES:
+            _log.warning(
+                "[data_bus] Handler failed; requeueing: bundle=%s subject=%s message=%s retry=%s",
+                self.bundle_id,
+                message.subject,
+                message.message_id,
+                retry_count + 1,
+                exc_info=(type(exc), exc, exc.__traceback__),
+            )
+            await self.stream.requeue(
+                claim,
+                reason="handler_error",
+                max_retries=DATA_BUS_MAX_RETRIES,
+            )
+            return
+        result = DataBusResult.error_result(
+            message,
+            code="handler_error",
+            message_text=str(exc),
+            details={"stream_id": claim.stream_id, "retry_count": retry_count},
+        )
+        await self._complete_terminal_result(
+            claim,
+            result,
+            dlq_reason="handler_error",
+            dlq_details={"retry_count": retry_count, "error": str(exc)},
+        )
+
+    async def _complete_terminal_result(
+        self,
+        claim: DataBusClaim,
+        result: DataBusResult,
+        *,
+        dlq_reason: str | None = None,
+        dlq_details: Mapping[str, Any] | None = None,
+    ) -> None:
+        message = claim.message
+        await self.stream.write_result(result, stream_id=claim.stream_id)
+        if dlq_reason:
+            details = {"stream_id": claim.stream_id, **dict(dlq_details or {})}
+            await self.stream.write_dlq(
+                message,
+                reason=dlq_reason,
+                details=details,
+            )
+        error_code = ""
+        if isinstance(result.error, Mapping):
+            error_code = str(result.error.get("code") or "")
+        _log.info(
+            "[data_bus] Terminal claim result: bundle=%s subject=%s message=%s "
+            "status=%s code=%s stream_id=%s",
+            message.bundle_id,
+            message.subject,
+            message.message_id,
+            result.status,
+            error_code,
+            claim.stream_id,
+        )
+        await self._send_default_reply(message, result)
+        await self.stream.ack(claim)
 
     def _partition_key(self, handler_spec: DataBusHandlerSpec, message: DataBusMessage) -> str | None:
         if handler_spec.partition_by == DATA_BUS_PARTITION_OBJECT_REF:

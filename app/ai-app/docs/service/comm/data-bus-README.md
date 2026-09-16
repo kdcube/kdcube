@@ -656,7 +656,8 @@ Processing flow:
 6. For a delegated application-operation Card, the runtime derives the exact
    operation from the handler declaration and verifies that it is selected.
 7. The runtime verifies handler `user_types` / `roles` visibility.
-8. If no handler exists or access is denied, the runtime writes a failure result and
+8. If no handler exists or access is denied, the runtime writes a failure
+   result, emits the correlated error when reply metadata exists, and then
    acknowledges the stream item.
 9. If the handler uses `serial_per_partition`, the runtime acquires the
    partition token lock before invoking bundle code.
@@ -668,6 +669,13 @@ Processing flow:
 13. Retryable failures remain pending or are requeued according to the runtime
    retry policy.
 14. Non-retryable failures or exhausted retries go to the DLQ.
+
+A terminal result is completed in this order: result record, optional DLQ
+record, correlated reply, stream acknowledgement. If result persistence or
+reply delivery fails, the runtime does not acknowledge the claim. Handler
+retry policy applies to handler invocation failures; a reply-delivery failure
+is not reclassified as a handler failure and does not trigger an immediate
+second invocation of bundle code.
 
 Suggested result record shape:
 
