@@ -90,6 +90,10 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.named_service_admis
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_roles import (
     delegated_role_projection,
 )
+from kdcube_ai_app.apps.chat.sdk.application_operations import (
+    APPLICATION_OPERATION_POLICY_PROPERTY,
+    application_operation_policy_enabled,
+)
 
 
 MANAGED_MCP_AUTH_MODE = MANAGED_AUTH_MODE
@@ -653,6 +657,7 @@ async def _live_grant_record(request: Any, grant_record: Optional[Dict[str, Any]
     # the catalog generation its selection was saved against.
     resolved["card_revision"] = int(card.card_revision or 0)
     resolved["catalog_version"] = str(card.catalog_version or "")
+    resolved["properties"] = dict(getattr(card, "properties", None) or {})
     return resolved
 
 
@@ -745,6 +750,15 @@ def _delegated_runtime_projection(
             "provenance": dict(projection.get("provenance") or economics.get("provenance") or {}),
         }
     )
+    properties = (
+        grant_record.get("properties")
+        if isinstance(grant_record.get("properties"), Mapping)
+        else {}
+    )
+    if application_operation_policy_enabled(properties):
+        identity_authority[APPLICATION_OPERATION_POLICY_PROPERTY] = dict(
+            properties[APPLICATION_OPERATION_POLICY_PROPERTY]
+        )
     delegated_card_binding = delegated_card_binding_from_request(request)
     if not delegated_card_binding and credential_view.registry_access_id:
         delegated_card_binding = {
@@ -831,13 +845,25 @@ def delegated_rest_runtime_projection(
 
 
 def has_delegated_application_operation_card(request: Request) -> bool:
-    """Whether the live request Card carries the all-application authority row."""
+    """Whether the live request Card opted into application-operation policy."""
 
     delegated = getattr(getattr(request, "state", None), "delegated_credential", None)
     if not isinstance(delegated, Mapping):
         return False
     credential = delegated.get("credential")
     grant_record = delegated.get("grant_record")
+    composition = _live_card_composition(request)
+    properties = (
+        getattr(composition.effective_card, "properties", None)
+        if composition is not None
+        else (
+            grant_record.get("properties")
+            if isinstance(grant_record, Mapping)
+            else {}
+        )
+    )
+    if not application_operation_policy_enabled(properties):
+        return False
     view = DelegatedCredentialView.from_parts(
         credential if isinstance(credential, Mapping) else {},
         grant_record if isinstance(grant_record, Mapping) else {},

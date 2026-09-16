@@ -17,6 +17,9 @@ from urllib.parse import quote, unquote
 
 
 APPLICATION_OPERATION_URN_PREFIX = "urn:kdcube:application-operation:"
+APPLICATION_OPERATION_POLICY_PROPERTY = "kdcube.application_operations"
+APPLICATION_OPERATION_POLICY_SCHEMA = "kdcube.application_operations.v1"
+APPLICATION_OPERATION_POLICY_MODE_SELECTED = "selected"
 _SAFE_COMPONENT = "-._~"
 _MAX_COMPONENT_LENGTH = 512
 
@@ -149,20 +152,51 @@ def data_bus_application_operation_ref(
     )
 
 
+def application_operation_policy() -> dict[str, str]:
+    """Return the durable Card marker for an explicit operation selection."""
+
+    return {
+        "schema": APPLICATION_OPERATION_POLICY_SCHEMA,
+        "mode": APPLICATION_OPERATION_POLICY_MODE_SELECTED,
+    }
+
+
+def application_operation_policy_enabled(properties: Mapping[str, Any] | None) -> bool:
+    """Whether a Card explicitly opted into selected application operations.
+
+    Existing Cards can already contain an empty ``resource_operations["*"]``
+    row for unrelated wildcard authority. Treating that row as opt-in would
+    silently deny every application call after an upgrade. The explicit marker
+    distinguishes a reviewed default-closed selection from that legacy shape.
+    """
+
+    values = properties if isinstance(properties, Mapping) else {}
+    policy = values.get(APPLICATION_OPERATION_POLICY_PROPERTY)
+    return bool(
+        isinstance(policy, Mapping)
+        and str(policy.get("schema") or "").strip()
+        == APPLICATION_OPERATION_POLICY_SCHEMA
+        and str(policy.get("mode") or "").strip()
+        == APPLICATION_OPERATION_POLICY_MODE_SELECTED
+    )
+
+
 def delegated_application_operation_selection(
     identity_authority: Mapping[str, Any] | None,
 ) -> frozenset[str] | None:
     """Return the Card's all-application selection, or ``None`` when absent.
 
-    Presence is distinct from an empty selection. A delegated Card with a
-    ``"*"`` operation row opted into application-operation authority and is
-    default-closed even when that row currently selects nothing. Other caller
-    identities and older resource-specific Cards keep their existing gates.
+    Presence is distinct from an empty selection. A delegated Card with the
+    explicit policy marker and a ``"*"`` operation row is default-closed even
+    when that row currently selects nothing. Other caller identities and
+    pre-policy Cards keep their existing gates.
     """
 
     authority = identity_authority if isinstance(identity_authority, Mapping) else {}
     binding = authority.get("delegated_card_binding")
     if not isinstance(binding, Mapping) or not str(binding.get("access_id") or "").strip():
+        return None
+    if not application_operation_policy_enabled(authority):
         return None
     resource_operations = authority.get("resource_operations")
     if not isinstance(resource_operations, Mapping) or "*" not in resource_operations:
@@ -178,9 +212,14 @@ def delegated_application_operation_selection(
 
 
 __all__ = [
+    "APPLICATION_OPERATION_POLICY_MODE_SELECTED",
+    "APPLICATION_OPERATION_POLICY_PROPERTY",
+    "APPLICATION_OPERATION_POLICY_SCHEMA",
     "APPLICATION_OPERATION_URN_PREFIX",
     "api_application_operation_id",
     "api_application_operation_ref",
+    "application_operation_policy",
+    "application_operation_policy_enabled",
     "application_operation_ref",
     "data_bus_application_operation_ref",
     "data_bus_application_operation_id",

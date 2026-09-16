@@ -6,6 +6,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import time
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI, Request
@@ -14,6 +15,8 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request as StarletteRequest
 
 from kdcube_ai_app.apps.chat.sdk.application_operations import (
+    APPLICATION_OPERATION_POLICY_PROPERTY,
+    application_operation_policy,
     application_operation_ref,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth import (
@@ -1195,6 +1198,9 @@ def test_application_operation_guard_uses_the_cards_wildcard_selection(monkeypat
     app.state.oauth_grant_store = _GrantStore(
         {
             "operations": [selected],
+            "properties": {
+                APPLICATION_OPERATION_POLICY_PROPERTY: application_operation_policy(),
+            },
             "credential": credential,
         }
     )
@@ -1251,6 +1257,29 @@ def test_application_operation_guard_uses_the_cards_wildcard_selection(monkeypat
     assert denied.json()["error_description"] == (
         f"operation not consented for this connection: {unselected}"
     )
+
+
+def test_application_operation_guard_requires_explicit_card_policy_marker():
+    credential = _authority(
+        scopes=["kdcube:role:registered"],
+        resource="*",
+    )
+    credential["attrs"]["resource_operations"] = {"*": []}
+    request = SimpleNamespace(
+        state=SimpleNamespace(
+            delegated_credential={
+                "credential": credential,
+                "grant_record": {"credential": credential},
+            }
+        )
+    )
+
+    assert surface_guard.has_delegated_application_operation_card(request) is False
+
+    request.state.delegated_credential["grant_record"]["properties"] = {
+        APPLICATION_OPERATION_POLICY_PROPERTY: application_operation_policy(),
+    }
+    assert surface_guard.has_delegated_application_operation_card(request) is True
 
 
 def test_application_operation_guard_ignores_a_non_delegated_bearer(monkeypatch):

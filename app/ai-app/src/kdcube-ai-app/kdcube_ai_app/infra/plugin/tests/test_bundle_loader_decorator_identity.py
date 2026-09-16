@@ -25,8 +25,11 @@ from kdcube_ai_app.infra.plugin.bundle_loader import (
     discover_bundle_interface_manifest,
 )
 from kdcube_ai_app.apps.chat.sdk.application_operations import (
+    APPLICATION_OPERATION_POLICY_PROPERTY,
     api_application_operation_id,
     api_application_operation_ref,
+    application_operation_policy,
+    application_operation_policy_enabled,
     application_operation_ref,
     data_bus_application_operation_ref,
     delegated_application_operation_selection,
@@ -325,6 +328,9 @@ def test_implicit_operation_ids_keep_api_exposures_distinct():
 
 def test_application_operation_selection_distinguishes_absent_and_empty_rows():
     binding = {"access_id": "card-a"}
+    policy = {
+        APPLICATION_OPERATION_POLICY_PROPERTY: application_operation_policy(),
+    }
 
     assert delegated_application_operation_selection({}) is None
     assert delegated_application_operation_selection(
@@ -335,9 +341,17 @@ def test_application_operation_selection_distinguishes_absent_and_empty_rows():
             "delegated_card_binding": binding,
             "resource_operations": {"*": []},
         }
+    ) is None
+    assert delegated_application_operation_selection(
+        {
+            **policy,
+            "delegated_card_binding": binding,
+            "resource_operations": {"*": []},
+        }
     ) == frozenset()
     assert delegated_application_operation_selection(
         {
+            **policy,
             "delegated_card_binding": binding,
             "resource_operations": {
                 "*": [
@@ -352,3 +366,5 @@ def test_application_operation_selection_distinguishes_absent_and_empty_rows():
             "reports%401-0:report.publish"
         }
     )
+    assert application_operation_policy_enabled(policy) is True
+    assert application_operation_policy_enabled({}) is False

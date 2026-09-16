@@ -15,6 +15,8 @@ from kdcube_ai_app.apps.chat.ingress.socketio import chat as socket_chat
 from kdcube_ai_app.apps.chat.ingress.socketio.data_bus import publish as pub
 from kdcube_ai_app.apps.chat.ingress.socketio.data_bus.publish import DataBusSocketIOIngress
 from kdcube_ai_app.apps.chat.sdk.application_operations import (
+    APPLICATION_OPERATION_POLICY_PROPERTY,
+    application_operation_policy,
     data_bus_application_operation_ref,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.policy import DataBusPublishLimit, DataBusSettings
@@ -1137,6 +1139,9 @@ async def test_data_bus_publish_carries_selected_operation_and_card_role(monkeyp
         expires_at=int(time.time()) + 3600,
         resource_grants={"*": ("kdcube:role:registered", "reports:write")},
         resource_operations={"*": (operation_ref,)},
+        properties={
+            APPLICATION_OPERATION_POLICY_PROPERTY: application_operation_policy(),
+        },
     )
     monkeypatch.setattr(pub, "resolve_live_grant_card", _async_return(card))
     socket_session = _socket_session()
@@ -1184,6 +1189,9 @@ async def test_data_bus_publish_carries_selected_operation_and_card_role(monkeyp
         "reports:write",
     ]
     assert "kdcube:role:super-admin" not in record["actor"]["roles"]
+    assert record["actor"]["identity_authority"][
+        APPLICATION_OPERATION_POLICY_PROPERTY
+    ] == application_operation_policy()
 
 
 @pytest.mark.asyncio
@@ -1216,6 +1224,9 @@ async def test_data_bus_publish_carries_unselected_operation_to_worker_guard(mon
                     operation_id="report.read",
                 ),
             )
+        },
+        properties={
+            APPLICATION_OPERATION_POLICY_PROPERTY: application_operation_policy(),
         },
     )
     monkeypatch.setattr(pub, "resolve_live_grant_card", _async_return(card))
@@ -1251,6 +1262,9 @@ async def test_data_bus_publish_carries_unselected_operation_to_worker_guard(mon
             operation_id="report.read",
         )
     ]
+    assert record["actor"]["identity_authority"][
+        APPLICATION_OPERATION_POLICY_PROPERTY
+    ] == application_operation_policy()
 
 
 @pytest.mark.asyncio

@@ -7,13 +7,26 @@ import asyncio
 import inspect
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Dict, Mapping, Optional, Tuple
 
+from connection_hub.delegated_credentials.live_grant import (
+    LiveGrantCardError,
+    live_grants_for_resource,
+    resolve_live_grant_card,
+)
+from connection_hub.delegated_credentials.resource_operations import (
+    operations_for_resource,
+)
 from kdcube_ai_app.apps.chat.emitters import ChatCommunicator, ChatRelayCommunicator
 from kdcube_ai_app.apps.chat.sdk.application_operations import (
+    APPLICATION_OPERATION_POLICY_PROPERTY,
+    application_operation_policy_enabled,
     data_bus_application_operation_ref,
     delegated_application_operation_selection,
+)
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_roles import (
+    delegated_role_projection,
 )
 from kdcube_ai_app.apps.chat.sdk.protocol import (
     ConversationCtx,
@@ -74,9 +87,32 @@ DATA_BUS_LOCK_RETRY_SLEEP_SECONDS = max(
     0.0,
     float(os.getenv("DATA_BUS_LOCK_RETRY_SLEEP_SECONDS", "0.05") or "0.05"),
 )
+
+_USER_TYPE_VISIBILITY_ORDER: dict[str, int] = {
+    "anonymous": 0,
+    "registered": 1,
+    "paid": 2,
+    "privileged": 3,
+}
+
+
 @dataclass(frozen=True)
 class _DataBusWorkerKey:
     bundle_id: str
+
+
+class _DelegatedCardDenial(Exception):
+    def __init__(
+        self,
+        *,
+        code: str,
+        message: str,
+        details: Mapping[str, Any],
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.details = dict(details)
 
 
 def _actor_user_id(actor: Mapping[str, Any] | None) -> str | None:
@@ -98,8 +134,170 @@ def _raw_roles_visible(required_roles: tuple[str, ...] | list[str] | None, actor
     return bool(_actor_raw_roles(actor) & set(roles))
 
 
+def _user_types_visible(
+    required_user_types: tuple[str, ...] | list[str] | None,
+    actor: Mapping[str, Any] | None,
+) -> bool:
+    user_types = tuple(
+        str(user_type or "").strip().lower()
+        for user_type in (required_user_types or ())
+        if str(user_type or "").strip()
+    )
+    if not user_types:
+        return True
+    current = str((actor or {}).get("user_type") or "").strip().lower()
+    if not current:
+        return False
+    current_rank = _USER_TYPE_VISIBILITY_ORDER.get(current)
+    if current_rank is None:
+        return current in set(user_types)
+    thresholds = [
+        _USER_TYPE_VISIBILITY_ORDER[user_type]
+        for user_type in user_types
+        if user_type in _USER_TYPE_VISIBILITY_ORDER
+    ]
+    if not thresholds:
+        return current in set(user_types)
+    return current_rank >= min(thresholds)
+
+
 def _handler_visible(handler_spec: DataBusHandlerSpec, actor: Mapping[str, Any] | None) -> bool:
-    return _raw_roles_visible(handler_spec.roles, actor)
+    return _user_types_visible(
+        handler_spec.user_types,
+        actor,
+    ) and _raw_roles_visible(handler_spec.roles, actor)
+
+
+def _delegated_card_context(
+    actor: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any], str] | None:
+    authority = (
+        dict((actor or {}).get("identity_authority") or {})
+        if isinstance((actor or {}).get("identity_authority"), Mapping)
+        else {}
+    )
+    binding = authority.get("delegated_card_binding")
+    if not isinstance(binding, Mapping):
+        return None
+    binding = dict(binding)
+    if not str(binding.get("access_id") or "").strip():
+        return None
+    resource = str(authority.get("delegated_resource") or "").strip()
+    if not resource:
+        raise _DelegatedCardDenial(
+            code="delegated_card_scope_invalid",
+            message="Delegated Card resource binding is missing",
+            details={},
+        )
+    return authority, binding, resource
+
+
+async def _resolve_live_delegated_actor(
+    redis: Any,
+    *,
+    tenant: str,
+    project: str,
+    actor: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Project the current effective Card onto a queued Data Bus actor."""
+
+    current_actor = dict(actor or {})
+    context = _delegated_card_context(current_actor)
+    if context is None:
+        return current_actor
+    authority, binding, resource = context
+    access_id = str(binding.get("access_id") or "").strip()
+    try:
+        card = await resolve_live_grant_card(
+            redis,
+            tenant=tenant,
+            project=project,
+            access_id=access_id,
+            expected_client_id=str(binding.get("client_id") or "").strip(),
+            expected_grantor_subject=str(
+                binding.get("grantor_user_id") or ""
+            ).strip(),
+            expected_delegate_subject=str(
+                binding.get("delegate_identity") or ""
+            ).strip(),
+        )
+    except LiveGrantCardError as exc:
+        raise _DelegatedCardDenial(
+            code="delegated_card_unavailable",
+            message="Current delegated Card state is unavailable",
+            details={"reason": exc.reason},
+        ) from exc
+    except Exception as exc:
+        _log.warning(
+            "[data_bus] delegated Card lookup failed access_id=%s",
+            access_id,
+            exc_info=True,
+        )
+        raise _DelegatedCardDenial(
+            code="delegated_card_unavailable",
+            message="Current delegated Card state is unavailable",
+            details={},
+        ) from exc
+    if card is None:
+        raise _DelegatedCardDenial(
+            code="delegated_card_not_active",
+            message="Delegated Card is no longer active",
+            details={},
+        )
+    grants = live_grants_for_resource(card, resource)
+    if grants is None:
+        raise _DelegatedCardDenial(
+            code="delegated_resource_not_granted",
+            message="Delegated Card no longer covers this resource",
+            details={"resource": resource},
+        )
+
+    operations = operations_for_resource(card.resource_operations, resource)
+    role_projection = delegated_role_projection(
+        grants,
+        fallback_roles=current_actor.get("roles") or (),
+    )
+    if role_projection.selected_on_card:
+        current_actor["roles"] = list(role_projection.roles)
+        current_actor["permissions"] = list(grants)
+        current_actor["user_type"] = role_projection.user_type
+    authority.update(
+        {
+            "delegated_resource": resource,
+            "grants": list(grants),
+            "scopes": list(grants),
+            "operations": list(operations),
+            "resource_grants": {
+                key: list(values)
+                for key, values in card.resource_grants.items()
+            },
+            "resource_operations": {
+                key: list(values)
+                for key, values in card.resource_operations.items()
+            },
+            "roles": list(current_actor.get("roles") or []),
+            "permissions": list(current_actor.get("permissions") or []),
+            "delegated_roles_selected": role_projection.selected_on_card,
+            "delegated_card_binding": {
+                "schema": "connection_hub.delegated_card_binding.v1",
+                "access_id": card.access_id,
+                "client_id": card.client_id,
+                "grantor_user_id": card.grantor_subject,
+                "delegate_identity": card.delegate_subject,
+                "expires_at": card.expires_at,
+            },
+        }
+    )
+    card_properties = getattr(card, "properties", None)
+    if application_operation_policy_enabled(card_properties):
+        authority[APPLICATION_OPERATION_POLICY_PROPERTY] = dict(
+            card_properties[APPLICATION_OPERATION_POLICY_PROPERTY]
+        )
+    else:
+        authority.pop(APPLICATION_OPERATION_POLICY_PROPERTY, None)
+    current_actor["identity_authority"] = authority
+    current_actor["rate_limit_subject"] = f"card:{card.access_id}"
+    return current_actor
 
 
 def _make_comm_context(message: DataBusMessage) -> ExternalEventPayload:
@@ -314,10 +512,30 @@ class DataBusBundleWorker:
                 dlq_reason="handler_not_found",
             )
             return
+        try:
+            current_actor = await _resolve_live_delegated_actor(
+                getattr(self, "redis", None),
+                tenant=message.tenant,
+                project=message.project,
+                actor=message.actor,
+            )
+        except _DelegatedCardDenial as exc:
+            result = DataBusResult.error_result(
+                message,
+                code=exc.code,
+                message_text=exc.message,
+                details=exc.details,
+                status="rejected",
+            )
+            await self._complete_terminal_result(claim, result)
+            return
+        if current_actor != message.actor:
+            message = replace(message, actor=current_actor)
+            claim = replace(claim, message=message)
         application_operations = delegated_application_operation_selection(
             (message.actor or {}).get("identity_authority")
         )
-        if application_operations is not None:
+        if application_operations is not None and handler_spec.operation_id_explicit:
             operation_ref = data_bus_application_operation_ref(
                 application_id=message.bundle_id,
                 subject=handler_spec.subject,

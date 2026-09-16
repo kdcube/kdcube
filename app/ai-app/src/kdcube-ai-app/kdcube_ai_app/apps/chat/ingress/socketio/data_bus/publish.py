@@ -17,6 +17,10 @@ from connection_hub.delegated_credentials.live_grant import (
 from connection_hub.delegated_credentials.resource_operations import (
     operations_for_resource,
 )
+from kdcube_ai_app.apps.chat.sdk.application_operations import (
+    APPLICATION_OPERATION_POLICY_PROPERTY,
+    application_operation_policy_enabled,
+)
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_roles import (
     delegated_role_projection,
@@ -211,6 +215,13 @@ def _apply_live_delegated_card(
             },
         }
     )
+    card_properties = getattr(card, "properties", None)
+    if application_operation_policy_enabled(card_properties):
+        authority[APPLICATION_OPERATION_POLICY_PROPERTY] = dict(
+            card_properties[APPLICATION_OPERATION_POLICY_PROPERTY]
+        )
+    else:
+        authority.pop(APPLICATION_OPERATION_POLICY_PROPERTY, None)
     session.identity_authority = authority
     session.rate_limit_subject = f"card:{card.access_id}"
 

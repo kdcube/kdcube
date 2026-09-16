@@ -2,8 +2,16 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
+from connection_hub.delegated_credentials.live_grant import LiveGrantCardError
+from kdcube_ai_app.apps.chat.sdk.application_operations import (
+    APPLICATION_OPERATION_POLICY_PROPERTY,
+    application_operation_policy,
+    application_operation_ref,
+)
 from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import (
     get_current_bundle_named_service_caller,
 )
@@ -41,6 +49,82 @@ class _RecordingStream:
     async def write_dlq(self, *args, **kwargs) -> None:
         del args, kwargs
         self.calls.append("dlq")
+
+
+_DELEGATED_RESOURCE = (
+    "https://board.example/api/integrations/bundles/tenant-data-bus/"
+    "project-data-bus/reports@1-0/public/mcp/reports"
+)
+
+
+def _delegated_actor(*, selected_operations: tuple[str, ...] = ()) -> dict:
+    return {
+        "user_id": "grantor-user",
+        "user_type": "privileged",
+        "roles": ["kdcube:role:super-admin"],
+        "permissions": ["kdcube:*"],
+        "identity_authority": {
+            APPLICATION_OPERATION_POLICY_PROPERTY: application_operation_policy(),
+            "delegated_resource": _DELEGATED_RESOURCE,
+            "delegated_card_binding": {
+                "access_id": "card-a",
+                "client_id": "worker-client-a",
+                "grantor_user_id": "grantor-user",
+                "delegate_identity": "worker-a",
+            },
+            "resource_operations": {"*": list(selected_operations)},
+        },
+    }
+
+
+def _live_card(
+    *,
+    operations: tuple[str, ...] = (),
+    policy_enabled: bool = True,
+    grants: tuple[str, ...] = ("kdcube:role:registered",),
+):
+    return SimpleNamespace(
+        access_id="card-a",
+        client_id="worker-client-a",
+        grantor_subject="grantor-user",
+        delegate_subject="worker-a",
+        expires_at=2_000_000_000,
+        resource_grants={_DELEGATED_RESOURCE: grants},
+        resource_operations={"*": operations},
+        properties=(
+            {
+                APPLICATION_OPERATION_POLICY_PROPERTY: application_operation_policy(),
+            }
+            if policy_enabled
+            else {}
+        ),
+    )
+
+
+def _worker_with_handler(stream: _RecordingStream, handler: DataBusHandlerSpec):
+    worker = object.__new__(DataBusBundleWorker)
+    worker.redis = object()
+    worker.stream = stream
+    worker.bundle_allowed_roles = ()
+    worker.handler_specs = {handler.subject: handler}
+    return worker
+
+
+def _claim(message: DataBusMessage, *, stream_id: str = "1-0") -> DataBusClaim:
+    return DataBusClaim(
+        stream_key="messages",
+        stream_id=stream_id,
+        consumer_name="worker-a",
+        fields={},
+        message=message,
+    )
+
+
+def _patch_live_card(monkeypatch, card) -> None:
+    async def _resolve(*_args, **_kwargs):
+        return card
+
+    monkeypatch.setattr(worker_module, "resolve_live_grant_card", _resolve)
 
 
 @pytest.mark.asyncio
@@ -89,19 +173,17 @@ async def test_unready_application_claim_is_deferred_without_acknowledgement() -
 
 
 @pytest.mark.asyncio
-async def test_worker_rechecks_selected_application_operation_before_invocation() -> None:
+async def test_worker_rechecks_selected_application_operation_before_invocation(
+    monkeypatch,
+) -> None:
     stream = _RecordingStream()
-    worker = object.__new__(DataBusBundleWorker)
-    worker.stream = stream
-    worker.bundle_allowed_roles = ()
-    worker.handler_specs = {
-        "report.publish.requested": DataBusHandlerSpec(
-            method_name="handle_publish",
-            subject="report.publish.requested",
-            operation_id="report.publish",
-            operation_id_explicit=True,
-        )
-    }
+    handler = DataBusHandlerSpec(
+        method_name="handle_publish",
+        subject="report.publish.requested",
+        operation_id="report.publish",
+        operation_id_explicit=True,
+    )
+    worker = _worker_with_handler(stream, handler)
     invoked = False
 
     async def _invoke_handler(*args, **kwargs):
@@ -118,43 +200,225 @@ async def test_worker_rechecks_selected_application_operation_before_invocation(
 
     worker._invoke_handler = _invoke_handler
     worker._send_default_reply = _send_default_reply
+    queued_operation = application_operation_ref(
+        application_id="reports@1-0",
+        operation_id="report.publish",
+    )
+    current_operation = application_operation_ref(
+        application_id="reports@1-0",
+        operation_id="report.read",
+    )
+    _patch_live_card(monkeypatch, _live_card(operations=(current_operation,)))
     message = DataBusMessage(
         message_id="message-card-denial",
         tenant="tenant-data-bus",
         project="project-data-bus",
         bundle_id="reports@1-0",
         subject="report.publish.requested",
-        actor={
-            "user_id": "grantor-user",
-            "user_type": "registered",
-            "roles": ["kdcube:role:registered"],
-            "identity_authority": {
-                "delegated_card_binding": {"access_id": "card-a"},
-                "resource_operations": {
-                    "*": [
-                        "urn:kdcube:application-operation:reports%401-0:report.read"
-                    ]
-                },
-            },
-        },
-    )
-    claim = DataBusClaim(
-        stream_key="messages",
-        stream_id="1-0",
-        consumer_name="worker-a",
-        fields={},
-        message=message,
+        actor=_delegated_actor(selected_operations=(queued_operation,)),
     )
 
-    await worker._process_claim(claim)
+    await worker._process_claim(_claim(message))
 
     assert invoked is False
     assert stream.calls == ["result", "reply", "ack"]
-    assert replies == [(message, stream.results[0])]
+    assert len(replies) == 1
+    assert replies[0][0].message_id == message.message_id
+    assert replies[0][0].actor["roles"] == ["kdcube:role:registered"]
+    assert replies[0][1] == stream.results[0]
     assert stream.results[0].error["code"] == "application_operation_not_granted"
     assert stream.results[0].error["details"]["operation_ref"] == (
         "urn:kdcube:application-operation:reports%401-0:report.publish"
     )
+
+
+@pytest.mark.asyncio
+async def test_pre_policy_empty_wildcard_row_stays_compatible_and_live_role_downscopes(
+    monkeypatch,
+) -> None:
+    stream = _RecordingStream()
+    handler = DataBusHandlerSpec(
+        method_name="handle_publish",
+        subject="report.publish.requested",
+        operation_id="report.publish",
+        operation_id_explicit=True,
+        user_types=("registered",),
+    )
+    worker = _worker_with_handler(stream, handler)
+    _patch_live_card(
+        monkeypatch,
+        _live_card(operations=(), policy_enabled=False),
+    )
+    observed_actor = {}
+
+    async def _invoke_handler(claim, _handler):
+        observed_actor.update(claim.message.actor)
+        return DataBusResult.ok(claim.message, {"handled": True}), True
+
+    worker._invoke_handler = _invoke_handler
+    message = DataBusMessage(
+        message_id="message-legacy-card",
+        tenant="tenant-data-bus",
+        project="project-data-bus",
+        bundle_id="reports@1-0",
+        subject=handler.subject,
+        actor=_delegated_actor(),
+    )
+
+    await worker._process_claim(_claim(message))
+
+    assert stream.calls == ["result", "ack"]
+    assert stream.results[0].status == "ok"
+    assert observed_actor["user_type"] == "registered"
+    assert observed_actor["roles"] == ["kdcube:role:registered"]
+    assert "kdcube:role:super-admin" not in observed_actor["roles"]
+    assert APPLICATION_OPERATION_POLICY_PROPERTY not in observed_actor[
+        "identity_authority"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_live_registered_card_cannot_enter_privileged_handler(monkeypatch) -> None:
+    stream = _RecordingStream()
+    operation = application_operation_ref(
+        application_id="reports@1-0",
+        operation_id="report.publish",
+    )
+    handler = DataBusHandlerSpec(
+        method_name="handle_publish",
+        subject="report.publish.requested",
+        operation_id="report.publish",
+        operation_id_explicit=True,
+        user_types=("privileged",),
+    )
+    worker = _worker_with_handler(stream, handler)
+    _patch_live_card(monkeypatch, _live_card(operations=(operation,)))
+
+    async def _invoke_handler(*_args, **_kwargs):
+        raise AssertionError("bundle code must not run")
+
+    async def _send_default_reply(_message, _result) -> None:
+        stream.calls.append("reply")
+
+    worker._invoke_handler = _invoke_handler
+    worker._send_default_reply = _send_default_reply
+    message = DataBusMessage(
+        message_id="message-privileged-denial",
+        tenant="tenant-data-bus",
+        project="project-data-bus",
+        bundle_id="reports@1-0",
+        subject=handler.subject,
+        actor=_delegated_actor(selected_operations=(operation,)),
+    )
+
+    await worker._process_claim(_claim(message))
+
+    assert stream.calls == ["result", "reply", "ack"]
+    assert stream.results[0].error["code"] == "handler_not_visible"
+
+
+@pytest.mark.asyncio
+async def test_revoked_card_is_rejected_before_bundle_code(monkeypatch) -> None:
+    stream = _RecordingStream()
+    handler = DataBusHandlerSpec(
+        method_name="handle_publish",
+        subject="report.publish.requested",
+    )
+    worker = _worker_with_handler(stream, handler)
+    _patch_live_card(monkeypatch, None)
+
+    async def _invoke_handler(*_args, **_kwargs):
+        raise AssertionError("bundle code must not run")
+
+    async def _send_default_reply(_message, _result) -> None:
+        stream.calls.append("reply")
+
+    worker._invoke_handler = _invoke_handler
+    worker._send_default_reply = _send_default_reply
+    message = DataBusMessage(
+        message_id="message-revoked-card",
+        tenant="tenant-data-bus",
+        project="project-data-bus",
+        bundle_id="reports@1-0",
+        subject=handler.subject,
+        actor=_delegated_actor(),
+    )
+
+    await worker._process_claim(_claim(message))
+
+    assert stream.calls == ["result", "reply", "ack"]
+    assert stream.results[0].error["code"] == "delegated_card_not_active"
+
+
+@pytest.mark.asyncio
+async def test_unavailable_card_state_is_rejected_with_reason(monkeypatch) -> None:
+    stream = _RecordingStream()
+    handler = DataBusHandlerSpec(
+        method_name="handle_publish",
+        subject="report.publish.requested",
+    )
+    worker = _worker_with_handler(stream, handler)
+
+    async def _resolve(*_args, **_kwargs):
+        raise LiveGrantCardError("card_updating")
+
+    monkeypatch.setattr(worker_module, "resolve_live_grant_card", _resolve)
+
+    async def _send_default_reply(_message, _result) -> None:
+        stream.calls.append("reply")
+
+    worker._send_default_reply = _send_default_reply
+    message = DataBusMessage(
+        message_id="message-card-unavailable",
+        tenant="tenant-data-bus",
+        project="project-data-bus",
+        bundle_id="reports@1-0",
+        subject=handler.subject,
+        actor=_delegated_actor(),
+    )
+
+    await worker._process_claim(_claim(message))
+
+    assert stream.calls == ["result", "reply", "ack"]
+    assert stream.results[0].error["code"] == "delegated_card_unavailable"
+    assert stream.results[0].error["details"] == {"reason": "card_updating"}
+
+
+@pytest.mark.asyncio
+async def test_implicit_data_bus_handler_keeps_dynamic_dispatch_authority(monkeypatch) -> None:
+    stream = _RecordingStream()
+    handler = DataBusHandlerSpec(
+        method_name="handle_command",
+        subject="problem_board.command.v1",
+        operation_id="data_bus.problem_board.command.v1",
+        operation_id_explicit=False,
+        user_types=("registered",),
+    )
+    worker = _worker_with_handler(stream, handler)
+    _patch_live_card(monkeypatch, _live_card(operations=()))
+    invoked = False
+
+    async def _invoke_handler(claim, _handler):
+        nonlocal invoked
+        invoked = True
+        assert claim.message.actor["roles"] == ["kdcube:role:registered"]
+        return DataBusResult.ok(claim.message, {"handled": True}), True
+
+    worker._invoke_handler = _invoke_handler
+    message = DataBusMessage(
+        message_id="message-dynamic-dispatch",
+        tenant="tenant-data-bus",
+        project="project-data-bus",
+        bundle_id="reports@1-0",
+        subject=handler.subject,
+        actor=_delegated_actor(),
+    )
+
+    await worker._process_claim(_claim(message))
+
+    assert invoked is True
+    assert stream.calls == ["result", "ack"]
+    assert stream.results[0].status == "ok"
 
 
 @pytest.mark.asyncio
