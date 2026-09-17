@@ -39,6 +39,7 @@ from kdcube_cli.host_vault import (
     HostVaultConfigurationError,
     validate_assembly_for_start as validate_host_vault_assembly_for_start,
 )
+from kdcube_cli.host_vault_service import ensure_host_vault_running
 
 
 class LocalLifecycleController:
@@ -86,9 +87,16 @@ class LocalLifecycleController:
                 f"Compose profile configuration is invalid: {exc}",
             ) from exc
         try:
-            validate_host_vault_assembly_for_start(
+            vault_config = validate_host_vault_assembly_for_start(
                 assembly,
                 workdir=self._context.workdir,
+            )
+            # A configured vault is a startup dependency: Compose leaves every
+            # service behind kdcube-secrets in Created while it is unreachable.
+            vault_state = ensure_host_vault_running(
+                vault_config,
+                assembly,
+                ai_app_root=self._context.ai_app_root,
             )
         except HostVaultConfigurationError as exc:
             raise OperationFailedError(
@@ -96,6 +104,13 @@ class LocalLifecycleController:
                 self._reference.target_id,
                 f"Host-vault startup preflight failed: {exc}",
             ) from exc
+        if vault_state.describe() and event_sink is not None:
+            event_sink(
+                ControlEvent(
+                    kind=ControlEventKind.PROGRESS,
+                    message=vault_state.describe(),
+                )
+            )
         env_main = installer_mod.load_env_file(env_file)
         installer_mod.ensure_compose_log_dirs(logs_dir(env_main, self._context.workdir))
         runtime_env = installer_mod.write_env_overlay(

@@ -285,6 +285,23 @@ platform:
         py_code_exec_network_mode: auto
 ```
 
+From this point the vault is a startup dependency of the runtime: `chat-ingress`
+and `chat-proc` wait for the `kdcube-secrets` health check, and that check fails
+while the vault is unreachable. A source-operated vault is a plain host process
+that a reboot stops. When the vault runs on the same machine as the same user,
+add `local_service` under `host_vault` so `kdcube start` and `kdcube refresh`
+start it when nothing listens:
+
+```yaml
+      local_service:
+        home: /absolute/path/to/vault-home
+        python: /absolute/path/to/host-vault-venv/bin/python
+        bind: "127.0.0.1"     # macOS default. Required on Linux, see the Host Vault page. Not supported on Windows.
+```
+
+Without `local_service` the same commands stop before Compose and name the
+vault as the cause.
+
 Then prepare the shadow broker, verify the copy, and activate through the CLI:
 
 ```bash

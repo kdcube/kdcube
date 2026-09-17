@@ -4,7 +4,7 @@ title: "Host Vault for Provider Secrets"
 summary: "Durable host-owned secret storage for local KDCube: selector states, system and trust-boundary flows, deployment workload identity over mTLS, migration, activation, and recovery."
 tags: ["service", "secrets", "security", "vault", "runtime"]
 keywords: ["host vault", "kdcube-host-vault/1", "secrets.service.backend", "workload identity", "mTLS", "kdcube-secrets broker", "envelope encryption", "trust registry", "hostvaultctl", "shadow staging", "activation"]
-updated_at: 2026-09-06
+updated_at: 2026-09-17
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/secrets/secrets-service-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/arch/security-and-trust-model-README.md
@@ -63,6 +63,7 @@ platform:
 | `host_vault.address` | `host:port` reached from the broker container. `host.docker.internal:7781` reaches the Docker host in the maintained local layouts. |
 | `host_vault.server_name` | DNS name or IP verified against the vault server certificate's subject alternative names. It authenticates the destination independently of routing. |
 | `host_vault.identity_dir` | Host directory containing the deployment client certificate, private key, and issuing CA certificate. The installer mounts only these files, read-only, into the broker. |
+| `host_vault.local_service` | Optional. Declares that the vault is a source-operated process on this host (`home`, `python`, optional `bind`). Commands that start the runtime then start the vault when nothing listens on its port (macOS and Linux, refused on Windows). Absent or `null` means another owner runs the vault and the CLI only checks that it answers. |
 | `py_code_exec_network_mode` | `auto` preserves the trusted supervisor route to the private secrets service while split generated execution stays restricted. |
 
 `secrets.provider` routes trusted KDCube consumers. `service.backend` chooses
@@ -641,6 +642,78 @@ broker if the shadow broker does not become healthy.
 Desktop. The vault service must bind an address reachable from Docker; mTLS
 still authenticates both ends.
 
+### The vault is a startup dependency, and the CLI ensures it
+
+With `service.backend: host-vault`, the broker's `/health` answers
+`503 {"detail":"backend_unavailable"}` while the vault is unreachable. Compose
+gates `chat-ingress` and `chat-proc` on that health check, so an unreachable
+vault leaves ingress, proc, `web-ui` and `web-proxy` in `Created` and prints no
+error. This holds in shadow staging too: the file provider is still
+authoritative, and the runtime still does not start without the vault. A host
+reboot is the ordinary way to get there, because a source-operated vault is a
+plain process that nothing restarts.
+
+A configured dependency is ensured by the command that needs it. `kdcube
+start`, `kdcube refresh`, and `kdcube init` therefore check the vault after the
+identity preflight and before Compose runs.
+
+Two conditions gate all of it, and both come from the descriptor:
+
+1. `secrets.service.backend` is `host-vault`. With any other backend the step
+   reads nothing, probes nothing, and starts nothing, on every operating system.
+   The shipped default is `ephemeral`.
+2. `host_vault.local_service` is declared. Without it the CLI never starts a
+   process. It only checks that the vault answers.
+
+| Descriptor | Vault answers | Nothing listens |
+| --- | --- | --- |
+| `local_service` declared | Left alone. | The CLI starts `vault_server.py` detached from the source checkout given by `--path`, with `KDCUBE_HOST_VAULT_HOME`, `_BIND`, `_PORT` from the descriptor, appends to `<home>/service.log`, writes `<home>/service.pid`, and waits for the port. A vault that does not come up fails the command with the last lines of its log. |
+| `local_service` absent or `null`, `address` names this host | Left alone. | The command fails before Compose with the address it probed and the consequence (which services would wait in `Created`). It names both ways out: start the vault, or declare `local_service`. |
+| `local_service` absent or `null`, `address` names another machine | Left alone. | The command warns and continues. The CLI sees the network from the host and the broker sees it from a container, so a failed probe is not proof. The warning names the vault as the cause to check if services stay in `Created`. |
+
+```yaml
+secrets:
+  service:
+    backend: host-vault
+    host_vault:
+      address: host.docker.internal:7781
+      server_name: host.docker.internal
+      identity_dir: /absolute/service-owned/path/deployment-identity
+      local_service:
+        home: /absolute/path/to/vault-home          # initialized by hostvaultctl.py init
+        python: /absolute/path/to/host-vault-venv/bin/python
+        bind: "127.0.0.1"                           # macOS default. Required on Linux (see the table below)
+```
+
+The probe runs from the host that runs the CLI. A Docker-host alias in
+`address` (`host.docker.internal`, `gateway.docker.internal`, `localhost`,
+`127.0.0.1`) is probed on loopback, and any other host is probed as written.
+The probe is a TCP connect. It presents no certificate, reads nothing, and
+leaves no line in the vault's service log.
+
+Operating systems:
+
+| Host | `local_service` | `bind` | State |
+| --- | --- | --- | --- |
+| macOS | Supported. | Defaults to `127.0.0.1`. Containers reach a loopback listener through `host.docker.internal`. | Verified on macOS with Docker Desktop: the vault was stopped, the CLI step started it detached, a second run left it alone, and the broker stayed healthy. |
+| Linux | Supported. | Required, no default. Compose maps `host.docker.internal` to `host-gateway`. Under Docker Engine that is the bridge gateway (commonly `172.17.0.1`), which a loopback listener does not answer: use that address, or `0.0.0.0` with port 7781 restricted at the firewall. Under Docker Desktop for Linux use `127.0.0.1`. | Covered by unit tests. Not yet run on a Linux host. |
+| Windows | Refused with a configuration error before anything starts. The vault's root-key custody check reads POSIX file modes, so the vault service does not run natively on Windows. | Not applicable. | The reachability check still runs for a vault that lives elsewhere (WSL, another machine). Covered by unit tests. Not run on a Windows host. |
+
+A loopback default on Linux would be the unsafe choice: the CLI's own probe
+would succeed, it would report the vault started, and the broker would still
+be unable to reach it. The bind is therefore the operator's written decision
+there.
+
+`kdcube stop` leaves the vault running. It is durable storage that outlives the
+Compose stack, and a second local deployment may share it. `local_service`
+names machine paths, so a portable descriptor export nulls it together with
+`identity_dir`.
+
+`local_service` fits the same-user functional topology in section 3, where the
+vault already runs as the desktop user. A vault under a dedicated OS account or
+on another machine is kept up by that owner's service manager, the descriptor
+leaves `local_service` out, and the CLI's part is the fail-fast check.
+
 The `auto` trusted-runtime network setting keeps host-launched supervisors on
 Docker's host network. Under local Docker-in-Docker it shares the processor's
 network namespace, which already contains the normal internal-service network
@@ -861,6 +934,9 @@ recovery are implemented. The remaining gates are deliberately separate:
   parent-network routing and the networkless executor are covered separately
 - package the host vault as a dedicated service-owned appliance or VM and add
   its enrollment/install lifecycle
+- run the CLI-ensured `local_service` start on a Linux host under Docker Engine
+  and under Docker Desktop, and make the vault's root-key custody check
+  portable before any native Windows support is claimed
 - remove plaintext source values only through a later explicit cleanup action
   after activation and durability acceptance
 

@@ -239,6 +239,19 @@ blocks startup after interruption until explicit recovery recreates and
 verifies file-backed operation. Plaintext cleanup remains a later operator
 decision after active-provider restart durability is accepted.
 
+Selecting the host-vault backend also adds an availability dependency. The
+vault is a host process outside Compose, and `chat-ingress` and `chat-proc`
+wait for the broker's health, which is the vault's health. This holds during
+shadow staging as well, while `secrets-file` is still authoritative. The
+commands that start the local runtime check the vault before Compose runs.
+They start it only where the descriptor declares the vault as a local service
+of the same host and user (`secrets.service.host_vault.local_service`), which
+is the same-user topology whose limits are stated above. A vault under a
+dedicated OS account or on another machine is supervised by its owner, and the
+CLI's part is to fail with the named cause before Compose. Starting the vault
+from the CLI grants the CLI nothing new: it already runs as the user who owns
+the vault home in that topology, and it reads no key, store, or audit content.
+
 ```text
 user consent -> Connection Hub record -> server-side credential store
                                              |

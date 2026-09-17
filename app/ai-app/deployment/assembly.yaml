@@ -313,6 +313,23 @@ secrets:
       address: "host.docker.internal:7781"  # DNS/IP plus port, as reached from the kdcube-secrets container
       server_name: "host.docker.internal"   # DNS name or IP present in the vault server certificate
       identity_dir: null                     # absolute host path outside the KDCube workdir
+      # A host-vault backend is a startup dependency: kdcube-secrets stays
+      # unhealthy while the vault is unreachable, and Compose leaves ingress,
+      # proc, web-ui and web-proxy in Created. `kdcube start` / `refresh` /
+      # `init` therefore check the vault first. Declare local_service when the
+      # vault is a source-operated process on this host, and the CLI starts it
+      # when nothing listens (it is left running by `kdcube stop`). Leave it
+      # null when another owner runs the vault: the CLI then only probes it
+      # and fails with the named cause.
+      # Read only when backend is "host-vault". macOS and Linux only: on
+      # Windows the vault service does not run natively and a declared
+      # local_service is refused.
+      local_service: null
+      #   home: /absolute/path/to/vault-home     # initialized by hostvaultctl.py init
+      #   python: /absolute/path/to/host-vault-venv/bin/python
+      #   bind: "127.0.0.1"                      # macOS default. REQUIRED on Linux: the Docker bridge gateway
+      #                                          # (commonly 172.17.0.1) or 0.0.0.0 under Docker Engine,
+      #                                          # 127.0.0.1 under Docker Desktop
 
 # ---------------------------------------------------------------------------
 # Host paths (deployment topology hints promoted into managed settings)

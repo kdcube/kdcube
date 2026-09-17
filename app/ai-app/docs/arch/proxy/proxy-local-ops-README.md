@@ -114,9 +114,31 @@ postgres-db (healthy)
   redis (healthy)         ├─ web-proxy
        └─ chat-proc      │
   web-ui ────────────────┘
-  kdcube-secrets (started) → chat-ingress, chat-proc
+  kdcube-secrets (healthy) → chat-ingress, chat-proc
   clamav (healthy) → chat-ingress
 ```
+
+`chat-ingress` and `chat-proc` wait for `kdcube-secrets` to be **healthy**, and
+`web-proxy` waits for them. Anything that keeps the secrets service unhealthy
+therefore leaves ingress, proc, `web-ui` and `web-proxy` in `Created`, and
+Compose reports no error.
+
+With the default `secrets.service.backend: ephemeral` the secrets service has
+no outside dependency. With `host-vault` its health is the health of a vault
+process outside Compose, on the host:
+
+```
+host vault (host process, not in Compose)
+  └─ kdcube-secrets (healthy only while the vault answers)
+       └─ chat-ingress, chat-proc
+            └─ web-proxy
+```
+
+That host process is a startup dependency Compose cannot see. `kdcube start`,
+`kdcube refresh` and `kdcube init` check it before they run Compose, and start
+it when the descriptor declares `secrets.service.host_vault.local_service`
+(macOS and Linux). See
+[The vault is a startup dependency](../../service/secrets/host-vault-README.md#the-vault-is-a-startup-dependency-and-the-cli-ensures-it).
 
 ---
 

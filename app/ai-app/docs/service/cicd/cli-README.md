@@ -822,7 +822,7 @@ copy of the container runtime files:
 | --- | --- |
 | `bundles.yaml` | Git bundles keep `repo` / `ref` / `subdir`; local path bundles are normalized back to host paths when possible. |
 | `bundles.secrets.yaml` | Exported as the live descriptor secret overlay. |
-| `secrets` backend in `assembly.yaml` | A Host Vault source is exported as portable `secrets-file`/ephemeral bootstrap; machine-specific vault address, certificate name, and identity path are cleared. |
+| `secrets` backend in `assembly.yaml` | A Host Vault source is exported as portable `secrets-file`/ephemeral bootstrap; machine-specific vault address, certificate name, identity path, and a declared `local_service` block are cleared. |
 | `infra.postgres.host`, `infra.redis.host` | Exported as descriptor-facing `localhost` for local runtimes, even when containers use `host.docker.internal`. |
 | `paths.host_bundles_path` | Preserved. This is the host source root for unmanaged local bundles. |
 | Other `paths.host_*` runtime mounts | Exported as `null` so the next `init` derives them from that runtime's workdir. |
@@ -1318,6 +1318,36 @@ Before staging:
 
 The exact descriptor shape and the source-operated provisioning commands are
 in [Host Vault for Provider Secrets](../secrets/host-vault-README.md).
+
+#### The vault stays a startup dependency
+
+Once `secrets.service.backend` is `host-vault`, every command that starts the
+runtime (`kdcube start`, `kdcube refresh`, `kdcube init`) checks that the vault
+answers before it runs Compose. Without that check an unreachable vault leaves
+`kdcube-secrets` unhealthy and `chat-ingress`, `chat-proc`, `web-ui` and
+`web-proxy` in `Created`, with no error. A host reboot produces exactly this
+when the vault is a source-operated process.
+
+The check runs only when the descriptor selects `host-vault`. With the default
+`ephemeral` backend the start commands read nothing, probe nothing, and start
+nothing.
+
+Declare `secrets.service.host_vault.local_service` (`home`, `python`, `bind`)
+when the vault runs on this host as the same user. The start command then
+starts it when nothing listens on the vault port and reports the pid. Without
+the declaration the CLI never starts a process: for a vault address on this
+host the command fails before Compose and names the address it probed, and for
+a vault on another machine it warns and continues. `kdcube stop` leaves the
+vault running.
+
+| Host | Starting the vault through `local_service` |
+| --- | --- |
+| macOS | Supported, `bind` defaults to `127.0.0.1`. Verified with Docker Desktop. |
+| Linux | Supported, `bind` is required. Under Docker Engine use the bridge gateway address (commonly `172.17.0.1`) or `0.0.0.0` with the port restricted at the firewall. Under Docker Desktop use `127.0.0.1`. Covered by unit tests, not yet run on a Linux host. |
+| Windows | Refused with a configuration error. The vault service does not run natively on Windows. The reachability check still applies to a vault that runs in WSL or on another machine. |
+
+The decision table and the reasons are in
+[The vault is a startup dependency](../secrets/host-vault-README.md#the-vault-is-a-startup-dependency-and-the-cli-ensures-it).
 
 #### Prepare the shadow broker
 

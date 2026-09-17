@@ -45,6 +45,7 @@ from kdcube_cli.host_vault import (
     config_from_assembly as host_vault_config_from_assembly,
     validate_assembly_for_start as validate_host_vault_assembly_for_start,
 )
+from kdcube_cli.host_vault_service import ensure_host_vault_running
 from kdcube_cli.management.models import ManagementSecretTarget
 from kdcube_cli.secrets_namespace import canonical_global_secret_root
 from kdcube_cli.tty_keys import (
@@ -6172,12 +6173,22 @@ def run_setup(
         runtime_env = None
         try:
             try:
-                validate_host_vault_assembly_for_start(
-                    load_release_descriptor(config_dir / "assembly.yaml"),
+                start_assembly = load_release_descriptor(config_dir / "assembly.yaml")
+                vault_config = validate_host_vault_assembly_for_start(
+                    start_assembly,
                     workdir=ctx.workdir,
+                )
+                # A configured vault is a startup dependency: Compose leaves every
+                # service behind kdcube-secrets in Created while it is unreachable.
+                vault_state = ensure_host_vault_running(
+                    vault_config,
+                    start_assembly,
+                    ai_app_root=ctx.ai_app_root,
                 )
             except HostVaultConfigurationError as exc:
                 raise SystemExit(f"Host-vault startup preflight failed: {exc}") from exc
+            if vault_state.describe():
+                console.print(f"[dim]{vault_state.describe()}[/dim]")
             maybe_remove_legacy_containers(console)
             token_overrides = generate_runtime_tokens()
             runtime_env = write_env_overlay(config_dir / ".env", token_overrides)

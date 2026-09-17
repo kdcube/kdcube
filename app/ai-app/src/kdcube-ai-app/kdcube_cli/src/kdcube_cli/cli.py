@@ -2238,6 +2238,14 @@ def _denormalize_exported_assembly_descriptor(data: dict[str, object]) -> bool:
                 ["secrets", "service", "host_vault", key],
                 None,
             )
+        # local_service names this machine's vault home and interpreter. Null
+        # it only where the source declared it, so an export gains no new key.
+        if _get_nested(data, "secrets", "service", "host_vault", "local_service") is not None:
+            installer_mod._set_nested(
+                data,
+                ["secrets", "service", "host_vault", "local_service"],
+                None,
+            )
         changed = True
 
     return changed

@@ -88,6 +88,14 @@ recovery, exact-key operations, export, and backend status. Read
 [Host Vault for Provider Secrets](../../../docs/service/secrets/host-vault-README.md)
 for provisioning, mTLS identity, migration, activation, and recovery.
 
+When `secrets.service.backend` is `host-vault`, the vault is a startup
+dependency: `chat-ingress` and `chat-proc` wait for the `kdcube-secrets` health
+check, which fails while the vault is unreachable. `kdcube start`, `kdcube
+refresh` and `kdcube init` therefore check the vault before Compose runs. They
+start it only when the descriptor declares
+`secrets.service.host_vault.local_service` (macOS, and Linux with an explicit
+`bind`, and refused on Windows). With any other backend none of this runs.
+
 ---
 
 ## What You Build

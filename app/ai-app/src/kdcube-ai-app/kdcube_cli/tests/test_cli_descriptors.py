@@ -4350,6 +4350,47 @@ def test_export_platform_descriptors_drops_cli_managed_local_paths(tmp_path: Pat
     assert exported["platform"]["services"]["proc"]["log"]["log_level"] == "INFO"
 
 
+def test_export_platform_descriptors_removes_host_vault_local_service_paths(
+    tmp_path: Path,
+) -> None:
+    config_dir = _write_initialized_runtime_config(
+        tmp_path / "runtime",
+        marker="source",
+        secrets_provider="secrets-service",
+    )
+    assembly_path = config_dir / "assembly.yaml"
+    assembly = yaml.safe_load(assembly_path.read_text(encoding="utf-8"))
+    assembly["secrets"]["service"] = {
+        "backend": "host-vault",
+        "host_vault": {
+            "address": "host.docker.internal:7781",
+            "server_name": "host.docker.internal",
+            "identity_dir": "/private/source-machine/identity",
+            "local_service": {
+                "home": "/private/source-machine/vault-home",
+                "python": "/private/source-machine/venv/bin/python",
+            },
+        },
+    }
+    assembly_path.write_text(
+        yaml.safe_dump(assembly, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    out_dir = tmp_path / "out"
+    _export_platform_descriptors(
+        Console(file=None),
+        config_dir=config_dir,
+        out_dir=out_dir,
+        quiet=True,
+    )
+
+    exported_text = (out_dir / "assembly.yaml").read_text()
+    exported = yaml.safe_load(exported_text)
+    assert exported["secrets"]["service"]["host_vault"]["local_service"] is None
+    assert "source-machine" not in exported_text
+
+
 def test_export_platform_descriptors_removes_host_vault_machine_identity(
     tmp_path: Path,
 ) -> None:
