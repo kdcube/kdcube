@@ -9,8 +9,12 @@ pooled resources); nothing is inferred from router/app state. Identity, tenant a
 project come per request from the named-service context.
 """
 
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.named_service_caller import (
+    named_service_caller,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.conversation.api import ConversationSearchContext
 from kdcube_ai_app.apps.chat.sdk.solutions.conversation.named_service import (
     make_conversation_search_named_service_provider,
 )
@@ -24,6 +28,21 @@ from kdcube_ai_app.apps.chat.sdk.solutions.conversation.search_backend import (
 from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import ConversationStore
 
 
+def conversation_search_context(ns_ctx: Any) -> ConversationSearchContext:
+    """Scope a search to the application that called, never to this bundle.
+
+    Every `conv` call is served here, so this bundle's own id would confine
+    every caller to conversations held by kdcube-services. A hosted agent's
+    search is scoped to its own application; an external client's is not.
+    """
+    caller = named_service_caller(ns_ctx)
+    return conversation_search_context_from_ns(
+        ns_ctx,
+        bundle_id=caller.bundle_id,
+        agent_id=caller.agent_id,
+    )
+
+
 def build_conversation_named_service_provider(
     *,
     pool_factory: Callable[[], Any],
@@ -31,6 +50,7 @@ def build_conversation_named_service_provider(
     storage_path: str,
     bundle_id: str,
     file_url_factory: Callable[[Any, Any], Any] | None = None,
+    bundle_validator: Callable[[Any, str], Awaitable[bool]] | None = None,
 ):
     """Build the conv provider with search + read/export bound per request to the
     caller's tenant/project.
@@ -46,8 +66,9 @@ def build_conversation_named_service_provider(
         return ConversationStore(storage_path)
 
     return make_conversation_search_named_service_provider(
-        context_factory=conversation_search_context_from_ns,
+        context_factory=conversation_search_context,
         file_url_factory=file_url_factory,
+        bundle_validator=bundle_validator,
         search_backend_factory=lambda ns_ctx: make_conversation_search_backend(
             pg_pool=pool_factory(),
             tenant=ns_ctx.tenant or "",

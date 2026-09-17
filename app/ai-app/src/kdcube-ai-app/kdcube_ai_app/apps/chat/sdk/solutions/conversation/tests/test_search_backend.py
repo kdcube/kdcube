@@ -22,11 +22,21 @@ from kdcube_ai_app.apps.chat.sdk.solutions.conversation.search_backend import (
 
 def test_ns_context_mapping():
     ns = SimpleNamespace(user_id="u1", conversation_id="c1", turn_id="t1", bundle_id="b", tenant="t", project="p")
-    ctx = conversation_search_context_from_ns(ns)
+    ctx = conversation_search_context_from_ns(ns, bundle_id="caller-app", agent_id="agent-a")
     assert ctx.user_id == "u1"
     assert ctx.conversation_id == "c1"
     assert ctx.turn_id == "t1"
-    assert ctx.tenant == "t" and ctx.project == "p" and ctx.bundle_id == "b"
+    assert ctx.tenant == "t" and ctx.project == "p"
+    assert ctx.bundle_id == "caller-app" and ctx.agent_id == "agent-a"
+
+
+def test_the_serving_bundle_never_scopes_a_named_service_search():
+    ns = SimpleNamespace(
+        user_id="u1", conversation_id="", turn_id="", bundle_id="kdcube-services@1-0", tenant="t", project="p",
+    )
+    ctx = conversation_search_context_from_ns(ns)
+    assert ctx.bundle_id is None
+    assert ctx.agent_id is None
 
 
 def test_backend_is_lazy_and_satisfies_protocol():

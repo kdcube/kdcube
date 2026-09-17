@@ -3453,6 +3453,7 @@ async def search_context(
         hit = {
             "turn_id": tid,
             "conversation_id": r.get("conversation_id") or conv,
+            "bundle_id": r.get("bundle_id"),
             "role": r.get("role", "artifact"),
             "ts": r.get("ts"),
             "sim": sim,

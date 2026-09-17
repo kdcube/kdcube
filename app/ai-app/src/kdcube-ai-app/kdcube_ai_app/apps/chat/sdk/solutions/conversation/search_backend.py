@@ -30,13 +30,25 @@ from kdcube_ai_app.apps.chat.sdk.solutions.conversation.read import build_conver
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import NamedServiceContext
 
 
-def conversation_search_context_from_ns(ns_ctx: NamedServiceContext) -> ConversationSearchContext:
-    """Map a named-service request context onto the explicit search context."""
+def conversation_search_context_from_ns(
+    ns_ctx: NamedServiceContext,
+    *,
+    bundle_id: Optional[str] = None,
+    agent_id: Optional[str] = None,
+) -> ConversationSearchContext:
+    """Map a named-service request context onto the explicit search context.
+
+    ``ns_ctx.bundle_id`` names the bundle serving the call, not the caller's
+    application, so it never scopes the search. The registering bundle passes
+    the caller's application as ``bundle_id``; without one the search covers
+    every conversation of the user.
+    """
     return ConversationSearchContext(
         user_id=str(ns_ctx.user_id or ""),
         conversation_id=str(ns_ctx.conversation_id or ""),
         turn_id=str(ns_ctx.turn_id or ""),
-        bundle_id=ns_ctx.bundle_id,
+        bundle_id=str(bundle_id or "").strip() or None,
+        agent_id=index_agent_id(agent_id),
         tenant=ns_ctx.tenant,
         project=ns_ctx.project,
     )

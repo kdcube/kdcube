@@ -110,6 +110,81 @@ async def test_object_search_uses_explicit_context_factory():
     assert items[0]["body"]["turn_id"] == "turn_prev"
 
 
+def _search_request(filters: dict) -> NamedServiceRequest:
+    return NamedServiceRequest.from_dict({
+        "operation": "object.search",
+        "namespace": "conv",
+        "query": "invoice",
+        "filters": filters,
+    })
+
+
+def test_search_filters_offer_an_optional_bundle_id():
+    scope = conversation_search_named_service_spec().search_scopes[0]
+    assert scope.filters_schema["bundle_id"]["type"] == "string"
+
+
+@pytest.mark.asyncio
+async def test_a_requested_bundle_id_replaces_the_default_scope():
+    backend = FakeBackend()
+    checked = []
+
+    async def validator(ns_ctx, bundle_id):
+        checked.append(bundle_id)
+        return True
+
+    provider = make_conversation_search_named_service_provider(
+        context_factory=lambda c: ConversationSearchContext(user_id="u", bundle_id="caller-app"),
+        search_backend_factory=lambda c: backend,
+        bundle_validator=validator,
+    )
+
+    response = await provider.object_search(
+        NamedServiceContext(), _search_request({"bundle_id": "workspace@2026-03-31-13-36"})
+    )
+
+    assert response.ok
+    assert checked == ["workspace@2026-03-31-13-36"]
+    assert backend.search_kwargs["bundle_id"] == "workspace@2026-03-31-13-36"
+
+
+@pytest.mark.asyncio
+async def test_without_a_requested_bundle_id_the_context_scope_stands():
+    backend = FakeBackend()
+    provider = make_conversation_search_named_service_provider(
+        context_factory=lambda c: ConversationSearchContext(user_id="u", bundle_id="caller-app"),
+        search_backend_factory=lambda c: backend,
+    )
+
+    response = await provider.object_search(NamedServiceContext(), _search_request({}))
+
+    assert response.ok
+    assert backend.search_kwargs["bundle_id"] == "caller-app"
+
+
+@pytest.mark.asyncio
+async def test_an_unregistered_bundle_id_is_refused_before_searching():
+    backend = FakeBackend()
+
+    async def validator(ns_ctx, bundle_id):
+        return False
+
+    provider = make_conversation_search_named_service_provider(
+        context_factory=lambda c: ConversationSearchContext(user_id="u"),
+        search_backend_factory=lambda c: backend,
+        bundle_validator=validator,
+    )
+
+    response = await provider.object_search(
+        NamedServiceContext(), _search_request({"bundle_id": "no-such-app@1-0"})
+    )
+
+    assert not response.ok
+    assert response.status == 404
+    assert response.error.code == "conversation_bundle_not_found"
+    assert backend.search_kwargs == {}
+
+
 @pytest.mark.asyncio
 async def test_object_search_missing_query_errors():
     backend = FakeBackend()

@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import base64
 import logging
+from dataclasses import replace
 from typing import Any, AsyncIterator, Awaitable, Callable, Mapping
 
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
@@ -175,6 +176,10 @@ ConversationReadServiceFactory = Callable[[NamedServiceContext], ConversationRea
 ConversationFileUrlFactory = Callable[
     [NamedServiceContext, Mapping[str, Any]], Awaitable["dict[str, Any] | None"]
 ]
+# Answers whether a bundle id a caller asked to search is known to the
+# caller's tenant/project. Optional: without it a requested bundle id is used
+# as given.
+ConversationBundleValidator = Callable[[NamedServiceContext, str], Awaitable[bool]]
 
 # Bytes above this ride out-of-band via a download URL when a URL factory is wired;
 # without a factory a binary this large is reported as metadata only (never a
@@ -210,6 +215,14 @@ CONVERSATION_SEARCH_FILTERS: dict[str, Any] = {
     "order": {"type": "string", "enum": ["asc", "desc"], "description": "Order of catalog results (ordinal/temporal/timeline lookups). Default asc."},
     "top_k": {"type": "integer", "description": "Maximum turn hits to return. Default 5."},
     "days": {"type": "integer", "description": "Lookback window in days. Default 365 for topic search, 3650 for temporal. Widen for material older than a year."},
+    "bundle_id": {
+        "type": "string",
+        "description": (
+            "Application (bundle id) whose conversations to search. When omitted, a hosted "
+            "application agent searches its own application's conversations and any other "
+            "caller searches all of the user's conversations."
+        ),
+    },
     "include_recovery_sessions": {
         "type": "boolean",
         "description": (
@@ -321,6 +334,7 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
         search_backend_factory: ConversationBackendFactory | None = None,
         read_service_factory: ConversationReadServiceFactory | None = None,
         file_url_factory: ConversationFileUrlFactory | None = None,
+        bundle_validator: ConversationBundleValidator | None = None,
         bundle_id: str | None = None,
     ) -> None:
         super().__init__(conversation_search_named_service_spec(bundle_id=bundle_id))
@@ -328,6 +342,7 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
         self._search_backend_factory = search_backend_factory
         self._read_service_factory = read_service_factory
         self._file_url_factory = file_url_factory
+        self._bundle_validator = bundle_validator
 
     @property
     def _search_enabled(self) -> bool:
@@ -450,15 +465,27 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
             include_recovery_sessions=bool(filters.get("include_recovery_sessions")),
         )
         context = self._context_factory(ctx)
+        requested_bundle_id = _text(filters.get("bundle_id"))
+        if requested_bundle_id:
+            if self._bundle_validator is not None and not await self._bundle_validator(ctx, requested_bundle_id):
+                return NamedServiceResponse.error_response(
+                    code="conversation_bundle_not_found",
+                    message=f"No application with bundle id {requested_bundle_id!r} is registered here.",
+                    status=404,
+                    provider=self.provider_identity(),
+                    namespace=request.namespace or NAMESPACE,
+                )
+            context = replace(context, bundle_id=requested_bundle_id)
         backend = self._search_backend_factory(ctx)
         LOGGER.info(
-            "[conversation.named_service.search] namespace=%s query=%r scope=%s targets=%s user_id=%s conversation_id=%s",
+            "[conversation.named_service.search] namespace=%s query=%r scope=%s targets=%s user_id=%s conversation_id=%s bundle_id=%s",
             namespace,
             params.query,
             params.scope,
             params.targets,
             context.user_id,
             context.conversation_id,
+            context.bundle_id or "",
         )
         result = await run_conversation_search(
             context=context,
@@ -749,6 +776,7 @@ def make_conversation_search_named_service_provider(
     search_backend_factory: ConversationBackendFactory | None = None,
     read_service_factory: ConversationReadServiceFactory | None = None,
     file_url_factory: ConversationFileUrlFactory | None = None,
+    bundle_validator: ConversationBundleValidator | None = None,
     bundle_id: str | None = None,
 ) -> ConversationSearchNamedServiceProvider:
     return ConversationSearchNamedServiceProvider(
@@ -756,6 +784,7 @@ def make_conversation_search_named_service_provider(
         search_backend_factory=search_backend_factory,
         read_service_factory=read_service_factory,
         file_url_factory=file_url_factory,
+        bundle_validator=bundle_validator,
         bundle_id=bundle_id,
     )
 
@@ -764,6 +793,7 @@ __all__ = [
     "CONVERSATION_OBJECT_KIND",
     "CONVERSATION_SEARCH_FILTERS",
     "CONVERSATION_SEARCH_SCOPES",
+    "ConversationBundleValidator",
     "ConversationFileUrlFactory",
     "ConversationReadServiceFactory",
     "ConversationSearchNamedServiceProvider",

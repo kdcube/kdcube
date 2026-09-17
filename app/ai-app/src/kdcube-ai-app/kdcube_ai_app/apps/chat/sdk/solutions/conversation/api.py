@@ -621,6 +621,9 @@ async def run_conversation_search(
         if not tid:
             continue
         hit_conversation_id = _as_str(h.get("conversation_id") or conversation_id)
+        # An unscoped search spans applications; each turn log lives under the
+        # bundle of its own hit, not under whatever bundle is ambient here.
+        hit_bundle_id = _as_str(context.bundle_id or h.get("bundle_id"))
         # Turn-log materialization is best-effort: when the turn log cannot be
         # fetched the hit is NOT dropped — snippet assembly falls back to the
         # matched row text below instead of shipping a blank result.
@@ -629,7 +632,7 @@ async def run_conversation_search(
             turn_log = await search_backend.get_turn_log(
                 turn_id=tid,
                 conversation_id=hit_conversation_id,
-                **({"bundle_id": context.bundle_id} if context.bundle_id else {}),
+                **({"bundle_id": hit_bundle_id} if hit_bundle_id else {}),
             )
             blocks = list((turn_log or {}).get("blocks") or [])
         except Exception:
