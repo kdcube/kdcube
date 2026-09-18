@@ -10,10 +10,12 @@ in :mod:`.rest_api`. Does not use the bundle-owned OAuth layer in
 
 from __future__ import annotations
 
+import io
 import logging
 import mimetypes
 import pathlib
 import re
+import warnings
 from typing import Annotated, Any, Mapping, Sequence
 
 import httpx
@@ -246,29 +248,84 @@ def _resolve_input_artifact(path_value: str, artifact_root: pathlib.Path) -> pat
     return resolve_artifact_path(artifact_root, raw)
 
 
+_IMAGE_FORMAT_MIME = {"JPEG": "image/jpeg", "PNG": "image/png", "GIF": "image/gif"}
+
+
 def validate_image(file_obj: dict[str, Any]) -> dict[str, Any] | None:
-    """Check one image against LinkedIn's size/format limits. Returns an error
-    dict or None."""
+    """Check one image against LinkedIn's image limits. Returns an error dict
+    or None.
+
+    The format and dimensions are read from the image header, not from the
+    declared MIME type or the filename; pixel data is never decoded. A GIF's
+    frames are counted by skipping their data blocks. The detected format
+    becomes the upload MIME type.
+    """
     data = file_obj.get("data") or b""
     filename = _safe_filename(str(file_obj.get("filename") or ""))
-    mime = str(file_obj.get("mime_type") or file_obj.get("mime") or "").strip()
-    mime = mime or mimetypes.guess_type(filename)[0] or "application/octet-stream"
-    if len(data) > rest_api.MAX_IMAGE_BYTES:
+    declared = str(file_obj.get("mime_type") or file_obj.get("mime") or "").strip()
+    declared = declared or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    try:
+        from PIL import Image
+    except ImportError:  # pragma: no cover - depends on the host's environment
         return {
-            "code": "file_too_large",
-            "message": f"LinkedIn images must be at most {rest_api.MAX_IMAGE_BYTES} bytes.",
+            "code": "image_inspection_unavailable",
+            "message": "Image validation needs Pillow, which this runtime does not have.",
             "filename": filename,
-            "size_bytes": len(data),
         }
-    if mime not in rest_api.SUPPORTED_IMAGE_MIME:
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(data), formats=list(_IMAGE_FORMAT_MIME)) as image:
+                detected = str(image.format or "")
+                width, height = image.size
+                frames = int(getattr(image, "n_frames", 1) or 1) if detected == "GIF" else 1
+    except Image.DecompressionBombError:
+        return {
+            "code": "image_too_many_pixels",
+            "message": (
+                f"LinkedIn images must have fewer than {rest_api.MAX_IMAGE_PIXELS} pixels; "
+                "this image is far larger."
+            ),
+            "filename": filename,
+            "max_pixels": rest_api.MAX_IMAGE_PIXELS,
+        }
+    except Exception:
         return {
             "code": "unsupported_image_type",
-            "message": f"LinkedIn accepts {', '.join(rest_api.SUPPORTED_IMAGE_MIME)}; got {mime}.",
+            "message": (
+                f"LinkedIn accepts {', '.join(rest_api.SUPPORTED_IMAGE_MIME)}; "
+                "the file is not a readable JPEG, PNG or GIF image."
+            ),
             "filename": filename,
-            "mime_type": mime,
+            "mime_type": declared,
+        }
+    pixels = int(width) * int(height)
+    if pixels >= rest_api.MAX_IMAGE_PIXELS:
+        return {
+            "code": "image_too_many_pixels",
+            "message": (
+                f"LinkedIn images must have fewer than {rest_api.MAX_IMAGE_PIXELS} pixels; "
+                f"this one is {width}x{height} = {pixels}."
+            ),
+            "filename": filename,
+            "width": width,
+            "height": height,
+            "pixels": pixels,
+            "max_pixels": rest_api.MAX_IMAGE_PIXELS,
+        }
+    if frames > rest_api.MAX_GIF_FRAMES:
+        return {
+            "code": "gif_too_many_frames",
+            "message": (
+                f"LinkedIn GIFs may have at most {rest_api.MAX_GIF_FRAMES} frames; "
+                f"this one has {frames}."
+            ),
+            "filename": filename,
+            "frames": frames,
+            "max_frames": rest_api.MAX_GIF_FRAMES,
         }
     file_obj["filename"] = filename
-    file_obj["mime_type"] = mime
+    file_obj["mime_type"] = _IMAGE_FORMAT_MIME[detected]
     return None
 
 
