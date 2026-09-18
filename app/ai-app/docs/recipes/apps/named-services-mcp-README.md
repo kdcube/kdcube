@@ -183,7 +183,7 @@ scope     user (default, recall across conversations) | conversation
 from/to   ISO window                                          (date-window recall)
 days      lookback window
 include_recovery_sessions  default false
-bundle_id application whose conversations to search          (default: a hosted agent's own application; otherwise all of the user's)
+bundle_id permitted application to search                     (hosted default: own app; external: explicit Card target)
 ```
 
 Behaviors from one operation (empty query is valid):

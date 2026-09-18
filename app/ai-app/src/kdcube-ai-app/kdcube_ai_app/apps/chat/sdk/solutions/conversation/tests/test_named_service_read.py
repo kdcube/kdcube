@@ -30,13 +30,16 @@ class FakeReadService:
         self._fetched = fetched
         self._export = export or {"ok": True, "count": 0, "total_available": 0, "limited": False, "conversations": []}
         self.list_scope = None
+        self.list_bundle_id = None
         self.get_scope = None
         self.get_conversation_id = None
         self.fetch_scope = None
+        self.fetch_bundle_id = None
         self.export_scope = None
 
     async def list_user_conversations(self, request):
         self.list_scope = request.scope
+        self.list_bundle_id = request.bundle_id
         return list(self._summaries)
 
     async def get_conversation(self, request):
@@ -47,6 +50,7 @@ class FakeReadService:
     async def fetch_conversation(self, request):
         # Rich per-turn artifacts (object.get conv:conversation distills these).
         self.fetch_scope = request.scope
+        self.fetch_bundle_id = request.bundle_id
         self.get_conversation_id = request.conversation_id
         return dict(self._fetched or {})
 
@@ -57,7 +61,7 @@ class FakeReadService:
 
 def _provider(read_service=None):
     return make_conversation_search_named_service_provider(
-        context_factory=lambda c: ConversationSearchContext(user_id=c.user_id or "", conversation_id=c.conversation_id or ""),
+        context_factory=lambda c: ConversationSearchContext(user_id=c.user_id or "", conversation_id=c.conversation_id or "", bundle_id="caller-app"),
         search_backend_factory=lambda c: None,
         read_service_factory=(lambda c: read_service) if read_service is not None else None,
         bundle_id="b",
@@ -95,6 +99,7 @@ async def test_object_list_returns_summaries_with_self_scope():
     # Default scope is the caller's own conversations.
     assert svc.list_scope.normalized_mode == "self"
     assert svc.list_scope.resolve() == "user_42"
+    assert svc.list_bundle_id == "caller-app"
     items = resp.ret["items"]
     assert len(items) == 1
     assert items[0]["object_kind"] == "conversation"
@@ -145,6 +150,14 @@ async def test_object_get_missing_returns_404():
 
 
 @pytest.mark.asyncio
+async def test_object_get_uses_exact_bundle_scope():
+    svc = FakeReadService(fetched={"conversation_id": "c1", "turns": []})
+    provider = _provider(svc)
+    await provider.object_get(NamedServiceContext(user_id="u"), _req("object.get", object_ref="conv:conversation:c1"))
+    assert svc.fetch_bundle_id == "caller-app"
+
+
+@pytest.mark.asyncio
 async def test_object_get_requires_id():
     provider = _provider(FakeReadService())
     resp = await provider.object_get(NamedServiceContext(user_id="u"), _req("object.get"))
@@ -177,6 +190,7 @@ async def test_read_not_configured_guard():
 def _read_only_provider(read_service):
     # No search factories: a read/export-only registration (no search backend).
     return make_conversation_search_named_service_provider(
+        context_factory=lambda c: ConversationSearchContext(user_id=c.user_id or "", bundle_id="caller-app"),
         read_service_factory=lambda c: read_service,
         bundle_id="b",
     )
@@ -214,13 +228,35 @@ class _FileBackend:
 
 
 def _file_provider(backend, *, file_url_factory=None):
+    files = ("summary.md", "a.png", "chart.png", "missing.md", "big.bin")
+    fetched = {
+        "conversation_id": "c1", "user_id": "u",
+        "turns": [{"turn_id": "1", "artifacts": [
+            {"type": "artifact:assistant.file", "data": {"payload": {
+                "filename": name, "artifact_path": f"conv:fi:turn_1.files/{name}",
+            }}} for name in files
+        ]}],
+    }
     return make_conversation_search_named_service_provider(
-        context_factory=lambda c: ConversationSearchContext(user_id=c.user_id or "", conversation_id=c.conversation_id or ""),
+        context_factory=lambda c: ConversationSearchContext(user_id=c.user_id or "", conversation_id=c.conversation_id or "", bundle_id="caller-app"),
         search_backend_factory=lambda c: backend,
-        read_service_factory=lambda c: FakeReadService(),
+        read_service_factory=lambda c: FakeReadService(fetched=fetched),
         file_url_factory=file_url_factory,
         bundle_id="b",
     )
+
+
+@pytest.mark.asyncio
+async def test_file_ref_not_in_scoped_conversation_is_not_materialized():
+    backend = _FileBackend({"ok": True, "data": b"secret"})
+    provider = _file_provider(backend)
+    response = await provider.object_get(
+        NamedServiceContext(user_id="u"),
+        _req("object.get", object_ref="conv:fi:conv_c1.turn_1.files/secret.txt"),
+    )
+    assert response.status == 404
+    assert response.error.code == "conversation_file_not_found"
+    assert backend.calls == []
 
 
 @pytest.mark.asyncio
@@ -229,17 +265,17 @@ async def test_object_get_conv_fi_returns_text_inline():
     provider = _file_provider(backend)
     resp = await provider.object_get(
         NamedServiceContext(user_id="u", conversation_id="c1"),
-        _req("object.get", object_ref="conv:fi:turn_1.files/summary.md"),
+        _req("object.get", object_ref="conv:fi:conv_c1.turn_1.files/summary.md"),
     )
     assert resp.ok
     obj = resp.ret["object"]
     assert obj["object_kind"] == "conversation.file"
-    assert obj["ref"] == "conv:fi:turn_1.files/summary.md"
+    assert obj["ref"] == "conv:fi:conv_c1.turn_1.files/summary.md"
     assert obj["body"]["encoding"] == "text"
     assert obj["body"]["content"] == "hello"
     assert obj["body"]["filename"] == "summary.md"
     # fi ref carries no conv_ prefix -> conversation_id falls back to the caller's ctx.
-    assert backend.calls == [("conv:fi:turn_1.files/summary.md", "c1")]
+    assert backend.calls == [("conv:fi:conv_c1.turn_1.files/summary.md", "c1")]
 
 
 @pytest.mark.asyncio
@@ -249,7 +285,7 @@ async def test_object_get_conv_fi_binary_base64():
     provider = _file_provider(backend)
     resp = await provider.object_get(
         NamedServiceContext(user_id="u", conversation_id="c1"),
-        _req("object.get", object_ref="conv:fi:turn_1.files/a.png"),
+        _req("object.get", object_ref="conv:fi:conv_c1.turn_1.files/a.png"),
     )
     assert resp.ok
     obj = resp.ret["object"]
@@ -309,7 +345,7 @@ async def test_object_get_conv_fi_not_found():
     provider = _file_provider(backend)
     resp = await provider.object_get(
         NamedServiceContext(user_id="u", conversation_id="c1"),
-        _req("object.get", object_ref="conv:fi:turn_1.files/missing.md"),
+        _req("object.get", object_ref="conv:fi:conv_c1.turn_1.files/missing.md"),
     )
     assert not resp.ok
     assert resp.status == 404
@@ -325,7 +361,7 @@ async def test_object_get_conv_fi_too_large_returns_metadata_only():
     provider = _file_provider(backend)
     resp = await provider.object_get(
         NamedServiceContext(user_id="u", conversation_id="c1"),
-        _req("object.get", object_ref="conv:fi:turn_1.files/big.bin"),
+        _req("object.get", object_ref="conv:fi:conv_c1.turn_1.files/big.bin"),
     )
     assert resp.ok
     obj = resp.ret["object"]

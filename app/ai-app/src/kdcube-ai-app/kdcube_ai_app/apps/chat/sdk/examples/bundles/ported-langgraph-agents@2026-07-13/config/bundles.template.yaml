@@ -293,6 +293,12 @@ bundles:
                   #   namespaces:
                   #     slack: { allowed: [provider.about, object.schema, object.search, object.action] }
                   #     conv:  { allowed: [provider.about, object.search, object.get] }
+                  # To permit reads of another application's conversations,
+                  # list exact bundle ids in conv.targets. The caller's Card
+                  # must also grant each target; users may then turn targets off.
+                  #     conv:
+                  #       allowed: [provider.about, object.search, object.get]
+                  #       targets: [workspace@2026-03-31-13-36]
         # The Telegram Bot API webhook (a public @api that drives the SAME
         # execute_core for the DEFAULT agent). `route="public"` exposes it at the
         # proc layer; the trust boundary is the Telegram webhook secret, verified by

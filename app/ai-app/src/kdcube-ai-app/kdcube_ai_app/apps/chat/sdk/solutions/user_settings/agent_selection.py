@@ -67,7 +67,7 @@ _MODEL_UNSET = object()
 _INSTRUCTIONS_UNSET = object()
 _PRESENTATION_UNSET = object()
 
-_DICT_CATEGORIES = ("tools", "mcp", "named_services", "resources")
+_DICT_CATEGORIES = ("tools", "mcp", "named_services", "resources", "conversation_targets")
 
 
 def agent_selection_key(agent_id: str, *, conversation_id: str = "") -> str:

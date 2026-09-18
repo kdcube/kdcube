@@ -19,6 +19,8 @@ from kdcube_ai_app.apps.chat.sdk.solutions.conversation.named_service import (
     conversation_search_named_service_spec,
     make_conversation_search_named_service_provider,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.conversation.target_scope import bind_conversation_targets
+from kdcube_ai_app.apps.chat.sdk.solutions.conversation.target_policy import ConversationTargetPolicy
 
 
 class FakeBackend:
@@ -86,7 +88,7 @@ async def test_object_search_uses_explicit_context_factory():
     )
 
     ns_ctx = NamedServiceContext(
-        tenant="t", project="p", user_id="user_42", conversation_id="conv_99",
+        tenant="t", project="p", user_id="user_42", conversation_id="conv_99", bundle_id="caller-app",
     )
     request = NamedServiceRequest.from_dict({
         "operation": "object.search",
@@ -133,19 +135,73 @@ async def test_a_requested_bundle_id_replaces_the_default_scope():
         checked.append(bundle_id)
         return True
 
+    async def policy(_ctx):
+        return ConversationTargetPolicy(configured=("workspace@2026-03-31-13-36",))
+
     provider = make_conversation_search_named_service_provider(
         context_factory=lambda c: ConversationSearchContext(user_id="u", bundle_id="caller-app"),
         search_backend_factory=lambda c: backend,
         bundle_validator=validator,
+        target_policy_factory=policy,
     )
 
-    response = await provider.object_search(
-        NamedServiceContext(), _search_request({"bundle_id": "workspace@2026-03-31-13-36"})
-    )
+    with bind_conversation_targets(("workspace@2026-03-31-13-36",)):
+        response = await provider.object_search(
+            NamedServiceContext(), _search_request({"bundle_id": "workspace@2026-03-31-13-36"})
+        )
 
     assert response.ok
     assert checked == ["workspace@2026-03-31-13-36"]
     assert backend.search_kwargs["bundle_id"] == "workspace@2026-03-31-13-36"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("configured,disabled,expected", [
+    ((), (), "conversation_target_outside_ceiling"),
+    (("other-app",), ("other-app",), "conversation_target_disabled"),
+])
+async def test_cross_bundle_target_requires_admin_ceiling_and_user_choice(
+    configured, disabled, expected
+):
+    backend = FakeBackend()
+
+    async def policy(_ctx):
+        return ConversationTargetPolicy(configured=configured, disabled=disabled)
+
+    async def validator(_ctx, _bundle_id):
+        return True
+
+    provider = make_conversation_search_named_service_provider(
+        context_factory=lambda c: ConversationSearchContext(user_id="u", bundle_id="caller-app"),
+        search_backend_factory=lambda c: backend,
+        bundle_validator=validator,
+        target_policy_factory=policy,
+    )
+    with bind_conversation_targets(("other-app",)):
+        response = await provider.object_search(
+            NamedServiceContext(), _search_request({"bundle_id": "other-app"})
+        )
+    assert response.status == 403
+    assert response.error.code == expected
+    assert backend.search_kwargs == {}
+
+
+@pytest.mark.asyncio
+async def test_user_can_disable_own_conversation_target():
+    backend = FakeBackend()
+
+    async def policy(_ctx):
+        return ConversationTargetPolicy(disabled=("caller-app",))
+
+    provider = make_conversation_search_named_service_provider(
+        context_factory=lambda c: ConversationSearchContext(user_id="u", bundle_id="caller-app"),
+        search_backend_factory=lambda c: backend,
+        target_policy_factory=policy,
+    )
+    response = await provider.object_search(NamedServiceContext(), _search_request({}))
+    assert response.status == 403
+    assert response.error.code == "conversation_target_disabled"
+    assert backend.search_kwargs == {}
 
 
 @pytest.mark.asyncio
@@ -160,6 +216,28 @@ async def test_without_a_requested_bundle_id_the_context_scope_stands():
 
     assert response.ok
     assert backend.search_kwargs["bundle_id"] == "caller-app"
+
+
+@pytest.mark.asyncio
+async def test_known_cross_bundle_target_requires_card_permission():
+    backend = FakeBackend()
+
+    async def validator(ns_ctx, bundle_id):
+        return True
+
+    provider = make_conversation_search_named_service_provider(
+        context_factory=lambda c: ConversationSearchContext(user_id="u", bundle_id="caller-app"),
+        search_backend_factory=lambda c: backend,
+        bundle_validator=validator,
+    )
+    with bind_conversation_targets(("different-app",)):
+        response = await provider.object_search(
+            NamedServiceContext(), _search_request({"bundle_id": "workspace@2026-03-31-13-36"})
+        )
+
+    assert response.status == 403
+    assert response.error.code == "conversation_target_not_granted"
+    assert backend.search_kwargs == {}
 
 
 @pytest.mark.asyncio
@@ -189,7 +267,7 @@ async def test_an_unregistered_bundle_id_is_refused_before_searching():
 async def test_object_search_missing_query_errors():
     backend = FakeBackend()
     provider = make_conversation_search_named_service_provider(
-        context_factory=lambda c: ConversationSearchContext(user_id="u", conversation_id="c"),
+        context_factory=lambda c: ConversationSearchContext(user_id="u", conversation_id="c", bundle_id="caller-app"),
         search_backend_factory=lambda c: backend,
     )
     request = NamedServiceRequest.from_dict({

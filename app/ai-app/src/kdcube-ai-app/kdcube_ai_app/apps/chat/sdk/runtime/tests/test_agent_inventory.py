@@ -32,8 +32,29 @@ from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.client_tools
     named_service_namespaces,
     set_denied_named_service_namespaces,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.conversation.target_policy import (
+    configured_conversation_targets,
+)
 
 FAKE_WEB_MODULE = "kdcube_fake_web_tools_for_inventory_tests"
+
+
+def test_conversation_targets_are_exact_and_selection_only_denies_catalog_rows():
+    props = {
+        "surfaces": {"as_consumer": {"agents": {"main": {"tools": [{
+            "kind": "named_service",
+            "namespaces": {"conv": {"allowed": ["object.search"], "targets": [
+                "workspace@1-0", "*", "", "workspace@1-0", 7,
+            ]}},
+        }]}}}},
+    }
+    assert configured_conversation_targets(props, "main") == ("workspace@1-0",)
+    catalog = agent_capabilities_catalog(props, "main")
+    assert catalog["conversation_targets"] == [{"bundle_id": "workspace@1-0"}]
+    assert clamp_selection({"conversation_targets": {
+        "workspace@1-0": True,
+        "secret@1-0": True,
+    }}, catalog) == {"conversation_targets": {"workspace@1-0": True}}
 
 
 @pytest.fixture(autouse=True)

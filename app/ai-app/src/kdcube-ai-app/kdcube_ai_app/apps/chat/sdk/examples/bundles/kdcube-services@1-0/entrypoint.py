@@ -399,6 +399,7 @@ class KDCubeServicesEntrypoint(BaseEntrypoint):
                 bundle_id=self._named_services_bundle_id(),
                 file_url_factory=self._conversation_file_url,
                 bundle_validator=self._conversation_bundle_registered,
+                redis_factory=lambda: self.redis,
             )
         )
         providers.append(

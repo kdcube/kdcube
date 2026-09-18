@@ -791,6 +791,7 @@ class NamedServiceResponse:
     def to_dict(self) -> dict[str, Any]:
         return {
             "ok": self.ok,
+            "status": self.status,
             "ret": dict(self.ret or {}),
             "error": self.error.to_dict() if self.error else None,
         }

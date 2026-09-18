@@ -27,6 +27,8 @@ from kdcube_ai_app.apps.chat.sdk.solutions.conversation.search_backend import (
 )
 from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import ConversationStore
 
+from .target_policy import hosted_conversation_target_policy
+
 
 def conversation_search_context(ns_ctx: Any) -> ConversationSearchContext:
     """Scope a search to the application that called, never to this bundle.
@@ -51,6 +53,7 @@ def build_conversation_named_service_provider(
     bundle_id: str,
     file_url_factory: Callable[[Any, Any], Any] | None = None,
     bundle_validator: Callable[[Any, str], Awaitable[bool]] | None = None,
+    redis_factory: Callable[[], Any] | None = None,
 ):
     """Build the conv provider with search + read/export bound per request to the
     caller's tenant/project.
@@ -69,6 +72,11 @@ def build_conversation_named_service_provider(
         context_factory=conversation_search_context,
         file_url_factory=file_url_factory,
         bundle_validator=bundle_validator,
+        target_policy_factory=(
+            (lambda ns_ctx: hosted_conversation_target_policy(
+                ns_ctx, redis=redis_factory(), pg_pool=pool_factory()
+            )) if redis_factory is not None else None
+        ),
         search_backend_factory=lambda ns_ctx: make_conversation_search_backend(
             pg_pool=pool_factory(),
             tenant=ns_ctx.tenant or "",

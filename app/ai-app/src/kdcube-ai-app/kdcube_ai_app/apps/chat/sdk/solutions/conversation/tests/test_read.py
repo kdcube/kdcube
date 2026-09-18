@@ -37,11 +37,11 @@ class FakePort:
         self.list_calls: List[str] = []
         self.fetch_calls: List[tuple] = []
 
-    async def list_conversations(self, *, user_id, started_after=None, days=3650, last_n=None, include_titles=True):
+    async def list_conversations(self, *, user_id, bundle_id=None, started_after=None, days=3650, last_n=None, include_titles=True):
         self.list_calls.append(user_id)
         return list(self._convs)
 
-    async def fetch_conversation_artifacts(self, *, user_id, conversation_id, turn_ids=None, materialize=True, days=3650):
+    async def fetch_conversation_artifacts(self, *, user_id, conversation_id, bundle_id=None, turn_ids=None, materialize=True, days=3650):
         self.fetch_calls.append((user_id, conversation_id))
         return self._artifacts.get(conversation_id, {})
 

@@ -13,6 +13,7 @@ the search backend are replaced.
 from __future__ import annotations
 
 import copy
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -46,6 +47,7 @@ from kdcube_ai_app.apps.chat.sdk.protocol import (
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import bind_current_request_context
 from kdcube_ai_app.apps.chat.sdk.runtime.dynamic_module_loader import load_dynamic_module_for_path
+from kdcube_ai_app.apps.chat.sdk.solutions.conversation.target_policy import ConversationTargetPolicy
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import relay
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.admission import (
     NamedServiceAdmission,
@@ -124,6 +126,46 @@ def _conv_module():
     return module
 
 
+@pytest.mark.asyncio
+async def test_hosted_target_policy_uses_source_bundle_and_saved_selection(monkeypatch):
+    module = _conv_module()
+    policy_module = sys.modules[module.hosted_conversation_target_policy.__module__]
+    seen = {}
+
+    async def _props(redis, *, tenant, project, bundle_id):
+        seen["props"] = (redis, tenant, project, bundle_id)
+        return {"surfaces": {"as_consumer": {"agents": {AGENT_ID: {"tools": [{
+            "kind": "named_service", "namespaces": {"conv": {"targets": [OTHER_BUNDLE]}},
+        }]}}}}}
+
+    class _Selections:
+        def __init__(self, **kwargs):
+            seen["store"] = kwargs
+
+        async def get_selection(self, **kwargs):
+            seen["selection"] = kwargs
+            return {"disabled": {"conversation_targets": {OTHER_BUNDLE: True}}}
+
+    monkeypatch.setattr(policy_module, "get_bundle_props", _props)
+    monkeypatch.setattr(policy_module, "UserAgentSelectionStore", _Selections)
+    monkeypatch.setattr(
+        policy_module, "named_service_caller",
+        lambda _ctx: SimpleNamespace(bundle_id=AGENT_BUNDLE, agent_id=AGENT_ID),
+    )
+    resolved = await module.hosted_conversation_target_policy(
+        SimpleNamespace(tenant="t", project="p", user_id=USER, conversation_id="conv-now"),
+        redis="redis", pg_pool="pool",
+    )
+    assert resolved == ConversationTargetPolicy(
+        configured=(OTHER_BUNDLE,), disabled=(OTHER_BUNDLE,)
+    )
+    assert seen["props"] == ("redis", "t", "p", AGENT_BUNDLE)
+    assert seen["selection"] == {
+        "user_id": USER, "bundle_id": AGENT_BUNDLE,
+        "agent_id": AGENT_ID, "conversation_id": "conv-now",
+    }
+
+
 @pytest.fixture
 def backend() -> _Backend:
     return _Backend()
@@ -136,13 +178,21 @@ def registry(monkeypatch, backend, tmp_path) -> NamedServiceRegistry:
     def _backend_for(**kwargs):
         return backend
 
+    async def _registered(_ctx, bundle_id):
+        return bundle_id in {AGENT_BUNDLE, OTHER_BUNDLE}
+
     monkeypatch.setattr(module, "make_conversation_search_backend", _backend_for)
     provider = module.build_conversation_named_service_provider(
         pool_factory=lambda: None,
         model_service_factory=lambda: None,
         storage_path=str(tmp_path),
         bundle_id=SERVICES_BUNDLE,
+        bundle_validator=_registered,
     )
+    async def _policy(_ctx):
+        return ConversationTargetPolicy(configured=(OTHER_BUNDLE,))
+
+    provider._target_policy_factory = _policy
     context_factory = provider._context_factory
 
     def _recording_context(ns_ctx):
@@ -212,7 +262,7 @@ async def _through_bundle_registry(admission: NamedServiceAdmission, request, *,
         )
 
 
-def _mcp_request(client_id: str):
+def _mcp_request(client_id: str, *, targets: tuple[str, ...] = ()):
     grant_record = {
         "client_id": client_id,
         "registry_access_id": "oauth-5aa44826664a0bdd",
@@ -246,6 +296,9 @@ def _mcp_request(client_id: str):
         resource=RESOURCE,
         request_resource=REQUEST_RESOURCE,
         outer_operation="named_services_search",
+        card_composition=SimpleNamespace(effective_card=SimpleNamespace(
+            properties={"kdcube.conversation_targets": list(targets)}
+        )),
     )
     return request
 
@@ -265,19 +318,19 @@ async def test_mcp_a_hosted_agent_searches_its_own_application(backend):
 
 
 @pytest.mark.usefixtures("local_bundle_loading")
-async def test_mcp_an_external_client_searches_every_conversation_of_the_user(backend):
+async def test_mcp_an_external_client_has_no_implicit_conversation_target(backend):
     admission = managed_named_service_admission(_mcp_request(EXTERNAL_CLIENT))
 
     response = await _through_bundle_registry(admission, _search(), routing_bundle=SERVICES_BUNDLE)
 
-    assert response.ok, response.error
-    assert backend.served_bundle_ids == [SERVICES_BUNDLE]
-    assert backend.search_kwargs["bundle_id"] is None
+    assert response.status == 403
+    assert response.error.code == "conversation_target_not_granted"
+    assert backend.search_kwargs == {}
 
 
 @pytest.mark.usefixtures("local_bundle_loading")
-async def test_mcp_an_external_client_can_name_the_application(backend):
-    admission = managed_named_service_admission(_mcp_request(EXTERNAL_CLIENT))
+async def test_mcp_an_external_client_can_name_only_a_granted_application(backend):
+    admission = managed_named_service_admission(_mcp_request(EXTERNAL_CLIENT, targets=(OTHER_BUNDLE,)))
 
     response = await _through_bundle_registry(
         admission, _search({"bundle_id": OTHER_BUNDLE}), routing_bundle=SERVICES_BUNDLE,
@@ -288,15 +341,39 @@ async def test_mcp_an_external_client_can_name_the_application(backend):
 
 
 @pytest.mark.usefixtures("local_bundle_loading")
-async def test_mcp_a_hosted_agent_naming_another_application_gets_that_application(backend):
+async def test_mcp_a_hosted_agent_cannot_name_an_ungranted_application(backend):
     admission = managed_named_service_admission(_mcp_request(AGENT_CLIENT))
 
     response = await _through_bundle_registry(
         admission, _search({"bundle_id": OTHER_BUNDLE}), routing_bundle=SERVICES_BUNDLE,
     )
 
+    assert response.status == 403
+    assert response.error.code == "conversation_target_not_granted"
+    assert backend.search_kwargs == {}
+
+
+@pytest.mark.usefixtures("local_bundle_loading")
+async def test_mcp_a_hosted_agent_can_name_a_granted_application(backend):
+    admission = managed_named_service_admission(_mcp_request(AGENT_CLIENT, targets=(OTHER_BUNDLE,)))
+
+    response = await _through_bundle_registry(
+        admission, _search({"bundle_id": OTHER_BUNDLE}), routing_bundle=SERVICES_BUNDLE,
+    )
+
     assert response.ok, response.error
     assert backend.search_kwargs["bundle_id"] == OTHER_BUNDLE
+
+
+@pytest.mark.usefixtures("local_bundle_loading")
+async def test_mcp_unknown_target_is_404_even_before_card_denial(backend):
+    admission = managed_named_service_admission(_mcp_request(AGENT_CLIENT))
+    response = await _through_bundle_registry(
+        admission, _search({"bundle_id": "missing@1-0"}), routing_bundle=SERVICES_BUNDLE,
+    )
+    assert response.status == 404
+    assert response.error.code == "conversation_bundle_not_found"
+    assert backend.search_kwargs == {}
 
 
 # -- native door ---------------------------------------------------------------
@@ -322,6 +399,52 @@ async def test_native_door_a_hosted_agent_searches_its_own_application(backend):
     assert backend.search_kwargs["bundle_id"] == AGENT_BUNDLE
 
 
+@pytest.mark.usefixtures("local_bundle_loading")
+async def test_native_cross_bundle_read_requires_card_target(backend):
+    selector = native_agent_admission_selector(
+        source_bundle_id=AGENT_BUNDLE,
+        source_agent_id=AGENT_ID,
+        client_id=AGENT_CLIENT,
+        grantor_user_id=USER,
+    )
+    denied = native_agent_admission_from_state(
+        selector=selector,
+        state={"granted": True, "resource": RESOURCE},
+    )
+    response = await _through_bundle_registry(
+        denied, _search({"bundle_id": OTHER_BUNDLE}), routing_bundle=AGENT_BUNDLE,
+    )
+    assert response.status == 403
+    assert backend.search_kwargs == {}
+
+    allowed = native_agent_admission_from_state(
+        selector=selector,
+        state={"granted": True, "resource": RESOURCE, "conversation_targets": [OTHER_BUNDLE]},
+    )
+    response = await _through_bundle_registry(
+        allowed, _search({"bundle_id": OTHER_BUNDLE}), routing_bundle=AGENT_BUNDLE,
+    )
+    assert response.ok, response.error
+    assert backend.search_kwargs["bundle_id"] == OTHER_BUNDLE
+
+
+@pytest.mark.usefixtures("local_bundle_loading")
+async def test_native_unknown_target_is_404(backend):
+    selector = native_agent_admission_selector(
+        source_bundle_id=AGENT_BUNDLE, source_agent_id=AGENT_ID,
+        client_id=AGENT_CLIENT, grantor_user_id=USER,
+    )
+    admission = native_agent_admission_from_state(
+        selector=selector, state={"granted": True, "resource": RESOURCE},
+    )
+    response = await _through_bundle_registry(
+        admission, _search({"bundle_id": "missing@1-0"}), routing_bundle=AGENT_BUNDLE,
+    )
+    assert response.status == 404
+    assert response.error.code == "conversation_bundle_not_found"
+    assert backend.search_kwargs == {}
+
+
 # -- Data Bus relay ------------------------------------------------------------
 
 
@@ -336,7 +459,7 @@ class _RelayRedis:
         self.store[key] = value
 
 
-async def _through_relay(registry, *, selector: dict, actor: dict, request: NamedServiceRequest):
+async def _through_relay(registry, *, selector: dict, actor: dict, request: NamedServiceRequest, targets: tuple[str, ...] = ()):
     message = SimpleNamespace(
         tenant="t",
         project="p",
@@ -362,7 +485,9 @@ async def _through_relay(registry, *, selector: dict, actor: dict, request: Name
     async def _connection_hub(call):
         assert call.request["payload"]["client_id"] == selector["client_id"]
         return BundleNamedServiceResult(
-            value=NamedServiceResponse.ok_response(object={"granted": True, "resource": RESOURCE})
+            value=NamedServiceResponse.ok_response(object={
+                "granted": True, "resource": RESOURCE, "conversation_targets": list(targets),
+            })
         )
 
     with bind_auth_context(worker_auth), bind_bundle_named_service_caller(_connection_hub):
@@ -396,6 +521,42 @@ async def test_relay_a_hosted_agent_searches_its_own_application(registry, backe
     assert response.ok, response.error
     assert backend.served_bundle_ids == [SERVICES_BUNDLE]
     assert backend.search_kwargs["bundle_id"] == AGENT_BUNDLE
+
+
+async def test_relay_cross_bundle_read_requires_hub_card_target(registry, backend):
+    selector = native_agent_selector(
+        source_bundle_id=AGENT_BUNDLE,
+        source_agent_id=AGENT_ID,
+        client_id=AGENT_CLIENT,
+        grantor_user_id=USER,
+    )
+    denied = await _through_relay(
+        registry, selector=selector, actor=_relay_actor(),
+        request=_search({"bundle_id": OTHER_BUNDLE}),
+    )
+    assert denied.status == 403
+    assert backend.search_kwargs == {}
+
+    allowed = await _through_relay(
+        registry, selector=selector, actor=_relay_actor(),
+        request=_search({"bundle_id": OTHER_BUNDLE}), targets=(OTHER_BUNDLE,),
+    )
+    assert allowed.ok, allowed.error
+    assert backend.search_kwargs["bundle_id"] == OTHER_BUNDLE
+
+
+async def test_relay_unknown_target_is_404(registry, backend):
+    selector = native_agent_selector(
+        source_bundle_id=AGENT_BUNDLE, source_agent_id=AGENT_ID,
+        client_id=AGENT_CLIENT, grantor_user_id=USER,
+    )
+    response = await _through_relay(
+        registry, selector=selector, actor=_relay_actor(),
+        request=_search({"bundle_id": "missing@1-0"}),
+    )
+    assert response.status == 404
+    assert response.error.code == "conversation_bundle_not_found"
+    assert backend.search_kwargs == {}
 
 
 async def test_relay_an_application_call_searches_its_source_application(registry, backend):
