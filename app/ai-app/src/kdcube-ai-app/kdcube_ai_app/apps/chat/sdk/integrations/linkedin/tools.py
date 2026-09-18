@@ -86,13 +86,6 @@ def linkedin_api_version() -> str:
     return rest_api.DEFAULT_LINKEDIN_API_VERSION
 
 
-def _subject_from_id_token(id_token: str) -> str:
-    from connection_hub.delegated_to_kdcube.providers.linkedin import (
-        _decode_id_token_claims,
-    )
-
-    return str(_decode_id_token_claims(id_token).get("sub") or "").strip()
-
 
 async def _accounts_client(*, tenant: str = "", project: str = "", hub_bundle_id: str = ""):
     """Connection Hub client for the current user, None outside a bound scope.
@@ -442,8 +435,9 @@ class LinkedInTools:
     async def _author_urn(self, credential: ConnectedAccountCredential) -> str:
         """Author URN from the connected account's ``external_subject``.
 
-        The credential is a token record and carries no subject; its
-        ``id_token`` is the fallback.
+        The subject was established when the account was connected, from
+        userinfo or a verified ID token. The credential's own ``id_token`` is
+        not read here: it would be an unverified claim.
         """
         subject = ""
         accounts = await connected_linkedin_accounts(
@@ -455,9 +449,6 @@ class LinkedInTools:
             if account.account_id == credential.account_id:
                 subject = str(account.external_subject or "").strip()
                 break
-        if not subject:
-            raw = dict(credential.raw_credential or {})
-            subject = _subject_from_id_token(str(raw.get("id_token") or ""))
         return rest_api.person_urn(subject)
 
     async def _org_author_urn(self, credential: ConnectedAccountCredential) -> str:
