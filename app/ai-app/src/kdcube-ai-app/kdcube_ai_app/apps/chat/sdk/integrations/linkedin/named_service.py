@@ -566,7 +566,9 @@ LINKEDIN_SCHEMA = {
     "limits": {
         "post_text_chars": rest_api.LINKEDIN_POST_MAX_CHARS,
         "images_per_post": rest_api.MULTI_IMAGE_MAX,
-        "image_bytes": rest_api.MAX_IMAGE_BYTES,
+        # Strictly fewer pixels (width x height) than this; no byte limit.
+        "image_max_pixels_exclusive": rest_api.MAX_IMAGE_PIXELS,
+        "gif_max_frames": rest_api.MAX_GIF_FRAMES,
         "image_mime": list(rest_api.SUPPORTED_IMAGE_MIME),
     },
     # LinkedIn's post content universe (Posts API `content` members) and what
