@@ -152,6 +152,35 @@ async def test_author_comes_from_the_account_not_the_credential(granted, sent):
 
 
 @pytest.mark.asyncio
+async def test_an_account_without_a_subject_never_takes_the_author_from_the_id_token(
+    granted, sent, monkeypatch
+):
+    # Regression: the author fell back to the `sub` of an unverified,
+    # base64-decoded ID token carried on the credential.
+    import base64
+    import json
+
+    payload = base64.urlsafe_b64encode(json.dumps({"sub": "attacker"}).encode()).decode().rstrip("=")
+    granted.raw_credential["id_token"] = f"header.{payload}.signature"
+
+    async def _accounts(**_kwargs):
+        return [
+            ConnectedAccount(
+                account_id="acc_1",
+                provider_id="linkedin",
+                external_subject="",
+                claims=("linkedin:post",),
+                credential_id="cred_1",
+            )
+        ]
+
+    monkeypatch.setattr(linkedin_tools, "connected_linkedin_accounts", _accounts)
+    with pytest.raises(rest_api.LinkedInPayloadError):
+        await linkedin_tools.LinkedInTools()._author_urn(granted)
+    assert not _bodies(sent, "/rest/posts")
+
+
+@pytest.mark.asyncio
 async def test_image_post_uploads_then_references_the_image_urn(granted, sent, monkeypatch):
     monkeypatch.setattr(
         linkedin_tools,
