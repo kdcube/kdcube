@@ -5,9 +5,13 @@
 
 from __future__ import annotations
 
+import io
+import struct
+import zlib
 from typing import Any
 
 import pytest
+from PIL import Image
 
 from kdcube_ai_app.apps.chat.sdk.integrations.connected_accounts import (
     ConnectedAccountCredential,
@@ -26,6 +30,42 @@ ACCOUNT = ConnectedAccount(
     claims=("linkedin:post",),
     credential_id="cred_1",
 )
+
+
+def _encoded(fmt: str, size=(4, 3), **save) -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", size, (200, 30, 30)).save(buffer, format=fmt, **save)
+    return buffer.getvalue()
+
+
+PNG = _encoded("PNG")
+
+
+def _png_header(width: int, height: int, *, idat_bytes: int = 0) -> bytes:
+    """A PNG whose header declares these dimensions. Opening it reads only the
+    header, so huge dimensions or a huge data chunk cost nothing to build."""
+
+    def chunk(kind: bytes, payload: bytes) -> bytes:
+        crc = zlib.crc32(kind + payload) & 0xFFFFFFFF
+        return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", crc)
+
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"IDAT", b"\x00" * idat_bytes)
+        + chunk(b"IEND", b"")
+    )
+
+
+def _gif(frames: int) -> bytes:
+    # Consecutive frames differ, or Pillow merges them into one.
+    images = [Image.new("L", (2, 2), (index * 37) % 256) for index in range(frames)]
+    buffer = io.BytesIO()
+    images[0].save(buffer, format="GIF", save_all=True, append_images=images[1:], optimize=False)
+    data = buffer.getvalue()
+    assert Image.open(io.BytesIO(data)).n_frames == frames
+    return data
 
 
 class _Response:
@@ -185,7 +225,7 @@ async def test_image_post_uploads_then_references_the_image_urn(granted, sent, m
     monkeypatch.setattr(
         linkedin_tools,
         "load_image_artifact",
-        lambda path: ({"filename": "c.png", "mime_type": "image/png", "data": b"\x89PNG"}, None),
+        lambda path: ({"filename": "c.png", "mime_type": "image/png", "data": PNG}, None),
     )
     result = await linkedin_tools.LinkedInTools().post_linkedin_image_update(
         text="chart", image_path="conv:fi:x", alt_text="quarterly"
@@ -256,20 +296,77 @@ async def test_unsupported_image_type_is_refused(granted, sent):
     assert sent == []
 
 
+# --- Image limits: pixels, frames and the real format, never encoded bytes ---
+
+
+def _image(data: bytes, filename: str = "img.png", mime: str = "image/png") -> dict:
+    return {"filename": filename, "mime_type": mime, "data": data}
+
+
+def test_a_heavy_file_below_the_pixel_ceiling_is_accepted():
+    # Regression: 36,152,320 was compared with len(data) as a byte limit.
+    data = _png_header(1200, 1500, idat_bytes=rest_api.MAX_IMAGE_PIXELS + 1)
+    assert len(data) > rest_api.MAX_IMAGE_PIXELS
+    assert linkedin_tools.validate_image(_image(data)) is None
+
+
+def test_a_small_file_at_the_pixel_ceiling_is_refused():
+    data = _png_header(rest_api.MAX_IMAGE_PIXELS, 1)
+    assert len(data) < 100
+    error = linkedin_tools.validate_image(_image(data))
+    assert error["code"] == "image_too_many_pixels"
+    assert (error["width"], error["height"]) == (rest_api.MAX_IMAGE_PIXELS, 1)
+    assert error["pixels"] == error["max_pixels"] == rest_api.MAX_IMAGE_PIXELS
+
+
+def test_one_pixel_below_the_ceiling_is_accepted():
+    data = _png_header(rest_api.MAX_IMAGE_PIXELS - 1, 1)
+    assert linkedin_tools.validate_image(_image(data)) is None
+
+
+def test_dimensions_far_beyond_the_ceiling_are_refused_without_decoding():
+    error = linkedin_tools.validate_image(_image(_png_header(20000, 20000)))
+    assert error["code"] == "image_too_many_pixels"
+
+
+def test_a_gif_of_the_allowed_frame_count_is_accepted():
+    file_obj = _image(_gif(rest_api.MAX_GIF_FRAMES), "a.gif", "image/gif")
+    assert linkedin_tools.validate_image(file_obj) is None
+    assert file_obj["mime_type"] == "image/gif"
+
+
+def test_a_gif_with_too_many_frames_is_refused():
+    error = linkedin_tools.validate_image(
+        _image(_gif(rest_api.MAX_GIF_FRAMES + 1), "a.gif", "image/gif")
+    )
+    assert error["code"] == "gif_too_many_frames"
+    assert error["frames"] == rest_api.MAX_GIF_FRAMES + 1
+
+
+def test_the_upload_mime_follows_the_content_not_the_name():
+    file_obj = _image(_encoded("JPEG"), "photo.png", "image/png")
+    assert linkedin_tools.validate_image(file_obj) is None
+    assert file_obj["mime_type"] == "image/jpeg"
+
+
+def test_a_format_linkedin_does_not_take_is_refused_whatever_its_name():
+    error = linkedin_tools.validate_image(_image(_encoded("BMP"), "chart.png", "image/png"))
+    assert error["code"] == "unsupported_image_type"
+
+
+def test_a_truncated_image_is_refused():
+    error = linkedin_tools.validate_image(_image(PNG[:12]))
+    assert error["code"] == "unsupported_image_type"
+
+
 @pytest.mark.asyncio
-async def test_oversized_image_is_refused(granted, sent):
+async def test_a_multi_image_post_is_refused_before_any_upload_when_one_image_is_over(granted, sent):
     result = await linkedin_tools.LinkedInTools().publish(
         text="hi",
-        files=[
-            {
-                "filename": "big.png",
-                "mime_type": "image/png",
-                "data": b"x" * (rest_api.MAX_IMAGE_BYTES + 1),
-            }
-        ],
+        files=[_image(PNG, "a.png"), _image(_png_header(rest_api.MAX_IMAGE_PIXELS, 1), "b.png")],
     )
     assert result["ok"] is False
-    assert result["error"]["code"] == "file_too_large"
+    assert result["error"]["code"] == "image_too_many_pixels"
     assert sent == []
 
 
@@ -293,7 +390,7 @@ async def test_publish_staged_reads_bytes_and_releases_the_slot(granted, sent, m
     root = tmp_path / "staging"
     root.mkdir()
     ref = file_staging.new_staged_ref("chart.png")
-    file_staging.save_staged(root, ref, b"\x89PNG-staged")
+    file_staging.save_staged(root, ref, PNG)
     monkeypatch.setattr(linkedin_tools, "staging_root_for_service", lambda: root)
 
     result = await linkedin_tools.LinkedInTools().publish_staged(
@@ -500,7 +597,7 @@ async def test_staged_image_upload_consumes_auth_marker_before_returning(
     root = tmp_path / "staging"
     root.mkdir()
     ref = file_staging.new_staged_ref("chart.png")
-    file_staging.save_staged(root, ref, b"\x89PNG-staged")
+    file_staging.save_staged(root, ref, PNG)
     monkeypatch.setattr(linkedin_tools, "staging_root_for_service", lambda: root)
     monkeypatch.setattr(connected_accounts, "refresh_connected_account_claim", _refresh)
     monkeypatch.setattr(
