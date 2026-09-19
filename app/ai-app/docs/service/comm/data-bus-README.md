@@ -4,7 +4,7 @@ title: "Data Bus"
 summary: "Runtime contract for bundle-scoped Data Bus messages, including direct delegated-Card admission, handler registration, ordering, correlated results, and live-session fanout."
 status: active
 tags: ["service", "comm", "data-bus", "socketio", "sse", "redis-streams", "bundle-runtime"]
-updated_at: 2026-09-16
+updated_at: 2026-09-19
 keywords:
   [
     "data bus",
@@ -716,7 +716,13 @@ Retention is operational policy:
 - result stream: short retention for debugging and near-term reconnects;
 - DLQ stream: longer retention and alertable.
 
-Exact retention values should be configurable by deployment.
+The built-in message-stream cap is 50,000 entries. A six-hour window at the
+measured incident rate of 8,353 entries per hour is accepted for this transport
+buffer: the stream supports recovery and diagnosis, while application storage,
+receipts, and journals own durable audit history. A deployment that requires a
+longer recovery window sizes the cap from its measured peak entry rate and the
+required duration. Any exposed override belongs in deployment descriptors; an
+environment-only override is not a public configuration contract.
 
 ## Security
 
