@@ -953,7 +953,9 @@ class BaseEntrypoint:
             )
         except Exception as exc:
             from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import (
+                annotate_capability_states,
                 deny_all_capabilities,
+                unavailable_capability_states,
             )
 
             selection = {
@@ -967,6 +969,14 @@ class BaseEntrypoint:
                 ),
                 "capability_source": "unavailable",
             }
+            catalog = annotate_capability_states(
+                catalog,
+                unavailable_capability_states(
+                    catalog,
+                    tenant=str(identity.get("tenant") or ""),
+                    project=str(identity.get("project") or ""),
+                ),
+            )
             capability_control = {
                 "ok": False,
                 "error": str(exc) or "agent_capability_control_unavailable",

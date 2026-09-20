@@ -26,17 +26,19 @@ const MOCK_INVENTORY = {
     },
     {
       alias: 'web_tools', name: 'web', kind: 'python', system: false,
+      authority_state: 'allowed_selected',
       tools: [
-        { name: 'web_search', description: 'Web discovery tool (multi-query). Finds and deduplicates pages.' },
-        { name: 'web_fetch', description: 'Fetch-only URL dereferencer (no search).' },
+        { name: 'web_search', description: 'Web discovery tool (multi-query). Finds and deduplicates pages.', authority_state: 'allowed_selected' },
+        { name: 'web_fetch', description: 'Fetch-only URL dereferencer (no search).', authority_state: 'not_allowed' },
       ],
     },
     {
       alias: 'gmail', name: 'gmail', kind: 'python', system: false,
+      authority_state: 'allowed_unselected',
       tools: [
-        { name: 'search_gmail', description: 'Search the connected Gmail account.' },
-        { name: 'read_gmail_message', description: 'Read one Gmail message body.' },
-        { name: 'send_gmail', description: 'Send an email from the connected account.' },
+        { name: 'search_gmail', description: 'Search the connected Gmail account.', authority_state: 'allowed_unselected' },
+        { name: 'read_gmail_message', description: 'Read one Gmail message body.', authority_state: 'allowed_unselected' },
+        { name: 'send_gmail', description: 'Send an email from the connected account.', authority_state: 'allowed_unselected' },
       ],
     },
     {
@@ -76,12 +78,16 @@ const MOCK_INVENTORY = {
       id: 'public.web-research', name: 'web research', namespace: 'public',
       description: 'Multi-source web research with citations.',
       when_to_use: ['Multi-source questions'],
+      authority_state: 'not_allowed',
     },
   ],
 }
 
 export function installCapabilitiesMock(): void {
-  let disabled: AgentSelectionDisabled = {}
+  let disabled: AgentSelectionDisabled = {
+    tools: { web_tools: ['web_fetch'], gmail: true },
+    skills: ['public.web-research'],
+  }
   let model: AgentModelPick | null = null
   let cachePolicy: Record<string, string> = {}
   let pending: AgentSelectionPending | null = null

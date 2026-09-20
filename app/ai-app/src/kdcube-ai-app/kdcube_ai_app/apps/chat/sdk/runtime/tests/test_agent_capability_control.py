@@ -24,6 +24,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import (
     disabled_from_projection,
     selected_capabilities_from_disabled,
     sync_agent_capability_projection,
+    unavailable_capability_states,
 )
 from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import (
     BundleNamedServiceResult,
@@ -231,6 +232,18 @@ def test_user_selection_round_trips_through_the_positive_card_policy() -> None:
 
 def test_three_state_annotation_keeps_not_allowed_distinct_from_unselected() -> None:
     catalog = _catalog()
+    catalog["resources"] = [
+        {
+            "resource_id": "mcp://example/resource-a",
+            "tools": [{"operation": "read"}],
+        }
+    ]
+    target = application_resource(
+        tenant=TENANT,
+        project=PROJECT,
+        application="workspace@1-0",
+        agent="*",
+    )
     states = {
         "tool_groups": {"web": CAPABILITY_ALLOWED_SELECTED},
         "tools": {"web/search": CAPABILITY_ALLOWED_UNSELECTED},
@@ -239,6 +252,14 @@ def test_three_state_annotation_keeps_not_allowed_distinct_from_unselected() -> 
             "work/object.search": CAPABILITY_ALLOWED_SELECTED,
             "work/object.delete": CAPABILITY_NOT_ALLOWED,
         },
+        "resources": {"mcp://example/resource-a": CAPABILITY_ALLOWED_SELECTED},
+        "resource_operations": {
+            "mcp%3A%2F%2Fexample%2Fresource-a/read": CAPABILITY_NOT_ALLOWED,
+        },
+        "skills": {"work.review": CAPABILITY_ALLOWED_UNSELECTED},
+        "conversation_targets": {target: CAPABILITY_NOT_ALLOWED},
+        "resource_families": {"user_external_mcp": CAPABILITY_ALLOWED_SELECTED},
+        "subagents": {"enabled": CAPABILITY_ALLOWED_UNSELECTED},
     }
 
     annotated = annotate_capability_states(catalog, states)
@@ -255,7 +276,43 @@ def test_three_state_annotation_keeps_not_allowed_distinct_from_unselected() -> 
     assert annotated["named_services"][0]["realm"]["operations"][1][
         "authority_state"
     ] == CAPABILITY_NOT_ALLOWED
+    assert annotated["resources"][0]["authority_state"] == CAPABILITY_ALLOWED_SELECTED
+    assert annotated["resources"][0]["tools"][0]["authority_state"] == (
+        CAPABILITY_NOT_ALLOWED
+    )
+    assert annotated["skills"][0]["authority_state"] == CAPABILITY_ALLOWED_UNSELECTED
+    assert annotated["conversation_targets"][0]["authority_state"] == (
+        CAPABILITY_NOT_ALLOWED
+    )
+    assert annotated["delegated_resource_families"][0]["authority_state"] == (
+        CAPABILITY_ALLOWED_SELECTED
+    )
+    assert annotated["subagents"]["authority_state"] == CAPABILITY_ALLOWED_UNSELECTED
     assert annotated["capability_states"] == states
+
+
+def test_unavailable_state_marks_every_descriptor_capability_not_allowed() -> None:
+    catalog = _catalog()
+
+    states = unavailable_capability_states(
+        catalog,
+        tenant=TENANT,
+        project=PROJECT,
+    )
+    annotated = annotate_capability_states(catalog, states)
+
+    assert states
+    assert all(
+        state == CAPABILITY_NOT_ALLOWED
+        for category in states.values()
+        for state in category.values()
+    )
+    assert annotated["tools"][1]["authority_state"] == CAPABILITY_NOT_ALLOWED
+    assert annotated["skills"][0]["authority_state"] == CAPABILITY_NOT_ALLOWED
+    assert annotated["conversation_targets"][0]["authority_state"] == (
+        CAPABILITY_NOT_ALLOWED
+    )
+    assert annotated["subagents"]["authority_state"] == CAPABILITY_NOT_ALLOWED
 
 
 def test_unavailable_projection_closes_every_selectable_capability() -> None:

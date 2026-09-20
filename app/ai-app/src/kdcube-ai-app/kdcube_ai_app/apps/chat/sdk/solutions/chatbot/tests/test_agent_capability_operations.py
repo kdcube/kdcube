@@ -136,6 +136,32 @@ async def test_capability_only_update_does_not_require_postgres(monkeypatch) -> 
 
 
 @pytest.mark.asyncio
+async def test_capability_read_marks_rows_not_permitted_when_card_is_unavailable(
+    monkeypatch,
+) -> None:
+    async def _sync(_entrypoint: Any, **_kwargs: Any):
+        raise RuntimeError("card unavailable")
+
+    monkeypatch.setattr(capability_control, "sync_agent_capability_projection", _sync)
+    owner = _owner(pg_pool=None)
+
+    result = await BaseEntrypoint.agent_capabilities(
+        owner,
+        data={"data": {"agent": "main"}},
+    )
+
+    assert result["ok"] is True
+    assert result["selection"]["capability_source"] == "unavailable"
+    assert result["selection"]["disabled"] == {"tools": {"web": True}}
+    assert result["capabilities"]["tools"][0]["authority_state"] == (
+        "not_allowed"
+    )
+    assert result["capabilities"]["tools"][0]["tools"][0][
+        "authority_state"
+    ] == "not_allowed"
+
+
+@pytest.mark.asyncio
 async def test_mixed_update_reports_preference_commit_before_card_failure(monkeypatch) -> None:
     authority = _authority()
     events: list[str] = []

@@ -2162,6 +2162,13 @@ a { color: inherit; }
   cursor: pointer;
 }
 .k-menu-row-main:hover { background: var(--surface-2); }
+.k-menu-row-not-allowed .k-menu-row-main:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+.k-menu-row-not-allowed .k-menu-row-main:disabled:hover { background: transparent; }
+.k-menu-row-not-allowed .k-menu-row-label,
+.k-menu-row-not-allowed .k-menu-row-label code { color: var(--muted); }
 /* Informational row inside an expanded namespace (operations / named
    actions): row geometry without the toggle affordance — selection stays
    namespace-level. Ellipsizes exactly like a toggle row. */
@@ -2499,6 +2506,7 @@ button.k-menu-status:hover { background: var(--surface-2); }
 }
 .k-menu-tag-ok { color: var(--green-dark, #1E7C5A); border-color: rgba(82, 176, 68, 0.4); background: rgba(232, 247, 229, 0.55); }
 .k-menu-tag-consent { color: var(--accent); border-color: rgba(1, 190, 178, 0.4); background: var(--accent-soft); }
+.k-menu-tag-not-allowed { color: var(--muted); background: var(--surface-2); }
 .k-menu-consent {
   border-color: rgba(1, 190, 178, 0.55);
   background: var(--accent-soft);

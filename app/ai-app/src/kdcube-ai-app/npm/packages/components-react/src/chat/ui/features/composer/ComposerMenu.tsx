@@ -18,6 +18,7 @@ import { agentGrantConsentOpen, chatActions, consentOpenForClaims, openCapabilit
 import type { AgentCapabilityConsent, ConnectionsConsentOpen } from '@kdcube/components-core/chat'
 import { useAppDispatch } from '../../support/hooks.ts'
 import type {
+  AgentCapabilityAuthorityValue,
   AgentCapabilitiesInventory,
   AgentSelectionDisabled,
   AgentSelectionPatch,
@@ -115,6 +116,7 @@ function MenuRow({
   child = false,
   spotlight = false,
   aside,
+  authorityState,
 }: {
   label: ReactNode
   sub?: string
@@ -130,24 +132,34 @@ function MenuRow({
   spotlight?: boolean
   /** Trailing affordance beside the toggle (e.g. the consent state/button). */
   aside?: ReactNode
+  /** Live Control x user-selection state. Only not_allowed is immutable;
+   *  selected and unselected rows remain ordinary local draft choices. */
+  authorityState?: AgentCapabilityAuthorityValue
 }) {
+  const notAllowed = authorityState === 'not_allowed'
+  const renderedChecked = notAllowed ? 'off' : checked
   return (
-    <div className={`k-menu-row ${child ? 'k-menu-row-child' : ''}${spotlight ? ' k-menu-row-spotlight' : ''}`}>
+    <div
+      className={`k-menu-row ${child ? 'k-menu-row-child' : ''}${spotlight ? ' k-menu-row-spotlight' : ''}${notAllowed ? ' k-menu-row-not-allowed' : ''}`}
+      data-authority-state={authorityState || undefined}
+    >
       <button
         type="button"
         role="menuitemcheckbox"
-        aria-checked={checked === 'on' ? 'true' : checked === 'partial' ? 'mixed' : 'false'}
+        aria-checked={renderedChecked === 'on' ? 'true' : renderedChecked === 'partial' ? 'mixed' : 'false'}
+        aria-disabled={notAllowed || undefined}
+        disabled={notAllowed}
         className="k-menu-row-main"
-        title={sub || hint || undefined}
+        title={notAllowed ? 'Project policy marks this capability unavailable' : sub || hint || undefined}
         onClick={onToggle}
       >
         <span className="k-menu-row-text">
           <span className="k-menu-row-label">{label}</span>
           {sub ? <span className="k-menu-row-sub">{sub}</span> : null}
         </span>
-        <span className="k-menu-row-state">{checked === 'off' ? null : <CheckIcon state={checked === 'partial' ? 'partial' : 'on'} />}</span>
+        <span className="k-menu-row-state">{renderedChecked === 'off' ? null : <CheckIcon state={renderedChecked === 'partial' ? 'partial' : 'on'} />}</span>
       </button>
-      {aside}
+      {notAllowed ? <span className="k-menu-tag k-menu-tag-not-allowed">Not permitted</span> : aside}
       {expandable ? (
         <button
           type="button"
@@ -161,6 +173,13 @@ function MenuRow({
       ) : null}
     </div>
   )
+}
+
+function nestedAuthorityState(
+  parent: AgentCapabilityAuthorityValue | undefined,
+  own: AgentCapabilityAuthorityValue | undefined,
+): AgentCapabilityAuthorityValue | undefined {
+  return parent === 'not_allowed' ? 'not_allowed' : own
 }
 
 function SectionTitle({ children }: { children: ReactNode }) {
@@ -514,6 +533,7 @@ function SkillsSection({ inventory, disabled, toggle }: CapabilityRowsProps) {
           sub={firstLine(skill.description)}
           checked={isSkillDisabled(disabled, skill.id) ? 'off' : 'on'}
           onToggle={() => toggle({ skills: { [skill.id]: !isSkillDisabled(disabled, skill.id) } })}
+          authorityState={skill.authority_state}
         />
       ))}
     </div>
@@ -526,14 +546,18 @@ function ConversationTargetsSection({ inventory, disabled, toggle }: CapabilityR
   return (
     <div>
       <SectionTitle>Conversations</SectionTitle>
-      {targets.map(({ bundle_id: bundleId }) => (
-        <MenuRow
-          key={bundleId}
-          label={bundleId}
-          checked={disabled.conversation_targets?.[bundleId] ? 'off' : 'on'}
-          onToggle={() => toggle({ conversation_targets: { [bundleId]: !disabled.conversation_targets?.[bundleId] } })}
-        />
-      ))}
+      {targets.map((target) => {
+        const bundleId = target.bundle_id
+        return (
+          <MenuRow
+            key={bundleId}
+            label={bundleId}
+            checked={disabled.conversation_targets?.[bundleId] ? 'off' : 'on'}
+            onToggle={() => toggle({ conversation_targets: { [bundleId]: !disabled.conversation_targets?.[bundleId] } })}
+            authorityState={target.authority_state}
+          />
+        )
+      })}
     </div>
   )
 }
@@ -614,6 +638,7 @@ function ToolGroupsSection({ inventory, disabled, toggle, pending, spotlight, on
                   title={`Approve ${group.name || group.alias} account access`}
                 />
               )}
+              authorityState={group.authority_state}
             />
             {isOpen
               ? group.tools.map((tool) => (
@@ -626,6 +651,7 @@ function ToolGroupsSection({ inventory, disabled, toggle, pending, spotlight, on
                     onToggle={() => toggle(toolTogglePatch(group, disabled, tool.name))}
                     spotlight={toolSpotlit(group.alias, tool.name)}
                     aside={<ConsentAside consent={tool.consent} onConsent={onConsent} />}
+                    authorityState={nestedAuthorityState(group.authority_state, tool.authority_state)}
                   />
                 ))
               : null}
@@ -655,6 +681,7 @@ function McpSection({ inventory, disabled, toggle, onConsent }: CapabilityRowsPr
               expanded={isOpen}
               onExpand={() => setExpanded((current) => ({ ...current, [server.server_id]: !isOpen }))}
               aside={<ConsentAside consent={server.consent} onConsent={onConsent} />}
+              authorityState={server.authority_state}
             />
             {isOpen
               ? entries.map((tool) => (
@@ -665,6 +692,7 @@ function McpSection({ inventory, disabled, toggle, onConsent }: CapabilityRowsPr
                     sub={firstLine(tool.description)}
                     checked={isMcpToolDisabled(disabled, server.server_id, tool.name) ? 'off' : 'on'}
                     onToggle={() => toggle(mcpToolTogglePatch(server, disabled, tool.name))}
+                    authorityState={nestedAuthorityState(server.authority_state, tool.authority_state)}
                   />
                 ))
               : null}
@@ -689,15 +717,24 @@ function RealmEntryRow({
   toggle,
   consent,
   onConsent,
+  parentAuthorityState,
 }: {
   namespace: string
   entryKeys: string[]
   entryKey: string
-  entry: { name: string; label?: string; description?: string; via?: string; claims?: string[] }
+  entry: {
+    name: string
+    label?: string
+    description?: string
+    via?: string
+    claims?: string[]
+    authority_state?: AgentCapabilityAuthorityValue
+  }
   disabled: AgentSelectionDisabled
   toggle: (patch: AgentSelectionPatch) => void
   consent?: AgentCapabilityConsent
   onConsent?: (open: ConnectionsConsentOpen) => void
+  parentAuthorityState?: AgentCapabilityAuthorityValue
 }) {
   const claims = (entry.claims ?? []).filter(Boolean)
   let aside: ReactNode = null
@@ -726,6 +763,7 @@ function RealmEntryRow({
       checked={isNamespaceEntryDisabled(disabled, namespace, entryKey) ? 'off' : 'on'}
       onToggle={() => toggle(namespaceEntryTogglePatch(namespace, entryKeys, disabled, entryKey))}
       aside={aside}
+      authorityState={nestedAuthorityState(parentAuthorityState, entry.authority_state)}
     />
   )
 }
@@ -822,6 +860,7 @@ type RealmEntryItem = {
   claims?: string[]
   enabled_for_agent?: boolean
   excluded_note?: string
+  authority_state?: AgentCapabilityAuthorityValue
 }
 
 /** An advertised-but-excluded realm entry: present, greyed, honest. No
@@ -859,6 +898,7 @@ function RealmGroupRow({
   toggle,
   consent,
   onConsent,
+  parentAuthorityState,
 }: {
   namespace: string
   entryKeys: string[]
@@ -867,8 +907,13 @@ function RealmGroupRow({
   toggle: (patch: AgentSelectionPatch) => void
   consent?: AgentCapabilityConsent
   onConsent?: (open: ConnectionsConsentOpen) => void
+  parentAuthorityState?: AgentCapabilityAuthorityValue
 }) {
   const [open, setOpen] = useState(false)
+  const authorityState = parentAuthorityState === 'not_allowed'
+    || group.entries.every(({ item }) => item.authority_state === 'not_allowed')
+    ? 'not_allowed'
+    : undefined
   return (
     <div className="k-menu-group">
       <MenuRow
@@ -880,6 +925,7 @@ function RealmGroupRow({
         expandable={group.entries.length > 0}
         expanded={open}
         onExpand={() => setOpen((value) => !value)}
+        authorityState={authorityState}
       />
       {open
         ? group.entries.map(({ item, key }) => (
@@ -893,6 +939,7 @@ function RealmGroupRow({
               toggle={toggle}
               consent={consent}
               onConsent={onConsent}
+              parentAuthorityState={parentAuthorityState}
             />
           ))
         : null}
@@ -973,6 +1020,7 @@ function ServicesSection({ inventory, disabled, toggle, namespaceStyles, spotlig
                   title={`Approve ${realm?.label || entry.namespace} account access`}
                 />
               )}
+              authorityState={entry.authority_state}
             />
             {isOpen && realm?.third_party ? <ServiceCardLine text={realm.third_party} /> : null}
             {isOpen
@@ -1002,6 +1050,7 @@ function ServicesSection({ inventory, disabled, toggle, namespaceStyles, spotlig
                     toggle={toggle}
                     consent={entry.consent}
                     onConsent={onConsent}
+                    parentAuthorityState={entry.authority_state}
                   />
                 ))
               : null}
@@ -1039,6 +1088,7 @@ function HelperAgentsSection({ inventory, disabled, toggle, pending }: Capabilit
         sub={entry.description || undefined}
         checked={off ? 'off' : 'on'}
         onToggle={() => toggle(subagentsTogglePatch(disabled, defaultOn))}
+        authorityState={entry.authority_state}
       />
     </div>
   )

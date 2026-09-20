@@ -13,6 +13,7 @@ from urllib.parse import quote, unquote
 
 from connection_hub.delegated_credentials.agent_capability_policy import (
     AGENT_CAPABILITY_METADATA_SCHEMA,
+    CAPABILITY_NOT_ALLOWED,
     AgentCapabilityPolicy,
 )
 from connection_hub.delegated_credentials.application_resources import (
@@ -690,6 +691,28 @@ def deny_all_capabilities(
     return disabled_from_projection(catalog, _policy(resource, {}))
 
 
+def unavailable_capability_states(
+    catalog: Mapping[str, Any],
+    *,
+    tenant: str,
+    project: str,
+) -> dict[str, dict[str, str]]:
+    """Mark every descriptor capability unavailable when Card lookup fails."""
+
+    return {
+        category: {
+            capability: CAPABILITY_NOT_ALLOWED
+            for capability in sorted(capabilities)
+        }
+        for category, capabilities in _capability_inventory(
+            catalog,
+            tenant=tenant,
+            project=project,
+            authority=False,
+        ).items()
+    }
+
+
 def annotate_capability_states(
     catalog: Mapping[str, Any],
     states: Mapping[str, Any] | None,
@@ -763,6 +786,22 @@ def annotate_capability_states(
                 if operation:
                     operation_states[operation] = action["authority_state"]
         row["operation_authority_states"] = operation_states
+    for row in result.get("resources") or ():
+        if not isinstance(row, dict):
+            continue
+        resource_id = _text(row.get("resource_id"))
+        row["authority_state"] = state(RESOURCES, resource_id)
+        for tool in row.get("tools") or ():
+            if not isinstance(tool, dict):
+                continue
+            operation = _text(tool.get("operation") or tool.get("name"))
+            tool["authority_state"] = state(
+                RESOURCE_OPERATIONS,
+                _member(resource_id, operation),
+            )
+    for row in result.get("skills") or ():
+        if isinstance(row, dict):
+            row["authority_state"] = state(SKILLS, _text(row.get("id")))
     for row in result.get("conversation_targets") or ():
         if not isinstance(row, dict):
             continue
@@ -784,6 +823,15 @@ def annotate_capability_states(
                 ),
                 "",
             )
+    for row in result.get("delegated_resource_families") or ():
+        if isinstance(row, dict):
+            row["authority_state"] = state(
+                RESOURCE_FAMILIES,
+                _text(row.get("id")),
+            )
+    subagents = result.get("subagents")
+    if isinstance(subagents, dict) and subagents.get("available"):
+        subagents["authority_state"] = state(SUBAGENTS, "enabled")
     result["capability_states"] = copy.deepcopy(dict(states))
     return result
 
@@ -865,4 +913,5 @@ __all__ = [
     "disabled_from_projection",
     "selected_capabilities_from_disabled",
     "sync_agent_capability_projection",
+    "unavailable_capability_states",
 ]

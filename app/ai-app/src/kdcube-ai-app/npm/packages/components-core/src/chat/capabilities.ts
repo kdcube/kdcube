@@ -17,9 +17,25 @@
 
 // ── wire types (agent_capabilities payload) ──────────────────────────────────
 
+/** Live project-Control x user-selection state for one descriptor capability.
+ *  An empty value is accepted only for backwards-compatible payloads produced
+ *  before the Card projection was attached. */
+export type AgentCapabilityAuthorityState =
+  | 'allowed_selected'
+  | 'allowed_unselected'
+  | 'not_allowed'
+
+export type AgentCapabilityAuthorityValue = AgentCapabilityAuthorityState | ''
+
+export type AgentCapabilityAuthorityStates = Record<
+  string,
+  Record<string, AgentCapabilityAuthorityValue>
+>
+
 export interface AgentCapabilityToolEntry {
   name: string
   description: string
+  authority_state?: AgentCapabilityAuthorityValue
   /** Per-tool consent state (dotted claim policies). */
   consent?: AgentCapabilityConsent
 }
@@ -52,6 +68,7 @@ export interface AgentCapabilityToolGroup {
   /** Locked-on platform groups (io/context). Never user-toggleable. */
   system: boolean
   tools: AgentCapabilityToolEntry[]
+  authority_state?: AgentCapabilityAuthorityValue
   /** Group-level consent state (bare-alias claim policies). */
   consent?: AgentCapabilityConsent
 }
@@ -66,6 +83,7 @@ export interface AgentCapabilityMcpServer {
    *  runtime's cached listing). Present => per-tool toggles; absent => the
    *  server-level toggle only. */
   tool_entries?: AgentCapabilityToolEntry[]
+  authority_state?: AgentCapabilityAuthorityValue
   /** The server calls its KDCube surface AS the signed-in user under a
    *  per-agent consent grant (a `delegated: true` connection). */
   delegated?: boolean
@@ -99,6 +117,7 @@ export interface AgentCapabilityRealmEntry {
    *  path by design ("Reading rides the context tools — the agent pulls refs
    *  directly"). Renders in place of the generic admin line. */
   excluded_note?: string
+  authority_state?: AgentCapabilityAuthorityValue
 }
 
 /** The resolved realm behind a configured namespace: what's inside and which
@@ -146,6 +165,8 @@ export interface AgentCapabilityNamespace {
   alias: string
   operations: string[]
   tools: string[]
+  authority_state?: AgentCapabilityAuthorityValue
+  operation_authority_states?: Record<string, AgentCapabilityAuthorityValue>
   /** Namespace-level consent state (the realm's connected-account claims). */
   consent?: AgentCapabilityConsent
   /** Resolved realm view (label/description, operations, named actions). */
@@ -158,6 +179,7 @@ export interface AgentCapabilitySkill {
   description: string
   when_to_use: string[]
   namespace: string
+  authority_state?: AgentCapabilityAuthorityValue
 }
 
 /** The sub-agents (subagent delegation) inventory entry. Present when the
@@ -173,6 +195,14 @@ export interface AgentCapabilitySubagents {
    *  (default) = on unless the user opts out; `false` = offered but off until
    *  the user opts in (an admin-set default-off ability). */
   default_on?: boolean
+  authority_state?: AgentCapabilityAuthorityValue
+}
+
+export interface AgentCapabilityConversationTarget {
+  bundle_id: string
+  /** Exact application resource when the provider exposes it. */
+  resource?: string
+  authority_state?: AgentCapabilityAuthorityValue
 }
 
 /** Whether the agent CONSUMES the two mid-turn conversation affordances: a
@@ -262,8 +292,8 @@ export interface AgentCapabilitiesInventory {
   tools: AgentCapabilityToolGroup[]
   mcp: AgentCapabilityMcpServer[]
   named_services: AgentCapabilityNamespace[]
-  /** Application conversation targets currently permitted by the effective Card. */
-  conversation_targets?: { bundle_id: string }[]
+  /** Descriptor conversation targets with their live Card authority state. */
+  conversation_targets?: AgentCapabilityConversationTarget[]
   skills: AgentCapabilitySkill[]
   /** Admin-allowed model list; empty/absent keeps the model choice invisible. */
   supported_models?: AgentSupportedModel[]
@@ -279,6 +309,9 @@ export interface AgentCapabilitiesInventory {
   instruction_profiles?: AgentInstructionProfiles | null
   /** Declared presentation facets (tool catalog / skills form); absent = hidden. */
   presentation_facets?: AgentPresentationFacets | null
+  /** Category/member map returned by the live Card projection. Row-level
+   *  authority_state fields mirror this map for the picker. */
+  capability_states?: AgentCapabilityAuthorityStates
 }
 
 /** The saved deny-list. Absent key/entry = enabled (full configured set). */
@@ -707,6 +740,7 @@ export interface RealmEntryLike {
   /** Declared reason for an intentional exclusion (see
    *  `AgentCapabilityRealmEntry.excluded_note`). */
   excluded_note?: string
+  authority_state?: AgentCapabilityAuthorityValue
 }
 
 export interface RealmGroupView {
