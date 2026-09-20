@@ -383,12 +383,17 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
         selected = _text(raw.get("user_id"))
         use_selected = mode == READ_SCOPE_USER and bool(selected)
         current = _text(ctx.user_id)
-        admitted_claims = set(admitted_named_service_claims() or ())
+        admitted_claims = admitted_named_service_claims()
+        effective_permissions = (
+            set(ctx.permissions)
+            if admitted_claims is None
+            else set(admitted_claims)
+        )
         if (
             use_selected
             and selected != current
             and _ANY_USER_READ_PERMISSION
-            not in {*ctx.permissions, *admitted_claims}
+            not in effective_permissions
         ):
             return NamedServiceResponse.error_response(
                 code="conversation_user_not_granted",

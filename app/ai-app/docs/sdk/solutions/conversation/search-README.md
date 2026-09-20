@@ -282,6 +282,10 @@ checks both the selected application target and the payload-dependent
 follows the [discovery registry](../../namespace-services/discovery-README.md)
 like every other provider.
 
+For a delegated invocation, the provider derives payload authority exclusively
+from the bound effective Card claims. For a direct platform invocation without
+a delegated scope, it derives payload authority from the named-service context.
+
 Every `conv` call is served by kdcube-services, so the bundle on the provider's
 own request context names the provider, never the caller, and never scopes a
 search. The application target is resolved from the trusted caller and an

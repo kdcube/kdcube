@@ -17,6 +17,9 @@ from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
     NamedServiceContext,
     NamedServiceRequest,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.authority_scope import (
+    bind_named_service_claims,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.conversation.api import ConversationSearchContext
 from kdcube_ai_app.apps.chat.sdk.solutions.conversation.named_service import (
     make_conversation_search_named_service_provider,
@@ -180,6 +183,27 @@ async def test_selected_user_scope_routes_to_selected_user():
     assert resp.ok
     assert svc.list_scope.normalized_mode == "user"
     assert svc.list_scope.resolve() == "other-user"
+
+
+@pytest.mark.asyncio
+async def test_bound_card_claims_replace_ambient_any_user_permission():
+    svc = FakeReadService(summaries=[])
+    provider = _provider(svc)
+    ctx = NamedServiceContext(
+        user_id="admin-1",
+        permissions=("conversations:read:any_user",),
+    )
+    request = _req(
+        "object.list",
+        filters={"scope": {"mode": "user", "user_id": "other-user"}},
+    )
+
+    with bind_named_service_claims(("conversations:read",)):
+        response = await provider.object_list(ctx, request)
+
+    assert response.status == 403
+    assert response.error.code == "conversation_user_not_granted"
+    assert svc.list_scope is None
 
 
 @pytest.mark.asyncio

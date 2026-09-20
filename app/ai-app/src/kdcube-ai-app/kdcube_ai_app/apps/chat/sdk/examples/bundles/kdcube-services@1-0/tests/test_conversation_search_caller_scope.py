@@ -33,6 +33,9 @@ from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import (
     BundleNamedServiceResult,
     bind_bundle_named_service_caller,
 )
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.surface_guard import (
+    delegated_mcp_runtime_projection,
+)
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.named_service_admission import (
     managed_named_service_admission,
     native_agent_admission_from_state,
@@ -290,11 +293,20 @@ def local_bundle_loading(monkeypatch, registry):
     monkeypatch.setattr(bundle_loader, "get_workflow_instance_async", _workflow)
 
 
-def _request_context(*, routing_bundle: str) -> ExternalEventPayload:
+def _request_context(
+    *,
+    routing_bundle: str,
+    permissions: tuple[str, ...] = (),
+) -> ExternalEventPayload:
     return ExternalEventPayload(
         routing=ExternalEventRouting(bundle_id=routing_bundle, session_id="sess-1", conversation_id="conv-now"),
         actor=ExternalEventActor(tenant_id="t", project_id="p"),
-        user=ExternalEventUser(user_type="registered", user_id=USER, roles=["kdcube:role:registered"]),
+        user=ExternalEventUser(
+            user_type="registered",
+            user_id=USER,
+            roles=["kdcube:role:registered"],
+            permissions=list(permissions),
+        ),
     )
 
 
@@ -327,8 +339,17 @@ def _read_request(
     return NamedServiceRequest.from_dict(payload)
 
 
-async def _through_bundle_registry(admission: NamedServiceAdmission, request, *, routing_bundle: str):
-    comm_context = _request_context(routing_bundle=routing_bundle)
+async def _through_bundle_registry(
+    admission: NamedServiceAdmission,
+    request,
+    *,
+    routing_bundle: str,
+    ambient_permissions: tuple[str, ...] = (),
+):
+    comm_context = _request_context(
+        routing_bundle=routing_bundle,
+        permissions=ambient_permissions,
+    )
     caller = bundle_operations.make_local_bundle_named_service_caller(
         redis=None, pg_pool=None, comm_context=comm_context,
     )
@@ -346,6 +367,7 @@ def _mcp_request(
     operation: str = "object.search",
     targets: tuple[str, ...] = (),
     claims: tuple[str, ...] = ("conversations:read",),
+    grantor_permissions: tuple[str, ...] = (),
 ):
     grant_record = {
         "client_id": client_id,
@@ -358,6 +380,11 @@ def _mcp_request(
         "account_scope": {},
         "named_services": copy.deepcopy(NAMED_SERVICES),
     }
+    if grantor_permissions:
+        grant_record["grantor_authority"] = {
+            "grantor_roles": ["kdcube:role:registered"],
+            "grantor_permissions": list(grantor_permissions),
+        }
     credential = CredentialEnvelope(
         subject=f"integration:{client_id}:{USER}",
         attrs={
@@ -365,12 +392,20 @@ def _mcp_request(
             "grantor_subject": USER,
             "grants": list(claims),
             "resource": RESOURCE,
+            "resource_grants": {RESOURCE: list(claims)},
         },
     )
     request = SimpleNamespace(
         state=SimpleNamespace(
             delegated_credential={"credential": credential.to_dict(), "grant_record": grant_record}
-        )
+        ),
+        headers={"host": "kdcube.test"},
+        url=SimpleNamespace(
+            scheme="https",
+            netloc="kdcube.test",
+            path=REQUEST_RESOURCE,
+        ),
+        base_url="https://kdcube.test/",
     )
     store_managed_named_service_admission_snapshot(
         request,
@@ -699,6 +734,7 @@ async def _through_read_door(
     *,
     targets: tuple[str, ...] = (),
     claims: tuple[str, ...] = ("conversations:read",),
+    ambient_permissions: tuple[str, ...] = (),
 ):
     if door == "managed_mcp":
         admission = managed_named_service_admission(
@@ -713,12 +749,14 @@ async def _through_read_door(
             admission,
             request,
             routing_bundle=SERVICES_BUNDLE,
+            ambient_permissions=ambient_permissions,
         )
     if door == "native":
         return await _through_bundle_registry(
             _native_admission(targets=targets, claims=claims),
             request,
             routing_bundle=AGENT_BUNDLE,
+            ambient_permissions=ambient_permissions,
         )
     if door == "data_bus":
         selector = native_agent_selector(
@@ -730,7 +768,7 @@ async def _through_read_door(
         return await _through_relay(
             registry,
             selector=selector,
-            actor=_relay_actor(),
+            actor=_relay_actor(permissions=ambient_permissions),
             request=request,
             targets=targets,
             claims=claims,
@@ -869,6 +907,64 @@ async def test_every_read_door_denies_ungranted_cross_user_scope(
     assert response.status == 403
     assert response.error.code == "conversation_user_not_granted"
     _assert_not_executed(read_kind, backend, read_service)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_bundle_loading")
+@pytest.mark.parametrize("door", ["managed_mcp", "native", "data_bus"])
+@pytest.mark.parametrize("read_kind", ["list", "get", "file"])
+async def test_every_read_door_treats_bound_card_claims_as_complete_authority(
+    door,
+    read_kind,
+    registry,
+    backend,
+    read_service,
+):
+    response = await _through_read_door(
+        door,
+        registry,
+        _read_request(
+            read_kind,
+            {"scope": {"mode": "user", "user_id": "other-user"}},
+        ),
+        claims=("conversations:read",),
+        ambient_permissions=("conversations:read:any_user",),
+    )
+
+    assert response.status == 403
+    assert response.error.code == "conversation_user_not_granted"
+    _assert_not_executed(read_kind, backend, read_service)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_bundle_loading")
+async def test_managed_card_removal_survives_grantor_runtime_projection(
+    registry,
+    backend,
+    read_service,
+):
+    request_context = _mcp_request(
+        AGENT_CLIENT,
+        operation="object.list",
+        claims=("conversations:read",),
+        grantor_permissions=("conversations:read:any_user",),
+    )
+    runtime = delegated_mcp_runtime_projection(request_context)
+    assert "conversations:read:any_user" in runtime["permissions"]
+
+    response = await _through_bundle_registry(
+        managed_named_service_admission(request_context),
+        _read_request(
+            "list",
+            {"scope": {"mode": "user", "user_id": "other-user"}},
+        ),
+        routing_bundle=SERVICES_BUNDLE,
+        ambient_permissions=tuple(runtime["permissions"]),
+    )
+
+    assert response.status == 403
+    assert response.error.code == "conversation_user_not_granted"
+    _assert_not_executed("list", backend, read_service)
 
 
 @pytest.mark.asyncio
