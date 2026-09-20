@@ -298,6 +298,56 @@ class ConnectionsProviderBase(NamedServiceProvider):
             object=dict(state or {"governed": False}),
         )
 
+    async def agent_capability_sync(
+        self,
+        ctx: NamedServiceContext,
+        request: NamedServiceRequest,
+    ) -> NamedServiceResponse:
+        payload = dict(request.payload or {})
+        required_strings = ("application", "agent_id", "descriptor_revision")
+        missing = [
+            key
+            for key in required_strings
+            if not str(payload.get(key) or "").strip()
+        ]
+        if not isinstance(payload.get("descriptor_payload"), Mapping):
+            missing.append("descriptor_payload")
+        if not isinstance(payload.get("capability_authority"), Mapping):
+            missing.append("capability_authority")
+        if missing:
+            return self._error(
+                "connections_agent_capability_args_required",
+                f"Required capability sync fields are missing or invalid: {', '.join(missing)}",
+                status=400,
+            )
+        try:
+            result = dict(
+                await self.sync_agent_capabilities(
+                    ctx,
+                    payload=payload,
+                )
+                or {}
+            )
+        except Exception as exc:
+            return self._error("connections_agent_capability_sync_failed", str(exc))
+        if result.get("ok") is not True:
+            status = int(result.get("status") or 400)
+            code = str(result.get("error") or "connections_agent_capability_sync_failed")
+            message = str(result.get("message") or result.get("reason") or code)
+            return NamedServiceResponse.error_response(
+                code=code,
+                message=message,
+                status=status,
+                details=result,
+                provider=self.provider_identity(),
+                namespace=NAMESPACE,
+            )
+        return NamedServiceResponse.ok_response(
+            provider=self.provider_identity(),
+            namespace=NAMESPACE,
+            object=result,
+        )
+
     # ── error helper ─────────────────────────────────────────────────────────
 
     def _error(self, code: str, message: str, *, status: int = 500) -> NamedServiceResponse:
@@ -376,6 +426,25 @@ class ConnectionsProviderBase(NamedServiceProvider):
         delegated-grant catalog."""
         del client_id, namespace, operation, access_id, delegate_identity
         return {"governed": False}
+
+    async def sync_agent_capabilities(
+        self,
+        ctx: NamedServiceContext,
+        *,
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Synchronize a trusted host's descriptor ceiling.
+
+        Only the Connection Hub host implements this mutation. Other providers
+        keep the portable contract concrete while refusing the operation.
+        """
+
+        del ctx, payload
+        return {
+            "ok": False,
+            "error": "agent_capability_sync_not_supported",
+            "status": 501,
+        }
 
     @abstractmethod
     async def list_catalog(self, ctx: NamedServiceContext) -> list[CatalogEntry]:

@@ -359,6 +359,27 @@ async def _session_for_comm_context(redis: Any, comm_context: ExternalEventPaylo
     return _fallback_session_from_comm_context(comm_context)
 
 
+def _local_named_service_context(auth_context: Any, source: ExternalEventPayload) -> Any:
+    """Bind platform-owned source provenance to one local peer call."""
+
+    from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
+        NamedServiceContext,
+        SOURCE_BUNDLE_ID_METADATA,
+    )
+
+    routing = getattr(source, "routing", None)
+    source_bundle_id = str(getattr(routing, "bundle_id", None) or "").strip()
+    metadata = (
+        {SOURCE_BUNDLE_ID_METADATA: source_bundle_id}
+        if source_bundle_id
+        else {}
+    )
+    return NamedServiceContext.from_auth_context(
+        auth_context,
+        metadata=metadata,
+    )
+
+
 def _apply_request_projection_to_session(session: Any, comm_context: ExternalEventPayload) -> Any:
     """Preserve request-bound authority projections across local peer calls.
 
@@ -787,7 +808,10 @@ async def invoke_local_bundle_named_service(
 
     request = NamedServiceRequest.coerce(call.request)
     auth = AuthContext.from_external_event_payload(target_context, source="named_service.bundle_registry")
-    client = NamedServiceClient(registry, auth_context=auth)
+    client = NamedServiceClient(
+        registry,
+        context=_local_named_service_context(auth, comm_context),
+    )
     nested_caller = make_local_bundle_operation_caller(redis=redis, pg_pool=pg_pool, comm_context=target_context)
     nested_stream_caller = make_local_bundle_operation_stream_caller(redis=redis, pg_pool=pg_pool, comm_context=target_context)
     nested_named_service_caller = make_local_bundle_named_service_caller(

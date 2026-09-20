@@ -19,6 +19,7 @@ from typing import Any, Callable, Mapping, Optional
 
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
     NamedServiceContext,
+    SOURCE_BUNDLE_ID_METADATA,
     TRANSPORT_API,
     TRANSPORT_LOCAL,
     named_service_provider,
@@ -304,6 +305,81 @@ class ConnectionHubProvider(ConnectionsProviderBase):
             # Unknown current authority is unavailability, and the caller must
             # be able to tell it from "nothing to gate".
             return {"unavailable": exc.reason or "catalog_unavailable"}
+
+    async def sync_agent_capabilities(
+        self,
+        ctx: NamedServiceContext,
+        *,
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        application = str(payload.get("application") or "").strip()
+        source_bundle_id = str(
+            dict(ctx.metadata or {}).get(SOURCE_BUNDLE_ID_METADATA) or ""
+        ).strip()
+        if not source_bundle_id or source_bundle_id != application:
+            return {
+                "ok": False,
+                "error": "agent_capability_source_mismatch",
+                "message": (
+                    "The descriptor application must match the platform-bound "
+                    "source bundle."
+                ),
+                "status": 403,
+            }
+        user_id = self._user_id(ctx)
+        if not user_id:
+            return {
+                "ok": False,
+                "error": "delegated_access_requires_authenticated_user",
+                "status": 401,
+            }
+        if self._automation_access_factory is None:
+            return {
+                "ok": False,
+                "error": "agent_capability_service_unavailable",
+                "status": 503,
+            }
+        service = self._automation_access_factory()
+        if service is None:
+            return {
+                "ok": False,
+                "error": "agent_capability_service_unavailable",
+                "status": 503,
+            }
+        accepted_keys = (
+            "application",
+            "agent_id",
+            "descriptor_revision",
+            "descriptor_payload",
+            "capability_authority",
+            "capability_metadata",
+            "capability_catalog",
+            "selected_capabilities",
+            "replace_selection",
+            "conversation_target_resources",
+            "resource_grants",
+            "resource_operations",
+            "named_service_operations",
+            "properties",
+            "issuer_label",
+            "manage_url",
+        )
+        sync_payload = {
+            key: payload[key]
+            for key in accepted_keys
+            if key in payload
+        }
+        user = {
+            "user_id": user_id,
+            "user_type": ctx.user_type,
+            "roles": list(ctx.roles or ()),
+            "permissions": list(ctx.permissions or ()),
+        }
+        result = await service.sync_agent_capability_control(
+            user,
+            **sync_payload,
+        )
+        return dict(result or {})
 
     async def _refresh_tokens(
         self,

@@ -7,6 +7,7 @@ from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import (
     BundleMCPResult,
     BundleOperationCall,
     _apply_request_projection_to_session,
+    _local_named_service_context,
     _raw_roles_visible,
     _target_comm_context,
     bind_bundle_mcp_caller,
@@ -15,6 +16,10 @@ from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import (
     call_bundle_operation,
     get_current_bundle_mcp_caller,
     get_current_bundle_operation_caller,
+)
+from kdcube_ai_app.apps.chat.sdk.infra.auth_context import AuthContext
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
+    SOURCE_BUNDLE_ID_METADATA,
 )
 from kdcube_ai_app.apps.chat.sdk.protocol import (
     ExternalEventActor,
@@ -154,6 +159,34 @@ def test_target_comm_context_preserves_identity_authority():
     assert target.user.user_id == "telegram_42"
     assert target.user.identity_authority["platform_user_id"] == "platform-user-1"
     assert target.user.roles == ["kdcube:role:super-admin"]
+
+
+def test_local_named_service_context_keeps_target_identity_and_source_provenance():
+    source = ExternalEventPayload(
+        request=ExternalEventRequest(request_id="request-source"),
+        routing=ExternalEventRouting(
+            bundle_id="problem-board@1-0",
+            session_id="session-source",
+        ),
+        actor=ExternalEventActor(tenant_id="tenant-a", project_id="project-a"),
+        user=ExternalEventUser(user_type="registered", user_id="user-1"),
+    )
+    target_auth = AuthContext(
+        tenant="tenant-a",
+        project="project-a",
+        bundle_id="connection-hub@1-0",
+        principal_kind="user",
+        principal_id="user-1",
+        user_id="user-1",
+        user_type="registered",
+    )
+
+    context = _local_named_service_context(target_auth, source)
+
+    assert context.bundle_id == "connection-hub@1-0"
+    assert context.metadata == {
+        SOURCE_BUNDLE_ID_METADATA: "problem-board@1-0",
+    }
 
 
 def test_request_projection_overlays_stored_session_for_peer_calls():

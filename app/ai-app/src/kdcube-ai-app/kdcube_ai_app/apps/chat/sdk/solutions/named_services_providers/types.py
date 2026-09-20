@@ -14,6 +14,7 @@ from kdcube_ai_app.apps.chat.sdk.infra.auth_context import AuthContext
 
 NAMED_SERVICE_REQUEST_SCHEMA = "kdcube.named_service.request.v1"
 NAMED_SERVICE_RESPONSE_SCHEMA = "kdcube.named_service.response.v1"
+SOURCE_BUNDLE_ID_METADATA = "source_bundle_id"
 
 TRANSPORT_LOCAL = "local"
 TRANSPORT_API = "api"
