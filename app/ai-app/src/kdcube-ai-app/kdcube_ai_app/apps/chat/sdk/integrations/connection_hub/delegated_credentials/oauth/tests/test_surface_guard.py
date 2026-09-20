@@ -46,6 +46,9 @@ from connection_hub.delegated_credentials.cards.model import (
     ControlCardBinding,
     NamedServiceSelection,
 )
+from connection_hub.delegated_credentials.controls.snapshot import (
+    materialize_control_snapshot,
+)
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.cards.service import (
     replace_state,
 )
@@ -593,6 +596,11 @@ def test_control_card_tool_denial_names_control_and_has_no_caller_consent(monkey
         issuer_kind="application",
         issuer_label="Demo project",
         composition_mode="and",
+    )
+    control = materialize_control_snapshot(
+        control,
+        basis_catalog_version="catalog-test-v1",
+        origin="test",
     )
     caller = dataclasses.replace(
         caller,
