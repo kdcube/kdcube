@@ -361,6 +361,14 @@ def test_broad_target_stays_inside_one_deployment_and_ownership_stays_separate()
     assert parsed.matches(ApplicationResource(TENANT, PROJECT, "workspace@1-0", "worker"))
     assert not parsed.matches(ApplicationResource(TENANT, "other-project", "workspace@1-0", "worker"))
     assert payload["conversation_target_resources"] == [target]
+    assert disabled_from_projection(
+        catalog,
+        {
+            "schema": AGENT_CAPABILITY_POLICY_SCHEMA,
+            "resource": payload["capability_authority"]["resource"],
+            "capabilities": {},
+        },
+    )["conversation_targets"] == {target: True}
     # Target scope says where calls may go. The provider resource remains
     # independent and resolves its own grantor/identity-scope policy.
     assert NAMED_SERVICES_RESOURCE != target

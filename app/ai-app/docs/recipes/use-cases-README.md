@@ -4,7 +4,7 @@ title: "Recipe Index: What Problem Does KDCube Solve?"
 summary: "Problem-first index of KDCube use cases for agents and builders: seventeen practitioner problems spanning agent operation, delegated access, multi-user state, generated-code isolation, browser composition, and serving several complete app-owned websites from one installation."
 status: current
 tags: ["recipes", "use-cases", "index", "problems", "platform", "agents"]
-updated_at: 2026-08-13
+updated_at: 2026-09-20
 keywords:
   [
     "what problem does kdcube solve",
@@ -54,7 +54,7 @@ HOW. Use the index to find the problem; use the entry to confirm the fit.
 | 10 | "A nightly script shouldn't hold a person's session" | Automation tokens bound to resources + grants; one-click revoke logs out the bound session | [automation access](connections/create-delegated-automation-access-README.md) |
 | 11 | "The only way to run generated code is a shell — security says no" | Execution is a contracted tool call in an isolated runtime; outputs are declared, hosted, delivery-verified | [ISO runtime](../exec/README-iso-runtime.md) · [custom tools](../sdk/tools/custom-tools-README.md) |
 | 12 | "Agent reports live in chat where no search engine reaches them" | A public-content provider: crawlable HTML, sitemaps, `410` on retract, stable URLs | [public content](../sdk/solutions/cdn-pub/public-content-solution-README.md) · [publish recipe](resource_sharing/publish-discoverable-content-README.md) |
-| 13 | "Every user wants a different agent; we ship one config" | The config is an inventory; each user narrows it (deny-lists + model pick), applied per turn as configured ∩ chosen | [construct a ReAct agent](../sdk/agents/react/how/how-to-construct-react-agent-README.md) · [user settings](../sdk/solutions/user-settings/user-settings-solution-README.md) |
+| 13 | "Every user wants a different agent; we ship one config" | The descriptor becomes a Control Card; each user's resident Card selects a positive subset, applied live as current control ∩ selection | [agent capability control](../sdk/solutions/user-settings/capabilities-README.md) · [construct a ReAct agent](../sdk/agents/react/how/how-to-construct-react-agent-README.md) |
 | 14 | "Cache rebuilds are invisible; nobody can attribute the cost" | Placement by lifecycle; the `[CACHE]` cold-turn marker joins the rebuild premium to its cause; the user holds the policy | [context caching](../sdk/agents/react/context-caching-README.md) |
 | 15 | "Every internal tool becomes its own frontend project" | A scene is config + content over a shared host; widgets are served by the apps that own them | [scene configuration](../sdk/solutions/scene/config/README.md) · [scene recipe](components/scene-README.md) |
 | 16 | "The answer arrives while the agent is still working" | Every conversation carries an event lane; answers fold into the live turn or wait as next-turn context | [conversation events](../sdk/bundle/bundle-conversation-events-and-react-output-README.md) |
@@ -296,20 +296,24 @@ MCP — and we ship one config."
 
 ```text
 BUILD IT YOURSELF                          WITH KDCUBE
-per-user feature flags · allow-list UI     admin grant ∩ user pick
-per-user model routing · storage        →  composer "+" menu · per turn
-permission clamping · staleness            fail-open, never wider
+per-user feature flags · allow-list UI     Control Card ∩ resident selection
+per-user model routing · storage        →  composer "+" menu · typed preferences
+descriptor drift · unavailable authority  live reconciliation · fail closed
 ```
 
-- **Config grants the inventory:** `surfaces.as_consumer.agents.<id>` declares
-  the tools/skills; the admin-allowed model list is `supported_models`.
-- **The chat "+" menu narrows it:** deny-lists for tools, skills, MCP servers,
-  and namespaces, plus one model pick — stored per (user, app, agent).
-- **Applied per turn as `configured ∩ chosen`,** clamped on write, fail-open —
-  a broken selection never breaks the agent.
-- **New config entries default ON for everyone;** system tools stay locked on.
+- **The descriptor supplies the ceiling:** KDCube revises one stable,
+  credentialless Control Card for the exact app/agent resource.
+- **The user selects a positive subset:** one stable resident agent Card holds
+  tools, skills, MCP, service operations, resources, targets, and subagents.
+- **The current intersection drives both runtime and UI:** selected, available
+  but unselected, and not permitted are distinct states. An unavailable Card
+  projection closes selectable capabilities.
+- **Descriptor additions default unselected;** removals stop working on the
+  next live projection. Model, instruction, presentation, and cache choices
+  remain typed PostgreSQL preferences with configured fallbacks.
 
-Docs: [construct a ReAct agent](../sdk/agents/react/how/how-to-construct-react-agent-README.md) ·
+Docs: [agent capability control](../sdk/solutions/user-settings/capabilities-README.md) ·
+[construct a ReAct agent](../sdk/agents/react/how/how-to-construct-react-agent-README.md) ·
 [user settings](../sdk/solutions/user-settings/user-settings-solution-README.md) ·
 [chat with a ReAct agent](components/chat-with-react-agent-README.md)
 

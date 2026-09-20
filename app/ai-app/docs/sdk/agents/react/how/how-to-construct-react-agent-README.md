@@ -1,10 +1,10 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/how/how-to-construct-react-agent-README.md
 title: "How To Construct A ReAct Agent"
-summary: "The full story of creating and customizing a ReAct agent from app code and config: construction, per-agent configuration, conversation-scoped model/capability selection, and prompt-cache consequences."
+summary: "The full story of creating and customizing a ReAct agent from app code and config: construction, per-agent configuration, live Card capability projection, user preferences, and prompt-cache consequences."
 status: current
-tags: ["sdk", "agents", "react", "how-to", "configuration", "per-user-selection", "supported-models", "composer-menu"]
-updated_at: 2026-07-16
+tags: ["sdk", "agents", "react", "how-to", "configuration", "per-user-selection", "control-card", "supported-models", "composer-menu"]
+updated_at: 2026-09-20
 keywords:
   [
     "build_react",
@@ -33,11 +33,11 @@ see_also:
 
 A ReAct runtime object is assembled fresh for every turn from four inputs:
 **app code** (the workflow that calls `build_react`), **app config** (the
-per-agent blocks in `bundles.yaml`), the **conversation-scoped user
-selection**, and **durable turn state** (timeline, workspace refs, memory, and
-runtime context). Fresh construction does not mean stateless execution. This
-article walks the pipeline, configuration, selection, consent boundary, and
-prompt-cache consequences.
+per-agent blocks in `bundles.yaml`), the user's **live Card capability
+projection and scoped preferences**, and **durable turn state** (timeline,
+workspace refs, memory, and runtime context). Fresh construction does not mean
+stateless execution. This article walks the pipeline, configuration, selection,
+consent boundary, and prompt-cache consequences.
 
 ## 1. The construction pipeline
 
@@ -57,8 +57,9 @@ turn arrives (BaseWorkflow.__init__ built runtime_ctx: tenant/project/user_id/
   │      → AgentSkillConfig: custom_skills_root, agents_config
   │                                     (from surfaces.as_consumer.agents.<id>.skills)
   ├─ 3. apply_user_agent_selection(tool_config, skill_config)
-  │      → the user's saved deny-list narrows both configs; the user's model
-  │        pick lands on runtime_ctx.agent_role_models  (fail-open, per turn)
+  │      → current descriptor Control Card ∩ resident user selection narrows
+  │        both configs; scoped preference picks overlay the runtime context
+  │        (capabilities fail closed; preferences use configured fallbacks)
   ├─ 4. apply_delegated_tool_claims(tool_config)
   │      → demand-driven consent: every claim-gated tool STAYS available; a
   │        tool attempt with unmet claims raises the ask (structured consent
@@ -83,14 +84,17 @@ beating app-level `role_models`. The full resolution chain (code defaults →
 `bundles.yaml` → invocation overlay) is owned by
 [Bundle Agent Integration §2A](../../../bundle/bundle-agent-integration-README.md#2a-model-selection-for-agent-roles).
 
-Step 3 is the turn-start narrowing pass: it removes user-disabled entries,
-applies the validated model pick and subagent toggle, and governs when a
-cache-colding selection change lands. Step 4 is deliberately **not** another
-narrower. Connected-account claims remain attached to configured tools and are
-enforced at the concrete tool attempt. The turn-start hook only checks whether
-a claim demanded earlier in this conversation has since become satisfied and,
-if so, publishes that transition through ANNOUNCE. Bookkeeping failure keeps
-the configured set; it never bypasses the operation-level authorization fence.
+Step 3 is the turn-start authority pass. It resolves the current descriptor
+Control Card and resident agent Card, narrows tools, skills, named services,
+targets, resources, and subagents from their positive live projection, then
+applies validated model/instruction/presentation preferences. An unavailable
+Card projection removes every selectable capability; a preference-store error
+uses configured preference defaults without widening that projection. Step 4
+is deliberately **not** another narrower. Connected-account claims remain
+attached to selected tools and are enforced at the concrete tool attempt. The
+turn-start hook only checks whether a claim demanded earlier in this
+conversation has since become satisfied and, if so, publishes that transition
+through ANNOUNCE.
 
 ## 2. The per-agent config surface
 
@@ -194,63 +198,42 @@ mid-conversation, `apply_delegated_tool_claims` publishes the transition on
 in ANNOUNCE. The instruction text stays byte-identical whether or not the
 account is connected.
 
-## 4. The per-user selection layer
+## 4. Live capability projection and user preferences
 
-On top of the admin-granted inventory, each signed-in user can narrow what the
-agent uses in one conversation. The effective selection is stored per
-`(user, app id, conversation, agent)` and applied in step 3. An optional
-user/app/agent baseline seeds a new conversation once; after materialization,
-that conversation owns its durable selection.
+On top of the descriptor inventory, each signed-in user has one stable
+resident Card for an app/agent caller profile. KDCube also materializes a
+stable credentialless Control Card from that app/agent descriptor and links it
+to the resident Card. Step 3 uses their current intersection on every turn:
 
-**Two operations on the SDK entrypoint base** (available to every chat app,
-declared for registered users and above):
-
-- `agent_capabilities` — returns the pickable inventory (python tool groups
-  with per-tool docs, MCP servers with per-tool entries when knowable,
-  named-service namespaces, concrete skills with front-matter,
-  `supported_models` + the configured `default_model`) plus the caller's
-  current selection.
-- `agent_selection_update` — merge-writes partial toggles, clamped against the
-  live inventory on every write.
-
-**The record is a deny-list plus one pick:**
-
-```json
-{
-  "schema_version": 1,
-  "disabled": {
-    "tools": {"gmail": true, "web_tools": ["web_fetch"]},
-    "mcp": {"knowledge": ["kb_fetch"]},
-    "named_services": {
-      "mail": ["object.action.send"],
-      "task": ["object.delete"]
-    },
-    "skills": ["public.docx-press"],
-    "subagents": true
-  },
-  "model": {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"}
-}
+```text
+effective capabilities = current descriptor Control ∩ resident Card selection
 ```
 
-Semantics, enforced at both ends (clamp on write, `effective = configured −
-disabled` on read):
+The resident Card stores a positive capability selection. A newly published
+descriptor capability is offered but remains unselected; a removed capability
+is denied by the next live intersection. Neither change creates a new resident
+identity or requires a new hosted-agent credential. System tools remain
+outside the selectable boundary.
 
-- The user can only **remove**; nothing outside the configured inventory can
-  ever be enabled. New config entries default ON for everyone.
-- System tool groups (`io`, `context`) are locked on and immune.
-- Python groups and MCP servers toggle whole or per tool. Named-service realms
-  toggle whole, per generic operation, or per named action; full denial removes
-  the realm from roster and dispatch, while entry denial is enforced at named-
-  service dispatch. Denied skills disappear from every consumer. If subagents
-  are offered, denying them prevents the spawner, `react.delegate`, and its
-  instruction guidance from being installed.
-- The `model` field is a **pick, not a denial**: one choice from
-  `supported_models`, applied for the user's turns to the strong decision role
-  (`solver.react.v2.decision.v2.strong`), overriding what `role_models`
-  configures for it. Absent pick — and any pick no longer in the list — runs
-  the configured default.
-- The whole layer FAILS OPEN: a missing row, a store error, or a stale entry
-  yields the configured behavior, never a broken agent.
+Two operations on the SDK entrypoint base expose this contract to registered
+users and above:
+
+- `agent_capabilities` returns the descriptive catalog, scoped preference
+  choices, the current Card projection, and `allowed_selected`,
+  `allowed_unselected`, or `not_allowed` on each capability row.
+- `agent_selection_update` replaces the visible positive Card selection and
+  may update model, instruction, presentation, and cache preferences in the
+  same save.
+
+An unavailable Card projection fails closed for selectable capabilities. The
+picker shows those rows as **Not permitted**, and the runtime removes them.
+PostgreSQL stores the preference fields and only a compatibility seed for the
+first Card migration. Preference failures fall back to configured model and
+presentation behavior without granting any missing capability.
+
+The complete capability families, Card bootstrap, three-state picker, wildcard
+resource semantics, and descriptor-change rules are owned by
+[Agent Capability Control And Selection](../../../solutions/user-settings/capabilities-README.md).
 
 ## 5. Cache implications — what a switch costs
 
@@ -282,49 +265,42 @@ equivalent; both stay silent while the conversation has no turns yet, where
 nothing is cached.
 
 Second, the **cold-cache policy** — and because the user pays for the cache,
-the user holds it. Each user keeps a standing per-class policy
-(`cache_policy: {model_switch, capability_toggle}` in the same selection
-record) with values `accept`, `confirm` (the platform default), `defer_cold`,
-or `defer_conversation`; admin config supplies the default and the allowed set
-(`config.react.<agent>.cache.selection_change_policy`). Under `confirm`, the
-decision moment IS the policy picker: making a costly change in a warm
-conversation opens an inline choice — Apply now · Apply from next conversation
-· Apply when cache is cold — with "remember my choice" persisting the standing
-policy. Deferred choices park the change as a **pending delta** the runtime
-promotes when its trigger fires (a different conversation, or the warmness
-signal reading cold — where applying is free); the menu badges pending changes
-until then. At the runtime choke point, each conversation keeps the
-last-APPLIED selection snapshot: a change that lands on a warm conversation
-emits a **cold-turn marker** — an ANNOUNCE `[CACHE]` line for the agent plus
-`cache_cold_turn` metadata on the decision call's accounting, so the
-cache-rebuild premium is attributable as one identifiable component within the
-turn's spend sum (a turn's cost is always the sum of the spendings inside it).
-Everything fails open to the configured behavior.
+the user holds it. PostgreSQL stores the standing policy and deferred
+model/instruction/presentation deltas; admin config supplies the default and
+allowed set (`config.react.<agent>.cache.selection_change_policy`). Under
+`confirm`, the decision moment is the policy picker. A resident Card
+capability edit is authority and applies immediately; it cannot be pinned to
+an older conversation snapshot. The next applicable warm turn records the
+resulting cold turn. Preference deltas may wait for a different conversation
+or a cold cache. At the runtime choke point, a change that lands on a warm
+conversation emits an ANNOUNCE `[CACHE]` line plus `cache_cold_turn`
+accounting metadata, so the rebuild premium is attributable within the turn's
+spend. Preference failures use configured defaults; Card projection failure
+closes selectable capabilities.
 
 ## 6. How the chat component connects
 
 The chat engine carries the agent identity and the selection UI end to end:
 
 - `EngineConfig.agentId` (default `main`) rides every message target and event
-  batch and scopes the selection operations. The current `conversation_id`
-  scopes the effective model/capability selection — one chat instance drives
-  one configured agent in one active conversation.
+  batch and scopes the selection operations. The resident capability Card is
+  scoped to the user/app/agent profile; `conversation_id` scopes preference
+  choices and pending cache policy.
 - The composer "+" menu is fed by `agent_capabilities` (lazy, on first open)
-  and keeps toggles as a local draft. **Save changes** sends one scoped
-  `agent_selection_update` merge-write; sending a chat message does not save
-  the draft implicitly.
+  and keeps toggles as a local draft. **Save changes** sends one
+  `agent_selection_update`; sending a chat message does not save the draft
+  implicitly.
   Sections: Model (radio pick with the configured default tagged), Skills,
   Tools (two-level per-tool rows), MCP servers, Services (namespaces), plus a
   Connection-Hub entry that renders only when opening it can actually happen —
   a host that acks the `connection_hub.settings` surface command owns the
   open, and without an ack the served connections widget opens directly.
-- Saved toggles apply on the next eligible turn under the user's cache policy:
-  now, in the next conversation, or when the current cache is already cold.
-  The backend reads the conversation row per turn, so there is no session
-  invalidation. Switching conversations discards unsaved edits and loads that
-  conversation's selection. A chat-originated Capabilities window carries the
-  same conversation id. Only an independently mounted, unscoped widget edits
-  the baseline used to seed future conversations.
+- Saved capability toggles revise the resident Card immediately and affect the
+  next turn's live projection. Saved preference changes follow their selected
+  cache-policy timing. Switching conversations discards unsaved UI edits and
+  loads the same live Card selection alongside that conversation's preference
+  record. A chat-originated Capabilities window carries the conversation id so
+  preference updates retain the right scope.
 
 The engine API detail (state branch, draft/save methods, switch-race handling) is owned by
 [Chat Engine](../../../npm/components-core/chat-engine-README.md); the

@@ -76,6 +76,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.conversation.read import (
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.conversation.target_scope import (
     admitted_conversation_targets,
+    conversation_target_applications,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.conversation.target_policy import (
     ConversationTargetPolicy,
@@ -444,9 +445,24 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
             else named_service_caller(ctx).bundle_id
         )) or ""
         admitted = admitted_conversation_targets()
-        allowed = set(admitted or ())
-        if own:
+        tenant = _text(getattr(ctx, "tenant", ""))
+        project = _text(getattr(ctx, "project", ""))
+        allowed = set(
+            conversation_target_applications(
+                admitted or (),
+                tenant=tenant,
+                project=project,
+            )
+        )
+        # No managed admission scope means an in-process platform caller. Its
+        # own application remains the trusted default. A present but empty
+        # scope is an explicit Card denial and must not be widened here.
+        if admitted is None and own:
             allowed.add(own)
+
+        def _is_allowed(bundle_id: str) -> bool:
+            return bundle_id in allowed or "*" in allowed
+
         if requested and self._bundle_validator is not None:
             if not await self._bundle_validator(ctx, requested):
                 return NamedServiceResponse.error_response(
@@ -456,7 +472,12 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
                     provider=self.provider_identity(),
                     namespace=request.namespace or NAMESPACE,
                 )
-        target = requested or own or (next(iter(allowed)) if len(allowed) == 1 else "")
+        exact_allowed = allowed - {"*"}
+        target = (
+            requested
+            or (own if own and _is_allowed(own) else "")
+            or (next(iter(exact_allowed)) if len(exact_allowed) == 1 else "")
+        )
         if not target:
             return NamedServiceResponse.error_response(
                 code="conversation_target_required" if allowed else "conversation_target_not_granted",
@@ -468,7 +489,7 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
                 provider=self.provider_identity(),
                 namespace=request.namespace or NAMESPACE,
             )
-        if target not in allowed:
+        if not _is_allowed(target):
             return NamedServiceResponse.error_response(
                 code="conversation_target_not_granted",
                 message=f"This caller's Card does not grant conversation reads for {target!r}.",
@@ -487,18 +508,17 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
                     provider=self.provider_identity(),
                     namespace=request.namespace or NAMESPACE,
                 )
-            if target != own and target not in policy.configured:
+            configured = set(
+                conversation_target_applications(
+                    policy.configured,
+                    tenant=tenant,
+                    project=project,
+                )
+            )
+            if target != own and target not in configured and "*" not in configured:
                 return NamedServiceResponse.error_response(
                     code="conversation_target_outside_ceiling",
                     message=f"The agent's configuration does not permit conversation reads for {target!r}.",
-                    status=403,
-                    provider=self.provider_identity(),
-                    namespace=request.namespace or NAMESPACE,
-                )
-            if target in policy.disabled:
-                return NamedServiceResponse.error_response(
-                    code="conversation_target_disabled",
-                    message=f"The user's capability selection disabled conversation reads for {target!r}.",
                     status=403,
                     provider=self.provider_identity(),
                     namespace=request.namespace or NAMESPACE,

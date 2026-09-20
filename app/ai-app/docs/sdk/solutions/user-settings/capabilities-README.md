@@ -1,185 +1,228 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/user-settings/capabilities-README.md
-title: "Conversation-Scoped Agent Capabilities"
-summary: "How users control what an agent may use in each conversation: the admin inventory as ceiling, an optional user baseline for future conversations, conversation-scoped selections, explicit Save changes, runtime narrowing, and realm-described service cards."
+title: "Agent Capability Control And Selection"
+summary: "How an app descriptor becomes a live credentialless Control Card, how a resident agent Card stores the user's positive selection, and how their current intersection drives both runtime exposure and the three-state capability picker."
 status: current
-tags: ["sdk", "solutions", "user-settings", "capabilities", "agent-selection", "named-services", "picker", "widget"]
-updated_at: 2026-07-12
+tags: ["sdk", "solutions", "capabilities", "agent-selection", "control-card", "connection-hub", "picker", "widget"]
+updated_at: 2026-09-20
 keywords:
   [
     "agent_capabilities",
     "agent_selection_update",
+    "agent capability Control Card",
+    "resident agent Card",
+    "capability projection",
+    "allowed_selected",
+    "allowed_unselected",
+    "not_allowed",
     "capability picker",
-    "capabilities widget",
-    "per-user tools",
-    "conversation-scoped agent settings",
-    "Save changes",
-    "namespace narrowing",
-    "object.action",
-    "service card",
-    "realm presentation",
-    "deny-list",
-    "supported_models",
+    "descriptor capability authority",
+    "application resource",
+    "conversation targets",
   ]
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-cards/delegated-cards-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/user-settings/user-settings-solution-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/how/how-to-construct-react-agent-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/conversation/search-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-accounts/delegated-accounts-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/providers-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-caching-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/work-with-subagents-README.md
 ---
-# Conversation-Scoped Agent Capabilities
+# Agent Capability Control And Selection
 
-An agent's configuration grants it tools, skills, services, and models. Each
-user then decides which of those the agent may use in **this conversation**.
-The composer picker edits a local draft and persists it only when the user
-presses **Save changes**; the runtime enforces that exact conversation row on
-every turn. A dedicated widget manages the user baseline from which new
-conversations start. This doc owns that surface end to end.
+An application descriptor says what one hosted agent may use. KDCube turns
+that declaration into a live Connection Hub boundary so a descriptor change,
+a user's choice, the picker, and the next agent turn cannot disagree. The
+descriptor remains the ceiling; the signed-in user chooses a positive subset
+inside it.
 
-## The model: ceiling → pick → enforcement
+This page owns the KDCube capability-projection and picker contract. Connection
+Hub owns Card persistence, revisioning, composition, drift, and enforcement;
+see [Delegated Access Cards](../connections/delegated-cards/delegated-cards-README.md).
+
+## One live projection, two consumers
 
 ```text
-ADMIN INVENTORY (bundles.yaml)          the ceiling
-  surfaces.as_consumer.agents.<id>      tools/skills/MCP/namespaces
-  supported_models                      the model list users may pick from
-        |
-        v  agent_capabilities (read: inventory + saved selection + coverage)
-CONVERSATION SELECTION (deny-list)      narrows, never widens
-  user baseline (or application fallback) -> materialized once
-  picker toggles -> local draft -> explicit Save changes
-  -> agent_selection_update(conversation_id)
-  clamped on write to the live inventory; system tools stay locked on
-  persisted per (user, app, conversation, agent) in user_bundle_props
-        |
-        v  applied at turn start (apply_user_agent_selection)
-RUNTIME NARROWING                       denied = uncallable
-  denied tool groups/tools    -> removed from the turn's tool config
-  denied namespaces           -> gone from roster and dispatch
-  denied operations/actions   -> rejected at named-service dispatch
-  model pick                  -> overlays the strong decision role
+APP + AGENT DESCRIPTOR
+  capability_authority                  executable ceiling
+  capability_metadata                   labels, descriptions, presentation
+  delegated_catalog operation grants    service-operation -> grant vocabulary
+              |
+              v  agent_capability.sync
+STABLE CREDENTIALLESS CONTROL CARD
+  exact resource urn:kdcube:app:<tenant>:<project>:<app>:<agent>
+  current descriptor authority; composition = AND
+              |
+              | linked when the user's stable resident agent Card is created
+              v
+STABLE RESIDENT AGENT CARD
+  positive capabilities explicitly selected by this user
+              |
+              v  live Card composition on every read/turn
+EFFECTIVE PROJECTION = current Control authority ∩ resident selection
+              |
+              +-- runtime tool/skill/service/target exposure
+              +-- picker state for the same catalog rows
 ```
 
-Two operations carry the whole flow, both on the agent's app:
-`agent_capabilities` (POST, read: the pickable inventory, the conversation's
-saved selection, consent coverage) and `agent_selection_update` (POST,
-explicit merge-write of the draft). In chat, both carry `conversation_id`.
-Storage shape, default/materialization rules, merge/clamp semantics, and the pending
-cache-policy delta are owned by the
-[User Settings Solution](user-settings-solution-README.md); the inventory's
-config source is owned by
-[How To Construct A ReAct Agent](../../agents/react/how/how-to-construct-react-agent-README.md).
+The effective Card `projection` returned by `agent_capability.sync` is the one
+capability list used for actual exposure. The current runtime translates that
+positive list into its existing internal disabled-map adapter and then narrows
+the tool config, skill config, named-service dispatcher, conversation targets,
+resource operations, resource families, and subagent installation. That
+adapter is not another authority source. `agent_capabilities` annotates the
+picker catalog from the same sync result.
 
-## Selection granularity
+Platform system tools are outside this user-selectable boundary. Every
+descriptor capability is inside it. If the live Card projection cannot be
+resolved, selectable capabilities close for the turn and the picker marks
+them not allowed; preference-store availability never widens that result.
 
-| Level | Deny key | Effect |
+## Authority is data, presentation is metadata
+
+The producer sends structurally separate fields:
+
+- `capability_authority` contains only stable capability identities grouped by
+  family;
+- `capability_metadata` contains bounded display material such as titles and
+  descriptions;
+- standard `resource_grants`, `resource_operations`, and
+  `named_service_operations` carry Connection Hub enforcement authority.
+
+`tool_traits`, ANNOUNCE text, labels, descriptions, connected-account status,
+and other presentation details do not become constraints merely because the
+picker displays them. Conversely, a label cannot make a capability callable.
+The descriptor revision evidence covers the authority independently of its
+presentation.
+
+For named services, the producer reads the operation and its grants directly
+from the owning app's
+`config.delegated_catalog.named_service_namespaces.*.tools` declaration. That
+is the operation-to-grant map used by Connection Hub; there is no second map in
+the picker or runtime.
+
+## The three picker states
+
+Each selectable row has exactly one authority state:
+
+| State | Meaning | Picker behavior | Runtime behavior |
+| --- | --- | --- | --- |
+| `allowed_selected` | The current Control Card permits it and the resident Card selects it. | Checked and editable. | Exposed. |
+| `allowed_unselected` | The current Control Card permits it, but the resident Card does not select it. | Unchecked and editable. | Not exposed. |
+| `not_allowed` | It appears in the live descriptive catalog but is outside the current Control authority, or the projection is unavailable. | Unchecked, disabled, and labeled **Not permitted**; expandable details remain readable. | Not exposed. |
+
+Selecting one operation selects only that operation. Sharing a claim with a
+sibling operation does not select the sibling visually or operationally. A
+parent row that is not allowed also makes its nested rows not allowed.
+
+The descriptor can offer these user-selectable families:
+
+| Family | Selection unit | Effect when absent from the projection |
 | --- | --- | --- |
-| Model | `model: {provider, model}` pick (not a denial) | Overlays the strong decision role; `null` returns to the configured default. Only `supported_models` entries are pickable. |
-| Skill | `skills: [<id>]` | Skill drops from the agent's gallery. |
-| Tool group | `tools: {<alias>: true}` | The whole group leaves the turn's tool config. System groups (`io_tools`, `ctx_tools`) stay locked on. |
-| Individual tool | `tools: {<alias>: [<name>]}` | One tool leaves the group; siblings stay. |
-| MCP server | `mcp: {<server_id>: true}` | Server and all its tools drop. |
-| MCP tool | `mcp: {<server_id>: [<name>]}` | One listed tool drops (wildcard servers subtract via `denied_tools`). |
-| Namespace | `named_services: {<ns>: true}` | The realm leaves the roster and dispatch entirely. |
-| Namespace operation | `named_services: {<ns>: ["object.search", ...]}` | The operation is rejected at named-service dispatch for this user's turns. |
-| Named action | `named_services: {<ns>: ["object.action.<name>"]}` | Exactly that action name is rejected at dispatch; sibling actions still ride `object.action`. |
-| Subagents | `subagents: true` | Delegation leaves the agent's turns: the spawner is not installed, `react.delegate` is absent from the catalog, and the delegation guidance is absent from the instructions. |
+| Python tools | group or individual tool | Removed from the turn's tool config. |
+| MCP | server or listed tool | Removed from the MCP tool config. |
+| Named services | namespace or operation/action | Removed from the roster or rejected before provider dispatch. |
+| App resources | resource or operation | Rejected at the governed resource operation boundary. |
+| Skills | concrete skill id | Removed from every skill consumer. |
+| Conversation targets | exact application resource | Rejected before conversation storage is read. |
+| Delegated resource families | family id | Not projected to the resident caller. |
+| Subagents | one `enabled` capability | Spawner, tool, and guidance are not installed. |
 
-Deny keys clamp on write against the live inventory: operations clamp to the
-configuration's allowed set, actions to the realm's declared action names,
-the subagents toggle to the ability actually being offered — a stored
-selection never references anything outside the grant.
+## Creation, edits, and descriptor changes
 
-Most of the pickable inventory comes from what the admin granted under
-`surfaces.as_consumer.agents.<id>`. Subagent delegation joins it from the
-react agent config: `react: agents: <id>: subagents: true` puts the ability
-in the inventory, default ON for users (absent = not offered; see
-[Work With Subagents](../../agents/react/work-with-subagents-README.md)).
-The catalog exposes it as the `subagents` entry with its picker copy —
-helpers can raise the quality of hard tasks, and each helper runs on
-additional model calls billed to the user's account, so the paying user
-decides — the same principle as the model pick, where the admin declares the
-allowed list and the user picks their own price/quality point.
+The Control Card id is deterministic for the grantor, descriptor issuer kind,
+and exact app/agent resource. The resident agent Card id is deterministic for
+the grantor and `kdcube-agent:<app>:<agent>` caller profile. Neither id includes
+the selected capability set.
 
-## The picker: one body, three shells
+On first bootstrap, KDCube creates or resolves both Cards, links the Control
+Card to the resident Card, and starts the resident selection empty. A
+pre-Control-Card installation is the one compatibility exception: if a legacy
+PostgreSQL deny map exists, it is converted once into the equivalent positive
+selection so an existing user's choices survive migration. PostgreSQL does
+not remain capability authority after that bootstrap.
 
-The capability picker is one component
-(`useCapabilityPickerBody` in `@kdcube/components-react/chat`) rendered into
-three presentations. Interaction state (toggles, spotlight, the confirm
-picker) lives above the shells, so switching mid-interaction keeps it.
+Descriptor reconciliation and user selection are independent revisions:
 
-| Shell | Where | When it is the right form |
-| --- | --- | --- |
-| Composer popover | The chat composer's "+" button | Draft and save the current conversation's model and capabilities. |
-| Expanded modal | The popover's expand affordance (canvas-modal shell, Esc/backdrop/collapse) | The same current-conversation draft with room for service-card descriptions. |
-| `capabilities` widget | Served full-page by the agent's app; mountable on any scene | Uses the `conversation_id` supplied by a chat-originated `capabilities.open`; when independently mounted with no id, manages the user baseline for future conversations. |
-
-The two chat shells share one draft. Closing and reopening the picker in the
-same conversation keeps it; switching conversations drops unsaved edits.
-**Save changes** sends one partial patch bound to the current conversation id.
-A save already in flight is reconciled only if that conversation is still
-open, so a late response cannot overwrite another conversation's picker.
-
-The served widget follows the standard widget contract (auth + CONFIG
-handshake; see
-[App Widget Integration](../../bundle/bundle-widget-integration-README.md)),
-registers as `@ui_widget(alias="capabilities")` with its build mapping under
-`config.ui.widgets.capabilities`, and takes the agent from widget config
-(`?agent=` scene param or the handshake's `agentId`), defaulting to the
-app's default agent. A `capabilities.open` command may also supply the active
-`conversation_id`; the widget forwards it on both read and update operations.
-
-That is how the baseline row is populated: only an independently mounted,
-unscoped capabilities read or update reaches `agent_selection:<agent_id>`.
-Chat-originated windows carry the conversation id and never write it. If the
-row has never been written, a new conversation starts from the application's
-configured inventory and configured model. Hosts must present the unscoped
-widget as **defaults for future conversations**; opening it as though it were
-the current conversation editor would silently change scope.
-
-## Service cards: realms describe themselves
-
-An expanded namespace renders as a service card built ONLY from the realm's
-own self-description — the same contract the agent reads through
-`provider.about`/`object.schema`. A realm author declares, in the provider
-spec's metadata (see
-[Named-Service Providers](../../namespace-services/providers-README.md)):
-
-| Declaration | Renders as |
+| Change | Result |
 | --- | --- |
-| `presentation.about` | The purpose line under the realm label ("Read, search, and send email from the mail accounts you connect."). |
-| `presentation.third_party` | The dependency line ("Works with your Slack workspace through your connected Slack account."). |
-| `object_kinds` (name → one-liner) | The compact "Objects: message · attachment · account" line, full descriptions in the tooltip. |
-| `presentation.operations` / `presentation.actions` (name → label + description) | Group summaries and detail rows: the human names ("Send email") title each entry and join into its group's summary line; the grammar token rides the detail row as a mono hint. |
-| `connected_accounts` (provider_id, connector_app_id, claims, `claims_by_operation`, provider_label, claim_labels) | Per-entry "via your connected Google account · send mail" lines and the consent chips. |
+| Descriptor removes a capability | The Control Card revision removes it; the next live intersection denies it without changing the resident selection or credential. |
+| Descriptor adds a capability | It appears as `allowed_unselected`; no existing resident Card gains it. The user must select it explicitly. |
+| User changes a visible selection | `agent_selection_update` replaces the visible positive selection on the resident Card. |
+| Labels or other metadata change | The picker can show the new presentation without treating it as authority. |
 
-The card presents the realm's entries as three human capability groups —
-Read / Create & update / Actions — classified from the realm's own entries
-(named actions always land in Actions; operation tokens classify by verb).
-Each group is one toggle, summarized by its entries' human labels; expanding
-a group's details reveals the per-entry rows, each still a toggle (the
-namespace-operation/action granularity above). Entries the admin excluded
-collapse to one quiet expandable line per service; its tooltip names the
-admin fix path (`namespaces.<ns>.allowed`). An INTENTIONAL exclusion with a
-declared note (`namespaces.<ns>.excluded.<op>.reason` in the consumer
-descriptor) renders that reason on its row instead of the admin sentence —
-"Reading rides the context tools — the agent pulls task refs directly" —
-with no admin tooltip: the capability is served through another path by
-design, so no fix is pending. The same declaration's `agent_hint` drives the
-in-turn reroute on the dispatch denial (fix actor `agent`, see
-[Named-Service Providers](../../namespace-services/providers-README.md)).
-A namespace whose realm is unresolvable expands to exactly "This service
-hasn't described itself yet." — the honest state; the UI invents no copy.
+The remint rule depends on the authorization representation. A static or
+embedded credential grant never grows because a descriptor/catalog grew; it
+needs an explicit new grant and, for snapshot credentials, re-consent or
+re-minting. This hosted-agent capability relationship is pointer-backed: the
+credential continues to identify the resident Card, while the current Control
+Card and resident selection are resolved live. Revising descriptor authority
+therefore does not remint that credential. A newly offered capability still
+stays unselected until the user chooses it.
 
-## Consent and cache cost (pointers)
+## Resource selectors and data ownership
 
-- Coverage chips (CONNECTED / CONSENT) show each row's connected-account
-  state read-only; the CONSENT chip seeds the consent plan with exactly the
-  unmet claims — semantics owned by
-  [Delegated Accounts](../connections/delegated-accounts/delegated-accounts-README.md).
-- Effective claims recompute over the narrowed set: a user who denied
-  `object.action.send` is never asked for the send claim — same doc.
-- A toggle on a warm conversation may rebuild the prompt cache; the confirm
-  picker and the user-held policy that govern this are owned by
-  [ReAct Context Caching](../../agents/react/context-caching-README.md).
+An application capability resource has five fixed parts:
+
+```text
+urn:kdcube:app:<tenant>:<project>:<application>:<agent>
+```
+
+`*` is valid only as a complete application or agent segment. It matches one
+segment and never consumes `:`, so
+`urn:kdcube:app:<tenant>:<project>:*:*` means every app and every agent in that
+one tenant/project deployment. It cannot cross the tenant or project boundary.
+
+Target breadth and data ownership are independent. A project may permit an
+agent to target all apps and agents with that selector while each conversation
+read still binds to the current authenticated/delegated user's rows. Reading a
+different user's data additionally requires the explicit
+`conversations:read:any_user` grant. Broad target selection does not imply that
+grant.
+
+For an explicit conversation target, registry membership is only existence
+evidence. An unknown app returns `404 conversation_bundle_not_found`; a known
+app outside the live Card/descriptor/user selection returns `403` with the
+refusing-layer code. Registration alone never authorizes a target. The full
+boundary is documented in [Conversation Search](../conversation/search-README.md).
+
+## Operations and picker shells
+
+Two app operations carry the surface:
+
+- `agent_capabilities` reads the descriptive catalog, preference choices, and
+  current Card projection, then annotates every row with its authority state.
+- `agent_selection_update` saves a capability draft as a positive resident
+  Card selection. The same request may update model, instruction,
+  presentation, and cache preferences in PostgreSQL; those fields are not
+  Card authority.
+
+The picker body (`useCapabilityPickerBody` in
+`@kdcube/components-react/chat`) is rendered in the composer popover, its
+expanded modal, and the served `capabilities` widget. The shells share one
+draft and save only on **Save changes**. Closing and reopening retains the
+draft for the active chat; changing conversations drops unsaved UI state. A
+conversation id scopes model/instruction/presentation/cache preferences. The
+resident Card capability selection is the user's live selection for that
+app/agent and is not duplicated into a conversation row.
+
+## Preferences, consent, and service descriptions
+
+Model, instruction, presentation, and cold-cache-policy choices remain typed
+preferences in `user_bundle_props`; see the
+[User Settings Solution](user-settings-solution-README.md). A preference-store
+failure falls back to configured preference defaults while Card capability
+authority remains closed to its effective projection.
+
+Connected-account coverage is also separate. Coverage chips describe whether
+the selected operation's provider claims are satisfied. Selecting an operation
+does not bypass demand-driven consent, and two operations that require the same
+claim remain distinct selections. See
+[Delegated Accounts](../connections/delegated-accounts/delegated-accounts-README.md).
+
+Expanded named-service cards render their labels, descriptions, object kinds,
+operations, actions, and connected-account requirements from the provider's
+self-description. Missing self-description is shown as unavailable descriptive
+content; the UI does not invent authority or copy. Provider declaration details
+live in [Named-Service Providers](../../namespace-services/providers-README.md).

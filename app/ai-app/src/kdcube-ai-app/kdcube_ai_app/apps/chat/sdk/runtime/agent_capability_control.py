@@ -648,7 +648,7 @@ def disabled_from_projection(
             ),
             "",
         )
-        target_key = bundle_id or declared_resource
+        target_key = declared_resource or bundle_id
         if target_key and not target:
             denied_targets[target_key] = True
     if denied_targets:

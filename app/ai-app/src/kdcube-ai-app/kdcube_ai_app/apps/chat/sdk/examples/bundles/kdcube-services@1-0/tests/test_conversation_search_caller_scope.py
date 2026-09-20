@@ -21,6 +21,9 @@ from typing import Any
 import pytest
 
 from connection_hub.authority_registry import CredentialEnvelope
+from connection_hub.delegated_credentials.application_resources import (
+    application_resource,
+)
 from connection_hub.delegated_credentials.catalog.authorization import (
     ActiveCatalogCapabilities,
 )
@@ -75,6 +78,18 @@ AGENT_ID = "lg-react"
 AGENT_CLIENT = f"kdcube-agent:{AGENT_BUNDLE}:{AGENT_ID}"
 EXTERNAL_CLIENT = "https://claude.ai/oauth/claude-code-client-metadata"
 OTHER_BUNDLE = "workspace@2026-03-31-13-36"
+DEPLOYMENT_APPLICATIONS = application_resource(
+    tenant="t",
+    project="p",
+    application="*",
+    agent="*",
+)
+OWN_APPLICATION = application_resource(
+    tenant="t",
+    project="p",
+    application=AGENT_BUNDLE,
+    agent="*",
+)
 USER = "user-1"
 
 RESOURCE = "*/api/integrations/bundles/*/*/kdcube-services@1-0/public/mcp/named_services*"
@@ -182,7 +197,7 @@ def _conv_module():
 
 
 @pytest.mark.asyncio
-async def test_hosted_target_policy_uses_source_bundle_and_saved_selection(monkeypatch):
+async def test_hosted_target_policy_uses_source_bundle_descriptor(monkeypatch):
     module = _conv_module()
     policy_module = sys.modules[module.hosted_conversation_target_policy.__module__]
     seen = {}
@@ -193,16 +208,7 @@ async def test_hosted_target_policy_uses_source_bundle_and_saved_selection(monke
             "kind": "named_service", "namespaces": {"conv": {"targets": [OTHER_BUNDLE]}},
         }]}}}}}
 
-    class _Selections:
-        def __init__(self, **kwargs):
-            seen["store"] = kwargs
-
-        async def get_selection(self, **kwargs):
-            seen["selection"] = kwargs
-            return {"disabled": {"conversation_targets": {OTHER_BUNDLE: True}}}
-
     monkeypatch.setattr(policy_module, "get_bundle_props", _props)
-    monkeypatch.setattr(policy_module, "UserAgentSelectionStore", _Selections)
     monkeypatch.setattr(
         policy_module, "named_service_caller",
         lambda _ctx: SimpleNamespace(bundle_id=AGENT_BUNDLE, agent_id=AGENT_ID),
@@ -211,14 +217,8 @@ async def test_hosted_target_policy_uses_source_bundle_and_saved_selection(monke
         SimpleNamespace(tenant="t", project="p", user_id=USER, conversation_id="conv-now"),
         redis="redis", pg_pool="pool",
     )
-    assert resolved == ConversationTargetPolicy(
-        configured=(OTHER_BUNDLE,), disabled=(OTHER_BUNDLE,)
-    )
+    assert resolved == ConversationTargetPolicy(configured=(OTHER_BUNDLE,))
     assert seen["props"] == ("redis", "t", "p", AGENT_BUNDLE)
-    assert seen["selection"] == {
-        "user_id": USER, "bundle_id": AGENT_BUNDLE,
-        "agent_id": AGENT_ID, "conversation_id": "conv-now",
-    }
 
 
 @pytest.fixture
@@ -365,7 +365,7 @@ def _mcp_request(
     client_id: str,
     *,
     operation: str = "object.search",
-    targets: tuple[str, ...] = (),
+    targets: tuple[str, ...] = (OWN_APPLICATION,),
     claims: tuple[str, ...] = ("conversations:read",),
     grantor_permissions: tuple[str, ...] = (),
 ):
@@ -444,7 +444,9 @@ async def test_mcp_a_hosted_agent_searches_its_own_application(backend):
 
 @pytest.mark.usefixtures("local_bundle_loading")
 async def test_mcp_an_external_client_has_no_implicit_conversation_target(backend):
-    admission = managed_named_service_admission(_mcp_request(EXTERNAL_CLIENT))
+    admission = managed_named_service_admission(
+        _mcp_request(EXTERNAL_CLIENT, targets=())
+    )
 
     response = await _through_bundle_registry(admission, _search(), routing_bundle=SERVICES_BUNDLE)
 
@@ -455,7 +457,9 @@ async def test_mcp_an_external_client_has_no_implicit_conversation_target(backen
 
 @pytest.mark.usefixtures("local_bundle_loading")
 async def test_mcp_an_external_client_can_name_only_a_granted_application(backend):
-    admission = managed_named_service_admission(_mcp_request(EXTERNAL_CLIENT, targets=(OTHER_BUNDLE,)))
+    admission = managed_named_service_admission(
+        _mcp_request(EXTERNAL_CLIENT, targets=(DEPLOYMENT_APPLICATIONS,))
+    )
 
     response = await _through_bundle_registry(
         admission, _search({"bundle_id": OTHER_BUNDLE}), routing_bundle=SERVICES_BUNDLE,
@@ -514,7 +518,11 @@ async def test_native_door_a_hosted_agent_searches_its_own_application(backend):
     )
     admission = native_agent_admission_from_state(
         selector=selector,
-        state={"granted": True, "resource": RESOURCE},
+        state={
+            "granted": True,
+            "resource": RESOURCE,
+            "conversation_targets": [OWN_APPLICATION],
+        },
     )
 
     response = await _through_bundle_registry(admission, _search(), routing_bundle=AGENT_BUNDLE)
@@ -544,7 +552,11 @@ async def test_native_cross_bundle_read_requires_card_target(backend):
 
     allowed = native_agent_admission_from_state(
         selector=selector,
-        state={"granted": True, "resource": RESOURCE, "conversation_targets": [OTHER_BUNDLE]},
+        state={
+            "granted": True,
+            "resource": RESOURCE,
+            "conversation_targets": [DEPLOYMENT_APPLICATIONS],
+        },
     )
     response = await _through_bundle_registry(
         allowed, _search({"bundle_id": OTHER_BUNDLE}), routing_bundle=AGENT_BUNDLE,
@@ -590,7 +602,7 @@ async def _through_relay(
     selector: dict,
     actor: dict,
     request: NamedServiceRequest,
-    targets: tuple[str, ...] = (),
+    targets: tuple[str, ...] = (OWN_APPLICATION,),
     claims: tuple[str, ...] = ("conversations:read",),
 ):
     message = SimpleNamespace(
@@ -675,7 +687,8 @@ async def test_relay_cross_bundle_read_requires_hub_card_target(registry, backen
 
     allowed = await _through_relay(
         registry, selector=selector, actor=_relay_actor(),
-        request=_search({"bundle_id": OTHER_BUNDLE}), targets=(OTHER_BUNDLE,),
+        request=_search({"bundle_id": OTHER_BUNDLE}),
+        targets=(DEPLOYMENT_APPLICATIONS,),
     )
     assert allowed.ok, allowed.error
     assert backend.search_kwargs["bundle_id"] == OTHER_BUNDLE
@@ -707,7 +720,7 @@ async def test_relay_an_application_call_searches_its_source_application(registr
 
 def _native_admission(
     *,
-    targets: tuple[str, ...] = (),
+    targets: tuple[str, ...] = (OWN_APPLICATION,),
     claims: tuple[str, ...] = ("conversations:read",),
 ):
     selector = native_agent_admission_selector(
@@ -732,7 +745,7 @@ async def _through_read_door(
     registry: NamedServiceRegistry,
     request: NamedServiceRequest,
     *,
-    targets: tuple[str, ...] = (),
+    targets: tuple[str, ...] = (OWN_APPLICATION,),
     claims: tuple[str, ...] = ("conversations:read",),
     ambient_permissions: tuple[str, ...] = (),
 ):
@@ -870,7 +883,11 @@ async def test_external_mcp_client_has_no_implicit_target_for_any_read(
 ):
     request = _read_request(read_kind)
     admission = managed_named_service_admission(
-        _mcp_request(EXTERNAL_CLIENT, operation=request.operation)
+        _mcp_request(
+            EXTERNAL_CLIENT,
+            operation=request.operation,
+            targets=(),
+        )
     )
 
     response = await _through_bundle_registry(

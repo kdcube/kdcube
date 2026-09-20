@@ -1,15 +1,20 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Elena Viter
 
-"""The per-user agent-selection settings records — a concrete store on the
-generic user-settings core (``store.UserSettingsStore``).
+"""Per-user agent behavior preferences on the generic settings store.
 
 The user-default record is keyed ``agent_selection:<agent_id>``. A
 conversation's effective selection is keyed
 ``conversation:<conversation_id>:agent_selection:<agent_id>`` in the same
-``user_bundle_props`` table. Conversation rows own the capability/model pick;
-the user-default row supplies their initial value and owns the standing cache
-policy. The value is a deny-list record:
+``user_bundle_props`` table. Conversation rows own model, instruction, and
+presentation picks; the user-default row supplies their initial values and
+owns the standing cache policy.
+
+``disabled`` remains in the value as a compatibility and migration seed for
+records written before resident Agent Cards became authoritative. Current
+delegated capability authority and selection live on the agent's linked
+Connection Hub Cards; this PostgreSQL field does not authorize or deny a live
+operation. The compatibility record is shaped as follows:
 
     {
       "schema_version": 1,
@@ -27,9 +32,9 @@ policy. The value is a deny-list record:
       "updated_at": "<iso>"
     }
 
-Absent record = full configured set (nothing disabled). Writes are merge-writes
-of partial toggles, clamped against the live inventory catalog when one is
-provided, so the selection can only ever narrow the configured set.
+Old callers can still merge and clamp ``disabled`` while their values are
+migrated. Absence of this compatibility record says nothing about current
+capability authority.
 
 ``model`` is the one PICK in the record (a choice from the admin-declared
 ``supported_models`` list, applied to the strong decision role for the user's
@@ -450,9 +455,10 @@ class UserAgentSelectionStore(UserSettingsStore):
         """Resolve the selection for a conversation or the user default.
 
         A missing conversation row inherits the user default. ``materialize``
-        freezes that inherited model/capability selection for the conversation
-        with an insert-if-absent; standing cache policy remains on the default
-        row. A due ``next_conversation`` default is promoted before seeding.
+        freezes inherited behavior preferences for the conversation with an
+        insert-if-absent; live capabilities continue to resolve from the
+        resident Agent Card. Standing cache policy remains on the default row.
+        A due ``next_conversation`` default is promoted before seeding.
         """
         conversation = str(conversation_id or "").strip()
         default = await self._get_exact_selection(

@@ -3,7 +3,7 @@ id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/conversation/search-README.
 title: "Conversation Search"
 summary: "Recover decisions, sources, and prior work from the same user's current or earlier conversations through one identity-safe search used by agents, apps, MCP clients, REST, and the chat UI."
 tags: ["sdk", "solutions", "conversation", "search", "conv", "memory-realm", "agent-tools", "named-service-provider", "rank-weights", "rrf"]
-updated_at: 2026-09-18
+updated_at: 2026-09-20
 keywords:
   [
     "conversation search",
@@ -22,6 +22,8 @@ keywords:
     "POST /api/cb/conversations search",
     "scope conversation user agent",
     "snippet fallback",
+    "conversation target card projection",
+    "deployment-bounded application selector",
   ]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/conversational-memory-search-README.md
@@ -295,27 +297,40 @@ optional `filters.bundle_id`:
    its client identity (`kdcube-agent:<bundle>:<agent>`) or the validated source
    bundle on a relayed application call; the provider never uses the serving
    kdcube-services bundle as the source.
-2. For another bundle, the source agent descriptor lists the exact target at
+2. For another bundle, the source agent descriptor lists an application
+   selector at
    `surfaces.as_consumer.agents.<agent>.tools[].namespaces.conv.targets` on a
-   `kind: named_service` connection. The effective Connection Hub Card also
-   contains that target in `kdcube.conversation_targets`. This Card property
-   is a finite list, composed with the project Control Card when linked.
-3. An external OAuth caller has no own bundle. Its Card lists a finite target
-   before it can read any conversation. A single target is the default; with
-   multiple targets the caller supplies `bundle_id`.
-4. A user may disable any displayed target, including the hosted agent's own,
-   in the capabilities picker. The picker shows the source bundle and only
-   configured cross-bundle targets on the effective Card; its saved choice
-   removes access without adding a target to the descriptor or Card.
+   `kind: named_service` connection. Current descriptors use typed resources
+   such as `urn:kdcube:app:<tenant>:<project>:<application>:*`; each wildcard
+   occupies one segment, so `...:<tenant>:<project>:*:*` covers applications
+   only inside that deployment. Legacy exact bundle ids remain readable during
+   migration.
+3. The linked Control Card limits that descriptor inventory and the resident
+   Agent Card records the user's positive selection. Connection Hub derives
+   `kdcube.conversation_targets` from their live effective capability
+   projection. It is a transport view of the same authority, not another
+   target list. Newly published selectors are unselected until the user saves
+   a new Card revision.
+4. An external OAuth caller has no own bundle. Its Card must select a target
+   before it can read any conversation. A single exact target is the default;
+   with multiple targets or a broad application selector the caller supplies
+   `bundle_id`.
+
+Application breadth and data ownership are independent. Selecting all
+applications does not select another user: storage remains scoped to the
+authenticated user. A request for a different user additionally requires the
+payload-dependent `conversations:read:any_user` authority.
 
 The target guard is shared by `object.search`, `object.list`, `object.get`,
 exports, and conversation file reads through managed MCP, native calls, and
 Data Bus relay. An unknown explicit bundle answers `404
 conversation_bundle_not_found`. An existing target refused by the Card, the
-hosted agent's descriptor, or the user's choice answers `403` with a code naming
-the refusing layer. The target is applied to storage reads, including turn logs
-and file materialization. The model supplies only a requested target, never
-the caller identity or its authority.
+hosted agent's descriptor, or the resident selection answers `403` with a code
+naming the refusing layer. Validation deliberately establishes existence
+before Card membership, preserving the `404`/`403` distinction. The target is
+applied to storage reads, including turn logs and file materialization. The
+model supplies only a requested target, never the caller identity or its
+authority.
 
 ### Let a person search their own conversations
 

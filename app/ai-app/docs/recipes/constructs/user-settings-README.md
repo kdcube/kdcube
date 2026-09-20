@@ -1,10 +1,10 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/recipes/constructs/user-settings-README.md
 title: "Recipe: App User Settings"
-summary: "Steps to give an app durable user settings over user_bundle_props: choose the setting scope, define its typed key and record, clamp/merge on write, expose explicit operations, save deliberate UI drafts, and apply the setting at runtime."
+summary: "Steps to give an app durable non-security preferences over user_bundle_props: choose the scope, define a typed record, normalize and merge writes, expose explicit operations, save deliberate UI drafts, and apply configured fallbacks at runtime."
 status: current
 tags: ["recipes", "constructs", "user-settings", "user_bundle_props", "store", "operations"]
-updated_at: 2026-07-12
+updated_at: 2026-09-20
 keywords:
   [
     "app user settings recipe",
@@ -40,7 +40,8 @@ the ceiling and fallback when the scoped row or field is absent.
 Keep out: secrets (user secret store) and conversation **execution state**
 (turns, timeline payloads, cache warmness, summaries, artifacts). A durable
 choice whose intended scope is one conversation belongs here and uses an
-exact conversation key.
+exact conversation key. Authorization, consent, and capability selection also
+stay out: use their owning security stores and fail-closed boundaries.
 
 ## 2. Pick the subsystem/key convention
 
@@ -77,15 +78,16 @@ class MyAppSettingsStore(UserSettingsStore):
         ...
 ```
 
-The complete shipped exemplar is `UserAgentSelectionStore`
+One shipped exemplar is the preference half of `UserAgentSelectionStore`
 (`kdcube_ai_app/apps/chat/sdk/solutions/user_settings/agent_selection.py`):
-a structured record with its own deep merge, clamped against the live
-inventory on write.
+a structured model/instruction/presentation/cache-policy record with its own
+deep merge and option normalization. Its `disabled` shape is migration
+compatibility for pre-Card capability choices, not a pattern for new stores.
 
-The two invariants to copy exactly: **merge-writes** (one write carries only
+The two invariants to copy exactly are **merge-writes** (one write carries only
 what changed and preserves sibling fields from its read snapshot) and
-**clamp-on-write** (a choice outside what config grants is stripped or
-ignored; reads additionally recompute effective = configured ∩ chosen).
+**normalize-on-write** (a preference outside the configured option set is
+stripped or ignored, and reads resolve stale choices to declared defaults).
 Concurrent writes to the same exact key are last-writer-wins; serialize them
 when stronger ordering is required. Use insert-if-absent when materializing an
 inherited scoped value so a first read cannot replace a simultaneous write.
@@ -107,30 +109,32 @@ async def myapp_settings_update(self, data=None, **kwargs):
 ```
 
 Declare `user_types` explicitly — an operation without a declared visibility
-is open to ALL callers. Shipped exemplars:
-`agent_capabilities`/`agent_selection_update` (entrypoint base) and
-`memories_widget_preferences`/`memories_widget_preferences_update`.
+is open to ALL callers. `memories_widget_preferences` and
+`memories_widget_preferences_update` are a pure settings example.
+`agent_capabilities` and `agent_selection_update` intentionally coordinate two
+owners in one UI save: preferences use this store, while capability authority
+uses the resident Connection Hub Card.
 
 ## 5. UI round-trip
 
 Read once (lazy, on surface open); keep edits as a local draft; save only on an
-explicit user command; send the exact scope plus only the changed fields; then
-reconcile from the returned clamped record. The chat composer uses
-`conversation_id` and exposes **Save changes**. A chat-originated
-`capabilities.open` command carries that same id into the served widget. An
-independently mounted Capabilities widget omits it and therefore edits the
-user baseline from which future conversations start. Never switch those
-scopes silently in a host UI.
+explicit user command; send the exact scope plus only changed fields; then
+reconcile from the returned normalized record. The chat composer uses
+`conversation_id` for model, instruction, presentation, and cache preferences
+and exposes **Save changes**. An independently mounted settings surface may
+omit it to edit a future-conversation baseline. Never switch scopes silently
+in a host UI.
 
 The composer "+" menu and the memories widget are the two shipped
 round-trips; the chat engine's capabilities branch
 (`loadAgentCapabilities` / `updateAgentSelection` /
 `saveAgentSelectionChanges`) is the client-side pattern to copy.
 
-## 6. Apply per turn, fail open
+## 6. Apply preferences at their owning boundary
 
-Read the exact scoped record fresh at the runtime application point and treat
-every failure as "use the configured behavior":
+Read the exact scoped preference record at the runtime application point. For
+ordinary behavior preferences, a read failure means "use the configured
+preference":
 
 ```python
 try:
@@ -139,6 +143,12 @@ except Exception:
     settings = {}   # configured defaults; the turn always proceeds
 ```
 
-Shipped application points: `BaseWorkflow.apply_user_agent_selection` (agent
-selection: narrowing, model pick, cold-cache policy) and the memory
-announce/tools honoring `memory_enabled` + `memory_scope`.
+Shipped application points are the preference portion of
+`BaseWorkflow.apply_user_agent_selection` (model, instruction, presentation,
+and cache policy) and the memory announce/tools honoring `memory_enabled` and
+`memory_scope`.
+
+This fail-open fallback does not apply to security decisions. In the same
+workflow, an unavailable Connection Hub capability projection closes all
+selectable capabilities. Identity, consent, Card authority, and other fences
+must follow their own fail-closed contracts.

@@ -5,6 +5,10 @@ from __future__ import annotations
 
 import pytest
 
+from connection_hub.delegated_credentials.application_resources import (
+    application_resource,
+)
+
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
     NamedServiceContext,
     NamedServiceRequest,
@@ -156,17 +160,11 @@ async def test_a_requested_bundle_id_replaces_the_default_scope():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("configured,disabled,expected", [
-    ((), (), "conversation_target_outside_ceiling"),
-    (("other-app",), ("other-app",), "conversation_target_disabled"),
-])
-async def test_cross_bundle_target_requires_admin_ceiling_and_user_choice(
-    configured, disabled, expected
-):
+async def test_cross_bundle_target_requires_descriptor_ceiling():
     backend = FakeBackend()
 
     async def policy(_ctx):
-        return ConversationTargetPolicy(configured=configured, disabled=disabled)
+        return ConversationTargetPolicy()
 
     async def validator(_ctx, _bundle_id):
         return True
@@ -182,25 +180,88 @@ async def test_cross_bundle_target_requires_admin_ceiling_and_user_choice(
             NamedServiceContext(), _search_request({"bundle_id": "other-app"})
         )
     assert response.status == 403
-    assert response.error.code == expected
+    assert response.error.code == "conversation_target_outside_ceiling"
     assert backend.search_kwargs == {}
 
 
 @pytest.mark.asyncio
-async def test_user_can_disable_own_conversation_target():
+async def test_empty_managed_card_selection_disables_own_conversation_target():
     backend = FakeBackend()
-
-    async def policy(_ctx):
-        return ConversationTargetPolicy(disabled=("caller-app",))
-
     provider = make_conversation_search_named_service_provider(
         context_factory=lambda c: ConversationSearchContext(user_id="u", bundle_id="caller-app"),
         search_backend_factory=lambda c: backend,
+    )
+    with bind_conversation_targets(()):
+        response = await provider.object_search(NamedServiceContext(), _search_request({}))
+    assert response.status == 403
+    assert response.error.code == "conversation_target_not_granted"
+    assert backend.search_kwargs == {}
+
+
+@pytest.mark.asyncio
+async def test_deployment_bounded_wildcard_target_allows_registered_application():
+    backend = FakeBackend()
+    selector = application_resource(
+        tenant="tenant-a",
+        project="project-a",
+        application="*",
+        agent="*",
+    )
+
+    async def validator(_ctx, _bundle_id):
+        return True
+
+    async def policy(_ctx):
+        return ConversationTargetPolicy(configured=(selector,))
+
+    provider = make_conversation_search_named_service_provider(
+        context_factory=lambda c: ConversationSearchContext(
+            user_id="u", bundle_id="caller-app"
+        ),
+        search_backend_factory=lambda c: backend,
+        bundle_validator=validator,
         target_policy_factory=policy,
     )
-    response = await provider.object_search(NamedServiceContext(), _search_request({}))
+    context = NamedServiceContext(tenant="tenant-a", project="project-a")
+    with bind_conversation_targets((selector,)):
+        response = await provider.object_search(
+            context,
+            _search_request({"bundle_id": "workspace@1-0"}),
+        )
+
+    assert response.ok
+    assert backend.search_kwargs["bundle_id"] == "workspace@1-0"
+
+
+@pytest.mark.asyncio
+async def test_typed_target_cannot_cross_project_boundary():
+    backend = FakeBackend()
+    selector = application_resource(
+        tenant="tenant-a",
+        project="other-project",
+        application="*",
+        agent="*",
+    )
+
+    async def validator(_ctx, _bundle_id):
+        return True
+
+    provider = make_conversation_search_named_service_provider(
+        context_factory=lambda c: ConversationSearchContext(
+            user_id="u", bundle_id="caller-app"
+        ),
+        search_backend_factory=lambda c: backend,
+        bundle_validator=validator,
+    )
+    context = NamedServiceContext(tenant="tenant-a", project="project-a")
+    with bind_conversation_targets((selector,)):
+        response = await provider.object_search(
+            context,
+            _search_request({"bundle_id": "workspace@1-0"}),
+        )
+
     assert response.status == 403
-    assert response.error.code == "conversation_target_disabled"
+    assert response.error.code == "conversation_target_not_granted"
     assert backend.search_kwargs == {}
 
 

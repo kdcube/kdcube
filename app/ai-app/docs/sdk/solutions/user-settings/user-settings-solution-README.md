@@ -1,10 +1,10 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/user-settings/user-settings-solution-README.md
 title: "User Settings Solution"
-summary: "The typed user-settings construct over user_bundle_props: application fallbacks, optional user baselines, durable conversation-scoped choices, merge-write/clamp semantics, the shipped settings stores, and how settings reach runtime and UI."
+summary: "The typed user-settings construct over user_bundle_props: durable preference records, explicit scope, merge and clamp semantics, configured fallbacks, and the boundary between PostgreSQL preferences and Connection Hub capability authority."
 status: current
-tags: ["sdk", "solutions", "user-settings", "user_bundle_props", "preferences", "agent-selection", "conversation-settings", "storage"]
-updated_at: 2026-07-12
+tags: ["sdk", "solutions", "user-settings", "user_bundle_props", "preferences", "conversation-settings", "storage"]
+updated_at: 2026-09-20
 keywords:
   [
     "user_bundle_props",
@@ -12,12 +12,12 @@ keywords:
     "UserSettingsStore",
     "UserAgentSelectionStore",
     "memory preferences",
-    "agent_selection key",
+    "agent preferences",
     "conversation-scoped settings",
     "merge-write",
-    "clamp on write",
     "cache_policy",
     "pending delta",
+    "legacy capability seed",
   ]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/user-settings/capabilities-README.md
@@ -25,222 +25,138 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/how/how-to-construct-react-agent-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-caching-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/user-memories-overview-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/npm/components-core/chat-engine-README.md
 ---
 # User Settings Solution
 
-User settings are the platform's home for **durable user choices**: what a
-signed-in user decided about how an app behaves for them, available across
-devices and applied fresh at the owning runtime boundary. A setting family
-decides its scope. Memory preferences are platform-wide. Agent selections are
-durable **per conversation**; an optional user baseline can seed future
-conversations. One typed record store carries all of them.
+User settings are the platform home for durable, non-secret user preferences:
+what a signed-in user chose about how an app behaves, available across devices
+and read at the runtime boundary that owns the choice. Each setting family
+defines its scope, typed key, defaults, and write semantics.
 
-## The storage model
+Capability authority is not a user-settings record. A hosted agent's current
+capabilities are the live intersection of its descriptor Control Card and the
+user's resident agent Card. PostgreSQL stores model, instruction,
+presentation, and cache preferences. The complete distinction is owned by
+[Agent Capability Control And Selection](capabilities-README.md).
 
-Everything rides one table, `user_bundle_props`, living in the tenant/project
-schema (`kdcube_<tenant>_<project>`):
+## Storage model
+
+All preference families use `user_bundle_props` in the tenant/project schema
+(`kdcube_<tenant>_<project>`):
 
 | Column | Meaning |
 | --- | --- |
-| `user_id` | The owning user (writes are always single-actor). |
-| `bundle_id` | The app the setting belongs to — a real app id, or a store-defined marker for platform-wide settings. |
-| `key` | The setting record's typed address inside the store's namespace. It may carry an exact scope such as `conversation:<id>:`. |
-| `value_json` | The record (JSONB), shaped and versioned by the owning store. |
-| `subsystem` | Which store owns the row (`memory`, `agents`, …; default `bundle`). |
-| `created_at` / `updated_at` | Row lifecycle. |
+| `user_id` | The owning user; writes are single-actor. |
+| `bundle_id` | The app the preference belongs to, or a store-defined marker for a platform-wide preference. |
+| `key` | The typed address inside that store, including exact entity or conversation scope when needed. |
+| `value_json` | The versioned preference record. |
+| `subsystem` | The owning store (`memory`, `agents`, and app-defined names). |
+| `created_at` / `updated_at` | Record lifecycle. |
 
-Primary key `(user_id, bundle_id, key)`; a supporting index over
-`(user_id, subsystem, bundle_id, key, updated_at DESC)` serves store scans.
-Each store creates the table idempotently (`ensure_schema`), so any one of
-them bootstraps the construct.
+The primary key is `(user_id, bundle_id, key)`. A store is a thin typed layer
+over this table. It owns one `subsystem`, key convention, `schema_version`,
+defaults, normalization, and merge behavior. `UserSettingsStore` in
+`kdcube_ai_app.apps.chat.sdk.solutions.user_settings.store` provides the
+generic record access. Apps add a concrete store rather than writing rows ad
+hoc; see the [App User Settings recipe](../../../recipes/constructs/user-settings-README.md).
 
-A **store** is a thin, typed layer over this table that owns one record shape:
-its `subsystem`, its key convention, its `value_json` schema (with a
-`schema_version`), its defaults, and its write semantics. The generic core
-lives in `kdcube_ai_app/apps/chat/sdk/solutions/user_settings/` —
-`UserSettingsStore` (`store.py`) carries the table access and conventions, and
-concrete stores subclass it (the agent selection record in
-`agent_selection.py`). Apps add their own settings by adding a store, never by
-writing rows ad hoc — the
-[user-settings recipe](../../../recipes/constructs/user-settings-README.md)
-walks the steps.
+Secrets, credential handles, Card authority, turn logs, timelines, cache
+warmness, summaries, and artifacts do not belong in `value_json`.
 
-## The two shipped stores
+## Shipped stores
 
 ### Memory preferences (`subsystem='memory'`)
 
-`UserMemoryStore.get_user_preferences` / `set_user_preferences` keep the user's
-memory posture: `memory_enabled` (participate in durable memory at all) and
-`memory_scope` (single-channel vs identity-family reads), plus `updated_by` and
-free `metadata`. Convention worth copying when a setting is platform-wide
-rather than per-app: the row uses **`bundle_id='*'`** and `key='preferences'`,
-so one record governs the user's memory behavior across every app. An absent
-row reads as the permissive defaults (enabled, family scope), and writes merge
-over the stored record so toggling one field never clobbers the other. Memory
-semantics themselves are owned by
+`UserMemoryStore.get_user_preferences` and `set_user_preferences` keep
+`memory_enabled`, `memory_scope`, `updated_by`, and bounded metadata. This
+platform-wide preference uses `bundle_id='*'` and `key='preferences'`. An
+absent row reads as the declared defaults, and a partial write preserves
+sibling fields. Memory semantics live in
 [User Memories Overview](../../memory/user-memories-overview-README.md).
 
-### Agent selection (`subsystem='agents'`)
+### Agent preferences (`subsystem='agents'`)
 
-`UserAgentSelectionStore` uses two exact keys under the **real** `bundle_id`:
+`UserAgentSelectionStore` retains its historical class name but now owns
+preference fields, not live capability authority. It uses two keys under the
+real `bundle_id`:
 
-| Scope | Key | Owns |
+| Scope | Key | Current responsibility |
 | --- | --- | --- |
-| User baseline | `agent_selection:<agent_id>` | Optional initial model/capability selection for future conversations; standing `cache_policy`; a `next_conversation` pending delta. |
-| Conversation | `conversation:<conversation_id>:agent_selection:<agent_id>` | The effective model/capability selection for this conversation; a `when_cold` pending delta. |
+| User/app/agent baseline | `agent_selection:<agent_id>` | Default model, instruction and presentation picks; standing cache policy; a `next_conversation` pending preference delta. |
+| Conversation | `conversation:<conversation_id>:agent_selection:<agent_id>` | Materialized model, instruction and presentation picks for that conversation; a `when_cold` pending preference delta. |
 
-The conversation row is a full selection, not a sparse override. On its first
-capability read or first turn, the store inserts the current user baseline
-with `ON CONFLICT DO NOTHING`. If no baseline row exists, the seed is the
-application-configured behavior: nothing user-disabled and no model override.
-This freezes what that conversation uses while allowing the baseline to evolve
-for future conversations. No schema change, tag column, scan, or new table is
-required: the typed key is the scope.
-
-The two settings surfaces write these keys deliberately:
-
-- the chat picker always sends `conversation_id` and therefore writes the
-  conversation key;
-- the independently served Capabilities widget sends no `conversation_id` and
-  therefore writes the user baseline for future conversations.
-
-A conversation edit never updates the baseline implicitly. Conversely, a host
-must label the unscoped widget as **defaults for future conversations**, not as
-an expanded editor for the current conversation.
-
-```text
-configured inventory (admin ceiling)
-            |
-            v
-user baseline: agent_selection:main
-  disabled + model + standing cache_policy
-            |
-            | first read/turn; insert if absent
-            v
-conversation:conv-42:agent_selection:main
-  disabled + model for conv-42
-            |
-            | explicit "Save changes"
-            v
-next turn in conv-42 reads this exact row
-
-conv-43 starts independently from the user baseline
-```
-
-User-baseline example:
+The baseline is inserted into a conversation with `ON CONFLICT DO NOTHING` on
+first materialization. The conversation then owns its preference values while
+future conversations can start from a changed baseline.
 
 ```json
 {
   "schema_version": 1,
-  "disabled": {},
-  "model": null,
-  "cache_policy": {"model_switch": "confirm", "capability_toggle": "accept"},
-  "updated_at": "2026-07-12T12:00:00Z"
-}
-```
-
-Conversation example:
-
-```json
-{
-  "schema_version": 1,
-  "disabled": {
-    "tools": {"gmail": true, "web_tools": ["web_fetch"]},
-    "mcp": {"knowledge": ["kb_fetch"]},
-    "named_services": {"mail": ["object.action.send"]},
-    "skills": ["public.docx-press"]
-  },
   "model": {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
-  "updated_at": "2026-07-12T12:05:00Z"
+  "instructions": "concise",
+  "presentation": {"tool_catalog": "compact"},
+  "cache_policy": {"model_switch": "confirm", "capability_toggle": "confirm"},
+  "pending": null,
+  "updated_at": "2026-09-20T12:05:00Z"
 }
 ```
 
-- `disabled` — DENY-lists per category (python tool groups whole or per tool,
-  MCP servers whole or per tool, named-service namespaces whole or per
-  operation/action — `object.search`, `object.action.send` — skills). Absent
-  entry = enabled; absent record = the full configured set. The full
-  granularity map and the picker surfaces live in
-  [Conversation-Scoped Agent Capabilities](capabilities-README.md).
-- `model` — the single PICK from the admin-declared `supported_models` list;
-  absent = the configured default model runs.
-- `cache_policy` — the user's standing cold-cache policy per change class,
-  stored only on the user-baseline row
-  (`accept`, `confirm`, `defer_cold`, `defer_conversation`); admin config
-  supplies only the default and the allowed set.
-- `pending` — one deferred selection change awaiting its trigger. A
-  `next_conversation` delta sits on the user baseline and is promoted before a
-  different conversation is seeded. A `when_cold` delta sits on the current
-  conversation and is promoted when that conversation's cache is cold.
+- `model` is one choice from `supported_models`; absent or stale means the
+  configured default.
+- `instructions` is one declared instruction profile; absent or stale means
+  the declared default.
+- `presentation` contains declared presentation facets such as compact or full
+  tool and skill forms.
+- `cache_policy` is the user's standing policy within the administrator's
+  allowed set.
+- `pending` carries a deferred preference delta and its trigger.
 
-Selection semantics (what the record means at runtime) are owned by
-[How To Construct A ReAct Agent](../../agents/react/how/how-to-construct-react-agent-README.md);
-the cache consequences by [Context Caching](../../agents/react/context-caching-README.md).
+The record schema still understands `disabled` for compatibility with
+pre-Control-Card installations. `get_legacy_capability_seed` reads only the
+user baseline and supplies that deny map once when the resident agent Card is
+first created. The migration converts it to an equivalent positive Card
+selection. Current capability reads and writes then use Connection Hub; a
+conversation row is never a second capability authority source.
 
-## The semantics that make user settings safe
+## Preference semantics
 
-These rules hold for every store and are what distinguish the construct from a
-generic KV:
+- **Configuration bounds each preference.** Model, instruction, presentation,
+  and policy writes are normalized against their declared option sets. A stale
+  choice falls back to the configured preference value.
+- **Scope is explicit.** A request with `conversation_id` addresses that
+  conversation's preferences. An unscoped request addresses the baseline used
+  for future materialization. Hosts must label those scopes honestly.
+- **Partial writes preserve siblings.** Updating a model does not erase the
+  instruction profile or cache policy. Writes to one exact key are
+  last-writer-wins unless an app adds stronger coordination.
+- **Materialization is race-safe.** Insert-if-absent cannot replace a
+  simultaneous explicit write.
+- **Preference reads use configured fallbacks.** Missing storage or malformed
+  preference data does not break the turn. This fail-open rule applies only to
+  behavior preferences. It does not apply to capability authority, consent,
+  identity, or other security boundaries.
+- **Records are versioned.** `schema_version` evolves the JSON shape without a
+  table migration for every field.
 
-- **Config grants, the user chooses within the grant.** Writes are clamped
-  against the live inventory/allowed set at write time (out-of-inventory tool
-  names, models outside `supported_models`, policies outside the admin-allowed
-  set — all stripped), and reads recompute `effective = configured ∩ chosen`,
-  so a stale stored choice for a since-removed config entry is a harmless
-  no-op.
-- **Defaults have an explicit chain.** Config supplies the app ceiling and the
-  fallback when no user-baseline row exists. A new conversation inherits the
-  user baseline once, then owns its materialized selection. No migration
-  back-fills rows.
-- **Merge-writes, never clobbering siblings.** A write carries only what
-  changed (a partial patch); the store merges it over the stored record.
-  Toggling one tool never touches the model pick; setting the model never
-  touches the deny-lists in that write. The UI batches one conversation draft
-  behind **Save changes**. Truly concurrent writes to the same exact key are
-  last-writer-wins; callers should serialize them. First conversation
-  materialization is insert-if-absent, so it cannot replace a simultaneous
-  user write.
-- **Per-turn reads, fail-open.** The runtime reads the record fresh at the
-  turn's application point and treats every failure (missing pool, store
-  error, malformed record) as "use the configured behavior" — a broken
-  settings store never breaks the agent.
-- **Versioned records.** `schema_version` in `value_json` lets a store evolve
-  its shape without table changes.
-
-**What belongs here:** durable user choices, including a choice whose exact
-scope is one conversation — toggles, picks, standing policies, and
-notification/scope preferences. **What stays out:** conversation execution
-state (turns, timeline payloads, cache warmness, summaries, artifacts) and
-**secrets of any kind**. Tokens and credentials live in the user secret store
-behind the connections stack, never in `value_json`.
-
-## How settings reach runtime and UI
+## Runtime and UI flow
 
 ```text
-UI (widget / composer menu)
-  ├─ read op   (agent_capabilities, memories_widget_preferences)
-  │     → config-derived inventory/defaults + the scoped current record
-  ├─ local draft (model/tool/service/skill toggles)
-  ├─ explicit Save changes
-  │     → agent_selection_update(conversation_id, partial patch)
-  │     → merge-write, clamped server-side
-  └─ standalone capabilities widget (no conversation_id)
-        → manages the user baseline for future conversations
+composer / capabilities widget
+  -> agent_capabilities
+       live Card capability projection + typed preferences
+  -> local draft
+  -> explicit Save changes
+  -> agent_selection_update
+       capability draft -> resident Connection Hub Card
+       preference fields -> user_bundle_props at the explicit scope
 
-runtime (per turn)
-  └─ application point reads the record fresh and applies it fail-open
-     (agent selection: BaseWorkflow.apply_user_agent_selection narrows the
-      tool/skill configs, makes denied namespace operations/actions
-      uncallable at named-service dispatch, applies the model pick, honors
-      conversation selection + user-baseline cache_policy/pending;
-      memory: announce/tools honor memory_enabled + memory_scope)
+turn start
+  -> resolve current Control Card and resident Card (fail closed)
+  -> read scoped preferences (configured fallback on failure)
+  -> narrow executable capabilities, then apply preference overlays
 ```
 
-The ops pattern: read ops piggyback the current record on the config-derived
-payload (one round-trip for the picker); chat writes carry `conversation_id`,
-accept partial patches, and return the clamped scoped record for
-reconciliation; both declare visibility
-explicitly (registered users and above — an undeclared operation is open to
-all callers). The chat-side client detail (state branch, draft, explicit save,
-and conversation-switch race handling) is owned by
-[Chat Engine](../../npm/components-core/chat-engine-README.md).
+The capability picker can save both halves in one operation, but that transport
+convenience does not merge their authority models. Capability changes revise
+the resident Card immediately. Model, instruction, presentation, and deferred
+cache behavior retain their explicit baseline or conversation scope.

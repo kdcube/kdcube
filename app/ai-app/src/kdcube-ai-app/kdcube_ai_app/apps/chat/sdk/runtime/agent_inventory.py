@@ -47,7 +47,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.tool_config import (
     DEFAULT_AGENT_ID,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.conversation.target_policy import (
-    configured_conversation_targets,
+    configured_conversation_target_rows,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.client_tools import (
     NAMED_SERVICE_TOOLS_ALIAS,
@@ -1055,11 +1055,12 @@ def agent_capabilities_catalog(
         "tools": tools_out,
         "mcp": mcp_out,
         "named_services": namespaces_out,
-        "conversation_targets": [
-            {"bundle_id": target} for target in configured_conversation_targets(
-                bundle_props, _norm(agent_id) or default_agent_id
+        "conversation_targets": list(
+            configured_conversation_target_rows(
+                bundle_props,
+                _norm(agent_id) or default_agent_id,
             )
-        ],
+        ),
         "delegated_resource_families": resource_family_catalog_from_bundle_props(
             bundle_props,
             agent_id=_norm(agent_id) or default_agent_id,
@@ -1946,11 +1947,17 @@ def clamp_selection(
         if _norm_namespace(e.get("namespace"))
     }
     skill_ids = {_norm(s.get("id")) for s in (catalog.get("skills") or []) if _norm(s.get("id"))}
-    conversation_targets = {
-        _norm(entry.get("bundle_id"))
-        for entry in (catalog.get("conversation_targets") or [])
-        if isinstance(entry, Mapping) and _norm(entry.get("bundle_id"))
-    }
+    conversation_targets: set[str] = set()
+    for entry in catalog.get("conversation_targets") or []:
+        if not isinstance(entry, Mapping):
+            continue
+        resource = _norm(entry.get("resource"))
+        bundle_id = _norm(entry.get("bundle_id"))
+        if resource:
+            conversation_targets.add(resource)
+        if bundle_id and bundle_id != "*":
+            # Preserve legacy exact-bundle patches during Card migration.
+            conversation_targets.add(bundle_id)
     resource_tool_names: dict[str, set[str]] = {
         _norm(entry.get("resource_id")): {
             _norm(tool.get("operation") or tool.get("name"))

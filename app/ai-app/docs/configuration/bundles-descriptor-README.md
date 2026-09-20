@@ -3,8 +3,8 @@ id: repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-descriptor-README.m
 title: "Bundles Descriptor"
 summary: "Application registry and non-secret deployment configuration in bundles.yaml: default app, Git or local sources, module paths, readiness policy, and app-scoped config."
 tags: ["service", "configuration", "bundle", "bundle-registry", "deployment", "descriptor", "api-security"]
-keywords: ["bundle registry", "default bundle selection", "git bundle source", "local path bundle source", "bundle module mapping", "bundle configuration", "bundle inventory", "service.readiness", "application readiness policy", "file-backed bundle authority", "bundle reload workflow", "app-owned delegated catalog", "delegated_catalog", "operation csrf override"]
-updated_at: 2026-09-14
+keywords: ["bundle registry", "default bundle selection", "git bundle source", "local path bundle source", "bundle module mapping", "bundle configuration", "bundle inventory", "service.readiness", "application readiness policy", "file-backed bundle authority", "bundle reload workflow", "app-owned delegated catalog", "delegated_catalog", "agent capability Control Card", "operation grant mapping", "operation csrf override"]
+updated_at: 2026-09-20
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/descriptors-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/apps/app-with-agents-README.md
@@ -17,6 +17,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-operation-csrf-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/arch/proc/application-startup-health-and-readiness-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/user-settings/capabilities-README.md
 ---
 # Bundles Descriptor
 
@@ -391,6 +392,14 @@ The three declaration groups have different ownership:
 Operation IDs belong to the service contract, not to MCP, REST, or Data Bus.
 Every adapter carrying the same operation uses the same ID and reaches the same
 authorization policy.
+
+The resident-agent capability producer reads this exact
+`delegated_catalog.named_service_namespaces.*.tools` tree to translate each
+descriptor-selected namespace operation into its Connection Hub grants. The
+picker and runtime do not maintain a second operation-to-grant map. Capability
+labels, `tool_traits`, and other presentation metadata remain separate from
+that authority; see
+[Agent Capability Control And Selection](../sdk/solutions/user-settings/capabilities-README.md).
 
 During application reconciliation, the runtime starts with Connection Hub's
 effective base `connections` configuration and assembles declarations from all

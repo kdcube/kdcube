@@ -522,14 +522,44 @@ class BaseEntrypoint:
         if not any(row.get("namespace") == "conv" for row in catalog.get("named_services") or []):
             catalog["conversation_targets"] = []
             return catalog
+        from connection_hub.delegated_credentials.application_resources import (
+            application_resource,
+        )
+
+        identity = self._agent_selection_identity()
+        tenant = str(identity.get("tenant") or "").strip()
+        project = str(identity.get("project") or "").strip()
         own = self._named_services_bundle_id()
-        targets = {own} if own else set()
-        targets.update({
-            str(row.get("bundle_id") or "").strip()
-            for row in catalog.get("conversation_targets") or []
-        })
-        targets.discard("")
-        catalog["conversation_targets"] = [{"bundle_id": target} for target in sorted(targets)]
+        rows: dict[str, dict[str, Any]] = {}
+        for raw in catalog.get("conversation_targets") or []:
+            if not isinstance(raw, Mapping):
+                continue
+            row = dict(raw)
+            bundle_id = str(row.get("bundle_id") or "").strip()
+            resource = str(row.get("resource") or "").strip()
+            if not resource and bundle_id:
+                resource = application_resource(
+                    tenant=tenant,
+                    project=project,
+                    application=bundle_id,
+                    agent="*",
+                )
+            if not resource:
+                continue
+            row["resource"] = resource
+            rows[resource] = row
+        if own:
+            own_resource = application_resource(
+                tenant=tenant,
+                project=project,
+                application=own,
+                agent="*",
+            )
+            rows.setdefault(
+                own_resource,
+                {"bundle_id": own, "resource": own_resource},
+            )
+        catalog["conversation_targets"] = [rows[key] for key in sorted(rows)]
         return catalog
 
     RESIDENT_RESOURCE_CATALOG_BUDGET_SECONDS = 3.0

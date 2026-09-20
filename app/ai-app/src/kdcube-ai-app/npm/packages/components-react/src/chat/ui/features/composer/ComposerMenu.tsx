@@ -548,12 +548,14 @@ function ConversationTargetsSection({ inventory, disabled, toggle }: CapabilityR
       <SectionTitle>Conversations</SectionTitle>
       {targets.map((target) => {
         const bundleId = target.bundle_id
+        const targetId = target.resource ?? bundleId
         return (
           <MenuRow
-            key={bundleId}
-            label={bundleId}
-            checked={disabled.conversation_targets?.[bundleId] ? 'off' : 'on'}
-            onToggle={() => toggle({ conversation_targets: { [bundleId]: !disabled.conversation_targets?.[bundleId] } })}
+            key={targetId}
+            label={bundleId === '*' ? 'All applications' : bundleId}
+            sub={target.resource}
+            checked={disabled.conversation_targets?.[targetId] ? 'off' : 'on'}
+            onToggle={() => toggle({ conversation_targets: { [targetId]: !disabled.conversation_targets?.[targetId] } })}
             authorityState={target.authority_state}
           />
         )

@@ -314,7 +314,9 @@ export interface AgentCapabilitiesInventory {
   capability_states?: AgentCapabilityAuthorityStates
 }
 
-/** The saved deny-list. Absent key/entry = enabled (full configured set). */
+/** UI adapter derived from the positive resident Card projection. An absent
+ *  key means the visible catalog entry is selected. This is not an authority
+ *  record; saves are converted back to a positive Card selection. */
 export interface AgentSelectionDisabled {
   tools?: Record<string, true | string[]>
   mcp?: Record<string, true | string[]>
