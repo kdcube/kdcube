@@ -11,14 +11,14 @@ can be replaced without changing the provider contract.
 Scope model (per the named-services collaboration decisions):
 
 * default scope is the current user / grantor (`mode="self"`),
-* admin selected-user access is explicit (`mode="user"` + `user_id`) and is
-  expected to be gated by stronger grants at the managed boundary,
+* selected-user access is explicit (`mode="user"` + `user_id`) and the named-
+  service provider enforces its stronger permission before this facade runs,
 * all-tenant/all-project bulk export is deliberately NOT here — that stays a
   separate provider/admin operation.
 
 Authorization is not decided here. The facade resolves an effective user id and
-defensively validates the scope is well-formed; grant/consent enforcement is the
-managed boundary's responsibility (Connection Hub).
+defensively validates the scope is well-formed; the provider enforces payload-
+dependent scope while the managed boundary enforces operation and Card policy.
 
 `normalize_conversation` and `collapse_turn` are already SDK-owned; reusing them
 keeps `object.export` on the same record family as the direct
@@ -65,8 +65,8 @@ class ConversationReadScope:
     """Who the read is for.
 
     `mode="self"` reads the current caller's own conversations (`current_user_id`).
-    `mode="user"` reads a selected user's conversations (`user_id`) — an admin
-    path the managed boundary must have authorized with `:any_user` grants.
+    `mode="user"` reads a selected user's conversations (`user_id`) after the
+    provider has required `conversations:read:any_user` for a different user.
     """
 
     mode: str = SCOPE_SELF

@@ -36,6 +36,9 @@ from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.admission im
     NamedServiceAdmissionSelector,
     effective_named_service_operation,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.authority_scope import (
+    bind_named_service_claims,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import (
     NamedServiceError,
     NamedServiceRequest,
@@ -93,6 +96,7 @@ class DelegatedAccountExecutionScope:
     account_scope: Mapping[str, Any]
     client_id: str
     resource: str
+    claims: tuple[str, ...] = ()
     conversation_targets: tuple[str, ...] = ()
 
     @contextmanager
@@ -101,7 +105,9 @@ class DelegatedAccountExecutionScope:
             self.account_scope,
             client_id=self.client_id,
             resource=self.resource,
-        ), bind_conversation_targets(self.conversation_targets):
+        ), bind_named_service_claims(self.claims), bind_conversation_targets(
+            self.conversation_targets
+        ):
             yield
 
 
@@ -123,6 +129,7 @@ def _decision(
             account_scope=evaluation.account_scope,
             client_id=evaluation.client_id,
             resource=evaluation.resource,
+            claims=evaluation.claims,
             conversation_targets=evaluation.conversation_targets,
         )
     return NamedServiceAdmissionDecision.allow(

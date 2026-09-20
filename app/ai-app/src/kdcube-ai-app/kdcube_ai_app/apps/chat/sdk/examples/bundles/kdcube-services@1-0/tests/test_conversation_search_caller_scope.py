@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: MIT
 
-"""A conv search is scoped to the application that called, on every path.
+"""Every conversation read is scoped to the application that called.
 
 kdcube-services serves every `conv` call, so the bundle id on the provider's
 own request context is always kdcube-services. These tests drive the real
 dispatch of each path into the real provider wiring of this bundle: the managed
 MCP door and the native door through the bundle-registry transport, and a
 detached runtime through the Data Bus relay handler. Only bundle loading and
-the search backend are replaced.
+the read/search backends are replaced.
 """
 
 from __future__ import annotations
@@ -81,7 +81,9 @@ NAMED_SERVICES = {
     "namespaces": {
         "conv": {
             "tools": {
+                "list": {"operation": "object.list", "grants": ["conversations:read"]},
                 "search": {"operation": "object.search", "grants": ["conversations:read"]},
+                "get": {"operation": "object.get", "grants": ["conversations:read"]},
             },
         },
     },
@@ -93,8 +95,15 @@ CONNECTIONS = {
             "resources": [
                 {
                     "resource": RESOURCE,
-                    "grants": ["conversations:read"],
-                    "tools": {"named_services_search": {"grants": ["conversations:read"]}},
+                    "grants": [
+                        "conversations:read",
+                        "conversations:read:any_user",
+                    ],
+                    "tools": {
+                        "named_services_list": {"grants": ["conversations:read"]},
+                        "named_services_search": {"grants": ["conversations:read"]},
+                        "named_services_get": {"grants": ["conversations:read"]},
+                    },
                     "named_services": copy.deepcopy(NAMED_SERVICES),
                 },
             ],
@@ -107,6 +116,7 @@ class _Backend:
     def __init__(self) -> None:
         self.search_kwargs: dict[str, Any] = {}
         self.served_bundle_ids: list[Any] = []
+        self.materialize_calls: list[tuple[str, str]] = []
 
     async def search(self, **kwargs):
         self.search_kwargs = kwargs
@@ -117,6 +127,48 @@ class _Backend:
 
     async def get_turn_log(self, **kwargs):
         return {}
+
+    async def materialize_file(self, *, fi_ref, conversation_id=""):
+        self.materialize_calls.append((fi_ref, conversation_id))
+        return {
+            "ok": True,
+            "filename": "summary.md",
+            "mime": "text/markdown",
+            "size": 5,
+            "data": b"hello",
+        }
+
+
+class _ReadService:
+    def __init__(self) -> None:
+        self.list_requests = []
+        self.fetch_requests = []
+
+    async def list_user_conversations(self, request):
+        self.list_requests.append(request)
+        return [{
+            "conversation_id": "c1",
+            "user_id": USER,
+            "title": "One",
+            "turn_count": 1,
+        }]
+
+    async def fetch_conversation(self, request):
+        self.fetch_requests.append(request)
+        return {
+            "conversation_id": "c1",
+            "user_id": USER,
+            "turns": [{
+                "turn_id": "1",
+                "artifacts": [{
+                    "type": "artifact:assistant.file",
+                    "data": {"payload": {
+                        "filename": "summary.md",
+                        "artifact_path": "conv:fi:turn_1.files/summary.md",
+                    }},
+                }],
+            }],
+        }
 
 
 def _conv_module():
@@ -172,7 +224,12 @@ def backend() -> _Backend:
 
 
 @pytest.fixture
-def registry(monkeypatch, backend, tmp_path) -> NamedServiceRegistry:
+def read_service() -> _ReadService:
+    return _ReadService()
+
+
+@pytest.fixture
+def registry(monkeypatch, backend, read_service, tmp_path) -> NamedServiceRegistry:
     module = _conv_module()
 
     def _backend_for(**kwargs):
@@ -189,6 +246,7 @@ def registry(monkeypatch, backend, tmp_path) -> NamedServiceRegistry:
         bundle_id=SERVICES_BUNDLE,
         bundle_validator=_registered,
     )
+    provider._read_service_factory = lambda _ctx: read_service
     async def _policy(_ctx):
         return ConversationTargetPolicy(configured=(OTHER_BUNDLE,))
 
@@ -249,6 +307,26 @@ def _search(filters: dict | None = None) -> NamedServiceRequest:
     )
 
 
+def _read_request(
+    read_kind: str,
+    filters: dict | None = None,
+) -> NamedServiceRequest:
+    if read_kind == "search":
+        return _search(filters)
+    payload: dict[str, Any] = {
+        "operation": "object.list" if read_kind == "list" else "object.get",
+        "namespace": "conv",
+        "filters": dict(filters or {}),
+    }
+    if read_kind == "get":
+        payload["object_ref"] = "conv:conversation:c1"
+    elif read_kind == "file":
+        payload["object_ref"] = "conv:fi:conv_c1.turn_1.files/summary.md"
+    elif read_kind != "list":
+        raise AssertionError(f"unknown read kind: {read_kind}")
+    return NamedServiceRequest.from_dict(payload)
+
+
 async def _through_bundle_registry(admission: NamedServiceAdmission, request, *, routing_bundle: str):
     comm_context = _request_context(routing_bundle=routing_bundle)
     caller = bundle_operations.make_local_bundle_named_service_caller(
@@ -262,7 +340,13 @@ async def _through_bundle_registry(admission: NamedServiceAdmission, request, *,
         )
 
 
-def _mcp_request(client_id: str, *, targets: tuple[str, ...] = ()):
+def _mcp_request(
+    client_id: str,
+    *,
+    operation: str = "object.search",
+    targets: tuple[str, ...] = (),
+    claims: tuple[str, ...] = ("conversations:read",),
+):
     grant_record = {
         "client_id": client_id,
         "registry_access_id": "oauth-5aa44826664a0bdd",
@@ -270,7 +354,7 @@ def _mcp_request(client_id: str, *, targets: tuple[str, ...] = ()):
         "delegate_subject": f"integration:{client_id}:{USER}",
         "card_revision": 3,
         "catalog_version": CARD_VERSION,
-        "resource_grants": {RESOURCE: ["conversations:read"]},
+        "resource_grants": {RESOURCE: list(claims)},
         "account_scope": {},
         "named_services": copy.deepcopy(NAMED_SERVICES),
     }
@@ -279,7 +363,7 @@ def _mcp_request(client_id: str, *, targets: tuple[str, ...] = ()):
         attrs={
             "client_id": client_id,
             "grantor_subject": USER,
-            "grants": ["conversations:read"],
+            "grants": list(claims),
             "resource": RESOURCE,
         },
     )
@@ -295,7 +379,13 @@ def _mcp_request(client_id: str, *, targets: tuple[str, ...] = ()):
         credential=credential,
         resource=RESOURCE,
         request_resource=REQUEST_RESOURCE,
-        outer_operation="named_services_search",
+        outer_operation=(
+            "named_services_list"
+            if operation == "object.list"
+            else "named_services_get"
+            if operation == "object.get"
+            else "named_services_search"
+        ),
         card_composition=SimpleNamespace(effective_card=SimpleNamespace(
             properties={"kdcube.conversation_targets": list(targets)}
         )),
@@ -459,7 +549,15 @@ class _RelayRedis:
         self.store[key] = value
 
 
-async def _through_relay(registry, *, selector: dict, actor: dict, request: NamedServiceRequest, targets: tuple[str, ...] = ()):
+async def _through_relay(
+    registry,
+    *,
+    selector: dict,
+    actor: dict,
+    request: NamedServiceRequest,
+    targets: tuple[str, ...] = (),
+    claims: tuple[str, ...] = ("conversations:read",),
+):
     message = SimpleNamespace(
         tenant="t",
         project="p",
@@ -486,7 +584,10 @@ async def _through_relay(registry, *, selector: dict, actor: dict, request: Name
         assert call.request["payload"]["client_id"] == selector["client_id"]
         return BundleNamedServiceResult(
             value=NamedServiceResponse.ok_response(object={
-                "granted": True, "resource": RESOURCE, "conversation_targets": list(targets),
+                "granted": True,
+                "resource": RESOURCE,
+                "resource_claims": list(claims),
+                "conversation_targets": list(targets),
             })
         )
 
@@ -495,12 +596,12 @@ async def _through_relay(registry, *, selector: dict, actor: dict, request: Name
     return NamedServiceResponse.from_dict(result["data"]["response"])
 
 
-def _relay_actor() -> dict:
+def _relay_actor(*, permissions: tuple[str, ...] = ()) -> dict:
     return {
         "user_id": USER,
         "user_type": "registered",
         "roles": ["kdcube:role:registered"],
-        "permissions": [],
+        "permissions": list(permissions),
         "identity_authority": {},
         "session_id": "sess-1",
         "source_bundle_id": AGENT_BUNDLE,
@@ -567,3 +668,245 @@ async def test_relay_an_application_call_searches_its_source_application(registr
     assert response.ok, response.error
     assert backend.served_bundle_ids == [SERVICES_BUNDLE]
     assert backend.search_kwargs["bundle_id"] == AGENT_BUNDLE
+
+
+def _native_admission(
+    *,
+    targets: tuple[str, ...] = (),
+    claims: tuple[str, ...] = ("conversations:read",),
+):
+    selector = native_agent_admission_selector(
+        source_bundle_id=AGENT_BUNDLE,
+        source_agent_id=AGENT_ID,
+        client_id=AGENT_CLIENT,
+        grantor_user_id=USER,
+    )
+    return native_agent_admission_from_state(
+        selector=selector,
+        state={
+            "granted": True,
+            "resource": RESOURCE,
+            "resource_claims": list(claims),
+            "conversation_targets": list(targets),
+        },
+    )
+
+
+async def _through_read_door(
+    door: str,
+    registry: NamedServiceRegistry,
+    request: NamedServiceRequest,
+    *,
+    targets: tuple[str, ...] = (),
+    claims: tuple[str, ...] = ("conversations:read",),
+):
+    if door == "managed_mcp":
+        admission = managed_named_service_admission(
+            _mcp_request(
+                AGENT_CLIENT,
+                operation=request.operation,
+                targets=targets,
+                claims=claims,
+            )
+        )
+        return await _through_bundle_registry(
+            admission,
+            request,
+            routing_bundle=SERVICES_BUNDLE,
+        )
+    if door == "native":
+        return await _through_bundle_registry(
+            _native_admission(targets=targets, claims=claims),
+            request,
+            routing_bundle=AGENT_BUNDLE,
+        )
+    if door == "data_bus":
+        selector = native_agent_selector(
+            source_bundle_id=AGENT_BUNDLE,
+            source_agent_id=AGENT_ID,
+            client_id=AGENT_CLIENT,
+            grantor_user_id=USER,
+        )
+        return await _through_relay(
+            registry,
+            selector=selector,
+            actor=_relay_actor(),
+            request=request,
+            targets=targets,
+            claims=claims,
+        )
+    raise AssertionError(f"unknown read door: {door}")
+
+
+def _assert_not_executed(
+    read_kind: str,
+    backend: _Backend,
+    read_service: _ReadService,
+) -> None:
+    assert backend.search_kwargs == {}
+    assert backend.materialize_calls == []
+    assert read_service.list_requests == []
+    assert read_service.fetch_requests == []
+
+
+def _assert_executed_for_target(
+    read_kind: str,
+    target: str,
+    backend: _Backend,
+    read_service: _ReadService,
+) -> None:
+    if read_kind == "search":
+        assert backend.search_kwargs["bundle_id"] == target
+    elif read_kind == "list":
+        assert read_service.list_requests[-1].bundle_id == target
+    else:
+        assert read_service.fetch_requests[-1].bundle_id == target
+        if read_kind == "file":
+            assert backend.materialize_calls == [
+                ("conv:fi:conv_c1.turn_1.files/summary.md", "c1")
+            ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_bundle_loading")
+@pytest.mark.parametrize("door", ["managed_mcp", "native", "data_bus"])
+@pytest.mark.parametrize("read_kind", ["search", "list", "get", "file"])
+async def test_every_read_door_requires_and_honors_cross_bundle_target(
+    door,
+    read_kind,
+    registry,
+    backend,
+    read_service,
+):
+    request = _read_request(read_kind, {"bundle_id": OTHER_BUNDLE})
+
+    denied = await _through_read_door(door, registry, request)
+    assert denied.status == 403
+    assert denied.error.code == "conversation_target_not_granted"
+    _assert_not_executed(read_kind, backend, read_service)
+
+    allowed = await _through_read_door(
+        door,
+        registry,
+        request,
+        targets=(OTHER_BUNDLE,),
+    )
+    assert allowed.ok, allowed.error
+    _assert_executed_for_target(
+        read_kind,
+        OTHER_BUNDLE,
+        backend,
+        read_service,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_bundle_loading")
+@pytest.mark.parametrize("door", ["managed_mcp", "native", "data_bus"])
+@pytest.mark.parametrize("read_kind", ["search", "list", "get", "file"])
+async def test_every_read_door_returns_404_for_unknown_target(
+    door,
+    read_kind,
+    registry,
+    backend,
+    read_service,
+):
+    response = await _through_read_door(
+        door,
+        registry,
+        _read_request(read_kind, {"bundle_id": "missing@1-0"}),
+    )
+
+    assert response.status == 404
+    assert response.error.code == "conversation_bundle_not_found"
+    _assert_not_executed(read_kind, backend, read_service)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_bundle_loading")
+@pytest.mark.parametrize("read_kind", ["search", "list", "get", "file"])
+async def test_external_mcp_client_has_no_implicit_target_for_any_read(
+    read_kind,
+    backend,
+    read_service,
+):
+    request = _read_request(read_kind)
+    admission = managed_named_service_admission(
+        _mcp_request(EXTERNAL_CLIENT, operation=request.operation)
+    )
+
+    response = await _through_bundle_registry(
+        admission,
+        request,
+        routing_bundle=SERVICES_BUNDLE,
+    )
+
+    assert response.status == 403
+    assert response.error.code == "conversation_target_not_granted"
+    _assert_not_executed(read_kind, backend, read_service)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_bundle_loading")
+@pytest.mark.parametrize("door", ["managed_mcp", "native", "data_bus"])
+@pytest.mark.parametrize("read_kind", ["list", "get", "file"])
+async def test_every_read_door_denies_ungranted_cross_user_scope(
+    door,
+    read_kind,
+    registry,
+    backend,
+    read_service,
+):
+    response = await _through_read_door(
+        door,
+        registry,
+        _read_request(
+            read_kind,
+            {"scope": {"mode": "user", "user_id": "other-user"}},
+        ),
+    )
+
+    assert response.status == 403
+    assert response.error.code == "conversation_user_not_granted"
+    _assert_not_executed(read_kind, backend, read_service)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_bundle_loading")
+@pytest.mark.parametrize("door", ["managed_mcp", "native", "data_bus"])
+@pytest.mark.parametrize("read_kind", ["list", "get", "file"])
+async def test_every_read_door_honors_admitted_any_user_claim(
+    door,
+    read_kind,
+    registry,
+    backend,
+    read_service,
+):
+    response = await _through_read_door(
+        door,
+        registry,
+        _read_request(
+            read_kind,
+            {"scope": {"mode": "user", "user_id": "other-user"}},
+        ),
+        claims=("conversations:read", "conversations:read:any_user"),
+    )
+
+    assert response.ok, response.error
+    _assert_executed_for_target(
+        read_kind,
+        AGENT_BUNDLE,
+        backend,
+        read_service,
+    )
+
+    after_scope = await _through_read_door(
+        door,
+        registry,
+        _read_request(
+            read_kind,
+            {"scope": {"mode": "user", "user_id": "other-user"}},
+        ),
+    )
+    assert after_scope.status == 403
+    assert after_scope.error.code == "conversation_user_not_granted"

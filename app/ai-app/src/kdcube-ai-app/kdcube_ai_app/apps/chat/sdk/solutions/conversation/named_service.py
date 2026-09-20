@@ -47,6 +47,9 @@ from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
     build_default_operations,
     named_service_provider,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.authority_scope import (
+    admitted_named_service_claims,
+)
 
 from kdcube_ai_app.apps.chat.sdk.solutions.conversation.api import (
     ALLOWED_SCOPES,
@@ -101,6 +104,7 @@ PROVIDER_ID = "sdk.conversation"
 LOGGER = logging.getLogger("kdcube.sdk.conversation.named_service")
 
 _CONVERSATION_TRANSPORTS = (TRANSPORT_LOCAL, TRANSPORT_API)
+_ANY_USER_READ_PERMISSION = "conversations:read:any_user"
 
 
 def _conversation_operations() -> dict:
@@ -111,9 +115,9 @@ def _conversation_operations() -> dict:
 
 _CONVERSATION_OBJECT_KINDS = (OBJECT_KIND, CONVERSATION_OBJECT_KIND)
 
-# Advisory grant hints for the managed boundary (Connection Hub). NOT enforced
-# here: the provider makes no platform-role decisions — boundary policy owns
-# consent/enforcement. Selected-user access is expected to require `:any_user`.
+# Grant hints published to the managed boundary (Connection Hub). Operation
+# admission happens there; the provider also checks the payload-dependent
+# selected-user claim because the operation gate cannot infer `scope.user_id`.
 _CONVERSATION_GRANT_HINTS = {
     "object.list": ["conversations:read"],
     "object.search": ["conversations:read"],
@@ -364,19 +368,45 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
 
     # -- read/export scope + guards -----------------------------------------
 
-    def _read_scope(self, ctx: NamedServiceContext, request: NamedServiceRequest) -> ConversationReadScope:
+    def _read_scope(
+        self,
+        ctx: NamedServiceContext,
+        request: NamedServiceRequest,
+    ) -> ConversationReadScope | NamedServiceResponse:
         """Map the request onto a read scope. Default is the caller's own
-        conversations; an explicit `scope.mode="user"` + `user_id` selects a user
-        (an admin path the managed boundary is expected to have granted)."""
+        conversations; selecting another user requires explicit authority on
+        every transport because the operation gate cannot infer payload scope."""
         raw = request.filters.get("scope") or request.payload.get("scope") or {}
         if not isinstance(raw, dict):
             raw = {}
         mode = _text(raw.get("mode")).lower()
         selected = _text(raw.get("user_id"))
         use_selected = mode == READ_SCOPE_USER and bool(selected)
+        current = _text(ctx.user_id)
+        admitted_claims = set(admitted_named_service_claims() or ())
+        if (
+            use_selected
+            and selected != current
+            and _ANY_USER_READ_PERMISSION
+            not in {*ctx.permissions, *admitted_claims}
+        ):
+            return NamedServiceResponse.error_response(
+                code="conversation_user_not_granted",
+                message=(
+                    "Reading another user's conversations requires the "
+                    f"{_ANY_USER_READ_PERMISSION!r} permission."
+                ),
+                status=403,
+                details={
+                    "required_permission": _ANY_USER_READ_PERMISSION,
+                    "selected_user_id": selected,
+                },
+                provider=self.provider_identity(),
+                namespace=request.namespace or NAMESPACE,
+            )
         return ConversationReadScope(
             mode=READ_SCOPE_USER if use_selected else READ_SCOPE_SELF,
-            current_user_id=_text(ctx.user_id),
+            current_user_id=current,
             user_id=selected,
         )
 
@@ -615,6 +645,8 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
             scope = self._read_scope(ctx, request)
         except ConversationScopeError as exc:
             return self._scope_error(request, exc)
+        if isinstance(scope, NamedServiceResponse):
+            return scope
         filters = dict(request.filters or {})
         target = await self._target_bundle(ctx, request)
         if isinstance(target, NamedServiceResponse):
@@ -655,6 +687,8 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
             scope = self._read_scope(ctx, request)
         except ConversationScopeError as exc:
             return self._scope_error(request, exc)
+        if isinstance(scope, NamedServiceResponse):
+            return scope
         target = await self._target_bundle(ctx, request)
         if isinstance(target, NamedServiceResponse):
             return target
@@ -738,6 +772,8 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
         if self._read_service_factory is None:
             return self._read_not_configured(request)
         scope = self._read_scope(ctx, request)
+        if isinstance(scope, NamedServiceResponse):
+            return scope
         scoped = await self._read_service_factory(ctx).fetch_conversation(
             ConversationGetRequest(scope=scope, conversation_id=conv_id, bundle_id=target)
         )

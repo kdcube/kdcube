@@ -277,9 +277,10 @@ generated code in isolated runtimes over the relay (see the
 The provider advertises read operations only and carries advisory grant hints
 (`conversations:read`, `conversations:read:any_user` for selected-user access).
 The managed boundary checks the operation and effective Card; the provider
-checks the selected application target before reading storage. Registration follows
-the [discovery registry](../../namespace-services/discovery-README.md) like
-every other provider.
+checks both the selected application target and the payload-dependent
+`conversations:read:any_user` claim before reading storage. Registration
+follows the [discovery registry](../../namespace-services/discovery-README.md)
+like every other provider.
 
 Every `conv` call is served by kdcube-services, so the bundle on the provider's
 own request context names the provider, never the caller, and never scopes a

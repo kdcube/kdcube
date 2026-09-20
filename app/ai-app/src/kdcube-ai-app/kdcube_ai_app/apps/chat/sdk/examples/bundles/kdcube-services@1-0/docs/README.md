@@ -194,11 +194,13 @@ Operations and scope:
   realm (turn-level recovery), backed by the SDK search backend over the shared
   search plumbing, bound per request to the caller's tenant/project.
 - Default scope is the caller's own conversations. A selected-user scope
-  (`filters.scope = {mode: "user", user_id}`) is the admin path.
+  (`filters.scope = {mode: "user", user_id}`) requires the admitted
+  `conversations:read:any_user` claim.
 
-Boundary policy (grant vocabulary) — enforced by Connection Hub / the managed
-boundary, not by provider code. Suggested `named_services` namespace block for
-the delegated credential grant record:
+Boundary policy (grant vocabulary) is admitted by Connection Hub. The provider
+also enforces the selected-user claim because that choice is inside its decoded
+request. Suggested `named_services` namespace block for the delegated credential
+grant record:
 
 ```yaml
 named_services:

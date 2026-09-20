@@ -543,27 +543,40 @@ class BaseEntrypoint:
                     NamedServiceResponse,
                 )
 
-                result = await call_bundle_named_service(
-                    bundle_id=DEFAULT_CONNECTION_HUB_BUNDLE_ID,
-                    request={
-                        "namespace": NAMESPACE,
-                        "operation": AGENT_GRANT_CHECK,
-                        "payload": {
-                            "client_id": delegated_client_id_for_agent(own, agent_id),
-                            "namespace": "conv",
-                            "operation": "object.search",
-                        },
-                    },
-                )
-                value = getattr(result, "value", None)
-                response = NamedServiceResponse.coerce(value) if value is not None else None
-                state = response.object if response is not None and response.ok else {}
-                if isinstance(state, Mapping) and state.get("granted") is True:
+                for operation in ("object.search", "object.list", "object.get"):
+                    try:
+                        result = await call_bundle_named_service(
+                            bundle_id=DEFAULT_CONNECTION_HUB_BUNDLE_ID,
+                            request={
+                                "namespace": NAMESPACE,
+                                "operation": AGENT_GRANT_CHECK,
+                                "payload": {
+                                    "client_id": delegated_client_id_for_agent(own, agent_id),
+                                    "namespace": "conv",
+                                    "operation": operation,
+                                },
+                            },
+                        )
+                    except Exception:
+                        self.logger.log(
+                            "[agent_capabilities] conversation target Card probe "
+                            f"failed for {operation}",
+                            "WARNING",
+                        )
+                        continue
+                    value = getattr(result, "value", None)
+                    response = NamedServiceResponse.coerce(value) if value is not None else None
+                    state = response.object if response is not None and response.ok else {}
+                    if not isinstance(state, Mapping) or state.get("granted") is not True:
+                        continue
                     card_targets = state.get("conversation_targets")
                     if isinstance(card_targets, (list, tuple)):
                         targets.update(configured.intersection(
                             target for target in card_targets if isinstance(target, str)
                         ))
+                    # Conversation targets are Card properties, so the first
+                    # granted read operation supplies the complete target set.
+                    break
             except Exception:
                 self.logger.log("[agent_capabilities] conversation target Card probe failed", "WARNING")
         catalog["conversation_targets"] = [{"bundle_id": target} for target in sorted(targets)]

@@ -167,15 +167,68 @@ async def test_object_get_requires_id():
 
 @pytest.mark.asyncio
 async def test_selected_user_scope_routes_to_selected_user():
-    # Selected-user (admin) scope routes reads to the target user. Covered via
-    # object.list now that export is gone.
+    # Selected-user scope routes reads only when its stronger permission was
+    # projected into this invocation. Covered via object.list now that export
+    # is gone.
     svc = FakeReadService(summaries=[])
     provider = _provider(svc)
-    ctx = NamedServiceContext(user_id="admin-1")
+    ctx = NamedServiceContext(
+        user_id="admin-1",
+        permissions=("conversations:read:any_user",),
+    )
     resp = await provider.object_list(ctx, _req("object.list", filters={"scope": {"mode": "user", "user_id": "other-user"}}))
     assert resp.ok
     assert svc.list_scope.normalized_mode == "user"
     assert svc.list_scope.resolve() == "other-user"
+
+
+@pytest.mark.asyncio
+async def test_selected_current_user_does_not_require_any_user_permission():
+    svc = FakeReadService(summaries=[])
+    provider = _provider(svc)
+    resp = await provider.object_list(
+        NamedServiceContext(user_id="user-1"),
+        _req(
+            "object.list",
+            filters={"scope": {"mode": "user", "user_id": "user-1"}},
+        ),
+    )
+    assert resp.ok
+    assert svc.list_scope.resolve() == "user-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("read_kind", ["list", "get", "file"])
+async def test_cross_user_read_requires_any_user_permission(read_kind):
+    svc = FakeReadService(
+        summaries=[],
+        fetched={"conversation_id": "c1", "turns": []},
+    )
+    backend = _FileBackend({"ok": True, "data": b"secret"})
+    provider = _file_provider(backend, read_service=svc)
+    request = {
+        "list": _req("object.list"),
+        "get": _req("object.get", object_ref="conv:conversation:c1"),
+        "file": _req(
+            "object.get",
+            object_ref="conv:fi:conv_c1.turn_1.files/summary.md",
+        ),
+    }[read_kind]
+    request.filters["scope"] = {"mode": "user", "user_id": "other-user"}
+
+    response = await provider.dispatch(
+        NamedServiceContext(user_id="user-1"),
+        request,
+    )
+
+    assert response.status == 403
+    assert response.error.code == "conversation_user_not_granted"
+    assert response.error.details["required_permission"] == (
+        "conversations:read:any_user"
+    )
+    assert svc.list_scope is None
+    assert svc.fetch_scope is None
+    assert backend.calls == []
 
 
 @pytest.mark.asyncio
@@ -227,7 +280,7 @@ class _FileBackend:
         return dict(self._result)
 
 
-def _file_provider(backend, *, file_url_factory=None):
+def _file_provider(backend, *, file_url_factory=None, read_service=None):
     files = ("summary.md", "a.png", "chart.png", "missing.md", "big.bin")
     fetched = {
         "conversation_id": "c1", "user_id": "u",
@@ -240,7 +293,7 @@ def _file_provider(backend, *, file_url_factory=None):
     return make_conversation_search_named_service_provider(
         context_factory=lambda c: ConversationSearchContext(user_id=c.user_id or "", conversation_id=c.conversation_id or "", bundle_id="caller-app"),
         search_backend_factory=lambda c: backend,
-        read_service_factory=lambda c: FakeReadService(fetched=fetched),
+        read_service_factory=lambda c: read_service or FakeReadService(fetched=fetched),
         file_url_factory=file_url_factory,
         bundle_id="b",
     )
