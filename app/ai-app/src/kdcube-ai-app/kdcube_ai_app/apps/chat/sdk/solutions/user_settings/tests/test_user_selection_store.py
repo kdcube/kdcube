@@ -140,6 +140,26 @@ async def test_get_selection_absent_row_is_empty_denylist():
 
 
 @pytest.mark.asyncio
+async def test_legacy_capability_seed_distinguishes_missing_from_empty_row():
+    pool = _FakePool()
+    store = _store(pool)
+
+    assert await store.get_legacy_capability_seed(
+        user_id="u1", bundle_id="bundle@1-0", agent_id="main"
+    ) is None
+
+    await store.set_selection(
+        user_id="u1",
+        bundle_id="bundle@1-0",
+        agent_id="main",
+        patch={},
+    )
+    assert await store.get_legacy_capability_seed(
+        user_id="u1", bundle_id="bundle@1-0", agent_id="main"
+    ) == {}
+
+
+@pytest.mark.asyncio
 async def test_set_selection_merge_write_round_trip():
     pool = _FakePool()
     store = _store(pool)

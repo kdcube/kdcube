@@ -37,8 +37,9 @@
 # `disabled_category` slices it. The per-category wrappers below stay for callers
 # that need exactly one thing.
 #
-# Everything fails open: any absence or error yields no override, and the app's (or
-# the router's) configured default routes the turn.
+# Model and presentation preferences fail open to app defaults. Capability
+# authority is different: every turn resolves the live Connection Hub Card
+# projection, and an unavailable projection closes selectable capabilities.
 
 from __future__ import annotations
 
@@ -267,24 +268,76 @@ async def resolve_turn_selection_disabled(
 ) -> Dict[str, Any]:
     """THIS (user, conversation)'s WHOLE deny map for the ACTIVE ``agent_id``.
 
-    The block the capabilities picker saved — every category at once, in ONE store
-    read, so a lane that narrows tools AND servers AND namespaces does not pay
-    three round trips. Slice it with ``disabled_category`` (or the per-category
-    wrappers below).
+    The result is projected live from the descriptor Control Card intersected
+    with the user's agent Card. PostgreSQL remains the migration seed for a Card
+    that does not exist yet; after bootstrap it is not capability authority.
 
     What the admin declared under ``surfaces.as_consumer.agents.<id>`` is the
     CEILING; this is the user's subtraction from it. The effective set is always
     ceiling minus deny map — a selection can never widen an inventory, and a key
     the picker could not have offered simply matches nothing.
 
-    Fails open: any absence or error yields ``{}`` so the full declared inventory
-    stays in force."""
+    Fails closed: an unavailable Card projection returns a deny map covering the
+    current selectable catalog. Platform system tools remain outside this
+    user-selectable boundary."""
+    from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import (
+        agent_capability_identity,
+        deny_all_capabilities,
+        disabled_from_projection,
+        sync_agent_capability_projection,
+    )
+    from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import (
+        agent_capabilities_catalog,
+    )
+
+    identity = agent_capability_identity(entrypoint)
+    catalog_builder = getattr(entrypoint, "_agent_capabilities_catalog", None)
+    if callable(catalog_builder):
+        catalog = catalog_builder(agent_id)
+    else:
+        catalog = agent_capabilities_catalog(
+            getattr(entrypoint, "bundle_props", None),
+            agent_id,
+        )
+    initial_disabled = None
+    if getattr(entrypoint, "pg_pool", None) is not None:
+        try:
+            store_factory = getattr(entrypoint, "_agent_selection_store", None)
+            if callable(store_factory):
+                store = store_factory(identity)
+            else:
+                from kdcube_ai_app.apps.chat.sdk.solutions.user_settings import (
+                    UserAgentSelectionStore,
+                )
+
+                store = UserAgentSelectionStore(
+                    pg_pool=entrypoint.pg_pool,
+                    tenant=str(identity.get("tenant") or "default"),
+                    project=str(identity.get("project") or "default"),
+                )
+            initial_disabled = await store.get_legacy_capability_seed(
+                user_id=str(identity.get("user_id") or "anonymous"),
+                bundle_id=str(identity.get("bundle_id") or ""),
+                agent_id=agent_id,
+            )
+        except Exception:
+            initial_disabled = None
     try:
-        selection = await _load_selection(entrypoint, state, agent_id)
+        result = await sync_agent_capability_projection(
+            entrypoint,
+            catalog=catalog,
+            agent_id=agent_id,
+            initial_disabled=initial_disabled,
+        )
+        return disabled_from_projection(catalog, result["projection"])
     except Exception:
-        return {}
-    disabled = (selection or {}).get("disabled")
-    return dict(disabled) if isinstance(disabled, Mapping) else {}
+        return deny_all_capabilities(
+            catalog=catalog,
+            tenant=str(identity.get("tenant") or ""),
+            project=str(identity.get("project") or ""),
+            application=str(identity.get("bundle_id") or ""),
+            agent_id=agent_id,
+        )
 
 
 async def resolve_turn_disabled_tools(
@@ -302,7 +355,8 @@ async def resolve_turn_disabled_tools(
     named-service namespaces in their own categories (``resolve_turn_disabled_mcp``
     / ``resolve_turn_disabled_namespaces``).
 
-    Fails open: any error yields ``{}`` so every tool the admin allows stays bound.
+    Fails closed through the live Card resolver; an unavailable projection
+    denies every selectable tool while platform system tools remain available.
     """
     return disabled_category(
         await resolve_turn_selection_disabled(entrypoint, state, agent_id), DISABLED_TOOLS
@@ -323,7 +377,8 @@ async def resolve_turn_disabled_mcp(
     server the user turned off is never dialled and no bearer is ever read for it
     (``mcp_bridge.narrow_mcp_connections``).
 
-    Fails open: any error yields ``{}`` so every declared server stays bound."""
+    Fails closed through the live Card resolver; an unavailable projection
+    denies every selectable server."""
     return disabled_category(
         await resolve_turn_selection_disabled(entrypoint, state, agent_id), DISABLED_MCP
     )
@@ -341,7 +396,8 @@ async def resolve_turn_disabled_namespaces(
     (``namespaces.<ns>.allowed``); ``foreign_runtime.named_services`` turns the two
     into the surviving roster for the turn.
 
-    Fails open: any error yields ``{}`` so every declared namespace stays in force.
+    Fails closed through the live Card resolver; an unavailable projection
+    denies every selectable namespace.
     """
     return disabled_category(
         await resolve_turn_selection_disabled(entrypoint, state, agent_id),

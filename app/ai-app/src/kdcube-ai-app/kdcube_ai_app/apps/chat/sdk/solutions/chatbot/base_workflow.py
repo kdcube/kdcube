@@ -2919,21 +2919,20 @@ class BaseWorkflow():
             return safe_tool_config
 
     async def apply_user_agent_selection(self, tool_config: Any, skill_config: Any) -> tuple:
-        """Narrow the configured tool/skill configs to this user's saved selection.
+        """Apply live Card capability authority and stored user preferences.
 
-        The user's per-agent selection (a deny-list stored per user / bundle /
-        conversation / agent in ``user_bundle_props``, seeded from a user
-        default) can only remove entries from what the bundle config grants;
-        system tool groups stay locked on. FAILS OPEN:
-        no row, missing pool, store error — anything — returns the configs
-        unchanged. Also installs the per-turn named-service namespace deny-set
-        so denied namespaces vanish from the roster and from dispatch, and
-        applies the user's MODEL pick (validated against the agent's
-        ``supported_models`` list) to the strong decision role for this turn
-        via ``runtime_ctx.agent_role_models`` — the channel the ReAct runtimes
-        bind into the request role_models the model router overlays.
+        The current descriptor Control Card intersected with the user's agent
+        Card is the capability source on every turn. Its positive projection
+        narrows tools, skills, and named-service dispatch; an unavailable Card
+        projection closes every selectable capability while platform system
+        tools remain outside this boundary. PostgreSQL stores model,
+        instruction, presentation, and cache preferences, plus a migration-only
+        seed for a Card that has not been created yet. Preference failures fall
+        back to configured defaults without widening the Card projection.
         """
         BaseWorkflow._clear_resident_runtime_projection(self)
+        narrowed_tools = tool_config
+        narrowed_skills = skill_config
         try:
             from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.client_tools import (
                 set_denied_named_service_entries,
@@ -2953,13 +2952,6 @@ class BaseWorkflow():
             project = str(getattr(runtime_ctx, "project", "") or "").strip()
             if not user_id or not bundle_id:
                 return tool_config, skill_config
-            if self.pg_pool is None:
-                projected_tools = await BaseWorkflow._apply_resident_runtime_projection(
-                    self,
-                    tool_config,
-                    disabled_selection={},
-                )
-                return projected_tools, skill_config
 
             from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import (
                 SELECTION_CHANGE_CAPABILITY,
@@ -2979,18 +2971,38 @@ class BaseWorkflow():
                 UserAgentSelectionStore,
             )
 
-            store = UserAgentSelectionStore(
-                pg_pool=self.pg_pool,
-                tenant=tenant or "default",
-                project=project or "default",
-            )
-            selection = await store.get_selection(
-                user_id=user_id,
-                bundle_id=bundle_id,
-                agent_id=agent_id,
-                conversation_id=conversation_id,
-            )
             bundle_props = self.bundle_props if isinstance(self.bundle_props, Mapping) else {}
+            store = None
+            selection: Dict[str, Any] = {}
+            legacy_disabled = None
+            if self.pg_pool is not None:
+                try:
+                    store = UserAgentSelectionStore(
+                        pg_pool=self.pg_pool,
+                        tenant=tenant or "default",
+                        project=project or "default",
+                    )
+                    legacy_disabled = await store.get_legacy_capability_seed(
+                        user_id=user_id,
+                        bundle_id=bundle_id,
+                        agent_id=agent_id,
+                    )
+                    selection = await store.get_selection(
+                        user_id=user_id,
+                        bundle_id=bundle_id,
+                        agent_id=agent_id,
+                        conversation_id=conversation_id,
+                    )
+                except Exception:
+                    store = None
+                    selection = {}
+                    legacy_disabled = None
+                    self.logger.log(
+                        "[agent_selection] preference store unavailable; "
+                        "configured preferences stay and Card authority still applies\n"
+                        + traceback.format_exc(),
+                        level="WARNING",
+                    )
             if runtime_ctx is not None:
                 runtime_ctx.cold_turn_marker = None
 
@@ -3009,7 +3021,7 @@ class BaseWorkflow():
             warm = self._conversation_cache_is_warm(timeline)
             promoted_policy = ""
             pending = (selection or {}).get("pending")
-            if isinstance(pending, Mapping) and pending:
+            if store is not None and isinstance(pending, Mapping) and pending:
                 apply_mode = str(pending.get("apply") or "").strip().lower()
                 since_conversation = str(pending.get("since_conversation_id") or "").strip()
                 triggered = (
@@ -3038,8 +3050,8 @@ class BaseWorkflow():
 
             # Freeze the inherited default only after a due default-level
             # pending delta has had a chance to promote. From this point the
-            # conversation owns its model/capability selection.
-            if conversation_id:
+            # conversation owns its model and presentation preferences.
+            if store is not None and conversation_id:
                 selection = await store.get_selection(
                     user_id=user_id,
                     bundle_id=bundle_id,
@@ -3048,7 +3060,69 @@ class BaseWorkflow():
                     materialize=True,
                 )
 
-            disabled = (selection or {}).get("disabled") or {}
+            from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import (
+                deny_all_capabilities,
+                disabled_from_projection,
+                sync_agent_capability_projection,
+            )
+            from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import (
+                agent_capabilities_catalog,
+            )
+
+            bundle_root_resolver = getattr(self, "bundle_root", None)
+            capability_catalog = agent_capabilities_catalog(
+                bundle_props,
+                agent_id,
+                bundle_root=(
+                    bundle_root_resolver()
+                    if callable(bundle_root_resolver)
+                    else None
+                ),
+            )
+            try:
+                capability_control = await sync_agent_capability_projection(
+                    self,
+                    catalog=capability_catalog,
+                    agent_id=agent_id,
+                    initial_disabled=legacy_disabled,
+                )
+                disabled = disabled_from_projection(
+                    capability_catalog,
+                    capability_control["projection"],
+                )
+            except Exception:
+                disabled = deny_all_capabilities(
+                    catalog=capability_catalog,
+                    tenant=tenant,
+                    project=project,
+                    application=bundle_id,
+                    agent_id=agent_id,
+                )
+                self.logger.log(
+                    "[agent_capabilities] live Card projection unavailable; "
+                    "selectable capabilities are closed",
+                    level="WARNING",
+                )
+            narrowed_tools = narrow_agent_tool_config(
+                tool_config,
+                disabled,
+                bundle_props=bundle_props,
+                agent_id=agent_id,
+            )
+            narrowed_skills = narrow_agent_skill_config(
+                skill_config,
+                disabled.get("skills") or [],
+            )
+            from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import (
+                disabled_namespace_maps,
+            )
+
+            denied_namespaces, denied_entries = disabled_namespace_maps(disabled)
+            set_denied_named_service_namespaces(denied_namespaces or None)
+            set_denied_named_service_entries(denied_entries or None)
+            if runtime_ctx is not None and "mem" in denied_namespaces:
+                runtime_ctx.memory_hotset = []
+                runtime_ctx.memory_hotset_error = None
             supported = react_supported_models(bundle_props, agent_id)
             matched_pick = match_supported_model((selection or {}).get("model"), supported)
             from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import (
@@ -3080,11 +3154,18 @@ class BaseWorkflow():
                     if value == "defer_cold":
                         return warm
                     return False
-                # Pin only when EVERY delta class defers; `accept` and
-                # `confirm` (stored = UI-confirmed) adopt immediately.
-                pinned = bool(change["classes"]) and all(_blocks_now(k) for k in change["classes"])
+                # Card capability changes are already authoritative for this
+                # call and cannot be pinned to an earlier snapshot. Only the
+                # preference-backed model/prompt class may defer.
+                pinnable_classes = [
+                    klass
+                    for klass in change["classes"]
+                    if klass != SELECTION_CHANGE_CAPABILITY
+                ]
+                pinned = bool(pinnable_classes) and all(
+                    _blocks_now(klass) for klass in pinnable_classes
+                )
             if pinned:
-                disabled = dict((prev_snapshot or {}).get("disabled") or {})
                 matched_pick = match_supported_model((prev_snapshot or {}).get("model"), supported)
                 matched_instructions = match_instruction_profile(
                     (prev_snapshot or {}).get("instructions"), _instruction_profiles,
@@ -3092,6 +3173,14 @@ class BaseWorkflow():
                 matched_presentation = normalize_presentation_pick(
                     (prev_snapshot or {}).get("presentation")
                 )
+                if timeline is not None:
+                    try:
+                        timeline.agent_selection_snapshot = {
+                            **dict(prev_snapshot or {}),
+                            "disabled": copy.deepcopy(disabled),
+                        }
+                    except Exception:
+                        pass
             else:
                 if change["changed"]:
                     marker = {
@@ -3228,40 +3317,10 @@ class BaseWorkflow():
             if not disabled and not applied_model:
                 projected_tools = await BaseWorkflow._apply_resident_runtime_projection(
                     self,
-                    tool_config,
+                    narrowed_tools,
                     disabled_selection=disabled,
                 )
-                return projected_tools, skill_config
-
-            narrowed_tools = tool_config
-            narrowed_skills = skill_config
-            if disabled:
-                narrowed_tools = narrow_agent_tool_config(
-                    tool_config,
-                    disabled,
-                    bundle_props=bundle_props,
-                    agent_id=agent_id,
-                )
-                narrowed_skills = narrow_agent_skill_config(
-                    skill_config,
-                    disabled.get("skills") or [],
-                )
-
-                from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import (
-                    disabled_namespace_maps,
-                )
-
-                # Full denials remove the namespace from roster + dispatch;
-                # per-entry denials make individual operations/actions
-                # uncallable at the grammar tools' dispatch for this turn.
-                denied_namespaces, denied_entries = disabled_namespace_maps(disabled)
-                if denied_namespaces:
-                    set_denied_named_service_namespaces(denied_namespaces)
-                    if runtime_ctx is not None and "mem" in denied_namespaces:
-                        runtime_ctx.memory_hotset = []
-                        runtime_ctx.memory_hotset_error = None
-                if denied_entries:
-                    set_denied_named_service_entries(denied_entries)
+                return projected_tools, narrowed_skills
 
             narrowed_tools = await BaseWorkflow._apply_resident_runtime_projection(
                 self,
@@ -3289,16 +3348,16 @@ class BaseWorkflow():
                 pass
             return narrowed_tools, narrowed_skills
         except Exception:
-            # Fail OPEN: a broken selection store must never silence the agent.
             try:
                 self.logger.log(
-                    "[agent_selection] load/apply failed; using the configured set\n"
+                    "[agent_selection] preference apply failed; "
+                    "the Card-narrowed capability set stays in force\n"
                     + traceback.format_exc(),
                     level="WARNING",
                 )
             except Exception:
                 pass
-            return tool_config, skill_config
+            return narrowed_tools, narrowed_skills
 
     def build_react(self,
                     scratchpad: TurnScratchpad,

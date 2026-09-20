@@ -424,10 +424,10 @@ class BaseEntrypoint:
             return {"ok": False, "error": str(exc), "status": 500}
 
     # -- per-user agent capability selection ----------------------------------
-    # A user narrows the CONFIGURED agent inventory (bundles.yaml is what the
-    # administrator granted); selection is a deny-list stored per (user, REAL
-    # bundle_id, agent) in user_bundle_props (subsystem='agents'). See
-    # runtime/agent_inventory.py + solutions/user_settings/agent_selection.py.
+    # A user narrows the descriptor-owned inventory through a positive
+    # Connection Hub Card selection. PostgreSQL keeps model/prompt preferences
+    # and supplies a migration seed only when a pre-Card deny map already
+    # exists. See runtime/agent_capability_control.py.
 
     @staticmethod
     def _agent_selection_payload(data: Optional[Dict[str, Any]], kwargs: Dict[str, Any]) -> Dict[str, Any]:
@@ -518,67 +518,17 @@ class BaseEntrypoint:
         return await self._attach_delegated_mcp_consent(catalog, agent_id)
 
     async def _attach_conversation_targets(self, catalog: Dict[str, Any], agent_id: str) -> Dict[str, Any]:
-        """Show own conversations and only cross-app targets on the effective Card."""
+        """Show the descriptor's target catalog; the live Card supplies selection."""
         if not any(row.get("namespace") == "conv" for row in catalog.get("named_services") or []):
             catalog["conversation_targets"] = []
             return catalog
         own = self._named_services_bundle_id()
         targets = {own} if own else set()
-        configured = {
+        targets.update({
             str(row.get("bundle_id") or "").strip()
             for row in catalog.get("conversation_targets") or []
-        }
-        configured.discard("")
-        if configured:
-            try:
-                from connection_hub.contract import AGENT_GRANT_CHECK, NAMESPACE
-                from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import call_bundle_named_service
-                from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.connection_edges import (
-                    DEFAULT_CONNECTION_HUB_BUNDLE_ID,
-                )
-                from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_mcp import (
-                    delegated_client_id_for_agent,
-                )
-                from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import (
-                    NamedServiceResponse,
-                )
-
-                for operation in ("object.search", "object.list", "object.get"):
-                    try:
-                        result = await call_bundle_named_service(
-                            bundle_id=DEFAULT_CONNECTION_HUB_BUNDLE_ID,
-                            request={
-                                "namespace": NAMESPACE,
-                                "operation": AGENT_GRANT_CHECK,
-                                "payload": {
-                                    "client_id": delegated_client_id_for_agent(own, agent_id),
-                                    "namespace": "conv",
-                                    "operation": operation,
-                                },
-                            },
-                        )
-                    except Exception:
-                        self.logger.log(
-                            "[agent_capabilities] conversation target Card probe "
-                            f"failed for {operation}",
-                            "WARNING",
-                        )
-                        continue
-                    value = getattr(result, "value", None)
-                    response = NamedServiceResponse.coerce(value) if value is not None else None
-                    state = response.object if response is not None and response.ok else {}
-                    if not isinstance(state, Mapping) or state.get("granted") is not True:
-                        continue
-                    card_targets = state.get("conversation_targets")
-                    if isinstance(card_targets, (list, tuple)):
-                        targets.update(configured.intersection(
-                            target for target in card_targets if isinstance(target, str)
-                        ))
-                    # Conversation targets are Card properties, so the first
-                    # granted read operation supplies the complete target set.
-                    break
-            except Exception:
-                self.logger.log("[agent_capabilities] conversation target Card probe failed", "WARNING")
+        })
+        targets.discard("")
         catalog["conversation_targets"] = [{"bundle_id": target} for target in sorted(targets)]
         return catalog
 
@@ -953,10 +903,16 @@ class BaseEntrypoint:
             "INFO",
         )
         selection: Dict[str, Any] = {"schema_version": 1, "disabled": {}}
+        initial_disabled: Optional[Dict[str, Any]] = None
         identity = self._agent_selection_identity()
         try:
             if self.pg_pool is not None and identity.get("bundle_id"):
                 store = self._agent_selection_store(identity)
+                initial_disabled = await store.get_legacy_capability_seed(
+                    user_id=identity["user_id"],
+                    bundle_id=identity["bundle_id"],
+                    agent_id=agent_id,
+                )
                 selection = await store.get_selection(
                     user_id=identity["user_id"],
                     bundle_id=identity["bundle_id"],
@@ -965,9 +921,61 @@ class BaseEntrypoint:
                     materialize=bool(conversation_id),
                 )
         except Exception:
-            # Selection read is best-effort; the inventory is still useful and
-            # the runtime fails open anyway.
-            self.logger.log("[agent_capabilities] selection read failed (fail-open)", "WARNING")
+            self.logger.log(
+                "[agent_capabilities] preference read failed; Card authority still resolves",
+                "WARNING",
+            )
+        capability_control: Dict[str, Any] = {}
+        try:
+            from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import (
+                annotate_capability_states,
+                disabled_from_projection,
+                sync_agent_capability_projection,
+            )
+
+            capability_control = await sync_agent_capability_projection(
+                self,
+                catalog=catalog,
+                agent_id=agent_id,
+                initial_disabled=initial_disabled,
+            )
+            selection = {
+                **selection,
+                "disabled": disabled_from_projection(
+                    catalog,
+                    capability_control["projection"],
+                ),
+                "capability_source": "connection_hub_card",
+            }
+            catalog = annotate_capability_states(
+                catalog,
+                capability_control.get("states"),
+            )
+        except Exception as exc:
+            from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import (
+                deny_all_capabilities,
+            )
+
+            selection = {
+                **selection,
+                "disabled": deny_all_capabilities(
+                    catalog=catalog,
+                    tenant=str(identity.get("tenant") or ""),
+                    project=str(identity.get("project") or ""),
+                    application=str(identity.get("bundle_id") or ""),
+                    agent_id=agent_id,
+                ),
+                "capability_source": "unavailable",
+            }
+            capability_control = {
+                "ok": False,
+                "error": str(exc) or "agent_capability_control_unavailable",
+            }
+            self.logger.log(
+                "[agent_capabilities] live Card projection unavailable; "
+                "selectable capabilities are closed",
+                "WARNING",
+            )
         cache_policy: Dict[str, Any] = {}
         try:
             from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import (
@@ -991,6 +999,7 @@ class BaseEntrypoint:
             "agent": agent_id,
             "capabilities": catalog,
             "selection": selection,
+            "capability_control": capability_control,
             # The user-held cold-cache policy: effective per delta class, the
             # admin-allowed set, and the admin default (any pending deferred
             # delta rides selection.pending).
@@ -1005,9 +1014,10 @@ class BaseEntrypoint:
         "mcp": {}, "named_services": {}, "resources": {}, "skills": [...],
         "subagents": true}}}``.
         Per-key toggles: ``true``/name-list disables, ``false`` re-enables; keys
-        absent from the patch keep their state. ``replace: true`` swaps the
-        whole record. ``subagents`` is the one bare toggle (delegation on/off
-        for this user; storable only while the admin inventory offers it).
+        absent from the patch keep their state. ``replace: true`` replaces the
+        visible capability selection; preference fields change only when they
+        are present. ``subagents`` is the one bare toggle (delegation on/off
+        for this user; selectable only while the admin inventory offers it).
 
         The single model pick rides the same body: ``"model": {"provider": …,
         "model": …}`` sets it (clamped to the agent's ``supported_models``),
@@ -1026,8 +1036,9 @@ class BaseEntrypoint:
         defaults; omitted keeps the stored picks.
 
         Cold-cache choices ride the same body too: ``"apply": "now" |
-        "next_conversation" | "when_cold"`` (deferred choices park the change
-        as a pending delta the runtime promotes on its trigger;
+        "next_conversation" | "when_cold"`` (deferred choices park model,
+        instruction, and presentation changes as a pending delta; capability
+        changes revise the live Card selection immediately;
         ``conversation_id`` selects the active conversation and anchors the
         next-conversation trigger) and
         ``"cache_policy": {"model_switch": …, "capability_toggle": …}``
@@ -1054,10 +1065,32 @@ class BaseEntrypoint:
                 "message": "body.data needs a disabled object, a model field, an instructions field, a presentation object, and/or a cache_policy object",
             }
         identity = self._agent_selection_identity()
-        if self.pg_pool is None or not identity.get("bundle_id"):
+        if not identity.get("bundle_id"):
+            return {"ok": False, "error": "agent_capability_identity_missing"}
+        updates_preferences = bool(
+            has_model
+            or has_instructions
+            or has_presentation
+            or isinstance(raw_cache_policy, Mapping)
+        )
+        if updates_preferences and self.pg_pool is None:
             return {"ok": False, "error": "storage_unavailable"}
+        selection: Dict[str, Any] = {"schema_version": 1, "disabled": {}}
+        capability_control: Dict[str, Any] = {}
+        preference_update_applied = False
         try:
-            from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import clamp_cache_policy
+            from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import (
+                disabled_from_projection,
+                selected_capabilities_from_disabled,
+                sync_agent_capability_projection,
+            )
+            from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import (
+                clamp_cache_policy,
+                clamp_selection,
+            )
+            from kdcube_ai_app.apps.chat.sdk.solutions.user_settings.agent_selection import (
+                merge_selection_patch,
+            )
 
             # Enriched so per-tool MCP denials clamp against the same listing
             # the picker showed.
@@ -1065,33 +1098,108 @@ class BaseEntrypoint:
                 agent_id,
                 conversation_id=conversation_id,
             )
-            store = self._agent_selection_store(identity)
-            await store.ensure_schema()
-            selection = await store.set_selection(
-                user_id=identity["user_id"],
-                bundle_id=identity["bundle_id"],
-                agent_id=agent_id,
-                patch=patch if isinstance(patch, Mapping) else None,
+            store = None
+            initial_disabled: Optional[Dict[str, Any]] = None
+            if self.pg_pool is not None:
+                try:
+                    store = self._agent_selection_store(identity)
+                    await store.ensure_schema()
+                    initial_disabled = await store.get_legacy_capability_seed(
+                        user_id=identity["user_id"],
+                        bundle_id=identity["bundle_id"],
+                        agent_id=agent_id,
+                    )
+                    selection = await store.get_selection(
+                        user_id=identity["user_id"],
+                        bundle_id=identity["bundle_id"],
+                        agent_id=agent_id,
+                        conversation_id=conversation_id,
+                        materialize=bool(conversation_id),
+                    )
+                except Exception:
+                    if updates_preferences:
+                        raise
+                    store = None
+                    initial_disabled = None
+                    self.logger.log(
+                        "[agent_selection_update] preference store unavailable; "
+                        "capability-only Card update continues",
+                        "WARNING",
+                    )
+            capability_control = await sync_agent_capability_projection(
+                self,
                 catalog=catalog,
-                replace=bool(payload.get("replace")),
-                apply=str(payload.get("apply") or "now"),
-                conversation_id=conversation_id,
-                cache_policy=(
-                    clamp_cache_policy(raw_cache_policy, self.bundle_props, agent_id)
-                    if isinstance(raw_cache_policy, Mapping)
-                    else None
-                ),
-                **({"model": payload.get("model")} if has_model else {}),
-                **({"instructions": payload.get("instructions")} if has_instructions else {}),
-                **({"presentation": payload.get("presentation")} if has_presentation else {}),
+                agent_id=agent_id,
+                initial_disabled=initial_disabled,
             )
+            current_disabled = disabled_from_projection(
+                catalog,
+                capability_control["projection"],
+            )
+            selected_capabilities = None
+            if isinstance(patch, Mapping):
+                target_disabled = merge_selection_patch(
+                    {} if bool(payload.get("replace")) else current_disabled,
+                    patch,
+                )
+                target_disabled = clamp_selection(target_disabled, catalog)
+                selected_capabilities = selected_capabilities_from_disabled(
+                    authority=capability_control["authority"],
+                    catalog=catalog,
+                    disabled=target_disabled,
+                )
+            if updates_preferences:
+                assert store is not None
+                selection = await store.set_selection(
+                    user_id=identity["user_id"],
+                    bundle_id=identity["bundle_id"],
+                    agent_id=agent_id,
+                    patch=None,
+                    catalog=catalog,
+                    replace=False,
+                    apply=str(payload.get("apply") or "now"),
+                    conversation_id=conversation_id,
+                    cache_policy=(
+                        clamp_cache_policy(raw_cache_policy, self.bundle_props, agent_id)
+                        if isinstance(raw_cache_policy, Mapping)
+                        else None
+                    ),
+                    **({"model": payload.get("model")} if has_model else {}),
+                    **({"instructions": payload.get("instructions")} if has_instructions else {}),
+                    **({"presentation": payload.get("presentation")} if has_presentation else {}),
+                )
+                preference_update_applied = True
+            if selected_capabilities is not None:
+                capability_control = await sync_agent_capability_projection(
+                    self,
+                    catalog=catalog,
+                    agent_id=agent_id,
+                    selected_capabilities=selected_capabilities,
+                    replace_selection=True,
+                )
+                current_disabled = disabled_from_projection(
+                    catalog,
+                    capability_control["projection"],
+                )
+            selection = {
+                **selection,
+                "disabled": current_disabled,
+                "capability_source": "connection_hub_card",
+            }
         except Exception as exc:
             self.logger.log(f"[agent_selection_update] failed: {traceback.format_exc()}", "ERROR")
-            return {"ok": False, "error": str(exc), "status": 500}
+            return {
+                "ok": False,
+                "error": str(exc) or "agent_selection_update_failed",
+                "status": 500,
+                "preference_update_applied": preference_update_applied,
+                "selection": selection if preference_update_applied else None,
+            }
         return {
             "ok": True,
             "agent": agent_id,
             "selection": selection,
+            "capability_control": capability_control,
         }
 
     async def on_bundle_load(self, **kwargs) -> None:

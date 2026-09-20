@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 
-"""BaseWorkflow.apply_user_agent_selection: fail-open + narrowing wiring."""
+"""BaseWorkflow.apply_user_agent_selection: live Card narrowing + preferences."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control as agent_capability_control
 from kdcube_ai_app.apps.chat.sdk.runtime.skill_config import AgentSkillConfig
 from kdcube_ai_app.apps.chat.sdk.runtime.tool_config import AgentToolConfig
 from kdcube_ai_app.apps.chat.sdk.solutions.user_settings import agent_selection_key
@@ -95,6 +96,35 @@ def _tool_cfg() -> AgentToolConfig:
     )
 
 
+def _gmail_props() -> dict:
+    return {
+        "surfaces": {
+            "as_consumer": {
+                "agents": {
+                    "main": {
+                        "tools": [
+                            {
+                                "name": "io",
+                                "kind": "python",
+                                "module": "missing.io_mod",
+                                "alias": "io_tools",
+                                "allowed": ["tool_call"],
+                            },
+                            {
+                                "name": "gmail",
+                                "kind": "python",
+                                "module": "missing.gmail_mod",
+                                "alias": "gmail",
+                                "allowed": ["search_gmail"],
+                            },
+                        ]
+                    }
+                }
+            }
+        }
+    }
+
+
 def _selection_row(disabled) -> dict:
     return {
         "value_json": json.dumps({"schema_version": 1, "disabled": disabled}),
@@ -110,6 +140,20 @@ def _reset_namespace_deny():
     set_denied_named_service_namespaces(None)
 
 
+@pytest.fixture(autouse=True)
+def _legacy_selection_as_card_projection(monkeypatch):
+    """Keep selection/cache tests focused while Card behavior has its own suite."""
+
+    async def _sync(_entrypoint, *, initial_disabled=None, **_kwargs):
+        return {"projection": {"test_disabled": dict(initial_disabled or {})}}
+
+    def _disabled(_catalog, projection):
+        return dict(projection.get("test_disabled") or {})
+
+    monkeypatch.setattr(agent_capability_control, "sync_agent_capability_projection", _sync)
+    monkeypatch.setattr(agent_capability_control, "disabled_from_projection", _disabled)
+
+
 @pytest.mark.asyncio
 async def test_absent_row_returns_configs_unchanged():
     stub = _workflow_stub(pg_pool=_FakePool())
@@ -120,22 +164,81 @@ async def test_absent_row_returns_configs_unchanged():
 
 
 @pytest.mark.asyncio
-async def test_store_error_fails_open():
+async def test_preference_store_error_keeps_card_projection_in_force(monkeypatch):
     stub = _workflow_stub(pg_pool=_BrokenPool())
     tool_cfg, skill_cfg = _tool_cfg(), AgentSkillConfig()
+
+    async def _sync(*_args, **_kwargs):
+        return {"projection": {"test_disabled": {"tools": {"gmail": True}}}}
+
+    monkeypatch.setattr(agent_capability_control, "sync_agent_capability_projection", _sync)
     out_tools, out_skills = await BaseWorkflow.apply_user_agent_selection(stub, tool_cfg, skill_cfg)
-    assert out_tools is tool_cfg
+    assert "gmail" not in out_tools.allowed_plugins
+    assert "io_tools" in out_tools.allowed_plugins
     assert out_skills is skill_cfg
-    assert any("fail" in line.lower() or "configured set" in line for _, line in stub.logger.lines)
+    assert any("preference store unavailable" in line for _, line in stub.logger.lines)
 
 
 @pytest.mark.asyncio
-async def test_missing_pool_fails_open():
+async def test_missing_preference_pool_still_resolves_the_card():
     stub = _workflow_stub(pg_pool=None)
     tool_cfg, skill_cfg = _tool_cfg(), AgentSkillConfig()
     out_tools, out_skills = await BaseWorkflow.apply_user_agent_selection(stub, tool_cfg, skill_cfg)
     assert out_tools is tool_cfg
     assert out_skills is skill_cfg
+
+
+@pytest.mark.asyncio
+async def test_unavailable_card_closes_selectable_tools(monkeypatch):
+    stub = _workflow_stub(pg_pool=None, bundle_props=_gmail_props())
+
+    async def _unavailable(*_args, **_kwargs):
+        raise RuntimeError("card unavailable")
+
+    monkeypatch.setattr(
+        agent_capability_control,
+        "sync_agent_capability_projection",
+        _unavailable,
+    )
+    monkeypatch.setattr(
+        agent_capability_control,
+        "deny_all_capabilities",
+        lambda **_kwargs: {"tools": {"gmail": True}},
+    )
+
+    out_tools, _out_skills = await BaseWorkflow.apply_user_agent_selection(
+        stub,
+        _tool_cfg(),
+        AgentSkillConfig(),
+    )
+
+    assert "gmail" not in out_tools.allowed_plugins
+    assert "io_tools" in out_tools.allowed_plugins
+
+
+@pytest.mark.asyncio
+async def test_each_turn_uses_the_current_card_projection(monkeypatch):
+    stub = _workflow_stub(pg_pool=None, bundle_props=_gmail_props())
+    projections = iter(({}, {"tools": {"gmail": True}}))
+
+    async def _sync(*_args, **_kwargs):
+        return {"projection": {"test_disabled": next(projections)}}
+
+    monkeypatch.setattr(agent_capability_control, "sync_agent_capability_projection", _sync)
+
+    first, _ = await BaseWorkflow.apply_user_agent_selection(
+        stub,
+        _tool_cfg(),
+        AgentSkillConfig(),
+    )
+    second, _ = await BaseWorkflow.apply_user_agent_selection(
+        stub,
+        _tool_cfg(),
+        AgentSkillConfig(),
+    )
+
+    assert "gmail" in first.allowed_plugins
+    assert "gmail" not in second.allowed_plugins
 
 
 @pytest.mark.asyncio
@@ -363,11 +466,15 @@ async def test_model_pick_applies_alongside_deny_list():
 
 
 @pytest.mark.asyncio
-async def test_model_store_error_fails_open_to_configured_role():
+async def test_model_store_error_restores_the_configured_role():
     stub = _workflow_stub(pg_pool=_BrokenPool(), bundle_props=_MODEL_PROPS)
     stub.runtime_ctx.agent_role_models = {"seeded": {"provider": "x", "model": "y"}}
     tool_cfg, skill_cfg = _tool_cfg(), AgentSkillConfig()
     out_tools, out_skills = await BaseWorkflow.apply_user_agent_selection(stub, tool_cfg, skill_cfg)
     assert out_tools is tool_cfg and out_skills is skill_cfg
-    # No override was written; the router keeps resolving the configured spec.
-    assert USER_MODEL_TARGET_ROLE not in (stub.runtime_ctx.agent_role_models or {})
+    assert stub.runtime_ctx.agent_role_models == {
+        USER_MODEL_TARGET_ROLE: {
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-6",
+        }
+    }

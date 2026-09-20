@@ -494,6 +494,32 @@ class UserAgentSelectionStore(UserSettingsStore):
             )
         return self._compose_effective_selection(default, scoped, conversation_id=conversation)
 
+    async def get_legacy_capability_seed(
+        self,
+        *,
+        user_id: str,
+        bundle_id: str,
+        agent_id: str,
+    ) -> Optional[dict[str, Any]]:
+        """Return a persisted pre-Card deny map, or ``None`` when none exists.
+
+        Capability authority and the current user selection live on Connection
+        Hub Cards. This exact default-row read exists only to preserve an
+        already-persisted selection when that Card is first materialized. A
+        missing row must remain distinguishable from an empty legacy deny map:
+        the former creates an empty Card selection, while the latter preserves
+        the old behavior in which every then-visible capability was selected.
+        """
+
+        stored = await self._get_exact_selection(
+            user_id=user_id,
+            bundle_id=bundle_id,
+            agent_id=agent_id,
+        )
+        if stored is None:
+            return None
+        return dict(stored.get("disabled") or {})
+
     async def set_selection(
         self,
         *,

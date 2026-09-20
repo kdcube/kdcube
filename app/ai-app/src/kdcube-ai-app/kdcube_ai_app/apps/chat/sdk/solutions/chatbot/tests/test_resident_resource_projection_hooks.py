@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control as agent_capability_control
 import kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory as agent_inventory_module
 import kdcube_ai_app.apps.chat.sdk.runtime.resident_resources as resident_resources_module
 from kdcube_ai_app.apps.chat.sdk.runtime.resident_resources import (
@@ -163,12 +164,32 @@ def _workflow_stub(*, bearer_provider=None):
         ),
         "bundle_props": _bundle_props(),
         "bundle_root": lambda: ".",
+        "_conversation_cache_is_warm": lambda _timeline: False,
         "logger": SimpleNamespace(log=lambda *_args, **_kwargs: None),
         "pg_pool": None,
     }
     if bearer_provider is not None:
         values["resident_gateway_bearer_provider"] = bearer_provider
     return SimpleNamespace(**values)
+
+
+@pytest.fixture(autouse=True)
+def _card_projection_allows_the_fixture_catalog(monkeypatch):
+    """These tests isolate resident-resource binding after Card narrowing."""
+
+    async def _sync(*_args, **_kwargs):
+        return {"projection": {}}
+
+    monkeypatch.setattr(
+        agent_capability_control,
+        "sync_agent_capability_projection",
+        _sync,
+    )
+    monkeypatch.setattr(
+        agent_capability_control,
+        "disabled_from_projection",
+        lambda _catalog, _projection: {},
+    )
 
 
 @pytest.mark.asyncio

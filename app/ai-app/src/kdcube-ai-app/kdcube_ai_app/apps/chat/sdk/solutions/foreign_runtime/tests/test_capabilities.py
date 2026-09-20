@@ -14,6 +14,9 @@ import asyncio
 from types import SimpleNamespace
 from typing import Any, Dict
 
+import pytest
+
+import kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control as agent_capability_control
 from kdcube_ai_app.apps.chat.sdk.solutions.foreign_runtime import capabilities
 
 
@@ -50,10 +53,17 @@ class _Store:
     def __init__(self, selection: Dict[str, Any] | None):
         self.selection = selection
         self.calls: list[Dict[str, Any]] = []
+        self.seed_calls: list[Dict[str, Any]] = []
 
     async def get_selection(self, **kwargs: Any) -> Dict[str, Any] | None:
         self.calls.append(dict(kwargs))
         return self.selection
+
+    async def get_legacy_capability_seed(self, **kwargs: Any) -> Dict[str, Any] | None:
+        self.seed_calls.append(dict(kwargs))
+        if self.selection is None:
+            return None
+        return dict(self.selection.get("disabled") or {})
 
 
 def _entrypoint(selection: Dict[str, Any] | None, props: Dict[str, Any] | None = None):
@@ -74,6 +84,18 @@ def _entrypoint(selection: Dict[str, Any] | None, props: Dict[str, Any] | None =
 
 def _state() -> Dict[str, Any]:
     return {"conversation_id": "conv-1", "session_id": "sess-1"}
+
+
+@pytest.fixture(autouse=True)
+def _legacy_selection_as_card_projection(monkeypatch):
+    async def _sync(_entrypoint, *, initial_disabled=None, **_kwargs):
+        return {"projection": {"test_disabled": dict(initial_disabled or {})}}
+
+    def _disabled(_catalog, projection):
+        return dict(projection.get("test_disabled") or {})
+
+    monkeypatch.setattr(agent_capability_control, "sync_agent_capability_projection", _sync)
+    monkeypatch.setattr(agent_capability_control, "disabled_from_projection", _disabled)
 
 
 def _resolve(entrypoint, state=None, agent_id="press"):
@@ -176,16 +198,17 @@ _SELECTION = {
 }
 
 
-def test_the_whole_deny_map_is_read_in_one_store_round_trip() -> None:
+def test_the_whole_deny_map_is_seeded_from_the_legacy_default_once() -> None:
     entrypoint, store = _entrypoint(_SELECTION)
     disabled = asyncio.run(
         capabilities.resolve_turn_selection_disabled(entrypoint, _state(), "press")
     )
     assert disabled["mcp"] == {"named_services": True, "press": ["commit_entry"]}
     assert disabled["named_services"] == {"conv": True, "linkedin": ["object.action"]}
-    assert len(store.calls) == 1
-    assert store.calls[0]["agent_id"] == "press"
-    assert store.calls[0]["conversation_id"] == "conv-1"
+    assert store.calls == []
+    assert len(store.seed_calls) == 1
+    assert store.seed_calls[0]["agent_id"] == "press"
+    assert "conversation_id" not in store.seed_calls[0]
 
 
 def test_each_category_resolves_to_its_own_real_key() -> None:
@@ -243,7 +266,7 @@ def test_nothing_picked_leaves_the_full_declared_inventory() -> None:
         ) == {}
 
 
-def test_the_deny_map_fails_open() -> None:
+def test_preference_storage_absence_does_not_bypass_the_card() -> None:
     entrypoint, _store = _entrypoint(_SELECTION)
     entrypoint.pg_pool = None
     assert asyncio.run(
@@ -259,3 +282,25 @@ def test_the_deny_map_fails_open() -> None:
     assert asyncio.run(
         capabilities.resolve_turn_disabled_namespaces(entrypoint, _state(), "press")
     ) == {}
+
+
+def test_the_deny_map_fails_closed_when_the_card_is_unavailable(monkeypatch) -> None:
+    entrypoint, _store = _entrypoint(_SELECTION)
+
+    async def _unavailable(*_args, **_kwargs):
+        raise RuntimeError("card unavailable")
+
+    monkeypatch.setattr(
+        agent_capability_control,
+        "sync_agent_capability_projection",
+        _unavailable,
+    )
+    monkeypatch.setattr(
+        agent_capability_control,
+        "deny_all_capabilities",
+        lambda **_kwargs: {"mcp": {"press": True}},
+    )
+
+    assert asyncio.run(
+        capabilities.resolve_turn_disabled_mcp(entrypoint, _state(), "press")
+    ) == {"press": True}
