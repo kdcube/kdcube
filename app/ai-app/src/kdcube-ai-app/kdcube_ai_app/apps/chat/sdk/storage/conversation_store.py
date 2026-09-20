@@ -4,6 +4,7 @@
 # chatbot/storage/storage.py
 
 import json, time, os, pathlib, tempfile, zipfile
+from datetime import datetime, timezone
 from typing import Optional, Tuple, List, Dict, Any
 from urllib.parse import urlparse, unquote
 
@@ -23,7 +24,14 @@ except ImportError:
 _JSON_META = {"ContentType": "application/json"}
 
 async def attachment_rn_and_rel_name(tenant, project, user_or_fp, conversation_id, turn_id, role, filename: str):
-    ts = time.strftime("%Y%m%d%H%M%S", time.gmtime())
+    # Microseconds, not seconds. Three files named image.png attached in one
+    # click share a second, so a seconds prefix gave all three the same stored
+    # name: the second and third overwrote the first in the object store, and
+    # the identical file_ref that followed made the whole message unsendable.
+    # The prefix stays all digits because the upload fallback in
+    # runtime/harness/events/resolver.py matches a stored upload by
+    # `name[: -(len(filename) + 1)].isdigit()`.
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
     safe_name = os.path.basename(filename) or "file.bin"
     rel_name = f"{ts}-{safe_name}"
     rn = rn_attachment(tenant, project, user_or_fp, conversation_id, turn_id, role, rel_name)
