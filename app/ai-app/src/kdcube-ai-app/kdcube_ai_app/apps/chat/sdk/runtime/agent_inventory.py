@@ -46,6 +46,9 @@ from kdcube_ai_app.apps.chat.sdk.runtime.tool_config import (
     AgentToolConfig,
     DEFAULT_AGENT_ID,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.conversation.target_policy import (
+    configured_conversation_targets,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.client_tools import (
     NAMED_SERVICE_TOOLS_ALIAS,
     NAMED_SERVICE_TOOLS_MODULE,
@@ -674,6 +677,7 @@ _DISABLED_REASONS = (
     ("mcp", "mcp_toggle"),
     ("named_services", "namespace_toggle"),
     ("resources", "resource_toggle"),
+    ("conversation_targets", "conversation_target_toggle"),
     ("skills", "skill_toggle"),
     ("subagents", "subagents_toggle"),
 )
@@ -1051,6 +1055,11 @@ def agent_capabilities_catalog(
         "tools": tools_out,
         "mcp": mcp_out,
         "named_services": namespaces_out,
+        "conversation_targets": [
+            {"bundle_id": target} for target in configured_conversation_targets(
+                bundle_props, _norm(agent_id) or default_agent_id
+            )
+        ],
         "delegated_resource_families": resource_family_catalog_from_bundle_props(
             bundle_props,
             agent_id=_norm(agent_id) or default_agent_id,
@@ -1937,6 +1946,11 @@ def clamp_selection(
         if _norm_namespace(e.get("namespace"))
     }
     skill_ids = {_norm(s.get("id")) for s in (catalog.get("skills") or []) if _norm(s.get("id"))}
+    conversation_targets = {
+        _norm(entry.get("bundle_id"))
+        for entry in (catalog.get("conversation_targets") or [])
+        if isinstance(entry, Mapping) and _norm(entry.get("bundle_id"))
+    }
     resource_tool_names: dict[str, set[str]] = {
         _norm(entry.get("resource_id")): {
             _norm(tool.get("operation") or tool.get("name"))
@@ -2025,6 +2039,14 @@ def clamp_selection(
             if names:
                 out_resources[resource_id] = names
 
+    out_conversation_targets: dict[str, bool] = {}
+    raw_conversation_targets = disabled.get("conversation_targets")
+    if isinstance(raw_conversation_targets, Mapping):
+        for target, value in raw_conversation_targets.items():
+            target = _norm(target)
+            if target in conversation_targets and value is True:
+                out_conversation_targets[target] = True
+
     out_skills: list[str] = []
     for skill_id in _string_list(disabled.get("skills")):
         if skill_id in skill_ids and skill_id not in out_skills:
@@ -2047,6 +2069,8 @@ def clamp_selection(
         out["named_services"] = out_namespaces
     if out_resources:
         out["resources"] = out_resources
+    if out_conversation_targets:
+        out["conversation_targets"] = out_conversation_targets
     if out_skills:
         out["skills"] = out_skills
     if subagents_offered and "subagents" in disabled:
@@ -2385,6 +2409,7 @@ def selection_deltas(disabled: Mapping[str, Any] | None) -> dict[str, Any]:
         "mcp_off": sorted(_disabled_flag_set(disabled, "mcp")),
         "named_services_off": sorted(_disabled_flag_set(disabled, "named_services", namespace=True)),
         "resources_off": sorted(_disabled_flag_set(disabled, "resources")),
+        "conversation_targets_off": sorted(_disabled_flag_set(disabled, "conversation_targets")),
         "skills_off": _string_list((disabled or {}).get("skills")),
         "subagents_off": subagents_denied(disabled),
     }

@@ -11,14 +11,14 @@ can be replaced without changing the provider contract.
 Scope model (per the named-services collaboration decisions):
 
 * default scope is the current user / grantor (`mode="self"`),
-* admin selected-user access is explicit (`mode="user"` + `user_id`) and is
-  expected to be gated by stronger grants at the managed boundary,
+* selected-user access is explicit (`mode="user"` + `user_id`) and the named-
+  service provider enforces its stronger permission before this facade runs,
 * all-tenant/all-project bulk export is deliberately NOT here — that stays a
   separate provider/admin operation.
 
 Authorization is not decided here. The facade resolves an effective user id and
-defensively validates the scope is well-formed; grant/consent enforcement is the
-managed boundary's responsibility (Connection Hub).
+defensively validates the scope is well-formed; the provider enforces payload-
+dependent scope while the managed boundary enforces operation and Card policy.
 
 `normalize_conversation` and `collapse_turn` are already SDK-owned; reusing them
 keeps `object.export` on the same record family as the direct
@@ -65,8 +65,8 @@ class ConversationReadScope:
     """Who the read is for.
 
     `mode="self"` reads the current caller's own conversations (`current_user_id`).
-    `mode="user"` reads a selected user's conversations (`user_id`) — an admin
-    path the managed boundary must have authorized with `:any_user` grants.
+    `mode="user"` reads a selected user's conversations (`user_id`) after the
+    provider has required `conversations:read:any_user` for a different user.
     """
 
     mode: str = SCOPE_SELF
@@ -98,6 +98,7 @@ class ConversationReadScope:
 @dataclass(frozen=True)
 class ConversationListRequest:
     scope: ConversationReadScope
+    bundle_id: str = ""
     since: str = ""
     days: int = 3650
     last_n: Optional[int] = None
@@ -108,12 +109,14 @@ class ConversationListRequest:
 class ConversationGetRequest:
     scope: ConversationReadScope
     conversation_id: str = ""
+    bundle_id: str = ""
     days: int = 3650
 
 
 @dataclass(frozen=True)
 class ConversationExportScope:
     scope: ConversationReadScope
+    bundle_id: str = ""
     since: str = ""
     limit: int = DEFAULT_EXPORT_LIMIT
 
@@ -139,6 +142,7 @@ class ConversationMaterializationPort(Protocol):
         self,
         *,
         user_id: str,
+        bundle_id: Optional[str] = None,
         started_after: Optional[_dt.datetime] = None,
         days: int = 3650,
         last_n: Optional[int] = None,
@@ -150,6 +154,7 @@ class ConversationMaterializationPort(Protocol):
         *,
         user_id: str,
         conversation_id: str,
+        bundle_id: Optional[str] = None,
         turn_ids: Optional[List[str]] = None,
         materialize: bool = True,
         days: int = 3650,
@@ -196,6 +201,7 @@ class ConversationReadService:
         user_id = request.scope.resolve()
         convs = await self._port.list_conversations(
             user_id=user_id,
+            bundle_id=request.bundle_id or None,
             started_after=_parse_iso(request.since),
             days=request.days,
             last_n=request.last_n,
@@ -214,6 +220,7 @@ class ConversationReadService:
             raise ConversationScopeError("get_conversation requires a conversation_id")
         fetched = await self._port.fetch_conversation_artifacts(
             user_id=user_id, conversation_id=conversation_id, days=request.days,
+            bundle_id=request.bundle_id or None,
         )
         if not fetched:
             return None
@@ -228,13 +235,14 @@ class ConversationReadService:
             raise ConversationScopeError("fetch_conversation requires a conversation_id")
         return await self._port.fetch_conversation_artifacts(
             user_id=user_id, conversation_id=conversation_id, days=request.days,
+            bundle_id=request.bundle_id or None,
         )
 
     async def export_conversations(self, request: ConversationExportScope) -> Dict[str, Any]:
         """User-scoped export. Same record family as the direct conversations_export
         MCP tool, but scoped to one user (self or selected) — never all-user bulk."""
         user_id = request.scope.resolve()
-        records = await self._export_records(user_id, since=request.since)
+        records = await self._export_records(user_id, since=request.since, bundle_id=request.bundle_id)
         limit = request.normalized_limit
         return {
             "ok": True,
@@ -244,9 +252,10 @@ class ConversationReadService:
             "conversations": records[:limit],
         }
 
-    async def _export_records(self, user_id: str, *, since: str) -> List[Dict[str, Any]]:
+    async def _export_records(self, user_id: str, *, since: str, bundle_id: str = "") -> List[Dict[str, Any]]:
         convs = await self._port.list_conversations(
             user_id=user_id, started_after=_parse_iso(since), days=3650, last_n=None, include_titles=True,
+            bundle_id=bundle_id or None,
         )
         out: List[Dict[str, Any]] = []
         for conv in (convs or []):
@@ -257,6 +266,7 @@ class ConversationReadService:
                 continue
             fetched = await self._port.fetch_conversation_artifacts(
                 user_id=user_id, conversation_id=conv_id, days=3650,
+                bundle_id=bundle_id or None,
             )
             raw = self._raw_record(conv_id, user_id, conv=conv, fetched=fetched or {})
             out.append(normalize_conversation(raw, tenant=self._tenant, project=self._project))
@@ -318,6 +328,7 @@ class _PooledMaterializationPort:
         self,
         *,
         user_id: str,
+        bundle_id: Optional[str] = None,
         started_after: Optional[_dt.datetime] = None,
         days: int = 3650,
         last_n: Optional[int] = None,
@@ -326,7 +337,7 @@ class _PooledMaterializationPort:
         ctx = self._ensure_ctx()
         result = await ctx.list_conversations(
             user_id=user_id, last_n=last_n, started_after=started_after,
-            days=days, include_titles=include_titles, ctx={},  # ctx={} bypasses ambient bundle_id filtering
+            days=days, include_titles=include_titles, bundle_id=bundle_id, ctx={},
         )
         # ContextRAGClient.list_conversations returns {"user_id", "items": [...]},
         # NOT a bare list — unwrap items (list(dict) would yield the keys).
@@ -337,6 +348,7 @@ class _PooledMaterializationPort:
         *,
         user_id: str,
         conversation_id: str,
+        bundle_id: Optional[str] = None,
         turn_ids: Optional[List[str]] = None,
         materialize: bool = True,
         days: int = 3650,
@@ -344,7 +356,7 @@ class _PooledMaterializationPort:
         ctx = self._ensure_ctx()
         result = await ctx.fetch_conversation_artifacts(
             user_id=user_id, conversation_id=conversation_id, turn_ids=turn_ids,
-            materialize=materialize, days=days, ctx={},
+            materialize=materialize, days=days, bundle_id=bundle_id, ctx={},
         )
         return _dict_result(result)
 

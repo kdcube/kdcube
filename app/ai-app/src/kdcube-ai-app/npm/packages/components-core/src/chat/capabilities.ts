@@ -262,6 +262,8 @@ export interface AgentCapabilitiesInventory {
   tools: AgentCapabilityToolGroup[]
   mcp: AgentCapabilityMcpServer[]
   named_services: AgentCapabilityNamespace[]
+  /** Application conversation targets currently permitted by the effective Card. */
+  conversation_targets?: { bundle_id: string }[]
   skills: AgentCapabilitySkill[]
   /** Admin-allowed model list; empty/absent keeps the model choice invisible. */
   supported_models?: AgentSupportedModel[]
@@ -283,6 +285,7 @@ export interface AgentCapabilitiesInventory {
 export interface AgentSelectionDisabled {
   tools?: Record<string, true | string[]>
   mcp?: Record<string, true | string[]>
+  conversation_targets?: Record<string, true>
   /** `true` denies the whole namespace; a key list denies individual
    *  operations (`object.search`) / named actions (`object.action.send`). */
   named_services?: Record<string, true | string[]>
@@ -300,6 +303,7 @@ export interface AgentSelectionDisabled {
 export interface AgentSelectionPatch {
   tools?: Record<string, boolean | string[]>
   mcp?: Record<string, boolean | string[]>
+  conversation_targets?: Record<string, boolean>
   named_services?: Record<string, boolean | string[]>
   skills?: Record<string, boolean>
   /** Sub-agents toggle: the explicit preference the user is writing — `true`
@@ -374,6 +378,7 @@ export function applySelectionPatch(
     ...(disabled.tools ? { tools: { ...disabled.tools } } : {}),
     ...(disabled.mcp ? { mcp: { ...disabled.mcp } } : {}),
     ...(disabled.named_services ? { named_services: { ...disabled.named_services } } : {}),
+    ...(disabled.conversation_targets ? { conversation_targets: { ...disabled.conversation_targets } } : {}),
     ...(disabled.skills ? { skills: [...disabled.skills] } : {}),
     ...(disabled.subagents !== undefined ? { subagents: disabled.subagents } : {}),
   }
@@ -392,6 +397,15 @@ export function applySelectionPatch(
     }
     if (Object.keys(target).length > 0) out[category] = target as never
     else delete out[category]
+  }
+  if (patch.conversation_targets) {
+    const targets = { ...(out.conversation_targets ?? {}) }
+    for (const [bundleId, value] of Object.entries(patch.conversation_targets)) {
+      if (value) targets[bundleId] = true
+      else delete targets[bundleId]
+    }
+    if (Object.keys(targets).length) out.conversation_targets = targets
+    else delete out.conversation_targets
   }
   if (patch.skills) {
     const skills = new Set(out.skills ?? [])
@@ -421,6 +435,8 @@ export function mergeSelectionPatches(
     const merged = { ...(base[category] ?? {}), ...(next[category] ?? {}) }
     if (Object.keys(merged).length > 0) out[category] = merged as never
   }
+  const conversationTargets = { ...(base.conversation_targets ?? {}), ...(next.conversation_targets ?? {}) }
+  if (Object.keys(conversationTargets).length) out.conversation_targets = conversationTargets
   const skills = { ...(base.skills ?? {}), ...(next.skills ?? {}) }
   if (Object.keys(skills).length > 0) out.skills = skills
   if (next.subagents !== undefined) out.subagents = next.subagents

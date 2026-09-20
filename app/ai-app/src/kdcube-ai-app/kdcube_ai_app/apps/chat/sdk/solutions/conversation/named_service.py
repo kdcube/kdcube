@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import base64
 import logging
+from dataclasses import replace
 from typing import Any, AsyncIterator, Awaitable, Callable, Mapping
 
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
@@ -45,6 +46,9 @@ from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
     TRANSPORT_LOCAL,
     build_default_operations,
     named_service_provider,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.authority_scope import (
+    admitted_named_service_claims,
 )
 
 from kdcube_ai_app.apps.chat.sdk.solutions.conversation.api import (
@@ -70,6 +74,15 @@ from kdcube_ai_app.apps.chat.sdk.solutions.conversation.read import (
     ConversationReadService,
     ConversationScopeError,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.conversation.target_scope import (
+    admitted_conversation_targets,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.conversation.target_policy import (
+    ConversationTargetPolicy,
+)
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.named_service_caller import (
+    named_service_caller,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.conversation.view import build_conversation_timeline
 from kdcube_ai_app.apps.chat.sdk.solutions.conversation.presentation import (
     CONVERSATION_OBJECT_KIND,
@@ -91,6 +104,7 @@ PROVIDER_ID = "sdk.conversation"
 LOGGER = logging.getLogger("kdcube.sdk.conversation.named_service")
 
 _CONVERSATION_TRANSPORTS = (TRANSPORT_LOCAL, TRANSPORT_API)
+_ANY_USER_READ_PERMISSION = "conversations:read:any_user"
 
 
 def _conversation_operations() -> dict:
@@ -101,9 +115,9 @@ def _conversation_operations() -> dict:
 
 _CONVERSATION_OBJECT_KINDS = (OBJECT_KIND, CONVERSATION_OBJECT_KIND)
 
-# Advisory grant hints for the managed boundary (Connection Hub). NOT enforced
-# here: the provider makes no platform-role decisions — boundary policy owns
-# consent/enforcement. Selected-user access is expected to require `:any_user`.
+# Grant hints published to the managed boundary (Connection Hub). Operation
+# admission happens there; the provider also checks the payload-dependent
+# selected-user claim because the operation gate cannot infer `scope.user_id`.
 _CONVERSATION_GRANT_HINTS = {
     "object.list": ["conversations:read"],
     "object.search": ["conversations:read"],
@@ -175,6 +189,13 @@ ConversationReadServiceFactory = Callable[[NamedServiceContext], ConversationRea
 ConversationFileUrlFactory = Callable[
     [NamedServiceContext, Mapping[str, Any]], Awaitable["dict[str, Any] | None"]
 ]
+# Answers whether a bundle id a caller asked to search is known to the
+# caller's tenant/project. Optional: without it a requested bundle id is used
+# as given.
+ConversationBundleValidator = Callable[[NamedServiceContext, str], Awaitable[bool]]
+ConversationTargetPolicyFactory = Callable[
+    [NamedServiceContext], Awaitable[ConversationTargetPolicy]
+]
 
 # Bytes above this ride out-of-band via a download URL when a URL factory is wired;
 # without a factory a binary this large is reported as metadata only (never a
@@ -210,6 +231,14 @@ CONVERSATION_SEARCH_FILTERS: dict[str, Any] = {
     "order": {"type": "string", "enum": ["asc", "desc"], "description": "Order of catalog results (ordinal/temporal/timeline lookups). Default asc."},
     "top_k": {"type": "integer", "description": "Maximum turn hits to return. Default 5."},
     "days": {"type": "integer", "description": "Lookback window in days. Default 365 for topic search, 3650 for temporal. Widen for material older than a year."},
+    "bundle_id": {
+        "type": "string",
+        "description": (
+            "Application (bundle id) whose conversations to search. When omitted, a hosted "
+            "application agent searches its own application's conversations and any other "
+            "caller searches all of the user's conversations."
+        ),
+    },
     "include_recovery_sessions": {
         "type": "boolean",
         "description": (
@@ -321,6 +350,8 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
         search_backend_factory: ConversationBackendFactory | None = None,
         read_service_factory: ConversationReadServiceFactory | None = None,
         file_url_factory: ConversationFileUrlFactory | None = None,
+        bundle_validator: ConversationBundleValidator | None = None,
+        target_policy_factory: ConversationTargetPolicyFactory | None = None,
         bundle_id: str | None = None,
     ) -> None:
         super().__init__(conversation_search_named_service_spec(bundle_id=bundle_id))
@@ -328,6 +359,8 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
         self._search_backend_factory = search_backend_factory
         self._read_service_factory = read_service_factory
         self._file_url_factory = file_url_factory
+        self._bundle_validator = bundle_validator
+        self._target_policy_factory = target_policy_factory
 
     @property
     def _search_enabled(self) -> bool:
@@ -335,19 +368,50 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
 
     # -- read/export scope + guards -----------------------------------------
 
-    def _read_scope(self, ctx: NamedServiceContext, request: NamedServiceRequest) -> ConversationReadScope:
+    def _read_scope(
+        self,
+        ctx: NamedServiceContext,
+        request: NamedServiceRequest,
+    ) -> ConversationReadScope | NamedServiceResponse:
         """Map the request onto a read scope. Default is the caller's own
-        conversations; an explicit `scope.mode="user"` + `user_id` selects a user
-        (an admin path the managed boundary is expected to have granted)."""
+        conversations; selecting another user requires explicit authority on
+        every transport because the operation gate cannot infer payload scope."""
         raw = request.filters.get("scope") or request.payload.get("scope") or {}
         if not isinstance(raw, dict):
             raw = {}
         mode = _text(raw.get("mode")).lower()
         selected = _text(raw.get("user_id"))
         use_selected = mode == READ_SCOPE_USER and bool(selected)
+        current = _text(ctx.user_id)
+        admitted_claims = admitted_named_service_claims()
+        effective_permissions = (
+            set(ctx.permissions)
+            if admitted_claims is None
+            else set(admitted_claims)
+        )
+        if (
+            use_selected
+            and selected != current
+            and _ANY_USER_READ_PERMISSION
+            not in effective_permissions
+        ):
+            return NamedServiceResponse.error_response(
+                code="conversation_user_not_granted",
+                message=(
+                    "Reading another user's conversations requires the "
+                    f"{_ANY_USER_READ_PERMISSION!r} permission."
+                ),
+                status=403,
+                details={
+                    "required_permission": _ANY_USER_READ_PERMISSION,
+                    "selected_user_id": selected,
+                },
+                provider=self.provider_identity(),
+                namespace=request.namespace or NAMESPACE,
+            )
         return ConversationReadScope(
             mode=READ_SCOPE_USER if use_selected else READ_SCOPE_SELF,
-            current_user_id=_text(ctx.user_id),
+            current_user_id=current,
             user_id=selected,
         )
 
@@ -368,6 +432,86 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
             provider=self.provider_identity(),
             namespace=request.namespace or NAMESPACE,
         )
+
+    async def _target_bundle(
+        self, ctx: NamedServiceContext, request: NamedServiceRequest, *, own_bundle: str | None = None
+    ) -> str | NamedServiceResponse:
+        filters = request.filters if isinstance(request.filters, Mapping) else {}
+        requested = _text(filters.get("bundle_id"))
+        own = (own_bundle if own_bundle is not None else (
+            self._context_factory(ctx).bundle_id
+            if self._context_factory is not None
+            else named_service_caller(ctx).bundle_id
+        )) or ""
+        admitted = admitted_conversation_targets()
+        allowed = set(admitted or ())
+        if own:
+            allowed.add(own)
+        if requested and self._bundle_validator is not None:
+            if not await self._bundle_validator(ctx, requested):
+                return NamedServiceResponse.error_response(
+                    code="conversation_bundle_not_found",
+                    message=f"No application with bundle id {requested!r} is registered here.",
+                    status=404,
+                    provider=self.provider_identity(),
+                    namespace=request.namespace or NAMESPACE,
+                )
+        target = requested or own or (next(iter(allowed)) if len(allowed) == 1 else "")
+        if not target:
+            return NamedServiceResponse.error_response(
+                code="conversation_target_required" if allowed else "conversation_target_not_granted",
+                message=(
+                    "Select one permitted application bundle for this read."
+                    if allowed else "No conversation application target is granted to this caller."
+                ),
+                status=400 if allowed else 403,
+                provider=self.provider_identity(),
+                namespace=request.namespace or NAMESPACE,
+            )
+        if target not in allowed:
+            return NamedServiceResponse.error_response(
+                code="conversation_target_not_granted",
+                message=f"This caller's Card does not grant conversation reads for {target!r}.",
+                status=403,
+                provider=self.provider_identity(),
+                namespace=request.namespace or NAMESPACE,
+            )
+        if own and self._target_policy_factory is not None:
+            try:
+                policy = await self._target_policy_factory(ctx)
+            except Exception:
+                return NamedServiceResponse.error_response(
+                    code="conversation_target_policy_unavailable",
+                    message="The agent's conversation target policy is unavailable.",
+                    status=503,
+                    provider=self.provider_identity(),
+                    namespace=request.namespace or NAMESPACE,
+                )
+            if target != own and target not in policy.configured:
+                return NamedServiceResponse.error_response(
+                    code="conversation_target_outside_ceiling",
+                    message=f"The agent's configuration does not permit conversation reads for {target!r}.",
+                    status=403,
+                    provider=self.provider_identity(),
+                    namespace=request.namespace or NAMESPACE,
+                )
+            if target in policy.disabled:
+                return NamedServiceResponse.error_response(
+                    code="conversation_target_disabled",
+                    message=f"The user's capability selection disabled conversation reads for {target!r}.",
+                    status=403,
+                    provider=self.provider_identity(),
+                    namespace=request.namespace or NAMESPACE,
+                )
+        elif own and target != own:
+            return NamedServiceResponse.error_response(
+                code="conversation_target_outside_ceiling",
+                message=f"The agent's configuration does not permit conversation reads for {target!r}.",
+                status=403,
+                provider=self.provider_identity(),
+                namespace=request.namespace or NAMESPACE,
+            )
+        return target
 
     async def provider_about(self, ctx: NamedServiceContext, request: NamedServiceRequest) -> NamedServiceResponse:
         del ctx, request
@@ -450,15 +594,20 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
             include_recovery_sessions=bool(filters.get("include_recovery_sessions")),
         )
         context = self._context_factory(ctx)
+        target = await self._target_bundle(ctx, request, own_bundle=context.bundle_id)
+        if isinstance(target, NamedServiceResponse):
+            return target
+        context = replace(context, bundle_id=target)
         backend = self._search_backend_factory(ctx)
         LOGGER.info(
-            "[conversation.named_service.search] namespace=%s query=%r scope=%s targets=%s user_id=%s conversation_id=%s",
+            "[conversation.named_service.search] namespace=%s query=%r scope=%s targets=%s user_id=%s conversation_id=%s bundle_id=%s",
             namespace,
             params.query,
             params.scope,
             params.targets,
             context.user_id,
             context.conversation_id,
+            context.bundle_id or "",
         )
         result = await run_conversation_search(
             context=context,
@@ -501,10 +650,16 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
             scope = self._read_scope(ctx, request)
         except ConversationScopeError as exc:
             return self._scope_error(request, exc)
+        if isinstance(scope, NamedServiceResponse):
+            return scope
         filters = dict(request.filters or {})
+        target = await self._target_bundle(ctx, request)
+        if isinstance(target, NamedServiceResponse):
+            return target
         service = self._read_service_factory(ctx)
         list_request = ConversationListRequest(
             scope=scope,
+            bundle_id=target,
             since=_text(filters.get("since") or filters.get("from")),
             days=_int_or_none(filters.get("days")) or 3650,
             last_n=_int_or_none(filters.get("last_n") or request.limit),
@@ -537,6 +692,11 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
             scope = self._read_scope(ctx, request)
         except ConversationScopeError as exc:
             return self._scope_error(request, exc)
+        if isinstance(scope, NamedServiceResponse):
+            return scope
+        target = await self._target_bundle(ctx, request)
+        if isinstance(target, NamedServiceResponse):
+            return target
         service = self._read_service_factory(ctx)
         # Fetch the RICH per-turn artifacts, then distill to a lightweight,
         # time-ordered timeline. This surfaces assistant-produced files and user
@@ -544,7 +704,7 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
         # plus thinking, responses, produced artifacts, and sources — unlike the
         # thin normalized record which drops all of those.
         raw = await service.fetch_conversation(
-            ConversationGetRequest(scope=scope, conversation_id=conversation_id)
+            ConversationGetRequest(scope=scope, conversation_id=conversation_id, bundle_id=target)
         )
         if not (raw or {}).get("turns"):
             return NamedServiceResponse.error_response(
@@ -610,6 +770,33 @@ class ConversationSearchNamedServiceProvider(NamedServiceProvider):
                 ),
                 status=400, details={"ref": ref}, provider=self.provider_identity(),
                 namespace=request.namespace or NAMESPACE, object_ref=ref,
+            )
+        target = await self._target_bundle(ctx, request)
+        if isinstance(target, NamedServiceResponse):
+            return target
+        if self._read_service_factory is None:
+            return self._read_not_configured(request)
+        scope = self._read_scope(ctx, request)
+        if isinstance(scope, NamedServiceResponse):
+            return scope
+        scoped = await self._read_service_factory(ctx).fetch_conversation(
+            ConversationGetRequest(scope=scope, conversation_id=conv_id, bundle_id=target)
+        )
+        timeline = build_conversation_timeline(scoped or {})
+        refs = {
+            event.get("ref")
+            for turn in timeline.get("turns") or ()
+            for event in turn.get("events") or ()
+            if isinstance(event, Mapping)
+        }
+        if ref not in refs:
+            return NamedServiceResponse.error_response(
+                code="conversation_file_not_found",
+                message="File was not found in a conversation this caller may read.",
+                status=404,
+                provider=self.provider_identity(),
+                namespace=request.namespace or NAMESPACE,
+                object_ref=ref,
             )
         result = await materialize(fi_ref=fi_ref, conversation_id=conv_id)
         if not result.get("ok"):
@@ -749,6 +936,8 @@ def make_conversation_search_named_service_provider(
     search_backend_factory: ConversationBackendFactory | None = None,
     read_service_factory: ConversationReadServiceFactory | None = None,
     file_url_factory: ConversationFileUrlFactory | None = None,
+    bundle_validator: ConversationBundleValidator | None = None,
+    target_policy_factory: ConversationTargetPolicyFactory | None = None,
     bundle_id: str | None = None,
 ) -> ConversationSearchNamedServiceProvider:
     return ConversationSearchNamedServiceProvider(
@@ -756,6 +945,8 @@ def make_conversation_search_named_service_provider(
         search_backend_factory=search_backend_factory,
         read_service_factory=read_service_factory,
         file_url_factory=file_url_factory,
+        bundle_validator=bundle_validator,
+        target_policy_factory=target_policy_factory,
         bundle_id=bundle_id,
     )
 
@@ -764,6 +955,7 @@ __all__ = [
     "CONVERSATION_OBJECT_KIND",
     "CONVERSATION_SEARCH_FILTERS",
     "CONVERSATION_SEARCH_SCOPES",
+    "ConversationBundleValidator",
     "ConversationFileUrlFactory",
     "ConversationReadServiceFactory",
     "ConversationSearchNamedServiceProvider",

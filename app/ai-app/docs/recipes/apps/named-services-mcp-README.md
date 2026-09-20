@@ -183,6 +183,7 @@ scope     user (default, recall across conversations) | conversation
 from/to   ISO window                                          (date-window recall)
 days      lookback window
 include_recovery_sessions  default false
+bundle_id permitted application to search                     (hosted default: own app; external: explicit Card target)
 ```
 
 Behaviors from one operation (empty query is valid):
@@ -352,19 +353,21 @@ Drop the weight.
 
 ## Identity And Scope
 
-A named-service provider receives **identity**, and lets the underlying realm
-authorize — it makes no platform-role decisions of its own.
+A named-service provider receives **identity** plus request-local authority
+admitted for this invocation. The operation boundary and the realm each enforce
+the dimensions they can observe.
 
 ```text
 Default scope is the caller's own data (mode=self).
-Selected-user (mode=user, user_id=...) is an admin path the managed boundary
-  grants via conversations:read:any_user.
-The provider maps the request onto the realm's own scope; the realm decides.
+Selected-user (mode=user, user_id=...) requires the effective Card claim
+  conversations:read:any_user. The provider checks that claim because user_id
+  is inside the decoded provider request, then maps it onto the realm's scope.
 ```
 
-Grant hints in the schema (`conversations:read`, `conversations:read:any_user`) are
-advisory for the consent boundary. Enforcement is the boundary's, not the
-provider's.
+Grant hints in the schema (`conversations:read`, `conversations:read:any_user`)
+tell the consent boundary what a call can demand. The boundary admits the
+operation and binds effective Card claims; the provider enforces the
+payload-dependent selected-user claim.
 
 ## Batch Get
 

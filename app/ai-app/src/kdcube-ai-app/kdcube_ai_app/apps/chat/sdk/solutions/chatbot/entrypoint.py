@@ -514,7 +514,73 @@ class BaseEntrypoint:
             agent_id,
             conversation_id=conversation_id,
         )
+        catalog = await self._attach_conversation_targets(catalog, agent_id)
         return await self._attach_delegated_mcp_consent(catalog, agent_id)
+
+    async def _attach_conversation_targets(self, catalog: Dict[str, Any], agent_id: str) -> Dict[str, Any]:
+        """Show own conversations and only cross-app targets on the effective Card."""
+        if not any(row.get("namespace") == "conv" for row in catalog.get("named_services") or []):
+            catalog["conversation_targets"] = []
+            return catalog
+        own = self._named_services_bundle_id()
+        targets = {own} if own else set()
+        configured = {
+            str(row.get("bundle_id") or "").strip()
+            for row in catalog.get("conversation_targets") or []
+        }
+        configured.discard("")
+        if configured:
+            try:
+                from connection_hub.contract import AGENT_GRANT_CHECK, NAMESPACE
+                from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import call_bundle_named_service
+                from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.connection_edges import (
+                    DEFAULT_CONNECTION_HUB_BUNDLE_ID,
+                )
+                from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_mcp import (
+                    delegated_client_id_for_agent,
+                )
+                from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import (
+                    NamedServiceResponse,
+                )
+
+                for operation in ("object.search", "object.list", "object.get"):
+                    try:
+                        result = await call_bundle_named_service(
+                            bundle_id=DEFAULT_CONNECTION_HUB_BUNDLE_ID,
+                            request={
+                                "namespace": NAMESPACE,
+                                "operation": AGENT_GRANT_CHECK,
+                                "payload": {
+                                    "client_id": delegated_client_id_for_agent(own, agent_id),
+                                    "namespace": "conv",
+                                    "operation": operation,
+                                },
+                            },
+                        )
+                    except Exception:
+                        self.logger.log(
+                            "[agent_capabilities] conversation target Card probe "
+                            f"failed for {operation}",
+                            "WARNING",
+                        )
+                        continue
+                    value = getattr(result, "value", None)
+                    response = NamedServiceResponse.coerce(value) if value is not None else None
+                    state = response.object if response is not None and response.ok else {}
+                    if not isinstance(state, Mapping) or state.get("granted") is not True:
+                        continue
+                    card_targets = state.get("conversation_targets")
+                    if isinstance(card_targets, (list, tuple)):
+                        targets.update(configured.intersection(
+                            target for target in card_targets if isinstance(target, str)
+                        ))
+                    # Conversation targets are Card properties, so the first
+                    # granted read operation supplies the complete target set.
+                    break
+            except Exception:
+                self.logger.log("[agent_capabilities] conversation target Card probe failed", "WARNING")
+        catalog["conversation_targets"] = [{"bundle_id": target} for target in sorted(targets)]
+        return catalog
 
     RESIDENT_RESOURCE_CATALOG_BUDGET_SECONDS = 3.0
 

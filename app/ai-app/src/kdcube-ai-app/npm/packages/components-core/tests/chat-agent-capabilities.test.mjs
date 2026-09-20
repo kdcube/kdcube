@@ -55,6 +55,22 @@ test('mergeSelectionPatches keeps the latest toggle per key', () => {
   })
 })
 
+test('conversation target toggles only narrow the visible target choice', () => {
+  const disabled = applySelectionPatch({}, { conversation_targets: { 'workspace@1-0': true } })
+  assert.deepEqual(disabled, { conversation_targets: { 'workspace@1-0': true } })
+  assert.deepEqual(
+    mergeSelectionPatches(
+      { conversation_targets: { 'workspace@1-0': true } },
+      { conversation_targets: { 'workspace@1-0': false } },
+    ),
+    { conversation_targets: { 'workspace@1-0': false } },
+  )
+  assert.deepEqual(
+    applySelectionPatch(disabled, { conversation_targets: { 'workspace@1-0': false } }),
+    {},
+  )
+})
+
 test('tool toggles collapse to minimal group form', () => {
   // Nothing disabled -> disabling one tool stores a name list.
   assert.deepEqual(toolTogglePatch(webGroup, {}, 'web_search'), {

@@ -520,6 +520,24 @@ function SkillsSection({ inventory, disabled, toggle }: CapabilityRowsProps) {
   )
 }
 
+function ConversationTargetsSection({ inventory, disabled, toggle }: CapabilityRowsProps) {
+  const targets = inventory.conversation_targets ?? []
+  if (!targets.length) return null
+  return (
+    <div>
+      <SectionTitle>Conversations</SectionTitle>
+      {targets.map(({ bundle_id: bundleId }) => (
+        <MenuRow
+          key={bundleId}
+          label={bundleId}
+          checked={disabled.conversation_targets?.[bundleId] ? 'off' : 'on'}
+          onToggle={() => toggle({ conversation_targets: { [bundleId]: !disabled.conversation_targets?.[bundleId] } })}
+        />
+      ))}
+    </div>
+  )
+}
+
 function ToolGroupsSection({ inventory, disabled, toggle, pending, spotlight, onConsent }: CapabilityRowsProps) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const groups = inventory.tools.filter((group) => !group.system)
@@ -1128,6 +1146,7 @@ function builtInSections(namespaceStyles: NamespaceStyleMap): ComposerMenuSectio
     capabilitySection('tools', 20, (inv) => inv.tools.some((group) => !group.system), ToolGroupsSection),
     capabilitySection('mcp', 30, (inv) => inv.mcp.length > 0, McpSection),
     capabilitySection('services', 40, (inv) => inv.named_services.length > 0, ServicesSection),
+    capabilitySection('conversation-targets', 43, (inv) => Boolean(inv.conversation_targets?.length), ConversationTargetsSection),
     capabilitySection('subagents', 45, (inv) => Boolean(inv.subagents?.available), HelperAgentsSection),
     {
       id: 'connectors',

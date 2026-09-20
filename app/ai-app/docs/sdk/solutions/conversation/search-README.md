@@ -3,7 +3,7 @@ id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/conversation/search-README.
 title: "Conversation Search"
 summary: "Recover decisions, sources, and prior work from the same user's current or earlier conversations through one identity-safe search used by agents, apps, MCP clients, REST, and the chat UI."
 tags: ["sdk", "solutions", "conversation", "search", "conv", "memory-realm", "agent-tools", "named-service-provider", "rank-weights", "rrf"]
-updated_at: 2026-09-08
+updated_at: 2026-09-18
 keywords:
   [
     "conversation search",
@@ -266,17 +266,56 @@ flow are in
 The provider (`sdk/solutions/conversation/named_service.py`, provider id
 `sdk.conversation`) mirrors the memory provider's shape: decorated class,
 spec factory, search scopes, `intro`. The **kdcube-services** app registers it,
-supplying the two seams — `conversation_search_context_from_ns` as the context
-factory and a pooled `make_conversation_search_backend` bound per request to
-the caller's tenant/project — and publishes `conv` on its `named_services` MCP
-surface. From there the realm is reachable by connected external agents and by
+supplying the seams — a context factory built on
+`conversation_search_context_from_ns`, a pooled `make_conversation_search_backend`
+bound per request to the caller's tenant/project, and a registry check for a
+requested bundle — and publishes `conv` on its `named_services` MCP surface.
+From there the realm is reachable by connected external agents, by hosted
+application agents over delegated MCP or the native named-service door, and by
 generated code in isolated runtimes over the relay (see the
 [isolated-runtime doc](../kdcube-services/named-services-from-isolated-runtime-README.md)).
 The provider advertises read operations only and carries advisory grant hints
-(`conversations:read`, `conversations:read:any_user` for selected-user access);
-consent and enforcement live at the managed boundary, and registration follows
-the [discovery registry](../../namespace-services/discovery-README.md) like
-every other provider.
+(`conversations:read`, `conversations:read:any_user` for selected-user access).
+The managed boundary checks the operation and effective Card; the provider
+checks both the selected application target and the payload-dependent
+`conversations:read:any_user` claim before reading storage. Registration
+follows the [discovery registry](../../namespace-services/discovery-README.md)
+like every other provider.
+
+For a delegated invocation, the provider derives payload authority exclusively
+from the bound effective Card claims. For a direct platform invocation without
+a delegated scope, it derives payload authority from the named-service context.
+
+Every `conv` call is served by kdcube-services, so the bundle on the provider's
+own request context names the provider, never the caller, and never scopes a
+search. The application target is resolved from the trusted caller and an
+optional `filters.bundle_id`:
+
+1. A hosted agent defaults to its own bundle's conversations. Admission supplies
+   its client identity (`kdcube-agent:<bundle>:<agent>`) or the validated source
+   bundle on a relayed application call; the provider never uses the serving
+   kdcube-services bundle as the source.
+2. For another bundle, the source agent descriptor lists the exact target at
+   `surfaces.as_consumer.agents.<agent>.tools[].namespaces.conv.targets` on a
+   `kind: named_service` connection. The effective Connection Hub Card also
+   contains that target in `kdcube.conversation_targets`. This Card property
+   is a finite list, composed with the project Control Card when linked.
+3. An external OAuth caller has no own bundle. Its Card lists a finite target
+   before it can read any conversation. A single target is the default; with
+   multiple targets the caller supplies `bundle_id`.
+4. A user may disable any displayed target, including the hosted agent's own,
+   in the capabilities picker. The picker shows the source bundle and only
+   configured cross-bundle targets on the effective Card; its saved choice
+   removes access without adding a target to the descriptor or Card.
+
+The target guard is shared by `object.search`, `object.list`, `object.get`,
+exports, and conversation file reads through managed MCP, native calls, and
+Data Bus relay. An unknown explicit bundle answers `404
+conversation_bundle_not_found`. An existing target refused by the Card, the
+hosted agent's descriptor, or the user's choice answers `403` with a code naming
+the refusing layer. The target is applied to storage reads, including turn logs
+and file materialization. The model supplies only a requested target, never
+the caller identity or its authority.
 
 ### Let a person search their own conversations
 

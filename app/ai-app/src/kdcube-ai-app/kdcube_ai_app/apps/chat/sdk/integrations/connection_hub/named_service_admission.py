@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import contextmanager
 from typing import Any, Mapping
 
 from connection_hub.agent_account_scope import bind_agent_account_scope
@@ -35,10 +36,16 @@ from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.admission im
     NamedServiceAdmissionSelector,
     effective_named_service_operation,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.authority_scope import (
+    bind_named_service_claims,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import (
     NamedServiceError,
     NamedServiceRequest,
     NamedServiceResponse,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.conversation.target_scope import (
+    bind_conversation_targets,
 )
 
 
@@ -89,13 +96,19 @@ class DelegatedAccountExecutionScope:
     account_scope: Mapping[str, Any]
     client_id: str
     resource: str
+    claims: tuple[str, ...] = ()
+    conversation_targets: tuple[str, ...] = ()
 
+    @contextmanager
     def bind(self):
-        return bind_agent_account_scope(
+        with bind_agent_account_scope(
             self.account_scope,
             client_id=self.client_id,
             resource=self.resource,
-        )
+        ), bind_named_service_claims(self.claims), bind_conversation_targets(
+            self.conversation_targets
+        ):
+            yield
 
 
 def _selector_mapping(selector: NamedServiceAdmissionSelector) -> dict[str, Any]:
@@ -116,6 +129,8 @@ def _decision(
             account_scope=evaluation.account_scope,
             client_id=evaluation.client_id,
             resource=evaluation.resource,
+            claims=evaluation.claims,
+            conversation_targets=evaluation.conversation_targets,
         )
     return NamedServiceAdmissionDecision.allow(
         execution_scope=scope,
