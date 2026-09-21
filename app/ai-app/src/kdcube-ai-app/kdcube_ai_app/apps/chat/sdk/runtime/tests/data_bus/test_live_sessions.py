@@ -178,6 +178,7 @@ async def test_revoked_card_is_removed_before_outbound_delivery(monkeypatch) -> 
             "access_id": "alpha",
             "resource": "https://runtime.example/problem-board",
             "client_id": "worker-alpha",
+            "grantor_user_id": "grantor-alpha",
             "delegate_identity": "worker:alpha",
             "delegated_bearer_token": "must-not-be-stored",
         },
@@ -189,6 +190,7 @@ async def test_revoked_card_is_removed_before_outbound_delivery(monkeypatch) -> 
         "access_id": "alpha",
         "resource": "https://runtime.example/problem-board",
         "client_id": "worker-alpha",
+        "grantor_user_id": "grantor-alpha",
         "delegate_identity": "worker:alpha",
     }
     assert "must-not-be-stored" not in json.dumps(stored)
@@ -238,3 +240,52 @@ async def test_active_card_remains_in_outbound_delivery_index(monkeypatch) -> No
         principal="card:alpha",
         now=1_900_000_000,
     ) == ("session-alpha",)
+
+
+
+@pytest.mark.asyncio
+async def test_live_session_card_lookup_reads_through_the_durable_store(monkeypatch) -> None:
+    # A missing projection must resolve from the durable Card, not read as
+    # revoked, so the lookup carries the store and the grantor it needs.
+    seen: dict = {}
+    store = object()
+
+    async def resolve(redis, **kwargs):
+        del redis
+        seen.update(kwargs)
+        return None
+
+    monkeypatch.setattr(live_sessions, "resolve_live_grant_card", resolve)
+    monkeypatch.setattr(
+        live_sessions, "delegated_card_store", lambda **scope: store
+    )
+    redis = _Redis()
+    registry = DataBusLiveSessionRegistry(redis)
+    await registry.register(
+        tenant="tenant-a",
+        project="project-a",
+        bundle_id="problem-board@1-0",
+        principal="card:alpha",
+        session_id="session-alpha",
+        socket_id="socket-alpha",
+        expires_at=2_000_000_000,
+        authorization_scope={
+            "credential_kind": "delegated_card",
+            "access_id": "alpha",
+            "resource": "https://runtime.example/problem-board",
+            "client_id": "worker-alpha",
+            "grantor_user_id": "grantor-alpha",
+            "delegate_identity": "worker:alpha",
+        },
+    )
+
+    await registry.sessions(
+        tenant="tenant-a",
+        project="project-a",
+        bundle_id="problem-board@1-0",
+        principal="card:alpha",
+        now=1_900_000_000,
+    )
+
+    assert seen["card_store"] is store
+    assert seen["expected_grantor_subject"] == "grantor-alpha"

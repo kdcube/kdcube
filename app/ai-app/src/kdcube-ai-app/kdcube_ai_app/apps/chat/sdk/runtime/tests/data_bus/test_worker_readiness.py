@@ -888,3 +888,41 @@ async def test_handler_binds_local_bundle_callers_for_its_lifetime(
     assert get_current_bundle_operation_caller() is None
     assert get_current_bundle_operation_stream_caller() is None
     assert get_current_bundle_named_service_caller() is None
+
+
+
+@pytest.mark.asyncio
+async def test_worker_card_lookup_reads_through_the_durable_store(monkeypatch) -> None:
+    seen: dict = {}
+    store = object()
+
+    async def _resolve(*_args, **kwargs):
+        seen.update(kwargs)
+        return None
+
+    monkeypatch.setattr(worker_module, "resolve_live_grant_card", _resolve)
+    monkeypatch.setattr(worker_module, "delegated_card_store", lambda **scope: store)
+    stream = _RecordingStream()
+    handler = DataBusHandlerSpec(
+        method_name="handle_publish",
+        subject="report.publish.requested",
+    )
+    worker = _worker_with_handler(stream, handler)
+
+    async def _send_default_reply(_message, _result) -> None:
+        stream.calls.append("reply")
+
+    worker._send_default_reply = _send_default_reply
+    message = DataBusMessage(
+        message_id="message-store-read-through",
+        tenant="tenant-data-bus",
+        project="project-data-bus",
+        bundle_id="reports@1-0",
+        subject=handler.subject,
+        actor=_delegated_actor(),
+    )
+
+    await worker._process_claim(_claim(message))
+
+    assert seen["card_store"] is store
+    assert seen["expected_grantor_subject"]

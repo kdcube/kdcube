@@ -17,6 +17,9 @@ from connection_hub.delegated_credentials.live_grant import (
     live_grants_for_resource,
     resolve_live_grant_card,
 )
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.serving import (
+    delegated_card_store,
+)
 
 LIVE_SESSION_SCHEMA = "kdcube.data_bus.live_session.v1"
 LIVE_SESSION_INDEX_TTL_SECONDS = 3600
@@ -89,6 +92,7 @@ class DataBusLiveSessionRegistry:
                 "access_id": str(authority.get("access_id") or ""),
                 "resource": str(authority.get("resource") or ""),
                 "client_id": str(authority.get("client_id") or ""),
+                "grantor_user_id": str(authority.get("grantor_user_id") or ""),
                 "delegate_identity": str(
                     authority.get("delegate_identity") or ""
                 ),
@@ -217,18 +221,27 @@ class DataBusLiveSessionRegistry:
         resource = str(authorization.get("resource") or "").strip()
         if not access_id or not resource:
             return False
+        tenant = str(record.get("tenant") or "")
+        project = str(record.get("project") or "")
         try:
+            # A record written before the grantor was kept resolves without
+            # the store; a missing projection then reads as unknown, not
+            # revoked.
             card = await resolve_live_grant_card(
                 self.redis,
-                tenant=str(record.get("tenant") or ""),
-                project=str(record.get("project") or ""),
+                tenant=tenant,
+                project=project,
                 access_id=access_id,
                 expected_client_id=str(
                     authorization.get("client_id") or ""
                 ).strip(),
+                expected_grantor_subject=str(
+                    authorization.get("grantor_user_id") or ""
+                ).strip(),
                 expected_delegate_subject=str(
                     authorization.get("delegate_identity") or ""
                 ).strip(),
+                card_store=delegated_card_store(tenant=tenant, project=project),
             )
         except LiveGrantCardError:
             return None

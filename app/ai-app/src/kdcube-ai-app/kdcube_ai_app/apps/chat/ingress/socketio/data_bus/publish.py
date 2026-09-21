@@ -14,6 +14,9 @@ from connection_hub.delegated_credentials.live_grant import (
     live_grants_for_resource,
     resolve_live_grant_card,
 )
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.serving import (
+    delegated_card_store,
+)
 from connection_hub.delegated_credentials.resource_operations import (
     operations_for_resource,
 )
@@ -130,9 +133,13 @@ async def _live_delegated_card(
             project=project,
             access_id=access_id,
             expected_client_id=str(scope.get("client_id") or "").strip(),
+            expected_grantor_subject=str(
+                scope.get("grantor_user_id") or ""
+            ).strip(),
             expected_delegate_subject=str(
                 scope.get("delegate_identity") or ""
             ).strip(),
+            card_store=delegated_card_store(tenant=tenant, project=project),
         )
     except LiveGrantCardError as exc:
         return None, {

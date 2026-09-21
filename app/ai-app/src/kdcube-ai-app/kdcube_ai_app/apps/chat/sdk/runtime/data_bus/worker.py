@@ -15,6 +15,9 @@ from connection_hub.delegated_credentials.live_grant import (
     live_grants_for_resource,
     resolve_live_grant_card,
 )
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.serving import (
+    delegated_card_store,
+)
 from connection_hub.delegated_credentials.resource_operations import (
     operations_for_resource,
 )
@@ -224,6 +227,7 @@ async def _resolve_live_delegated_actor(
             expected_delegate_subject=str(
                 binding.get("delegate_identity") or ""
             ).strip(),
+            card_store=delegated_card_store(tenant=tenant, project=project),
         )
     except LiveGrantCardError as exc:
         raise _DelegatedCardDenial(

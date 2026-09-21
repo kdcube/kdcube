@@ -1342,3 +1342,38 @@ async def test_federated_connect_rejects_explicitly_disallowed_origin(monkeypatc
     )
 
     assert ok is False
+
+
+
+@pytest.mark.asyncio
+async def test_publish_card_lookup_reads_through_the_durable_store(monkeypatch):
+    # A missing projection must resolve from the durable Card, not read as
+    # revoked (2026-09-21 migration incident), so the lookup carries the
+    # durable store and the grantor from the admission scope.
+    seen: dict = {}
+    store = object()
+
+    async def resolve(redis, **kwargs):
+        del redis
+        seen.update(kwargs)
+        return None
+
+    monkeypatch.setattr(pub, "resolve_live_grant_card", resolve)
+    monkeypatch.setattr(pub, "delegated_card_store", lambda **scope: store)
+
+    card, error = await pub._live_delegated_card(
+        redis=object(),
+        tenant="tenant-a",
+        project="project-a",
+        scope={
+            "access_id": "card-a",
+            "resource": "https://runtime.example/problem-board",
+            "client_id": "client-a",
+            "grantor_user_id": "grantor-a",
+            "delegate_identity": "worker-a",
+        },
+    )
+
+    assert card is None and error is not None
+    assert seen["card_store"] is store
+    assert seen["expected_grantor_subject"] == "grantor-a"

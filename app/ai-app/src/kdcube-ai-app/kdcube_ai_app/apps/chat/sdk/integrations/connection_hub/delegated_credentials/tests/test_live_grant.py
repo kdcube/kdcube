@@ -137,10 +137,8 @@ async def test_live_grant_resolves_current_valid_card():
 
 
 @pytest.mark.asyncio
-async def test_live_grant_absent_expired_or_revoked_denies():
+async def test_live_grant_expired_or_revoked_denies():
     redis = _Redis()
-    assert await _resolve(redis) is None
-
     redis.values[_key()] = _projection(_authority(expires_at=int(time.time()) - 1))
     assert await _resolve(redis) is None
 
@@ -233,3 +231,46 @@ def test_live_resource_grants_preserve_explicit_empty_narrowing():
 
     assert live_grants_for_resource(authority, RESOURCE) == ()
     assert live_grants_for_resource(authority, "https://runtime.example.test/mcp/other") is None
+
+
+@pytest.mark.asyncio
+async def test_a_missing_projection_without_a_store_is_unavailable_not_revoked():
+    # 2026-09-21: the Card identity migration removed every moved Card's
+    # projection; callers without a durable store read the absence as
+    # "revoked", and every relay refresh was refused as invalid_grant.
+    redis = _Redis()
+
+    with pytest.raises(LiveGrantCardError) as exc_info:
+        await _resolve(redis)
+
+    assert exc_info.value.reason == "card_projection_missing"
+
+
+class _DurableCards:
+    def __init__(self, authority) -> None:
+        self.authority = authority
+        self.reads: list[tuple[str, str]] = []
+
+    async def read_current_authority(self, *, subject_hash: str, access_id: str):
+        self.reads.append((subject_hash, access_id))
+        return object(), self.authority
+
+
+@pytest.mark.asyncio
+async def test_a_missing_projection_reads_through_to_the_durable_card():
+    redis = _Redis()
+    store = _DurableCards(_authority())
+
+    resolved = await resolve_live_grant_card(
+        redis,
+        tenant=TENANT,
+        project=PROJECT,
+        access_id=ACCESS_ID,
+        expected_client_id=CLIENT,
+        expected_grantor_subject=GRANTOR,
+        expected_delegate_subject=DELEGATE,
+        card_store=store,
+    )
+
+    assert resolved is not None and resolved.access_id == ACCESS_ID
+    assert [access_id for _, access_id in store.reads] == [ACCESS_ID]

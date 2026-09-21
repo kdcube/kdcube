@@ -66,6 +66,7 @@ from connection_hub.delegated_credentials.cards.resolver import (
     CardUnavailable,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.serving import (
+    delegated_card_store,
     delegated_serving_resolvers,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.cards.service import (
@@ -2378,12 +2379,54 @@ async def authorize_consent(request: Request) -> Response:
     return RedirectResponse(url, status_code=302)
 
 
-def _token_error(error: str, description: str = "", status: int = 400) -> JSONResponse:
+def _token_error(
+    error: str,
+    description: str = "",
+    status: int = 400,
+    *,
+    retry_after_seconds: int | None = None,
+) -> JSONResponse:
+    headers = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+    if retry_after_seconds is not None:
+        headers["Retry-After"] = str(max(1, int(retry_after_seconds)))
     return JSONResponse(
         status_code=status,
         content={"error": error, "error_description": description},
-        headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+        headers=headers,
     )
+
+
+# Live-grant states that end on their own: the Card sweep completes, an
+# in-flight Card mutation commits, or a store read succeeds again. The token is
+# still valid, so the client is told to retry after the wait instead of being
+# told its grant is invalid.
+_TRANSIENT_LIVE_GRANT_REASONS = {
+    "lookup_unavailable": 5,
+    "cache_unavailable": 5,
+    "card_projection_reconciling": 60,
+    "card_updating": 5,
+    "card_projection_missing": 5,
+    "control_card_lookup_unavailable": 5,
+    "control_card_updating": 5,
+    "durable_card_unreadable": 30,
+    "durable_card_history_unreadable": 30,
+}
+
+
+def _refresh_refused(reason: str, client_id: str, description: str) -> JSONResponse:
+    """A refresh refusal with its reason in the log.
+
+    Every refusal is logged with a secret-free reason and the client id, so a
+    refused refresh can be traced to its cause (2026-09-21: four silent
+    invalid_grant returns hid that migrated Cards had no projection).
+    """
+
+    LOGGER.warning(
+        "[connection-hub.oauth] refresh denied reason=%s client_id=%s",
+        reason,
+        client_id,
+    )
+    return _token_error("invalid_grant", description)
 
 
 def _minter_accepts_authority_kwargs(minter) -> bool:
@@ -2752,10 +2795,18 @@ async def token(request: Request) -> Response:
             return _token_error("invalid_request", "missing refresh_token")
         refresh_state = await store.get_refresh_token_state(rt)
         if refresh_state is None:
-            return _token_error("invalid_grant", "refresh token invalid or expired")
+            return _refresh_refused(
+                "refresh_token_unknown",
+                str(client_id or ""),
+                "refresh token invalid or expired",
+            )
         rec = refresh_state.record
         if client_id and rec["client_id"] != client_id:
-            return _token_error("invalid_grant", "client mismatch")
+            return _refresh_refused(
+                "client_mismatch",
+                str(client_id or ""),
+                "client mismatch",
+            )
         # The registry card is the authority: a pointer-carrying refresh record
         # re-derives its scopes from the card AS IT IS NOW — a hub-side
         # extension rides the next refresh, and a revoked card (gone) ends the
@@ -2771,6 +2822,14 @@ async def token(request: Request) -> Response:
             tenant, project = oauth_tenant_project(request)
             credential = rec.get("credential")
             credential = credential if isinstance(credential, Mapping) else {}
+            # A projection lost to eviction or removed by a migration is not a
+            # revoked Card: with the durable store the lookup reads through to
+            # the committed revision, as the MCP surface guard does.
+            resolvers = delegated_serving_resolvers(request)
+            card_store = getattr(resolvers, "cards", None) or delegated_card_store(
+                tenant=tenant,
+                project=project,
+            )
             try:
                 card = await resolve_live_grant_card(
                     store.redis,
@@ -2780,6 +2839,7 @@ async def token(request: Request) -> Response:
                     expected_client_id=str(rec.get("client_id") or ""),
                     expected_grantor_subject=str(rec.get("sub") or ""),
                     expected_delegate_subject=str(credential.get("subject") or ""),
+                    card_store=card_store,
                 )
             except LiveGrantCardError as exc:
                 LOGGER.warning(
@@ -2787,20 +2847,34 @@ async def token(request: Request) -> Response:
                     exc.reason,
                     str(rec.get("client_id") or ""),
                 )
-                status = 503 if exc.reason == "lookup_unavailable" else 400
+                retry_after = _TRANSIENT_LIVE_GRANT_REASONS.get(exc.reason)
+                if retry_after is not None:
+                    return _token_error(
+                        "temporarily_unavailable",
+                        "current delegated authorization state is unavailable",
+                        status=503,
+                        retry_after_seconds=retry_after,
+                    )
                 return _token_error(
-                    "temporarily_unavailable" if status == 503 else "invalid_grant",
+                    "invalid_grant",
                     "current delegated authorization state is unavailable",
-                    status=status,
                 )
             if card is None:
-                return _token_error("invalid_grant", "delegated consent was revoked")
+                return _refresh_refused(
+                    "card_revoked_or_expired",
+                    str(rec.get("client_id") or ""),
+                    "delegated consent was revoked",
+                )
             live_scopes = live_grants_for_resource(
                 card,
                 str(rec.get("resource") or "") or "*",
             )
             if live_scopes is None:
-                return _token_error("invalid_grant", "delegated consent no longer covers this resource")
+                return _refresh_refused(
+                    "card_resource_not_covered",
+                    str(rec.get("client_id") or ""),
+                    "delegated consent no longer covers this resource",
+                )
             scopes = list(live_scopes)
             operations = list(card.operations)
             resource_grants = dict(card.resource_grants)
@@ -2816,7 +2890,11 @@ async def token(request: Request) -> Response:
             state=refresh_state,
         )
         if not new_rt:
-            return _token_error("invalid_grant", "refresh token invalid or expired")
+            return _refresh_refused(
+                "refresh_token_rotation_lost",
+                str(rec.get("client_id") or ""),
+                "refresh token invalid or expired",
+            )
         return await _issue_tokens(
             request, store,
             sub=rec["sub"], scopes=scopes, client_id=rec["client_id"],

@@ -568,3 +568,108 @@ def test_grant_store_outage_is_logged_and_returned_as_retryable_503(ctx, caplog)
         "error_description": "OAuth authorization state is temporarily unavailable",
     }
     assert "route=token operation=refresh_token.read" in caplog.text
+
+
+
+@pytest.mark.asyncio
+async def test_refresh_reads_a_missing_projection_through_to_the_durable_card(ctx):
+    # 2026-09-21: the Card identity migration removed every moved Card's
+    # projection and the token route, with no durable store, refused every
+    # refresh as "delegated consent was revoked". It reads through now.
+    import json
+    from dataclasses import replace
+
+    from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.serving import (
+        SERVING_RESOLVERS_ATTR,
+    )
+
+    client, store = ctx
+    code = await _seed_code(store)
+    first = client.post("/oauth/token", data={
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": "http://127.0.0.1:9000/callback",
+        "client_id": "claude",
+        "code_verifier": VERIFIER,
+    }).json()
+    refresh_token = first["refresh_token"]
+    refresh_record = await store.validate_refresh_token(refresh_token)
+    card_key = _card_key(_seed_live_card(store, refresh_record))
+    durable = CardAuthority.from_mapping(
+        json.loads(store.redis.values.pop(card_key))["authority"]
+    )
+
+    class _DurableCards:
+        reads = 0
+
+        async def read_current_authority(self, *, subject_hash, access_id):
+            _DurableCards.reads += 1
+            assert access_id == durable.access_id
+            return object(), durable
+
+    state = client.app.state
+    setattr(
+        state,
+        SERVING_RESOLVERS_ATTR,
+        replace(getattr(state, SERVING_RESOLVERS_ATTR), cards=_DurableCards()),
+    )
+
+    response = client.post("/oauth/token", data={
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": "claude",
+    })
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["refresh_token"] != refresh_token
+    assert _DurableCards.reads == 1
+
+
+def test_every_refused_refresh_names_its_reason(ctx, caplog):
+    client, _ = ctx
+    with caplog.at_level("WARNING", logger="kdcube.connection_hub.oauth"):
+        response = client.post("/oauth/token", data={
+            "grant_type": "refresh_token", "refresh_token": "bogus", "client_id": "claude",
+        })
+
+    assert response.status_code == 400
+    assert "refresh denied reason=refresh_token_unknown client_id=claude" in caplog.text
+    assert "bogus" not in caplog.text
+
+
+
+@pytest.mark.asyncio
+async def test_a_reconciling_card_is_a_retryable_503_that_keeps_the_token(ctx, monkeypatch):
+    # 2026-09-21: the reconciling state answered 400 invalid_grant, so the
+    # relay marked the channel permanently refused for a wait of a minute.
+    from connection_hub.delegated_credentials.live_grant import LiveGrantCardError
+    from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.http import (
+        routes as token_routes,
+    )
+
+    client, store = ctx
+    code = await _seed_code(store)
+    first = client.post("/oauth/token", data={
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": "http://127.0.0.1:9000/callback",
+        "client_id": "claude",
+        "code_verifier": VERIFIER,
+    }).json()
+    refresh_token = first["refresh_token"]
+
+    async def reconciling(*_args, **_kwargs):
+        raise LiveGrantCardError("card_projection_reconciling")
+
+    monkeypatch.setattr(token_routes, "resolve_live_grant_card", reconciling)
+
+    response = client.post("/oauth/token", data={
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": "claude",
+    })
+
+    assert response.status_code == 503
+    assert response.json()["error"] == "temporarily_unavailable"
+    assert int(response.headers["Retry-After"]) > 0
+    assert await store.validate_refresh_token(refresh_token) is not None
