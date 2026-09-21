@@ -4,8 +4,8 @@ title: "LinkedIn Integration"
 summary: "Recipe for configuring a LinkedIn OAuth connector app in Connection Hub, letting KDCube users connect their own LinkedIn accounts, and wiring LinkedIn publishing through delegated-to-KDCube connected accounts, productivity MCP tools, and the linkedin named-service namespace."
 status: active
 tags: ["recipes", "connections", "connection-hub", "linkedin", "oauth", "connected-accounts", "delegated-to-kdcube", "named-services", "mcp", "capability-catalog", "account-selection"]
-updated_at: 2026-08-07
-keywords: ["LinkedIn OAuth", "publish LinkedIn post", "LinkedIn named service", "LinkedIn productivity MCP", "account_required", "agent_account_binding_required", "outcome_unknown"]
+updated_at: 2026-09-18
+keywords: ["LinkedIn OAuth", "publish LinkedIn post", "LinkedIn named service", "LinkedIn productivity MCP", "account_required", "agent_account_binding_required", "outcome_unknown", "image_too_many_pixels", "gif_too_many_frames"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/integrations/slack-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/components/named-service-README.md
@@ -385,6 +385,15 @@ signed upload and `{filename, content_base64, mime}` is a small inline
 fallback. One file becomes `content.media`; several become
 `content.multiImage`. `alt_texts` is positional, so resolved files keep the
 payload order across the three forms.
+
+Every image is checked before anything is uploaded, whichever form it arrives
+in. The format is read from the image itself, not from the filename or a
+declared `mime`: it must be JPEG, PNG or GIF, and the upload carries the
+detected type. LinkedIn's Images API limits an image to fewer than 36,152,320
+pixels (width × height) and a GIF to 250 frames; it publishes no byte limit,
+and none is applied. A refusal names the cause: `image_too_many_pixels` (with
+`width`, `height`, `pixels`, `max_pixels`), `gif_too_many_frames` (with
+`frames`, `max_frames`) or `unsupported_image_type`.
 
 ### Capability Catalog
 
