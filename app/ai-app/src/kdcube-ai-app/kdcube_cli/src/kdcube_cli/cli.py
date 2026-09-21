@@ -25,6 +25,7 @@ from rich.table import Table
 from rich.text import Text
 
 from kdcube_cli import installer as installer_mod
+from kdcube_cli import bundle_activation
 from kdcube_cli.banner import print_cli_banner
 from kdcube_cli.bundle_delete_transaction import (
     advance_bundle_delete_transaction,
@@ -2774,6 +2775,7 @@ def _bundle_reload_summary_lines(
     *,
     descriptor_path: Path,
     bundle_id: str,
+    payload: dict[str, object] | None = None,
 ) -> list[str]:
     lines = [
         "Bundle reload accepted.",
@@ -2792,7 +2794,13 @@ def _bundle_reload_summary_lines(
         lines.append("Eviction: " + ", ".join(parts))
     elif eviction is not None:
         lines.append(f"Eviction: {eviction}")
-    lines.append("The next request will re-import that bundle from the runtime workspace descriptor path.")
+    # What loaded, read from the receipt and checked against the pin (W209).
+    lines.extend(bundle_activation.activation_lines(result, payload or {"bundle_id": bundle_id}))
+    activation = result.get("activation")
+    if isinstance(activation, dict) and activation.get("mode") == "snapshot":
+        lines.append("The next request will re-import that bundle from the snapshot above.")
+    else:
+        lines.append("The next request will re-import that bundle from the runtime workspace descriptor path.")
     return lines
 
 
@@ -2872,6 +2880,16 @@ def _post_local_bundle_control(
     return result
 
 
+def _descriptor_bundle_path(descriptor_path: Path, bundle_id: str) -> str:
+    """The container path a descriptor entry declares, or "" for a git-backed or pathless entry."""
+    text = descriptor_path.read_text()
+    data = yaml.safe_load(text) if descriptor_path.suffix.lower() in {".yaml", ".yml"} else json.loads(text)
+    for spec in _iter_bundle_specs(data if isinstance(data, dict) else None):
+        if str(spec.get("id") or "") == bundle_id:
+            return str(spec.get("path") or "").strip() if not _has_value(spec.get("repo")) else ""
+    return ""
+
+
 def reload_bundle_from_descriptor(
     console: Console,
     *,
@@ -2881,6 +2899,8 @@ def reload_bundle_from_descriptor(
     verbose: bool = False,
     json_output: bool = False,
     quiet: bool = False,
+    commit: str | None = None,
+    expect: str | None = None,
 ) -> dict[str, object]:
     ctx = _build_paths_for_repo(repo_root, workdir)
     env_main_path = ctx.config_dir / ".env"
@@ -2902,6 +2922,20 @@ def reload_bundle_from_descriptor(
             f"Known bundles: {known}"
         )
 
+    # An activation at a commit pins the ref on this host first (W209), so a
+    # ref that moves before the proc reads it is refused there, not loaded.
+    host_bundle_path: Path | None = None
+    if commit:
+        host_root, container_root = _bundle_runtime_roots(workdir)
+        host_bundle_path = bundle_activation.host_path_for(
+            _descriptor_bundle_path(descriptor_path, bundle_id),
+            host_root=host_root,
+            container_root=container_root,
+        )
+    payload, pin_lines = bundle_activation.activation_payload(
+        bundle_id=bundle_id, commit=commit, expect=expect, host_path=host_bundle_path
+    )
+
     running = _compose_running_services(ctx.docker_dir, env_main_path)
     if "chat-proc" not in running:
         raise SystemExit(
@@ -2914,18 +2948,20 @@ def reload_bundle_from_descriptor(
             f"[dim]Reloading bundle[/dim] {bundle_id}\n"
             f"[dim]Descriptor[/dim] {descriptor_path}"
         )
+        for line in pin_lines:
+            console.print(f"[dim]{line}[/dim]")
     result = _post_local_bundle_control(
         console,
         ctx=ctx,
         env_main_path=env_main_path,
         endpoint="/internal/bundles/reload-authority",
-        payload={"bundle_id": bundle_id},
+        payload=payload,
         label="Bundle reload",
         verbose=verbose,
     )
     result.setdefault(
         "messages",
-        _bundle_reload_summary_lines(result, descriptor_path=descriptor_path, bundle_id=bundle_id),
+        _bundle_reload_summary_lines(result, descriptor_path=descriptor_path, bundle_id=bundle_id, payload=payload),
     )
     if json_output:
         _print_json(result)
@@ -4654,6 +4690,23 @@ def main() -> None:
             help="Suppress the banner and routine success chatter",
         )
 
+    def _add_bundle_activation_args(subparser: argparse.ArgumentParser) -> None:
+        subparser.add_argument(
+            "--commit",
+            default=None,
+            dest="activation_commit",
+            help=(
+                "With `reload`, load the bundle's subtree at this commit, tag or branch as a snapshot "
+                "instead of the mounted tree. Pinned on this host first; the proc refuses a ref that moved."
+            ),
+        )
+        subparser.add_argument(
+            "--expect",
+            default=None,
+            dest="activation_expect",
+            help="With `reload --commit`, the full sha the ref must resolve to on the proc (default: the host pin).",
+        )
+
     _sp = subparsers.add_parser("stop", help="Stop the local Docker Compose stack")
     _add_quiet_arg(_sp)
     _sp.add_argument("--tenant", default="", help="Tenant of the runtime to stop. With --project, composes under the platform default base.")
@@ -4669,6 +4722,7 @@ def main() -> None:
     _sp.add_argument("--project", default="", help="Project of the runtime. Pair with --tenant.")
     _sp.add_argument("--workdir", default=None, help="(Advanced) Fully-qualified namespaced runtime workdir")
     _sp.add_argument("--path", default=str(DEFAULT_DIR), help="Platform repo path")
+    _add_bundle_activation_args(_sp)
     _sp.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
     _sp.add_argument(
         "--verbose",
@@ -4827,6 +4881,7 @@ def main() -> None:
         dest="reload_changed",
         help="With `bundle config apply`, reload changed IDs and retire removed IDs after staging descriptors",
     )
+    _add_bundle_activation_args(_sp)
     _sp = subparsers.add_parser("config", help="Export or import runtime descriptors")
     _add_quiet_arg(_sp)
     _sp.add_argument("config_action", choices=("export", "import", "apply"), help="Descriptor operation")
@@ -5545,6 +5600,8 @@ def main() -> None:
                 verbose=bool(args.verbose),
                 json_output=bool(args.json_output),
                 quiet=bool(args.quiet),
+                commit=getattr(args, "activation_commit", None),
+                expect=getattr(args, "activation_expect", None),
             )
             return
         if args.command == "bundle":
@@ -5574,6 +5631,10 @@ def main() -> None:
                     bool(args.delete),
                 ]
             )
+            if _bundle_arg != "reload" and (
+                getattr(args, "activation_commit", None) or getattr(args, "activation_expect", None)
+            ):
+                raise SystemExit("--commit and --expect are only supported with `kdcube bundle reload <bundle_id>`.")
             if _bundle_arg == "catalog":
                 if _status_bundle_arg != "check":
                     raise SystemExit("Usage: kdcube bundle catalog check --workdir <workdir>")
@@ -5659,6 +5720,8 @@ def main() -> None:
                     verbose=bool(args.verbose),
                     json_output=bool(args.json_output),
                     quiet=bool(args.quiet),
+                    commit=getattr(args, "activation_commit", None),
+                    expect=getattr(args, "activation_expect", None),
                 )
                 return
             if _bundle_arg == "config":

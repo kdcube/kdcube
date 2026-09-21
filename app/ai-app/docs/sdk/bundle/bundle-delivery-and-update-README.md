@@ -61,6 +61,10 @@ kdcube bundle reload workspace@2026-03-31-13-36 --workdir ~/.kdcube/kdcube-runti
 - drops matching dynamic bundle modules from `sys.modules`
 - invalidates static widget entrypoint load state for that bundle
 - broadcasts `changed_bundle_ids` so other proc workers evict the same bundle
+- returns an `activation` block naming what loaded: the mounted tree's head and
+  dirty state, or with `--commit <ref>` the snapshot of that commit the proc
+  imports instead of the tree (see
+  [Activation at a commit](../../configuration/bundles-descriptor-README.md#activation-at-a-commit))
 
 Use it after changing:
 

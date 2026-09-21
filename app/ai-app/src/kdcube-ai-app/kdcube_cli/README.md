@@ -544,7 +544,7 @@ kdcube defaults \
 
 | Command | What it does |
 |---|---|
-| `kdcube bundle reload <bundle_id> [--json] [--quiet]` | Reapply bundle config and clear proc caches — no full restart needed |
+| `kdcube bundle reload <bundle_id> [--commit <ref>] [--expect <sha>] [--json] [--quiet]` | Reapply bundle config and clear proc caches, no full restart needed. The receipt names what loaded. `--commit` loads a snapshot of that commit instead of the mounted tree, pinned on the host and fenced on the proc (`--expect` overrides the pin). Writes nothing to the descriptor. |
 | `kdcube bundle <bundle_id>` | Create, update, or delete a staged bundle entry |
 | `kdcube bundle config apply --descriptors-location <dir> [--dry-run] [--reload]` | User/operator flow to reapply seed `bundles.yaml` / `bundles.secrets.yaml` to an existing runtime — no platform refresh |
 | `kdcube bundle catalog check [--json] [--verbose]` | Compare all app-owned descriptor declarations with the immutable delegated catalog serving requests; report every drift or duplicate owner without changing runtime state |

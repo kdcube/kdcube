@@ -158,6 +158,12 @@ def _application_generation(
         "descriptor_props_fingerprint": descriptor_props_fingerprint,
         "runtime_generation": static_widget_runtime_generation(),
     }
+    # An activation at a commit is its own generation: two activations of the
+    # same mounted tree at different commits must not share one. Added only
+    # when set, so entries without it keep the generation they had.
+    activation_commit = str(getattr(entry.activation, "commit", None) or "").strip() if entry.activation else ""
+    if activation_commit:
+        payload["activation_commit"] = activation_commit
     return hashlib.sha256(_stable_json(payload).encode("utf-8")).hexdigest()[:24]
 
 
@@ -424,8 +430,15 @@ class ProcApplicationLifecycle:
             source="application.preparation",
         )
         resolved_entry = BundleEntry.model_validate(resolved)
+        # The registry keeps what the model does not carry: the mounted path
+        # behind a snapshot and the `source` block naming what loads, so a
+        # later reader can say which commit this process imported.
+        registry_entry = {
+            **resolved_entry.model_dump(mode="python", exclude_none=True),
+            **{key: resolved[key] for key in ("mounted_path", "source") if resolved.get(key) is not None},
+        }
         await upsert_bundles_async(
-            {entry.id: resolved_entry.model_dump(mode="python", exclude_none=True)},
+            {entry.id: registry_entry},
             None,
             resolve_git=False,
             source="application.preparation.resolved",

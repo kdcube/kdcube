@@ -330,10 +330,30 @@ async def resolve_git_bundle_entry_async(
     *,
     source: str = "application.preparation",
 ) -> Dict[str, Any]:
-    """Materialize one Git-backed app without serializing the full registry."""
+    """Materialize one app's source without serializing the full registry.
+
+    A Git-backed entry is cloned at its ref. A local-path entry that declares
+    ``activation.commit`` is exported at that commit into the managed root
+    and its ``path`` points there, so what loads is the commit and not the
+    mounted tree (bundle_snapshot). Either way the returned entry's ``path``
+    is what the loader imports and ``source`` says what that is.
+    """
     normalized = _normalize({"id": bundle_id, **dict(entry or {})})
     resolved = await _apply_git_resolution({normalized["id"]: normalized}, source=source)
-    return dict(resolved[normalized["id"]])
+    out = dict(resolved[normalized["id"]])
+    component = (os.getenv("GATEWAY_COMPONENT") or "ingress").strip().lower()
+    if component == "proc" and not out.get("repo"):
+        from kdcube_ai_app.infra.plugin.bundle_snapshot import resolve_activation_entry
+
+        out = await resolve_activation_entry(out)
+        logger.info(
+            "Bundle activation resolved: id=%s path=%s source=%s origin=%s",
+            bundle_id,
+            out.get("path"),
+            (out.get("source") or {}).get("mode"),
+            source,
+        )
+    return out
 
 
 def _warn_missing_bundle_path_once(*, bundle_id: str, path_val: str, source: str, repo: Optional[str] = None) -> None:

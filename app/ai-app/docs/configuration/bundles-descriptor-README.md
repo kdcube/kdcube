@@ -70,6 +70,7 @@ For the operational local workflow for reusing a runtime, changing bundle roots,
 | `bundles.items[].repo` / `ref` / `subdir` / `module` | proc git resolution | git-backed bundle definition |
 | `bundles.items[].path` / `module` | proc local-path loading | local development bundle definition |
 | `bundles.items[].service.readiness` | proc application lifecycle | aggregate readiness policy: `independent` by default or `required` |
+| `bundles.items[].activation.commit` / `require_commit` | proc bundle activation | local-path entry loads a snapshot of that commit; `require_commit` refuses a reload naming none |
 | `bundles.items[].config` | `self.bundle_prop("...")` | non-secret effective bundle config |
 
 ### Application readiness policy
@@ -889,6 +890,67 @@ For a local path bundle, keep only:
 - `path`
 - `module`
 - `config`
+- `activation` if the entry is pinned to a commit (below)
+
+#### Activation at a commit
+
+A local path bundle is a bind mount of a work tree, and a reload imports
+whatever that tree holds at the instant of import. Two things follow. The
+reload receipt cannot say which version of the bundle is running, and a tree
+that is clean at one commit can move to another clean commit between a
+worker's check and the import, which no dirty-tree check can see.
+
+An activation can name a commit instead. The bundle's subtree at that commit
+is exported from the repository's object store into the managed bundles root
+(`<managed root>/<bundle id>/snapshots/<sha>/`), verified file by file
+against the commit's trees, and the process imports that directory. The
+mounted tree is not read for the import and is not written.
+
+Two ways to name it:
+
+```bash
+# For this activation only: the proc's registry holds the commit until it restarts.
+kdcube bundle reload <bundle_id> --commit <ref> --workdir <runtime-workdir> --path <repo-root>
+```
+
+```yaml
+# For every activation of the entry, including a proc restart.
+bundles:
+  items:
+    - id: "my.bundle@1-0"
+      path: "/bundles/my-repo/src/my_bundle"
+      module: "entrypoint"
+      activation:
+        commit: "3f2a9c1e..."      # any ref; pinned to a sha at activation
+        require_commit: true       # refuse a reload that names no commit
+```
+
+`--commit` takes a commit, tag or branch. The CLI pins it to a sha in the
+host checkout behind `path` first and sends both. The proc resolves the ref
+again in the mounted repository and refuses with `409
+bundle_activation_commit_mismatch` when the two differ, before anything is
+evicted. That is the fence: a branch that moved after the worker read it is
+refused, not loaded. `--expect <sha>` replaces the host pin when the sha
+comes from elsewhere, such as a coordination record. A request commit wins
+over the descriptor's for that activation.
+
+`--commit` writes nothing to the descriptor. A reload stays a reload, and a
+proc restart loads from the descriptor entry again. Making a commit durable
+is a hand edit of `activation.commit`, which is the normal way to change
+the descriptor.
+
+`require_commit: true` turns the receipt into a gate for that entry: a
+reload without `--commit` is refused with `400
+bundle_activation_commit_required` naming the entry and the flag. Nothing
+sets it but the descriptor.
+
+Every reload receipt, with or without a commit, carries an `activation`
+block naming what loaded: for a snapshot its `commit`, `tree`, `path`,
+`origin` (`request` or `descriptor`) and `durable`, and for the mounted tree
+its `head`, `dirty` and the changed paths under the bundle at the moment of
+the read. `kdcube bundle reload` prints the block as `Loaded:` lines and
+exits nonzero when the receipt's commit is not the pinned one. A git-backed
+entry (`repo`/`ref`) refuses `--commit`: its version is its `ref`.
 
 ## `bundles.yaml` by run mode
 
@@ -929,7 +991,10 @@ Reload workflow:
 kdcube bundle reload <bundle_id> --workdir <runtime-workdir> --path <repo-root>
 ```
 
-That reapplies the mounted descriptor and clears proc bundle caches.
+That reapplies the mounted descriptor and clears proc bundle caches. The
+receipt names what loaded (head and dirty state of the mounted tree). To load
+a named commit instead of the tree, add `--commit <ref>` (see
+[Activation at a commit](#activation-at-a-commit)).
 
 ### Direct local service run
 

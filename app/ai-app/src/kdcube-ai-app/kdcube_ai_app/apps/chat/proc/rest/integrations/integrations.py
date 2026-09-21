@@ -1586,6 +1586,11 @@ class BundleReloadAuthorityRequest(BaseModel):
     tenant: Optional[str] = None
     project: Optional[str] = None
     bundle_id: Optional[str] = None
+    # Activation at a commit (W209): `commit` is the ref to load, pinned in
+    # the bundle's repository here; `expected_commit` is the sha the caller
+    # pinned, and a different pin is refused before anything is evicted.
+    commit: Optional[str] = None
+    expected_commit: Optional[str] = None
 
 
 class BundleRemoveRequest(BaseModel):
@@ -3231,8 +3236,9 @@ async def _do_reload_bundles_from_authority(
         payload: Optional[BundleReloadAuthorityRequest] = None,
 ):
     settings = get_settings()
-    from kdcube_ai_app.infra.plugin.bundle_store import reload_registry_from_authority
-    from kdcube_ai_app.infra.plugin.bundle_registry import set_registry_async
+    from kdcube_ai_app.infra.plugin.bundle_store import BundleActivationConfig, reload_registry_from_authority
+    from kdcube_ai_app.infra.plugin.bundle_registry import get_all as get_registry_entries, set_registry_async
+    from kdcube_ai_app.infra.plugin.bundle_snapshot import BundleSnapshotError, prepare_activation
     from kdcube_ai_app.infra.plugin.bundle_loader import (
         BundleSpec,
         clear_bundle_loader_caches,
@@ -3244,13 +3250,22 @@ async def _do_reload_bundles_from_authority(
     tenant_id = (payload.tenant if payload else None) or settings.TENANT
     project_id = (payload.project if payload else None) or settings.PROJECT
     requested_bundle_id = str((payload.bundle_id if payload else "") or "").strip() or None
+    requested_commit = str((payload.commit if payload else "") or "").strip() or None
+    expected_commit = str((payload.expected_commit if payload else "") or "").strip() or None
+    if (requested_commit or expected_commit) and not requested_bundle_id:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "bundle_activation_requires_bundle_id", "message": "An activation at a commit names one bundle."},
+        )
     redis = _get_app_redis(request)
     authority = describe_authoritative_bundle_store(tenant_id, project_id)
     logger.info(
-        "[bundle.reload] requested: tenant=%s project=%s bundle=%s authority=%s pid=%s user=%s",
+        "[bundle.reload] requested: tenant=%s project=%s bundle=%s commit=%s expected=%s authority=%s pid=%s user=%s",
         tenant_id,
         project_id,
         requested_bundle_id or "<all>",
+        requested_commit or "<none>",
+        expected_commit or "<none>",
         authority,
         os.getpid(),
         session.username or session.user_id or "unknown",
@@ -3262,6 +3277,7 @@ async def _do_reload_bundles_from_authority(
         raise HTTPException(status_code=400, detail=str(ve))
 
     target_entry = None
+    activation_source: dict[str, Any] | None = None
     if requested_bundle_id:
         target_entry = reg.bundles.get(requested_bundle_id)
         if target_entry is None:
@@ -3279,10 +3295,48 @@ async def _do_reload_bundles_from_authority(
             bool(target_entry.singleton),
             os.getpid(),
         )
+        # Pin, fence and materialize before anything is evicted: a refused
+        # activation leaves the running bundle exactly as it was.
+        try:
+            activation_commit, activation_source = await prepare_activation(
+                target_entry.model_dump(),
+                commit=requested_commit,
+                expected_commit=expected_commit,
+            )
+        except BundleSnapshotError as exc:
+            status = 409 if exc.code == "bundle_activation_commit_mismatch" else 400
+            logger.warning(
+                "[bundle.reload] activation refused: tenant=%s project=%s bundle=%s code=%s detail=%s",
+                tenant_id,
+                project_id,
+                requested_bundle_id,
+                exc.code,
+                exc.details,
+            )
+            raise HTTPException(status_code=status, detail={"code": exc.code, "message": str(exc), **exc.details})
+        if activation_commit:
+            declared = target_entry.activation or BundleActivationConfig()
+            target_entry = target_entry.model_copy(
+                update={"activation": BundleActivationConfig(commit=activation_commit, require_commit=declared.require_commit)}
+            )
+            reg.bundles[requested_bundle_id] = target_entry
+        logger.info(
+            "[bundle.reload] activation source: tenant=%s project=%s bundle=%s mode=%s commit=%s path=%s pid=%s",
+            tenant_id,
+            project_id,
+            requested_bundle_id,
+            activation_source.get("mode"),
+            activation_source.get("commit") or activation_source.get("head") or "<none>",
+            activation_source.get("path"),
+            os.getpid(),
+        )
 
     bundles_dict = {bid: entry.model_dump() for bid, entry in reg.bundles.items()}
     eviction_result: dict[str, int] | None = None
     if tenant_id == settings.TENANT and project_id == settings.PROJECT:
+        # The path this process loaded last time may differ from the
+        # descriptor path (a snapshot), and eviction is keyed by path.
+        previously_loaded = dict(get_registry_entries().get(requested_bundle_id) or {}) if requested_bundle_id else {}
         await set_registry_async(
             bundles_dict,
             reg.default_bundle_id,
@@ -3318,6 +3372,27 @@ async def _do_reload_bundles_from_authority(
                 singleton=bool(target_payload.get("singleton")),
             )
             eviction_result = evict_bundle_scope(target_spec, drop_sys_modules=True)
+            previous_path = str(previously_loaded.get("path") or "").strip()
+            if previous_path and previous_path != str(target_payload.get("path") or ""):
+                previous_eviction = evict_bundle_scope(
+                    BundleSpec(
+                        id=target_spec.id,
+                        path=previous_path,
+                        module=str(previously_loaded.get("module") or target_payload.get("module") or "") or None,
+                        singleton=bool(previously_loaded.get("singleton", target_payload.get("singleton"))),
+                    ),
+                    drop_sys_modules=True,
+                )
+                eviction_result = {
+                    key: int(eviction_result.get(key, 0)) + int(previous_eviction.get(key, 0))
+                    for key in set(eviction_result) | set(previous_eviction)
+                }
+                logger.info(
+                    "[bundle.reload] evicted previously loaded path too: bundle=%s previous_path=%s eviction=%s",
+                    requested_bundle_id,
+                    previous_path,
+                    previous_eviction,
+                )
             invalidate_static_bundle_entrypoint_loads(
                 bundle_id=requested_bundle_id,
                 tenant=tenant_id,
@@ -3394,6 +3469,9 @@ async def _do_reload_bundles_from_authority(
         "eviction": eviction_result,
         "changed_bundle_ids": changed_bundle_ids,
         "broadcast_receivers": receivers,
+        # What this activation loads: a snapshot named by commit, or the
+        # mounted tree with its head and dirty state at the moment of the read.
+        "activation": activation_source,
     }
 
 

@@ -879,6 +879,7 @@ def _entries_equivalent(a: "BundleEntry", b: "BundleEntry") -> bool:
         and _norm_str(a.ref) == _norm_str(b.ref)
         and _norm_str(a.subdir) == _norm_str(b.subdir)
         and _norm_str(a.git_commit) == _norm_str(b.git_commit)
+        and (a.activation or BundleActivationConfig()) == (b.activation or BundleActivationConfig())
     )
 
 def _merge_example_bundles(reg: "BundlesRegistry") -> tuple["BundlesRegistry", bool]:
@@ -927,6 +928,21 @@ class BundleServiceConfig(BaseModel):
     readiness: Literal["independent", "required"] = "independent"
 
 
+class BundleActivationConfig(BaseModel):
+    """How a local-path bundle is activated.
+
+    ``commit`` names the commit the bundle loads from: its subtree at that
+    commit is exported from the repository holding ``path`` into the managed
+    root and imported from there, so the mounted tree cannot reach the import
+    (bundle_snapshot). ``require_commit`` refuses an activation that names no
+    commit, which turns the receipt into a fence for that entry. Both are
+    read from the descriptor only. Nothing in the runtime writes them.
+    """
+
+    commit: Optional[str] = None
+    require_commit: bool = False
+
+
 class BundleEntry(BaseModel):
     id: str
     name: Optional[str] = None
@@ -939,6 +955,7 @@ class BundleEntry(BaseModel):
     subdir: Optional[str] = None
     git_commit: Optional[str] = None
     service: Optional[BundleServiceConfig] = None
+    activation: Optional[BundleActivationConfig] = None
 
 class BundlesRegistry(BaseModel):
     default_bundle_id: Optional[str] = None
@@ -2390,6 +2407,20 @@ async def force_env_reset_if_requested(
         await _release_bundle_props_lock(redis, lock_key=lock_key, token=lock_token)
 
 
+def _nested_block(bid: str, key: str, raw: Any, model: type[BaseModel]) -> Optional[BaseModel]:
+    """A nested descriptor block as its model. Absent is None. Malformed is refused, not dropped."""
+    if raw is None:
+        return None
+    if isinstance(raw, model):
+        return raw
+    if not isinstance(raw, dict):
+        raise ValueError(f"Bundle '{bid}': '{key}' must be a mapping, got {type(raw).__name__}.")
+    try:
+        return model.model_validate(raw)
+    except Exception as exc:
+        raise ValueError(f"Bundle '{bid}': '{key}' block is invalid: {exc}") from exc
+
+
 def _to_entry(bid: str, v: Dict[str, Any]) -> BundleEntry:
     """Normalize incoming dict -> BundleEntry."""
     unsupported_keys = {"git_url", "git_ref", "git_subdir", "git_repo"}
@@ -2422,6 +2453,10 @@ def _to_entry(bid: str, v: Dict[str, Any]) -> BundleEntry:
         ref=ref,
         subdir=subdir,
         git_commit=_norm_str(v.get("git_commit")),
+        # Nested blocks the model declares must be carried here too, or the
+        # descriptor's word never reaches the runtime that reads the field.
+        service=_nested_block(bid, "service", v.get("service"), BundleServiceConfig),
+        activation=_nested_block(bid, "activation", v.get("activation"), BundleActivationConfig),
     )
     # Explicit descriptor references to built-in bundles should resolve even
     # when automatic example inclusion is disabled.
