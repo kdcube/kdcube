@@ -26,6 +26,26 @@ from connection_hub.delegated_credentials.live_grant import (
     live_grants_for_resource,
     resolve_live_grant_card,
 )
+from connection_hub.delegated_credentials.cards.cache import DelegatedCardRuntimeCache as _CardCache
+from connection_hub.delegated_credentials.cards.reconcile import CardProjectionEpochGate
+
+
+@pytest.fixture(autouse=True)
+def _projections_swept(monkeypatch):
+    """This Redis run's Card projections are already swept against durable
+    state, as after startup (cards/reconcile.py). The fake Redis has no run_id."""
+
+    async def _ready(self):
+        return True
+
+    async def _read_in_current_run(self, access_id):
+        return True, await self.read(access_id)
+
+    monkeypatch.setattr(CardProjectionEpochGate, "is_ready", _ready)
+    monkeypatch.setattr(
+        _CardCache, "read_in_current_run", _read_in_current_run
+    )
+
 
 TENANT = "tenant-a"
 PROJECT = "project-a"

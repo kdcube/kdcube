@@ -39,9 +39,24 @@ from connection_hub.delegated_credentials.oauth.store import (
 # ------------------------------- fake redis -------------------------------
 
 class FakeRedis:
+    """In-memory Redis for grant-store tests.
+
+    It models a Redis whose current run has already been swept against durable
+    Cards (connection_hub cards/reconcile.py): INFO reports ``RUN_ID`` and every
+    ``...:cards-epoch`` key reads as that run unless a test sets it.
+    """
+
+    RUN_ID = "fake-redis-run"
+
     def __init__(self):
         self.values: dict[str, str] = {}
         self.ttls: dict[str, int] = {}
+
+    async def info(self, section=None):
+        return {"run_id": self.RUN_ID}
+
+    def pipeline(self, transaction=True):
+        return _FakePipeline(self)
 
     async def set(self, key, value, nx=False, ex=None):
         if nx and key in self.values:
@@ -63,6 +78,8 @@ class FakeRedis:
         return True
 
     async def get(self, key):
+        if key.endswith(":cards-epoch") and key not in self.values:
+            return self.RUN_ID
         return self.values.get(key)
 
     async def delete(self, *keys):
@@ -104,6 +121,25 @@ class FakeRedis:
             self.ttls.pop(key, None)
             return current
         raise AssertionError("unsupported Lua script in FakeRedis")
+
+
+class _FakePipeline:
+    """Queues the reads ``DelegatedCardRuntimeCache.read_in_current_run`` sends."""
+
+    def __init__(self, redis: FakeRedis):
+        self._redis = redis
+        self._calls: list = []
+
+    def info(self, section=None):
+        self._calls.append(lambda: self._redis.info(section))
+        return self
+
+    def get(self, key):
+        self._calls.append(lambda: self._redis.get(key))
+        return self
+
+    async def execute(self):
+        return [await call() for call in self._calls]
 
 
 # ------------------------------- clients -------------------------------
