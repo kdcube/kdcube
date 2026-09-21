@@ -10,10 +10,43 @@ from kdcube_ai_app.auth.bundle import (
 )
 
 
+class _FakePipeline:
+    def __init__(self, redis: "FakeRedis") -> None:
+        self._redis = redis
+        self._operations = []
+
+    def info(self, section):
+        self._operations.append(("info", (section,)))
+        return self
+
+    def get(self, key):
+        self._operations.append(("get", (key,)))
+        return self
+
+    def delete(self, key):
+        self._operations.append(("delete", (key,)))
+        return self
+
+    async def execute(self):
+        return [
+            await getattr(self._redis, operation)(*args)
+            for operation, args in self._operations
+        ]
+
+
 class FakeRedis:
     def __init__(self):
         self.values: dict[str, str] = {}
         self.sets: dict[str, set[str]] = {}
+        self.run_id = "test-redis-run"
+
+    async def info(self, section):
+        assert section == "server"
+        return {"run_id": self.run_id}
+
+    def pipeline(self, *, transaction=True):
+        assert transaction is True
+        return _FakePipeline(self)
 
     async def get(self, key):
         return self.values.get(key)

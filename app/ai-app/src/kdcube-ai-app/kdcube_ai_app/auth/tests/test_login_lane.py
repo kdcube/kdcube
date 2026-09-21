@@ -9,6 +9,7 @@ configuration from the platform provider config."""
 from __future__ import annotations
 
 import json
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -16,6 +17,7 @@ import pytest
 from connection_hub.server_side_login.cookies import StandardCookiePolicy
 from connection_hub.server_side_login.flow import BrowserSessionFlow, LoginAttemptRejected
 from connection_hub.server_side_login.model import LoginAttempt, SessionPolicy, VerifiedIdentity
+from connection_hub.one_time_state import state_digest
 
 from kdcube_ai_app.auth.AuthManager import AuthenticationError
 from kdcube_ai_app.auth.bundle import BundleSessionAuthManager, BundleSessionAuthority
@@ -27,6 +29,7 @@ from kdcube_ai_app.auth.bundle.login_lane import (
     login_authenticator_is_oidc,
 )
 from kdcube_ai_app.auth.tests.test_bundle_sessions import FakeRedis
+from kdcube_ai_app.infra.secrets import InMemorySecretsManager, KDCubeEphemeralSecretStore
 
 
 class Clock:
@@ -64,6 +67,16 @@ def _identity(**overrides) -> VerifiedIdentity:
     base = dict(provider="cognito", subject="abc-123", email="Person@Example.com", name="Person", email_verified=True, claims={"cognito:groups": ["staff"]})
     base.update(overrides)
     return VerifiedIdentity(**base)
+
+
+def _attempt_store(authority: BundleSessionAuthority, manager: InMemorySecretsManager):
+    return RedisLoginAttemptStore(
+        authority,
+        secret_store=KDCubeEphemeralSecretStore(
+            manager,
+            namespace="login-attempts",
+        ),
+    )
 
 
 # ---- the authority: idle bound and touch ------------------------------------
@@ -152,6 +165,7 @@ async def test_flow_over_the_platform_backend_issues_a_platform_session(monkeypa
     monkeypatch.setattr("kdcube_ai_app.auth.bundle.login_lane.time.time", clock)
     redis = FakeRedis()
     authority = _authority(redis)
+    secrets = InMemorySecretsManager()
     policy = SessionPolicy(idle_ttl_seconds=600, max_ttl_seconds=3600, touch_interval_seconds=60, attempt_ttl_seconds=120)
     seen: list[VerifiedIdentity] = []
 
@@ -164,7 +178,7 @@ async def test_flow_over_the_platform_backend_issues_a_platform_session(monkeypa
     upstream = FakeUpstream(_identity())
     flow = BrowserSessionFlow(
         backend=backend,
-        attempts=RedisLoginAttemptStore(authority),
+        attempts=_attempt_store(authority, secrets),
         upstream=upstream,
         cookies=StandardCookiePolicy(session_name="__Secure-LATC", secure=True),
         policy=policy,
@@ -173,8 +187,12 @@ async def test_flow_over_the_platform_backend_issues_a_platform_session(monkeypa
 
     start = await flow.begin_login("/app?tab=2")
     assert start.redirect_url.endswith(start.attempt.state)
-    attempt_key = authority._ns(f"kdcube:auth:browser-login:{start.attempt.state}")
+    attempt_key = authority._ns(
+        f"kdcube:auth:browser-login:{state_digest(start.attempt.state)}"
+    )
     assert attempt_key in redis.values
+    assert start.attempt.state not in redis.values[attempt_key]
+    assert start.attempt.code_verifier not in redis.values[attempt_key]
 
     done = await flow.complete_login({"state": start.attempt.state, "code": "c"}, attempt_binding=start.attempt.binding)
     assert done.redirect_to == "/app?tab=2"
@@ -208,14 +226,40 @@ async def test_flow_over_the_platform_backend_issues_a_platform_session(monkeypa
 async def test_attempt_store_take_is_get_and_delete_and_respects_expiry():
     redis = FakeRedis()
     authority = _authority(redis)
-    store = RedisLoginAttemptStore(authority)
-    live = LoginAttempt(state="s1", binding="b", nonce="n", code_verifier="v", next_path="/x", created_at=1, expires_at=4_000_000_000)
+    manager = InMemorySecretsManager()
+    store = _attempt_store(authority, manager)
+    live = LoginAttempt(state="s1", binding="b", nonce="n", code_verifier="v", next_path="/x", created_at=1, expires_at=int(time.time()) + 60)
     await store.put(live)
     assert (await store.take("s1")).next_path == "/x"
     assert await store.take("s1") is None
     stale = LoginAttempt(state="s2", binding="b", nonce="n", code_verifier="v", next_path="/x", created_at=1, expires_at=2)
     await store.put(stale)
     assert await store.take("s2") is None
+
+
+@pytest.mark.asyncio
+async def test_attempt_store_rejects_a_pointer_restored_from_an_older_redis_run():
+    redis = FakeRedis()
+    authority = _authority(redis)
+    manager = InMemorySecretsManager()
+    store = _attempt_store(authority, manager)
+    attempt = LoginAttempt(
+        state="restored",
+        binding="b",
+        nonce="n",
+        code_verifier="verifier-secret",
+        next_path="/x",
+        created_at=1,
+        expires_at=int(time.time()) + 60,
+    )
+    await store.put(attempt)
+
+    redis.run_id = "new-redis-run"
+
+    assert await store.take(attempt.state) is None
+    assert await manager.list_secret_keys(
+        "platform.runtime.login-attempts.__keys"
+    ) == []
 
 
 # ---- the lane's configuration ------------------------------------------------

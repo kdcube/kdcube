@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import asyncio
 import threading
 import time
@@ -33,6 +34,12 @@ _MAX_SECRET_INVENTORY_BYTES = 4 * 1024 * 1024
 _MAX_SECRET_PROVIDER_KEY_CHARS = 1024
 _AWS_SECRET_INVENTORY_SCHEMA = "kdcube.aws_secret_inventory.v1"
 _AWS_SECRET_STRING_MAX_BYTES = 64 * 1024
+_EPHEMERAL_SECRET_NAMESPACE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+_EPHEMERAL_SECRET_REF = re.compile(r"^[a-f0-9]{32}$")
+_EPHEMERAL_EXPIRES_AT_TAG = "kdcube:expires-at"
+_EPHEMERAL_PURGE_INTERVAL_SECONDS = 300.0
+_AWS_EPHEMERAL_PURGE_MAX_PAGES = 3
+_EPHEMERAL_PURGE_LOCK = threading.Lock()
 
 
 def _first_non_empty(*values: Any) -> Optional[str]:
@@ -43,6 +50,39 @@ def _first_non_empty(*values: Any) -> Optional[str]:
         if text:
             return text
     return None
+
+
+def _ephemeral_secret_parts(namespace: str, secret_ref: str) -> tuple[str, str]:
+    clean_namespace = str(namespace or "").strip().lower()
+    clean_ref = str(secret_ref or "").strip().lower()
+    if not _EPHEMERAL_SECRET_NAMESPACE.fullmatch(clean_namespace):
+        raise SecretsManagerError("Ephemeral secret namespace is invalid")
+    if not _EPHEMERAL_SECRET_REF.fullmatch(clean_ref):
+        raise SecretsManagerError("Ephemeral secret reference is invalid")
+    return clean_namespace, clean_ref
+
+
+def _ephemeral_provider_key(namespace: str, secret_ref: str) -> str:
+    clean_namespace, clean_ref = _ephemeral_secret_parts(namespace, secret_ref)
+    return f"platform.runtime.{clean_namespace}.{clean_ref}"
+
+
+def _ephemeral_inventory_key(namespace: str) -> str:
+    clean_namespace = str(namespace or "").strip().lower()
+    if not _EPHEMERAL_SECRET_NAMESPACE.fullmatch(clean_namespace):
+        raise SecretsManagerError("Ephemeral secret namespace is invalid")
+    return f"platform.runtime.{clean_namespace}.__keys"
+
+
+def _ephemeral_expires_at(value: str | None) -> int:
+    try:
+        payload = json.loads(value or "")
+        expires_at = int(payload.get("expires_at") or 0) if isinstance(payload, dict) else 0
+    except (TypeError, ValueError):
+        expires_at = 0
+    if expires_at <= 0:
+        raise SecretsManagerError("Ephemeral secret envelope is invalid")
+    return expires_at
 
 
 async def _run_blocking_critical_section(fn) -> Any:
@@ -287,6 +327,84 @@ class ISecretsManager(ABC):
     async def delete_many(self, keys: Iterable[str]) -> None:
         for key in keys:
             await self.delete_secret(key)
+
+    def _claim_ephemeral_purge(self, namespace: str) -> bool:
+        """Throttle cleanup per manager and namespace in this host process."""
+
+        clean_namespace, _ = _ephemeral_secret_parts(namespace, "0" * 32)
+        moment = time.monotonic()
+        with _EPHEMERAL_PURGE_LOCK:
+            due_by_namespace = getattr(self, "_ephemeral_purge_after", None)
+            if not isinstance(due_by_namespace, dict):
+                due_by_namespace = {}
+                self._ephemeral_purge_after = due_by_namespace
+            if moment < float(due_by_namespace.get(clean_namespace) or 0.0):
+                return False
+            # Claim before I/O so concurrent login starts do not all scan the
+            # provider. A failed best-effort purge is retried after the same
+            # bounded interval, outside the login-start critical path.
+            due_by_namespace[clean_namespace] = (
+                moment + _EPHEMERAL_PURGE_INTERVAL_SECONDS
+            )
+            return True
+
+    async def set_ephemeral_secret(
+        self,
+        *,
+        namespace: str,
+        secret_ref: str,
+        value: str,
+        expires_at: int,
+    ) -> None:
+        """Create one short-lived runtime secret outside tracked descriptors."""
+
+        del expires_at
+        await self.set_secret(_ephemeral_provider_key(namespace, secret_ref), value)
+
+    async def get_ephemeral_secret(
+        self,
+        *,
+        namespace: str,
+        secret_ref: str,
+    ) -> Optional[str]:
+        return await self.get_secret_strict(
+            _ephemeral_provider_key(namespace, secret_ref)
+        )
+
+    async def delete_ephemeral_secret(
+        self,
+        *,
+        namespace: str,
+        secret_ref: str,
+    ) -> None:
+        await self.delete_secret(_ephemeral_provider_key(namespace, secret_ref))
+
+    async def purge_expired_ephemeral_secrets(
+        self,
+        *,
+        namespace: str,
+        now: int,
+        limit: int = 100,
+    ) -> int:
+        """Delete expired host-vault records without exposing their values."""
+
+        clean_namespace, _ = _ephemeral_secret_parts(namespace, "0" * 32)
+        if not self._claim_ephemeral_purge(clean_namespace):
+            return 0
+        prefix = f"platform.runtime.{clean_namespace}."
+        keys = await self.list_secret_keys(_ephemeral_inventory_key(namespace))
+        removed = 0
+        for key in keys:
+            if removed >= max(1, int(limit)):
+                break
+            if not key.startswith(prefix):
+                continue
+            raw = await self.get_secret_strict(key)
+            if raw is None or _ephemeral_expires_at(raw) > int(now):
+                continue
+            await self.delete_secret(key)
+            removed += 1
+        return removed
 
     async def get_user_secret(self, *, user_id: str, key: str, bundle_id: str | None = None) -> Optional[str]:
         return await self.get_secret(build_user_secret_key(user_id=user_id, key=key, bundle_id=bundle_id))
@@ -856,6 +974,51 @@ class SecretsFileSecretsManager(ISecretsManager):
     async def delete_secret(self, key: str) -> None:
         await self.delete_many([key])
 
+    @staticmethod
+    def _ephemeral_secrets_are_unsupported() -> SecretsManagerWriteError:
+        return SecretsManagerWriteError(
+            "secrets-file cannot store short-lived runtime secrets in tracked descriptors"
+        )
+
+    async def set_ephemeral_secret(
+        self,
+        *,
+        namespace: str,
+        secret_ref: str,
+        value: str,
+        expires_at: int,
+    ) -> None:
+        del namespace, secret_ref, value, expires_at
+        raise self._ephemeral_secrets_are_unsupported()
+
+    async def get_ephemeral_secret(
+        self,
+        *,
+        namespace: str,
+        secret_ref: str,
+    ) -> Optional[str]:
+        del namespace, secret_ref
+        raise self._ephemeral_secrets_are_unsupported()
+
+    async def delete_ephemeral_secret(
+        self,
+        *,
+        namespace: str,
+        secret_ref: str,
+    ) -> None:
+        del namespace, secret_ref
+        raise self._ephemeral_secrets_are_unsupported()
+
+    async def purge_expired_ephemeral_secrets(
+        self,
+        *,
+        namespace: str,
+        now: int,
+        limit: int = 100,
+    ) -> int:
+        del namespace, now, limit
+        raise self._ephemeral_secrets_are_unsupported()
+
     async def set_many(self, values: Mapping[str, str]) -> None:
         normalized_values = {
             validate_secret_provider_key(key): value
@@ -1158,6 +1321,10 @@ class AwsSecretsManagerSecretsManager(ISecretsManager):
     def _inventory_secret_id(self) -> str:
         return f"{self._prefix}/inventory"
 
+    def _ephemeral_secret_id(self, namespace: str, secret_ref: str) -> str:
+        clean_namespace, clean_ref = _ephemeral_secret_parts(namespace, secret_ref)
+        return f"{self._prefix}/runtime/{clean_namespace}/{clean_ref}"
+
     def _doc_lock_key(self, secret_id: str) -> str:
         safe = str(secret_id or "").replace("/", ":")
         return self._lock_key_fmt.format(
@@ -1316,6 +1483,106 @@ class AwsSecretsManagerSecretsManager(ISecretsManager):
             if code in {"ResourceNotFoundException", "InvalidRequestException"}:
                 return
             raise SecretsManagerWriteError(f"aws-sm delete failed for {key}") from exc
+
+    async def set_ephemeral_secret(
+        self,
+        *,
+        namespace: str,
+        secret_ref: str,
+        value: str,
+        expires_at: int,
+    ) -> None:
+        secret_id = self._ephemeral_secret_id(namespace, secret_ref)
+        try:
+            async with self._client_cm() as client:
+                await client.create_secret(
+                    Name=secret_id,
+                    SecretString=value,
+                    Tags=[
+                        {
+                            "Key": _EPHEMERAL_EXPIRES_AT_TAG,
+                            "Value": str(int(expires_at)),
+                        }
+                    ],
+                )
+        except Exception as exc:
+            raise SecretsManagerWriteError("aws-sm ephemeral create failed") from exc
+
+    async def get_ephemeral_secret(
+        self,
+        *,
+        namespace: str,
+        secret_ref: str,
+    ) -> Optional[str]:
+        return await self._get_secret_string_by_id(
+            self._ephemeral_secret_id(namespace, secret_ref),
+            strict=True,
+        )
+
+    async def delete_ephemeral_secret(
+        self,
+        *,
+        namespace: str,
+        secret_ref: str,
+    ) -> None:
+        secret_id = self._ephemeral_secret_id(namespace, secret_ref)
+        await self._delete_secret_by_id(secret_id, key="ephemeral runtime secret")
+
+    async def purge_expired_ephemeral_secrets(
+        self,
+        *,
+        namespace: str,
+        now: int,
+        limit: int = 100,
+    ) -> int:
+        clean_namespace, _ = _ephemeral_secret_parts(namespace, "0" * 32)
+        if not self._claim_ephemeral_purge(clean_namespace):
+            return 0
+        name_prefix = f"{self._prefix}/runtime/{clean_namespace}/"
+        removed = 0
+        next_token: str | None = None
+        pages = 0
+        try:
+            async with self._client_cm() as client:
+                while (
+                    removed < max(1, int(limit))
+                    and pages < _AWS_EPHEMERAL_PURGE_MAX_PAGES
+                ):
+                    request: dict[str, Any] = {
+                        "Filters": [{"Key": "name", "Values": [name_prefix]}],
+                        "MaxResults": 100,
+                        "IncludePlannedDeletion": False,
+                    }
+                    if next_token:
+                        request["NextToken"] = next_token
+                    response = await client.list_secrets(**request)
+                    pages += 1
+                    for item in response.get("SecretList") or []:
+                        tags = {
+                            str(tag.get("Key") or ""): str(tag.get("Value") or "")
+                            for tag in item.get("Tags") or []
+                            if isinstance(tag, Mapping)
+                        }
+                        try:
+                            expires_at = int(tags.get(_EPHEMERAL_EXPIRES_AT_TAG) or 0)
+                        except (TypeError, ValueError):
+                            expires_at = 0
+                        name = str(item.get("Name") or "")
+                        if not name.startswith(name_prefix) or expires_at <= 0 or expires_at > int(now):
+                            continue
+                        await client.delete_secret(
+                            SecretId=name,
+                            ForceDeleteWithoutRecovery=True,
+                        )
+                        removed += 1
+                        if removed >= max(1, int(limit)):
+                            break
+                    next_token = str(response.get("NextToken") or "")
+                    if not next_token:
+                        break
+        except Exception as exc:
+            raise SecretsManagerWriteError("aws-sm ephemeral purge failed") from exc
+        return removed
 
     async def _read_secret(self, key: str, *, strict: bool) -> Optional[str]:
         key = validate_secret_provider_key(key)

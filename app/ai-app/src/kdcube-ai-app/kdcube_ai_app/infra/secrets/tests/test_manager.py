@@ -7,6 +7,7 @@ import pytest
 from kdcube_ai_app.infra.secrets import (
     AwsSecretsManagerSecretsManager,
     InMemorySecretsManager,
+    KDCubeEphemeralSecretStore,
     SecretsFileSecretsManager,
     SecretsManagerConfig,
     SecretsManagerError,
@@ -97,6 +98,17 @@ class _FakeHttpxModule:
         return self.client
 
 
+class _QueuedSecretsHttpClient(_FakeSecretsHttpClient):
+    def __init__(self, responses: list[_FakeHttpResponse]):
+        super().__init__()
+        self.responses = list(responses)
+
+    async def _respond(self, method: str, url: str, **kwargs):
+        self.requests.append((method, url, kwargs))
+        assert self.responses, f"unexpected {method} {url}"
+        return self.responses.pop(0)
+
+
 class _FakeAwsClientError(Exception):
     def __init__(self, code: str):
         super().__init__(code)
@@ -106,6 +118,10 @@ class _FakeAwsClientError(Exception):
 class _FakeAwsSecretsClient:
     def __init__(self, initial: dict[str, str] | None = None):
         self.data = dict(initial or {})
+        self.tags: dict[str, list[dict[str, str]]] = {}
+        self.delete_calls: list[dict[str, object]] = []
+        self.list_calls: list[dict[str, object]] = []
+        self.page_size: int | None = None
 
     async def get_secret_value(self, *, SecretId: str):
         if SecretId not in self.data:
@@ -118,15 +134,49 @@ class _FakeAwsSecretsClient:
         self.data[SecretId] = SecretString
         return {"ARN": SecretId}
 
-    async def create_secret(self, *, Name: str, SecretString: str):
+    async def create_secret(self, *, Name: str, SecretString: str, Tags=None):
         self.data[Name] = SecretString
+        self.tags[Name] = list(Tags or [])
         return {"ARN": Name}
 
     async def delete_secret(self, *, SecretId: str, ForceDeleteWithoutRecovery: bool):
+        self.delete_calls.append(
+            {
+                "SecretId": SecretId,
+                "ForceDeleteWithoutRecovery": ForceDeleteWithoutRecovery,
+            }
+        )
         if SecretId not in self.data:
             raise _FakeAwsClientError("ResourceNotFoundException")
         self.data.pop(SecretId, None)
+        self.tags.pop(SecretId, None)
         return {"ARN": SecretId}
+
+    async def list_secrets(self, **request):
+        self.list_calls.append(dict(request))
+        prefixes = [
+            str(value)
+            for item in request.get("Filters") or []
+            if item.get("Key") == "name"
+            for value in item.get("Values") or []
+        ]
+        names = sorted(
+            name
+            for name in self.data
+            if not prefixes or any(name.startswith(prefix) for prefix in prefixes)
+        )
+        start = int(request.get("NextToken") or 0)
+        page_size = self.page_size or max(1, len(names))
+        end = min(len(names), start + page_size)
+        response = {
+            "SecretList": [
+                {"Name": name, "Tags": list(self.tags.get(name) or [])}
+                for name in names[start:end]
+            ]
+        }
+        if end < len(names):
+            response["NextToken"] = str(end)
+        return response
 
 
 class _FakeAwsClientContext:
@@ -1032,3 +1082,191 @@ async def test_secrets_file_manager_cross_replica_reads_current_yaml(tmp_path, m
 
     assert lock_key not in fake_redis.data
     assert await manager_b.get_secret("platform.services.openai.api_key") == "sk-new"
+
+
+@pytest.mark.asyncio
+async def test_ephemeral_store_uses_host_vault_inventory_and_purges_expired_records():
+    manager = InMemorySecretsManager()
+    store = KDCubeEphemeralSecretStore(manager, namespace="login-attempts")
+    expired_ref = "a" * 32
+    live_ref = "b" * 32
+
+    await store.set(
+        secret_ref=expired_ref,
+        value=json.dumps({"expires_at": 10, "secret": "expired"}),
+        expires_at=10,
+    )
+    await store.set(
+        secret_ref=live_ref,
+        value=json.dumps({"expires_at": 30, "secret": "live"}),
+        expires_at=30,
+    )
+
+    assert await store.purge_expired(now=20, limit=100) == 1
+    assert await store.get(secret_ref=expired_ref) is None
+    assert json.loads(await store.get(secret_ref=live_ref) or "{}") == {
+        "expires_at": 30,
+        "secret": "live",
+    }
+
+
+@pytest.mark.asyncio
+async def test_ephemeral_purge_uses_the_host_vault_broker_inventory(monkeypatch):
+    expired_ref = "a" * 32
+    live_ref = "b" * 32
+    expired_key = f"platform.runtime.login-attempts.{expired_ref}"
+    live_key = f"platform.runtime.login-attempts.{live_ref}"
+    client = _QueuedSecretsHttpClient(
+        [
+            _FakeHttpResponse(200, {"value": json.dumps([live_key, expired_key])}),
+            _FakeHttpResponse(200, {"value": json.dumps({"expires_at": 10})}),
+            _FakeHttpResponse(204, {}),
+            _FakeHttpResponse(200, {"value": json.dumps({"expires_at": 30})}),
+        ]
+    )
+    monkeypatch.setattr(
+        secrets_manager_module,
+        "_get_httpx",
+        lambda: _FakeHttpxModule(client),
+    )
+    store = KDCubeEphemeralSecretStore(
+        _secrets_service_manager(), namespace="login-attempts"
+    )
+
+    assert await store.purge_expired(now=20, limit=100) == 1
+    assert [method for method, _url, _kwargs in client.requests] == [
+        "GET",
+        "GET",
+        "DELETE",
+        "GET",
+    ]
+    assert client.requests[0][1].endswith(
+        "/secret/platform.runtime.login-attempts.__keys"
+    )
+    assert client.requests[1][1].endswith(f"/secret/{expired_key}")
+    assert client.requests[2][1].endswith(f"/secret/{expired_key}")
+    assert client.requests[3][1].endswith(f"/secret/{live_key}")
+    assert client.responses == []
+
+
+@pytest.mark.asyncio
+async def test_ephemeral_purge_is_throttled_per_manager_namespace():
+    manager = InMemorySecretsManager()
+    store = KDCubeEphemeralSecretStore(manager, namespace="login-attempts")
+    await store.set(
+        secret_ref="e" * 32,
+        value=json.dumps({"expires_at": 10, "secret": "first"}),
+        expires_at=10,
+    )
+
+    assert await store.purge_expired(now=20, limit=100) == 1
+    await store.set(
+        secret_ref="f" * 32,
+        value=json.dumps({"expires_at": 10, "secret": "second"}),
+        expires_at=10,
+    )
+    assert await store.purge_expired(now=20, limit=100) == 0
+    assert await store.get(secret_ref="f" * 32) is not None
+
+
+@pytest.mark.asyncio
+async def test_aws_ephemeral_store_uses_dedicated_prefix_and_force_deletes():
+    manager = AwsSecretsManagerSecretsManager(
+        SecretsManagerConfig(
+            provider="aws-sm",
+            component="ingress",
+            aws_sm_prefix="kdcube/demo/demo-march",
+        )
+    )
+    client = _FakeAwsSecretsClient()
+    manager._session = _FakeAwsSession(client)
+    store = KDCubeEphemeralSecretStore(manager, namespace="login-attempts")
+    expired_ref = "c" * 32
+    live_ref = "d" * 32
+    expired_id = f"kdcube/demo/demo-march/runtime/login-attempts/{expired_ref}"
+    live_id = f"kdcube/demo/demo-march/runtime/login-attempts/{live_ref}"
+
+    await store.set(
+        secret_ref=expired_ref,
+        value=json.dumps({"expires_at": 10, "secret": "expired"}),
+        expires_at=10,
+    )
+    await store.set(
+        secret_ref=live_ref,
+        value=json.dumps({"expires_at": 30, "secret": "live"}),
+        expires_at=30,
+    )
+
+    assert sorted(client.data) == [expired_id, live_id]
+    assert client.tags[expired_id] == [
+        {"Key": "kdcube:expires-at", "Value": "10"}
+    ]
+    assert await store.purge_expired(now=20, limit=100) == 1
+    assert expired_id not in client.data and live_id in client.data
+    assert client.delete_calls == [
+        {"SecretId": expired_id, "ForceDeleteWithoutRecovery": True}
+    ]
+
+    await store.delete(secret_ref=live_ref)
+    assert client.delete_calls[-1] == {
+        "SecretId": live_id,
+        "ForceDeleteWithoutRecovery": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_aws_ephemeral_purge_scans_at_most_three_pages():
+    manager = AwsSecretsManagerSecretsManager(
+        SecretsManagerConfig(
+            provider="aws-sm",
+            component="ingress",
+            aws_sm_prefix="kdcube/demo/demo-march",
+        )
+    )
+    prefix = "kdcube/demo/demo-march/runtime/login-attempts/"
+    client = _FakeAwsSecretsClient(
+        {f"{prefix}{index:032x}": "value" for index in range(8)}
+    )
+    client.page_size = 1
+    for name in client.data:
+        client.tags[name] = [{"Key": "kdcube:expires-at", "Value": "30"}]
+    manager._session = _FakeAwsSession(client)
+    store = KDCubeEphemeralSecretStore(manager, namespace="login-attempts")
+
+    assert await store.purge_expired(now=20, limit=100) == 0
+    assert len(client.list_calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_secrets_file_refuses_all_ephemeral_secret_operations(tmp_path):
+    manager = SecretsFileSecretsManager(
+        SecretsManagerConfig(
+            provider="secrets-file",
+            component="proc",
+            global_secrets_yaml=(tmp_path / "bundles.secrets.yaml").resolve().as_uri(),
+        )
+    )
+    calls = (
+        manager.set_ephemeral_secret(
+            namespace="login-attempts",
+            secret_ref="a" * 32,
+            value="secret",
+            expires_at=20,
+        ),
+        manager.get_ephemeral_secret(
+            namespace="login-attempts",
+            secret_ref="a" * 32,
+        ),
+        manager.delete_ephemeral_secret(
+            namespace="login-attempts",
+            secret_ref="a" * 32,
+        ),
+        manager.purge_expired_ephemeral_secrets(
+            namespace="login-attempts",
+            now=20,
+            limit=100,
+        ),
+    )
+    for call in calls:
+        with pytest.raises(SecretsManagerWriteError, match="tracked descriptors"):
+            await call

@@ -13,8 +13,8 @@ attempt, sliding renewal, and the OIDC code flow) is
   permissions resolved through the Connection Hub authority registry's
   grants (``resolve_platform_grants``, the same rule the Google reference
   login applies).
-- ``RedisLoginAttemptStore``: one-time login attempts in the same Redis
-  namespace as the sessions.
+- ``RedisLoginAttemptStore``: secret-backed one-time login attempts with a
+  digest-only, Redis-run-bound pointer beside the sessions.
 - ``platform_login_flow``: the flow assembled from the deployment's
   descriptors. The selected platform provider (``auth.connection_hub``) must
   be a server-side lane (``bundle``) whose ``input`` authenticator is a
@@ -29,7 +29,6 @@ that knows FastAPI.
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from dataclasses import dataclass
@@ -47,6 +46,11 @@ from connection_hub.server_side_login.model import (
 )
 from connection_hub.server_side_login.oidc import OidcClientConfig, OidcCodeFlow, OidcEndpoints
 from connection_hub.server_side_login.protocols import UpstreamIdentity
+from connection_hub.one_time_state import (
+    OneTimeStateSecretStore,
+    RedisRunBoundPointerStore,
+    SecretBackedOneTimeStateStore,
+)
 
 from kdcube_ai_app.auth.bundle.sessions import (
     BundleSessionAuthority,
@@ -212,20 +216,33 @@ class PlatformSessionBackend:
             return False
 
 
-# ---- one-time login attempts in Redis ----------------------------------------
+# ---- secret-backed one-time login attempts -----------------------------------
 
 class RedisLoginAttemptStore:
-    """``LoginAttemptStore`` beside the session records, keyed by state, with
-    the attempt's own expiry as the key TTL. ``take`` is get-and-delete."""
+    """``LoginAttemptStore`` with a run-bound Redis pointer and secret payload."""
 
-    def __init__(self, authority: BundleSessionAuthority) -> None:
+    def __init__(
+        self,
+        authority: BundleSessionAuthority,
+        *,
+        secret_store: OneTimeStateSecretStore,
+    ) -> None:
         self._authority = authority
 
-    def _key(self, state: str) -> str:
-        return self._authority._ns(f"kdcube:auth:browser-login:{state}")
+        self._secret_store = secret_store
+
+    async def _store(self) -> SecretBackedOneTimeStateStore:
+        redis = await self._authority._redis_client()
+        return SecretBackedOneTimeStateStore(
+            pointers=RedisRunBoundPointerStore(
+                redis,
+                prefix=self._authority._ns("kdcube:auth:browser-login"),
+            ),
+            secrets=self._secret_store,
+            purpose="browser-login",
+        )
 
     async def put(self, attempt: LoginAttempt) -> None:
-        redis = await self._authority._redis_client()
         ttl = max(1, int(attempt.expires_at) - int(time.time()))
         payload = {
             "state": attempt.state,
@@ -238,24 +255,15 @@ class RedisLoginAttemptStore:
             "upstream": attempt.upstream,
             "metadata": dict(attempt.metadata or {}),
         }
-        await redis.setex(self._key(attempt.state), ttl, json.dumps(payload, separators=(",", ":")))
+        await (await self._store()).put(
+            attempt.state,
+            payload,
+            ttl_seconds=ttl,
+        )
 
     async def take(self, state: str) -> LoginAttempt | None:
-        key = self._key(_str(state))
-        redis = await self._authority._redis_client()
-        raw = None
-        getdel = getattr(redis, "getdel", None)
-        if callable(getdel):
-            raw = await getdel(key)
-        else:
-            raw = await redis.get(key)
-            if raw is not None:
-                await redis.delete(key)
-        if not raw:
-            return None
-        try:
-            data = json.loads(raw if isinstance(raw, str) else raw.decode("utf-8"))
-        except Exception:  # noqa: BLE001 - a corrupt attempt is an absent attempt
+        data = await (await self._store()).pop(_str(state))
+        if data is None:
             return None
         if int(data.get("expires_at") or 0) <= int(time.time()):
             return None
@@ -576,6 +584,7 @@ async def platform_login_flow(*, origin: str, settings: Any | None = None) -> Br
     configured. The redirect URI is the registry's when set, else this
     origin's callback route (the Cognito app client must list it)."""
     from kdcube_ai_app.apps.chat.sdk.config import get_settings
+    from kdcube_ai_app.infra.secrets import ephemeral_secret_store
     config = bundle_login_config(settings)
     if config is None:
         return None
@@ -602,7 +611,13 @@ async def platform_login_flow(*, origin: str, settings: Any | None = None) -> Br
     )
     return BrowserSessionFlow(
         backend=backend,
-        attempts=RedisLoginAttemptStore(authority),
+        attempts=RedisLoginAttemptStore(
+            authority,
+            secret_store=ephemeral_secret_store(
+                namespace="login-attempts",
+                settings=settings,
+            ),
+        ),
         upstream=upstream,
         cookies=cookies,
         policy=config.policy,

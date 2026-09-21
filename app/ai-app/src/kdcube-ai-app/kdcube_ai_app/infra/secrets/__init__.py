@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Elena Viter
 
-from .manager import (
+from kdcube_ai_app.infra.secrets.manager import (
     AwsSecretsManagerSecretsManager,
     build_user_secret_key,
     build_user_secret_metadata_key,
@@ -17,6 +17,11 @@ from .manager import (
     get_secrets_manager,
     reset_secrets_manager_cache,
 )
+from kdcube_ai_app.infra.secrets.ephemeral import (
+    KDCubeEphemeralSecretStore,
+    SUPPORTED_EPHEMERAL_SECRET_PROVIDERS,
+    ephemeral_secret_store,
+)
 
 __all__ = [
     "AwsSecretsManagerSecretsManager",
@@ -29,6 +34,9 @@ __all__ = [
     "SecretsManagerError",
     "SecretsManagerWriteError",
     "SecretsServiceSecretsManager",
+    "KDCubeEphemeralSecretStore",
+    "SUPPORTED_EPHEMERAL_SECRET_PROVIDERS",
+    "ephemeral_secret_store",
     "build_secrets_manager_config",
     "create_secrets_manager",
     "get_secrets_manager",

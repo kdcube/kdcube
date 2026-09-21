@@ -4,7 +4,7 @@ title: "Server-Side Login And The Platform Session"
 summary: "How an app-defined login turns an authenticator proof into one KDCube-owned, Redis-backed platform session, including protected browser entry, the platform-hosted OIDC lane, and its sliding lifetime."
 tags: ["service", "auth", "application", "bundle", "session", "sso"]
 keywords: ["server-side login", "app-defined authenticator", "platform session", "platform principal", "connection edge", "bundle", "kst1", "login lane", "login", "logout", "register", "invalidate", "sliding session", "OIDC", "Cognito hosted UI"]
-updated_at: 2026-09-14
+updated_at: 2026-09-21
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/app-simple-idp-bridge-README.md
@@ -91,8 +91,8 @@ Platform UserSession
 | `kdcube_ai_app.auth.bundle` | Platform | Async API used by the application to register/login/logout/delete/invalidate sessions. The package name is the technical alias. |
 | Browser cookies | Connection Hub provider config | Carry the `kst1.*` auth token under configured cookie names. |
 | Gateway auth manager | Platform | Validates token, Redis session, user record, and roles on each request. |
-| Redis | Platform | Stores active session records, user records, token versions, and session indexes. |
-| `secrets.yaml` / secret provider | Deployment | Stores `platform.services.session_token.secret` shared by all validating services. |
+| Redis | Platform | Stores active session records, user records, token versions, session indexes, and digest-only login-attempt pointers bound to the current Redis run. |
+| Deployment secret provider | Deployment | Stores `platform.services.session_token.secret` and short-lived login-attempt payloads. Local runtimes use the host vault; hosted runtimes use dedicated Secrets Manager records. |
 
 ## Descriptor Contract
 
@@ -175,10 +175,26 @@ extends it by the idle limit, never past the maximum since sign-in.
 The session itself is the host-neutral `connection_hub.server_side_login`
 (one-time browser-bound login attempt with PKCE and nonce, the same-origin
 `next` guard, sliding renewal, and an OIDC code-flow authenticator with a Cognito
-preset). The platform supplies the backend over `BundleSessionAuthority`, the
-attempt store in the same Redis namespace, and the routes
+preset). The platform supplies the backend over `BundleSessionAuthority`, a
+secret-backed attempt store with a digest-only Redis pointer, and the routes
 (`kdcube_ai_app/auth/bundle/login_lane.py`,
 `kdcube_ai_app/apps/chat/ingress/platform_session.py`).
+
+The raw state, browser binding, nonce, PKCE verifier, return path, and metadata
+remain in one short-lived deployment secret. Redis stores only a SHA-256 state
+digest, an opaque secret reference, expiry, purpose, and the Redis `run_id` that
+created the pointer. Callback consumption transactionally reads the current run,
+claims the pointer once, and deletes it before reading and deleting the secret.
+A Redis restart or restored snapshot therefore invalidates the old attempt; the
+browser starts a new login instead of reviving earlier state.
+
+Expired attempt secrets are removed on a best-effort maintenance path. Each
+runtime process scans a namespace at most once every five minutes. AWS scans at
+most three Secrets Manager pages per pass, then resumes on a later pass. The
+local host-vault inventory is deterministic and bounded by its 1,024-name
+response limit; exceeding that limit fails the cleanup closed and leaves the
+records for operator remediation rather than returning a partial inventory.
+Creating and consuming an individual attempt does not depend on cleanup.
 
 For Cognito and OIDC, identity is the verified issuer plus the upstream `sub`.
 Connection Hub resolves that identity through a connection edge. The first
@@ -595,6 +611,8 @@ names are tenant/project namespaced.
 | User sessions set | `{tenant}:{project}:kdcube:auth:bundle-session:user-sessions:{sub}` | Session TTL window | Invalidate/delete all sessions for a subject. |
 | User version | `{tenant}:{project}:kdcube:auth:bundle-session:user-version:{sub}` | Until delete | Role/session revocation boundary. |
 | Principal edge projection | `{tenant}:{project}:kdcube:connection-edge:principal:<identity-hash>` | Rebuildable | Resolve a verified issuer/subject to its platform user without reading bundle storage. |
+| Login-attempt pointer | `{tenant}:{project}:kdcube:auth:browser-login:<state-sha256>` | Attempt TTL and current Redis run | Single-use lookup containing no raw state, PKCE verifier, or browser binding. |
+| Login-attempt secret | host vault `platform.runtime.login-attempts.<ref>` or AWS `<prefix>/runtime/login-attempts/<ref>` | Attempt TTL | Raw one-time browser-login payload; consumed with forced deletion. |
 | Signing secret | `platform.services.session_token.secret` | Deployment secret lifecycle | HMAC signature verification. |
 | Browser auth cookie | descriptor-configured name | Cookie lifecycle | Transport from browser to gateway. |
 
