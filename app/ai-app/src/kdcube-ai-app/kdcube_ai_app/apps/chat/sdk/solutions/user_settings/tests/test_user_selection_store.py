@@ -11,8 +11,11 @@ import pytest
 from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import agent_capabilities_catalog
 from kdcube_ai_app.apps.chat.sdk.solutions.user_settings import (
     AGENT_SELECTION_SUBSYSTEM,
+    CONVERSATION_CAPABILITY_SUBSYSTEM,
+    ConversationCapabilitySelectionStore,
     UserAgentSelectionStore,
     agent_selection_key,
+    conversation_capability_selection_key,
     merge_selection_patch,
 )
 
@@ -116,6 +119,22 @@ class _FakePool:
 
 def _store(pool) -> UserAgentSelectionStore:
     return UserAgentSelectionStore(pg_pool=pool, tenant="acme", project="demo")
+
+
+def _capability_store(pool) -> ConversationCapabilitySelectionStore:
+    return ConversationCapabilitySelectionStore(
+        pg_pool=pool,
+        tenant="acme",
+        project="demo",
+    )
+
+
+def _projection(*selected: str) -> dict:
+    return {
+        "schema": "connection_hub.agent_capability_policy.v1",
+        "resource": "urn:connection-hub:application:acme:demo:bundle%401-0:main",
+        "capabilities": {"tools": list(selected)},
+    }
 
 
 # ── store behavior ────────────────────────────────────────────────────────────
@@ -270,6 +289,59 @@ def test_conversation_selection_key_is_typed_and_exact():
     assert agent_selection_key("main", conversation_id="conv-42") == (
         "conversation:conv-42:agent_selection:main"
     )
+
+
+def test_conversation_capability_key_is_typed_and_exact():
+    assert conversation_capability_selection_key(
+        "main",
+        conversation_id="conv-42",
+    ) == "conversation:conv-42:agent_capability_selection:main"
+
+
+@pytest.mark.asyncio
+async def test_conversation_capability_snapshot_is_immutable_while_selection_changes():
+    pool = _FakePool()
+    store = _capability_store(pool)
+    first_base = _projection("web/search")
+    later_base = _projection("web/search", "task/create")
+
+    first = await store.get_selection(
+        user_id="u1",
+        bundle_id="b",
+        agent_id="main",
+        conversation_id="conv-a",
+        base_projection=first_base,
+    )
+    same = await store.get_selection(
+        user_id="u1",
+        bundle_id="b",
+        agent_id="main",
+        conversation_id="conv-a",
+        base_projection=later_base,
+    )
+    changed = await store.set_projection(
+        user_id="u1",
+        bundle_id="b",
+        agent_id="main",
+        conversation_id="conv-a",
+        base_projection=later_base,
+        projection=_projection(),
+    )
+    next_conversation = await store.get_selection(
+        user_id="u1",
+        bundle_id="b",
+        agent_id="main",
+        conversation_id="conv-b",
+        base_projection=later_base,
+    )
+
+    assert first["base_projection"] == first_base
+    assert same["base_projection"] == first_base
+    assert changed["base_projection"] == first_base
+    assert changed["projection"] == _projection()
+    assert next_conversation["base_projection"] == later_base
+    key = ("u1", "b", conversation_capability_selection_key("main", conversation_id="conv-a"))
+    assert pool.rows[key]["subsystem"] == CONVERSATION_CAPABILITY_SUBSYSTEM
 
 
 @pytest.mark.asyncio

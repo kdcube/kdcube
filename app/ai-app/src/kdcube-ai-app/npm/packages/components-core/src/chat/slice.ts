@@ -59,6 +59,7 @@ import type { SubagentStreamKind } from './subagents.ts'
 import { applySelectionPatch, initialCapabilitiesState } from './capabilities.ts'
 import type {
   AgentCachePolicy,
+  AgentCapabilitySelectionScope,
   AgentCapabilitiesInventory,
   AgentModelPick,
   AgentSelectionDisabled,
@@ -389,6 +390,9 @@ const slice = createSlice({
         agent: string
         inventory: AgentCapabilitiesInventory
         disabled: AgentSelectionDisabled
+        baseDisabled?: AgentSelectionDisabled
+        agentBaseDisabled?: AgentSelectionDisabled
+        scope?: AgentCapabilitySelectionScope | null
         model?: AgentModelPick | null
         instructions?: string | null
         presentation?: Record<string, string> | null
@@ -401,6 +405,9 @@ const slice = createSlice({
       state.capabilities.agent = action.payload.agent
       state.capabilities.inventory = action.payload.inventory
       state.capabilities.disabled = action.payload.disabled
+      state.capabilities.baseDisabled = action.payload.baseDisabled ?? action.payload.disabled
+      state.capabilities.agentBaseDisabled = action.payload.agentBaseDisabled ?? action.payload.disabled
+      state.capabilities.scope = action.payload.scope ?? null
       state.capabilities.model = action.payload.model ?? null
       state.capabilities.instructions = action.payload.instructions ?? null
       state.capabilities.presentation = action.payload.presentation ?? null
@@ -441,6 +448,9 @@ const slice = createSlice({
       state,
       action: PayloadAction<{
         disabled: AgentSelectionDisabled
+        baseDisabled?: AgentSelectionDisabled
+        agentBaseDisabled?: AgentSelectionDisabled
+        scope?: AgentCapabilitySelectionScope | null
         model?: AgentModelPick | null
         instructions?: string | null
         presentation?: Record<string, string> | null
@@ -448,6 +458,15 @@ const slice = createSlice({
       }>,
     ) {
       state.capabilities.disabled = action.payload.disabled
+      if (action.payload.baseDisabled !== undefined) {
+        state.capabilities.baseDisabled = action.payload.baseDisabled
+      }
+      if (action.payload.agentBaseDisabled !== undefined) {
+        state.capabilities.agentBaseDisabled = action.payload.agentBaseDisabled
+      }
+      if (action.payload.scope !== undefined) {
+        state.capabilities.scope = action.payload.scope
+      }
       state.capabilities.model = action.payload.model ?? null
       state.capabilities.instructions = action.payload.instructions ?? null
       state.capabilities.presentation = action.payload.presentation ?? null

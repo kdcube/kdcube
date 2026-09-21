@@ -4,7 +4,7 @@ title: "Recipe: Chat With A ReAct Agent"
 summary: "End-to-end steps: declare a ReAct agent with per-agent config, wire the chat component to it, and let users explicitly save model/capability choices for each conversation."
 status: current
 tags: ["recipes", "components", "chat", "react", "agent", "supported-models", "composer-menu"]
-updated_at: 2026-09-04
+updated_at: 2026-09-21
 keywords:
   [
     "chat with react agent",
@@ -161,8 +161,8 @@ chat widget) renders the composer "+" menu automatically for signed-in users.
 - The two chat shells edit a local draft for the active conversation. The user
   presses **Save changes** once; the saved model/capabilities apply from that
   conversation's next message. A chat-originated full-page widget receives
-  that conversation id; an independently mounted widget has no id and manages
-  the baseline for future conversations.
+  that conversation id; an independently mounted widget has no id and shows
+  the Agent Card base read-only. Users edit that base in Connection Hub.
 - Verify end to end: toggle a tool group off, press **Save changes**, send a
   message, and confirm the
   agent's tool catalog for that turn excludes the group (the selection is also

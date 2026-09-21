@@ -4,7 +4,7 @@ title: "Recipe: App User Settings"
 summary: "Steps to give an app durable non-security preferences over user_bundle_props: choose the scope, define a typed record, normalize and merge writes, expose explicit operations, save deliberate UI drafts, and apply configured fallbacks at runtime."
 status: current
 tags: ["recipes", "constructs", "user-settings", "user_bundle_props", "store", "operations"]
-updated_at: 2026-09-20
+updated_at: 2026-09-21
 keywords:
   [
     "app user settings recipe",
@@ -112,18 +112,22 @@ Declare `user_types` explicitly — an operation without a declared visibility
 is open to ALL callers. `memories_widget_preferences` and
 `memories_widget_preferences_update` are a pure settings example.
 `agent_capabilities` and `agent_selection_update` intentionally coordinate two
-owners in one UI save: preferences use this store, while capability authority
-uses the resident Connection Hub Card.
+owners in one UI save: behavior preferences use the agent-preference records,
+while capability toggles replace the named conversation's positive projection
+beneath its current Connection Hub Cards. The Agent Card base is edited in
+Connection Hub.
 
 ## 5. UI round-trip
 
 Read once (lazy, on surface open); keep edits as a local draft; save only on an
 explicit user command; send the exact scope plus only changed fields; then
 reconcile from the returned normalized record. The chat composer uses
-`conversation_id` for model, instruction, presentation, and cache preferences
-and exposes **Save changes**. An independently mounted settings surface may
-omit it to edit a future-conversation baseline. Never switch scopes silently
-in a host UI.
+`conversation_id` for capability changes and for scoped model, instruction,
+presentation, and cache preferences, and exposes **Save changes**. An
+independently mounted capability surface without a conversation id shows the
+Agent Card base read-only; preference-only settings may still expose an
+explicit future-conversation baseline. Never switch scopes silently in a host
+UI.
 
 The composer "+" menu and the memories widget are the two shipped
 round-trips; the chat engine's capabilities branch

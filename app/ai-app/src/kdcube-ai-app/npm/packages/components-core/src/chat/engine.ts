@@ -748,9 +748,12 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
         agent: response.agent || runtime.agentId,
         inventory: response.capabilities,
         disabled: response.selection?.disabled ?? {},
+        baseDisabled: response.selection?.conversation_base_disabled ?? response.selection?.disabled ?? {},
+        agentBaseDisabled: response.selection?.agent_base_disabled ?? response.selection?.disabled ?? {},
+        scope: response.selection?.scope ?? null,
         model: response.selection?.model ?? null,
         instructions: response.selection?.instructions ?? null,
-          presentation: response.selection?.presentation ?? null,
+        presentation: response.selection?.presentation ?? null,
         cachePolicy: response.cache_policy ?? null,
         pending: response.selection?.pending ?? null,
       }))
@@ -774,6 +777,9 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
       if (getChat().conversationId === conversationId) {
         dispatch(chatActions.capabilitiesSelectionSaved({
           disabled: response.selection?.disabled ?? {},
+          baseDisabled: response.selection?.conversation_base_disabled,
+          agentBaseDisabled: response.selection?.agent_base_disabled,
+          scope: response.selection?.scope,
           model: response.selection?.model ?? null,
           instructions: response.selection?.instructions ?? null,
           presentation: response.selection?.presentation ?? null,
@@ -823,6 +829,9 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
       if (getChat().conversationId === conversationId) {
         dispatch(chatActions.capabilitiesSelectionSaved({
           disabled: response.selection?.disabled ?? {},
+          baseDisabled: response.selection?.conversation_base_disabled,
+          agentBaseDisabled: response.selection?.agent_base_disabled,
+          scope: response.selection?.scope,
           model: response.selection?.model ?? null,
           instructions: response.selection?.instructions ?? null,
           presentation: response.selection?.presentation ?? null,

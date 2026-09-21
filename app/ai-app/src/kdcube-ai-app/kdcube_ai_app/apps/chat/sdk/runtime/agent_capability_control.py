@@ -128,6 +128,53 @@ def _policy_sets(value: Mapping[str, Any] | None) -> dict[str, set[str]]:
     }
 
 
+def intersect_capability_projections(
+    *projections: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Intersect finite positive projections for one exact agent resource."""
+
+    if not projections:
+        raise ValueError("agent_capability_projection_required")
+    effective = AgentCapabilityPolicy.from_property(projections[0])
+    for projection in projections[1:]:
+        effective = effective.intersection(
+            AgentCapabilityPolicy.from_property(projection)
+        )
+    return effective.to_property()
+
+
+def conversation_capability_projections(
+    card_projection: Mapping[str, Any],
+    conversation_selection: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return this conversation's live base and effective projection.
+
+    The stored base freezes what existed when the conversation started. The
+    current Card is intersected on every read, so a later revocation closes
+    access immediately while a later addition cannot enter the conversation.
+    """
+
+    if not isinstance(conversation_selection, Mapping):
+        current = copy.deepcopy(dict(card_projection))
+        return current, copy.deepcopy(current)
+    base_projection = conversation_selection.get("base_projection")
+    selected_projection = conversation_selection.get("projection")
+    if not isinstance(base_projection, Mapping) or not isinstance(
+        selected_projection,
+        Mapping,
+    ):
+        raise ValueError("conversation_capability_projection_invalid")
+    live_base = intersect_capability_projections(
+        card_projection,
+        base_projection,
+    )
+    effective = intersect_capability_projections(
+        live_base,
+        selected_projection,
+    )
+    return live_base, effective
+
+
 def _realm_operation_entries(row: Mapping[str, Any]) -> list[dict[str, Any]]:
     realm = row.get("realm")
     if not isinstance(realm, Mapping):
@@ -908,9 +955,11 @@ __all__ = [
     "AgentCapabilityControlUnavailable",
     "agent_capability_identity",
     "annotate_capability_states",
+    "conversation_capability_projections",
     "deny_all_capabilities",
     "descriptor_capability_payload",
     "disabled_from_projection",
+    "intersect_capability_projections",
     "selected_capabilities_from_disabled",
     "sync_agent_capability_projection",
     "unavailable_capability_states",

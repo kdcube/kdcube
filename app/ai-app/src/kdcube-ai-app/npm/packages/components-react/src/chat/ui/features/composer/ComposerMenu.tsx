@@ -117,6 +117,8 @@ function MenuRow({
   spotlight = false,
   aside,
   authorityState,
+  baseChecked,
+  scopeLocked = false,
 }: {
   label: ReactNode
   sub?: string
@@ -133,24 +135,43 @@ function MenuRow({
   /** Trailing affordance beside the toggle (e.g. the consent state/button). */
   aside?: ReactNode
   /** Live Control x user-selection state. Only not_allowed is immutable;
-   *  selected and unselected rows remain ordinary local draft choices. */
+   *  the Agent Card's unselected rows are also outside the conversation. */
   authorityState?: AgentCapabilityAuthorityValue
+  /** State inherited when this conversation started. */
+  baseChecked?: 'on' | 'off' | 'partial'
+  /** An unscoped picker shows the Agent Card base; Connection Hub edits it. */
+  scopeLocked?: boolean
 }) {
   const notAllowed = authorityState === 'not_allowed'
-  const renderedChecked = notAllowed ? 'off' : checked
+  const outsideAgentBase = authorityState === 'allowed_unselected'
+  const outsideConversationBase = baseChecked === 'off'
+  const excluded = notAllowed || outsideAgentBase || outsideConversationBase
+  const renderedChecked = excluded ? 'off' : checked
+  const locked = notAllowed || outsideAgentBase || outsideConversationBase || scopeLocked
+  const lockLabel = notAllowed
+    ? 'Not permitted'
+    : outsideAgentBase
+      ? 'Not in Agent Card'
+      : outsideConversationBase
+        ? 'Not in conversation base'
+        : scopeLocked
+          ? 'Managed in Agent Card'
+          : ''
+  const inherited = baseChecked !== undefined && baseChecked === renderedChecked
   return (
     <div
-      className={`k-menu-row ${child ? 'k-menu-row-child' : ''}${spotlight ? ' k-menu-row-spotlight' : ''}${notAllowed ? ' k-menu-row-not-allowed' : ''}`}
+      className={`k-menu-row ${child ? 'k-menu-row-child' : ''}${spotlight ? ' k-menu-row-spotlight' : ''}${locked ? ' k-menu-row-not-allowed' : ''}`}
       data-authority-state={authorityState || undefined}
+      data-selection-source={baseChecked === undefined ? undefined : inherited ? 'inherited' : 'conversation'}
     >
       <button
         type="button"
         role="menuitemcheckbox"
         aria-checked={renderedChecked === 'on' ? 'true' : renderedChecked === 'partial' ? 'mixed' : 'false'}
-        aria-disabled={notAllowed || undefined}
-        disabled={notAllowed}
+        aria-disabled={locked || undefined}
+        disabled={locked}
         className="k-menu-row-main"
-        title={notAllowed ? 'Project policy marks this capability unavailable' : sub || hint || undefined}
+        title={locked ? lockLabel : sub || hint || undefined}
         onClick={onToggle}
       >
         <span className="k-menu-row-text">
@@ -159,7 +180,16 @@ function MenuRow({
         </span>
         <span className="k-menu-row-state">{renderedChecked === 'off' ? null : <CheckIcon state={renderedChecked === 'partial' ? 'partial' : 'on'} />}</span>
       </button>
-      {notAllowed ? <span className="k-menu-tag k-menu-tag-not-allowed">Not permitted</span> : aside}
+      {locked ? (
+        <span className="k-menu-tag k-menu-tag-not-allowed">{lockLabel}</span>
+      ) : (
+        <>
+          {baseChecked !== undefined ? (
+            <span className="k-menu-tag">{inherited ? 'Inherited' : 'Changed here'}</span>
+          ) : null}
+          {aside}
+        </>
+      )}
       {expandable ? (
         <button
           type="button"
@@ -355,6 +385,8 @@ function namespaceLabel(namespace: string, styles: NamespaceStyleMap): string {
 interface CapabilityRowsProps {
   inventory: AgentCapabilitiesInventory
   disabled: AgentSelectionDisabled
+  baseDisabled: AgentSelectionDisabled
+  editable: boolean
   toggle: (patch: AgentSelectionPatch) => void
   namespaceStyles: NamespaceStyleMap
   pending?: AgentSelectionPending | null
@@ -521,7 +553,7 @@ function PresentationSection({ vm }: ComposerMenuSectionContext) {
   )
 }
 
-function SkillsSection({ inventory, disabled, toggle }: CapabilityRowsProps) {
+function SkillsSection({ inventory, disabled, baseDisabled, editable, toggle }: CapabilityRowsProps) {
   if (!inventory.skills.length) return null
   return (
     <div>
@@ -532,6 +564,8 @@ function SkillsSection({ inventory, disabled, toggle }: CapabilityRowsProps) {
           label={skill.name}
           sub={firstLine(skill.description)}
           checked={isSkillDisabled(disabled, skill.id) ? 'off' : 'on'}
+          baseChecked={isSkillDisabled(baseDisabled, skill.id) ? 'off' : 'on'}
+          scopeLocked={!editable}
           onToggle={() => toggle({ skills: { [skill.id]: !isSkillDisabled(disabled, skill.id) } })}
           authorityState={skill.authority_state}
         />
@@ -540,7 +574,7 @@ function SkillsSection({ inventory, disabled, toggle }: CapabilityRowsProps) {
   )
 }
 
-function ConversationTargetsSection({ inventory, disabled, toggle }: CapabilityRowsProps) {
+function ConversationTargetsSection({ inventory, disabled, baseDisabled, editable, toggle }: CapabilityRowsProps) {
   const targets = inventory.conversation_targets ?? []
   if (!targets.length) return null
   return (
@@ -555,6 +589,8 @@ function ConversationTargetsSection({ inventory, disabled, toggle }: CapabilityR
             label={bundleId === '*' ? 'All applications' : bundleId}
             sub={target.resource}
             checked={disabled.conversation_targets?.[targetId] ? 'off' : 'on'}
+            baseChecked={baseDisabled.conversation_targets?.[targetId] ? 'off' : 'on'}
+            scopeLocked={!editable}
             onToggle={() => toggle({ conversation_targets: { [targetId]: !disabled.conversation_targets?.[targetId] } })}
             authorityState={target.authority_state}
           />
@@ -564,7 +600,7 @@ function ConversationTargetsSection({ inventory, disabled, toggle }: CapabilityR
   )
 }
 
-function ToolGroupsSection({ inventory, disabled, toggle, pending, spotlight, onConsent }: CapabilityRowsProps) {
+function ToolGroupsSection({ inventory, disabled, baseDisabled, editable, toggle, pending, spotlight, onConsent }: CapabilityRowsProps) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const groups = inventory.tools.filter((group) => !group.system)
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -617,6 +653,7 @@ function ToolGroupsSection({ inventory, disabled, toggle, pending, spotlight, on
       <SectionTitle>Tools</SectionTitle>
       {groups.map((group) => {
         const state = toolGroupState(group, disabled)
+        const baseState = toolGroupState(group, baseDisabled)
         const isOpen = Boolean(expanded[group.alias])
         return (
           <div key={group.alias}>
@@ -628,6 +665,8 @@ function ToolGroupsSection({ inventory, disabled, toggle, pending, spotlight, on
                 </>
               }
               checked={state}
+              baseChecked={baseState}
+              scopeLocked={!editable}
               onToggle={() => toggle(toolGroupTogglePatch(group, disabled))}
               expandable={group.tools.length > 0}
               expanded={isOpen}
@@ -650,6 +689,8 @@ function ToolGroupsSection({ inventory, disabled, toggle, pending, spotlight, on
                     label={<EntryTitle name={tool.name} />}
                     sub={firstLine(tool.description)}
                     checked={isToolDisabled(disabled, group.alias, tool.name) ? 'off' : 'on'}
+                    baseChecked={isToolDisabled(baseDisabled, group.alias, tool.name) ? 'off' : 'on'}
+                    scopeLocked={!editable}
                     onToggle={() => toggle(toolTogglePatch(group, disabled, tool.name))}
                     spotlight={toolSpotlit(group.alias, tool.name)}
                     aside={<ConsentAside consent={tool.consent} onConsent={onConsent} />}
@@ -664,7 +705,7 @@ function ToolGroupsSection({ inventory, disabled, toggle, pending, spotlight, on
   )
 }
 
-function McpSection({ inventory, disabled, toggle, onConsent }: CapabilityRowsProps) {
+function McpSection({ inventory, disabled, baseDisabled, editable, toggle, onConsent }: CapabilityRowsProps) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   if (!inventory.mcp.length) return null
   return (
@@ -678,6 +719,8 @@ function McpSection({ inventory, disabled, toggle, onConsent }: CapabilityRowsPr
             <MenuRow
               label={server.name || server.server_id}
               checked={mcpServerState(server, disabled)}
+              baseChecked={mcpServerState(server, baseDisabled)}
+              scopeLocked={!editable}
               onToggle={() => toggle(mcpServerTogglePatch(server, disabled))}
               expandable={entries.length > 0}
               expanded={isOpen}
@@ -693,6 +736,8 @@ function McpSection({ inventory, disabled, toggle, onConsent }: CapabilityRowsPr
                     label={<EntryTitle name={tool.name} />}
                     sub={firstLine(tool.description)}
                     checked={isMcpToolDisabled(disabled, server.server_id, tool.name) ? 'off' : 'on'}
+                    baseChecked={isMcpToolDisabled(baseDisabled, server.server_id, tool.name) ? 'off' : 'on'}
+                    scopeLocked={!editable}
                     onToggle={() => toggle(mcpToolTogglePatch(server, disabled, tool.name))}
                     authorityState={nestedAuthorityState(server.authority_state, tool.authority_state)}
                   />
@@ -716,6 +761,8 @@ function RealmEntryRow({
   entryKey,
   entry,
   disabled,
+  baseDisabled,
+  editable,
   toggle,
   consent,
   onConsent,
@@ -733,6 +780,8 @@ function RealmEntryRow({
     authority_state?: AgentCapabilityAuthorityValue
   }
   disabled: AgentSelectionDisabled
+  baseDisabled: AgentSelectionDisabled
+  editable: boolean
   toggle: (patch: AgentSelectionPatch) => void
   consent?: AgentCapabilityConsent
   onConsent?: (open: ConnectionsConsentOpen) => void
@@ -763,6 +812,8 @@ function RealmEntryRow({
       label={<EntryTitle name={entry.name} label={entry.label} />}
       sub={sub || undefined}
       checked={isNamespaceEntryDisabled(disabled, namespace, entryKey) ? 'off' : 'on'}
+      baseChecked={isNamespaceEntryDisabled(baseDisabled, namespace, entryKey) ? 'off' : 'on'}
+      scopeLocked={!editable}
       onToggle={() => toggle(namespaceEntryTogglePatch(namespace, entryKeys, disabled, entryKey))}
       aside={aside}
       authorityState={nestedAuthorityState(parentAuthorityState, entry.authority_state)}
@@ -897,6 +948,8 @@ function RealmGroupRow({
   entryKeys,
   group,
   disabled,
+  baseDisabled,
+  editable,
   toggle,
   consent,
   onConsent,
@@ -906,6 +959,8 @@ function RealmGroupRow({
   entryKeys: string[]
   group: RealmGroupView
   disabled: AgentSelectionDisabled
+  baseDisabled: AgentSelectionDisabled
+  editable: boolean
   toggle: (patch: AgentSelectionPatch) => void
   consent?: AgentCapabilityConsent
   onConsent?: (open: ConnectionsConsentOpen) => void
@@ -923,6 +978,8 @@ function RealmGroupRow({
         label={group.label}
         sub={group.summary}
         checked={namespaceState(namespace, group.keys, disabled)}
+        baseChecked={namespaceState(namespace, group.keys, baseDisabled)}
+        scopeLocked={!editable}
         onToggle={() => toggle(namespaceGroupTogglePatch(namespace, entryKeys, group.keys, disabled))}
         expandable={group.entries.length > 0}
         expanded={open}
@@ -938,6 +995,8 @@ function RealmGroupRow({
               entryKey={key}
               entry={item}
               disabled={disabled}
+              baseDisabled={baseDisabled}
+              editable={editable}
               toggle={toggle}
               consent={consent}
               onConsent={onConsent}
@@ -986,7 +1045,7 @@ function ExcludedSummary({ namespace, excluded }: { namespace: string; excluded:
   )
 }
 
-function ServicesSection({ inventory, disabled, toggle, namespaceStyles, spotlight, onConsent }: CapabilityRowsProps) {
+function ServicesSection({ inventory, disabled, baseDisabled, editable, toggle, namespaceStyles, spotlight, onConsent }: CapabilityRowsProps) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   if (!inventory.named_services.length) return null
   // The consent banner's "turn off the tools" for a named-service tool names
@@ -1010,6 +1069,8 @@ function ServicesSection({ inventory, disabled, toggle, namespaceStyles, spotlig
               label={realm?.label || namespaceLabel(entry.namespace, namespaceStyles)}
               sub={realm?.about || realm?.description || undefined}
               checked={namespaceState(entry.namespace, entryKeys, disabled)}
+              baseChecked={namespaceState(entry.namespace, entryKeys, baseDisabled)}
+              scopeLocked={!editable}
               onToggle={() => toggle(namespaceTogglePatch(entry.namespace, entryKeys, disabled))}
               expandable
               expanded={isOpen}
@@ -1049,6 +1110,8 @@ function ServicesSection({ inventory, disabled, toggle, namespaceStyles, spotlig
                     entryKeys={entryKeys}
                     group={group}
                     disabled={disabled}
+                    baseDisabled={baseDisabled}
+                    editable={editable}
                     toggle={toggle}
                     consent={entry.consent}
                     onConsent={onConsent}
@@ -1072,11 +1135,12 @@ function ServicesSection({ inventory, disabled, toggle, namespaceStyles, spotlig
  *  local-draft + explicit-save selection flow as every other category. Label and
  *  description come from the payload — the server owns the quality-vs-spend
  *  copy. */
-function HelperAgentsSection({ inventory, disabled, toggle, pending }: CapabilityRowsProps) {
+function HelperAgentsSection({ inventory, disabled, baseDisabled, editable, toggle, pending }: CapabilityRowsProps) {
   const entry = inventory.subagents
   if (!entry?.available) return null
   const defaultOn = entry.default_on !== false
   const off = isSubagentsDisabled(disabled, defaultOn)
+  const baseOff = isSubagentsDisabled(baseDisabled, defaultOn)
   const pendingSubagents = pending?.disabled?.subagents !== undefined
   return (
     <div>
@@ -1089,6 +1153,8 @@ function HelperAgentsSection({ inventory, disabled, toggle, pending }: Capabilit
         }
         sub={entry.description || undefined}
         checked={off ? 'off' : 'on'}
+        baseChecked={baseOff ? 'off' : 'on'}
+        scopeLocked={!editable}
         onToggle={() => toggle(subagentsTogglePatch(disabled, defaultOn))}
         authorityState={entry.authority_state}
       />
@@ -1148,7 +1214,7 @@ function builtInSections(namespaceStyles: NamespaceStyleMap): ComposerMenuSectio
     id,
     order,
     render: ({ vm, close }) => {
-      const { inventory, disabled, toggle, pending } = vm.capabilities
+      const { inventory, disabled, baseDisabled, scope, toggle, pending } = vm.capabilities
       if (!inventory || !hasItems(inventory)) return null
       const onConsent = vm.connections.available()
         ? (consent: ConnectionsConsentOpen) => {
@@ -1160,6 +1226,8 @@ function builtInSections(namespaceStyles: NamespaceStyleMap): ComposerMenuSectio
         <Section
           inventory={inventory}
           disabled={disabled}
+          baseDisabled={baseDisabled}
+          editable={scope?.capabilities_editable !== false}
           toggle={toggle}
           namespaceStyles={namespaceStyles}
           pending={pending}
@@ -1210,6 +1278,17 @@ function builtInSections(namespaceStyles: NamespaceStyleMap): ComposerMenuSectio
 
 function modelKey(pick: { provider?: string; model?: string } | null | undefined): string {
   return pick?.model ? `${pick.provider ?? ''}:${pick.model}` : ''
+}
+
+function changesConversationCapabilities(patch: AgentSelectionPatch): boolean {
+  return Boolean(
+    patch.tools
+    || patch.mcp
+    || patch.named_services
+    || patch.conversation_targets
+    || patch.skills
+    || patch.subagents !== undefined
+  )
 }
 
 /** The picker's interaction core, shared by every presentation (popover,
@@ -1289,12 +1368,19 @@ export function useCapabilityPickerBody({
     }
   }, [active, capabilities.status, capabilities.model])
 
-  /* Decision routing — the decision moment IS the policy picker. On a fresh
+  /* Decision routing — the decision moment IS the policy picker. Capability
+   * rows always change this conversation from its next message; cache timing
+   * never turns that into a different scope. On a fresh
    * conversation (nothing cached) every change just applies. On a warm-ish
    * conversation the user's standing policy decides: accept applies with the
    * passive notice, defer_* writes the change as a pending delta, confirm
    * opens the inline choice (Apply now / next conversation / when cold). */
   const routeToggle = (patch: Parameters<typeof capabilities.toggle>[0]) => {
+    if (changesConversationCapabilities(patch)) {
+      setToggledThisOpen(true)
+      capabilities.toggle(patch)
+      return
+    }
     const klass: 'model_switch' | 'capability_toggle' =
       patch.model !== undefined ? 'model_switch' : 'capability_toggle'
     const policy = capabilities.cachePolicy?.effective?.[klass]
@@ -1382,7 +1468,9 @@ export function useCapabilityPickerBody({
             ? 'Saving changes…'
             : capabilities.dirty
               ? 'Unsaved changes'
-              : 'Saved changes apply from your next message.'}
+              : capabilities.scope?.kind === 'agent_base'
+                ? 'The Agent Card base is managed in Connection Hub.'
+                : 'Saved for this conversation. Changes apply from your next message.'}
       </span>
       <button
         type="button"

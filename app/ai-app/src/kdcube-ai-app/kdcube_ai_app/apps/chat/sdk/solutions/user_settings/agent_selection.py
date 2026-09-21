@@ -11,10 +11,10 @@ presentation picks; the user-default row supplies their initial values and
 owns the standing cache policy.
 
 ``disabled`` remains in the value as a compatibility and migration seed for
-records written before resident Agent Cards became authoritative. Current
-delegated capability authority and selection live on the agent's linked
-Connection Hub Cards; this PostgreSQL field does not authorize or deny a live
-operation. The compatibility record is shaped as follows:
+records written before Agent Cards became authoritative. Current Control and
+Agent Card authority lives in Connection Hub; current conversation selection
+lives in the separate ``agent_capabilities`` record. This compatibility field
+does not authorize or deny a live operation. The record is shaped as follows:
 
     {
       "schema_version": 1,
@@ -456,8 +456,9 @@ class UserAgentSelectionStore(UserSettingsStore):
 
         A missing conversation row inherits the user default. ``materialize``
         freezes inherited behavior preferences for the conversation with an
-        insert-if-absent; live capabilities continue to resolve from the
-        resident Agent Card. Standing cache policy remains on the default row.
+        insert-if-absent. ``ConversationCapabilitySelectionStore`` owns the
+        separate capability snapshot. Standing cache policy remains on the
+        default row.
         A due ``next_conversation`` default is promoted before seeding.
         """
         conversation = str(conversation_id or "").strip()

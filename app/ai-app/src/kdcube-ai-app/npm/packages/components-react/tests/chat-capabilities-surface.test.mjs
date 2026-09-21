@@ -225,6 +225,25 @@ test('chat-originated capability windows keep the active conversation scope', ()
   assert.match(composerSource, /conversation_id:\s*vm\.state\.conversationId/)
   assert.match(widgetSource, /conversation_id:\s*conversationRef\.current/)
   assert.match(widgetSource, /Choose what the \$\{agentId\} agent may use in this conversation/)
+  assert.match(widgetSource, /Edit this base in Connection Hub/)
+})
+
+test('picker names conversation provenance and never promotes a row into the Agent Card', () => {
+  const menu = readFileSync(
+    new URL('../src/chat/ui/features/composer/ComposerMenu.tsx', import.meta.url),
+    'utf8',
+  )
+  assert.match(menu, /'Inherited' : 'Changed here'/)
+  assert.match(menu, /'Not in conversation base'/)
+  assert.match(menu, /Saved for this conversation\. Changes apply from your next message\./)
+  assert.match(menu, /The Agent Card base is managed in Connection Hub\./)
+  assert.match(menu, /changesConversationCapabilities\(patch\)/)
+  const capabilityBranch = menu.slice(
+    menu.indexOf('if (changesConversationCapabilities(patch))'),
+    menu.indexOf("const klass: 'model_switch'", menu.indexOf('if (changesConversationCapabilities(patch))')),
+  )
+  assert.match(capabilityBranch, /capabilities\.toggle\(patch\)/)
+  assert.doesNotMatch(capabilityBranch, /next_conversation|when_cold/)
 })
 
 // ---------------------------------------------------------------------------

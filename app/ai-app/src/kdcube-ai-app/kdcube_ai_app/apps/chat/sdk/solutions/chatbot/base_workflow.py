@@ -2919,16 +2919,16 @@ class BaseWorkflow():
             return safe_tool_config
 
     async def apply_user_agent_selection(self, tool_config: Any, skill_config: Any) -> tuple:
-        """Apply live Card capability authority and stored user preferences.
+        """Apply live Card authority, conversation narrowing, and preferences.
 
         The current descriptor Control Card intersected with the user's agent
-        Card is the capability source on every turn. Its positive projection
-        narrows tools, skills, and named-service dispatch; an unavailable Card
-        projection closes every selectable capability while platform system
-        tools remain outside this boundary. PostgreSQL stores model,
-        instruction, presentation, and cache preferences, plus a migration-only
-        seed for a Card that has not been created yet. Preference failures fall
-        back to configured defaults without widening the Card projection.
+        Card bounds every turn. The conversation's positive snapshot narrows
+        that projection further, so later Card additions do not enter an open
+        conversation while later revocations still close immediately. An
+        unavailable Card or conversation projection closes every selectable
+        capability while platform system tools remain outside this boundary.
+        PostgreSQL separately stores model, instruction, presentation, and
+        cache preferences.
         """
         BaseWorkflow._clear_resident_runtime_projection(self)
         narrowed_tools = tool_config
@@ -2968,14 +2968,21 @@ class BaseWorkflow():
                 selection_snapshot,
             )
             from kdcube_ai_app.apps.chat.sdk.solutions.user_settings import (
+                ConversationCapabilitySelectionStore,
                 UserAgentSelectionStore,
             )
 
             bundle_props = self.bundle_props if isinstance(self.bundle_props, Mapping) else {}
             store = None
+            capability_store = None
             selection: Dict[str, Any] = {}
             legacy_disabled = None
             if self.pg_pool is not None:
+                capability_store = ConversationCapabilitySelectionStore(
+                    pg_pool=self.pg_pool,
+                    tenant=tenant or "default",
+                    project=project or "default",
+                )
                 try:
                     store = UserAgentSelectionStore(
                         pg_pool=self.pg_pool,
@@ -3052,15 +3059,26 @@ class BaseWorkflow():
             # pending delta has had a chance to promote. From this point the
             # conversation owns its model and presentation preferences.
             if store is not None and conversation_id:
-                selection = await store.get_selection(
-                    user_id=user_id,
-                    bundle_id=bundle_id,
-                    agent_id=agent_id,
-                    conversation_id=conversation_id,
-                    materialize=True,
-                )
+                try:
+                    selection = await store.get_selection(
+                        user_id=user_id,
+                        bundle_id=bundle_id,
+                        agent_id=agent_id,
+                        conversation_id=conversation_id,
+                        materialize=True,
+                    )
+                except Exception:
+                    store = None
+                    selection = {}
+                    self.logger.log(
+                        "[agent_selection] preference materialization unavailable; "
+                        "configured preferences stay and capability authority still applies\n"
+                        + traceback.format_exc(),
+                        level="WARNING",
+                    )
 
             from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import (
+                conversation_capability_projections,
                 deny_all_capabilities,
                 disabled_from_projection,
                 sync_agent_capability_projection,
@@ -3086,9 +3104,28 @@ class BaseWorkflow():
                     agent_id=agent_id,
                     initial_disabled=legacy_disabled,
                 )
+                card_projection = capability_control["projection"]
+                conversation_selection = None
+                if conversation_id:
+                    if capability_store is None:
+                        raise RuntimeError(
+                            "conversation capability selection requires pg_pool"
+                        )
+                    conversation_selection = await capability_store.get_selection(
+                        user_id=user_id,
+                        bundle_id=bundle_id,
+                        agent_id=agent_id,
+                        conversation_id=conversation_id,
+                        base_projection=card_projection,
+                        materialize=True,
+                    )
+                _live_base, effective_projection = conversation_capability_projections(
+                    card_projection,
+                    conversation_selection,
+                )
                 disabled = disabled_from_projection(
                     capability_catalog,
-                    capability_control["projection"],
+                    effective_projection,
                 )
             except Exception:
                 disabled = deny_all_capabilities(
@@ -3099,7 +3136,7 @@ class BaseWorkflow():
                     agent_id=agent_id,
                 )
                 self.logger.log(
-                    "[agent_capabilities] live Card projection unavailable; "
+                    "[agent_capabilities] live Card or conversation projection unavailable; "
                     "selectable capabilities are closed",
                     level="WARNING",
                 )
@@ -3154,9 +3191,10 @@ class BaseWorkflow():
                     if value == "defer_cold":
                         return warm
                     return False
-                # Card capability changes are already authoritative for this
-                # call and cannot be pinned to an earlier snapshot. Only the
-                # preference-backed model/prompt class may defer.
+                # Conversation capability changes are already authoritative
+                # for this call and cannot be pinned to an earlier timeline
+                # snapshot. Only the preference-backed model/prompt class may
+                # defer.
                 pinnable_classes = [
                     klass
                     for klass in change["classes"]

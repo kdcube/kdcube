@@ -63,7 +63,51 @@ class _Store:
         }
 
 
-def _owner(*, pg_pool: Any, store: _Store | None = None) -> SimpleNamespace:
+class _BrokenPreferenceStore:
+    async def ensure_schema(self) -> None:
+        raise RuntimeError("preference store unavailable")
+
+
+class _CapabilityStore:
+    def __init__(
+        self,
+        events: list[str],
+        projection: dict[str, Any],
+        *,
+        write_error: str = "",
+    ) -> None:
+        self.events = events
+        self.base_projection = projection
+        self.projection = projection
+        self.write_error = write_error
+        self.set_calls: list[dict[str, Any]] = []
+
+    async def get_selection(self, **_kwargs: Any):
+        return {
+            "schema_version": 1,
+            "base_projection": self.base_projection,
+            "projection": self.projection,
+        }
+
+    async def set_projection(self, **kwargs: Any):
+        self.events.append("conversation-write")
+        self.set_calls.append(dict(kwargs))
+        if self.write_error:
+            raise RuntimeError(self.write_error)
+        self.projection = kwargs["projection"]
+        return {
+            "schema_version": 1,
+            "base_projection": self.base_projection,
+            "projection": self.projection,
+        }
+
+
+def _owner(
+    *,
+    pg_pool: Any,
+    store: Any = None,
+    capability_store: _CapabilityStore | None = None,
+) -> SimpleNamespace:
     async def _catalog(_agent_id: str, *, conversation_id: str = ""):
         return dict(CATALOG)
 
@@ -83,6 +127,7 @@ def _owner(*, pg_pool: Any, store: _Store | None = None) -> SimpleNamespace:
         },
         _agent_capabilities_catalog_enriched=_catalog,
         _agent_selection_store=(lambda _identity: store),
+        _agent_capability_selection_store=(lambda _identity: capability_store),
     )
 
 
@@ -98,28 +143,35 @@ def _authority() -> dict[str, Any]:
 
 
 @pytest.mark.asyncio
-async def test_capability_only_update_does_not_require_postgres(monkeypatch) -> None:
+async def test_capability_update_writes_only_the_conversation_projection(monkeypatch) -> None:
     authority = _authority()
     calls: list[dict[str, Any]] = []
+    events: list[str] = []
+    store = _Store(events)
+    capability_store = _CapabilityStore(events, authority)
 
     async def _sync(_entrypoint: Any, **kwargs: Any):
         calls.append(dict(kwargs))
-        projection = kwargs.get("selected_capabilities") or authority
         return {
             "authority": authority,
-            "projection": projection,
-            "selection": projection,
+            "projection": authority,
+            "selection": authority,
             "states": {},
         }
 
     monkeypatch.setattr(capability_control, "sync_agent_capability_projection", _sync)
-    owner = _owner(pg_pool=None)
+    owner = _owner(
+        pg_pool=object(),
+        store=store,
+        capability_store=capability_store,
+    )
 
     result = await BaseEntrypoint.agent_selection_update(
         owner,
         data={
             "data": {
                 "agent": "main",
+                "conversation_id": "conv-a",
                 "disabled": {"tools": {"web": True}},
                 "apply": "next_conversation",
             }
@@ -128,11 +180,47 @@ async def test_capability_only_update_does_not_require_postgres(monkeypatch) -> 
 
     assert result["ok"] is True
     assert result["selection"]["disabled"] == {"tools": {"web": True}}
-    assert len(calls) == 2
-    assert calls[1]["replace_selection"] is True
-    selected = calls[1]["selected_capabilities"]["capabilities"]
+    assert result["selection"]["capability_source"] == "conversation"
+    assert len(calls) == 1
+    assert "replace_selection" not in calls[0]
+    selected = capability_store.set_calls[0]["projection"]["capabilities"]
     assert selected["tool_groups"] == []
     assert selected["tools"] == []
+    assert events == ["conversation-write"]
+
+
+@pytest.mark.asyncio
+async def test_capability_only_update_does_not_depend_on_preference_storage(monkeypatch) -> None:
+    authority = _authority()
+    events: list[str] = []
+    capability_store = _CapabilityStore(events, authority)
+
+    async def _sync(_entrypoint: Any, **_kwargs: Any):
+        return {
+            "authority": authority,
+            "projection": authority,
+            "selection": authority,
+            "states": {},
+        }
+
+    monkeypatch.setattr(capability_control, "sync_agent_capability_projection", _sync)
+    result = await BaseEntrypoint.agent_selection_update(
+        _owner(
+            pg_pool=object(),
+            store=_BrokenPreferenceStore(),
+            capability_store=capability_store,
+        ),
+        data={
+            "data": {
+                "agent": "main",
+                "conversation_id": "conv-a",
+                "disabled": {"tools": {"web": True}},
+            }
+        },
+    )
+
+    assert result["ok"] is True
+    assert events == ["conversation-write"]
 
 
 @pytest.mark.asyncio
@@ -162,34 +250,68 @@ async def test_capability_read_marks_rows_not_permitted_when_card_is_unavailable
 
 
 @pytest.mark.asyncio
-async def test_mixed_update_reports_preference_commit_before_card_failure(monkeypatch) -> None:
+async def test_conversation_read_fails_closed_without_snapshot_storage(monkeypatch) -> None:
+    authority = _authority()
+
+    async def _sync(_entrypoint: Any, **_kwargs: Any):
+        return {
+            "authority": authority,
+            "projection": authority,
+            "selection": authority,
+            "states": {},
+        }
+
+    monkeypatch.setattr(capability_control, "sync_agent_capability_projection", _sync)
+    result = await BaseEntrypoint.agent_capabilities(
+        _owner(pg_pool=None),
+        data={"data": {"agent": "main", "conversation_id": "conv-a"}},
+    )
+
+    assert result["ok"] is True
+    assert result["selection"]["capability_source"] == (
+        "conversation_selection_unavailable"
+    )
+    assert result["selection"]["disabled"] == {"tools": {"web": True}}
+    assert result["selection"]["scope"] == {
+        "kind": "conversation",
+        "conversation_id": "conv-a",
+        "capabilities_editable": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_mixed_update_reports_preference_commit_before_conversation_failure(monkeypatch) -> None:
     authority = _authority()
     events: list[str] = []
     store = _Store(events)
-    sync_count = 0
+    capability_store = _CapabilityStore(
+        events,
+        authority,
+        write_error="conversation write unavailable",
+    )
 
     async def _sync(_entrypoint: Any, **kwargs: Any):
-        nonlocal sync_count
-        sync_count += 1
-        if sync_count == 1:
-            events.append("card-read")
-            return {
-                "authority": authority,
-                "projection": authority,
-                "selection": authority,
-                "states": {},
-            }
-        events.append("card-write")
-        raise RuntimeError("card write unavailable")
+        events.append("card-read")
+        return {
+            "authority": authority,
+            "projection": authority,
+            "selection": authority,
+            "states": {},
+        }
 
     monkeypatch.setattr(capability_control, "sync_agent_capability_projection", _sync)
-    owner = _owner(pg_pool=object(), store=store)
+    owner = _owner(
+        pg_pool=object(),
+        store=store,
+        capability_store=capability_store,
+    )
 
     result = await BaseEntrypoint.agent_selection_update(
         owner,
         data={
             "data": {
                 "agent": "main",
+                "conversation_id": "conv-a",
                 "disabled": {"tools": {"web": True}},
                 "model": {"provider": "test", "model": "small"},
                 "apply": "when_cold",
@@ -198,8 +320,20 @@ async def test_mixed_update_reports_preference_commit_before_card_failure(monkey
     )
 
     assert result["ok"] is False
-    assert result["error"] == "card write unavailable"
+    assert result["error"] == "conversation write unavailable"
     assert result["preference_update_applied"] is True
-    assert events == ["card-read", "preference-write", "card-write"]
+    assert result["capability_update_applied"] is False
+    assert events == ["card-read", "preference-write", "conversation-write"]
     assert store.set_calls[0]["patch"] is None
     assert store.set_calls[0]["apply"] == "when_cold"
+
+
+@pytest.mark.asyncio
+async def test_capability_update_requires_an_active_conversation() -> None:
+    result = await BaseEntrypoint.agent_selection_update(
+        _owner(pg_pool=object()),
+        data={"data": {"agent": "main", "disabled": {"tools": {"web": True}}}},
+    )
+
+    assert result["ok"] is False
+    assert result["error"] == "conversation_id_required"

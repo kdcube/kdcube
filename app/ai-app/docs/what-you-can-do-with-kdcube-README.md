@@ -4,7 +4,7 @@ title: "What You Can Do With KDCube"
 summary: "Builder-facing map of KDCube as an open-source AI application framework with an integrated production runtime: keep existing agents and product code, adopt one useful boundary, or compose complete multi-surface apps with identity, conversations, files, isolated execution, integrations, economics, and deployment services."
 tags: ["docs", "product", "overview", "framework", "runtime", "platform", "app", "agent", "integration"]
 keywords: ["what is kdcube", "what can kdcube do", "ai application framework", "production agent runtime", "keep existing agent", "langgraph integration", "multi-user chat", "isolated code execution", "connected accounts", "delegated operators", "named services", "scene", "canvas", "user memories", "application hosted website", "deploy from git", "agent economics"]
-updated_at: 2026-07-18
+updated_at: 2026-09-21
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/arch/security-and-trust-model-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/quick-start-README.md
@@ -209,10 +209,11 @@ conversation draft in the picker
 conversation-scoped selection enforced on later turns
 ```
 
-An optional user baseline supplies defaults for **future** conversations. A new
-conversation materializes that baseline once; later baseline changes do not
-rewrite existing conversations. Sending a chat message does not implicitly save
-picker edits.
+The user's Agent Card in Connection Hub supplies the base for **future**
+conversations. A new conversation snapshots that positive base once; later
+Agent Card additions do not enter it, while current revocations still close
+access. The chat picker changes only its named conversation, and sending a
+message does not implicitly save picker edits.
 
 See [Conversation-Scoped Agent Capabilities](sdk/solutions/user-settings/capabilities-README.md).
 

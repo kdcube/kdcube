@@ -314,9 +314,9 @@ export interface AgentCapabilitiesInventory {
   capability_states?: AgentCapabilityAuthorityStates
 }
 
-/** UI adapter derived from the positive resident Card projection. An absent
- *  key means the visible catalog entry is selected. This is not an authority
- *  record; saves are converted back to a positive Card selection. */
+/** UI adapter derived from the effective positive conversation projection.
+ *  An absent key means the visible catalog entry is selected. This is not an
+ *  authority record; scoped saves become a positive conversation selection. */
 export interface AgentSelectionDisabled {
   tools?: Record<string, true | string[]>
   mcp?: Record<string, true | string[]>
@@ -330,6 +330,14 @@ export interface AgentSelectionDisabled {
    *  `default_on` decides the rendered state. Both booleans are stored (an
    *  explicit `false` is what enables an admin default-off ability). */
   subagents?: boolean
+}
+
+/** Capability writes are conversation-local. An unscoped response exposes
+ *  the Agent Card base for inspection; that base is edited in Connection Hub. */
+export interface AgentCapabilitySelectionScope {
+  kind: 'conversation' | 'agent_base'
+  conversation_id: string
+  capabilities_editable: boolean
 }
 
 /** A partial toggle patch (what one interaction changes). Dict categories take
@@ -367,6 +375,13 @@ export interface AgentCapabilitiesState {
   agent: string | null
   inventory: AgentCapabilitiesInventory | null
   disabled: AgentSelectionDisabled
+  /** Effective inherited snapshot for this conversation, after current Card
+   *  revocations. Comparing a row with this map identifies local changes. */
+  baseDisabled: AgentSelectionDisabled
+  /** Current Agent Card base. This can differ from an open conversation's
+   *  frozen start snapshot. */
+  agentBaseDisabled: AgentSelectionDisabled
+  scope: AgentCapabilitySelectionScope | null
   /** The user's model pick; null = the configured default runs. */
   model: AgentModelPick | null
   /** The user's instruction-profile pick; null = the declared default runs. */
@@ -389,6 +404,9 @@ export const initialCapabilitiesState: AgentCapabilitiesState = {
   agent: null,
   inventory: null,
   disabled: {},
+  baseDisabled: {},
+  agentBaseDisabled: {},
+  scope: null,
   instructions: null,
   presentation: null,
   model: null,

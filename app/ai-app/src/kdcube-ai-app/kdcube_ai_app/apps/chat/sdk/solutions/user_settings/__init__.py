@@ -16,6 +16,13 @@ from kdcube_ai_app.apps.chat.sdk.solutions.user_settings.agent_selection import 
     agent_selection_key,
     merge_selection_patch,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.user_settings.conversation_capabilities import (
+    CONVERSATION_CAPABILITY_KEY_PREFIX,
+    CONVERSATION_CAPABILITY_SCHEMA_VERSION,
+    CONVERSATION_CAPABILITY_SUBSYSTEM,
+    ConversationCapabilitySelectionStore,
+    conversation_capability_selection_key,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.user_settings.store import (
     PLATFORM_WIDE_BUNDLE_ID,
     USER_SETTINGS_TABLE,
@@ -28,11 +35,16 @@ __all__ = [
     "AGENT_SELECTION_CONVERSATION_KEY_PREFIX",
     "AGENT_SELECTION_KEY_PREFIX",
     "AGENT_SELECTION_SUBSYSTEM",
+    "CONVERSATION_CAPABILITY_KEY_PREFIX",
+    "CONVERSATION_CAPABILITY_SCHEMA_VERSION",
+    "CONVERSATION_CAPABILITY_SUBSYSTEM",
     "PLATFORM_WIDE_BUNDLE_ID",
     "USER_SETTINGS_TABLE",
     "UserAgentSelectionStore",
+    "ConversationCapabilitySelectionStore",
     "UserSettingsStore",
     "agent_selection_key",
+    "conversation_capability_selection_key",
     "json_value",
     "merge_selection_patch",
     "utc_now_iso",

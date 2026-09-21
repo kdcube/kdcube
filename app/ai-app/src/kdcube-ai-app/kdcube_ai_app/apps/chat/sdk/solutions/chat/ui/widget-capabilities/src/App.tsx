@@ -89,7 +89,7 @@ function PickerApp() {
   // command: {agent_id?, conversation_id?, spotlight_tools?, section?} in
   // ui_event applies at runtime. Chat-originated commands carry the current
   // conversation; an independently mounted widget has no conversation and
-  // edits the baseline for future conversations.
+  // shows the Agent Card base managed in Connection Hub.
   const [agentId, setAgentId] = useState(settings.getAgentId())
   const [conversationId, setConversationId] = useState('')
   const [spotlight, setSpotlight] = useState<{ tools: string[]; nonce: number } | null>(null)
@@ -105,12 +105,15 @@ function PickerApp() {
       ...(conversationRef.current ? { conversation_id: conversationRef.current } : {}),
     }),
     submitUpdate: (patch: AgentSelectionPatch, options?: StandaloneSelectionWriteOptions) => {
-      const { model, ...disabled } = patch
+      const { model, instructions, presentation, ...disabled } = patch
+      const hasCapabilityPatch = Object.keys(disabled).length > 0
       const apply = options?.apply && options.apply !== 'now' ? options.apply : undefined
       return callOperation('agent_selection_update', {
         agent: agentRef.current,
-        disabled,
+        ...(hasCapabilityPatch ? { disabled } : {}),
         ...(model !== undefined ? { model } : {}),
+        ...(instructions !== undefined ? { instructions } : {}),
+        ...(presentation !== undefined ? { presentation } : {}),
         ...(apply ? { apply } : {}),
         ...(options?.cachePolicy ? { cache_policy: options.cachePolicy } : {}),
         ...(conversationRef.current ? { conversation_id: conversationRef.current } : {}),
@@ -160,7 +163,7 @@ function PickerApp() {
       title="Capabilities"
       subtitle={conversationId
         ? `Choose what the ${agentId} agent may use in this conversation.`
-        : `Choose what new conversations with the ${agentId} agent start with.`}
+        : `View what new conversations with the ${agentId} agent start with. Edit this base in Connection Hub.`}
     />
   )
 }

@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 import kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control as agent_capability_control
+import kdcube_ai_app.apps.chat.sdk.solutions.user_settings as user_settings_module
 from kdcube_ai_app.apps.chat.sdk.runtime.skill_config import AgentSkillConfig
 from kdcube_ai_app.apps.chat.sdk.runtime.tool_config import AgentToolConfig
 from kdcube_ai_app.apps.chat.sdk.solutions.user_settings import agent_selection_key
@@ -150,8 +151,16 @@ def _legacy_selection_as_card_projection(monkeypatch):
     def _disabled(_catalog, projection):
         return dict(projection.get("test_disabled") or {})
 
+    def _conversation_projection(card_projection, _conversation_selection):
+        return card_projection, card_projection
+
     monkeypatch.setattr(agent_capability_control, "sync_agent_capability_projection", _sync)
     monkeypatch.setattr(agent_capability_control, "disabled_from_projection", _disabled)
+    monkeypatch.setattr(
+        agent_capability_control,
+        "conversation_capability_projections",
+        _conversation_projection,
+    )
 
 
 @pytest.mark.asyncio
@@ -164,19 +173,91 @@ async def test_absent_row_returns_configs_unchanged():
 
 
 @pytest.mark.asyncio
-async def test_preference_store_error_keeps_card_projection_in_force(monkeypatch):
-    stub = _workflow_stub(pg_pool=_BrokenPool())
+async def test_conversation_store_error_closes_selectable_capabilities(monkeypatch):
+    stub = _workflow_stub(pg_pool=_BrokenPool(), bundle_props=_gmail_props())
     tool_cfg, skill_cfg = _tool_cfg(), AgentSkillConfig()
 
     async def _sync(*_args, **_kwargs):
         return {"projection": {"test_disabled": {"tools": {"gmail": True}}}}
 
     monkeypatch.setattr(agent_capability_control, "sync_agent_capability_projection", _sync)
+    monkeypatch.setattr(
+        agent_capability_control,
+        "deny_all_capabilities",
+        lambda **_kwargs: {"tools": {"gmail": True}},
+    )
     out_tools, out_skills = await BaseWorkflow.apply_user_agent_selection(stub, tool_cfg, skill_cfg)
     assert "gmail" not in out_tools.allowed_plugins
     assert "io_tools" in out_tools.allowed_plugins
     assert out_skills is skill_cfg
-    assert any("preference store unavailable" in line for _, line in stub.logger.lines)
+    assert any("conversation projection unavailable" in line for _, line in stub.logger.lines)
+
+
+@pytest.mark.asyncio
+async def test_missing_conversation_store_closes_selectable_capabilities(monkeypatch):
+    stub = _workflow_stub(pg_pool=None, bundle_props=_gmail_props())
+    tool_cfg, skill_cfg = _tool_cfg(), AgentSkillConfig()
+
+    async def _sync(*_args, **_kwargs):
+        return {"projection": {"test_disabled": {}}}
+
+    monkeypatch.setattr(agent_capability_control, "sync_agent_capability_projection", _sync)
+    monkeypatch.setattr(
+        agent_capability_control,
+        "deny_all_capabilities",
+        lambda **_kwargs: {"tools": {"gmail": True}},
+    )
+    out_tools, out_skills = await BaseWorkflow.apply_user_agent_selection(
+        stub,
+        tool_cfg,
+        skill_cfg,
+    )
+
+    assert "gmail" not in out_tools.allowed_plugins
+    assert "io_tools" in out_tools.allowed_plugins
+    assert out_skills is skill_cfg
+
+
+@pytest.mark.asyncio
+async def test_preference_materialization_failure_keeps_capability_narrowing(monkeypatch):
+    class _PreferenceStore:
+        reads = 0
+
+        def __init__(self, **_kwargs):
+            pass
+
+        async def get_legacy_capability_seed(self, **_kwargs):
+            return {"tools": {"gmail": True}}
+
+        async def get_selection(self, **_kwargs):
+            self.reads += 1
+            if self.reads > 1:
+                raise RuntimeError("preference materialization unavailable")
+            return {"schema_version": 1}
+
+    class _CapabilityStore:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def get_selection(self, **_kwargs):
+            return {"base_projection": {}, "projection": {}}
+
+    monkeypatch.setattr(user_settings_module, "UserAgentSelectionStore", _PreferenceStore)
+    monkeypatch.setattr(
+        user_settings_module,
+        "ConversationCapabilitySelectionStore",
+        _CapabilityStore,
+    )
+    stub = _workflow_stub(pg_pool=object(), bundle_props=_gmail_props())
+
+    out_tools, _out_skills = await BaseWorkflow.apply_user_agent_selection(
+        stub,
+        _tool_cfg(),
+        AgentSkillConfig(),
+    )
+
+    assert "gmail" not in out_tools.allowed_plugins
+    assert any("preference materialization unavailable" in line for _, line in stub.logger.lines)
 
 
 @pytest.mark.asyncio
@@ -218,7 +299,7 @@ async def test_unavailable_card_closes_selectable_tools(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_each_turn_uses_the_current_card_projection(monkeypatch):
-    stub = _workflow_stub(pg_pool=None, bundle_props=_gmail_props())
+    stub = _workflow_stub(pg_pool=_FakePool(), bundle_props=_gmail_props())
     projections = iter(({}, {"tools": {"gmail": True}}))
 
     async def _sync(*_args, **_kwargs):

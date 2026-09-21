@@ -19,6 +19,7 @@ from connection_hub.delegated_credentials.application_resources import (
 
 from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import (
     annotate_capability_states,
+    conversation_capability_projections,
     deny_all_capabilities,
     descriptor_capability_payload,
     disabled_from_projection,
@@ -201,6 +202,51 @@ def test_new_descriptor_capability_is_unselected_until_the_user_adds_it() -> Non
 
     assert disabled["tools"] == {"web": ["future"]}
     assert "web/future" in expanded["capability_authority"]["capabilities"]["tools"]
+
+
+def test_conversation_snapshot_rejects_later_card_additions_and_honors_revocations() -> None:
+    original_catalog = _catalog()
+    original_authority = _payload()["capability_authority"]
+    started_with = selected_capabilities_from_disabled(
+        authority=original_authority,
+        catalog=original_catalog,
+        disabled={},
+    )
+    stored = {
+        "base_projection": started_with,
+        "projection": started_with,
+    }
+
+    expanded_catalog = _catalog(include_future=True)
+    expanded_card = selected_capabilities_from_disabled(
+        authority=_payload(include_future=True)["capability_authority"],
+        catalog=expanded_catalog,
+        disabled={},
+    )
+    live_base, effective = conversation_capability_projections(
+        expanded_card,
+        stored,
+    )
+
+    assert disabled_from_projection(expanded_catalog, live_base)["tools"] == {
+        "web": ["future"]
+    }
+    assert disabled_from_projection(expanded_catalog, effective)["tools"] == {
+        "web": ["future"]
+    }
+
+    revoked_card = selected_capabilities_from_disabled(
+        authority=original_authority,
+        catalog=original_catalog,
+        disabled={"tools": {"web": ["search"]}},
+    )
+    _live_base, revoked_effective = conversation_capability_projections(
+        revoked_card,
+        stored,
+    )
+    assert disabled_from_projection(original_catalog, revoked_effective)["tools"] == {
+        "web": ["search"]
+    }
 
 
 def test_user_selection_round_trips_through_the_positive_card_policy() -> None:

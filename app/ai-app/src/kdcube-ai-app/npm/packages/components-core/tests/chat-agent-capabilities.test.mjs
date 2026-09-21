@@ -115,6 +115,9 @@ test('capabilities slice: load, optimistic patch, save reconcile', () => {
     agent: null,
     inventory: null,
     disabled: {},
+    baseDisabled: {},
+    agentBaseDisabled: {},
+    scope: null,
     model: null,
     instructions: null,
     presentation: null,
@@ -133,10 +136,15 @@ test('capabilities slice: load, optimistic patch, save reconcile', () => {
     agent: 'main',
     inventory,
     disabled: { mcp: { knowledge: true } },
+    baseDisabled: { tools: { web_tools: true } },
+    agentBaseDisabled: {},
+    scope: { kind: 'conversation', conversation_id: 'conv-1', capabilities_editable: true },
   }))
   assert.equal(state.capabilities.status, 'ready')
   assert.equal(state.capabilities.agent, 'main')
   assert.deepEqual(state.capabilities.disabled, { mcp: { knowledge: true } })
+  assert.deepEqual(state.capabilities.baseDisabled, { tools: { web_tools: true } })
+  assert.equal(state.capabilities.scope.kind, 'conversation')
 
   state = chatReducer(state, chatActions.capabilitiesPatchApplied({ tools: { web_tools: true } }))
   assert.deepEqual(state.capabilities.disabled, { mcp: { knowledge: true }, tools: { web_tools: true } })
@@ -264,4 +272,37 @@ test('selection transport sends instructions as a pick, not inside disabled', as
   assert.equal(submitted.data.instructions, 'lite')
   assert.deepEqual(submitted.data.disabled, { tools: { web_tools: true } })
   assert.equal(Object.hasOwn(submitted.data.disabled, 'instructions'), false)
+})
+
+test('selection transport does not invent a capability write for a model-only save', async () => {
+  const originalFetch = globalThis.fetch
+  let submitted = null
+  globalThis.fetch = async (_url, init) => {
+    submitted = JSON.parse(String(init?.body || '{}'))
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => ({ ok: true, agent: 'main', selection: { model: null } }),
+    }
+  }
+  const runtime = {
+    baseUrl: 'https://example.invalid',
+    tenant: 'tenant',
+    project: 'project',
+    bundleId: 'workspace@1-0',
+    agentId: 'main',
+    credentials: 'include',
+    authHeaders: async (base) => new Headers(base),
+    clientTimezone: () => ({ tz: 'UTC', utcOffsetMin: 0 }),
+  }
+
+  try {
+    await submitAgentSelectionUpdate(runtime, 'main', { model: null })
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+
+  assert.equal(submitted.data.model, null)
+  assert.equal(Object.hasOwn(submitted.data, 'disabled'), false)
 })

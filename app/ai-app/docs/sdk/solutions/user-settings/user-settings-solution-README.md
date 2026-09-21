@@ -1,10 +1,10 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/user-settings/user-settings-solution-README.md
 title: "User Settings Solution"
-summary: "The typed user-settings construct over user_bundle_props: durable preference records, explicit scope, merge and clamp semantics, configured fallbacks, and the boundary between PostgreSQL preferences and Connection Hub capability authority."
+summary: "The typed user-settings construct over user_bundle_props: durable preferences, explicit scope, and the conversation-local capability restriction composed beneath Connection Hub Cards."
 status: current
 tags: ["sdk", "solutions", "user-settings", "user_bundle_props", "preferences", "conversation-settings", "storage"]
-updated_at: 2026-09-20
+updated_at: 2026-09-21
 keywords:
   [
     "user_bundle_props",
@@ -18,6 +18,7 @@ keywords:
     "cache_policy",
     "pending delta",
     "legacy capability seed",
+    "ConversationCapabilitySelectionStore",
   ]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/user-settings/capabilities-README.md
@@ -33,9 +34,10 @@ what a signed-in user chose about how an app behaves, available across devices
 and read at the runtime boundary that owns the choice. Each setting family
 defines its scope, typed key, defaults, and write semantics.
 
-Capability authority is not a user-settings record. A hosted agent's current
-capabilities are the live intersection of its descriptor Control Card and the
-user's resident agent Card. PostgreSQL stores model, instruction,
+Control Card and Agent Card authority are not user-settings records. A hosted
+agent's current capabilities are the current Card intersection narrowed by a
+finite positive conversation base and conversation selection. PostgreSQL
+stores that conversation-local restriction alongside model, instruction,
 presentation, and cache preferences. The complete distinction is owned by
 [Agent Capability Control And Selection](capabilities-README.md).
 
@@ -60,8 +62,11 @@ defaults, normalization, and merge behavior. `UserSettingsStore` in
 generic record access. Apps add a concrete store rather than writing rows ad
 hoc; see the [App User Settings recipe](../../../recipes/constructs/user-settings-README.md).
 
-Secrets, credential handles, Card authority, turn logs, timelines, cache
-warmness, summaries, and artifacts do not belong in `value_json`.
+Secrets, credential handles, Control or Agent Card authority, turn logs,
+timelines, cache warmness, summaries, and artifacts do not belong in
+`value_json`. A conversation's positive capability snapshot does belong here:
+it can only narrow the Cards and is checked against their current projection
+on every turn.
 
 ## Shipped stores
 
@@ -113,10 +118,24 @@ future conversations can start from a changed baseline.
 
 The record schema still understands `disabled` for compatibility with
 pre-Control-Card installations. `get_legacy_capability_seed` reads only the
-user baseline and supplies that deny map once when the resident agent Card is
+user baseline and supplies that deny map once when the Agent Card is
 first created. The migration converts it to an equivalent positive Card
-selection. Current capability reads and writes then use Connection Hub; a
-conversation row is never a second capability authority source.
+selection. Current Agent Card reads and writes then use Connection Hub.
+
+### Conversation capability selection (`subsystem='agent_capabilities'`)
+
+`ConversationCapabilitySelectionStore` uses
+`conversation:<conversation_id>:agent_capability_selection:<agent_id>`. Its
+record contains two finite positive projections:
+
+- `base_projection` is written once from the current Agent Card projection;
+- `projection` starts equal to that base and is replaced by explicit saves in
+  that conversation's picker.
+
+Insert-if-absent makes simultaneous first reads converge on one base. The
+stored projections never widen Card authority: every read and turn computes
+`current Cards ∩ base_projection ∩ projection`. Storage failure closes
+selectable capabilities instead of applying preference fallback behavior.
 
 ## Preference semantics
 
@@ -143,20 +162,23 @@ conversation row is never a second capability authority source.
 ```text
 composer / capabilities widget
   -> agent_capabilities
-       live Card capability projection + typed preferences
+       current Cards + conversation capability snapshot + typed preferences
   -> local draft
   -> explicit Save changes
   -> agent_selection_update
-       capability draft -> resident Connection Hub Card
+       capability draft -> this conversation's positive projection
        preference fields -> user_bundle_props at the explicit scope
 
 turn start
-  -> resolve current Control Card and resident Card (fail closed)
+  -> resolve current Control Card and Agent Card (fail closed)
+  -> intersect the conversation base and selection (fail closed)
   -> read scoped preferences (configured fallback on failure)
   -> narrow executable capabilities, then apply preference overlays
 ```
 
 The capability picker can save both halves in one operation, but that transport
 convenience does not merge their authority models. Capability changes revise
-the resident Card immediately. Model, instruction, presentation, and deferred
-cache behavior retain their explicit baseline or conversation scope.
+only the named conversation and apply from its next message. The Agent Card
+base is edited separately in Connection Hub. Model, instruction, presentation,
+and deferred cache behavior retain their explicit baseline or conversation
+scope.

@@ -9,6 +9,7 @@
 import type { EngineRuntime } from '../runtime.ts'
 import type {
   AgentCachePolicy,
+  AgentCapabilitySelectionScope,
   AgentCapabilitiesInventory,
   AgentModelPick,
   AgentSelectionApplyMode,
@@ -428,6 +429,9 @@ export interface AgentCapabilitiesResponse {
   selection: {
     schema_version?: number
     disabled?: AgentSelectionDisabled
+    conversation_base_disabled?: AgentSelectionDisabled
+    agent_base_disabled?: AgentSelectionDisabled
+    scope?: AgentCapabilitySelectionScope
     model?: AgentModelPick | null
     instructions?: string | null
     presentation?: Record<string, string> | null
@@ -445,6 +449,9 @@ export interface AgentSelectionUpdateResponse {
   selection: {
     schema_version?: number
     disabled?: AgentSelectionDisabled
+    conversation_base_disabled?: AgentSelectionDisabled
+    agent_base_disabled?: AgentSelectionDisabled
+    scope?: AgentCapabilitySelectionScope
     model?: AgentModelPick | null
     instructions?: string | null
     presentation?: Record<string, string> | null
@@ -507,6 +514,7 @@ export async function submitAgentSelectionUpdate(
 ): Promise<AgentSelectionUpdateResponse> {
   const { tenant, project } = requireScope(runtime)
   const { model, instructions, presentation, ...disabled } = patch
+  const hasCapabilityPatch = Object.keys(disabled).length > 0
   const apply = options.apply && options.apply !== 'now' ? options.apply : undefined
   const response = await fetch(operationsUrl(runtime, 'agent_selection_update', runtime.bundleId, tenant, project), {
     method: 'POST',
@@ -515,7 +523,7 @@ export async function submitAgentSelectionUpdate(
     body: JSON.stringify({
       data: {
         agent: agentId,
-        disabled,
+        ...(hasCapabilityPatch ? { disabled } : {}),
         ...(model !== undefined ? { model } : {}),
         ...(instructions !== undefined ? { instructions } : {}),
         ...(presentation !== undefined ? { presentation } : {}),

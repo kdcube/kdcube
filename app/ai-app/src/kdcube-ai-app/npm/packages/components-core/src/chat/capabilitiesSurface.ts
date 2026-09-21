@@ -12,8 +12,8 @@
  * RECEIVE (the served `capabilities` widget): parse the routed command,
  * apply `{agent_id?, conversation_id?, spotlight_tools?, section?}` at
  * runtime, and ack for host diagnostics. A chat-originated open carries the
- * active conversation id; an independently mounted widget has no id and edits
- * the future-conversation baseline.
+ * active conversation id; an independently mounted widget has no id and shows
+ * the Agent Card base, which is edited in Connection Hub.
  */
 
 export const CAPABILITIES_SURFACE = 'sdk.agent.capabilities'
@@ -28,7 +28,7 @@ const CAPABILITIES_ACK_TIMEOUT_MS = 600
 export interface CapabilitiesOpenPayload {
   /** The bundle agent whose inventory the picker should manage. */
   agent_id?: string
-  /** Exact conversation to edit; absent means the user baseline. */
+  /** Exact conversation to edit; absent shows the Agent Card base. */
   conversation_id?: string
   /** Entries to highlight + scroll to (`alias.tool` or a namespace token). */
   spotlight_tools?: string[]

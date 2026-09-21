@@ -5,7 +5,7 @@
  * widget has no engine and talks straight to the same two operations
  * (`agent_capabilities` read, `agent_selection_update` merge-write) with its
  * own auth. Its injected fetchers decide whether those calls carry a
- * conversation id or target the unscoped baseline. This hook reproduces the engine's
+ * conversation id or show the unscoped Agent Card base. This hook reproduces the engine's
  * capabilities contract (local draft + explicit save + explicit cache
  * decisions) over injected fetchers and shapes the result as the `vm` slice
  * `useCapabilityPickerBody` consumes — the picker logic itself is not forked.
@@ -18,6 +18,7 @@ import {
 } from '@kdcube/components-core/chat'
 import type {
   AgentCachePolicy,
+  AgentCapabilitySelectionScope,
   AgentCapabilitiesInventory,
   AgentModelPick,
   AgentSelectionDisabled,
@@ -32,6 +33,9 @@ export interface StandaloneCapabilitiesResponse {
   capabilities?: AgentCapabilitiesInventory | null
   selection?: {
     disabled?: AgentSelectionDisabled
+    conversation_base_disabled?: AgentSelectionDisabled
+    agent_base_disabled?: AgentSelectionDisabled
+    scope?: AgentCapabilitySelectionScope
     model?: AgentModelPick | null
     instructions?: string | null
     presentation?: Record<string, string> | null
@@ -72,6 +76,9 @@ export function useStandaloneCapabilitiesVm(
   const [agent, setAgent] = useState<string>(runtime.agentId)
   const [inventory, setInventory] = useState<AgentCapabilitiesInventory | null>(null)
   const [disabled, setDisabled] = useState<AgentSelectionDisabled>({})
+  const [baseDisabled, setBaseDisabled] = useState<AgentSelectionDisabled>({})
+  const [agentBaseDisabled, setAgentBaseDisabled] = useState<AgentSelectionDisabled>({})
+  const [scope, setScope] = useState<AgentCapabilitySelectionScope | null>(null)
   const [model, setModel] = useState<AgentModelPick | null>(null)
   const [instructions, setInstructions] = useState<string | null>(null)
   const [presentation, setPresentation] = useState<Record<string, string> | null>(null)
@@ -90,6 +97,9 @@ export function useStandaloneCapabilitiesVm(
     queuedPatch: AgentSelectionPatch | null = null,
   ) => {
     const responseDisabled = response.selection?.disabled ?? {}
+    setBaseDisabled(response.selection?.conversation_base_disabled ?? responseDisabled)
+    setAgentBaseDisabled(response.selection?.agent_base_disabled ?? responseDisabled)
+    setScope(response.selection?.scope ?? null)
     const responseModel = response.selection?.model ?? null
     const responseInstructions = response.selection?.instructions ?? null
     const responsePresentation = response.selection?.presentation ?? null
@@ -204,6 +214,9 @@ export function useStandaloneCapabilitiesVm(
         agent,
         inventory,
         disabled,
+        baseDisabled,
+        agentBaseDisabled,
+        scope,
         model,
         instructions,
         presentation,
@@ -229,5 +242,5 @@ export function useStandaloneCapabilitiesVm(
     }
     return vm as unknown as ChatViewModel
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, error, agent, inventory, disabled, model, instructions, presentation, cachePolicy, pending, dirty, saving, saveError, options.spotlight])
+  }, [status, error, agent, inventory, disabled, baseDisabled, agentBaseDisabled, scope, model, instructions, presentation, cachePolicy, pending, dirty, saving, saveError, options.spotlight])
 }

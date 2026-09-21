@@ -4,7 +4,7 @@ title: "Architecture Long"
 summary: "Detailed current KDCube architecture: deployment scope, app catalogs and surfaces, ingress, ordered conversation lanes, Data Bus and relay, identity and delegation, cross-runtime context, isolated execution, storage, scaling, sites, and economics."
 status: current
 tags: ["arch", "architecture", "runtime", "apps", "events", "identity", "execution", "storage"]
-updated_at: 2026-09-11
+updated_at: 2026-09-21
 keywords: ["KDCube architecture", "tenant project", "app provider consumer", "conversation event bus", "data bus", "isolated execution", "Connection Hub", "site catalog"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/arch/security-and-trust-model-README.md
@@ -585,21 +585,26 @@ a Boolean "run early" hint and not process-global exactly-once execution.
 
 ## 16. User Settings And Conversation Choices
 
-Agent model/capability choices are durable per conversation:
+Agent behavior preferences and capability restrictions are durable per
+conversation under separate typed keys:
 
 ```text
 conversation:<conversation_id>:agent_selection:<agent_id>
+conversation:<conversation_id>:agent_capability_selection:<agent_id>
 ```
 
-The optional `agent_selection:<agent_id>` row is a baseline for future
-conversations, not the app-configured default. A new conversation materializes
-the current baseline once using insert-if-absent; otherwise it starts from app
-configuration. Existing conversation rows do not change when the baseline
-changes.
+The optional `agent_selection:<agent_id>` row remains the behavior-preference
+baseline for model, instruction, presentation, and cache policy. Capability
+authority instead starts at the current Control Card and Agent Card. A new
+conversation snapshots their finite positive intersection with
+insert-if-absent, then its picker can narrow only that conversation. Current
+Card revocations still apply on every turn; later additions do not enter an
+existing conversation base.
 
 The picker edits a local draft. Only **Save changes** persists it. Switching
 conversations discards unsaved edits, and a chat-originated capabilities command
-carries `conversation_id` to preserve scope.
+carries `conversation_id` to preserve scope. An unscoped capability view shows
+the Agent Card base read-only; Connection Hub owns that Card's edits.
 
 ## 17. Storage Ownership
 
