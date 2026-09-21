@@ -112,7 +112,7 @@ async def test_deployed_widget_serves_without_loading_workflow(monkeypatch, tmp_
         widget_alias="stats",
         widget_path="index.html",
         request=_request(),
-        session=SimpleNamespace(),
+        session=SimpleNamespace(roles=[]),
     )
 
     assert response.status_code == 200
@@ -168,7 +168,7 @@ async def test_deployed_widget_refuses_manifest_from_older_application_generatio
             widget_alias="stats",
             widget_path="index.html",
             request=_request(),
-            session=SimpleNamespace(),
+            session=SimpleNamespace(roles=[]),
             application_generation="application-generation-current",
         )
 
@@ -238,7 +238,7 @@ async def test_deployed_widget_policy_denial_does_not_fall_back(monkeypatch, tmp
             widget_alias="stats",
             widget_path="index.html",
             request=_request(),
-            session=SimpleNamespace(),
+            session=SimpleNamespace(roles=[]),
         )
     assert exc_info.value.status_code == 403
 
@@ -370,7 +370,7 @@ async def test_deployed_mode_labels_legacy_fallback(monkeypatch) -> None:
         widget_alias="stats",
         widget_path="index.html",
         request=_request(),
-        session=SimpleNamespace(),
+        session=SimpleNamespace(roles=[]),
     )
     assert response.headers["X-KDCube-Widget-Delivery"] == "legacy-fallback"
 
@@ -399,7 +399,7 @@ async def test_deployed_mode_checks_manifest_against_ready_application_generatio
         widget_alias="stats",
         widget_path="index.html",
         request=_request(),
-        session=SimpleNamespace(),
+        session=SimpleNamespace(roles=[]),
     )
 
     assert response.body == b"current"
@@ -425,6 +425,6 @@ async def test_shadow_mode_keeps_legacy_request_path(monkeypatch) -> None:
         widget_alias="stats",
         widget_path="index.html",
         request=_request(),
-        session=SimpleNamespace(),
+        session=SimpleNamespace(roles=[]),
     )
     assert response.headers["X-KDCube-Widget-Delivery"] == "legacy-shadow"
