@@ -2435,3 +2435,51 @@ def test_a_surviving_resource_is_unaffected_by_the_wildcard_row(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["ok"] is True
+
+
+@pytest.mark.parametrize(
+    "message,reason",
+    [
+        ("bundle session is not active", "session_missing"),
+        ("bundle session token was invalidated", "user_version_changed"),
+        ("bundle session token signature is invalid", "signature_invalid"),
+        ("bundle session token is expired", "token_expired"),
+        ("bundle session user is disabled", "user_disabled"),
+        ("bundle session secret is not configured at platform.services.session_token.secret", "secret_unavailable"),
+        ("something new", "other"),
+    ],
+)
+def test_a_refused_delegated_bearer_is_logged_with_a_fixed_reason_class(message, reason):
+    # On 2026-09-21 every refusal read as `invalid_bearer`, and a lost session row
+    # (heals with one refresh) was diagnosed as a dead card (needs re-authorization).
+    from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth import (
+        surface_guard,
+    )
+
+    assert surface_guard._bearer_refusal_reason(RuntimeError(message)) == reason
+
+
+@pytest.mark.asyncio
+async def test_the_guard_logs_why_a_session_bearer_was_refused_and_never_the_token(monkeypatch, caplog):
+    from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth import (
+        surface_guard,
+    )
+    from kdcube_ai_app.auth.AuthManager import AuthenticationError
+    import kdcube_ai_app.auth.bundle as bundle_auth
+
+    class _Manager:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def authenticate(self, token):
+            raise AuthenticationError("bundle session is not active")
+
+    monkeypatch.setattr(bundle_auth, "BundleSessionAuthManager", _Manager)
+    monkeypatch.setattr(bundle_auth, "get_bundle_session_authority", lambda **kwargs: object())
+    monkeypatch.setattr(surface_guard, "oauth_tenant_project", lambda: ("t", "p"))
+
+    with caplog.at_level("INFO"):
+        assert await surface_guard._authenticate_delegated_client_access_token("kst1.secret-token-marker") is None
+
+    assert "delegated bearer refused reason=session_missing" in caplog.text
+    assert "secret-token-marker" not in caplog.text

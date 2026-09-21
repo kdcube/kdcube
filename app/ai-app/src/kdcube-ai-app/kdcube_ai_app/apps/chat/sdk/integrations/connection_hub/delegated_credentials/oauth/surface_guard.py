@@ -523,6 +523,33 @@ async def _access_grant_record(
         )
 
 
+_BEARER_REFUSAL_REASONS = (
+    ("session is not active", "session_missing"),
+    ("session subject does not match", "session_subject_mismatch"),
+    ("token record does not match", "session_token_mismatch"),
+    ("session record is expired", "session_expired"),
+    ("token is expired", "token_expired"),
+    ("was invalidated", "user_version_changed"),
+    ("user is unavailable", "user_missing"),
+    ("user is disabled", "user_disabled"),
+    ("secret is not configured", "secret_unavailable"),
+    ("signature", "signature_invalid"),
+    ("malformed", "token_malformed"),
+    ("payload is invalid", "token_malformed"),
+    ("schema is unsupported", "token_schema_unsupported"),
+)
+
+
+def _bearer_refusal_reason(exc: BaseException) -> str:
+    """A fixed reason class for a refused session bearer, never the exception text itself."""
+
+    text = str(exc or "").lower()
+    for needle, reason in _BEARER_REFUSAL_REASONS:
+        if needle in text:
+            return reason
+    return "other"
+
+
 async def _authenticate_delegated_client_access_token(token: str) -> dict[str, Any] | None:
     from kdcube_ai_app.auth.AuthManager import AuthenticationError
     from kdcube_ai_app.auth.bundle import BundleSessionAuthManager, get_bundle_session_authority
@@ -533,9 +560,23 @@ async def _authenticate_delegated_client_access_token(token: str) -> dict[str, A
     )
     try:
         user = await manager.authenticate(token)
-    except AuthenticationError:
+    except AuthenticationError as exc:
+        # Which check refused the bearer decides the remedy: a missing session
+        # row (a store restart) heals with one refresh, an invalidated or
+        # disabled user does not. Without the reason every refusal reads as
+        # `invalid_bearer`, and on 2026-09-21 that one word sent a diagnosis
+        # toward re-authorizing cards that were intact. The messages are fixed
+        # strings from the session authority and carry no token material.
+        LOGGER.info(
+            "[connection-hub.oauth] delegated bearer refused reason=%s",
+            _bearer_refusal_reason(exc),
+        )
         return None
-    except Exception:
+    except Exception as exc:
+        LOGGER.warning(
+            "[connection-hub.oauth] delegated bearer verification unavailable error=%s",
+            type(exc).__name__,
+        )
         return None
     return {
         "sub": getattr(user, "sub", None) or getattr(user, "username", None),
