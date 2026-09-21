@@ -26,6 +26,11 @@ from connection_hub.delegated_credentials.oauth.flow import (
     parse_authorize_request,
 )
 from connection_hub.delegated_credentials.oauth.clients import PublicClient
+from connection_hub.delegated_credentials.cards.identity import (
+    CARD_KIND_AUTOMATION,
+    CARD_KIND_CONNECTOR,
+    stable_card_access_id,
+)
 from connection_hub.delegated_credentials.oauth.consent import (
     CONSENT_CONTRACT_VERSION,
     named_service_selection_rows,
@@ -42,6 +47,28 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentia
 ISSUER = "https://connector.example.test"
 CHALLENGE = make_s256_challenge("verifier-" + "x" * 50)
 SUPPORTED_SCOPES = ["records:read"]
+
+
+def _card_identity(grantor_subject, client_id, resource, client_metadata=None):
+    asserted = dict(client_metadata or {})
+    nested = asserted.get("client_metadata")
+    if isinstance(nested, dict):
+        asserted = nested
+    kind = (
+        CARD_KIND_AUTOMATION
+        if asserted.get("kdcube_credential_use") == "multi_resource" or not resource
+        else CARD_KIND_CONNECTOR
+    )
+    return {
+        "ok": True,
+        "access_id": stable_card_access_id(
+            card_kind=kind,
+            grantor_subject=grantor_subject,
+            client_id=client_id,
+            entry_resource=resource,
+        ),
+        "card_kind": kind,
+    }
 
 
 def _params(**over):
@@ -426,6 +453,31 @@ def client():
     mount_test_oauth_adapter(app)
     app.state.oauth_authenticate = _fake_authenticate
     app.state.oauth_grant_store = GrantStore(FakeRedis(), tenant="home", project="demo")
+
+    class IdentityAccess:
+        async def oauth_consent_config(self, *, grantor_subject):
+            return oauth_delegated_config(app)
+
+        async def oauth_seed_account_scope(self, **_kwargs):
+            return {}
+
+        async def oauth_seed_named_service_operations(self, **_kwargs):
+            return {}
+
+        async def oauth_seed_resource_operations(self, **_kwargs):
+            return {}
+
+        async def resolve_oauth_card_identity(
+            self, *, grantor_subject, client_id, entry_resource, client_metadata
+        ):
+            return _card_identity(
+                grantor_subject,
+                client_id,
+                entry_resource,
+                client_metadata,
+            )
+
+    app.state.automation_access_factory = IdentityAccess
     return TestClient(app)
 
 
@@ -525,6 +577,16 @@ def test_authorize_can_render_bundle_hosted_consent(client, monkeypatch):
 
         async def oauth_seed_resource_operations(self, **_kwargs):
             return {}
+
+        async def resolve_oauth_card_identity(
+            self, *, grantor_subject, client_id, entry_resource, client_metadata
+        ):
+            return _card_identity(
+                grantor_subject,
+                client_id,
+                entry_resource,
+                client_metadata,
+            )
 
     client.app.state.automation_access_factory = OwnerAccess
 
@@ -711,6 +773,9 @@ def _open_card_editor(client, monkeypatch, *, multi_resource: bool):
             return {
                 "ok": True,
                 "access_id": "oauth-card-1",
+                "card_kind": (
+                    CARD_KIND_AUTOMATION if full else CARD_KIND_CONNECTOR
+                ),
                 "card_revision": 0,
                 "catalog_scope": {
                     "mode": "full" if full else "entry",
@@ -723,6 +788,11 @@ def _open_card_editor(client, monkeypatch, *, multi_resource: bool):
             return {
                 "ok": True,
                 "access_id": "oauth-card-1",
+                "card_kind": (
+                    CARD_KIND_AUTOMATION
+                    if multi_resource
+                    else CARD_KIND_CONNECTOR
+                ),
                 "catalog_version": selection["expected_catalog_version"],
                 "card_revision": selection["expected_card_revision"],
                 "resource_grants": dict(selection["resource_grants"]),
@@ -866,6 +936,7 @@ def test_card_editor_records_declared_resource_and_keeps_concrete_entry(
             return {
                 "ok": True,
                 "access_id": "oauth-card-pattern",
+                "card_kind": CARD_KIND_CONNECTOR,
                 "card_revision": 4,
                 "catalog_scope": {"mode": "entry", "resources": [pattern]},
                 "catalog_row_by_resource": {concrete: pattern},
@@ -914,6 +985,7 @@ def test_card_editor_records_declared_resource_and_keeps_concrete_entry(
             return {
                 "ok": True,
                 "access_id": "oauth-card-pattern",
+                "card_kind": CARD_KIND_CONNECTOR,
                 "catalog_version": selection["expected_catalog_version"],
                 "card_revision": selection["expected_card_revision"],
                 "resource_grants": dict(selection["resource_grants"]),
@@ -1107,6 +1179,13 @@ def test_consent_approve_issues_code_bound_to_selection(client):
     assert payload["sub"] == "google:admin@example.test"
     assert payload["operations"] == ["records_export"]
     assert payload["scopes"] == ["records:read"]
+    assert payload["registry_access_id"] == stable_card_access_id(
+        card_kind=CARD_KIND_AUTOMATION,
+        grantor_subject="google:admin@example.test",
+        client_id="claude",
+        entry_resource="",
+    )
+    assert payload["card_kind"] == CARD_KIND_AUTOMATION
     assert payload["delegation_edges"][0]["authority_id"] == "platform"
     assert payload["delegation_edges"][0]["grants"] == ["records:read"]
 
@@ -1160,20 +1239,34 @@ def test_oauth_consent_grants_an_authenticated_owners_exact_connector_tool(clien
     }
     owner_config = oauth_delegated_config(owner_config_app)
     seen_subjects: list[str] = []
+    seen_seed_client_metadata: list[dict] = []
 
     class OwnerAccess:
         async def oauth_consent_config(self, *, grantor_subject):
             seen_subjects.append(grantor_subject)
             return owner_config
 
-        async def oauth_seed_account_scope(self, **_kwargs):
+        async def oauth_seed_account_scope(self, **kwargs):
+            seen_seed_client_metadata.append(kwargs["client_metadata"])
             return {}
 
-        async def oauth_seed_named_service_operations(self, **_kwargs):
+        async def oauth_seed_named_service_operations(self, **kwargs):
+            seen_seed_client_metadata.append(kwargs["client_metadata"])
             return {}
 
-        async def oauth_seed_resource_operations(self, **_kwargs):
+        async def oauth_seed_resource_operations(self, **kwargs):
+            seen_seed_client_metadata.append(kwargs["client_metadata"])
             return {}
+
+        async def resolve_oauth_card_identity(
+            self, *, grantor_subject, client_id, entry_resource, client_metadata
+        ):
+            return _card_identity(
+                grantor_subject,
+                client_id,
+                entry_resource,
+                client_metadata,
+            )
 
     client.app.state.automation_access_factory = OwnerAccess
     params = _params(scope="external_mcp:use", resource=proxy)
@@ -1186,6 +1279,11 @@ def test_oauth_consent_grants_an_authenticated_owners_exact_connector_tool(clien
     assert get_response.status_code == 200
     assert "External MCP: Customer records" in get_response.text
     assert "Search records" in get_response.text
+    assert len(seen_seed_client_metadata) == 3
+    assert all(
+        metadata["client_id"] == "claude"
+        for metadata in seen_seed_client_metadata
+    )
 
     form = dict(params)
     form.update({

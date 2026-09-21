@@ -15,6 +15,9 @@ import pytest
 from connection_hub.delegated_credentials.cards.cache import (
     DelegatedCardRuntimeCache,
 )
+from connection_hub.delegated_credentials.cards.identity import (
+    CARD_KIND_AUTOMATION,
+)
 from connection_hub.delegated_credentials.cards.model import (
     CARD_STATE_ACTIVE,
     CARD_STATE_REVOKED,
@@ -83,6 +86,7 @@ def _authority(*, revision: int = 1, expires_at: int = NOW + 3600) -> CardAuthor
         grantor_subject="platform-user-1",
         delegate_subject="integration:automation:abc",
         source="manual",
+        card_kind=CARD_KIND_AUTOMATION,
         label="CI bot",
         card_revision=revision,
         catalog_version="delegated_catalog_2026-08-11-10-30-00-123_d4e5f6a7b8c9",
@@ -378,6 +382,7 @@ async def test_a_short_card_expiring_does_not_hide_a_long_one(service, store, ca
         grantor_subject=base.grantor_subject,
         delegate_subject=base.delegate_subject,
         source="oauth",
+        card_kind=CARD_KIND_AUTOMATION,
         card_revision=1,
         resource_grants=base.resource_grants,
         named_service_operations=base.named_service_operations,

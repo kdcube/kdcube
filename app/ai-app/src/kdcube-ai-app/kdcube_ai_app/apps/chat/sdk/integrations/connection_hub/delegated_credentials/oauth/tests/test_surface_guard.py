@@ -40,6 +40,10 @@ from connection_hub.delegated_credentials.cache_io import (
 from connection_hub.delegated_credentials.cards.cache import (
     DelegatedCardRuntimeCache,
 )
+from connection_hub.delegated_credentials.cards.identity import (
+    CARD_KIND_AUTOMATION,
+    CARD_KIND_CONTROL,
+)
 
 from connection_hub.delegated_credentials.cards.model import (
     CARD_STATE_REVOKED,
@@ -523,6 +527,7 @@ def _live_card(
         delegate_subject=(
             "integration:claude:a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
         ),
+        card_kind=CARD_KIND_AUTOMATION,
         operations=tuple(operations),
         resource_grants=(
             resource_grants
@@ -607,6 +612,7 @@ def test_control_card_tool_denial_names_control_and_has_no_caller_consent(monkey
         grantor_subject=caller.grantor_subject,
         delegate_subject="",
         source="control",
+        card_kind=CARD_KIND_CONTROL,
         label="Project policy",
         card_revision=8,
         resource_grants={GUARD_RESOURCE: ("records:read",)},

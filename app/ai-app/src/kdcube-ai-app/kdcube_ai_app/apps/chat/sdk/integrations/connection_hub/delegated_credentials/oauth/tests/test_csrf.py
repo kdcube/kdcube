@@ -18,7 +18,10 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.tests.helpers import mount_test_oauth_adapter
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.tests.helpers import (
+    bind_delegated_card_persistence,
+    mount_test_oauth_adapter,
+)
 from connection_hub.delegated_credentials.oauth.consent import (
     CONSENT_CONTRACT_VERSION,
 )
@@ -66,12 +69,14 @@ def _consent_form(csrf=None, decision="approve", **over):
 
 
 @pytest.fixture
-def client():
+def client(tmp_path):
     app = FastAPI()
+    redis = FakeRedis()
     enable_delegated_client(app, issuer=ISSUER)
     mount_test_oauth_adapter(app)
     app.state.oauth_authenticate = _authenticate
-    app.state.oauth_grant_store = GrantStore(FakeRedis(), tenant="home", project="demo")
+    app.state.oauth_grant_store = GrantStore(redis, tenant="home", project="demo")
+    bind_delegated_card_persistence(app, redis=redis, storage_root=tmp_path)
     return TestClient(app)
 
 
@@ -105,7 +110,7 @@ def test_consent_with_valid_csrf_succeeds_and_is_single_use(client):
         "/oauth/authorize/consent", data=_consent_form(csrf=csrf),
         headers=ADMIN, follow_redirects=False,
     )
-    assert r.status_code == 302  # approved
+    assert r.status_code == 302, r.text  # approved
     # Replay of the same token must fail (single-use).
     r2 = client.post(
         "/oauth/authorize/consent", data=_consent_form(csrf=csrf),

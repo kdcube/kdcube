@@ -1263,14 +1263,28 @@ async def authorize(request: Request) -> Response:
     # The view model is built before a renderer is chosen: both renderers see
     # the same facts, and a custom one changes presentation only.
     connected_accounts = await _connected_accounts_for_consent(subject)
+    seed_client_metadata = req.client.snapshot() if req.client is not None else {}
     seeded_account_scope = await _seed_account_scope_for_consent(
-        request, subject=subject, client_id=req.client_id, resource=req.resource, cfg=cfg,
+        request,
+        subject=subject,
+        client_id=req.client_id,
+        resource=req.resource,
+        client_metadata=seed_client_metadata,
+        cfg=cfg,
     )
     seeded_named_service_operations = await _seed_named_service_operations_for_consent(
-        request, subject=subject, client_id=req.client_id, resource=req.resource,
+        request,
+        subject=subject,
+        client_id=req.client_id,
+        resource=req.resource,
+        client_metadata=seed_client_metadata,
     )
     seeded_resource_operations = await _seed_resource_operations_for_consent(
-        request, subject=subject, client_id=req.client_id, resource=req.resource,
+        request,
+        subject=subject,
+        client_id=req.client_id,
+        resource=req.resource,
+        client_metadata=seed_client_metadata,
     )
     catalog_version = await _active_catalog_version_for_consent(request)
     widget_base = _connection_hub_widget_base(request)
@@ -1491,13 +1505,22 @@ def _accounts_needed_for_consent(request, scopes, connected_accounts, *, cfg=Non
 
 
 async def _seed_account_scope_for_consent(
-    request, *, subject: str, client_id: str, resource: str, cfg
+    request,
+    *,
+    subject: str,
+    client_id: str,
+    resource: str,
+    client_metadata: Mapping[str, Any],
+    cfg,
 ) -> dict:
     """Pre-check the picker from this exact client's existing Card."""
     try:
         service = get_automation_access(request)
         return await service.oauth_seed_account_scope(
-            grantor_subject=subject, client_id=client_id, resource=str(resource or ""),
+            grantor_subject=subject,
+            client_id=client_id,
+            resource=str(resource or ""),
+            client_metadata=client_metadata,
         )
     except Exception:
         LOGGER.exception("[connection-hub.oauth] consent account-scope seed failed")
@@ -1505,7 +1528,12 @@ async def _seed_account_scope_for_consent(
 
 
 async def _seed_named_service_operations_for_consent(
-    request, *, subject: str, client_id: str, resource: str
+    request,
+    *,
+    subject: str,
+    client_id: str,
+    resource: str,
+    client_metadata: Mapping[str, Any],
 ) -> dict:
     """Pre-check the operations picker from the client's existing card.
 
@@ -1516,7 +1544,10 @@ async def _seed_named_service_operations_for_consent(
     try:
         service = get_automation_access(request)
         return await service.oauth_seed_named_service_operations(
-            grantor_subject=subject, client_id=client_id, resource=str(resource or ""),
+            grantor_subject=subject,
+            client_id=client_id,
+            resource=str(resource or ""),
+            client_metadata=client_metadata,
         )
     except Exception:
         LOGGER.exception("[connection-hub.oauth] consent named-service seed failed")
@@ -1524,7 +1555,12 @@ async def _seed_named_service_operations_for_consent(
 
 
 async def _seed_resource_operations_for_consent(
-    request, *, subject: str, client_id: str, resource: str
+    request,
+    *,
+    subject: str,
+    client_id: str,
+    resource: str,
+    client_metadata: Mapping[str, Any],
 ) -> dict[str, list[str]]:
     """Pre-check owner-resource operations held by this OAuth client."""
     try:
@@ -1533,6 +1569,7 @@ async def _seed_resource_operations_for_consent(
             grantor_subject=subject,
             client_id=client_id,
             resource=str(resource or ""),
+            client_metadata=client_metadata,
         )
     except Exception:
         LOGGER.exception("[connection-hub.oauth] consent resource-operation seed failed")
@@ -2026,6 +2063,8 @@ async def authorize_consent_decision(request: Request) -> Response:
         resource_grants=dict(resolved.get("resource_grants") or {}),
         resource_operations=selected_resource_operations,
         resource=req.resource,
+        registry_access_id=str(resolved.get("access_id") or ""),
+        card_kind=str(resolved.get("card_kind") or ""),
         identity_scope=str(resolved.get("identity_scope") or ""),
         grantor_authority=grantor_authority,
         delegation_edges=list(grantor_authority.get("delegation_edges") or []),
@@ -2302,6 +2341,18 @@ async def authorize_consent(request: Request) -> Response:
         len(child_resource_operations),
         sorted(account_scope.keys()) or "-",
     )
+    service = get_automation_access(request)
+    identity = await service.resolve_oauth_card_identity(
+        grantor_subject=subject,
+        client_id=req.client_id,
+        entry_resource=req.resource,
+        client_metadata=req.client.snapshot() if req.client is not None else {},
+    )
+    if identity.get("ok") is not True:
+        return JSONResponse(
+            status_code=int(identity.get("status") or 400),
+            content=identity,
+        )
     code = await store.create_auth_code(
         client_id=req.client_id,
         redirect_uri=req.redirect_uri,
@@ -2312,6 +2363,8 @@ async def authorize_consent(request: Request) -> Response:
         resource_grants=resource_grants,
         resource_operations=resource_operations,
         resource=req.resource,
+        registry_access_id=str(identity.get("access_id") or ""),
+        card_kind=str(identity.get("card_kind") or ""),
         identity_scope=resource_cfg.identity_scope if resource_cfg is not None else "",
         grantor_authority=grantor_authority,
         delegation_edges=delegation_edges,
@@ -2379,6 +2432,8 @@ async def _issue_tokens(
     resource_grants=None,
     resource_operations=None,
     resource=None,
+    registry_access_id="",
+    card_kind="",
     identity_scope="",
     grantor_authority=None,
     delegation_edges=None,
@@ -2395,6 +2450,24 @@ async def _issue_tokens(
     expected_card_revision=None,
 ) -> JSONResponse:
     tenant, project = oauth_tenant_project(request)
+    resolved_access_id = str(registry_access_id or "").strip()
+    resolved_card_kind = str(card_kind or "").strip()
+    if not resolved_access_id or not resolved_card_kind:
+        service = get_automation_access(request)
+        identity = await service.resolve_oauth_card_identity(
+            grantor_subject=str(sub or ""),
+            client_id=str(client_id or ""),
+            entry_resource=str(resource or ""),
+            client_metadata=dict(client_metadata or {}),
+        )
+        if identity.get("ok") is not True:
+            return _token_error(
+                "invalid_grant",
+                "The delegated Card identity is ambiguous or unavailable.",
+                status=int(identity.get("status") or 400),
+            )
+        resolved_access_id = str(identity.get("access_id") or "").strip()
+        resolved_card_kind = str(identity.get("card_kind") or "").strip()
     grant_map = normalize_resource_grants(resource_grants)
     if not grant_map and str(resource or "").strip():
         grant_map = normalize_resource_grants({str(resource): list(scopes or [])})
@@ -2460,11 +2533,6 @@ async def _issue_tokens(
     # guards can enforce it. The binding carries the registry-card POINTER: the
     # guard resolves the card live, so hub-side extend/narrow/revoke apply to
     # this bearer immediately.
-    from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.automation_access import (
-        oauth_access_id,
-    )
-
-    registry_access_id = oauth_access_id(sub, client_id, str(resource or ""))
     await store.bind_access_grant(
         access_token,
         operations,
@@ -2475,7 +2543,7 @@ async def _issue_tokens(
         named_services=dict(named_services or {}),
         resource_grants=grant_map,
         resource_operations=operation_map,
-        registry_access_id=registry_access_id,
+        registry_access_id=resolved_access_id,
     )
     if refresh_token is None:
         refresh_token = await store.create_refresh_token(
@@ -2488,7 +2556,8 @@ async def _issue_tokens(
             grantor_authority=dict(grantor_authority or {}),
             delegation_edges=list(delegation_edges or []),
             named_services=dict(named_services or {}),
-            registry_access_id=registry_access_id,
+            registry_access_id=resolved_access_id,
+            card_kind=resolved_card_kind,
             client_metadata=dict(client_metadata or {}),
         )
     # Register the grant in the user's Connection Hub registry (Delegated by
@@ -2536,6 +2605,8 @@ async def _issue_tokens(
             resource_grants=grant_map if replace_authority else None,
             resource_operations=operation_map if replace_authority else None,
             resource=str(resource or ""),
+            access_id=resolved_access_id,
+            card_kind=resolved_card_kind,
             identity_scope=identity_scope,
             access_token=access_token,
             refresh_token=str(refresh_token or ""),
@@ -2619,7 +2690,7 @@ async def _issue_tokens(
             "expires_in": expires_in,
             "refresh_token": refresh_token,
             "scope": " ".join(scopes),
-            "access_id": registry_access_id,
+            "access_id": resolved_access_id,
         },
         headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
     )
@@ -2657,6 +2728,8 @@ async def token(request: Request) -> Response:
             resource_grants=payload.get("resource_grants"),
             resource_operations=payload.get("resource_operations"),
             resource=payload.get("resource"),
+            registry_access_id=payload.get("registry_access_id") or "",
+            card_kind=payload.get("card_kind") or "",
             identity_scope=payload.get("identity_scope") or "",
             grantor_authority=payload.get("grantor_authority") or {},
             delegation_edges=payload.get("delegation_edges") or [],
@@ -2693,6 +2766,7 @@ async def token(request: Request) -> Response:
         resource_operations = rec.get("resource_operations")
         account_scope: Mapping[str, Mapping[str, list[str] | tuple[str, ...]]] | None = None
         card_pointer = str(rec.get("registry_access_id") or "").strip()
+        refresh_card_kind = str(rec.get("card_kind") or "").strip()
         if card_pointer:
             tenant, project = oauth_tenant_project(request)
             credential = rec.get("credential")
@@ -2732,6 +2806,7 @@ async def token(request: Request) -> Response:
             resource_grants = dict(card.resource_grants)
             resource_operations = dict(card.resource_operations)
             account_scope = card.account_scope
+            refresh_card_kind = card.card_kind
         new_rt = await store.rotate_refresh_token(
             rt,
             scopes=list(scopes),
@@ -2749,6 +2824,8 @@ async def token(request: Request) -> Response:
             resource_grants=resource_grants,
             resource_operations=resource_operations,
             resource=rec.get("resource"),
+            registry_access_id=card_pointer,
+            card_kind=refresh_card_kind,
             identity_scope=rec.get("identity_scope") or "",
             grantor_authority=rec.get("grantor_authority") or {},
             delegation_edges=rec.get("delegation_edges") or [],

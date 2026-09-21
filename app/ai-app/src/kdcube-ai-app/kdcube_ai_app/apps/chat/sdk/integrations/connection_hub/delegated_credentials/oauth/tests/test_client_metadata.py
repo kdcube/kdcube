@@ -38,6 +38,9 @@ from connection_hub.delegated_credentials.oauth.pkce import (
 from connection_hub.delegated_credentials.oauth.store import (
     GrantStore,
 )
+from connection_hub.delegated_credentials.cards.identity import (
+    CARD_KIND_AUTOMATION,
+)
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.tests.helpers import (
     bind_delegated_card_persistence,
     enable_delegated_client,
@@ -397,6 +400,7 @@ def _seed_live_card(store, refresh_record) -> None:
         grantor_subject=str(refresh_record.get("sub") or ""),
         delegate_subject=str(credential.get("subject") or ""),
         source="oauth",
+        card_kind=CARD_KIND_AUTOMATION,
         card_revision=1,
         operations=tuple(refresh_record.get("operations") or ()),
         resource_grants={resource: tuple(refresh_record.get("scopes") or ())},

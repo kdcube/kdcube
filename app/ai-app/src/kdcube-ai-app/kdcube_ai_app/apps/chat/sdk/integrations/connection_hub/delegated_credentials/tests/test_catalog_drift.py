@@ -8,6 +8,9 @@ import copy
 
 import pytest
 
+from connection_hub.delegated_credentials.cards.identity import (
+    CARD_KIND_AUTOMATION,
+)
 from connection_hub.delegated_credentials.catalog.drift import (
     DRIFT_BASELINE_MISSING,
     DRIFT_CHANGED,
@@ -70,6 +73,7 @@ def _card(**overrides) -> CardAuthority:
         grantor_subject="platform-user-1",
         delegate_subject="integration:claude:platform-user-1",
         source="oauth",
+        card_kind=CARD_KIND_AUTOMATION,
         card_revision=3,
         catalog_version="delegated_catalog_2026-08-09-09-00-00-000_a1b2c3d4e5f6",
         resource_grants={RESOURCE: ("named_services:use", "mail:read")},
@@ -145,6 +149,7 @@ def test_a_missing_baseline_still_classifies_proven_removals_as_changed():
         "object.schema"
     ]
     assert drift["added"] == {
+        "resources": [],
         "claims": [],
         "outer_operations": [],
         "named_service_operations": [],

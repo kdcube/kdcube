@@ -254,6 +254,8 @@ async def test_multi_resource_authority_survives_code_refresh_and_access_binding
         proxy: [],
         connector: ["records.search"],
     }
+    registry_access_id = "aut_0123456789abcdef"
+    card_kind = "automation"
     code = await store.create_auth_code(
         client_id="openclaw",
         redirect_uri="http://localhost:9999/callback",
@@ -264,10 +266,14 @@ async def test_multi_resource_authority_survives_code_refresh_and_access_binding
         resource=proxy,
         resource_grants=resource_grants,
         resource_operations=resource_operations,
+        registry_access_id=registry_access_id,
+        card_kind=card_kind,
     )
     code_payload = await store.consume_auth_code(code)
     assert code_payload["resource_grants"] == resource_grants
     assert code_payload["resource_operations"] == resource_operations
+    assert code_payload["registry_access_id"] == registry_access_id
+    assert code_payload["card_kind"] == card_kind
 
     refresh = await store.create_refresh_token(
         client_id="openclaw",
@@ -277,11 +283,15 @@ async def test_multi_resource_authority_survives_code_refresh_and_access_binding
         resource=proxy,
         resource_grants=resource_grants,
         resource_operations=resource_operations,
+        registry_access_id=registry_access_id,
+        card_kind=card_kind,
     )
     rotated = await store.rotate_refresh_token(refresh)
     refresh_payload = await store.validate_refresh_token(rotated)
     assert refresh_payload["resource_grants"] == resource_grants
     assert refresh_payload["resource_operations"] == resource_operations
+    assert refresh_payload["registry_access_id"] == registry_access_id
+    assert refresh_payload["card_kind"] == card_kind
 
     await store.bind_access_grant(
         "access-token",

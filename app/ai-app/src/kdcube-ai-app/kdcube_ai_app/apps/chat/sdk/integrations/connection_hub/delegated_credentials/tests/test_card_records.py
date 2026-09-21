@@ -6,6 +6,9 @@ from datetime import datetime, timezone
 
 import pytest
 
+from connection_hub.delegated_credentials.cards.identity import (
+    CARD_KIND_AUTOMATION,
+)
 from connection_hub.delegated_credentials.cards.model import (
     CARD_STATE_ACTIVE,
     CARD_STATE_REVOKED,
@@ -33,6 +36,7 @@ def _authority(**overrides) -> CardAuthority:
         grantor_subject="platform-user-1",
         delegate_subject="integration:automation:abc",
         source="manual",
+        card_kind=CARD_KIND_AUTOMATION,
         label="CI bot",
         card_revision=1,
         catalog_version="delegated_catalog_2026-08-11-10-30-00-123_d4e5f6a7b8c9",
@@ -242,6 +246,7 @@ def _record_with_secrets():
         client_id="automation:abc",
         grantor_subject="platform-user-1",
         delegate_subject="integration:automation:abc",
+        card_kind=CARD_KIND_AUTOMATION,
         operations=("named_services_schema",),
         resource_grants={RESOURCE: ("slack:read",)},
         named_service_operations=NamedServiceSelection.exact(EXACT),

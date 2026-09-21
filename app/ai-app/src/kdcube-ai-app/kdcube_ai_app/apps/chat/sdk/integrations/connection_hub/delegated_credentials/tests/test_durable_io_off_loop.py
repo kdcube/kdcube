@@ -26,6 +26,9 @@ from connection_hub.delegated_credentials import durable_io
 from connection_hub.delegated_credentials.cards.cache import (
     DelegatedCardRuntimeCache,
 )
+from connection_hub.delegated_credentials.cards.identity import (
+    CARD_KIND_AUTOMATION,
+)
 from connection_hub.delegated_credentials.cards.model import (
     CARD_STATE_ACTIVE,
     CardAuthority,
@@ -139,6 +142,7 @@ def _authority(access_id: str) -> CardAuthority:
         grantor_subject="platform-user-1",
         delegate_subject="integration:automation:abc",
         source="manual",
+        card_kind=CARD_KIND_AUTOMATION,
         card_revision=1,
         state=CARD_STATE_ACTIVE,
         resource_grants={"https://ex/mcp": ("slack:read",)},

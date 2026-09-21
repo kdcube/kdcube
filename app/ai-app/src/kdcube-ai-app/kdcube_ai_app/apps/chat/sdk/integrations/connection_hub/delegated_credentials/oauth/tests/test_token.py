@@ -36,6 +36,9 @@ from connection_hub.delegated_credentials.cache_io import (
 from connection_hub.delegated_credentials.cards.cache import (
     DelegatedCardRuntimeCache,
 )
+from connection_hub.delegated_credentials.cards.identity import (
+    CARD_KIND_AUTOMATION,
+)
 from connection_hub.delegated_credentials.cards.model import (
     CardAuthority,
     NamedServiceSelection,
@@ -82,6 +85,7 @@ def _seed_live_card(
         grantor_subject=str(refresh_record.get("sub") or ""),
         delegate_subject=str(credential.get("subject") or ""),
         source="oauth",
+        card_kind=CARD_KIND_AUTOMATION,
         card_revision=1,
         operations=tuple(operations),
         resource_grants=(
