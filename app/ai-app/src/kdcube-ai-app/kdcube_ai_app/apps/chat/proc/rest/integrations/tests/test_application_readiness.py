@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 from starlette.requests import Request
@@ -14,6 +15,7 @@ from kdcube_ai_app.infra.plugin.app_readiness import (
     ApplicationReadinessRegistry,
     DesiredApplicationState,
 )
+from kdcube_ai_app.infra.plugin.bundle_store import BundlesRegistry
 
 
 def _request(body: bytes) -> Request:
@@ -99,3 +101,56 @@ async def test_mcp_unavailable_application_returns_structured_protocol_error(
         "retryable": True,
     }
     assert "generation" not in json.dumps(payload)
+
+
+@pytest.mark.asyncio
+async def test_authority_discovery_publication_uses_lifecycle_for_local_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[BundlesRegistry] = []
+    direct: list[tuple[str, str]] = []
+
+    class _Lifecycle:
+        async def publish_authority_discovery_change(
+            self,
+            registry: BundlesRegistry,
+        ) -> None:
+            published.append(registry)
+
+    monkeypatch.setattr(
+        integrations,
+        "get_settings",
+        lambda: SimpleNamespace(TENANT="tenant-a", PROJECT="project-a"),
+    )
+
+    async def _direct_reconcile(**kwargs):
+        direct.append((kwargs["tenant"], kwargs["project"]))
+
+    monkeypatch.setattr(
+        "kdcube_ai_app.infra.plugin.authority_discovery.reconcile_authority_discovery",
+        _direct_reconcile,
+    )
+    request = _request(b"")
+    request.scope["app"] = SimpleNamespace(
+        state=SimpleNamespace(
+            application_lifecycle=_Lifecycle(),
+            redis_async=object(),
+        ),
+    )
+    registry = BundlesRegistry()
+
+    await integrations._publish_authority_discovery_change(
+        request,
+        tenant="tenant-a",
+        project="project-a",
+        registry=registry,
+    )
+    await integrations._publish_authority_discovery_change(
+        request,
+        tenant="other-tenant",
+        project="project-a",
+        registry=registry,
+    )
+
+    assert published == [registry]
+    assert direct == [("other-tenant", "project-a")]

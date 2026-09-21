@@ -178,6 +178,31 @@ async def test_second_worker_reads_the_shared_redis_projection(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_restored_edge_projection_from_an_older_redis_run_is_not_used(tmp_path):
+    resolver, _authority, store, redis = _resolver(tmp_path)
+    store.upsert_edge(
+        from_authority_id=ISSUER,
+        from_provider="cognito",
+        from_subject="subject-1",
+        to_user_id="google:previous-target",
+    )
+    first = await resolver.resolve(_identity())
+    assert first.user_id == "google:previous-target"
+
+    store.remove_edge(
+        from_authority_id=ISSUER,
+        from_provider="cognito",
+        from_subject="subject-1",
+    )
+    redis.run_id = "run-after-restore"
+
+    resolved = await resolver.resolve(_identity())
+
+    assert resolved.user_id == "cognito:subject-1"
+    assert resolved.source == "first_verified_sign_in"
+
+
+@pytest.mark.asyncio
 async def test_different_workers_serialize_durable_edge_creation(tmp_path):
     first, _authority, _store, redis = _resolver(tmp_path)
     second, _authority2, second_store, _redis2 = _resolver(tmp_path, redis=redis)

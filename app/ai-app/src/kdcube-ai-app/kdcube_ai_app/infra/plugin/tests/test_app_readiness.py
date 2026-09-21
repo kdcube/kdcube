@@ -221,3 +221,40 @@ async def test_runtime_loader_checks_admission_before_importing_application(
             project=project,
             clear=True,
         )
+
+
+@pytest.mark.asyncio
+async def test_repeated_bundle_loads_make_zero_authority_discovery_redis_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _RedisMustRemainUnused:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def __getattr__(self, name: str):
+            self.calls += 1
+            raise AssertionError(f"bundle load accessed Redis through {name}")
+
+    async def _on_load(**kwargs):
+        del kwargs
+
+    monkeypatch.setattr(
+        bundle_loader,
+        "get_workflow_instance",
+        lambda *args, **kwargs: (object(), object()),
+    )
+    monkeypatch.setattr(bundle_loader, "_maybe_run_bundle_on_load", _on_load)
+    redis = _RedisMustRemainUnused()
+    spec = BundleSpec(id="app@1-0", path="/unused", module="entrypoint")
+    context = SimpleNamespace(actor=SimpleNamespace())
+
+    for _ in range(5):
+        await bundle_loader.get_workflow_instance_async(
+            spec,
+            SimpleNamespace(),
+            comm_context=context,
+            redis=redis,
+            enforce_application_readiness=False,
+        )
+
+    assert redis.calls == 0

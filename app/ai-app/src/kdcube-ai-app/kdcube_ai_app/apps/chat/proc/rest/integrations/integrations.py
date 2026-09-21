@@ -3080,6 +3080,36 @@ async def _reconcile_local_application_lifecycle(
     )
 
 
+async def _publish_authority_discovery_change(
+        request: Request,
+        *,
+        tenant: str,
+        project: str,
+        registry: BundlesRegistry,
+) -> None:
+    """Publish one source-owned authority generation from the origin process."""
+
+    settings = get_settings()
+    if tenant == settings.TENANT and project == settings.PROJECT:
+        lifecycle = getattr(request.app.state, "application_lifecycle", None)
+        if lifecycle is not None:
+            await lifecycle.publish_authority_discovery_change(registry)
+            return
+
+    from kdcube_ai_app.infra.plugin.authority_discovery import (
+        reconcile_authority_discovery,
+    )
+
+    await reconcile_authority_discovery(
+        registry=registry,
+        tenant=tenant,
+        project=project,
+        redis=_get_app_redis(request),
+        invalidate_on_failure=True,
+        logger=logger,
+    )
+
+
 async def _do_set_bundles(
         payload: AdminBundlesUpdateRequest,
         request: Request,
@@ -3133,6 +3163,12 @@ async def _do_set_bundles(
             project_id,
             props_map=props_map,
             replace=(payload.op == "replace"),
+        )
+        await _publish_authority_discovery_change(
+            request,
+            tenant=tenant_id,
+            project=project_id,
+            registry=updated,
         )
         if payload.op == "replace":
             await store_sync_bundle_props_authoritative(
@@ -3206,7 +3242,6 @@ async def _do_set_bundles(
         registry=updated,
         force=changed_bundle_ids,
     )
-
     try:
         msg = {
             "type": "bundles.update",
@@ -3331,6 +3366,13 @@ async def _do_reload_bundles_from_authority(
             os.getpid(),
         )
 
+    await _publish_authority_discovery_change(
+        request,
+        tenant=tenant_id,
+        project=project_id,
+        registry=reg,
+    )
+
     bundles_dict = {bid: entry.model_dump() for bid, entry in reg.bundles.items()}
     eviction_result: dict[str, int] | None = None
     if tenant_id == settings.TENANT and project_id == settings.PROJECT:
@@ -3431,7 +3473,6 @@ async def _do_reload_bundles_from_authority(
         lifecycle = getattr(request.app.state, "application_lifecycle", None)
         if lifecycle is not None:
             await lifecycle.reconcile(reg, force=set(changed_bundle_ids))
-
     msg = {
         "type": "bundles.update",
         "op": "replace",
@@ -3524,6 +3565,13 @@ async def _do_remove_bundle_from_authority(
         ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    await _publish_authority_discovery_change(
+        request,
+        tenant=tenant_id,
+        project=project_id,
+        registry=registry,
+    )
 
     bundles_dict = {
         current_id: entry.model_dump()

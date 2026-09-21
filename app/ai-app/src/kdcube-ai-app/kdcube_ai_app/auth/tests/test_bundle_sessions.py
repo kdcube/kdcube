@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from kdcube_ai_app.auth.AuthManager import AuthenticationError
@@ -8,7 +10,6 @@ from kdcube_ai_app.auth.bundle import (
     BundleSessionAuthority,
     BundleSessionInvalid,
 )
-
 
 class _FakePipeline:
     def __init__(self, redis: "FakeRedis") -> None:
@@ -92,10 +93,25 @@ class FakeRedis:
         del key, ttl
         return True
 
-    async def eval(self, _script, _numkeys, key, token):
-        if self.values.get(key) != token:
-            return 0
-        return await self.delete(key)
+    async def eval(self, _script, _numkeys, key, *arguments):
+        if len(arguments) == 1:
+            [token] = arguments
+            if self.values.get(key) != token:
+                return 0
+            return await self.delete(key)
+        encoded, revision, run_id = arguments
+        existing = json.loads(self.values[key]) if key in self.values else None
+        if (
+            isinstance(existing, dict)
+            and existing.get("redis_run_id") == run_id
+        ):
+            existing_revision = int(existing.get("edge_revision") or 0)
+            if existing_revision > int(revision):
+                return 0
+            if existing_revision == int(revision):
+                return 1 if self.values[key] == encoded else -1
+        self.values[key] = encoded
+        return 1
 
 
 @pytest.mark.asyncio

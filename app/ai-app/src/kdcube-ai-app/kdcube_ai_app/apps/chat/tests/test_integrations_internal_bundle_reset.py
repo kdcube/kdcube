@@ -62,7 +62,15 @@ def test_internal_reload_authority_reapplies_registry(monkeypatch):
             calls["publish"] = (channel, payload)
             return 1
 
+    class _Lifecycle:
+        async def publish_authority_discovery_change(self, registry):
+            calls["authority_discovery"] = registry
+
+        async def reconcile(self, registry, *, force=None):
+            calls["lifecycle"] = (registry, force)
+
     app.state.redis_async = _Redis()
+    app.state.application_lifecycle = _Lifecycle()
 
     monkeypatch.setattr(
         integrations,
@@ -109,6 +117,9 @@ def test_internal_reload_authority_evicts_requested_bundle_scope(monkeypatch):
     calls: dict[str, object] = {}
 
     class _Lifecycle:
+        async def publish_authority_discovery_change(self, registry):
+            calls["authority_discovery"] = registry
+
         async def reconcile(self, registry, *, force=None):
             calls["lifecycle"] = (registry, force)
 
@@ -225,6 +236,9 @@ def test_internal_remove_retires_only_descriptor_absent_bundle(monkeypatch):
             return 2
 
     class _Lifecycle:
+        async def publish_authority_discovery_change(self, registry):
+            calls["authority_discovery"] = registry
+
         async def retire(self, bundle_id, registry):
             calls["lifecycle"] = (bundle_id, registry)
 
@@ -487,6 +501,7 @@ def test_internal_bundle_update_targets_changed_app_and_schedules_preparation(mo
     app = FastAPI()
     mount_integrations_routers(app)
     calls: dict[str, object] = {}
+    event_order: list[str] = []
 
     current = BundlesRegistry(
         default_bundle_id="stable@1-0",
@@ -510,8 +525,13 @@ def test_internal_bundle_update_targets_changed_app_and_schedules_preparation(mo
             return 1
 
     class _Lifecycle:
+        async def publish_authority_discovery_change(self, registry):
+            calls["authority_discovery"] = registry
+            event_order.append("authority_discovery")
+
         async def reconcile(self, registry, *, force=None):
             calls["lifecycle"] = (registry, force)
+            event_order.append("lifecycle")
 
     app.state.redis_async = _Redis()
     app.state.application_lifecycle = _Lifecycle()
@@ -524,9 +544,11 @@ def test_internal_bundle_update_targets_changed_app_and_schedules_preparation(mo
     async def _save_registry(redis, registry, tenant, project, **kwargs):
         del redis
         calls["save"] = (registry, tenant, project, kwargs)
+        event_order.append("durable_save")
 
     async def _set_registry(registry, default_bundle_id, **kwargs):
         calls["set_registry"] = (registry, default_bundle_id, kwargs)
+        event_order.append("process_registry")
 
     def _evict(spec, *, drop_sys_modules=True):
         calls.setdefault("evicted", []).append((spec.id, spec.path, drop_sys_modules))
@@ -592,3 +614,6 @@ def test_internal_bundle_update_targets_changed_app_and_schedules_preparation(mo
         "stable@1-0",
     }
     assert force == {"changed@1-0"}
+    assert event_order.index("durable_save") < event_order.index("authority_discovery")
+    assert event_order.index("authority_discovery") < event_order.index("process_registry")
+    assert event_order.index("authority_discovery") < event_order.index("lifecycle")

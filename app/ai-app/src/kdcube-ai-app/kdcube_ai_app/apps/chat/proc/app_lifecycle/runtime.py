@@ -41,6 +41,9 @@ from kdcube_ai_app.infra.plugin.app_readiness import (
     application_readiness_registry,
     normalize_readiness_mode,
 )
+from kdcube_ai_app.infra.plugin.authority_discovery import (
+    reconcile_authority_discovery,
+)
 from kdcube_ai_app.infra.plugin.bundle_loader import (
     BundleSpec,
     evict_bundle_scope,
@@ -195,6 +198,8 @@ class ProcApplicationLifecycle:
         self._catalog_participants: set[str] = set()
         self._catalog_reconcile_error: Exception | None = None
         self._ready_callback: Callable[[ApplicationPreparation], Awaitable[None]] | None = None
+        self._authority_discovery_lock = asyncio.Lock()
+        self._authority_discovery_registry_revision = 0
         self.supervisor = ApplicationLifecycleSupervisor(
             tenant=self.tenant,
             project=self.project,
@@ -531,6 +536,24 @@ class ProcApplicationLifecycle:
 
     async def wait_for_current(self) -> None:
         await self.supervisor.wait_for_current()
+
+    async def publish_authority_discovery_change(
+        self,
+        registry: BundlesRegistry,
+    ) -> None:
+        """Publish authority manifests at the registry-change boundary."""
+
+        async with self._authority_discovery_lock:
+            self._authority_discovery_registry_revision += 1
+            await reconcile_authority_discovery(
+                registry=registry,
+                tenant=self.tenant,
+                project=self.project,
+                redis=self.redis,
+                source_revision=self._authority_discovery_registry_revision,
+                invalidate_on_failure=True,
+                logger=self.logger,
+            )
 
     async def shutdown(self) -> None:
         await self.supervisor.shutdown()

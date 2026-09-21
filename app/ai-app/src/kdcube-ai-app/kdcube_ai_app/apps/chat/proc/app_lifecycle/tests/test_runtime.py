@@ -91,6 +91,35 @@ def _lifecycle(registry: ApplicationReadinessRegistry) -> ProcApplicationLifecyc
 
 
 @pytest.mark.asyncio
+async def test_registry_change_is_the_only_authority_publication_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[int] = []
+
+    async def _reconcile_authority_discovery(**kwargs):
+        calls.append(int(kwargs["source_revision"]))
+
+    monkeypatch.setattr(
+        runtime,
+        "reconcile_authority_discovery",
+        _reconcile_authority_discovery,
+    )
+    _patch_preparation(monkeypatch)
+    lifecycle = _lifecycle(ApplicationReadinessRegistry())
+    registry = _registry(tmp_path)
+
+    await lifecycle.reconcile(registry)
+    await lifecycle.wait_for_current()
+    assert calls == []
+
+    await lifecycle.publish_authority_discovery_change(registry)
+
+    await lifecycle.shutdown()
+    assert calls == [1]
+
+
+@pytest.mark.asyncio
 async def test_reconcile_publishes_state_without_waiting_for_application_work(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

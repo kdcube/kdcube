@@ -3101,44 +3101,6 @@ def get_workflow_instance(
     return instance, mod
 
 
-async def _register_bundle_authority_provider_declarations(
-    *,
-    instance: Any,
-    spec: BundleSpec,
-    config: Any,
-    comm_context: ExternalEventPayload,
-    redis: Optional[Any],
-) -> None:
-    if redis is None:
-        return
-    try:
-        bundle_id_hint = getattr(getattr(config, "ai_bundle_spec", None), "id", None) or ""
-        manifest = discover_bundle_interface_manifest(instance, bundle_id=bundle_id_hint)
-        if not manifest.authority_providers:
-            return
-        from connection_hub.authority_registry import (
-            RedisAuthorityDiscovery,
-            authority_provider_spec_from_declaration,
-        )
-
-        tenant, project = _tp_from_ctx(comm_context)
-        discovery = RedisAuthorityDiscovery(redis, tenant=tenant, project=project)
-        bundle_id = manifest.bundle_id or bundle_id_hint or spec.path
-        for declaration in manifest.authority_providers:
-            await discovery.register_provider(
-                authority_provider_spec_from_declaration(declaration, bundle_id=bundle_id)
-            )
-        _log.info(
-            "[authority.discovery] registered %s provider(s) for bundle=%s tenant=%s project=%s",
-            len(manifest.authority_providers),
-            bundle_id,
-            tenant,
-            project,
-        )
-    except Exception:
-        _log.warning("[authority.discovery] failed to register bundle authority providers", exc_info=True)
-
-
 async def get_workflow_instance_async(
         spec: BundleSpec,
         config: Any,
@@ -3172,13 +3134,6 @@ async def get_workflow_instance_async(
         config,
         comm_context=comm_context,
         pg_pool=pg_pool,
-        redis=redis,
-    )
-    await _register_bundle_authority_provider_declarations(
-        instance=instance,
-        spec=spec,
-        config=config,
-        comm_context=comm_context,
         redis=redis,
     )
     await _maybe_run_bundle_on_load(

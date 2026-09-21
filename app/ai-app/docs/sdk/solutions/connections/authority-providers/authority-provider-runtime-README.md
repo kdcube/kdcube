@@ -4,7 +4,7 @@ title: "Authority Provider Runtime"
 summary: "Canonical Connection Hub runtime contract for authenticator selection, authority-scoped identities, linkers, grant resolvers, and surface guards."
 status: design
 tags: ["sdk", "solutions", "connections", "connection-hub", "authority-provider", "authenticator-selector", "surface-guard", "grants"]
-updated_at: 2026-09-11
+updated_at: 2026-09-21
 keywords: ["authority provider", "authenticator selection", "surface guard", "credential envelope", "MCP connector metadata", "KDCubeMCPServer"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
@@ -685,10 +685,37 @@ class MyBundle:
         return self.custom_authority_provider
 ```
 
-On proc load, the declaration is published to Redis authority discovery as
-metadata. The verifier itself remains reachable only where the bundle is
-loaded. Ingress may use the metadata for diagnostics/selection, but it must not
-import bundle-local verifier code.
+The declaration is represented in Redis authority discovery as metadata. The
+verifier remains reachable where the bundle is loaded. Ingress uses the
+metadata for diagnostics and selection while verification stays with the
+bundle runtime.
+
+The registry source-change handler publishes the complete authority declaration
+generation at install, update, removal, or manifest reload. Each registry entry
+is resolved to its authoritative Git or activation source before its manifest
+is read. Per-bundle manifest digests preserve unchanged generations, and a
+monotonic registry revision records the origin process's source-change
+sequence. Every provider record carries its publication generation and current
+Redis `run_id`.
+
+The complete-generation epoch records the source digest, bundle ids, authority
+ids, and Redis `run_id`. A discovery reader validates the epoch and provider
+records together. A missing, incomplete, or prior-run generation triggers one
+read-through to descriptor authority; that read returns the durable manifest
+view and refills its Redis projection. Normal bundle loading only loads the
+bundle and does not participate in authority discovery publication.
+
+Durable-source loading and complete-generation reconciliation share one
+tenant/project coordination lease. A source-change publisher and a restart
+read-through therefore cannot commit snapshots in reverse order: each reloads
+descriptor authority after acquiring the lease, then publishes that view.
+
+Authority and bundle identifiers are represented in Redis keys by full SHA-256
+digests, while the complete ids remain in the metadata record. Keys in one
+tenant/project share a Redis Cluster hash tag, and Lua receives every key it
+accesses through `KEYS`. This makes descriptor removal and Redis snapshot
+recovery explicit cache events, while the bundle manifest remains the source
+for the published provider set.
 
 An authenticator result should include:
 
