@@ -3078,6 +3078,7 @@ class BaseWorkflow():
                     )
 
             from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import (
+                agent_card_revision,
                 conversation_capability_projections,
                 deny_all_capabilities,
                 disabled_from_projection,
@@ -3105,6 +3106,7 @@ class BaseWorkflow():
                     initial_disabled=legacy_disabled,
                 )
                 card_projection = capability_control["projection"]
+                card_revision = agent_card_revision(capability_control)
                 conversation_selection = None
                 if conversation_id:
                     if capability_store is None:
@@ -3117,6 +3119,7 @@ class BaseWorkflow():
                         agent_id=agent_id,
                         conversation_id=conversation_id,
                         base_projection=card_projection,
+                        base_card_revision=card_revision,
                         materialize=True,
                     )
                 _live_base, effective_projection = conversation_capability_projections(

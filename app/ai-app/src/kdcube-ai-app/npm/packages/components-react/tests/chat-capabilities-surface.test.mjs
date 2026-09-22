@@ -257,6 +257,22 @@ test('picker names conversation provenance and never promotes a row into the Age
   assert.doesNotMatch(capabilityBranch, /next_conversation|when_cold/)
 })
 
+test('agent-base capability locks do not lock model choice and name the inherited Card revision', () => {
+  const menu = readFileSync(
+    new URL('../src/chat/ui/features/composer/ComposerMenu.tsx', import.meta.url),
+    'utf8',
+  )
+  const models = menu.slice(
+    menu.indexOf('function ModelsSection'),
+    menu.indexOf('function InstructionsSection'),
+  )
+  assert.match(models, /scopeLocked=\{false\}/)
+  assert.match(menu, /Its capability rows are managed in Connection Hub/)
+  assert.match(menu, /model and preference choices remain available here/)
+  assert.match(menu, /inherited Agent Card revision \{inheritedCardRevision\}/)
+  assert.match(menu, /Current Card revocations still apply/)
+})
+
 // ---------------------------------------------------------------------------
 // The full-page shell owns its scrolling: host embeddings (scene windows,
 // the side-panel widget wrapper) size or clip the frame, so document-level

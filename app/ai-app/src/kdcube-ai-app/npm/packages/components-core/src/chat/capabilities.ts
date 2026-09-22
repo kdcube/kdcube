@@ -338,6 +338,9 @@ export interface AgentCapabilitySelectionScope {
   kind: 'conversation' | 'agent_base'
   conversation_id: string
   capabilities_editable: boolean
+  /** Agent Card revision whose positive projection became this conversation's
+   *  immutable starting base. For agent_base this is the current revision. */
+  agent_card_revision?: number
 }
 
 /** A partial toggle patch (what one interaction changes). Dict categories take

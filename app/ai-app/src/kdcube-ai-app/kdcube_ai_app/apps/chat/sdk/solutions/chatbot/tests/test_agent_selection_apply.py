@@ -261,6 +261,49 @@ async def test_preference_materialization_failure_keeps_capability_narrowing(mon
 
 
 @pytest.mark.asyncio
+async def test_turn_materialization_records_agent_card_revision(monkeypatch):
+    calls = []
+
+    class _CapabilityStore:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def get_selection(self, **kwargs):
+            calls.append(kwargs)
+            projection = copy.deepcopy(kwargs["base_projection"])
+            return {
+                "base_projection": projection,
+                "base_card_revision": kwargs["base_card_revision"],
+                "projection": projection,
+            }
+
+    async def _sync(*_args, **_kwargs):
+        return {
+            "projection": {"test_disabled": {}},
+            "card": {"card_revision": 9},
+        }
+
+    monkeypatch.setattr(
+        user_settings_module,
+        "ConversationCapabilitySelectionStore",
+        _CapabilityStore,
+    )
+    monkeypatch.setattr(
+        agent_capability_control,
+        "sync_agent_capability_projection",
+        _sync,
+    )
+
+    await BaseWorkflow.apply_user_agent_selection(
+        _workflow_stub(pg_pool=_FakePool()),
+        _tool_cfg(),
+        AgentSkillConfig(),
+    )
+
+    assert calls[0]["base_card_revision"] == 9
+
+
+@pytest.mark.asyncio
 async def test_missing_preference_pool_still_resolves_the_card():
     stub = _workflow_stub(pg_pool=None)
     tool_cfg, skill_cfg = _tool_cfg(), AgentSkillConfig()

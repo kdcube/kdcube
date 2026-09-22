@@ -78,14 +78,18 @@ class _CapabilityStore:
     ) -> None:
         self.events = events
         self.base_projection = projection
+        self.base_card_revision = 0
         self.projection = projection
         self.write_error = write_error
         self.set_calls: list[dict[str, Any]] = []
 
-    async def get_selection(self, **_kwargs: Any):
+    async def get_selection(self, **kwargs: Any):
+        if not self.base_card_revision:
+            self.base_card_revision = int(kwargs.get("base_card_revision") or 0)
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "base_projection": self.base_projection,
+            "base_card_revision": self.base_card_revision,
             "projection": self.projection,
         }
 
@@ -96,8 +100,9 @@ class _CapabilityStore:
             raise RuntimeError(self.write_error)
         self.projection = kwargs["projection"]
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "base_projection": self.base_projection,
+            "base_card_revision": self.base_card_revision,
             "projection": self.projection,
         }
 
@@ -221,6 +226,81 @@ async def test_capability_only_update_does_not_depend_on_preference_storage(monk
 
     assert result["ok"] is True
     assert events == ["conversation-write"]
+
+
+@pytest.mark.asyncio
+async def test_model_preference_is_editable_without_a_conversation(monkeypatch) -> None:
+    authority = _authority()
+    events: list[str] = []
+    store = _Store(events)
+
+    async def _sync(_entrypoint: Any, **_kwargs: Any):
+        return {
+            "authority": authority,
+            "projection": authority,
+            "selection": authority,
+            "states": {},
+            "card": {"access_id": "agent-main", "card_revision": 7},
+        }
+
+    monkeypatch.setattr(capability_control, "sync_agent_capability_projection", _sync)
+    result = await BaseEntrypoint.agent_selection_update(
+        _owner(pg_pool=object(), store=store),
+        data={
+            "data": {
+                "agent": "main",
+                "model": {"provider": "test", "model": "small"},
+            }
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["selection"]["model"] == {
+        "provider": "test",
+        "model": "small",
+    }
+    assert result["selection"]["scope"] == {
+        "kind": "agent_base",
+        "conversation_id": "",
+        "capabilities_editable": False,
+        "agent_card_revision": 7,
+    }
+    assert events == ["preference-write"]
+
+
+@pytest.mark.asyncio
+async def test_conversation_scope_names_the_inherited_agent_card_revision(
+    monkeypatch,
+) -> None:
+    authority = _authority()
+    capability_store = _CapabilityStore([], authority)
+
+    async def _sync(_entrypoint: Any, **_kwargs: Any):
+        return {
+            "authority": authority,
+            "projection": authority,
+            "selection": authority,
+            "states": {},
+            "card": {"access_id": "agent-main", "card_revision": 7},
+        }
+
+    monkeypatch.setattr(capability_control, "sync_agent_capability_projection", _sync)
+    result = await BaseEntrypoint.agent_capabilities(
+        _owner(
+            pg_pool=object(),
+            store=_Store([]),
+            capability_store=capability_store,
+        ),
+        data={"data": {"agent": "main", "conversation_id": "conv-a"}},
+    )
+
+    assert result["ok"] is True
+    assert result["selection"]["scope"] == {
+        "kind": "conversation",
+        "conversation_id": "conv-a",
+        "capabilities_editable": True,
+        "agent_card_revision": 7,
+    }
 
 
 @pytest.mark.asyncio

@@ -46,6 +46,18 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def agent_card_revision(capability_control: Mapping[str, Any]) -> int:
+    """Return the revision of the resident Agent Card in a sync result."""
+
+    card = capability_control.get("card")
+    if not isinstance(card, Mapping):
+        return 0
+    try:
+        return max(0, int(card.get("card_revision") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def agent_capability_identity(entrypoint: Any) -> dict[str, str]:
     """Resolve the request identity used by the resident-agent Card boundary."""
 
@@ -953,6 +965,7 @@ async def sync_agent_capability_projection(
 
 __all__ = [
     "AgentCapabilityControlUnavailable",
+    "agent_card_revision",
     "agent_capability_identity",
     "annotate_capability_states",
     "conversation_capability_projections",

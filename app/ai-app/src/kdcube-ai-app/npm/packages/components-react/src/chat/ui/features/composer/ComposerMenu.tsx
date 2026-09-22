@@ -431,6 +431,7 @@ function ModelsSection({ vm }: ComposerMenuSectionContext) {
             }
             hint={`${row.provider} · ${row.model}`}
             checked={active ? 'on' : 'off'}
+            scopeLocked={false}
             onToggle={() => {
               if (active) return
               toggle({
@@ -1466,6 +1467,22 @@ export function useCapabilityPickerBody({
   const rendered = sections
     .map((section) => ({ id: section.id, node: section.render({ vm: vmForSections, close }) }))
     .filter((section) => section.node !== null && section.node !== undefined && section.node !== false)
+  const inheritedCardRevision = capabilities.scope?.agent_card_revision
+  const scopeNotice = capabilities.scope?.kind === 'agent_base'
+    ? (
+        <div className="k-menu-notice" role="status">
+          This is the Agent Card base
+          {inheritedCardRevision ? ` at revision ${inheritedCardRevision}` : ''}.
+          {' '}Its capability rows are managed in Connection Hub. Conversation overrides become available after the conversation starts; model and preference choices remain available here.
+        </div>
+      )
+    : capabilities.scope?.kind === 'conversation' && inheritedCardRevision
+      ? (
+          <div className="k-menu-notice" role="status">
+            This conversation inherited Agent Card revision {inheritedCardRevision}. Current Card revocations still apply; later additions do not enter this conversation automatically.
+          </div>
+        )
+      : null
   /* The save control leads the body (sticky, so it never scrolls out of
    * view): the sections below can be taller than any shell's viewport, and a
    * save button only reachable by scrolling reads as "my change is done"
@@ -1499,6 +1516,7 @@ export function useCapabilityPickerBody({
   return rendered.length ? (
     <>
       {saveBar}
+      {scopeNotice}
       {rendered.map((section, index) => (
         <div key={section.id} data-picker-section={section.id}>
           {index > 0 ? <div className="k-menu-divider" role="separator" /> : null}

@@ -6,7 +6,9 @@
 The Agent Card is the base for a newly started conversation. At the first
 materialized read, this store snapshots that positive Card projection twice:
 ``base_projection`` records what the conversation inherited and ``projection``
-records what it currently selects. Later picker writes replace only the latter.
+records what it currently selects. ``base_card_revision`` records which Agent
+Card revision supplied that base. Later picker writes replace only the current
+projection and preserve both inherited facts.
 
 Positive projections are intentional. A deny map cannot name a capability
 that did not exist when the conversation started, so a later Card expansion
@@ -28,7 +30,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.user_settings.store import (
 
 CONVERSATION_CAPABILITY_SUBSYSTEM = "agent_capabilities"
 CONVERSATION_CAPABILITY_KEY_PREFIX = "agent_capability_selection:"
-CONVERSATION_CAPABILITY_SCHEMA_VERSION = 1
+CONVERSATION_CAPABILITY_SCHEMA_VERSION = 2
 
 
 def conversation_capability_selection_key(agent_id: str, *, conversation_id: str) -> str:
@@ -60,6 +62,9 @@ class ConversationCapabilitySelectionStore(UserSettingsStore):
         return {
             "schema_version": CONVERSATION_CAPABILITY_SCHEMA_VERSION,
             "base_projection": cls._projection(value.get("base_projection")),
+            "base_card_revision": max(
+                0, int(value.get("base_card_revision") or 0)
+            ),
             "projection": cls._projection(value.get("projection")),
             "scope": {
                 "kind": "conversation",
@@ -99,6 +104,7 @@ class ConversationCapabilitySelectionStore(UserSettingsStore):
         agent_id: str,
         conversation_id: str,
         base_projection: Mapping[str, Any],
+        base_card_revision: int = 0,
         materialize: bool = True,
     ) -> dict[str, Any]:
         """Return the exact conversation snapshot, creating it once.
@@ -118,6 +124,7 @@ class ConversationCapabilitySelectionStore(UserSettingsStore):
             return stored
 
         base = self._projection(base_projection)
+        inherited_revision = max(0, int(base_card_revision or 0))
         if materialize:
             await self.put_record_if_absent(
                 user_id=user_id,
@@ -130,6 +137,7 @@ class ConversationCapabilitySelectionStore(UserSettingsStore):
                 value={
                     "schema_version": CONVERSATION_CAPABILITY_SCHEMA_VERSION,
                     "base_projection": base,
+                    "base_card_revision": inherited_revision,
                     "projection": copy.deepcopy(base),
                     "updated_at": utc_now_iso(),
                 },
@@ -146,6 +154,7 @@ class ConversationCapabilitySelectionStore(UserSettingsStore):
         return {
             "schema_version": CONVERSATION_CAPABILITY_SCHEMA_VERSION,
             "base_projection": base,
+            "base_card_revision": inherited_revision,
             "projection": copy.deepcopy(base),
             "scope": {
                 "kind": "conversation",
@@ -163,6 +172,7 @@ class ConversationCapabilitySelectionStore(UserSettingsStore):
         agent_id: str,
         conversation_id: str,
         base_projection: Mapping[str, Any],
+        base_card_revision: int = 0,
         projection: Mapping[str, Any],
     ) -> dict[str, Any]:
         """Replace this conversation's positive selection, preserving its base."""
@@ -174,6 +184,7 @@ class ConversationCapabilitySelectionStore(UserSettingsStore):
             agent_id=agent_id,
             conversation_id=conversation,
             base_projection=base_projection,
+            base_card_revision=base_card_revision,
             materialize=True,
         )
         await self.put_record(
@@ -187,6 +198,9 @@ class ConversationCapabilitySelectionStore(UserSettingsStore):
             value={
                 "schema_version": CONVERSATION_CAPABILITY_SCHEMA_VERSION,
                 "base_projection": self._projection(current.get("base_projection")),
+                "base_card_revision": max(
+                    0, int(current.get("base_card_revision") or 0)
+                ),
                 "projection": self._projection(projection),
                 "updated_at": utc_now_iso(),
             },

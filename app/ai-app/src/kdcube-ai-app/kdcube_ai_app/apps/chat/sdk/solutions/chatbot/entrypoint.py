@@ -990,6 +990,7 @@ class BaseEntrypoint:
         capability_control: Dict[str, Any] = {}
         try:
             from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import (
+                agent_card_revision,
                 annotate_capability_states,
                 conversation_capability_projections,
                 deny_all_capabilities,
@@ -1008,6 +1009,7 @@ class BaseEntrypoint:
                 capability_control.get("states"),
             )
             card_projection = capability_control["projection"]
+            card_revision = agent_card_revision(capability_control)
             card_disabled = disabled_from_projection(catalog, card_projection)
             conversation_selection: Optional[Dict[str, Any]] = None
             capability_source = "connection_hub_card"
@@ -1015,6 +1017,7 @@ class BaseEntrypoint:
                 "kind": "agent_base",
                 "conversation_id": "",
                 "capabilities_editable": False,
+                "agent_card_revision": card_revision,
             }
             if conversation_id:
                 capability_scope = {
@@ -1035,7 +1038,12 @@ class BaseEntrypoint:
                         agent_id=agent_id,
                         conversation_id=conversation_id,
                         base_projection=card_projection,
+                        base_card_revision=card_revision,
                         materialize=True,
+                    )
+                    capability_scope["agent_card_revision"] = max(
+                        0,
+                        int(conversation_selection.get("base_card_revision") or 0),
                     )
                     capability_source = "conversation"
                 except Exception as exc:
@@ -1240,6 +1248,7 @@ class BaseEntrypoint:
         capability_update_applied = False
         try:
             from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import (
+                agent_card_revision,
                 conversation_capability_projections,
                 disabled_from_projection,
                 selected_capabilities_from_disabled,
@@ -1296,6 +1305,7 @@ class BaseEntrypoint:
                 initial_disabled=initial_disabled,
             )
             card_projection = capability_control["projection"]
+            card_revision = agent_card_revision(capability_control)
             card_disabled = disabled_from_projection(catalog, card_projection)
             conversation_selection = None
             if conversation_id:
@@ -1306,6 +1316,7 @@ class BaseEntrypoint:
                     agent_id=agent_id,
                     conversation_id=conversation_id,
                     base_projection=card_projection,
+                    base_card_revision=card_revision,
                     materialize=True,
                 )
             live_base, effective_projection = conversation_capability_projections(
@@ -1352,6 +1363,7 @@ class BaseEntrypoint:
                     agent_id=agent_id,
                     conversation_id=conversation_id,
                     base_projection=card_projection,
+                    base_card_revision=card_revision,
                     projection=selected_capabilities,
                 )
                 capability_update_applied = True
@@ -1375,6 +1387,19 @@ class BaseEntrypoint:
                     "kind": "conversation" if conversation_id else "agent_base",
                     "conversation_id": conversation_id,
                     "capabilities_editable": bool(conversation_id),
+                    "agent_card_revision": (
+                        max(
+                            0,
+                            int(
+                                (conversation_selection or {}).get(
+                                    "base_card_revision"
+                                )
+                                or 0
+                            ),
+                        )
+                        if conversation_id
+                        else card_revision
+                    ),
                 },
                 "capability_source": "conversation" if conversation_id else "connection_hub_card",
             }

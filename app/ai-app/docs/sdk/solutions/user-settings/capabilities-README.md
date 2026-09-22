@@ -136,10 +136,18 @@ Within `allowed_selected`, the conversation adds two visible facts:
 - a row inside that base is tagged **Inherited** while it matches the starting
   state, or **Changed here** after this conversation turns it off or back on.
 
-The unscoped served picker shows the Agent Card base read-only. Its Connection
-Hub action carries the stable resident Card id and opens that exact Card's
-editor. A picker opened from a chat carries that conversation id and changes
-only that conversation.
+The unscoped served picker shows capability rows from the Agent Card base
+read-only and names that state in the surface. Its Connection Hub action carries
+the stable resident Card id and opens that exact Card's editor. Model,
+instruction, presentation, and cache choices remain user preferences and do not
+inherit the capability-row lock. A picker opened from a chat carries that
+conversation id and changes only that conversation.
+
+The first materialized conversation snapshot stores both its finite positive
+base and the exact Agent Card revision that supplied it. The picker displays
+that revision. Current Card revocations still intersect the frozen base on
+every read, while capabilities added by later Card revisions remain outside the
+conversation until a new conversation is started.
 
 Selecting one operation selects only that operation. Sharing a claim with a
 sibling operation does not select the sibling visually or operationally. A
@@ -180,6 +188,9 @@ ceiling and writes a revision-checked Card update. The linked descriptor
 Control Card displays its authority and presentation metadata as a
 descriptor-managed ceiling; changing the descriptor, then synchronizing,
 revises it. It is not shown as an empty generic resource Card.
+The editor groups child tools and operations beneath their tool group, MCP
+server, named service, or resource, and shows declared descriptions in the
+form. Repeated operation labels therefore retain their owning context.
 
 Descriptor, Agent Card, and conversation changes remain independent:
 

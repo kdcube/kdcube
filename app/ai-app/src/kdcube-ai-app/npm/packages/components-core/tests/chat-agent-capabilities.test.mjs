@@ -140,7 +140,12 @@ test('capabilities slice: load, optimistic patch, save reconcile', () => {
     disabled: { mcp: { knowledge: true } },
     baseDisabled: { tools: { web_tools: true } },
     agentBaseDisabled: {},
-    scope: { kind: 'conversation', conversation_id: 'conv-1', capabilities_editable: true },
+    scope: {
+      kind: 'conversation',
+      conversation_id: 'conv-1',
+      capabilities_editable: true,
+      agent_card_revision: 7,
+    },
   }))
   assert.equal(state.capabilities.status, 'ready')
   assert.equal(state.capabilities.agent, 'main')
@@ -148,6 +153,7 @@ test('capabilities slice: load, optimistic patch, save reconcile', () => {
   assert.deepEqual(state.capabilities.disabled, { mcp: { knowledge: true } })
   assert.deepEqual(state.capabilities.baseDisabled, { tools: { web_tools: true } })
   assert.equal(state.capabilities.scope.kind, 'conversation')
+  assert.equal(state.capabilities.scope.agent_card_revision, 7)
 
   state = chatReducer(state, chatActions.capabilitiesPatchApplied({ tools: { web_tools: true } }))
   assert.deepEqual(state.capabilities.disabled, { mcp: { knowledge: true }, tools: { web_tools: true } })

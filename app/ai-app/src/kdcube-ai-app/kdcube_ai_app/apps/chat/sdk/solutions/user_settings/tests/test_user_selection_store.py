@@ -311,6 +311,7 @@ async def test_conversation_capability_snapshot_is_immutable_while_selection_cha
         agent_id="main",
         conversation_id="conv-a",
         base_projection=first_base,
+        base_card_revision=4,
     )
     same = await store.get_selection(
         user_id="u1",
@@ -318,6 +319,7 @@ async def test_conversation_capability_snapshot_is_immutable_while_selection_cha
         agent_id="main",
         conversation_id="conv-a",
         base_projection=later_base,
+        base_card_revision=7,
     )
     changed = await store.set_projection(
         user_id="u1",
@@ -325,6 +327,7 @@ async def test_conversation_capability_snapshot_is_immutable_while_selection_cha
         agent_id="main",
         conversation_id="conv-a",
         base_projection=later_base,
+        base_card_revision=7,
         projection=_projection(),
     )
     next_conversation = await store.get_selection(
@@ -333,13 +336,18 @@ async def test_conversation_capability_snapshot_is_immutable_while_selection_cha
         agent_id="main",
         conversation_id="conv-b",
         base_projection=later_base,
+        base_card_revision=7,
     )
 
     assert first["base_projection"] == first_base
+    assert first["base_card_revision"] == 4
     assert same["base_projection"] == first_base
+    assert same["base_card_revision"] == 4
     assert changed["base_projection"] == first_base
+    assert changed["base_card_revision"] == 4
     assert changed["projection"] == _projection()
     assert next_conversation["base_projection"] == later_base
+    assert next_conversation["base_card_revision"] == 7
     key = ("u1", "b", conversation_capability_selection_key("main", conversation_id="conv-a"))
     assert pool.rows[key]["subsystem"] == CONVERSATION_CAPABILITY_SUBSYSTEM
 
