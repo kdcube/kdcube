@@ -491,6 +491,7 @@ export async function fetchAgentCapabilities(
     body: JSON.stringify({
       data: {
         agent: agentId,
+        caller_surface: 'chat_composer',
         ...(conversationId ? { conversation_id: conversationId } : {}),
       },
     }),

@@ -102,6 +102,7 @@ function PickerApp() {
     agentId,
     fetchCapabilities: () => callOperation('agent_capabilities', {
       agent: agentRef.current,
+      caller_surface: 'capabilities_widget',
       ...(conversationRef.current ? { conversation_id: conversationRef.current } : {}),
     }),
     submitUpdate: (patch: AgentSelectionPatch, options?: StandaloneSelectionWriteOptions) => {
