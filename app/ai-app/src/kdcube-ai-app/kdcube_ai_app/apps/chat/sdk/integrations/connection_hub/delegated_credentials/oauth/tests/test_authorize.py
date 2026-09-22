@@ -374,7 +374,7 @@ def _checkbox(html: str, operation: str) -> str:
     return html[html.rindex("<input", 0, start) : html.index(">", start) + 1]
 
 
-def test_a_first_consent_seeds_nothing():
+def test_a_first_consent_selects_the_operations_requested_by_the_client():
     app = FastAPI()
     resource = "https://runtime.example.test/public/mcp/named_services"
     publish_delegated_config(app, _seeding_config(resource))
@@ -385,9 +385,10 @@ def test_a_first_consent_seeds_nothing():
         config=oauth_delegated_config(app),
     )
 
-    assert "Nothing is selected by default" in html
-    assert "checked" not in _checkbox(html, "object.search")
-    assert "checked" not in _checkbox(html, "object.upsert")
+    assert "Named-service operations requested by this client" in html
+    assert "checked" in _checkbox(html, "object.search")
+    assert "checked" in _checkbox(html, "object.upsert")
+    assert "Provider accounts and their" in html
 
 
 def test_a_re_consent_seeds_what_the_card_holds_and_separates_what_is_new():
@@ -406,14 +407,34 @@ def test_a_re_consent_seeds_what_the_card_holds_and_separates_what_is_new():
         issuer=ISSUER,
         config=oauth_delegated_config(app),
         seeded_named_service_operations={"mem": ["object.search"]},
+        existing_card=True,
     )
 
     assert "checked" in _checkbox(html, "object.search")
     assert "checked" not in _checkbox(html, "object.upsert")
-    assert "Named-service operations this client has now" in html
+    assert "Named-service operations on this Card" in html
     assert "REPLACES" in html
     assert "Added since this client was last approved" in html
     assert "Nothing is selected by default" not in html
+
+
+def test_a_re_consent_preserves_an_intentionally_empty_card():
+    app = FastAPI()
+    resource = "https://runtime.example.test/public/mcp/named_services"
+    publish_delegated_config(app, _seeding_config(resource))
+
+    html = render_consent_html(
+        _seeding_request(app, resource),
+        issuer=ISSUER,
+        config=oauth_delegated_config(app),
+        seeded_named_service_operations={},
+        existing_card=True,
+    )
+
+    assert "This Card currently has no named-service operations" in html
+    assert "checked" not in _checkbox(html, "object.search")
+    assert "checked" not in _checkbox(html, "object.upsert")
+    assert "Added since this client was last approved" in html
 
 
 def test_the_view_model_carries_what_the_card_holds():
@@ -466,6 +487,9 @@ def client():
 
         async def oauth_seed_resource_operations(self, **_kwargs):
             return {}
+
+        async def oauth_consent_card_seed(self, **_kwargs):
+            return {"ok": True}
 
         async def resolve_oauth_card_identity(
             self, *, grantor_subject, client_id, entry_resource, client_metadata
@@ -577,6 +601,9 @@ def test_authorize_can_render_bundle_hosted_consent(client, monkeypatch):
 
         async def oauth_seed_resource_operations(self, **_kwargs):
             return {}
+
+        async def oauth_consent_card_seed(self, **_kwargs):
+            return {"ok": True}
 
         async def resolve_oauth_card_identity(
             self, *, grantor_subject, client_id, entry_resource, client_metadata
@@ -895,9 +922,11 @@ def test_multi_resource_oauth_delivery_opens_full_card_editor(client, monkeypatc
         "kdcube_credential_use": "multi_resource",
         "kdcube_agent_id": "codex:session-1",
     }
+    assert payload["selection_source"] == "request"
     assert payload["selection"]["label"].endswith("codex:session-1")
-    assert payload["selection"]["resource_grants"] == {}
-    assert payload["selection"]["resource_operations"] == {}
+    assert payload["selection"]["resource_grants"] == {"*": ["records:read"]}
+    assert payload["selection"]["resource_operations"] == {"*": ["records_export"]}
+    assert payload["selection"]["account_scope"] == {}
 
 
 def test_card_editor_records_declared_resource_and_keeps_concrete_entry(
@@ -1270,6 +1299,10 @@ def test_oauth_consent_grants_an_authenticated_owners_exact_connector_tool(clien
             seen_seed_client_metadata.append(kwargs["client_metadata"])
             return {}
 
+        async def oauth_consent_card_seed(self, **kwargs):
+            seen_seed_client_metadata.append(kwargs["client_metadata"])
+            return {"ok": True}
+
         async def resolve_oauth_card_identity(
             self, *, grantor_subject, client_id, entry_resource, client_metadata
         ):
@@ -1291,7 +1324,7 @@ def test_oauth_consent_grants_an_authenticated_owners_exact_connector_tool(clien
     assert get_response.status_code == 200
     assert "External MCP: Customer records" in get_response.text
     assert "Search records" in get_response.text
-    assert len(seen_seed_client_metadata) == 3
+    assert len(seen_seed_client_metadata) == 4
     assert all(
         metadata["client_id"] == "claude"
         for metadata in seen_seed_client_metadata
@@ -1503,20 +1536,33 @@ def test_the_consent_carries_the_operation_choice_into_the_code(client):
 
 
 
-def test_whole_card_reconnect_draft_seeds_the_existing_cards_full_authority(client, monkeypatch):
+@pytest.mark.parametrize(
+    ("card_grants", "card_operations"),
+    [
+        (
+            {
+                "*": ["records:read", "work:journal:view", "work:observe"],
+                "https://runtime.example.test/public/mcp/problem_board": ["work:relay"],
+            },
+            {
+                "*": ["records_export"],
+                "https://runtime.example.test/public/mcp/problem_board": ["worker_receive"],
+            },
+        ),
+        ({}, {}),
+    ],
+    ids=("held-authority", "intentionally-empty"),
+)
+def test_whole_card_reconnect_draft_seeds_exactly_what_the_existing_card_holds(
+    client,
+    monkeypatch,
+    card_grants,
+    card_operations,
+):
     # 2026-09-22: a codex reconnect requested only scope=work:relay while its
     # automation Card held journal:view, observe and relay; the operator must
     # see the Card's current authority selected, never the narrower request.
     config = oauth_delegated_config(client.app)
-    card_grants = {
-        "*": ["records:read", "work:journal:view", "work:observe"],
-        "https://runtime.example.test/public/mcp/problem_board": ["work:relay"],
-    }
-    card_operations = {
-        "*": ["records_export"],
-        "https://runtime.example.test/public/mcp/problem_board": ["worker_receive"],
-    }
-
     class ExistingCardAccess:
         async def oauth_consent_config(self, *, grantor_subject):
             return config
@@ -1572,14 +1618,9 @@ def test_whole_card_reconnect_draft_seeds_the_existing_cards_full_authority(clie
     )
 
     assert draft.status_code == 200, draft.text
-    selection = draft.json()["selection"]
-    selected = {
-        grant for grants in selection["resource_grants"].values() for grant in grants
-    }
-    assert selected == {"records:read", "work:journal:view", "work:observe", "work:relay"}
-    assert {
-        operation
-        for operations in selection["resource_operations"].values()
-        for operation in operations
-    } == {"records_export", "worker_receive"}
+    payload = draft.json()
+    assert payload["selection_source"] == "existing_card"
+    selection = payload["selection"]
+    assert selection["resource_grants"] == card_grants
+    assert selection["resource_operations"] == card_operations
     assert draft.json()["card_revision"] == 151

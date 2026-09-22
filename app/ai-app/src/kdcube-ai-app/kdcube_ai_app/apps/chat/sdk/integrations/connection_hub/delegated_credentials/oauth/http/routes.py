@@ -51,6 +51,7 @@ from connection_hub.delegated_credentials.oauth.consent import (
     CONSENT_CONTRACT_VERSION,
     named_service_selection_rows,
     platform_edge_grants_for_scopes,
+    requested_card_selection,
     render_consent_html,
     resource_selection_rows,
     tools_for_scopes,
@@ -314,6 +315,7 @@ def _consent_payload(
     seeded_account_scope: Mapping[str, Any] | None = None,
     seeded_named_service_operations: Mapping[str, Any] | None = None,
     seeded_resource_operations: Mapping[str, Iterable[str]] | None = None,
+    existing_card: bool = False,
 ) -> dict[str, Any]:
     authorize_request = {
         "client_id": req.client_id,
@@ -337,6 +339,7 @@ def _consent_payload(
         "issuer": issuer,
         "csrf_token": csrf_token,
         "trusted": bool(trusted),
+        "selection_source": "existing_card" if existing_card else "request",
         "brand": cfg.brand,
         "form_action": form_action,
         "grantor_subject": grantor_subject,
@@ -446,6 +449,7 @@ async def _render_custom_consent_if_configured(
     seeded_account_scope: Mapping[str, Any] | None = None,
     seeded_named_service_operations: Mapping[str, Any] | None = None,
     seeded_resource_operations: Mapping[str, Iterable[str]] | None = None,
+    existing_card: bool = False,
 ) -> Response | None:
     endpoint = _custom_consent_endpoint(request, cfg)
     if not endpoint:
@@ -489,6 +493,7 @@ async def _render_custom_consent_if_configured(
         seeded_account_scope=seeded_account_scope,
         seeded_named_service_operations=seeded_named_service_operations,
         seeded_resource_operations=seeded_resource_operations,
+        existing_card=existing_card,
     )
     try:
         result = await call_bundle_operation(
@@ -1643,6 +1648,26 @@ async def authorize(request: Request) -> Response:
             },
         )
 
+    compact_seed = await get_automation_access(request).oauth_consent_card_seed(
+        grantor_subject=subject,
+        client_id=req.client_id,
+        resource=req.resource,
+        client_metadata=seed_client_metadata,
+    )
+    if (
+        compact_seed.get("ok") is not True
+        and compact_seed.get("error") != "oauth_consent_identity_incomplete"
+    ):
+        return JSONResponse(
+            status_code=int(compact_seed.get("status") or 503),
+            content=compact_seed,
+        )
+    # A first classic OAuth consent may omit RFC 8707 ``resource`` without
+    # carrying the full-Card client hint. It has no Card identity to seed yet.
+    # Every storage failure and identity conflict above remains fail-closed;
+    # an existing intentionally-empty Card still returns ``access={...}``.
+    existing_card = isinstance(compact_seed.get("access"), Mapping)
+
     # Non-hub and headless hosts keep the compact renderer. Its synchronizer
     # token is single-use and bound to this user and client snapshot.
     csrf_context = {
@@ -1675,6 +1700,7 @@ async def authorize(request: Request) -> Response:
         seeded_account_scope=seeded_account_scope,
         seeded_named_service_operations=seeded_named_service_operations,
         seeded_resource_operations=seeded_resource_operations,
+        existing_card=existing_card,
     )
     if custom is not None:
         return custom
@@ -1699,6 +1725,7 @@ async def authorize(request: Request) -> Response:
             seeded_resource_operations=seeded_resource_operations,
             accounts_needed=accounts_needed,
             catalog_version=catalog_version,
+            existing_card=existing_card,
         )
     )
 
@@ -2091,35 +2118,17 @@ async def authorize_consent_draft(request: Request) -> Response:
                 },
                 headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
             )
-    existing = seed.get("access") if isinstance(seed.get("access"), Mapping) else {}
-    raw_resource_grants = {
-        str(resource): [str(grant) for grant in grants or ()]
-        for resource, grants in dict(existing.get("resource_grants") or {}).items()
-    }
-    resource_grants, _rewritten_grants = resolve_declared_resource_keys(
-        cfg,
-        raw_resource_grants,
-    )
-    # An RFC 8707 resource names one concrete entry door. Only that case may
-    # seed an entry row. A whole-Card authorization deliberately omits the
-    # resource parameter; manufacturing "*" here would silently grant every
-    # current and future surface instead of preserving exact Card selections.
-    entry_key = ""
-    requested_operations: list[str] = []
-    if req.resource:
-        entry_key, _entry_is_literal = resolve_declared_resource(
+    has_existing_card = isinstance(seed.get("access"), Mapping)
+    existing = dict(seed.get("access") or {}) if has_existing_card else {}
+    if has_existing_card:
+        raw_resource_grants = {
+            str(resource): [str(grant) for grant in grants or ()]
+            for resource, grants in dict(existing.get("resource_grants") or {}).items()
+        }
+        resource_grants, _rewritten_grants = resolve_declared_resource_keys(
             cfg,
-            req.resource,
+            raw_resource_grants,
         )
-        entry_grants = resource_grants.setdefault(entry_key, [])
-        for grant in req.scopes:
-            if grant not in entry_grants:
-                entry_grants.append(grant)
-        requested_operations = [
-            tool.name
-            for tool in cfg.tools_for_scopes(req.scopes, resource=req.resource)
-        ]
-    if existing:
         raw_resource_operations = {
             str(resource): [str(operation) for operation in operations or ()]
             for resource, operations in dict(existing.get("resource_operations") or {}).items()
@@ -2128,17 +2137,22 @@ async def authorize_consent_draft(request: Request) -> Response:
             cfg,
             raw_resource_operations,
         )
-        if entry_key:
-            entry_operations = resource_operations.setdefault(entry_key, [])
-            for operation in requested_operations:
-                if operation not in entry_operations:
-                    entry_operations.append(operation)
-    else:
-        resource_operations = (
-            {entry_key: requested_operations}
-            if entry_key
-            else {}
+        named_service_operations = _declared_named_service_operations(
+            cfg,
+            existing.get("effective_named_service_operations")
+            or existing.get("named_service_operations")
+            or {},
         )
+    else:
+        proposal = requested_card_selection(
+            req.scopes,
+            config=cfg,
+            resource=req.resource,
+            full_catalog=(seed.get("catalog_scope") or {}).get("mode") == "full",
+        )
+        resource_grants = dict(proposal["resource_grants"])
+        resource_operations = dict(proposal["resource_operations"])
+        named_service_operations = dict(proposal["named_service_operations"])
     invocation_policies = {
         resource: {operation: "always" for operation in operations}
         for resource, operations in resource_operations.items()
@@ -2220,6 +2234,7 @@ async def authorize_consent_draft(request: Request) -> Response:
             "mode": "entry",
             "resources": [req.resource],
         },
+        "selection_source": "existing_card" if has_existing_card else "request",
         "selection": {
             "label": _consent_label(
                 str(existing.get("label") or ""), derived_label, client, resource=req.resource
@@ -2228,14 +2243,7 @@ async def authorize_consent_draft(request: Request) -> Response:
             "resource_operations": resource_operations,
             "invocation_policies": invocation_policies,
             "properties": dict(existing.get("properties") or {}),
-            "named_service_operations": (
-                _declared_named_service_operations(
-                    cfg,
-                    existing.get("effective_named_service_operations")
-                    or existing.get("named_service_operations")
-                    or {},
-                )
-            ),
+            "named_service_operations": named_service_operations,
             "account_scope": existing.get("account_scope") or {},
             "catalog_row_by_resource": _declared_catalog_rows(
                 cfg,

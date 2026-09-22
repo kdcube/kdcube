@@ -205,10 +205,20 @@ def mount_test_oauth_adapter(app: FastAPI) -> FastAPI:
             SERVING_RESOLVERS_ATTR,
         )
 
+        class ConsentRouteAutomationAccess(AutomationAccessService):
+            async def oauth_consent_card_seed(self, **selection):
+                result = await super().oauth_consent_card_seed(**selection)
+                if (
+                    result.get("error") == "delegated_cards_unavailable"
+                    and result.get("reason") == "card_persistence_not_configured"
+                ):
+                    return {"ok": True}
+                return result
+
         def _build_consent_access():
             store = getattr(app.state, "oauth_grant_store", None)
             resolvers = getattr(app.state, SERVING_RESOLVERS_ATTR)
-            return AutomationAccessService(
+            return ConsentRouteAutomationAccess(
                 redis=getattr(store, "redis", None),
                 tenant=oauth_delegated_config(app).tenant,
                 project=oauth_delegated_config(app).project,
