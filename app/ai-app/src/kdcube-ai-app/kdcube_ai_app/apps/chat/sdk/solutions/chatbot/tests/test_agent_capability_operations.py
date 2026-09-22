@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from typing import Any
 
@@ -35,8 +36,11 @@ CATALOG = {
 
 
 class _Logger:
-    def log(self, *_args: Any, **_kwargs: Any) -> None:
-        return None
+    def __init__(self) -> None:
+        self.records: list[tuple[str, str]] = []
+
+    def log(self, message: Any, level: Any, **_kwargs: Any) -> None:
+        self.records.append((str(message), str(level)))
 
 
 class _Store:
@@ -112,6 +116,7 @@ def _owner(
     pg_pool: Any,
     store: Any = None,
     capability_store: _CapabilityStore | None = None,
+    logger: _Logger | None = None,
 ) -> SimpleNamespace:
     async def _catalog(_agent_id: str, *, conversation_id: str = ""):
         return dict(CATALOG)
@@ -119,7 +124,7 @@ def _owner(
     return SimpleNamespace(
         pg_pool=pg_pool,
         bundle_props={},
-        logger=_Logger(),
+        logger=logger or _Logger(),
         _agent_selection_payload=lambda data, kwargs: BaseEntrypoint._agent_selection_payload(
             data, kwargs
         ),
@@ -301,6 +306,71 @@ async def test_conversation_scope_names_the_inherited_agent_card_revision(
         "capabilities_editable": True,
         "agent_card_revision": 7,
     }
+
+
+@pytest.mark.asyncio
+async def test_capability_read_logs_caller_surface_and_resolved_scope(
+    monkeypatch,
+) -> None:
+    authority = _authority()
+
+    async def _sync(_entrypoint: Any, **_kwargs: Any):
+        return {
+            "authority": authority,
+            "projection": authority,
+            "selection": authority,
+            "states": {},
+            "card": {"access_id": "agent-main", "card_revision": 7},
+        }
+
+    monkeypatch.setattr(capability_control, "sync_agent_capability_projection", _sync)
+    logger = _Logger()
+    await BaseEntrypoint.agent_capabilities(
+        _owner(pg_pool=None, logger=logger),
+        data={
+            "data": {
+                "agent": "main",
+                "caller_surface": "capabilities_widget",
+            }
+        },
+    )
+    await BaseEntrypoint.agent_capabilities(
+        _owner(
+            pg_pool=object(),
+            store=_Store([]),
+            capability_store=_CapabilityStore([], authority),
+            logger=logger,
+        ),
+        data={
+            "data": {
+                "agent": "main",
+                "caller_surface": "chat_composer",
+                "conversation_id": "conv-a",
+            }
+        },
+    )
+
+    scope_events = [
+        json.loads(message.split("request_scope ", 1)[1])
+        for message, level in logger.records
+        if level == "INFO" and "request_scope " in message
+    ]
+    assert scope_events == [
+        {
+            "caller_surface": "capabilities_widget",
+            "capabilities_editable": False,
+            "conversation_id": None,
+            "outcome": "ok",
+            "scope_kind": "agent_base",
+        },
+        {
+            "caller_surface": "chat_composer",
+            "capabilities_editable": True,
+            "conversation_id": "conv-a",
+            "outcome": "ok",
+            "scope_kind": "conversation",
+        },
+    ]
 
 
 @pytest.mark.asyncio

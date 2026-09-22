@@ -951,6 +951,31 @@ class BaseEntrypoint:
         payload = self._agent_selection_payload(data, kwargs)
         agent_id = self._agent_selection_agent_id(payload)
         conversation_id = str(payload.get("conversation_id") or "").strip()
+        caller_surface = str(payload.get("caller_surface") or "").strip()[:80] or "unspecified"
+
+        def _log_request_scope(
+            scope: Mapping[str, Any],
+            *,
+            outcome: str,
+        ) -> None:
+            self.logger.log(
+                "[agent_capabilities] request_scope "
+                + json.dumps(
+                    {
+                        "caller_surface": caller_surface,
+                        "capabilities_editable": bool(
+                            scope.get("capabilities_editable")
+                        ),
+                        "conversation_id": conversation_id or None,
+                        "outcome": outcome,
+                        "scope_kind": str(scope.get("kind") or "unavailable"),
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                "INFO",
+            )
+
         started_at = time.monotonic()
         try:
             catalog = await self._agent_capabilities_catalog_enriched(
@@ -959,6 +984,7 @@ class BaseEntrypoint:
             )
         except Exception as exc:
             self.logger.log(f"[agent_capabilities] catalog failed: {traceback.format_exc()}", "ERROR")
+            _log_request_scope({}, outcome="catalog_failed")
             return {"ok": False, "error": str(exc), "status": 500}
         self.logger.log(
             f"[agent_capabilities] catalog+coverage in {int((time.monotonic() - started_at) * 1000)}ms agent={agent_id}",
@@ -1152,6 +1178,11 @@ class BaseEntrypoint:
             }
         except Exception:
             self.logger.log("[agent_capabilities] cache policy resolve failed (fail-open)", "WARNING")
+        resolved_scope = selection.get("scope")
+        _log_request_scope(
+            resolved_scope if isinstance(resolved_scope, Mapping) else {},
+            outcome="ok",
+        )
         return {
             "ok": True,
             "agent": agent_id,

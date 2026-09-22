@@ -5,6 +5,7 @@ import {
   chatActions,
   chatReducer,
   createLatestCapabilityRequestRunner,
+  fetchAgentCapabilities,
   initialState,
   isModelPicked,
   mergeSelectionPatches,
@@ -268,6 +269,39 @@ test('instruction profile pick: merge, optimistic state, and save reconcile', ()
   state = chatReducer(state, chatActions.capabilitiesSelectionSaved({ disabled: {}, instructions: 'lite' }))
   assert.equal(state.capabilities.instructions, 'lite')
   assert.equal(state.capabilities.dirty, false)
+})
+
+test('capability transport identifies the chat composer surface', async () => {
+  const originalFetch = globalThis.fetch
+  let submitted = null
+  globalThis.fetch = async (_url, init) => {
+    submitted = JSON.parse(String(init?.body || '{}'))
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => ({ ok: true, agent: 'main', selection: {} }),
+    }
+  }
+  const runtime = {
+    baseUrl: 'https://example.invalid',
+    tenant: 'tenant',
+    project: 'project',
+    bundleId: 'workspace@1-0',
+    agentId: 'main',
+    credentials: 'include',
+    authHeaders: async (base) => new Headers(base),
+    clientTimezone: () => ({ tz: 'UTC', utcOffsetMin: 0 }),
+  }
+
+  try {
+    await fetchAgentCapabilities(runtime, 'main', 'conv-1')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+
+  assert.equal(submitted.data.caller_surface, 'chat_composer')
+  assert.equal(submitted.data.conversation_id, 'conv-1')
 })
 
 test('selection transport sends instructions as a pick, not inside disabled', async () => {
