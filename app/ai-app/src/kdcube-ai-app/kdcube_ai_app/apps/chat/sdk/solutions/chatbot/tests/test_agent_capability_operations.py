@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from types import SimpleNamespace
 from typing import Any
@@ -200,6 +201,59 @@ async def test_capability_update_writes_only_the_conversation_projection(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_conversation_can_select_an_option_missing_from_agent_card_default(
+    monkeypatch,
+) -> None:
+    authority = _authority()
+    agent_default = capability_control.selected_capabilities_from_disabled(
+        authority=authority,
+        catalog=CATALOG,
+        disabled={"tools": {"web": True}},
+    )
+    events: list[str] = []
+    capability_store = _CapabilityStore(events, agent_default)
+
+    async def _sync(_entrypoint: Any, **_kwargs: Any):
+        return {
+            "authority": authority,
+            "projection": agent_default,
+            "selection": agent_default,
+            "states": {},
+            "card": {"access_id": "agent-main", "card_revision": 7},
+        }
+
+    monkeypatch.setattr(capability_control, "sync_agent_capability_projection", _sync)
+    result = await BaseEntrypoint.agent_selection_update(
+        _owner(
+            pg_pool=object(),
+            store=_Store(events),
+            capability_store=capability_store,
+        ),
+        data={
+            "data": {
+                "agent": "main",
+                "conversation_id": "conv-a",
+                "disabled": {"tools": {"web": False}},
+            }
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["selection"]["disabled"] == {}
+    assert result["selection"]["conversation_base_disabled"] == {
+        "tools": {"web": True}
+    }
+    assert result["selection"]["agent_base_disabled"] == {
+        "tools": {"web": True}
+    }
+    assert capability_control.disabled_from_projection(
+        CATALOG,
+        capability_store.set_calls[0]["projection"],
+    ) == {}
+    assert events == ["conversation-write"]
+
+
+@pytest.mark.asyncio
 async def test_capability_only_update_does_not_depend_on_preference_storage(monkeypatch) -> None:
     authority = _authority()
     events: list[str] = []
@@ -267,7 +321,7 @@ async def test_model_preference_is_editable_without_a_conversation(monkeypatch) 
     assert result["selection"]["scope"] == {
         "kind": "agent_base",
         "conversation_id": "",
-        "capabilities_editable": False,
+        "capabilities_editable": True,
         "agent_card_revision": 7,
     }
     assert events == ["preference-write"]
@@ -306,6 +360,39 @@ async def test_conversation_scope_names_the_inherited_agent_card_revision(
         "capabilities_editable": True,
         "agent_card_revision": 7,
     }
+
+
+@pytest.mark.asyncio
+async def test_capability_read_surfaces_saved_values_missing_from_control(
+    monkeypatch,
+) -> None:
+    authority = _authority()
+    selection = copy.deepcopy(authority)
+    selection["capabilities"]["tools"].append("web/removed")
+
+    async def _sync(_entrypoint: Any, **_kwargs: Any):
+        return {
+            "authority": authority,
+            "projection": authority,
+            "selection": selection,
+            "states": {},
+            "card": {"access_id": "agent-main", "card_revision": 7},
+        }
+
+    monkeypatch.setattr(capability_control, "sync_agent_capability_projection", _sync)
+    result = await BaseEntrypoint.agent_capabilities(
+        _owner(pg_pool=None),
+        data={"data": {"agent": "main", "caller_surface": "capabilities_widget"}},
+    )
+
+    assert result["ok"] is True
+    assert result["capabilities"]["missing_capabilities"] == [
+        {
+            "category": "tools",
+            "capability": "web/removed",
+            "reason": "missing_from_control_card",
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -358,7 +445,7 @@ async def test_capability_read_logs_caller_surface_and_resolved_scope(
     assert scope_events == [
         {
             "caller_surface": "capabilities_widget",
-            "capabilities_editable": False,
+            "capabilities_editable": True,
             "conversation_id": None,
             "expected_capabilities_editable": True,
             "expected_scope_kind": "agent_base",
@@ -483,11 +570,57 @@ async def test_mixed_update_reports_preference_commit_before_conversation_failur
 
 
 @pytest.mark.asyncio
-async def test_capability_update_requires_an_active_conversation() -> None:
+async def test_capability_update_without_conversation_replaces_agent_card_base(
+    monkeypatch,
+) -> None:
+    authority = _authority()
+    unselected = capability_control.selected_capabilities_from_disabled(
+        authority=authority,
+        catalog=CATALOG,
+        disabled={"tools": {"web": True}},
+    )
+    calls: list[dict[str, Any]] = []
+
+    async def _sync(_entrypoint: Any, **kwargs: Any):
+        calls.append(dict(kwargs))
+        projection = kwargs.get("selected_capabilities", unselected)
+        return {
+            "authority": authority,
+            "projection": projection,
+            "selection": projection,
+            "states": {},
+            "card": {
+                "access_id": "agent-main",
+                "card_revision": 8 if kwargs.get("replace_selection") else 7,
+            },
+        }
+
+    monkeypatch.setattr(capability_control, "sync_agent_capability_projection", _sync)
     result = await BaseEntrypoint.agent_selection_update(
-        _owner(pg_pool=object()),
-        data={"data": {"agent": "main", "disabled": {"tools": {"web": True}}}},
+        _owner(pg_pool=None),
+        data={
+            "data": {
+                "agent": "main",
+                "caller_surface": "capabilities_widget",
+                "disabled": {"tools": {"web": False}},
+            }
+        },
     )
 
-    assert result["ok"] is False
-    assert result["error"] == "conversation_id_required"
+    assert result["ok"] is True
+    assert result["selection"]["disabled"] == {}
+    assert result["selection"]["agent_base_disabled"] == {}
+    assert result["selection"]["capability_source"] == "connection_hub_card"
+    assert result["selection"]["scope"] == {
+        "kind": "agent_base",
+        "conversation_id": "",
+        "capabilities_editable": True,
+        "agent_card_revision": 8,
+    }
+    assert len(calls) == 2
+    assert "replace_selection" not in calls[0]
+    assert calls[1]["replace_selection"] is True
+    assert capability_control.disabled_from_projection(
+        CATALOG,
+        calls[1]["selected_capabilities"],
+    ) == {}

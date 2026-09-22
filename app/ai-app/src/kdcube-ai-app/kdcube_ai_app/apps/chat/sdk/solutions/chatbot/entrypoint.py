@@ -1030,6 +1030,7 @@ class BaseEntrypoint:
                 conversation_capability_projections,
                 deny_all_capabilities,
                 disabled_from_projection,
+                missing_control_capabilities,
                 sync_agent_capability_projection,
             )
 
@@ -1043,6 +1044,9 @@ class BaseEntrypoint:
                 catalog,
                 capability_control.get("states"),
             )
+            catalog["missing_capabilities"] = missing_control_capabilities(
+                capability_control
+            )
             card_projection = capability_control["projection"]
             card_revision = agent_card_revision(capability_control)
             card_disabled = disabled_from_projection(catalog, card_projection)
@@ -1051,7 +1055,7 @@ class BaseEntrypoint:
             capability_scope = {
                 "kind": "agent_base",
                 "conversation_id": "",
-                "capabilities_editable": False,
+                "capabilities_editable": True,
                 "agent_card_revision": card_revision,
             }
             if conversation_id:
@@ -1112,6 +1116,7 @@ class BaseEntrypoint:
                     )
             if selection.get("capability_source") != "conversation_selection_unavailable":
                 live_base, effective_projection = conversation_capability_projections(
+                    capability_control["authority"],
                     card_projection,
                     conversation_selection,
                 )
@@ -1236,10 +1241,11 @@ class BaseEntrypoint:
         Cold-cache choices ride the same body too: ``"apply": "now" |
         "next_conversation" | "when_cold"`` (deferred choices park model,
         instruction, and presentation changes as a pending delta). Capability
-        toggles always update the named conversation for its next message;
-        they never revise the Agent Card or another conversation.
-        ``conversation_id`` selects the active conversation and anchors the
-        preference next-conversation trigger, and
+        toggles update the named conversation when ``conversation_id`` is
+        present. Without it they replace this user's Agent Card selection for
+        the app and agent, within the current Control Card ceiling.
+        ``conversation_id`` also anchors the preference next-conversation
+        trigger, and
         ``"cache_policy": {"model_switch": …, "capability_toggle": …}``
         persists the user's standing policy (clamped to the admin-allowed set).
         """
@@ -1273,14 +1279,10 @@ class BaseEntrypoint:
             or has_presentation
             or isinstance(raw_cache_policy, Mapping)
         )
-        if updates_capabilities and not conversation_id:
-            return {
-                "ok": False,
-                "error": "conversation_id_required",
-                "message": "Capability changes require an active conversation; edit the Agent Card in Connection Hub to change the base.",
-                "status": 400,
-            }
-        if (updates_preferences or updates_capabilities) and self.pg_pool is None:
+        if (
+            updates_preferences
+            or (updates_capabilities and bool(conversation_id))
+        ) and self.pg_pool is None:
             return {"ok": False, "error": "storage_unavailable"}
         selection: Dict[str, Any] = {"schema_version": 1, "disabled": {}}
         capability_control: Dict[str, Any] = {}
@@ -1360,6 +1362,7 @@ class BaseEntrypoint:
                     materialize=True,
                 )
             live_base, effective_projection = conversation_capability_projections(
+                capability_control["authority"],
                 card_projection,
                 conversation_selection,
             )
@@ -1386,28 +1389,45 @@ class BaseEntrypoint:
                 )
                 preference_update_applied = True
             if updates_capabilities:
-                assert capability_store is not None
                 target_disabled = merge_selection_patch(
                     {} if bool(payload.get("replace")) else current_disabled,
                     patch,
                 )
                 target_disabled = clamp_selection(target_disabled, catalog)
                 selected_capabilities = selected_capabilities_from_disabled(
-                    authority=live_base,
+                    authority=capability_control["authority"],
                     catalog=catalog,
                     disabled=target_disabled,
                 )
-                conversation_selection = await capability_store.set_projection(
-                    user_id=identity["user_id"],
-                    bundle_id=identity["bundle_id"],
-                    agent_id=agent_id,
-                    conversation_id=conversation_id,
-                    base_projection=card_projection,
-                    base_card_revision=card_revision,
-                    projection=selected_capabilities,
-                )
+                if conversation_id:
+                    assert capability_store is not None
+                    conversation_selection = await capability_store.set_projection(
+                        user_id=identity["user_id"],
+                        bundle_id=identity["bundle_id"],
+                        agent_id=agent_id,
+                        conversation_id=conversation_id,
+                        base_projection=card_projection,
+                        base_card_revision=card_revision,
+                        projection=selected_capabilities,
+                    )
+                else:
+                    capability_control = await sync_agent_capability_projection(
+                        self,
+                        catalog=catalog,
+                        agent_id=agent_id,
+                        selected_capabilities=selected_capabilities,
+                        replace_selection=True,
+                    )
+                    card_projection = capability_control["projection"]
+                    card_revision = agent_card_revision(capability_control)
+                    card_disabled = disabled_from_projection(
+                        catalog,
+                        card_projection,
+                    )
+                    conversation_selection = None
                 capability_update_applied = True
                 live_base, effective_projection = conversation_capability_projections(
+                    capability_control["authority"],
                     card_projection,
                     conversation_selection,
                 )
@@ -1426,7 +1446,7 @@ class BaseEntrypoint:
                 "scope": {
                     "kind": "conversation" if conversation_id else "agent_base",
                     "conversation_id": conversation_id,
-                    "capabilities_editable": bool(conversation_id),
+                    "capabilities_editable": True,
                     "agent_card_revision": (
                         max(
                             0,

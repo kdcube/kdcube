@@ -52,11 +52,10 @@ test('one body renders into every shell (shared interaction state)', () => {
 })
 
 test('expand and collapse affordances are present', () => {
-  // Expand asks the HOST first (`capabilities.open` ack-wait), preserving the
-  // active conversation; the in-chat modal is the honest fallback.
-  assert.match(SOURCE, /CanvasExpandButton\n?[\s\S]{0,400}openCapabilitiesOnHost/)
-  assert.match(SOURCE, /conversation_id:\s*vm\.state\.conversationId/)
-  assert.match(SOURCE, /if \(acked\) setOpen\(false\)\n\s*else setView\('modal'\)/)
+  // Expand stays in the composer surface, so it keeps the active conversation.
+  // The served full-page surface has a different contract: Agent Card defaults.
+  assert.match(SOURCE, /CanvasExpandButton\n?[\s\S]{0,200}onClick=\{\(\) => setView\('modal'\)\}/)
+  assert.doesNotMatch(SOURCE, /openCapabilitiesOnHost/)
   assert.match(SOURCE, /aria-label="Collapse to menu"/)
   assert.match(SOURCE, /aria-label="Close \(Esc\)"/)
 })

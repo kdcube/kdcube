@@ -527,6 +527,7 @@ export async function submitAgentSelectionUpdate(
     body: JSON.stringify({
       data: {
         agent: agentId,
+        caller_surface: 'chat_composer',
         ...(hasCapabilityPatch ? { disabled } : {}),
         ...(model !== undefined ? { model } : {}),
         ...(instructions !== undefined ? { instructions } : {}),

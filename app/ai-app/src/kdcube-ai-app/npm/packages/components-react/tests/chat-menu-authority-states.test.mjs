@@ -17,16 +17,14 @@ const STYLES = [
   ),
 ]
 
-test('the shared capability picker locks rows excluded by any governing layer', () => {
+test('the shared capability picker locks only rows outside the Control Card', () => {
   assert.match(SOURCE, /const notAllowed = authorityState === 'not_allowed'/)
-  assert.match(SOURCE, /const excluded = notAllowed \|\| outsideAgentBase \|\| outsideConversationBase/)
-  assert.match(SOURCE, /const renderedChecked = excluded \? 'off' : checked/)
-  assert.match(SOURCE, /const locked = notAllowed \|\| outsideAgentBase \|\| outsideConversationBase \|\| scopeLocked/)
+  assert.match(SOURCE, /const renderedChecked = notAllowed \? 'off' : checked/)
+  assert.match(SOURCE, /const locked = notAllowed \|\| scopeLocked/)
+  assert.doesNotMatch(SOURCE, /outsideAgentBase|outsideConversationBase/)
   assert.match(SOURCE, /aria-disabled=\{locked \|\| undefined\}/)
   assert.match(SOURCE, /disabled=\{locked\}/)
   assert.match(SOURCE, /\? 'Not permitted'/)
-  assert.match(SOURCE, /\? 'Not in Agent Card'/)
-  assert.match(SOURCE, /\? 'Not in conversation base'/)
   assert.match(SOURCE, /data-authority-state=\{authorityState \|\| undefined\}/)
   for (const stylesheet of STYLES) {
     assert.match(stylesheet, /\.k-menu-row-not-allowed \.k-menu-row-main:disabled/)

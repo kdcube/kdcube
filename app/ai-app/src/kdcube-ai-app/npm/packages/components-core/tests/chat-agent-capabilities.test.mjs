@@ -204,6 +204,25 @@ test('capabilities slice: load, optimistic patch, save reconcile', () => {
   assert.deepEqual(state.capabilities, initialState.capabilities)
 })
 
+test('starting a scoped load clears the previously resolved scope', () => {
+  const ready = chatReducer(initialState, chatActions.capabilitiesLoaded({
+    agent: 'main',
+    inventory: { agent: 'main', tools: [], mcp: [], named_services: [], skills: [] },
+    disabled: {},
+    scope: {
+      kind: 'agent_base',
+      conversation_id: '',
+      capabilities_editable: true,
+    },
+  }))
+
+  const loading = chatReducer(ready, chatActions.capabilitiesLoading())
+
+  assert.equal(loading.capabilities.status, 'loading')
+  assert.equal(loading.capabilities.scope, null)
+  assert.equal(loading.capabilities.inventory, null)
+})
+
 test('capabilities load error is quiet state, not a throw', () => {
   const state = chatReducer(initialState, chatActions.capabilitiesLoadError('boom'))
   assert.equal(state.capabilities.status, 'error')
@@ -342,6 +361,8 @@ test('selection transport sends instructions as a pick, not inside disabled', as
 
   assert.equal(submitted.data.instructions, 'lite')
   assert.deepEqual(submitted.data.disabled, { tools: { web_tools: true } })
+  assert.equal(submitted.data.caller_surface, 'chat_composer')
+  assert.equal(submitted.data.conversation_id, 'conv-1')
   assert.equal(Object.hasOwn(submitted.data.disabled, 'instructions'), false)
 })
 

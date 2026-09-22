@@ -3123,6 +3123,7 @@ class BaseWorkflow():
                         materialize=True,
                     )
                 _live_base, effective_projection = conversation_capability_projections(
+                    capability_control["authority"],
                     card_projection,
                     conversation_selection,
                 )
