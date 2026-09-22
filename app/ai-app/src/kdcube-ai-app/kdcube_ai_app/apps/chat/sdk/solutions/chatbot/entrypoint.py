@@ -952,6 +952,11 @@ class BaseEntrypoint:
         agent_id = self._agent_selection_agent_id(payload)
         conversation_id = str(payload.get("conversation_id") or "").strip()
         caller_surface = str(payload.get("caller_surface") or "").strip()[:80] or "unspecified"
+        expected_scope_by_surface = {
+            "capabilities_widget": "agent_base",
+            "chat_composer": "conversation",
+        }
+        expected_scope_kind = expected_scope_by_surface.get(caller_surface)
 
         def _log_request_scope(
             scope: Mapping[str, Any],
@@ -967,6 +972,10 @@ class BaseEntrypoint:
                             scope.get("capabilities_editable")
                         ),
                         "conversation_id": conversation_id or None,
+                        "expected_capabilities_editable": (
+                            True if expected_scope_kind is not None else None
+                        ),
+                        "expected_scope_kind": expected_scope_kind,
                         "outcome": outcome,
                         "scope_kind": str(scope.get("kind") or "unavailable"),
                     },
