@@ -373,6 +373,8 @@ export interface AgentCapabilitiesState {
   status: AgentCapabilitiesLoadStatus
   error: string | null
   agent: string | null
+  /** Stable resident Agent Card id used to open its Connection Hub editor. */
+  agentCardId: string | null
   inventory: AgentCapabilitiesInventory | null
   disabled: AgentSelectionDisabled
   /** Effective inherited snapshot for this conversation, after current Card
@@ -402,6 +404,7 @@ export const initialCapabilitiesState: AgentCapabilitiesState = {
   status: 'idle',
   error: null,
   agent: null,
+  agentCardId: null,
   inventory: null,
   disabled: {},
   baseDisabled: {},

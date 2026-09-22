@@ -909,11 +909,11 @@ async def sync_agent_capability_projection(
         application=application,
         agent_id=agent_id,
     )
-    if selected_capabilities is None and initial_disabled is not None:
+    if selected_capabilities is None:
         selected_capabilities = selected_capabilities_from_disabled(
             authority=payload["capability_authority"],
             catalog=catalog,
-            disabled=initial_disabled,
+            disabled=initial_disabled or {},
         )
     if selected_capabilities is not None:
         payload["selected_capabilities"] = copy.deepcopy(dict(selected_capabilities))

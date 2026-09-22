@@ -462,3 +462,44 @@ async def test_sync_uses_the_local_trusted_connection_hub_operation() -> None:
     assert calls[0].request["namespace"] == "connections"
     assert calls[0].request["operation"] == "agent_capability.sync"
     assert result["projection"]["capabilities"]["skills"] == []
+
+
+@pytest.mark.asyncio
+async def test_sync_without_a_saved_preference_uses_the_descriptor_default() -> None:
+    calls = []
+    owner = SimpleNamespace(
+        bundle_props=_props(),
+        _agent_selection_identity=lambda: {
+            "tenant": TENANT,
+            "project": PROJECT,
+            "user_id": "user-a",
+            "bundle_id": APPLICATION,
+        },
+    )
+
+    async def _call(call):
+        calls.append(call)
+        payload = call.request["payload"]
+        selection = payload["selected_capabilities"]
+        return BundleNamedServiceResult(
+            value=NamedServiceResponse.ok_response(
+                object={
+                    "ok": True,
+                    "authority": payload["capability_authority"],
+                    "selection": selection,
+                    "projection": selection,
+                    "states": {},
+                }
+            )
+        )
+
+    with bind_bundle_named_service_caller(_call):
+        result = await sync_agent_capability_projection(
+            owner,
+            catalog=_catalog(),
+            agent_id=AGENT,
+        )
+
+    payload = calls[0].request["payload"]
+    assert payload["selected_capabilities"] == payload["capability_authority"]
+    assert result["projection"] == payload["capability_authority"]

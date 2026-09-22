@@ -113,6 +113,7 @@ test('capabilities slice: load, optimistic patch, save reconcile', () => {
     status: 'idle',
     error: null,
     agent: null,
+    agentCardId: null,
     inventory: null,
     disabled: {},
     baseDisabled: {},
@@ -134,6 +135,7 @@ test('capabilities slice: load, optimistic patch, save reconcile', () => {
   const inventory = { agent: 'main', tools: [webGroup], mcp: [], named_services: [], skills: [] }
   state = chatReducer(state, chatActions.capabilitiesLoaded({
     agent: 'main',
+    agentCardId: 'agent-card-main',
     inventory,
     disabled: { mcp: { knowledge: true } },
     baseDisabled: { tools: { web_tools: true } },
@@ -142,6 +144,7 @@ test('capabilities slice: load, optimistic patch, save reconcile', () => {
   }))
   assert.equal(state.capabilities.status, 'ready')
   assert.equal(state.capabilities.agent, 'main')
+  assert.equal(state.capabilities.agentCardId, 'agent-card-main')
   assert.deepEqual(state.capabilities.disabled, { mcp: { knowledge: true } })
   assert.deepEqual(state.capabilities.baseDisabled, { tools: { web_tools: true } })
   assert.equal(state.capabilities.scope.kind, 'conversation')

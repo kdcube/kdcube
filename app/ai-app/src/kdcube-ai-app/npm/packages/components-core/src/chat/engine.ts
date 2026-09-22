@@ -746,6 +746,7 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
       if (getChat().conversationId !== conversationId) return
       dispatch(chatActions.capabilitiesLoaded({
         agent: response.agent || runtime.agentId,
+        agentCardId: response.capability_control?.card?.access_id || null,
         inventory: response.capabilities,
         disabled: response.selection?.disabled ?? {},
         baseDisabled: response.selection?.conversation_base_disabled ?? response.selection?.disabled ?? {},

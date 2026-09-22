@@ -1167,6 +1167,7 @@ function HelperAgentsSection({ inventory, disabled, baseDisabled, editable, togg
  *  when the host registered an `open-connections` handler. */
 function ConnectorsSection({ vm, close }: ComposerMenuSectionContext) {
   if (!vm.connections.available()) return null
+  const agentCardId = vm.capabilities.agentCardId
   return (
     <div>
       <SectionTitle>Connections</SectionTitle>
@@ -1176,7 +1177,16 @@ function ConnectorsSection({ vm, close }: ComposerMenuSectionContext) {
           role="menuitem"
           className="k-menu-row-main"
           onClick={() => {
-            vm.connections.open('composer-menu')
+            vm.connections.open(
+              'composer-menu',
+              agentCardId
+                ? {
+                    tab: 'delegated_by_kdcube',
+                    params: { access_id: agentCardId },
+                    url: '',
+                  }
+                : undefined,
+            )
             close()
           }}
         >
@@ -1185,9 +1195,13 @@ function ConnectorsSection({ vm, close }: ComposerMenuSectionContext) {
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ marginRight: 6, verticalAlign: '-2px', display: 'inline' }}>
                 <path d="M12 22v-3M9 8V2M15 8V2M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8z" />
               </svg>
-              Manage connections…
+              {agentCardId ? 'Manage Agent Card…' : 'Manage connections…'}
             </span>
-            <span className="k-menu-row-sub">Connected accounts for tools like Gmail and Slack</span>
+            <span className="k-menu-row-sub">
+              {agentCardId
+                ? 'Starting capabilities for this agent'
+                : 'Connected accounts for tools like Gmail and Slack'}
+            </span>
           </span>
           <span className="k-menu-row-state">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

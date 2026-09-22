@@ -388,6 +388,7 @@ const slice = createSlice({
       state,
       action: PayloadAction<{
         agent: string
+        agentCardId?: string | null
         inventory: AgentCapabilitiesInventory
         disabled: AgentSelectionDisabled
         baseDisabled?: AgentSelectionDisabled
@@ -403,6 +404,7 @@ const slice = createSlice({
       state.capabilities.status = 'ready'
       state.capabilities.error = null
       state.capabilities.agent = action.payload.agent
+      state.capabilities.agentCardId = action.payload.agentCardId ?? null
       state.capabilities.inventory = action.payload.inventory
       state.capabilities.disabled = action.payload.disabled
       state.capabilities.baseDisabled = action.payload.baseDisabled ?? action.payload.disabled

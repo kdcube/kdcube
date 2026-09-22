@@ -30,6 +30,9 @@ import type { ChatViewModel } from '../../viewModel.ts'
 
 export interface StandaloneCapabilitiesResponse {
   agent?: string
+  capability_control?: {
+    card?: { access_id?: string } | null
+  } | null
   capabilities?: AgentCapabilitiesInventory | null
   selection?: {
     disabled?: AgentSelectionDisabled
@@ -74,6 +77,7 @@ export function useStandaloneCapabilitiesVm(
   const [status, setStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const [error, setError] = useState<string | null>(null)
   const [agent, setAgent] = useState<string>(runtime.agentId)
+  const [agentCardId, setAgentCardId] = useState<string | null>(null)
   const [inventory, setInventory] = useState<AgentCapabilitiesInventory | null>(null)
   const [disabled, setDisabled] = useState<AgentSelectionDisabled>({})
   const [baseDisabled, setBaseDisabled] = useState<AgentSelectionDisabled>({})
@@ -96,6 +100,9 @@ export function useStandaloneCapabilitiesVm(
     response: StandaloneCapabilitiesResponse,
     queuedPatch: AgentSelectionPatch | null = null,
   ) => {
+    if ('capability_control' in response) {
+      setAgentCardId(response.capability_control?.card?.access_id || null)
+    }
     const responseDisabled = response.selection?.disabled ?? {}
     setBaseDisabled(response.selection?.conversation_base_disabled ?? responseDisabled)
     setAgentBaseDisabled(response.selection?.agent_base_disabled ?? responseDisabled)
@@ -212,6 +219,7 @@ export function useStandaloneCapabilitiesVm(
         status,
         error,
         agent,
+        agentCardId,
         inventory,
         disabled,
         baseDisabled,
@@ -242,5 +250,5 @@ export function useStandaloneCapabilitiesVm(
     }
     return vm as unknown as ChatViewModel
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, error, agent, inventory, disabled, baseDisabled, agentBaseDisabled, scope, model, instructions, presentation, cachePolicy, pending, dirty, saving, saveError, options.spotlight])
+  }, [status, error, agent, agentCardId, inventory, disabled, baseDisabled, agentBaseDisabled, scope, model, instructions, presentation, cachePolicy, pending, dirty, saving, saveError, options.spotlight])
 }

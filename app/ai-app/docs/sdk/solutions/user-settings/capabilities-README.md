@@ -4,7 +4,7 @@ title: "Agent Capability Control And Selection"
 summary: "How descriptor authority, a user's Agent Card base, and a conversation-local positive selection combine to govern runtime exposure and the capability picker."
 status: current
 tags: ["sdk", "solutions", "capabilities", "agent-selection", "control-card", "connection-hub", "picker", "widget"]
-updated_at: 2026-09-21
+updated_at: 2026-09-22
 keywords:
   [
     "agent_capabilities",
@@ -136,9 +136,10 @@ Within `allowed_selected`, the conversation adds two visible facts:
 - a row inside that base is tagged **Inherited** while it matches the starting
   state, or **Changed here** after this conversation turns it off or back on.
 
-The unscoped served picker shows the Agent Card base read-only and directs the
-user to Connection Hub. A picker opened from a chat carries that conversation
-id and changes only that conversation.
+The unscoped served picker shows the Agent Card base read-only. Its Connection
+Hub action carries the stable resident Card id and opens that exact Card's
+editor. A picker opened from a chat carries that conversation id and changes
+only that conversation.
 
 Selecting one operation selects only that operation. Sharing a claim with a
 sibling operation does not select the sibling visually or operationally. A
@@ -164,13 +165,21 @@ and exact app/agent resource. The Agent Card id is deterministic for
 the grantor and `kdcube-agent:<app>:<agent>` caller profile. Neither id includes
 the selected capability set.
 
-On first bootstrap, KDCube creates or resolves both Cards, links the Control
-Card to the Agent Card, and starts the Agent Card selection empty. A
-pre-Control-Card installation is the one compatibility exception: if a legacy
-PostgreSQL deny map exists, it is converted once into the equivalent positive
-selection so an existing user's choices survive migration. PostgreSQL does
-not remain Agent Card authority after that bootstrap. PostgreSQL does own each
-conversation's immutable starting base and mutable conversation selection.
+On first bootstrap, KDCube creates or resolves both Cards and links the Control
+Card to the Agent Card. When the user has no earlier choice, KDCube converts
+the descriptor defaults into the initial positive Agent Card selection. An
+existing saved deny map is applied to those defaults before that first Card is
+created. Once the Card exists, its positive selection is the durable user
+choice; later synchronization does not replace it from PostgreSQL or from a
+new descriptor default. PostgreSQL owns each conversation's immutable starting
+base and mutable conversation selection.
+
+Connection Hub gives these two Cards different owner surfaces. The resident
+Agent Card editor changes only the positive base inside the linked descriptor
+ceiling and writes a revision-checked Card update. The linked descriptor
+Control Card displays its authority and presentation metadata as a
+descriptor-managed ceiling; changing the descriptor, then synchronizing,
+revises it. It is not shown as an empty generic resource Card.
 
 Descriptor, Agent Card, and conversation changes remain independent:
 

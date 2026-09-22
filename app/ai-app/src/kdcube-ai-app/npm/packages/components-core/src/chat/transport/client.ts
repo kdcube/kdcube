@@ -425,6 +425,9 @@ function unwrapOperationBody(payload: unknown, alias: string): unknown {
 export interface AgentCapabilitiesResponse {
   ok: boolean
   agent: string
+  capability_control?: {
+    card?: { access_id?: string } | null
+  } | null
   capabilities: AgentCapabilitiesInventory
   selection: {
     schema_version?: number

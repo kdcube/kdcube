@@ -201,6 +201,17 @@ test('the standalone picker fires consent-LESS connection opens (dead-row regres
   assert.doesNotMatch(open, /if \(consent\) runtime\.openConnections/)
 })
 
+test('the capabilities menu opens the exact resident Agent Card when one is known', () => {
+  const source = readFileSync(
+    new URL('../src/chat/ui/features/composer/ComposerMenu.tsx', import.meta.url),
+    'utf8',
+  )
+
+  assert.match(source, /const agentCardId = vm\.capabilities\.agentCardId/)
+  assert.match(source, /tab: 'delegated_by_kdcube'/)
+  assert.match(source, /params: \{ access_id: agentCardId \}/)
+})
+
 test('the served widget opens the hub host-first with the deep-link fallback', () => {
   const source = readFileSync(
     new URL('../../../../kdcube_ai_app/apps/chat/sdk/solutions/chat/ui/widget-capabilities/src/App.tsx', import.meta.url),
