@@ -14,7 +14,9 @@
 import { useMemo, useRef, useState } from 'react'
 import {
   applySelectionPatch,
+  createLatestCapabilityRequestRunner,
   mergeSelectionPatches,
+  shouldStartCapabilityRequest,
 } from '@kdcube/components-core/chat'
 import type {
   AgentCachePolicy,
@@ -95,6 +97,9 @@ export function useStandaloneCapabilitiesVm(
   const statusRef = useRef(status)
   statusRef.current = status
   const pendingPatchRef = useRef<AgentSelectionPatch | null>(null)
+  const requestRunnerRef = useRef<ReturnType<typeof createLatestCapabilityRequestRunner> | null>(null)
+  const requestRunner = requestRunnerRef.current ?? createLatestCapabilityRequestRunner()
+  requestRunnerRef.current = requestRunner
 
   const applyResponseSelection = (
     response: StandaloneCapabilitiesResponse,
@@ -127,21 +132,28 @@ export function useStandaloneCapabilitiesVm(
   }
 
   const load = async (opts?: { force?: boolean }) => {
-    if (statusRef.current === 'loading') return
-    if (statusRef.current === 'ready' && !opts?.force) return
+    if (!shouldStartCapabilityRequest(statusRef.current, opts?.force)) return
+    statusRef.current = 'loading'
     setStatus('loading')
     setError(null)
-    try {
-      const response = await runtime.fetchCapabilities()
-      setAgent(response.agent || runtime.agentId)
-      setInventory(response.capabilities ?? null)
-      setCachePolicy(response.cache_policy ?? null)
-      applyResponseSelection(response)
-      setStatus('ready')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-      setStatus('error')
-    }
+    await requestRunner.run(
+      () => runtime.fetchCapabilities(),
+      {
+        apply: (response) => {
+          setAgent(response.agent || runtime.agentId)
+          setInventory(response.capabilities ?? null)
+          setCachePolicy(response.cache_policy ?? null)
+          applyResponseSelection(response)
+          statusRef.current = 'ready'
+          setStatus('ready')
+        },
+        reject: (err) => {
+          setError(err instanceof Error ? err.message : String(err))
+          statusRef.current = 'error'
+          setStatus('error')
+        },
+      },
+    )
   }
 
   const flush = async () => {
