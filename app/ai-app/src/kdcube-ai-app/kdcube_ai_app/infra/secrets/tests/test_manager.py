@@ -119,6 +119,8 @@ class _FakeAwsSecretsClient:
     def __init__(self, initial: dict[str, str] | None = None):
         self.data = dict(initial or {})
         self.tags: dict[str, list[dict[str, str]]] = {}
+        self.version_tokens: dict[str, str] = {}
+        self.create_calls: list[dict[str, object]] = []
         self.delete_calls: list[dict[str, object]] = []
         self.list_calls: list[dict[str, object]] = []
         self.page_size: int | None = None
@@ -134,10 +136,36 @@ class _FakeAwsSecretsClient:
         self.data[SecretId] = SecretString
         return {"ARN": SecretId}
 
-    async def create_secret(self, *, Name: str, SecretString: str, Tags=None):
+    async def create_secret(
+        self,
+        *,
+        Name: str,
+        SecretString: str,
+        Tags=None,
+        ClientRequestToken: str | None = None,
+    ):
+        self.create_calls.append(
+            {
+                "Name": Name,
+                "SecretString": SecretString,
+                "Tags": list(Tags or []),
+                "ClientRequestToken": ClientRequestToken,
+            }
+        )
+        if Name in self.data:
+            if (
+                ClientRequestToken
+                and self.version_tokens.get(Name) == ClientRequestToken
+            ):
+                if self.data[Name] == SecretString:
+                    return {"ARN": Name, "VersionId": ClientRequestToken}
+                raise _FakeAwsClientError("InvalidRequestException")
+            raise _FakeAwsClientError("ResourceExistsException")
         self.data[Name] = SecretString
         self.tags[Name] = list(Tags or [])
-        return {"ARN": Name}
+        if ClientRequestToken:
+            self.version_tokens[Name] = ClientRequestToken
+        return {"ARN": Name, "VersionId": ClientRequestToken}
 
     async def delete_secret(self, *, SecretId: str, ForceDeleteWithoutRecovery: bool):
         self.delete_calls.append(
@@ -176,6 +204,19 @@ class _FakeAwsSecretsClient:
         }
         if end < len(names):
             response["NextToken"] = str(end)
+        return response
+
+
+class _LostAwsCreateResponseClient(_FakeAwsSecretsClient):
+    def __init__(self):
+        super().__init__()
+        self._lose_next_create_response = True
+
+    async def create_secret(self, **request):
+        response = await super().create_secret(**request)
+        if self._lose_next_create_response:
+            self._lose_next_create_response = False
+            raise RuntimeError("create response was lost")
         return response
 
 
@@ -251,6 +292,104 @@ async def test_secrets_service_accepts_host_vault_generation(monkeypatch):
             },
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_secrets_service_create_is_atomic_and_reports_collision(monkeypatch):
+    client = _QueuedSecretsHttpClient(
+        [
+            _FakeHttpResponse(200, {"status": "ok", "generation": 1}),
+            _FakeHttpResponse(409, {"detail": "generation conflict"}),
+        ]
+    )
+    monkeypatch.setattr(
+        secrets_manager_module,
+        "_get_httpx",
+        lambda: _FakeHttpxModule(client),
+    )
+    store = KDCubeEphemeralSecretStore(
+        _secrets_service_manager(), namespace="resident-secrets"
+    )
+    secret_ref = "a" * 32
+
+    assert await store.create(
+        secret_ref=secret_ref,
+        value="original",
+        expires_at=20,
+    )
+    assert not await store.create(
+        secret_ref=secret_ref,
+        value="replacement",
+        expires_at=30,
+    )
+    assert [request[2]["json"] for request in client.requests] == [
+        {
+            "key": f"platform.runtime.resident-secrets.{secret_ref}",
+            "value": "original",
+            "expected_generation": 0,
+        },
+        {
+            "key": f"platform.runtime.resident-secrets.{secret_ref}",
+            "value": "replacement",
+            "expected_generation": 0,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_secrets_service_create_transport_failure_is_outcome_unknown_and_safe(
+    monkeypatch,
+):
+    canary = "must-not-escape-create"
+    client = _FakeSecretsHttpClient(error=RuntimeError(canary))
+    monkeypatch.setattr(
+        secrets_manager_module,
+        "_get_httpx",
+        lambda: _FakeHttpxModule(client),
+    )
+
+    with pytest.raises(SecretsManagerWriteError) as captured:
+        await _secrets_service_manager().create_ephemeral_secret(
+            namespace="resident-secrets",
+            secret_ref="b" * 32,
+            value=canary,
+            expires_at=20,
+        )
+
+    assert str(captured.value) == "secrets-service create request outcome is unknown"
+    assert canary not in str(captured.value)
+    assert "platform.runtime" not in str(captured.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"status": "ok"},
+        {"status": "ok", "generation": 2},
+    ],
+)
+async def test_secrets_service_create_requires_generation_one(
+    monkeypatch,
+    payload,
+):
+    client = _FakeSecretsHttpClient(response=_FakeHttpResponse(200, payload))
+    monkeypatch.setattr(
+        secrets_manager_module,
+        "_get_httpx",
+        lambda: _FakeHttpxModule(client),
+    )
+
+    with pytest.raises(
+        SecretsManagerWriteError,
+        match="does not prove ownership; outcome is unknown",
+    ):
+        await _secrets_service_manager().create_ephemeral_secret(
+            namespace="resident-secrets",
+            secret_ref="c" * 32,
+            value="secret",
+            expires_at=20,
+        )
 
 
 @pytest.mark.asyncio
@@ -1111,6 +1250,26 @@ async def test_ephemeral_store_uses_host_vault_inventory_and_purges_expired_reco
 
 
 @pytest.mark.asyncio
+async def test_in_memory_ephemeral_create_preserves_existing_record():
+    store = KDCubeEphemeralSecretStore(
+        InMemorySecretsManager(), namespace="resident-secrets"
+    )
+    secret_ref = "a" * 32
+
+    assert await store.create(
+        secret_ref=secret_ref,
+        value="original",
+        expires_at=20,
+    )
+    assert not await store.create(
+        secret_ref=secret_ref,
+        value="replacement",
+        expires_at=30,
+    )
+    assert await store.get(secret_ref=secret_ref) == "original"
+
+
+@pytest.mark.asyncio
 async def test_ephemeral_purge_uses_the_host_vault_broker_inventory(monkeypatch):
     expired_ref = "a" * 32
     live_ref = "b" * 32
@@ -1215,6 +1374,96 @@ async def test_aws_ephemeral_store_uses_dedicated_prefix_and_force_deletes():
 
 
 @pytest.mark.asyncio
+async def test_aws_ephemeral_create_preserves_existing_record():
+    manager = AwsSecretsManagerSecretsManager(
+        SecretsManagerConfig(
+            provider="aws-sm",
+            component="ingress",
+            aws_sm_prefix="kdcube/demo/demo-march",
+        )
+    )
+    client = _FakeAwsSecretsClient()
+    manager._session = _FakeAwsSession(client)
+    store = KDCubeEphemeralSecretStore(manager, namespace="resident-secrets")
+    secret_ref = "e" * 32
+    secret_id = f"kdcube/demo/demo-march/runtime/resident-secrets/{secret_ref}"
+
+    await store.set(
+        secret_ref=secret_ref,
+        value="original",
+        expires_at=20,
+    )
+    assert not await store.create(
+        secret_ref=secret_ref,
+        value="replacement",
+        expires_at=30,
+    )
+    assert client.data[secret_id] == "original"
+    assert client.tags[secret_id] == [
+        {"Key": "kdcube:expires-at", "Value": "20"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_aws_ephemeral_create_replays_after_a_lost_success_response():
+    manager = AwsSecretsManagerSecretsManager(
+        SecretsManagerConfig(
+            provider="aws-sm",
+            component="ingress",
+            aws_sm_prefix="kdcube/demo/demo-march",
+        )
+    )
+    client = _LostAwsCreateResponseClient()
+    manager._session = _FakeAwsSession(client)
+    store = KDCubeEphemeralSecretStore(manager, namespace="resident-secrets")
+    secret_ref = "f" * 32
+    secret_id = f"kdcube/demo/demo-march/runtime/resident-secrets/{secret_ref}"
+
+    with pytest.raises(
+        SecretsManagerWriteError,
+        match="ephemeral create outcome is unknown",
+    ):
+        await store.create(
+            secret_ref=secret_ref,
+            value="resident bearer",
+            expires_at=20,
+        )
+
+    assert await store.create(
+        secret_ref=secret_ref,
+        value="resident bearer",
+        expires_at=20,
+    )
+    assert client.data[secret_id] == "resident bearer"
+    assert [call["ClientRequestToken"] for call in client.create_calls] == [
+        secret_ref,
+        secret_ref,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_aws_ephemeral_create_uses_canonical_ref_as_idempotency_token():
+    manager = AwsSecretsManagerSecretsManager(
+        SecretsManagerConfig(
+            provider="aws-sm",
+            component="ingress",
+            aws_sm_prefix="kdcube/demo/demo-march",
+        )
+    )
+    client = _FakeAwsSecretsClient()
+    manager._session = _FakeAwsSession(client)
+    store = KDCubeEphemeralSecretStore(manager, namespace="resident-secrets")
+    canonical_ref = "f" * 32
+
+    assert await store.create(
+        secret_ref=f"  {canonical_ref.upper()}  ",
+        value="resident bearer",
+        expires_at=20,
+    )
+    assert client.create_calls[0]["ClientRequestToken"] == canonical_ref
+
+
+@pytest.mark.asyncio
 async def test_aws_ephemeral_purge_scans_at_most_three_pages():
     manager = AwsSecretsManagerSecretsManager(
         SecretsManagerConfig(
@@ -1248,6 +1497,12 @@ async def test_secrets_file_refuses_all_ephemeral_secret_operations(tmp_path):
     )
     calls = (
         manager.set_ephemeral_secret(
+            namespace="login-attempts",
+            secret_ref="a" * 32,
+            value="secret",
+            expires_at=20,
+        ),
+        manager.create_ephemeral_secret(
             namespace="login-attempts",
             secret_ref="a" * 32,
             value="secret",

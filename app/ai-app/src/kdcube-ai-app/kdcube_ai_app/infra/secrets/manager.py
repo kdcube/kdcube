@@ -361,6 +361,21 @@ class ISecretsManager(ABC):
         del expires_at
         await self.set_secret(_ephemeral_provider_key(namespace, secret_ref), value)
 
+    async def create_ephemeral_secret(
+        self,
+        *,
+        namespace: str,
+        secret_ref: str,
+        value: str,
+        expires_at: int,
+    ) -> bool:
+        """Atomically create one runtime secret without replacing a record."""
+
+        del namespace, secret_ref, value, expires_at
+        raise SecretsManagerWriteError(
+            f"{self.provider_type} provider does not support create-only runtime secrets"
+        )
+
     async def get_ephemeral_secret(
         self,
         *,
@@ -458,6 +473,22 @@ class InMemorySecretsManager(ISecretsManager):
             if _secret_inventory_prefix(key) is not None:
                 return
             self._data.pop(key, None)
+
+    async def create_ephemeral_secret(
+        self,
+        *,
+        namespace: str,
+        secret_ref: str,
+        value: str,
+        expires_at: int,
+    ) -> bool:
+        del expires_at
+        key = _ephemeral_provider_key(namespace, secret_ref)
+        with self._lock:
+            if key in self._data:
+                return False
+            self._data[key] = value
+            return True
 
 
 def _split_bundle_secret_key(key: str) -> tuple[str, str] | None:
@@ -991,6 +1022,17 @@ class SecretsFileSecretsManager(ISecretsManager):
         del namespace, secret_ref, value, expires_at
         raise self._ephemeral_secrets_are_unsupported()
 
+    async def create_ephemeral_secret(
+        self,
+        *,
+        namespace: str,
+        secret_ref: str,
+        value: str,
+        expires_at: int,
+    ) -> bool:
+        del namespace, secret_ref, value, expires_at
+        raise self._ephemeral_secrets_are_unsupported()
+
     async def get_ephemeral_secret(
         self,
         *,
@@ -1145,7 +1187,7 @@ class SecretsServiceSecretsManager(ISecretsManager):
         return f"{self._url}/secret/{quote(key, safe='')}"
 
     @staticmethod
-    def _validate_write_response(response: Any, *, operation: str) -> None:
+    def _validate_write_response(response: Any, *, operation: str) -> int | None:
         if response.status_code == 409:
             raise SecretsManagerWriteError(f"secrets-service {operation} conflict")
         if response.status_code == 503:
@@ -1171,6 +1213,7 @@ class SecretsServiceSecretsManager(ISecretsManager):
             raise SecretsManagerWriteError(
                 f"secrets-service {operation} returned an invalid generation"
             )
+        return generation
 
     async def _read_secret(self, key: str, *, strict: bool) -> Optional[str]:
         key = validate_secret_provider_key(key)
@@ -1246,6 +1289,42 @@ class SecretsServiceSecretsManager(ISecretsManager):
         except Exception:
             raise SecretsManagerWriteError("secrets-service set request failed") from None
         self._validate_write_response(response, operation="set")
+
+    async def create_ephemeral_secret(
+        self,
+        *,
+        namespace: str,
+        secret_ref: str,
+        value: str,
+        expires_at: int,
+    ) -> bool:
+        del expires_at
+        key = _ephemeral_provider_key(namespace, secret_ref)
+        if not self.can_write():
+            raise SecretsManagerWriteError(
+                "secrets-service provider is not configured for writes"
+            )
+        httpx = _get_httpx()
+        try:
+            async with httpx.AsyncClient(timeout=self._write_timeout) as client:
+                response = await client.post(
+                    f"{self._url}/set",
+                    json={"key": key, "value": value, "expected_generation": 0},
+                    headers={"X-KDCUBE-ADMIN-TOKEN": self._admin_token},
+                )
+        except Exception:
+            raise SecretsManagerWriteError(
+                "secrets-service create request outcome is unknown"
+            ) from None
+        if response.status_code == 409:
+            return False
+        generation = self._validate_write_response(response, operation="create")
+        if generation != 1:
+            raise SecretsManagerWriteError(
+                "secrets-service create response does not prove ownership; "
+                "outcome is unknown"
+            )
+        return True
 
     async def delete_secret(self, key: str) -> None:
         key = validate_secret_provider_key(key)
@@ -1507,6 +1586,37 @@ class AwsSecretsManagerSecretsManager(ISecretsManager):
                 )
         except Exception as exc:
             raise SecretsManagerWriteError("aws-sm ephemeral create failed") from exc
+
+    async def create_ephemeral_secret(
+        self,
+        *,
+        namespace: str,
+        secret_ref: str,
+        value: str,
+        expires_at: int,
+    ) -> bool:
+        _clean_namespace, clean_ref = _ephemeral_secret_parts(namespace, secret_ref)
+        secret_id = self._ephemeral_secret_id(namespace, clean_ref)
+        try:
+            async with self._client_cm() as client:
+                await client.create_secret(
+                    Name=secret_id,
+                    ClientRequestToken=clean_ref,
+                    SecretString=value,
+                    Tags=[
+                        {
+                            "Key": _EPHEMERAL_EXPIRES_AT_TAG,
+                            "Value": str(int(expires_at)),
+                        }
+                    ],
+                )
+        except Exception as exc:
+            if self._error_code(exc) == "ResourceExistsException":
+                return False
+            raise SecretsManagerWriteError(
+                "aws-sm ephemeral create outcome is unknown"
+            ) from exc
+        return True
 
     async def get_ephemeral_secret(
         self,

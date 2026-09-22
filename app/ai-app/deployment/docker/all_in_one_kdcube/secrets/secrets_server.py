@@ -31,6 +31,7 @@ logger = logging.getLogger("kdcube.secrets")
 class SecretItem(BaseModel):
     key: str
     value: str
+    expected_generation: int | None = None
 
 
 class SecretStoreUnavailable(RuntimeError):
@@ -179,15 +180,22 @@ def set_secret(item: SecretItem, x_kdcube_admin_token: str | None = Header(defau
     _require_admin(x_kdcube_admin_token)
     if _inventory_prefix(item.key) is not None:
         return {"status": "ok", "inventory": "derived"}
+    if item.expected_generation not in {None, 0}:
+        raise HTTPException(status_code=409, detail="generation conflict")
     try:
         with _STORE_LOCK:
             store = _load_store()
+            if item.expected_generation == 0 and item.key in store:
+                raise HTTPException(status_code=409, detail="generation conflict")
             store[item.key] = item.value
             _save_store(store)
     except SecretStoreUnavailable:
         raise HTTPException(status_code=503, detail="secret store unavailable") from None
     logger.info("SET secret ref=%s -> ok", _key_digest(item.key))
-    return {"status": "ok"}
+    response: dict[str, Any] = {"status": "ok"}
+    if item.expected_generation == 0:
+        response["generation"] = 1
+    return response
 
 
 @app.delete("/secret/{key}")

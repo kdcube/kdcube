@@ -4,7 +4,7 @@ title: "Secrets Manager Implementations"
 summary: "System map for KDCube secret resolution: descriptor selectors, trusted-runtime read and write flows, persistence choices, and provider-specific behavior."
 tags: ["service", "secrets", "configuration", "aws", "runtime"]
 keywords: ["SECRETS_PROVIDER", "secrets.service.backend", "secrets-service", "host-vault", "aws-sm", "secrets-file", "in-memory", "user secrets", "bundle secrets", "secret flow"]
-updated_at: 2026-09-06
+updated_at: 2026-09-22
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/service-runtime-configuration-mapping-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/secrets-descriptor-README.md
@@ -57,7 +57,32 @@ Legacy aliases:
 The runtime entrypoint is the secrets manager in
 [manager.py](../../../src/kdcube-ai-app/kdcube_ai_app/infra/secrets/manager.py).
 
-### 1.1 Two selectors with different jobs
+### 1.1 Expiring runtime-secret custody
+
+Portable platform packages can bind an expiring, opaque secret-record
+contract through `KDCubeEphemeralSecretStore`. The adapter gives the package
+one namespace and delegates storage to the selected host provider. This lets
+protocols persist a short-lived bearer outside their durable metadata while
+keeping provider choice inside KDCube.
+
+`create(secret_ref, value, expires_at)` is an atomic create-only operation:
+
+- `True` proves this create operation owns the requested record; an exact
+  replay after a lost success response has the same result.
+- `False` proves the reference already existed and its value remains intact.
+- an exception means the outcome is unknown. The record remains eligible for
+  its provider expiry purge, and callers never infer that it is absent.
+
+The local secrets-service path sends `expected_generation: 0`. Both the
+host-vault broker and the temporary sidecar enforce that precondition at the
+storage mutation. AWS uses `CreateSecret` with the opaque reference as its
+idempotency token, so a retry of the same operation returns its original
+success; `ResourceExistsException` identifies a different operation that
+already owns the name. The in-memory provider performs the test and insert
+under its process lock. Existing `set` operations remain available for
+protocols that do not consume the create outcome.
+
+### 1.2 Two selectors with different jobs
 
 Local Compose has two independent selectors:
 

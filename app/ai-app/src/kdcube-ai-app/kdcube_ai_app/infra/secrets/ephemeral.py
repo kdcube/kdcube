@@ -20,7 +20,7 @@ SUPPORTED_EPHEMERAL_SECRET_PROVIDERS = frozenset(
 
 
 class KDCubeEphemeralSecretStore:
-    """Bind a portable one-time state store to one deployment namespace."""
+    """Bind portable expiring-secret contracts to one deployment namespace."""
 
     def __init__(self, manager: ISecretsManager, *, namespace: str) -> None:
         if manager.provider_type not in SUPPORTED_EPHEMERAL_SECRET_PROVIDERS:
@@ -43,6 +43,20 @@ class KDCubeEphemeralSecretStore:
         expires_at: int,
     ) -> None:
         await self._manager.set_ephemeral_secret(
+            namespace=self._namespace,
+            secret_ref=secret_ref,
+            value=value,
+            expires_at=expires_at,
+        )
+
+    async def create(
+        self,
+        *,
+        secret_ref: str,
+        value: str,
+        expires_at: int,
+    ) -> bool:
+        return await self._manager.create_ephemeral_secret(
             namespace=self._namespace,
             secret_ref=secret_ref,
             value=value,

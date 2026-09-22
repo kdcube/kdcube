@@ -91,6 +91,40 @@ def test_ephemeral_service_fails_closed_on_corrupt_storage(
     )
 
 
+def test_ephemeral_service_create_only_preserves_existing_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = tmp_path / "store.json"
+    monkeypatch.setenv("SECRETS_STORE_PATH", str(store))
+    module = _load_script(_DEPLOYMENT_SECRETS / "secrets_server.py", "secrets_server")
+    key = "platform.runtime.resident-secrets." + ("a" * 32)
+
+    assert module.set_secret(
+        module.SecretItem(key=key, value="original", expected_generation=0),
+        None,
+    ) == {"status": "ok", "generation": 1}
+    with pytest.raises(HTTPException) as collision:
+        module.set_secret(
+            module.SecretItem(
+                key=key,
+                value="replacement",
+                expected_generation=0,
+            ),
+            None,
+        )
+
+    assert collision.value.status_code == 409
+    assert json.loads(store.read_text(encoding="utf-8"))[key] == "original"
+    assert module.set_secret(
+        module.SecretItem(
+            key="platform.services.fixture.token",
+            value="ordinary",
+        ),
+        None,
+    ) == {"status": "ok"}
+
+
 class _FixtureBroker:
     def __init__(self, *, prefix: str) -> None:
         self.prefix = prefix
