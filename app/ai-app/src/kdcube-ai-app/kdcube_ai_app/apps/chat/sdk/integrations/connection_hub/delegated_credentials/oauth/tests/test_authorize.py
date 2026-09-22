@@ -1500,3 +1500,86 @@ def test_the_consent_carries_the_operation_choice_into_the_code(client):
     # absent one.
     assert payload["named_service_operations"] == {}
     assert "catalog_version" in payload
+
+
+
+def test_whole_card_reconnect_draft_seeds_the_existing_cards_full_authority(client, monkeypatch):
+    # 2026-09-22: a codex reconnect requested only scope=work:relay while its
+    # automation Card held journal:view, observe and relay; the operator must
+    # see the Card's current authority selected, never the narrower request.
+    config = oauth_delegated_config(client.app)
+    card_grants = {
+        "*": ["records:read", "work:journal:view", "work:observe"],
+        "https://runtime.example.test/public/mcp/problem_board": ["work:relay"],
+    }
+    card_operations = {
+        "*": ["records_export"],
+        "https://runtime.example.test/public/mcp/problem_board": ["worker_receive"],
+    }
+
+    class ExistingCardAccess:
+        async def oauth_consent_config(self, *, grantor_subject):
+            return config
+
+        async def oauth_consent_card_seed(
+            self, *, grantor_subject, client_id, resource, client_metadata
+        ):
+            assert not resource
+            return {
+                "ok": True,
+                "access_id": "aut_existing",
+                "card_kind": CARD_KIND_AUTOMATION,
+                "card_revision": 151,
+                "catalog_scope": {"mode": "full", "resources": []},
+                "access": {
+                    "label": "codex worker",
+                    "resource_grants": card_grants,
+                    "resource_operations": card_operations,
+                    "account_scope": {},
+                },
+            }
+
+    client.app.state.automation_access_factory = lambda: ExistingCardAccess()
+    monkeypatch.setattr(
+        oauth_routes,
+        "_connection_hub_widget_base",
+        lambda _request: "https://runtime.example.test/widgets/connections_settings",
+    )
+    public_client = PublicClient(
+        client_id="claude",
+        redirect_uris=("http://127.0.0.1/callback",),
+        client_name="Connection Hub CLI",
+        client_metadata={"kdcube_credential_use": "multi_resource"},
+    )
+    monkeypatch.setattr(
+        oauth_routes,
+        "get_client",
+        lambda client_id, _request=None: public_client if client_id == "claude" else None,
+    )
+    response = client.get(
+        "/oauth/authorize",
+        params=_params(),
+        headers={"Authorization": "Bearer admin-tok"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 302
+    draft_id = dict(up.parse_qsl(up.urlsplit(response.headers["location"]).query))["oauth_consent"]
+
+    draft = client.get(
+        "/oauth/authorize/consent/draft",
+        params={"draft_id": draft_id},
+        headers={"Authorization": "Bearer admin-tok"},
+    )
+
+    assert draft.status_code == 200, draft.text
+    selection = draft.json()["selection"]
+    selected = {
+        grant for grants in selection["resource_grants"].values() for grant in grants
+    }
+    assert selected == {"records:read", "work:journal:view", "work:observe", "work:relay"}
+    assert {
+        operation
+        for operations in selection["resource_operations"].values()
+        for operation in operations
+    } == {"records_export", "worker_receive"}
+    assert draft.json()["card_revision"] == 151
