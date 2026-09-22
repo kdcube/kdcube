@@ -44,7 +44,11 @@ import {
   submitChatMessage,
   submitTurnFeedback,
 } from './transport/index.ts'
-import { mergeSelectionPatches } from './capabilities.ts'
+import {
+  createLatestCapabilityRequestRunner,
+  mergeSelectionPatches,
+  shouldStartCapabilityRequest,
+} from './capabilities.ts'
 import type { AgentSelectionPatch } from './capabilities.ts'
 import { subagentThreadChildId } from './subagents.ts'
 import type { SubagentStreamKind } from './subagents.ts'
@@ -728,6 +732,7 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
   // Toggles take effect from the NEXT message (the backend reads per turn).
   let pendingSelectionPatch: AgentSelectionPatch | null = null
   let pendingSelectionConversationId: string | null = null
+  const capabilityRequests = createLatestCapabilityRequestRunner()
 
   discardAgentSelectionDraft = () => {
     pendingSelectionPatch = null
@@ -738,30 +743,34 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
     if (!authedRef) return
     const conversationId = ensureConversationId()
     const current = getChat().capabilities
-    if (current.status === 'loading') return
-    if (current.status === 'ready' && !opts?.force) return
+    if (!shouldStartCapabilityRequest(current.status, opts?.force)) return
     dispatch(chatActions.capabilitiesLoading())
-    try {
-      const response = await fetchAgentCapabilities(runtime, runtime.agentId, conversationId)
-      if (getChat().conversationId !== conversationId) return
-      dispatch(chatActions.capabilitiesLoaded({
-        agent: response.agent || runtime.agentId,
-        agentCardId: response.capability_control?.card?.access_id || null,
-        inventory: response.capabilities,
-        disabled: response.selection?.disabled ?? {},
-        baseDisabled: response.selection?.conversation_base_disabled ?? response.selection?.disabled ?? {},
-        agentBaseDisabled: response.selection?.agent_base_disabled ?? response.selection?.disabled ?? {},
-        scope: response.selection?.scope ?? null,
-        model: response.selection?.model ?? null,
-        instructions: response.selection?.instructions ?? null,
-        presentation: response.selection?.presentation ?? null,
-        cachePolicy: response.cache_policy ?? null,
-        pending: response.selection?.pending ?? null,
-      }))
-    } catch (error) {
-      if (getChat().conversationId !== conversationId) return
-      dispatch(chatActions.capabilitiesLoadError(messageForError(error)))
-    }
+    await capabilityRequests.run(
+      () => fetchAgentCapabilities(runtime, runtime.agentId, conversationId),
+      {
+        apply: (response) => {
+          if (getChat().conversationId !== conversationId) return
+          dispatch(chatActions.capabilitiesLoaded({
+            agent: response.agent || runtime.agentId,
+            agentCardId: response.capability_control?.card?.access_id || null,
+            inventory: response.capabilities,
+            disabled: response.selection?.disabled ?? {},
+            baseDisabled: response.selection?.conversation_base_disabled ?? response.selection?.disabled ?? {},
+            agentBaseDisabled: response.selection?.agent_base_disabled ?? response.selection?.disabled ?? {},
+            scope: response.selection?.scope ?? null,
+            model: response.selection?.model ?? null,
+            instructions: response.selection?.instructions ?? null,
+            presentation: response.selection?.presentation ?? null,
+            cachePolicy: response.cache_policy ?? null,
+            pending: response.selection?.pending ?? null,
+          }))
+        },
+        reject: (error) => {
+          if (getChat().conversationId !== conversationId) return
+          dispatch(chatActions.capabilitiesLoadError(messageForError(error)))
+        },
+      },
+    )
   }
 
   flushAgentSelection = async () => {

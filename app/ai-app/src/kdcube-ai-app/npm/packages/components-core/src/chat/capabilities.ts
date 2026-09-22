@@ -15,6 +15,50 @@
  * selection per turn, so there is no session invalidation.
  */
 
+export type LatestCapabilityRequestOutcome = 'applied' | 'stale' | 'failed'
+
+export interface LatestCapabilityRequestRunner {
+  run<T>(
+    request: () => Promise<T>,
+    handlers: {
+      apply: (value: T) => void
+      reject: (error: unknown) => void
+    },
+  ): Promise<LatestCapabilityRequestOutcome>
+}
+
+export function shouldStartCapabilityRequest(
+  status: 'idle' | 'loading' | 'ready' | 'error',
+  force: boolean = false,
+): boolean {
+  return force || (status !== 'loading' && status !== 'ready')
+}
+
+/** Apply only the newest capabilities request. A forced scoped refresh may
+ *  supersede an unscoped request that is already in flight. */
+export function createLatestCapabilityRequestRunner(): LatestCapabilityRequestRunner {
+  let generation = 0
+  return {
+    async run<T>(request: () => Promise<T>, handlers: {
+      apply: (value: T) => void
+      reject: (error: unknown) => void
+    }): Promise<LatestCapabilityRequestOutcome> {
+      const requestGeneration = ++generation
+      let value: T
+      try {
+        value = await request()
+      } catch (error) {
+        if (requestGeneration !== generation) return 'stale'
+        handlers.reject(error)
+        return 'failed'
+      }
+      if (requestGeneration !== generation) return 'stale'
+      handlers.apply(value)
+      return 'applied'
+    },
+  }
+}
+
 // ── wire types (agent_capabilities payload) ──────────────────────────────────
 
 /** Live project-Control x user-selection state for one descriptor capability.

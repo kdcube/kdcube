@@ -2,16 +2,44 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   applySelectionPatch,
-  isModelPicked,
   chatActions,
   chatReducer,
+  createLatestCapabilityRequestRunner,
   initialState,
+  isModelPicked,
   mergeSelectionPatches,
+  shouldStartCapabilityRequest,
   submitAgentSelectionUpdate,
   toolGroupState,
   toolGroupTogglePatch,
   toolTogglePatch,
 } from '../dist/chat/index.js'
+
+test('a forced scoped capability request supersedes an in-flight unscoped request', async () => {
+  assert.equal(shouldStartCapabilityRequest('loading', false), false)
+  assert.equal(shouldStartCapabilityRequest('loading', true), true)
+  const runner = createLatestCapabilityRequestRunner()
+  let resolveUnscoped
+  let resolveScoped
+  const unscopedResponse = new Promise((resolve) => { resolveUnscoped = resolve })
+  const scopedResponse = new Promise((resolve) => { resolveScoped = resolve })
+  const applied = []
+  const rejected = []
+  const handlers = {
+    apply: (value) => applied.push(value),
+    reject: (error) => rejected.push(error),
+  }
+
+  const unscoped = runner.run(() => unscopedResponse, handlers)
+  const scoped = runner.run(() => scopedResponse, handlers)
+
+  resolveScoped({ scope: 'conversation', conversationId: 'conv-42' })
+  assert.equal(await scoped, 'applied')
+  resolveUnscoped({ scope: 'agent_base' })
+  assert.equal(await unscoped, 'stale')
+  assert.deepEqual(applied, [{ scope: 'conversation', conversationId: 'conv-42' }])
+  assert.deepEqual(rejected, [])
+})
 
 const webGroup = {
   alias: 'web_tools',
