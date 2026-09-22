@@ -962,6 +962,42 @@ async def test_socketio_connect_uses_card_bearer_directly_for_data_bus():
 
 
 @pytest.mark.asyncio
+async def test_socketio_session_metadata_excludes_login_bearers(monkeypatch):
+    handler, grant = await _federated_handler(monkeypatch)
+    session_manager = handler.gateway_adapter.gateway.session_manager
+    session_manager.sessions[grant.session.session_id] = grant.session
+
+    async def keep_session(**kwargs):
+        return kwargs["session"]
+
+    monkeypatch.setattr(socket_chat, "upgrade_session_from_tokens", keep_session)
+
+    ok = await handler._handle_connect(
+        "socket-login-1",
+        {
+            "HTTP_ORIGIN": "https://app.example",
+            "REMOTE_ADDR": "127.0.0.1",
+            "HTTP_USER_AGENT": "pytest-agent",
+        },
+        {
+            "tenant": "tenant-a",
+            "project": "project-a",
+            "bundle_id": "task-tracker@1-0",
+            "user_session_id": grant.session.session_id,
+            "bearer_token": "access-secret",
+            "id_token": "id-secret",
+        },
+    )
+
+    assert ok is True
+    saved = handler.sio.saved_sessions["socket-login-1"]
+    assert "access-secret" not in json.dumps(saved)
+    assert "id-secret" not in json.dumps(saved)
+    assert saved["request_context"]["client_ip"] == "127.0.0.1"
+    assert saved["request_context"]["user_agent"] == "pytest-agent"
+
+
+@pytest.mark.asyncio
 async def test_socketio_connect_rejects_card_resource_for_another_bundle():
     handler, calls = await _delegated_handler()
 
