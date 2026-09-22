@@ -76,6 +76,13 @@ export type AgentCapabilityAuthorityStates = Record<
   Record<string, AgentCapabilityAuthorityValue>
 >
 
+/** A saved Agent Card choice no longer present in the live Control Card. */
+export interface AgentMissingCapability {
+  category: string
+  capability: string
+  reason: 'missing_from_control_card'
+}
+
 export interface AgentCapabilityToolEntry {
   name: string
   description: string
@@ -356,6 +363,9 @@ export interface AgentCapabilitiesInventory {
   /** Category/member map returned by the live Card projection. Row-level
    *  authority_state fields mirror this map for the picker. */
   capability_states?: AgentCapabilityAuthorityStates
+  /** Saved defaults retained on the Agent Card but unavailable under the
+   *  current descriptor-derived Control Card. */
+  missing_capabilities?: AgentMissingCapability[]
 }
 
 /** UI adapter derived from the effective positive conversation projection.
@@ -376,14 +386,15 @@ export interface AgentSelectionDisabled {
   subagents?: boolean
 }
 
-/** Capability writes are conversation-local. An unscoped response exposes
- *  the Agent Card base for inspection; that base is edited in Connection Hub. */
+/** Capability writes follow the explicit scope: a conversation replaces its
+ *  current selection within the Control Card, while agent_base edits the
+ *  user's Agent Card defaults for future conversations. */
 export interface AgentCapabilitySelectionScope {
   kind: 'conversation' | 'agent_base'
   conversation_id: string
   capabilities_editable: boolean
   /** Agent Card revision whose positive projection became this conversation's
-   *  immutable starting base. For agent_base this is the current revision. */
+   *  starting default. For agent_base this is the current revision. */
   agent_card_revision?: number
 }
 
@@ -424,8 +435,8 @@ export interface AgentCapabilitiesState {
   agentCardId: string | null
   inventory: AgentCapabilitiesInventory | null
   disabled: AgentSelectionDisabled
-  /** Effective inherited snapshot for this conversation, after current Card
-   *  revocations. Comparing a row with this map identifies local changes. */
+  /** Agent Card values inherited when this conversation started. Comparing a
+   *  row with this map identifies conversation-local changes. */
   baseDisabled: AgentSelectionDisabled
   /** Current Agent Card base. This can differ from an open conversation's
    *  frozen start snapshot. */

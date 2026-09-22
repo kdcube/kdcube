@@ -381,8 +381,11 @@ const slice = createSlice({
 
     // --- Per-user agent capabilities (composer "+" menu) ---
     capabilitiesLoading(state) {
-      state.capabilities.status = 'loading'
-      state.capabilities.error = null
+      state.capabilities = {
+        ...initialCapabilitiesState,
+        status: 'loading',
+        disabled: {},
+      }
     },
     capabilitiesLoaded(
       state,

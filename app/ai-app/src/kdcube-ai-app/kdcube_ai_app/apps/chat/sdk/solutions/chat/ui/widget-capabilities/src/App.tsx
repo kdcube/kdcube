@@ -86,24 +86,18 @@ function openConnections(consent?: ConnectionsConsentOpen): void {
 
 function PickerApp() {
   // Scene hosts summon this widget with a `capabilities.open` surface
-  // command: {agent_id?, conversation_id?, spotlight_tools?, section?} in
-  // ui_event applies at runtime. Chat-originated commands carry the current
-  // conversation; an independently mounted widget has no conversation and
-  // shows the Agent Card base managed in Connection Hub.
+  // command. This full-page surface always edits the Agent Card defaults;
+  // conversation capability changes stay in the chat composer's picker.
   const [agentId, setAgentId] = useState(settings.getAgentId())
-  const [conversationId, setConversationId] = useState('')
   const [spotlight, setSpotlight] = useState<{ tools: string[]; nonce: number } | null>(null)
   const agentRef = useRef(agentId)
-  const conversationRef = useRef(conversationId)
   agentRef.current = agentId
-  conversationRef.current = conversationId
 
   const vm = useStandaloneCapabilitiesVm({
     agentId,
     fetchCapabilities: () => callOperation('agent_capabilities', {
       agent: agentRef.current,
       caller_surface: 'capabilities_widget',
-      ...(conversationRef.current ? { conversation_id: conversationRef.current } : {}),
     }),
     submitUpdate: (patch: AgentSelectionPatch, options?: StandaloneSelectionWriteOptions) => {
       const { model, instructions, presentation, ...disabled } = patch
@@ -111,13 +105,13 @@ function PickerApp() {
       const apply = options?.apply && options.apply !== 'now' ? options.apply : undefined
       return callOperation('agent_selection_update', {
         agent: agentRef.current,
+        caller_surface: 'capabilities_widget',
         ...(hasCapabilityPatch ? { disabled } : {}),
         ...(model !== undefined ? { model } : {}),
         ...(instructions !== undefined ? { instructions } : {}),
         ...(presentation !== undefined ? { presentation } : {}),
         ...(apply ? { apply } : {}),
         ...(options?.cachePolicy ? { cache_policy: options.cachePolicy } : {}),
-        ...(conversationRef.current ? { conversation_id: conversationRef.current } : {}),
       })
     },
     openConnections,
@@ -134,12 +128,6 @@ function PickerApp() {
       if (payload.agent_id && payload.agent_id !== agentRef.current) {
         agentRef.current = payload.agent_id
         setAgentId(payload.agent_id)
-        reload = true
-      }
-      const nextConversationId = payload.conversation_id ?? ''
-      if (nextConversationId !== conversationRef.current) {
-        conversationRef.current = nextConversationId
-        setConversationId(nextConversationId)
         reload = true
       }
       if (payload.spotlight_tools?.length) {
@@ -162,9 +150,7 @@ function PickerApp() {
     <CapabilityPickerPage
       vm={vm}
       title="Capabilities"
-      subtitle={conversationId
-        ? `Choose what the ${agentId} agent may use in this conversation.`
-        : `View what new conversations with the ${agentId} agent start with. Edit this base in Connection Hub.`}
+      subtitle={`Choose the defaults new conversations with the ${agentId} agent start from.`}
     />
   )
 }

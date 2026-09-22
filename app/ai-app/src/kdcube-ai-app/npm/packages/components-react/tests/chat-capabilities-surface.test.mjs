@@ -221,7 +221,7 @@ test('the served widget opens the hub host-first with the deep-link fallback', (
   assert.match(source, /window\.open\(connectionsDeepLink\(consent\), '_blank', 'noopener'\)/)
 })
 
-test('chat-originated capability windows keep the active conversation scope', () => {
+test('standalone capability windows edit Agent Card defaults, not a conversation', () => {
   const composerSource = readFileSync(
     new URL('../src/chat/ui/features/composer/ComposerMenu.tsx', import.meta.url),
     'utf8',
@@ -233,21 +233,48 @@ test('chat-originated capability windows keep the active conversation scope', ()
     ),
     'utf8',
   )
-  assert.match(composerSource, /conversation_id:\s*vm\.state\.conversationId/)
-  assert.match(widgetSource, /conversation_id:\s*conversationRef\.current/)
-  assert.match(widgetSource, /Choose what the \$\{agentId\} agent may use in this conversation/)
-  assert.match(widgetSource, /Edit this base in Connection Hub/)
+  assert.doesNotMatch(composerSource, /openCapabilitiesOnHost/)
+  assert.match(composerSource, /Saved for this conversation\. Changes apply from your next message\./)
+  assert.doesNotMatch(widgetSource, /conversationRef|conversation_id:/)
+  assert.match(widgetSource, /caller_surface: 'capabilities_widget'/)
+  assert.match(widgetSource, /Choose the defaults new conversations with the \$\{agentId\} agent start from/)
 })
 
-test('picker names conversation provenance and never promotes a row into the Agent Card', () => {
+test('each composer open enters a fresh conversation-scoped load before rendering', () => {
   const menu = readFileSync(
     new URL('../src/chat/ui/features/composer/ComposerMenu.tsx', import.meta.url),
     'utf8',
   )
-  assert.match(menu, /'Inherited' : 'Changed here'/)
-  assert.match(menu, /'Not in conversation base'/)
+  const opener = menu.slice(
+    menu.indexOf('const openForCurrentContext'),
+    menu.indexOf('/* A consent banner'),
+  )
+  assert.ok(opener.indexOf('capabilities.load(') < opener.indexOf('setOpen(true)'))
+  assert.match(menu, /openForCurrentContext\('modal'\)/)
+  assert.match(menu, /openForCurrentContext\(preferred\)/)
+  assert.match(menu, /else openForCurrentContext\('popover'\)/)
+  assert.match(menu, /loadOnActivate: false/)
+})
+
+test('saved defaults removed from the Control Card stay visible as missing', () => {
+  const menu = readFileSync(
+    new URL('../src/chat/ui/features/composer/ComposerMenu.tsx', import.meta.url),
+    'utf8',
+  )
+  assert.match(menu, /function MissingCapabilitiesSection/)
+  assert.match(menu, /Missing from Control Card/)
+  assert.match(menu, /lockLabelOverride="Missing"/)
+})
+
+test('picker names conversation provenance and Agent Card defaults separately', () => {
+  const menu = readFileSync(
+    new URL('../src/chat/ui/features/composer/ComposerMenu.tsx', import.meta.url),
+    'utf8',
+  )
+  assert.match(menu, /inherited \? 'Saved default' : 'Changed here'/)
+  assert.match(menu, /inherited \? 'Inherited' : 'Changed here'/)
   assert.match(menu, /Saved for this conversation\. Changes apply from your next message\./)
-  assert.match(menu, /The Agent Card base is managed in Connection Hub\./)
+  assert.match(menu, /Saved as the defaults for new conversations\./)
   assert.match(menu, /changesConversationCapabilities\(patch\)/)
   const capabilityBranch = menu.slice(
     menu.indexOf('if (changesConversationCapabilities(patch))'),
@@ -257,7 +284,7 @@ test('picker names conversation provenance and never promotes a row into the Age
   assert.doesNotMatch(capabilityBranch, /next_conversation|when_cold/)
 })
 
-test('agent-base capability locks do not lock model choice and name the inherited Card revision', () => {
+test('agent-base selection is editable inside the Control Card and model choice stays editable', () => {
   const menu = readFileSync(
     new URL('../src/chat/ui/features/composer/ComposerMenu.tsx', import.meta.url),
     'utf8',
@@ -267,10 +294,12 @@ test('agent-base capability locks do not lock model choice and name the inherite
     menu.indexOf('function InstructionsSection'),
   )
   assert.match(models, /scopeLocked=\{false\}/)
-  assert.match(menu, /Its capability rows are managed in Connection Hub/)
-  assert.match(menu, /model and preference choices remain available here/)
-  assert.match(menu, /inherited Agent Card revision \{inheritedCardRevision\}/)
-  assert.match(menu, /Current Card revocations still apply/)
+  assert.match(menu, /const editingAgentBase = selectionScope === 'agent_base'/)
+  assert.match(menu, /const locked = notAllowed \|\| scopeLocked/)
+  assert.doesNotMatch(menu, /outsideAgentBase|outsideConversationBase/)
+  assert.match(menu, /These are the Agent Card defaults new conversations start from/)
+  assert.match(menu, /started from Agent Card revision \{inheritedCardRevision\}/)
+  assert.match(menu, /The Control Card remains its live capability range/)
 })
 
 // ---------------------------------------------------------------------------

@@ -1,8 +1,8 @@
 /**
  * ComposerMenu — the composer "+" menu: conversation capability settings.
  *
- * A registered user narrows which of the agent's CONFIGURED tools and skills it
- * uses. The inventory + saved selection lazy-load on first open
+ * A registered user chooses which Control-allowed tools and skills the agent
+ * uses. The inventory + saved selection load for each open
  * (`agent_capabilities`); row toggles update a local draft and the explicit
  * Save changes command sends one scoped `agent_selection_update` merge-write.
  *
@@ -14,7 +14,7 @@
  */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { agentGrantConsentOpen, chatActions, consentOpenForClaims, openCapabilitiesOnHost, openSurfaceOnHost } from '@kdcube/components-core/chat'
+import { agentGrantConsentOpen, chatActions, consentOpenForClaims, openSurfaceOnHost } from '@kdcube/components-core/chat'
 import type { AgentCapabilityConsent, ConnectionsConsentOpen } from '@kdcube/components-core/chat'
 import { useAppDispatch } from '../../support/hooks.ts'
 import type {
@@ -118,6 +118,8 @@ function MenuRow({
   aside,
   authorityState,
   baseChecked,
+  selectionScope,
+  lockLabelOverride,
   scopeLocked = false,
 }: {
   label: ReactNode
@@ -134,35 +136,37 @@ function MenuRow({
   spotlight?: boolean
   /** Trailing affordance beside the toggle (e.g. the consent state/button). */
   aside?: ReactNode
-  /** Live Control x user-selection state. Only not_allowed is immutable;
-   *  the Agent Card's unselected rows are also outside the conversation. */
+  /** Live Control x user-selection state. Only not_allowed is immutable. */
   authorityState?: AgentCapabilityAuthorityValue
   /** State inherited when this conversation started. */
   baseChecked?: 'on' | 'off' | 'partial'
-  /** An unscoped picker shows the Agent Card base; Connection Hub edits it. */
+  /** Both scopes can change the user's selection inside the Control Card.
+   *  Agent-base writes become defaults; conversation writes stay local. */
+  selectionScope?: 'agent_base' | 'conversation'
+  lockLabelOverride?: string
   scopeLocked?: boolean
 }) {
   const notAllowed = authorityState === 'not_allowed'
-  const outsideAgentBase = authorityState === 'allowed_unselected'
-  const outsideConversationBase = baseChecked === 'off'
-  const excluded = notAllowed || outsideAgentBase || outsideConversationBase
-  const renderedChecked = excluded ? 'off' : checked
-  const locked = notAllowed || outsideAgentBase || outsideConversationBase || scopeLocked
-  const lockLabel = notAllowed
+  const editingAgentBase = selectionScope === 'agent_base'
+  const renderedChecked = notAllowed ? 'off' : checked
+  const locked = notAllowed || scopeLocked
+  const lockLabel = lockLabelOverride || (notAllowed
     ? 'Not permitted'
-    : outsideAgentBase
-      ? 'Not in Agent Card'
-      : outsideConversationBase
-        ? 'Not in conversation base'
-        : scopeLocked
-          ? 'Managed in Agent Card'
-          : ''
+    : scopeLocked
+      ? 'Unavailable'
+      : '')
   const inherited = baseChecked !== undefined && baseChecked === renderedChecked
   return (
     <div
       className={`k-menu-row ${child ? 'k-menu-row-child' : ''}${spotlight ? ' k-menu-row-spotlight' : ''}${locked ? ' k-menu-row-not-allowed' : ''}`}
       data-authority-state={authorityState || undefined}
-      data-selection-source={baseChecked === undefined ? undefined : inherited ? 'inherited' : 'conversation'}
+      data-selection-source={baseChecked === undefined
+        ? undefined
+        : editingAgentBase
+          ? 'agent_base'
+          : inherited
+            ? 'inherited'
+            : 'conversation'}
     >
       <button
         type="button"
@@ -185,7 +189,11 @@ function MenuRow({
       ) : (
         <>
           {baseChecked !== undefined ? (
-            <span className="k-menu-tag">{inherited ? 'Inherited' : 'Changed here'}</span>
+            <span className="k-menu-tag">
+              {editingAgentBase
+                ? inherited ? 'Saved default' : 'Changed here'
+                : inherited ? 'Inherited' : 'Changed here'}
+            </span>
           ) : null}
           {aside}
         </>
@@ -387,6 +395,7 @@ interface CapabilityRowsProps {
   disabled: AgentSelectionDisabled
   baseDisabled: AgentSelectionDisabled
   editable: boolean
+  selectionScope?: 'agent_base' | 'conversation'
   toggle: (patch: AgentSelectionPatch) => void
   namespaceStyles: NamespaceStyleMap
   pending?: AgentSelectionPending | null
@@ -554,7 +563,7 @@ function PresentationSection({ vm }: ComposerMenuSectionContext) {
   )
 }
 
-function SkillsSection({ inventory, disabled, baseDisabled, editable, toggle }: CapabilityRowsProps) {
+function SkillsSection({ inventory, disabled, baseDisabled, editable, selectionScope, toggle }: CapabilityRowsProps) {
   if (!inventory.skills.length) return null
   return (
     <div>
@@ -566,6 +575,7 @@ function SkillsSection({ inventory, disabled, baseDisabled, editable, toggle }: 
           sub={firstLine(skill.description)}
           checked={isSkillDisabled(disabled, skill.id) ? 'off' : 'on'}
           baseChecked={isSkillDisabled(baseDisabled, skill.id) ? 'off' : 'on'}
+          selectionScope={selectionScope}
           scopeLocked={!editable}
           onToggle={() => toggle({ skills: { [skill.id]: !isSkillDisabled(disabled, skill.id) } })}
           authorityState={skill.authority_state}
@@ -575,7 +585,7 @@ function SkillsSection({ inventory, disabled, baseDisabled, editable, toggle }: 
   )
 }
 
-function ConversationTargetsSection({ inventory, disabled, baseDisabled, editable, toggle }: CapabilityRowsProps) {
+function ConversationTargetsSection({ inventory, disabled, baseDisabled, editable, selectionScope, toggle }: CapabilityRowsProps) {
   const targets = inventory.conversation_targets ?? []
   if (!targets.length) return null
   return (
@@ -591,6 +601,7 @@ function ConversationTargetsSection({ inventory, disabled, baseDisabled, editabl
             sub={target.resource}
             checked={disabled.conversation_targets?.[targetId] ? 'off' : 'on'}
             baseChecked={baseDisabled.conversation_targets?.[targetId] ? 'off' : 'on'}
+            selectionScope={selectionScope}
             scopeLocked={!editable}
             onToggle={() => toggle({ conversation_targets: { [targetId]: !disabled.conversation_targets?.[targetId] } })}
             authorityState={target.authority_state}
@@ -601,7 +612,7 @@ function ConversationTargetsSection({ inventory, disabled, baseDisabled, editabl
   )
 }
 
-function ToolGroupsSection({ inventory, disabled, baseDisabled, editable, toggle, pending, spotlight, onConsent }: CapabilityRowsProps) {
+function ToolGroupsSection({ inventory, disabled, baseDisabled, editable, selectionScope, toggle, pending, spotlight, onConsent }: CapabilityRowsProps) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const groups = inventory.tools.filter((group) => !group.system)
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -667,6 +678,7 @@ function ToolGroupsSection({ inventory, disabled, baseDisabled, editable, toggle
               }
               checked={state}
               baseChecked={baseState}
+              selectionScope={selectionScope}
               scopeLocked={!editable}
               onToggle={() => toggle(toolGroupTogglePatch(group, disabled))}
               expandable={group.tools.length > 0}
@@ -691,6 +703,7 @@ function ToolGroupsSection({ inventory, disabled, baseDisabled, editable, toggle
                     sub={firstLine(tool.description)}
                     checked={isToolDisabled(disabled, group.alias, tool.name) ? 'off' : 'on'}
                     baseChecked={isToolDisabled(baseDisabled, group.alias, tool.name) ? 'off' : 'on'}
+                    selectionScope={selectionScope}
                     scopeLocked={!editable}
                     onToggle={() => toggle(toolTogglePatch(group, disabled, tool.name))}
                     spotlight={toolSpotlit(group.alias, tool.name)}
@@ -706,7 +719,7 @@ function ToolGroupsSection({ inventory, disabled, baseDisabled, editable, toggle
   )
 }
 
-function McpSection({ inventory, disabled, baseDisabled, editable, toggle, onConsent }: CapabilityRowsProps) {
+function McpSection({ inventory, disabled, baseDisabled, editable, selectionScope, toggle, onConsent }: CapabilityRowsProps) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   if (!inventory.mcp.length) return null
   return (
@@ -721,6 +734,7 @@ function McpSection({ inventory, disabled, baseDisabled, editable, toggle, onCon
               label={server.name || server.server_id}
               checked={mcpServerState(server, disabled)}
               baseChecked={mcpServerState(server, baseDisabled)}
+              selectionScope={selectionScope}
               scopeLocked={!editable}
               onToggle={() => toggle(mcpServerTogglePatch(server, disabled))}
               expandable={entries.length > 0}
@@ -738,6 +752,7 @@ function McpSection({ inventory, disabled, baseDisabled, editable, toggle, onCon
                     sub={firstLine(tool.description)}
                     checked={isMcpToolDisabled(disabled, server.server_id, tool.name) ? 'off' : 'on'}
                     baseChecked={isMcpToolDisabled(baseDisabled, server.server_id, tool.name) ? 'off' : 'on'}
+                    selectionScope={selectionScope}
                     scopeLocked={!editable}
                     onToggle={() => toggle(mcpToolTogglePatch(server, disabled, tool.name))}
                     authorityState={nestedAuthorityState(server.authority_state, tool.authority_state)}
@@ -764,6 +779,7 @@ function RealmEntryRow({
   disabled,
   baseDisabled,
   editable,
+  selectionScope,
   toggle,
   consent,
   onConsent,
@@ -783,6 +799,7 @@ function RealmEntryRow({
   disabled: AgentSelectionDisabled
   baseDisabled: AgentSelectionDisabled
   editable: boolean
+  selectionScope?: 'agent_base' | 'conversation'
   toggle: (patch: AgentSelectionPatch) => void
   consent?: AgentCapabilityConsent
   onConsent?: (open: ConnectionsConsentOpen) => void
@@ -814,6 +831,7 @@ function RealmEntryRow({
       sub={sub || undefined}
       checked={isNamespaceEntryDisabled(disabled, namespace, entryKey) ? 'off' : 'on'}
       baseChecked={isNamespaceEntryDisabled(baseDisabled, namespace, entryKey) ? 'off' : 'on'}
+      selectionScope={selectionScope}
       scopeLocked={!editable}
       onToggle={() => toggle(namespaceEntryTogglePatch(namespace, entryKeys, disabled, entryKey))}
       aside={aside}
@@ -951,6 +969,7 @@ function RealmGroupRow({
   disabled,
   baseDisabled,
   editable,
+  selectionScope,
   toggle,
   consent,
   onConsent,
@@ -962,6 +981,7 @@ function RealmGroupRow({
   disabled: AgentSelectionDisabled
   baseDisabled: AgentSelectionDisabled
   editable: boolean
+  selectionScope?: 'agent_base' | 'conversation'
   toggle: (patch: AgentSelectionPatch) => void
   consent?: AgentCapabilityConsent
   onConsent?: (open: ConnectionsConsentOpen) => void
@@ -980,6 +1000,7 @@ function RealmGroupRow({
         sub={group.summary}
         checked={namespaceState(namespace, group.keys, disabled)}
         baseChecked={namespaceState(namespace, group.keys, baseDisabled)}
+        selectionScope={selectionScope}
         scopeLocked={!editable}
         onToggle={() => toggle(namespaceGroupTogglePatch(namespace, entryKeys, group.keys, disabled))}
         expandable={group.entries.length > 0}
@@ -998,6 +1019,7 @@ function RealmGroupRow({
               disabled={disabled}
               baseDisabled={baseDisabled}
               editable={editable}
+              selectionScope={selectionScope}
               toggle={toggle}
               consent={consent}
               onConsent={onConsent}
@@ -1046,7 +1068,7 @@ function ExcludedSummary({ namespace, excluded }: { namespace: string; excluded:
   )
 }
 
-function ServicesSection({ inventory, disabled, baseDisabled, editable, toggle, namespaceStyles, spotlight, onConsent }: CapabilityRowsProps) {
+function ServicesSection({ inventory, disabled, baseDisabled, editable, selectionScope, toggle, namespaceStyles, spotlight, onConsent }: CapabilityRowsProps) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   if (!inventory.named_services.length) return null
   // The consent banner's "turn off the tools" for a named-service tool names
@@ -1071,6 +1093,7 @@ function ServicesSection({ inventory, disabled, baseDisabled, editable, toggle, 
               sub={realm?.about || realm?.description || undefined}
               checked={namespaceState(entry.namespace, entryKeys, disabled)}
               baseChecked={namespaceState(entry.namespace, entryKeys, baseDisabled)}
+              selectionScope={selectionScope}
               scopeLocked={!editable}
               onToggle={() => toggle(namespaceTogglePatch(entry.namespace, entryKeys, disabled))}
               expandable
@@ -1113,6 +1136,7 @@ function ServicesSection({ inventory, disabled, baseDisabled, editable, toggle, 
                     disabled={disabled}
                     baseDisabled={baseDisabled}
                     editable={editable}
+                    selectionScope={selectionScope}
                     toggle={toggle}
                     consent={entry.consent}
                     onConsent={onConsent}
@@ -1136,7 +1160,7 @@ function ServicesSection({ inventory, disabled, baseDisabled, editable, toggle, 
  *  local-draft + explicit-save selection flow as every other category. Label and
  *  description come from the payload — the server owns the quality-vs-spend
  *  copy. */
-function HelperAgentsSection({ inventory, disabled, baseDisabled, editable, toggle, pending }: CapabilityRowsProps) {
+function HelperAgentsSection({ inventory, disabled, baseDisabled, editable, selectionScope, toggle, pending }: CapabilityRowsProps) {
   const entry = inventory.subagents
   if (!entry?.available) return null
   const defaultOn = entry.default_on !== false
@@ -1155,10 +1179,36 @@ function HelperAgentsSection({ inventory, disabled, baseDisabled, editable, togg
         sub={entry.description || undefined}
         checked={off ? 'off' : 'on'}
         baseChecked={baseOff ? 'off' : 'on'}
+        selectionScope={selectionScope}
         scopeLocked={!editable}
         onToggle={() => toggle(subagentsTogglePatch(disabled, defaultOn))}
         authorityState={entry.authority_state}
       />
+    </div>
+  )
+}
+
+function MissingCapabilitiesSection({ inventory }: CapabilityRowsProps) {
+  const missing = inventory.missing_capabilities ?? []
+  if (!missing.length) return null
+  return (
+    <div>
+      <SectionTitle>Missing from Control Card</SectionTitle>
+      {missing.map((entry) => {
+        const parts = entry.capability.split('/')
+        const shortName = parts[parts.length - 1] || entry.capability
+        return (
+          <MenuRow
+            key={`${entry.category}:${entry.capability}`}
+            label={shortName}
+            sub={`${entry.category.replace(/_/g, ' ')} · ${entry.capability}`}
+            checked="off"
+            onToggle={() => {}}
+            authorityState="not_allowed"
+            lockLabelOverride="Missing"
+          />
+        )
+      })}
     </div>
   )
 }
@@ -1243,6 +1293,7 @@ function builtInSections(namespaceStyles: NamespaceStyleMap): ComposerMenuSectio
           disabled={disabled}
           baseDisabled={baseDisabled}
           editable={scope?.capabilities_editable !== false}
+          selectionScope={scope?.kind}
           toggle={toggle}
           namespaceStyles={namespaceStyles}
           pending={pending}
@@ -1283,6 +1334,7 @@ function builtInSections(namespaceStyles: NamespaceStyleMap): ComposerMenuSectio
     capabilitySection('services', 40, (inv) => inv.named_services.length > 0, ServicesSection),
     capabilitySection('conversation-targets', 43, (inv) => Boolean(inv.conversation_targets?.length), ConversationTargetsSection),
     capabilitySection('subagents', 45, (inv) => Boolean(inv.subagents?.available), HelperAgentsSection),
+    capabilitySection('missing', 47, (inv) => Boolean(inv.missing_capabilities?.length), MissingCapabilitiesSection),
     {
       id: 'connectors',
       order: 50,
@@ -1318,6 +1370,7 @@ export function useCapabilityPickerBody({
   extraSections = [],
   close,
   active,
+  loadOnActivate = true,
   presentation = 'popover',
 }: {
   vm: ChatViewModel
@@ -1325,6 +1378,7 @@ export function useCapabilityPickerBody({
   extraSections?: ComposerMenuSectionDescriptor[]
   close: () => void
   active: boolean
+  loadOnActivate?: boolean
   presentation?: string
 }): ReactNode {
   const capabilities = vm.capabilities
@@ -1360,7 +1414,7 @@ export function useCapabilityPickerBody({
   const capabilitiesRef = useRef(capabilities)
   capabilitiesRef.current = capabilities
   useEffect(() => {
-    if (active) {
+    if (active && loadOnActivate) {
       // Opening the menu is the moment fresh consent/grant state matters — a
       // grant or revoke made in Connection Hub must show here. Re-fetch on the
       // open TRANSITION (ref keeps this out of the per-state-change loop),
@@ -1375,7 +1429,7 @@ export function useCapabilityPickerBody({
       setConfirmState(null)
       setRememberChoice(false)
     }
-  }, [active])
+  }, [active, loadOnActivate])
 
   useEffect(() => {
     if (active && capabilities.status === 'ready' && openInitialModelRef.current === null) {
@@ -1471,15 +1525,14 @@ export function useCapabilityPickerBody({
   const scopeNotice = capabilities.scope?.kind === 'agent_base'
     ? (
         <div className="k-menu-notice" role="status">
-          This is the Agent Card base
+          These are the Agent Card defaults new conversations start from
           {inheritedCardRevision ? ` at revision ${inheritedCardRevision}` : ''}.
-          {' '}Its capability rows are managed in Connection Hub. Conversation overrides become available after the conversation starts; model and preference choices remain available here.
         </div>
       )
     : capabilities.scope?.kind === 'conversation' && inheritedCardRevision
       ? (
           <div className="k-menu-notice" role="status">
-            This conversation inherited Agent Card revision {inheritedCardRevision}. Current Card revocations still apply; later additions do not enter this conversation automatically.
+            This conversation started from Agent Card revision {inheritedCardRevision}. The Control Card remains its live capability range.
           </div>
         )
       : null
@@ -1500,7 +1553,7 @@ export function useCapabilityPickerBody({
             : capabilities.dirty
               ? 'Unsaved changes'
               : capabilities.scope?.kind === 'agent_base'
-                ? 'The Agent Card base is managed in Connection Hub.'
+                ? 'Saved as the defaults for new conversations.'
                 : 'Saved for this conversation. Changes apply from your next message.'}
       </span>
       <button
@@ -1620,38 +1673,31 @@ export function ComposerMenu({
   const anchorRef = useRef<HTMLDivElement | null>(null)
   const capabilities = vm.capabilities
 
+  const openForCurrentContext = (nextView: 'popover' | 'modal') => {
+    // Enter loading before the surface renders. A cached Agent Card answer is
+    // never presented as this conversation's answer while the scoped request
+    // is still pending.
+    capabilities.load(
+      capabilities.dirty || capabilities.saving ? {} : { force: true },
+    )
+    setView(nextView)
+    setOpen(true)
+  }
+
   /* A consent banner's "turn off the tools" option requests a spotlight:
    * open the menu; the tools section highlights + scrolls to the tools.
    * A namespace target (service card, long prose) or a long target list
-   * opens the READABLE expanded form directly. Closing clears the request. */
+   * opens the conversation-scoped expanded form directly. */
   const spotlightNonce = vm.state.toolSpotlight?.nonce ?? 0
   useEffect(() => {
     if (!spotlightNonce) return
     const targets = vm.state.toolSpotlight?.tools
     const preferred = preferredMenuPresentation(targets, capabilities.inventory)
     if (preferred === 'modal') {
-      // The readable form: a host that declared the `capabilities.open`
-      // contract opens the picker as a real scene window (resizable,
-      // dockable); its ack replaces the in-chat modal. No ack -> the modal.
-      void openCapabilitiesOnHost(
-        {
-          spotlight_tools: targets,
-          agent_id: vm.agentId,
-          conversation_id: vm.state.conversationId ?? undefined,
-        },
-        { source: 'chat-spotlight' },
-      ).then((acked) => {
-        if (acked) {
-          dispatch(chatActions.clearToolSpotlight())
-          return
-        }
-        setView('modal')
-        setOpen(true)
-      })
+      openForCurrentContext('modal')
       return
     }
-    setView(preferred)
-    setOpen(true)
+    openForCurrentContext(preferred)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [spotlightNonce])
   const wasOpenRef = useRef(false)
@@ -1695,6 +1741,7 @@ export function ComposerMenu({
     extraSections,
     close,
     active: open,
+    loadOnActivate: false,
     presentation: view,
   })
 
@@ -1711,7 +1758,10 @@ export function ComposerMenu({
         aria-haspopup="menu"
         aria-expanded={open}
         disabled={disabled}
-        onClick={() => setOpen((value) => !value)}
+        onClick={() => {
+          if (open) close()
+          else openForCurrentContext('popover')
+        }}
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
           <path d="M12 5v14M5 12h14" />
@@ -1727,18 +1777,7 @@ export function ComposerMenu({
                 {agentName ? <span className="k-menu-head-agent">· {agentName} agent</span> : null}
               </span>
               <CanvasExpandButton
-                onClick={() => {
-                  void openCapabilitiesOnHost(
-                    {
-                      agent_id: vm.agentId,
-                      conversation_id: vm.state.conversationId ?? undefined,
-                    },
-                    { source: 'composer-expand' },
-                  ).then((acked) => {
-                    if (acked) setOpen(false)
-                    else setView('modal')
-                  })
-                }}
+                onClick={() => setView('modal')}
                 title="Expand"
               />
             </div>

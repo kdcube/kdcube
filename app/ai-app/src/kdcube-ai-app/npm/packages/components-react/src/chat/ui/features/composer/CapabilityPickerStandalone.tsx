@@ -136,6 +136,8 @@ export function useStandaloneCapabilitiesVm(
     statusRef.current = 'loading'
     setStatus('loading')
     setError(null)
+    setInventory(null)
+    setScope(null)
     await requestRunner.run(
       () => runtime.fetchCapabilities(),
       {

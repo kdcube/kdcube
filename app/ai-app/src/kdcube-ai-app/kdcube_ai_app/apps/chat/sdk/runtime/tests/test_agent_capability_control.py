@@ -23,6 +23,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import (
     deny_all_capabilities,
     descriptor_capability_payload,
     disabled_from_projection,
+    missing_control_capabilities,
     selected_capabilities_from_disabled,
     sync_agent_capability_projection,
     unavailable_capability_states,
@@ -204,7 +205,7 @@ def test_new_descriptor_capability_is_unselected_until_the_user_adds_it() -> Non
     assert "web/future" in expanded["capability_authority"]["capabilities"]["tools"]
 
 
-def test_conversation_snapshot_rejects_later_card_additions_and_honors_revocations() -> None:
+def test_conversation_selection_starts_from_agent_card_and_only_control_is_ceiling() -> None:
     original_catalog = _catalog()
     original_authority = _payload()["capability_authority"]
     started_with = selected_capabilities_from_disabled(
@@ -218,35 +219,71 @@ def test_conversation_snapshot_rejects_later_card_additions_and_honors_revocatio
     }
 
     expanded_catalog = _catalog(include_future=True)
-    expanded_card = selected_capabilities_from_disabled(
-        authority=_payload(include_future=True)["capability_authority"],
+    expanded_control = _payload(include_future=True)["capability_authority"]
+    expanded_default = selected_capabilities_from_disabled(
+        authority=expanded_control,
         catalog=expanded_catalog,
         disabled={},
     )
-    live_base, effective = conversation_capability_projections(
-        expanded_card,
+    inherited, effective = conversation_capability_projections(
+        expanded_control,
+        expanded_default,
         stored,
     )
 
-    assert disabled_from_projection(expanded_catalog, live_base)["tools"] == {
+    assert disabled_from_projection(expanded_catalog, inherited)["tools"] == {
         "web": ["future"]
     }
     assert disabled_from_projection(expanded_catalog, effective)["tools"] == {
         "web": ["future"]
     }
 
-    revoked_card = selected_capabilities_from_disabled(
+    selected_future = {
+        **stored,
+        "projection": expanded_default,
+    }
+    _inherited, expanded_effective = conversation_capability_projections(
+        expanded_control,
+        expanded_default,
+        selected_future,
+    )
+    expanded_disabled = disabled_from_projection(
+        expanded_catalog,
+        expanded_effective,
+    )
+    assert "future" not in expanded_disabled.get("tools", {}).get("web", [])
+
+    revoked_control = selected_capabilities_from_disabled(
         authority=original_authority,
         catalog=original_catalog,
         disabled={"tools": {"web": ["search"]}},
     )
-    _live_base, revoked_effective = conversation_capability_projections(
-        revoked_card,
+    _inherited, revoked_effective = conversation_capability_projections(
+        revoked_control,
+        started_with,
         stored,
     )
     assert disabled_from_projection(original_catalog, revoked_effective)["tools"] == {
         "web": ["search"]
     }
+
+
+def test_saved_agent_card_values_removed_from_control_are_named_as_missing() -> None:
+    current_control = _payload()["capability_authority"]
+    prior_selection = _payload(include_future=True)["capability_authority"]
+
+    assert missing_control_capabilities(
+        {
+            "authority": current_control,
+            "selection": prior_selection,
+        }
+    ) == [
+        {
+            "category": "tools",
+            "capability": "web/future",
+            "reason": "missing_from_control_card",
+        }
+    ]
 
 
 def test_user_selection_round_trips_through_the_positive_card_policy() -> None:

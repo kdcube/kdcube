@@ -146,12 +146,19 @@ def _legacy_selection_as_card_projection(monkeypatch):
     """Keep selection/cache tests focused while Card behavior has its own suite."""
 
     async def _sync(_entrypoint, *, initial_disabled=None, **_kwargs):
-        return {"projection": {"test_disabled": dict(initial_disabled or {})}}
+        return {
+            "authority": {"test_disabled": {}},
+            "projection": {"test_disabled": dict(initial_disabled or {})},
+        }
 
     def _disabled(_catalog, projection):
         return dict(projection.get("test_disabled") or {})
 
-    def _conversation_projection(card_projection, _conversation_selection):
+    def _conversation_projection(
+        _control_authority,
+        card_projection,
+        _conversation_selection,
+    ):
         return card_projection, card_projection
 
     monkeypatch.setattr(agent_capability_control, "sync_agent_capability_projection", _sync)
@@ -178,7 +185,10 @@ async def test_conversation_store_error_closes_selectable_capabilities(monkeypat
     tool_cfg, skill_cfg = _tool_cfg(), AgentSkillConfig()
 
     async def _sync(*_args, **_kwargs):
-        return {"projection": {"test_disabled": {"tools": {"gmail": True}}}}
+        return {
+            "authority": {"test_disabled": {}},
+            "projection": {"test_disabled": {"tools": {"gmail": True}}},
+        }
 
     monkeypatch.setattr(agent_capability_control, "sync_agent_capability_projection", _sync)
     monkeypatch.setattr(
@@ -199,7 +209,10 @@ async def test_missing_conversation_store_closes_selectable_capabilities(monkeyp
     tool_cfg, skill_cfg = _tool_cfg(), AgentSkillConfig()
 
     async def _sync(*_args, **_kwargs):
-        return {"projection": {"test_disabled": {}}}
+        return {
+            "authority": {"test_disabled": {}},
+            "projection": {"test_disabled": {}},
+        }
 
     monkeypatch.setattr(agent_capability_control, "sync_agent_capability_projection", _sync)
     monkeypatch.setattr(
@@ -279,6 +292,7 @@ async def test_turn_materialization_records_agent_card_revision(monkeypatch):
 
     async def _sync(*_args, **_kwargs):
         return {
+            "authority": {"test_disabled": {}},
             "projection": {"test_disabled": {}},
             "card": {"card_revision": 9},
         }
@@ -346,7 +360,10 @@ async def test_each_turn_uses_the_current_card_projection(monkeypatch):
     projections = iter(({}, {"tools": {"gmail": True}}))
 
     async def _sync(*_args, **_kwargs):
-        return {"projection": {"test_disabled": next(projections)}}
+        return {
+            "authority": {"test_disabled": {}},
+            "projection": {"test_disabled": next(projections)},
+        }
 
     monkeypatch.setattr(agent_capability_control, "sync_agent_capability_projection", _sync)
 

@@ -10,11 +10,11 @@ records what it currently selects. ``base_card_revision`` records which Agent
 Card revision supplied that base. Later picker writes replace only the current
 projection and preserve both inherited facts.
 
-Positive projections are intentional. A deny map cannot name a capability
-that did not exist when the conversation started, so a later Card expansion
-could otherwise leak into an already-open conversation. Intersecting finite
-positive projections keeps new authority out while allowing current Card
-revocations to take effect immediately.
+Positive projections are intentional. The descriptor-derived Control Card is
+the only ceiling; the Agent Card supplies the initial selection, not authority.
+The finite conversation projection therefore keeps newly allowed capabilities
+off until the user selects them, while current Control Card revocations take
+effect immediately.
 """
 
 from __future__ import annotations

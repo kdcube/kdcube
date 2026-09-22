@@ -156,19 +156,25 @@ def intersect_capability_projections(
 
 
 def conversation_capability_projections(
-    card_projection: Mapping[str, Any],
+    control_authority: Mapping[str, Any],
+    agent_default_projection: Mapping[str, Any],
     conversation_selection: Mapping[str, Any] | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Return this conversation's live base and effective projection.
+    """Return the inherited value and the effective current selection.
 
-    The stored base freezes what existed when the conversation started. The
-    current Card is intersected on every read, so a later revocation closes
-    access immediately while a later addition cannot enter the conversation.
+    The descriptor-derived Control Card is the sole ceiling. The Agent Card is
+    the default for a new conversation, and the stored base records that
+    inherited value for provenance. A conversation may select any capability
+    still allowed by the current Control Card; Control removals apply live and
+    Control additions remain off until the user selects them.
     """
 
     if not isinstance(conversation_selection, Mapping):
-        current = copy.deepcopy(dict(card_projection))
-        return current, copy.deepcopy(current)
+        inherited = copy.deepcopy(dict(agent_default_projection))
+        return inherited, intersect_capability_projections(
+            control_authority,
+            inherited,
+        )
     base_projection = conversation_selection.get("base_projection")
     selected_projection = conversation_selection.get("projection")
     if not isinstance(base_projection, Mapping) or not isinstance(
@@ -176,15 +182,37 @@ def conversation_capability_projections(
         Mapping,
     ):
         raise ValueError("conversation_capability_projection_invalid")
-    live_base = intersect_capability_projections(
-        card_projection,
-        base_projection,
-    )
     effective = intersect_capability_projections(
-        live_base,
+        control_authority,
         selected_projection,
     )
-    return live_base, effective
+    return copy.deepcopy(dict(base_projection)), effective
+
+
+def missing_control_capabilities(
+    capability_control: Mapping[str, Any],
+) -> list[dict[str, str]]:
+    """Name saved Agent Card choices absent from the current Control Card."""
+
+    authority_raw = capability_control.get("authority")
+    selection_raw = capability_control.get("selection")
+    if not isinstance(authority_raw, Mapping) or not isinstance(
+        selection_raw,
+        Mapping,
+    ):
+        return []
+    authority = AgentCapabilityPolicy.from_property(authority_raw)
+    selection = AgentCapabilityPolicy.from_property(selection_raw)
+    missing = selection.subtract(authority)
+    return [
+        {
+            "category": category,
+            "capability": capability,
+            "reason": "missing_from_control_card",
+        }
+        for category, capabilities in sorted(missing.capabilities.items())
+        for capability in sorted(capabilities)
+    ]
 
 
 def _realm_operation_entries(row: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -973,6 +1001,7 @@ __all__ = [
     "descriptor_capability_payload",
     "disabled_from_projection",
     "intersect_capability_projections",
+    "missing_control_capabilities",
     "selected_capabilities_from_disabled",
     "sync_agent_capability_projection",
     "unavailable_capability_states",
