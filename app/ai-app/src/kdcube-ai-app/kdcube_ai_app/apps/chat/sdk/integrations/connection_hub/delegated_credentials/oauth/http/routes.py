@@ -34,6 +34,7 @@ from connection_hub.delegated_credentials.live_grant import (
     LiveGrantCardError,
     live_grants_for_resource,
     resolve_live_grant_card,
+    whole_card_grants,
 )
 from connection_hub.delegated_credentials.oauth.client_metadata import (
     ClientMetadataError,
@@ -64,6 +65,10 @@ from connection_hub.delegated_credentials.resource_operations import (
 )
 from connection_hub.delegated_credentials.cards.resolver import (
     CardUnavailable,
+)
+from connection_hub.delegated_credentials.cards.identity import (
+    CARD_KIND_AGENT,
+    CARD_KIND_AUTOMATION,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.serving import (
     delegated_card_store,
@@ -609,6 +614,46 @@ def _selected_resource_authority(
         for selector in selected_operations
     }
     return selected_grants, selected_operations
+
+
+def _direct_operation_authority(
+    operations: Iterable[str],
+    *,
+    scopes: Iterable[str],
+    cfg: OAuthDelegatedClientConfig,
+) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """Project resource-free compact selections onto one declared row each."""
+    allowed_grants = {
+        str(scope).strip() for scope in scopes if str(scope).strip()
+    }
+    row_by_operation: dict[str, list[tuple[str, list[str]]]] = {}
+    for resource_cfg in cfg.resources:
+        selector, _literal = resolve_declared_resource(
+            cfg,
+            resource_cfg.resource,
+        )
+        if not selector:
+            continue
+        for tool in resource_cfg.tools:
+            grants = [str(grant) for grant in (tool.grants or resource_cfg.grants)]
+            if grants and not set(grants).issubset(allowed_grants):
+                continue
+            row_by_operation.setdefault(tool.name, []).append((selector, grants))
+
+    grants_by_resource: dict[str, list[str]] = {}
+    operations_by_resource: dict[str, list[str]] = {}
+    for operation in operations:
+        matches = row_by_operation.get(str(operation), [])
+        if len(matches) != 1:
+            raise ValueError(
+                "resource-free operation selection must identify one exact catalog row"
+            )
+        selector, grants = matches[0]
+        grants_by_resource[selector] = grants
+        selected = operations_by_resource.setdefault(selector, [])
+        if str(operation) not in selected:
+            selected.append(str(operation))
+    return grants_by_resource, operations_by_resource
 
 
 async def _active_catalog_document(request: Request) -> Any | None:
@@ -1758,18 +1803,25 @@ async def authorize_consent_draft(request: Request) -> Response:
         cfg,
         raw_resource_grants,
     )
-    # RFC 8707 keeps the entry indicator concrete. Card authority uses the
-    # declared selector that covers it. An uncovered URL stays literal; the
-    # catch-all row is never substituted as authority for one requested door.
-    entry_key, _entry_is_literal = resolve_declared_resource(cfg, req.resource)
-    entry_grants = resource_grants.setdefault(entry_key, [])
-    for grant in req.scopes:
-        if grant not in entry_grants:
-            entry_grants.append(grant)
-    requested_operations = [
-        tool.name
-        for tool in cfg.tools_for_scopes(req.scopes, resource=req.resource)
-    ]
+    # An RFC 8707 resource names one concrete entry door. Only that case may
+    # seed an entry row. A whole-Card authorization deliberately omits the
+    # resource parameter; manufacturing "*" here would silently grant every
+    # current and future surface instead of preserving exact Card selections.
+    entry_key = ""
+    requested_operations: list[str] = []
+    if req.resource:
+        entry_key, _entry_is_literal = resolve_declared_resource(
+            cfg,
+            req.resource,
+        )
+        entry_grants = resource_grants.setdefault(entry_key, [])
+        for grant in req.scopes:
+            if grant not in entry_grants:
+                entry_grants.append(grant)
+        requested_operations = [
+            tool.name
+            for tool in cfg.tools_for_scopes(req.scopes, resource=req.resource)
+        ]
     if existing:
         raw_resource_operations = {
             str(resource): [str(operation) for operation in operations or ()]
@@ -1779,14 +1831,17 @@ async def authorize_consent_draft(request: Request) -> Response:
             cfg,
             raw_resource_operations,
         )
-        entry_operations = resource_operations.setdefault(entry_key, [])
-        for operation in requested_operations:
-            if operation not in entry_operations:
-                entry_operations.append(operation)
+        if entry_key:
+            entry_operations = resource_operations.setdefault(entry_key, [])
+            for operation in requested_operations:
+                if operation not in entry_operations:
+                    entry_operations.append(operation)
     else:
-        resource_operations = {
-            entry_key: requested_operations
-        }
+        resource_operations = (
+            {entry_key: requested_operations}
+            if entry_key
+            else {}
+        )
     invocation_policies = {
         resource: {operation: "always" for operation in operations}
         for resource, operations in resource_operations.items()
@@ -2051,17 +2106,26 @@ async def authorize_consent_decision(request: Request) -> Response:
     if consumed_context != context:
         return _consent_draft_error("context_changed")
 
-    entry_key, _entry_is_literal = resolve_declared_resource(cfg, req.resource)
+    entry_key = ""
+    if req.resource:
+        entry_key, _entry_is_literal = resolve_declared_resource(
+            cfg,
+            req.resource,
+        )
+    resolved_resource_grants = dict(resolved.get("resource_grants") or {})
+    code_scopes = (
+        list(resolved_resource_grants.get(entry_key, ()))
+        if entry_key
+        else selected_grants
+    )
     code = await store.create_auth_code(
         client_id=req.client_id,
         redirect_uri=req.redirect_uri,
         code_challenge=req.code_challenge,
         sub=subject,
-        scopes=list(
-            dict(resolved.get("resource_grants") or {}).get(entry_key, ())
-        ),
+        scopes=code_scopes,
         operations=list(resolved.get("operations") or ()),
-        resource_grants=dict(resolved.get("resource_grants") or {}),
+        resource_grants=resolved_resource_grants,
         resource_operations=selected_resource_operations,
         resource=req.resource,
         registry_access_id=str(resolved.get("access_id") or ""),
@@ -2292,14 +2356,51 @@ async def authorize_consent(request: Request) -> Response:
                 "error_description": str(exc),
             },
         )
-    resource_grants = {
-        req.resource: list(selected_scopes),
-        **child_resource_grants,
-    }
-    resource_operations = {
-        req.resource: direct_operations,
-        **child_resource_operations,
-    }
+    if req.resource:
+        entry_key, _entry_is_literal = resolve_declared_resource(
+            cfg,
+            req.resource,
+        )
+        resource_grants = {
+            entry_key: list(selected_scopes),
+            **child_resource_grants,
+        }
+        resource_operations = {
+            entry_key: direct_operations,
+            **child_resource_operations,
+        }
+    else:
+        # Resource-free OAuth represents a whole Card. Its authority is the
+        # exact catalog rows submitted by the consent surface, never a
+        # synthetic catch-all derived from the missing entry door.
+        try:
+            direct_resource_grants, direct_resource_operations = (
+                _direct_operation_authority(
+                    direct_operations,
+                    scopes=selected_scopes,
+                    cfg=cfg,
+                )
+            )
+        except ValueError as exc:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "invalid_request",
+                    "error_description": str(exc),
+                },
+            )
+        resource_grants = dict(child_resource_grants)
+        resource_operations = {
+            resource: list(operations)
+            for resource, operations in child_resource_operations.items()
+        }
+        for resource, grants in direct_resource_grants.items():
+            resource_grants.setdefault(resource, grants)
+        for resource, operations in direct_resource_operations.items():
+            selected = resource_operations.setdefault(resource, [])
+            for operation in operations:
+                if operation not in selected:
+                    selected.append(operation)
     if req.resource:
         resource_grants, _rewritten_grants = resolve_declared_resource_keys(
             cfg,
@@ -2522,6 +2623,17 @@ async def _issue_tokens(
             operations or (),
         )
     )
+    whole_card = resolved_card_kind in {CARD_KIND_AGENT, CARD_KIND_AUTOMATION}
+    token_resource = None if whole_card else resource
+    if whole_card and grant_map:
+        scopes = sorted(
+            {
+                str(grant).strip()
+                for grants in grant_map.values()
+                for grant in grants
+                if str(grant).strip()
+            }
+        )
     operations = list(operation_union(operation_map))
     # This is the common credential envelope understood by the Connection Hub
     # authority SDK. The access token remains a real kst1 session token; the
@@ -2538,7 +2650,7 @@ async def _issue_tokens(
         account_scope=account_scope,
         tenant=tenant,
         project=project,
-        resource=resource,
+        resource=token_resource,
         identity_scope=identity_scope,
         expires_in=3600,
     )
@@ -2568,7 +2680,7 @@ async def _issue_tokens(
             account_scope=account_scope,
             tenant=tenant,
             project=project,
-            resource=resource,
+            resource=token_resource,
             identity_scope=identity_scope,
             expires_in=expires_in,
         )
@@ -2593,7 +2705,7 @@ async def _issue_tokens(
             client_id=client_id, sub=sub, scopes=scopes, operations=operations,
             resource_grants=grant_map,
             resource_operations=operation_map,
-            resource=resource,
+            resource=token_resource,
             identity_scope=identity_scope,
             credential=credential.to_dict(),
             grantor_authority=dict(grantor_authority or {}),
@@ -2614,10 +2726,10 @@ async def _issue_tokens(
             metadata_snapshot = dict(client_record.get("metadata") or {})
         client_label = _oauth_card_label(
             metadata_snapshot,
-            resource=str(resource or ""),
+            resource=str(token_resource or ""),
             explicit=str(card_label or ""),
         )
-        door_path = str(resource or "").split("?", 1)[0].rstrip("*").rstrip("/")
+        door_path = str(token_resource or "").split("?", 1)[0].rstrip("*").rstrip("/")
         door_alias = door_path.rsplit("/mcp/", 1)[-1].strip("/") if "/mcp/" in door_path else ""
         registered_name = str(metadata_snapshot.get("client_name") or "")
         asserted_metadata = (
@@ -2632,7 +2744,7 @@ async def _issue_tokens(
             "[connection_hub.oauth] card_label client_id=%s registered_name=%r "
             "metadata_keys=%s resource=%r door_alias=%r -> label=%r",
             client_id, registered_name, sorted(metadata_snapshot.keys()),
-            str(resource or ""), door_alias, client_label,
+            str(token_resource or ""), door_alias, client_label,
         )
         recorded = await service.record_oauth_grant(
             grantor_subject=sub,
@@ -2647,7 +2759,7 @@ async def _issue_tokens(
             operations=operations if replace_authority else None,
             resource_grants=grant_map if replace_authority else None,
             resource_operations=operation_map if replace_authority else None,
-            resource=str(resource or ""),
+            resource=str(token_resource or ""),
             access_id=resolved_access_id,
             card_kind=resolved_card_kind,
             identity_scope=identity_scope,
@@ -2734,6 +2846,7 @@ async def _issue_tokens(
             "refresh_token": refresh_token,
             "scope": " ".join(scopes),
             "access_id": resolved_access_id,
+            "card_kind": resolved_card_kind,
         },
         headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
     )
@@ -2865,9 +2978,18 @@ async def token(request: Request) -> Response:
                     str(rec.get("client_id") or ""),
                     "delegated consent was revoked",
                 )
-            live_scopes = live_grants_for_resource(
-                card,
-                str(rec.get("resource") or "") or "*",
+            refresh_card_kind = card.card_kind
+            whole_card = refresh_card_kind in {
+                CARD_KIND_AGENT,
+                CARD_KIND_AUTOMATION,
+            }
+            live_scopes = (
+                whole_card_grants(card)
+                if whole_card
+                else live_grants_for_resource(
+                    card,
+                    str(rec.get("resource") or "") or "*",
+                )
             )
             if live_scopes is None:
                 return _refresh_refused(
@@ -2880,13 +3002,18 @@ async def token(request: Request) -> Response:
             resource_grants = dict(card.resource_grants)
             resource_operations = dict(card.resource_operations)
             account_scope = card.account_scope
-            refresh_card_kind = card.card_kind
         new_rt = await store.rotate_refresh_token(
             rt,
             scopes=list(scopes),
             operations=list(operations),
             resource_grants=resource_grants,
             resource_operations=resource_operations,
+            resource=(
+                ""
+                if refresh_card_kind in {CARD_KIND_AGENT, CARD_KIND_AUTOMATION}
+                else None
+            ),
+            card_kind=refresh_card_kind or None,
             state=refresh_state,
         )
         if not new_rt:

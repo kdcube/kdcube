@@ -170,15 +170,84 @@ class _GrantStore:
         return self.record
 
 
+_REDIS_MUTATING_METHODS = {
+    "decr",
+    "delete",
+    "eval",
+    "evalsha",
+    "expire",
+    "hdel",
+    "hincrby",
+    "hset",
+    "incr",
+    "lpush",
+    "mset",
+    "pexpire",
+    "psetex",
+    "rename",
+    "rpush",
+    "sadd",
+    "set",
+    "setex",
+    "srem",
+    "unlink",
+    "zadd",
+    "zrem",
+}
+
+
+class _RedisPipeline:
+    def __init__(self, redis: "_Redis") -> None:
+        self._redis = redis
+
+    def __getattr__(self, name: str):
+        if name not in _REDIS_MUTATING_METHODS:
+            raise AttributeError(name)
+
+        def _mutation(*_args, **_kwargs):
+            self._redis.write_count += 1
+            return self
+
+        return _mutation
+
+    async def execute(self):
+        return []
+
+
 class _Redis:
     def __init__(self) -> None:
         self.values: dict[str, str] = {}
         self.fail_get = False
+        self.read_count = 0
+        self.write_count = 0
 
     async def get(self, key: str):
+        self.read_count += 1
         if self.fail_get:
             raise RuntimeError("redis unavailable")
         return self.values.get(key)
+
+    async def set(self, key: str, value: str, **_kwargs):
+        self.write_count += 1
+        self.values[key] = value
+        return True
+
+    async def delete(self, *keys: str):
+        self.write_count += 1
+        return sum(self.values.pop(key, None) is not None for key in keys)
+
+    def pipeline(self, *_args, **_kwargs):
+        return _RedisPipeline(self)
+
+    def __getattr__(self, name: str):
+        if name not in _REDIS_MUTATING_METHODS:
+            raise AttributeError(name)
+
+        async def _mutation(*_args, **_kwargs):
+            self.write_count += 1
+            return True
+
+        return _mutation
 
 
 def _authority(
@@ -722,6 +791,76 @@ def test_managed_mcp_guard_applies_live_operation_narrowing(monkeypatch):
     body = json.loads(result["content"][0]["text"])
     assert body["error"]["code"] == "delegated_capability_not_granted"
     assert body["ret"]["requested_capability"]["kind"] == "outer_operation"
+
+
+def test_repeated_whole_card_guard_calls_read_once_and_never_write(monkeypatch):
+    redis = _Redis()
+    _store_live_card(
+        redis,
+        _live_card(
+            resource_grants={
+                GUARD_RESOURCE: ("records:read",),
+                "https://other.example/mcp": ("memories:read",),
+            },
+            resource_operations={
+                GUARD_RESOURCE: ("records_export",),
+                "https://other.example/mcp": ("memory_search",),
+            },
+        ),
+    )
+    client = _client(
+        monkeypatch,
+        grant_record=_pointer_grant(),
+        redis=redis,
+    )
+
+    first = client.post(
+        "/guard",
+        json=_rpc_tool_call(),
+        headers={"Authorization": "Bearer reader"},
+    )
+    writes_after_first = redis.write_count
+    second = client.post(
+        "/guard",
+        json=_rpc_tool_call(),
+        headers={"Authorization": "Bearer reader"},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert redis.read_count == 2
+    assert writes_after_first == redis.write_count == 0
+
+
+def test_whole_card_guard_denies_an_operation_granted_only_at_another_surface(
+    monkeypatch,
+):
+    other_resource = "https://other.example/mcp"
+    redis = _Redis()
+    _store_live_card(
+        redis,
+        _live_card(
+            operations=("memory_search",),
+            resource_grants={other_resource: ("memories:read",)},
+            resource_operations={other_resource: ("memory_search",)},
+        ),
+    )
+    client = _client(
+        monkeypatch,
+        grant_record=_pointer_grant(),
+        redis=redis,
+    )
+
+    response = client.post(
+        "/guard",
+        json=_rpc_tool_call("memory_search"),
+        headers={"Authorization": "Bearer reader"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error_description"] == (
+        "delegated credential resource mismatch"
+    )
 
 
 def test_live_card_does_not_share_an_equal_tool_name_between_resources(monkeypatch):

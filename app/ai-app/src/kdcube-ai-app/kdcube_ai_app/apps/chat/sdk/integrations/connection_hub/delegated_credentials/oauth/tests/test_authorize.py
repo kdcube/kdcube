@@ -756,6 +756,7 @@ def test_authorize_unknown_client_is_400_not_redirect(client):
 
 def _open_card_editor(client, monkeypatch, *, multi_resource: bool):
     resource = "https://runtime.example.test/public/mcp/worker_stream"
+    resource_url = resource
     config = oauth_delegated_config(client.app)
 
     class CardEditorAccess:
@@ -770,6 +771,7 @@ def _open_card_editor(client, monkeypatch, *, multi_resource: bool):
             assert client_id == "claude"
             asserted = client_metadata.get("client_metadata") or {}
             full = asserted.get("kdcube_credential_use") == "multi_resource"
+            assert resource == (None if full else resource_url)
             return {
                 "ok": True,
                 "access_id": "oauth-card-1",
@@ -781,7 +783,11 @@ def _open_card_editor(client, monkeypatch, *, multi_resource: bool):
                     "mode": "full" if full else "entry",
                     "resources": [] if full else [resource],
                 },
-                "catalog_row_by_resource": {resource: "*"},
+                "catalog_row_by_resource": (
+                    {}
+                    if full
+                    else {resource: "*"}
+                ),
             }
 
         async def resolve_oauth_consent_authority(self, _user, **selection):
@@ -832,7 +838,7 @@ def _open_card_editor(client, monkeypatch, *, multi_resource: bool):
         )
     response = client.get(
         "/oauth/authorize",
-        params=_params(resource=resource),
+        params=_params() if multi_resource else _params(resource=resource),
         headers={"Authorization": "Bearer admin-tok"},
         follow_redirects=False,
     )
@@ -883,13 +889,15 @@ def test_multi_resource_oauth_delivery_opens_full_card_editor(client, monkeypatc
 
     assert draft.status_code == 200, draft.text
     payload = draft.json()
-    assert payload["entry_door"]["resource"] == resource
+    assert payload["entry_door"]["resource"] is None
     assert payload["catalog_scope"] == {"mode": "full", "resources": []}
     assert payload["client"]["client_metadata"] == {
         "kdcube_credential_use": "multi_resource",
         "kdcube_agent_id": "codex:session-1",
     }
     assert payload["selection"]["label"].endswith("codex:session-1")
+    assert payload["selection"]["resource_grants"] == {}
+    assert payload["selection"]["resource_operations"] == {}
 
 
 def test_card_editor_records_declared_resource_and_keeps_concrete_entry(
@@ -1128,8 +1136,12 @@ def test_multi_resource_card_decision_carries_full_selection_once(client, monkey
     code = dict(up.parse_qsl(up.urlsplit(approved.json()["redirect_url"]).query))["code"]
     store = client.app.state.oauth_grant_store
     code_payload = json.loads(store._r.values[store._key("code", code)])
+    assert code_payload["resource"] == ""
+    assert code_payload["card_kind"] == CARD_KIND_AUTOMATION
     assert code_payload["resource_grants"] == decision["resource_grants"]
     assert code_payload["resource_operations"] == decision["resource_operations"]
+    assert "*" not in code_payload["resource_grants"]
+    assert "*" not in code_payload["resource_operations"]
     assert code_payload["card_label"] == "codex-main on dev-main"
     assert code_payload["properties"] == decision["properties"]
     assert code_payload["expected_card_revision"] == draft["card_revision"]

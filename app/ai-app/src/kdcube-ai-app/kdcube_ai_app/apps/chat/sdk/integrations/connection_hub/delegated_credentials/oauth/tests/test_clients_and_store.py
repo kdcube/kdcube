@@ -364,6 +364,28 @@ async def test_refresh_token_validates_then_rotates(store):
 
 
 @pytest.mark.asyncio
+async def test_refresh_rotation_rewrites_agent_record_without_entry_resource(store):
+    rt = await store.create_refresh_token(
+        client_id="codex",
+        sub="user-1",
+        scopes=["work:read"],
+        resource="https://hub.example.test/mcp/worker_stream",
+        registry_access_id="aut_0123456789abcdef",
+        card_kind="automation",
+    )
+
+    new_rt = await store.rotate_refresh_token(
+        rt,
+        resource="",
+        card_kind="automation",
+    )
+
+    rotated = await store.validate_refresh_token(new_rt)
+    assert rotated["resource"] == ""
+    assert rotated["card_kind"] == "automation"
+
+
+@pytest.mark.asyncio
 async def test_refresh_token_allows_only_one_concurrent_rotation(store):
     rt = await store.create_refresh_token(
         client_id="claude",
