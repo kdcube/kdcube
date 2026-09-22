@@ -15,6 +15,7 @@ from __future__ import annotations
 import inspect
 import json
 import logging
+import secrets
 from functools import wraps
 from typing import Any, Iterable, Mapping, Optional, Tuple
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
@@ -89,6 +90,22 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentia
     oauth_tenant_project,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.http.discovery import resolve_issuer
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.http.device import (
+    DEVICE_CONSENT_SCHEMA,
+    device_completion_page,
+    device_consent_binding,
+    device_oauth_error,
+    device_verification_page,
+    get_device_grant_store,
+    verification_uri,
+    verification_uri_complete,
+)
+from connection_hub.delegated_credentials.oauth.device import (
+    DEVICE_GRANT_TYPE,
+    DEVICE_POLL_APPROVED,
+    DEVICE_POLL_AUTHORIZATION_PENDING,
+    DEVICE_POLL_SLOW_DOWN,
+)
 from connection_hub.delegated_credentials.oauth.flow import (
     AuthorizeError,
     AuthorizeRequest,
@@ -1159,6 +1176,29 @@ async def register_client(request: Request) -> Response:
                 "error_description": "only public clients using token_endpoint_auth_method 'none' are supported",
             },
         )
+    requested_grant_types = body.get("grant_types")
+    if requested_grant_types is None:
+        requested_grant_types = ["authorization_code", "refresh_token"]
+    supported_grant_types = {
+        "authorization_code",
+        "refresh_token",
+        DEVICE_GRANT_TYPE,
+    }
+    if (
+        not isinstance(requested_grant_types, list)
+        or not requested_grant_types
+        or any(
+            not isinstance(value, str) or value not in supported_grant_types
+            for value in requested_grant_types
+        )
+    ):
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "invalid_client_metadata",
+                "error_description": "grant_types contains an unsupported grant",
+            },
+        )
     redirect_uris = body.get("redirect_uris") or []
     if not isinstance(redirect_uris, list) or not redirect_uris:
         return JSONResponse(
@@ -1202,6 +1242,7 @@ async def register_client(request: Request) -> Response:
     )
     record = await get_grant_store(request).register_client(
         redirect_uris=redirect_uris,
+        grant_types=list(dict.fromkeys(requested_grant_types)),
         application_type=application_type,
         metadata=metadata,
     )
@@ -1211,7 +1252,7 @@ async def register_client(request: Request) -> Response:
         "redirect_uris": record["redirect_uris"],
         "token_endpoint_auth_method": "none",
         "application_type": application_type,
-        "grant_types": ["authorization_code", "refresh_token"],
+        "grant_types": list(dict.fromkeys(requested_grant_types)),
         "response_types": ["code"],
         "client_name": body.get("client_name"),
     })
@@ -1220,6 +1261,228 @@ async def register_client(request: Request) -> Response:
     if client_uri:
         content["client_uri"] = client_uri
     return JSONResponse(status_code=201, content=content)
+
+
+@router.post("/oauth/device_authorization", include_in_schema=False)
+@_normalize_grant_store_unavailable
+async def device_authorization(request: Request) -> Response:
+    """Create one short-lived RFC 8628 authorization request."""
+
+    issuer = resolve_issuer(request)
+    form = await request.form()
+    client_id = str(form.get("client_id") or "").strip()
+    resource = str(form.get("resource") or "").strip()
+    scope = str(form.get("scope") or "").strip()
+    requested_access_id = str(form.get("access_id") or "").strip()
+    if len(requested_access_id) > 256 or any(
+        ord(character) < 0x20 or ord(character) == 0x7F
+        for character in requested_access_id
+    ):
+        return device_oauth_error(
+            "invalid_request",
+            "access_id is invalid",
+        )
+    expected_card_revision: int | None = None
+    raw_revision = str(form.get("expected_card_revision") or "").strip()
+    if raw_revision:
+        try:
+            expected_card_revision = int(raw_revision)
+        except ValueError:
+            expected_card_revision = 0
+        if expected_card_revision < 1:
+            return device_oauth_error(
+                "invalid_request",
+                "expected_card_revision must be a positive integer",
+            )
+
+    cfg = await _consent_config(request)
+    if cfg is None:
+        return device_oauth_error(
+            "temporarily_unavailable",
+            "the delegated catalog is unavailable",
+            status=503,
+        )
+    try:
+        resolver = await _dynamic_client_resolver(request, client_id)
+    except ClientMetadataError as error:
+        return device_oauth_error(error.code, error.description, status=error.status_code)
+    client = get_client(client_id, request)
+    if client is None and resolver is not None:
+        client = resolver(client_id)
+    if client is None or not client.redirect_uris:
+        return device_oauth_error("invalid_client", "unknown client_id")
+    if DEVICE_GRANT_TYPE not in client.grant_types:
+        return device_oauth_error(
+            "unauthorized_client",
+            "client_id is not registered for device authorization",
+        )
+    authorize_params = {
+        "client_id": client_id,
+        # Device authorization never redirects here. Keeping the registered
+        # URI in the common request shape lets the existing consent validator
+        # enforce the same client snapshot and scopes.
+        "redirect_uri": client.redirect_uris[0],
+        "response_type": "code",
+        "scope": scope,
+        "resource": resource,
+        "state": secrets.token_urlsafe(24),
+        "code_challenge": secrets.token_urlsafe(32),
+        "code_challenge_method": "S256",
+    }
+    try:
+        parsed = parse_authorize_request(
+            authorize_params,
+            client_resolver=resolver,
+            public_client_resolver=lambda cid: get_client(cid, request),
+            supported_scopes=cfg.supported_scopes(resource),
+        )
+    except AuthorizeError as error:
+        return device_oauth_error(
+            error.error,
+            error.error_description or "the device authorization request is invalid",
+        )
+
+    catalog_version = await _active_catalog_version_for_consent(request)
+    if not catalog_version:
+        return device_oauth_error(
+            "temporarily_unavailable",
+            "the delegated catalog is unavailable",
+            status=503,
+        )
+    issued = await get_device_grant_store(request).create(
+        client_id=parsed.client_id,
+        scopes=parsed.scopes,
+        resource=parsed.resource or "",
+        client_metadata=(parsed.client.snapshot() if parsed.client is not None else {}),
+        requested_access_id=requested_access_id,
+        expected_card_revision=expected_card_revision,
+        context={
+            "authorize_params": authorize_params,
+            "client_metadata_digest": (
+                parsed.client.snapshot_digest() if parsed.client is not None else ""
+            ),
+            "catalog_version": catalog_version,
+        },
+    )
+    return JSONResponse(
+        {
+            "device_code": issued.device_code,
+            "user_code": issued.user_code,
+            "verification_uri": verification_uri(issuer),
+            "verification_uri_complete": verification_uri_complete(
+                issuer, issued.user_code
+            ),
+            "expires_in": issued.expires_in,
+            "interval": issued.interval,
+        },
+        headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+    )
+
+
+@router.get("/oauth/device", include_in_schema=False)
+@_normalize_grant_store_unavailable
+async def verify_device(request: Request) -> Response:
+    issuer = resolve_issuer(request)
+    user_code = str(request.query_params.get("user_code") or "").strip()
+    if not user_code:
+        return device_verification_page(issuer)
+
+    user, denied = await _require_user(request)
+    if denied is not None:
+        if getattr(denied, "status_code", None) == 401:
+            return_to = _return_to(request)
+            return RedirectResponse(
+                f"{sign_in_bounce_path()}?next={quote(return_to, safe='')}",
+                status_code=302,
+            )
+        return denied
+    subject = _user_subject(user or {})
+    if not subject:
+        return JSONResponse(status_code=401, content={"error": "login_required"})
+
+    found = await get_device_grant_store(request).read_user_code(
+        user_code,
+        attempt_key=subject,
+    )
+    if found.status == "rate_limited":
+        return device_verification_page(
+            issuer,
+            user_code=user_code,
+            error="Too many incorrect codes. Try again later.",
+            status=429,
+        )
+    if found.status != "found" or found.request is None:
+        return device_verification_page(
+            issuer,
+            user_code=user_code,
+            error="This code is invalid or expired.",
+            status=400,
+        )
+    device_request = found.request
+    context = device_request.get("context")
+    if not isinstance(context, Mapping):
+        return device_verification_page(
+            issuer,
+            error="This authorization request is unavailable.",
+            status=400,
+        )
+    authorize_params = context.get("authorize_params")
+    if not isinstance(authorize_params, Mapping):
+        return device_verification_page(
+            issuer,
+            error="This authorization request is unavailable.",
+            status=400,
+        )
+    widget_base = _connection_hub_widget_base(request)
+    owner_cfg = await _consent_config(request, owner_subject=subject)
+    if owner_cfg is None or owner_cfg.consent_ui.mode != "connection_hub" or not widget_base:
+        return device_verification_page(
+            issuer,
+            error="The authorization editor is unavailable.",
+            status=503,
+        )
+    draft = await get_grant_store(request).create_consent_draft(
+        subject,
+        context={
+            "schema": _CONSENT_DRAFT_SCHEMA,
+            "authorize_params": dict(authorize_params),
+            "client_id": str(device_request.get("client_id") or ""),
+            "client_metadata_digest": str(
+                context.get("client_metadata_digest") or ""
+            ),
+            "catalog_version": str(context.get("catalog_version") or ""),
+            "device_authorization": {
+                "schema": DEVICE_CONSENT_SCHEMA,
+                "device_digest": found.device_digest,
+                "user_digest": found.user_digest,
+                "user_code": user_code,
+                "requested_access_id": str(
+                    device_request.get("requested_access_id") or ""
+                ),
+                "expected_card_revision": device_request.get(
+                    "expected_card_revision"
+                ),
+            },
+        },
+    )
+    separator = "&" if "?" in widget_base else "?"
+    return RedirectResponse(
+        f"{widget_base}{separator}"
+        + urlencode({"tab": "delegatedAccess", "oauth_consent": draft}),
+        status_code=302,
+        headers={
+            "Cache-Control": "no-store",
+            "Pragma": "no-cache",
+            "Referrer-Policy": "no-referrer",
+        },
+    )
+
+
+@router.get("/oauth/device/complete", include_in_schema=False)
+async def device_complete(request: Request) -> Response:
+    return device_completion_page(
+        approved=str(request.query_params.get("result") or "") == "approved"
+    )
 
 
 @router.get("/oauth/authorize", include_in_schema=False)
@@ -1762,6 +2025,9 @@ async def authorize_consent_draft(request: Request) -> Response:
     )
     if not ok:
         return _consent_draft_error(reason)
+    device_binding = device_consent_binding(context)
+    if context.get("device_authorization") is not None and device_binding is None:
+        return _consent_draft_error("invalid")
     req, cfg, invalid = await _request_from_consent_draft(
         request,
         subject=subject,
@@ -1794,6 +2060,37 @@ async def authorize_consent_draft(request: Request) -> Response:
             status_code=int(seed.get("status") or 503),
             content=seed,
         )
+    if device_binding is not None:
+        seeded_access_id = str(seed.get("access_id") or "").strip()
+        seeded_revision = int(seed.get("card_revision") or 0)
+        requested_access_id = str(
+            device_binding.get("requested_access_id") or ""
+        ).strip()
+        expected_revision = device_binding.get("expected_card_revision")
+        terminal_error = ""
+        if requested_access_id and requested_access_id != seeded_access_id:
+            terminal_error = "device_card_mismatch"
+        elif expected_revision is not None and int(expected_revision) != seeded_revision:
+            terminal_error = "device_card_revision_conflict"
+        if terminal_error:
+            await get_device_grant_store(request).deny(
+                device_digest=str(device_binding["device_digest"]),
+                user_digest=str(device_binding["user_digest"]),
+                approving_subject=subject,
+                error=terminal_error,
+            )
+            await get_grant_store(request).consume_consent_draft_context(
+                draft_id,
+                subject,
+            )
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error": terminal_error,
+                    "error_description": "The requested Card changed; restart device authorization.",
+                },
+                headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+            )
     existing = seed.get("access") if isinstance(seed.get("access"), Mapping) else {}
     raw_resource_grants = {
         str(resource): [str(grant) for grant in grants or ()]
@@ -1909,6 +2206,15 @@ async def authorize_consent_draft(request: Request) -> Response:
             "redirect_host": urlsplit(req.redirect_uri).netloc,
             "requested_scopes": list(req.scopes),
         },
+        **(
+            {
+                "device_authorization": {
+                    "user_code": str(device_binding["user_code"]),
+                }
+            }
+            if device_binding is not None
+            else {}
+        ),
         "account_requirements": _account_requirements_payload(requirements),
         "catalog_scope": seed.get("catalog_scope") or {
             "mode": "entry",
@@ -1970,6 +2276,9 @@ async def authorize_consent_decision(request: Request) -> Response:
     ok, reason, context = await store.read_consent_draft_context(draft_id, subject)
     if not ok:
         return _consent_draft_error(reason)
+    device_binding = device_consent_binding(context)
+    if context.get("device_authorization") is not None and device_binding is None:
+        return _consent_draft_error("invalid")
     req, cfg, invalid = await _request_from_consent_draft(
         request,
         subject=subject,
@@ -1993,6 +2302,18 @@ async def authorize_consent_decision(request: Request) -> Response:
         )
         if not consumed:
             return _consent_draft_error(consume_reason)
+        if device_binding is not None:
+            await get_device_grant_store(request).deny(
+                device_digest=str(device_binding["device_digest"]),
+                user_digest=str(device_binding["user_digest"]),
+                approving_subject=subject,
+            )
+            return JSONResponse({
+                "ok": True,
+                "redirect_url": (
+                    f"{verification_uri(issuer)}/complete?result=denied"
+                ),
+            })
         return JSONResponse({
             "ok": True,
             "redirect_url": build_redirect(
@@ -2044,10 +2365,42 @@ async def authorize_consent_decision(request: Request) -> Response:
         properties=properties,
     )
     if resolved.get("ok") is not True:
+        if (
+            device_binding is not None
+            and str(resolved.get("error") or "") == "delegated_card_save_conflict"
+        ):
+            await get_device_grant_store(request).deny(
+                device_digest=str(device_binding["device_digest"]),
+                user_digest=str(device_binding["user_digest"]),
+                approving_subject=subject,
+                error="device_card_revision_conflict",
+            )
+            await store.consume_consent_draft_context(draft_id, subject)
         return JSONResponse(
             status_code=int(resolved.get("status") or 400),
             content=resolved,
         )
+    if device_binding is not None:
+        requested_access_id = str(
+            device_binding.get("requested_access_id") or ""
+        ).strip()
+        if requested_access_id and requested_access_id != str(
+            resolved.get("access_id") or ""
+        ).strip():
+            await get_device_grant_store(request).deny(
+                device_digest=str(device_binding["device_digest"]),
+                user_digest=str(device_binding["user_digest"]),
+                approving_subject=subject,
+                error="device_card_mismatch",
+            )
+            await store.consume_consent_draft_context(draft_id, subject)
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error": "device_card_mismatch",
+                    "error_description": "The approved Card does not match the requested Card.",
+                },
+            )
     selected_resource_operations = dict(resolved.get("resource_operations") or {})
     selected_policy_keys = {
         (str(resource), str(operation))
@@ -2118,31 +2471,52 @@ async def authorize_consent_decision(request: Request) -> Response:
         if entry_key
         else selected_grants
     )
-    code = await store.create_auth_code(
-        client_id=req.client_id,
-        redirect_uri=req.redirect_uri,
-        code_challenge=req.code_challenge,
-        sub=subject,
-        scopes=code_scopes,
-        operations=list(resolved.get("operations") or ()),
-        resource_grants=resolved_resource_grants,
-        resource_operations=selected_resource_operations,
-        resource=req.resource,
-        registry_access_id=str(resolved.get("access_id") or ""),
-        card_kind=str(resolved.get("card_kind") or ""),
-        identity_scope=str(resolved.get("identity_scope") or ""),
-        grantor_authority=grantor_authority,
-        delegation_edges=list(grantor_authority.get("delegation_edges") or []),
-        named_services=dict(resolved.get("named_services") or {}),
-        named_service_operations=resolved.get("named_service_operations") or {},
-        catalog_version=str(resolved.get("catalog_version") or ""),
-        account_scope=dict(resolved.get("account_scope") or {}),
-        client_metadata=req.client.snapshot() if req.client is not None else {},
-        properties=dict(resolved.get("properties") or {}),
-        card_label=str(payload.get("label") or "").strip(),
-        invocation_policies=canonical_invocation_policies,
-        expected_card_revision=int(resolved.get("card_revision") or 0),
-    )
+    authorization = {
+        "client_id": req.client_id,
+        "redirect_uri": req.redirect_uri,
+        "code_challenge": req.code_challenge,
+        "sub": subject,
+        "scopes": code_scopes,
+        "operations": list(resolved.get("operations") or ()),
+        "resource_grants": resolved_resource_grants,
+        "resource_operations": selected_resource_operations,
+        "resource": req.resource,
+        "registry_access_id": str(resolved.get("access_id") or ""),
+        "card_kind": str(resolved.get("card_kind") or ""),
+        "identity_scope": str(resolved.get("identity_scope") or ""),
+        "grantor_authority": grantor_authority,
+        "delegation_edges": list(grantor_authority.get("delegation_edges") or []),
+        "named_services": dict(resolved.get("named_services") or {}),
+        "named_service_operations": resolved.get("named_service_operations") or {},
+        "catalog_version": str(resolved.get("catalog_version") or ""),
+        "account_scope": dict(resolved.get("account_scope") or {}),
+        "client_metadata": req.client.snapshot() if req.client is not None else {},
+        "properties": dict(resolved.get("properties") or {}),
+        "card_label": str(payload.get("label") or "").strip(),
+        "invocation_policies": canonical_invocation_policies,
+        "expected_card_revision": int(resolved.get("card_revision") or 0),
+    }
+    if device_binding is not None:
+        decision_state = await get_device_grant_store(request).approve(
+            device_digest=str(device_binding["device_digest"]),
+            user_digest=str(device_binding["user_digest"]),
+            approving_subject=subject,
+            authorization=authorization,
+        )
+        if decision_state != "approved":
+            return JSONResponse(
+                status_code=409 if decision_state == "already_decided" else 410,
+                content={
+                    "error": "oauth_device_decision_unavailable",
+                    "reason": decision_state,
+                },
+            )
+        return JSONResponse({
+            "ok": True,
+            "redirect_url": f"{verification_uri(issuer)}/complete?result=approved",
+        })
+
+    code = await store.create_auth_code(**authorization)
     return JSONResponse({
         "ok": True,
         "redirect_url": build_redirect(
@@ -2592,6 +2966,7 @@ async def _issue_tokens(
     invocation_policies=None,
     replace_authority=False,
     expected_card_revision=None,
+    card_conflict_error="invalid_grant",
 ) -> JSONResponse:
     tenant, project = oauth_tenant_project(request)
     resolved_access_id = str(registry_access_id or "").strip()
@@ -2799,7 +3174,7 @@ async def _issue_tokens(
                 getattr(exc, "current_revision", 0),
             )
             return _token_error(
-                "invalid_grant",
+                str(card_conflict_error or "invalid_grant"),
                 "The delegated access card changed after approval; restart authorization.",
             )
         LOGGER.error(
@@ -2858,6 +3233,105 @@ async def token(request: Request) -> Response:
     form = await request.form()
     grant_type = (form.get("grant_type") or "").strip()
     store = get_grant_store(request)
+
+    if grant_type == DEVICE_GRANT_TYPE:
+        device_code = str(form.get("device_code") or "").strip()
+        client_id = str(form.get("client_id") or "").strip()
+        if not device_code or not client_id:
+            return _token_error(
+                "invalid_request",
+                "missing device_code parameters",
+            )
+        polled = await get_device_grant_store(request).poll(
+            device_code=device_code,
+            client_id=client_id,
+        )
+        if polled.status != DEVICE_POLL_APPROVED:
+            descriptions = {
+                DEVICE_POLL_AUTHORIZATION_PENDING: "The user has not completed authorization.",
+                DEVICE_POLL_SLOW_DOWN: "The client is polling too quickly.",
+                "access_denied": "The user denied the authorization request.",
+                "expired_token": "The device authorization request expired.",
+                "device_code_replayed": "The device code was already consumed.",
+                "device_client_mismatch": "The device code belongs to another client.",
+                "device_card_mismatch": "The requested Card does not match the approved Card.",
+                "device_card_revision_conflict": "The requested Card changed during authorization.",
+            }
+            return _token_error(
+                polled.status,
+                descriptions.get(
+                    polled.status,
+                    "The device authorization request is unavailable.",
+                ),
+                retry_after_seconds=(
+                    polled.interval
+                    if polled.status == DEVICE_POLL_SLOW_DOWN
+                    else None
+                ),
+            )
+        authorization = polled.authorization
+        if not isinstance(authorization, Mapping):
+            return _token_error(
+                "invalid_grant",
+                "The approved device authorization is invalid.",
+            )
+        if str(authorization.get("client_id") or "") != client_id:
+            return _token_error("device_client_mismatch", "client mismatch")
+        try:
+            issued = await _issue_tokens(
+                request,
+                store,
+                sub=authorization.get("sub"),
+                scopes=authorization.get("scopes") or [],
+                client_id=client_id,
+                operations=authorization.get("operations") or [],
+                resource_grants=authorization.get("resource_grants"),
+                resource_operations=authorization.get("resource_operations"),
+                resource=authorization.get("resource"),
+                registry_access_id=authorization.get("registry_access_id") or "",
+                card_kind=authorization.get("card_kind") or "",
+                identity_scope=authorization.get("identity_scope") or "",
+                grantor_authority=authorization.get("grantor_authority") or {},
+                delegation_edges=authorization.get("delegation_edges") or [],
+                named_services=authorization.get("named_services") or {},
+                named_service_operations=authorization.get("named_service_operations"),
+                catalog_version=authorization.get("catalog_version") or "",
+                account_scope=authorization.get("account_scope") or None,
+                client_metadata=authorization.get("client_metadata") or {},
+                properties=authorization.get("properties") or {},
+                card_label=authorization.get("card_label") or "",
+                invocation_policies=authorization.get("invocation_policies"),
+                replace_authority=True,
+                expected_card_revision=authorization.get("expected_card_revision"),
+                card_conflict_error="device_card_revision_conflict",
+            )
+        except GrantStoreUnavailable:
+            LOGGER.exception(
+                "[connection-hub.oauth] device token issuance unavailable after "
+                "device-code consumption client=%s",
+                client_id,
+            )
+            return _token_error(
+                "device_authorization_restart_required",
+                "Token issuance failed after approval; restart device authorization.",
+                status=503,
+            )
+        if int(getattr(issued, "status_code", 500)) >= 400:
+            try:
+                issued_payload = json.loads(bytes(issued.body).decode("utf-8"))
+            except (AttributeError, TypeError, UnicodeDecodeError, json.JSONDecodeError):
+                issued_payload = {}
+            if (
+                isinstance(issued_payload, Mapping)
+                and issued_payload.get("error") == "device_card_revision_conflict"
+            ):
+                return issued
+            return _token_error(
+                "device_authorization_restart_required",
+                "Token issuance failed after approval; restart device authorization.",
+                status=int(getattr(issued, "status_code", 503)),
+            )
+        return issued
 
     if grant_type == "authorization_code":
         code = form.get("code")

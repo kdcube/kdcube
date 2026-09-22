@@ -97,6 +97,9 @@ bundles:
             issuer: ''
             public_clients:
             - client_id: claude
+              grant_types:
+              - authorization_code
+              - refresh_token
               redirect_uris:
               - https://claude.ai/api/mcp/auth_callback
               - http://localhost/callback
