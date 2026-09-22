@@ -4,12 +4,12 @@
 """
 Per-request dependency resolution for the OAuth2 AS / MCP routes.
 
-Each dependency prefers an override on ``app.state`` (set by tests) and otherwise
-builds the real platform-backed implementation lazily:
+Each dependency prefers a request-bound capability supplied by the Connection
+Hub app, then an ``app.state`` override used by standalone SDK tests:
 
 - session authentication via :class:`BundleSessionAuthManager` (validates the
   opaque ``kst1`` token against the Redis user record);
-- the :class:`GrantStore` on the platform Redis client.
+- the package-owned :class:`GrantStore`, composed with durable OAuth authority.
 
 The OAuth tenant/project (which session namespace the consenting admin belongs
 to) and the auth cookie name are resolved from platform descriptors.
@@ -142,9 +142,21 @@ def get_authenticate(request: Request) -> AuthenticateFn:
 
 
 def get_grant_store(request: Request) -> Any:
-    store = getattr(request.app.state, "oauth_grant_store", None)
-    if store is not None:
-        return store
+    for state in (
+        getattr(request, "state", None),
+        getattr(request.app, "state", None),
+    ):
+        store = getattr(state, "oauth_grant_store", None)
+        if store is not None:
+            return store
+    if bool(
+        getattr(
+            getattr(request, "state", None),
+            "oauth_grant_store_required",
+            False,
+        )
+    ):
+        raise GrantStoreUnavailable("initialize.authority_not_bound")
 
     from kdcube_ai_app.infra.redis.client import get_async_redis_client
 

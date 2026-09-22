@@ -28,6 +28,9 @@ from connection_hub.authority_registry import (
     DELEGATED_CLIENT_AUTHORITY_ID,
 )
 from connection_hub.delegated_credentials.oauth.pkce import make_s256_challenge
+from connection_hub.delegated_credentials.oauth.authority_store import (
+    RefreshTokenReuseDetected,
+)
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.tests.test_clients_and_store import FakeRedis
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.tests.helpers import enable_delegated_client
 from connection_hub.delegated_credentials.cache_io import (
@@ -78,6 +81,9 @@ def _seed_live_card(
     """
     credential = refresh_record.get("credential") or {}
     access_id = str(refresh_record["registry_access_id"])
+    card_kind = str(
+        refresh_record.get("card_kind") or CARD_KIND_AUTOMATION
+    ).strip()
     resource = str(refresh_record.get("resource") or "") or "*"
     authority = CardAuthority(
         access_id=access_id,
@@ -85,7 +91,7 @@ def _seed_live_card(
         grantor_subject=str(refresh_record.get("sub") or ""),
         delegate_subject=str(credential.get("subject") or ""),
         source="oauth",
-        card_kind=CARD_KIND_AUTOMATION,
+        card_kind=card_kind,
         card_revision=1,
         operations=tuple(operations),
         resource_grants=(
@@ -399,6 +405,39 @@ async def test_refresh_token_rotates_and_issues_new_access(ctx):
 
 
 @pytest.mark.asyncio
+async def test_refresh_rotation_race_reports_family_reuse(ctx, caplog):
+    client, store = ctx
+    code = await _seed_code(store)
+    first = client.post("/oauth/token", data={
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": "http://127.0.0.1:9000/callback",
+        "client_id": "claude",
+        "code_verifier": VERIFIER,
+    }).json()
+    refresh_token = first["refresh_token"]
+    _seed_live_card(store, await store.validate_refresh_token(refresh_token))
+
+    async def reuse_detected(*_args, **_kwargs):
+        raise RefreshTokenReuseDetected("credential family revoked")
+
+    store.rotate_refresh_token = reuse_detected
+    with caplog.at_level("WARNING", logger="kdcube.connection_hub.oauth"):
+        response = client.post("/oauth/token", data={
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": "claude",
+        })
+
+    assert response.status_code == 400
+    assert response.json()["error_description"] == (
+        "refresh token reuse detected; the credential family was revoked"
+    )
+    assert "refresh denied reason=refresh_token_reuse_detected" in caplog.text
+    assert refresh_token not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_refresh_token_keeps_old_token_when_live_card_lookup_is_unavailable(ctx):
     client, store = ctx
     code = await _seed_code(store)
@@ -546,6 +585,34 @@ def test_unknown_refresh_token_is_invalid_grant(ctx):
     })
     assert r.status_code == 400
     assert r.json()["error"] == "invalid_grant"
+
+
+def test_refresh_token_reuse_revocation_is_named_for_the_client_and_log(
+    ctx,
+    caplog,
+):
+    client, store = ctx
+
+    async def reuse_detected(_refresh_token):
+        raise RefreshTokenReuseDetected("credential family revoked")
+
+    store.get_refresh_token_state = reuse_detected
+    with caplog.at_level("WARNING", logger="kdcube.connection_hub.oauth"):
+        response = client.post("/oauth/token", data={
+            "grant_type": "refresh_token",
+            "refresh_token": "replayed-secret",
+            "client_id": "claude",
+        })
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "error": "invalid_grant",
+        "error_description": (
+            "refresh token reuse detected; the credential family was revoked"
+        ),
+    }
+    assert "refresh denied reason=refresh_token_reuse_detected" in caplog.text
+    assert "replayed-secret" not in caplog.text
 
 
 def test_grant_store_outage_is_logged_and_returned_as_retryable_503(ctx, caplog):

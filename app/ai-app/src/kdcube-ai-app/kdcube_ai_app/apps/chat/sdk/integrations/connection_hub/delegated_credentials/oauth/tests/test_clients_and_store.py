@@ -540,6 +540,50 @@ async def test_client_registration_carries_sliding_ttl():
     assert r.ttls.get(key) == CLIENT_TTL_SECONDS
 
 
+def test_grant_store_prefers_the_request_bound_connection_hub_store():
+    app = FastAPI()
+    request = Request({
+        "type": "http",
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "https",
+        "path": "/oauth/authorize",
+        "raw_path": b"/oauth/authorize",
+        "query_string": b"",
+        "headers": [],
+        "client": ("127.0.0.1", 12345),
+        "server": ("runtime.example.test", 443),
+        "app": app,
+    })
+    bound_store = object()
+    request.state.oauth_grant_store = bound_store
+
+    assert get_grant_store(request) is bound_store
+
+
+def test_grant_store_refuses_a_bundle_request_without_bound_authority():
+    app = FastAPI()
+    request = Request({
+        "type": "http",
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "https",
+        "path": "/oauth/token",
+        "raw_path": b"/oauth/token",
+        "query_string": b"",
+        "headers": [],
+        "client": ("127.0.0.1", 12345),
+        "server": ("runtime.example.test", 443),
+        "app": app,
+    })
+    request.state.oauth_grant_store_required = True
+
+    with pytest.raises(GrantStoreUnavailable) as raised:
+        get_grant_store(request)
+
+    assert raised.value.operation == "initialize.authority_not_bound"
+
+
 def test_grant_store_reuses_proc_owned_async_redis_client():
     app = FastAPI()
     redis = FakeRedis()

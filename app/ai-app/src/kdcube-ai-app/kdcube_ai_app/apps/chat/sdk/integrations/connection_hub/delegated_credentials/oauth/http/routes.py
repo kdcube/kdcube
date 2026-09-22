@@ -114,6 +114,9 @@ from connection_hub.delegated_credentials.oauth.flow import (
     parse_authorize_request,
 )
 from connection_hub.delegated_credentials.oauth.pkce import verify_s256
+from connection_hub.delegated_credentials.oauth.authority_store import (
+    RefreshTokenReuseDetected,
+)
 from connection_hub.delegated_credentials.oauth.store import (
     GrantStoreUnavailable,
 )
@@ -3388,7 +3391,14 @@ async def token(request: Request) -> Response:
         client_id = form.get("client_id")
         if not rt:
             return _token_error("invalid_request", "missing refresh_token")
-        refresh_state = await store.get_refresh_token_state(rt)
+        try:
+            refresh_state = await store.get_refresh_token_state(rt)
+        except RefreshTokenReuseDetected:
+            return _refresh_refused(
+                "refresh_token_reuse_detected",
+                str(client_id or ""),
+                "refresh token reuse detected; the credential family was revoked",
+            )
         if refresh_state is None:
             return _refresh_refused(
                 "refresh_token_unknown",
@@ -3484,20 +3494,27 @@ async def token(request: Request) -> Response:
             resource_grants = dict(card.resource_grants)
             resource_operations = dict(card.resource_operations)
             account_scope = card.account_scope
-        new_rt = await store.rotate_refresh_token(
-            rt,
-            scopes=list(scopes),
-            operations=list(operations),
-            resource_grants=resource_grants,
-            resource_operations=resource_operations,
-            resource=(
-                ""
-                if refresh_card_kind in {CARD_KIND_AGENT, CARD_KIND_AUTOMATION}
-                else None
-            ),
-            card_kind=refresh_card_kind or None,
-            state=refresh_state,
-        )
+        try:
+            new_rt = await store.rotate_refresh_token(
+                rt,
+                scopes=list(scopes),
+                operations=list(operations),
+                resource_grants=resource_grants,
+                resource_operations=resource_operations,
+                resource=(
+                    ""
+                    if refresh_card_kind in {CARD_KIND_AGENT, CARD_KIND_AUTOMATION}
+                    else None
+                ),
+                card_kind=refresh_card_kind or None,
+                state=refresh_state,
+            )
+        except RefreshTokenReuseDetected:
+            return _refresh_refused(
+                "refresh_token_reuse_detected",
+                str(rec.get("client_id") or ""),
+                "refresh token reuse detected; the credential family was revoked",
+            )
         if not new_rt:
             return _refresh_refused(
                 "refresh_token_rotation_lost",
