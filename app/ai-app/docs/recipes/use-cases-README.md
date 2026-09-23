@@ -4,7 +4,7 @@ title: "Recipe Index: What Problem Does KDCube Solve?"
 summary: "Problem-first index of KDCube use cases for agents and builders: seventeen practitioner problems spanning agent operation, delegated access, multi-user state, generated-code isolation, browser composition, and serving several complete app-owned websites from one installation."
 status: current
 tags: ["recipes", "use-cases", "index", "problems", "platform", "agents"]
-updated_at: 2026-09-21
+updated_at: 2026-09-23
 keywords:
   [
     "what problem does kdcube solve",
@@ -54,7 +54,7 @@ HOW. Use the index to find the problem; use the entry to confirm the fit.
 | 10 | "A nightly script shouldn't hold a person's session" | Automation tokens bound to resources + grants; one-click revoke logs out the bound session | [automation access](connections/create-delegated-automation-access-README.md) |
 | 11 | "The only way to run generated code is a shell — security says no" | Execution is a contracted tool call in an isolated runtime; outputs are declared, hosted, delivery-verified | [ISO runtime](../exec/README-iso-runtime.md) · [custom tools](../sdk/tools/custom-tools-README.md) |
 | 12 | "Agent reports live in chat where no search engine reaches them" | A public-content provider: crawlable HTML, sitemaps, `410` on retract, stable URLs | [public content](../sdk/solutions/cdn-pub/public-content-solution-README.md) · [publish recipe](resource_sharing/publish-discoverable-content-README.md) |
-| 13 | "Every user wants a different agent; we ship one config" | The descriptor becomes a Control Card; each user has an Agent Card base, and each conversation can narrow its inherited positive snapshot | [agent capability control](../sdk/solutions/user-settings/capabilities-README.md) · [construct a ReAct agent](../sdk/agents/react/how/how-to-construct-react-agent-README.md) |
+| 13 | "Every user wants a different agent; we ship one config" | The descriptor becomes a Control Card ceiling; each user saves Agent Card defaults, and each conversation chooses within the live Control range | [agent capability control](../sdk/solutions/user-settings/capabilities-README.md) · [construct a ReAct agent](../sdk/agents/react/how/how-to-construct-react-agent-README.md) |
 | 14 | "Cache rebuilds are invisible; nobody can attribute the cost" | Placement by lifecycle; the `[CACHE]` cold-turn marker joins the rebuild premium to its cause; the user holds the policy | [context caching](../sdk/agents/react/context-caching-README.md) |
 | 15 | "Every internal tool becomes its own frontend project" | A scene is config + content over a shared host; widgets are served by the apps that own them | [scene configuration](../sdk/solutions/scene/config/README.md) · [scene recipe](components/scene-README.md) |
 | 16 | "The answer arrives while the agent is still working" | Every conversation carries an event lane; answers fold into the live turn or wait as next-turn context | [conversation events](../sdk/bundle/bundle-conversation-events-and-react-output-README.md) |
@@ -296,22 +296,23 @@ MCP — and we ship one config."
 
 ```text
 BUILD IT YOURSELF                          WITH KDCUBE
-per-user feature flags · allow-list UI     Control ∩ Agent Card ∩ conversation
-per-user model routing · storage        →  composer "+" menu · typed preferences
+per-user feature flags · allow-list UI     Control ceiling ∩ conversation selection
+per-user model routing · storage        →  Agent defaults · composer "+" menu
 descriptor drift · unavailable authority  live reconciliation · fail closed
 ```
 
 - **The descriptor supplies the ceiling:** KDCube revises one stable,
   credentialless Control Card for the exact app/agent resource.
-- **The user owns a positive Agent Card base:** Connection Hub edits the tools,
-  skills, MCP, service operations, resources, targets, and subagents available
-  to new conversations.
-- **Each conversation can narrow its inherited base:** its picker writes only
-  that conversation, and labels inherited state separately from local changes.
-- **The current intersection drives both runtime and UI:** Control or Agent
-  Card revocations apply immediately; later additions stay outside existing
-  conversation snapshots. Model, instruction, presentation, and cache choices
-  remain typed PostgreSQL preferences with configured fallbacks.
+- **The user owns positive Agent Card defaults:** the Agent Card picker or
+  Connection Hub edits the tools, skills, MCP, service operations, resources,
+  targets, and subagents a new conversation starts with.
+- **Each conversation chooses inside Control:** its picker writes only that
+  conversation, may turn any Control-allowed capability on or off, and labels
+  inherited defaults separately from local changes.
+- **The live Control intersection drives runtime and UI:** removals deny
+  immediately; additions become selectable but stay off until chosen in the
+  current scope. Model, instruction, presentation, and cache choices remain
+  typed PostgreSQL preferences with configured fallbacks.
 
 Docs: [agent capability control](../sdk/solutions/user-settings/capabilities-README.md) ·
 [construct a ReAct agent](../sdk/agents/react/how/how-to-construct-react-agent-README.md) ·

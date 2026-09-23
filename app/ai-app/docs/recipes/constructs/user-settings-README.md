@@ -4,7 +4,7 @@ title: "Recipe: App User Settings"
 summary: "Steps to give an app durable non-security preferences over user_bundle_props: choose the scope, define a typed record, normalize and merge writes, expose explicit operations, save deliberate UI drafts, and apply configured fallbacks at runtime."
 status: current
 tags: ["recipes", "constructs", "user-settings", "user_bundle_props", "store", "operations"]
-updated_at: 2026-09-21
+updated_at: 2026-09-23
 keywords:
   [
     "app user settings recipe",
@@ -114,8 +114,8 @@ is open to ALL callers. `memories_widget_preferences` and
 `agent_capabilities` and `agent_selection_update` intentionally coordinate two
 owners in one UI save: behavior preferences use the agent-preference records,
 while capability toggles replace the named conversation's positive projection
-beneath its current Connection Hub Cards. The Agent Card base is edited in
-Connection Hub.
+beneath its current Control Card. Without a conversation id, the same
+capability update replaces the Agent Card defaults through Connection Hub.
 
 ## 5. UI round-trip
 
@@ -125,9 +125,8 @@ reconcile from the returned normalized record. The chat composer uses
 `conversation_id` for capability changes and for scoped model, instruction,
 presentation, and cache preferences, and exposes **Save changes**. An
 independently mounted capability surface without a conversation id shows the
-Agent Card base read-only; preference-only settings may still expose an
-explicit future-conversation baseline. Never switch scopes silently in a host
-UI.
+editable Agent Card defaults for future conversations. Never switch scopes
+silently in a host UI.
 
 The composer "+" menu and the memories widget are the two shipped
 round-trips; the chat engine's capabilities branch
