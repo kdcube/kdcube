@@ -17,6 +17,9 @@ from connection_hub.delegated_credentials.migration.artifact import (
     read_migration_preview,
     write_migration_preview,
 )
+from connection_hub.delegated_credentials.migration.model import (
+    MigrationEvidenceMismatch,
+)
 from connection_hub.delegated_credentials.migration.service import (
     create_migration_preview,
 )
@@ -38,6 +41,10 @@ def _parser() -> argparse.ArgumentParser:
     preview = commands.add_parser("preview")
     preview.add_argument("--generation-id", required=True)
     preview.add_argument("--preview-file", required=True)
+
+    preflight = commands.add_parser("preflight-target")
+    preflight.add_argument("--preview-file", required=True)
+    preflight.add_argument("--confirm-preview-sha256", required=True)
 
     apply = commands.add_parser("apply")
     apply.add_argument("--preview-file", required=True)
@@ -99,10 +106,31 @@ async def _apply(args: argparse.Namespace) -> int:
         await source.close()
 
 
+async def _preflight_target(args: argparse.Namespace) -> int:
+    """Validate reviewed evidence and open the target before quiescence."""
+
+    preview = await read_migration_preview(args.preview_file)
+    require_reviewed_reset(dict(preview.prerequisites))
+    confirmed = str(args.confirm_preview_sha256 or "").strip().lower()
+    if confirmed != preview.preview_sha256:
+        raise MigrationEvidenceMismatch("authority_migration_preview_not_confirmed")
+    if preview.blockers:
+        raise MigrationEvidenceMismatch("authority_migration_preview_has_blockers")
+
+    target = await open_reset_target(get_settings())
+    try:
+        print(json.dumps({"ok": True, "target": "durable-authority"}, sort_keys=True))
+        return 0
+    finally:
+        await target.close()
+
+
 async def async_main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "preview":
         return await _preview(args)
+    if args.command == "preflight-target":
+        return await _preflight_target(args)
     return await _apply(args)
 
 

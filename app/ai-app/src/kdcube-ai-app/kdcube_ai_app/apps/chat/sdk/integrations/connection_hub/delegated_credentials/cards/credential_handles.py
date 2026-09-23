@@ -16,9 +16,23 @@ from connection_hub.delegated_credentials.cards.handle_authority import (
 from connection_hub.delegated_credentials.cards.resident_secrets import (
     ResidentCardSecretService,
 )
-from kdcube_ai_app.infra.secrets.ephemeral import ephemeral_secret_store
+from kdcube_ai_app.infra.secrets.ephemeral import (
+    KDCubeEphemeralSecretStore,
+    ephemeral_secret_store,
+)
 
 RESIDENT_CARD_SECRET_NAMESPACE = "resident-card-credentials"
+
+
+def resident_card_secret_store(
+    settings: Any | None = None,
+) -> KDCubeEphemeralSecretStore:
+    """Compose the deployment-selected resident Card secret custody."""
+
+    return ephemeral_secret_store(
+        namespace=RESIDENT_CARD_SECRET_NAMESPACE,
+        settings=settings,
+    )
 
 
 def postgres_card_credential_handle_store(
@@ -27,6 +41,7 @@ def postgres_card_credential_handle_store(
     tenant: str,
     project: str,
     settings: Any | None = None,
+    secret_store: KDCubeEphemeralSecretStore | None = None,
 ) -> PostgresCardCredentialHandleStore:
     """Bind package-owned metadata and lifecycle to KDCube host custody."""
 
@@ -37,9 +52,10 @@ def postgres_card_credential_handle_store(
     )
     resident_secrets = ResidentCardSecretService(
         metadata_store=metadata,
-        secret_store=ephemeral_secret_store(
-            namespace=RESIDENT_CARD_SECRET_NAMESPACE,
-            settings=settings,
+        secret_store=(
+            secret_store
+            if secret_store is not None
+            else resident_card_secret_store(settings)
         ),
     )
     return PostgresCardCredentialHandleStore(
@@ -51,4 +67,5 @@ def postgres_card_credential_handle_store(
 __all__ = [
     "RESIDENT_CARD_SECRET_NAMESPACE",
     "postgres_card_credential_handle_store",
+    "resident_card_secret_store",
 ]

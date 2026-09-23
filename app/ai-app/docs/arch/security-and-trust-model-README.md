@@ -232,6 +232,11 @@ broker's identity files, or control the host vault service. See
 [Host Vault for Provider Secrets](../service/secrets/host-vault-README.md).
 Existing file-backed values are first shadow-staged with create-only writes
 and in-broker digest comparison while `secrets-file` remains authoritative.
+Runtime-owned one-time and resident secrets are a separate custody family:
+when the service backend is `host-vault`, trusted services use that broker for
+these records even in shadow state, while provider-value reads remain
+file-backed. This separation keeps durable Card credentials and login state
+out of tracked descriptors without silently activating provider reads.
 Provider activation is a separately confirmed CLI transaction that quiesces
 the secret consumers, verifies both switched read paths, and restores file
 authority on an ordinary failure. A durable non-secret transaction marker

@@ -604,6 +604,7 @@ class Settings(PLATFORM_CONFIG):
     OPENROUTER_BASE_URL: str | None = None
     CLAUDE_CODE_KEY: str | None = None
     SECRETS_PROVIDER: str | None = None
+    SECRETS_SERVICE_BACKEND: str | None = None
     SECRETS_URL: str | None = None
     SECRETS_TOKEN: str | None = None
     SECRETS_ADMIN_TOKEN: str | None = None
@@ -1028,6 +1029,13 @@ class Settings(PLATFORM_CONFIG):
         #    so the assembled values feed into the URL construction below.
         if not self._env_present("SECRETS_PROVIDER") and not self.SECRETS_PROVIDER:
             self.SECRETS_PROVIDER = self._assembly_str("secrets.provider")
+        if (
+            not self._env_present("SECRETS_SERVICE_BACKEND")
+            and not self.SECRETS_SERVICE_BACKEND
+        ):
+            self.SECRETS_SERVICE_BACKEND = self._assembly_str(
+                "secrets.service.backend"
+            )
         if not self._env_present("SECRETS_URL") and not self.SECRETS_URL:
             self.SECRETS_URL = self._assembly_str("secrets.url")
         if not self._env_present("SECRETS_TOKEN") and not self.SECRETS_TOKEN:
@@ -1733,6 +1741,7 @@ def export_managed_env(
     _put("AWS_SHARED_CREDENTIALS_FILE", resolved.AWS_SHARED_CREDENTIALS_FILE)
     _put("AWS_CONFIG_FILE", resolved.AWS_CONFIG_FILE)
     _put("SECRETS_PROVIDER", resolved.SECRETS_PROVIDER)
+    _put("SECRETS_SERVICE_BACKEND", resolved.SECRETS_SERVICE_BACKEND)
     _put("SECRETS_URL", resolved.SECRETS_URL)
     _put("SECRETS_TOKEN", resolved.SECRETS_TOKEN)
     _put("SECRETS_ADMIN_TOKEN", resolved.SECRETS_ADMIN_TOKEN)

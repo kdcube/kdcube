@@ -295,6 +295,43 @@ async def test_secrets_service_accepts_host_vault_generation(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_secrets_service_omits_unconfigured_optional_http_gate(monkeypatch):
+    client = _FakeSecretsHttpClient(
+        response=_FakeHttpResponse(200, {"status": "ok", "generation": 1})
+    )
+    monkeypatch.setattr(
+        secrets_manager_module,
+        "_get_httpx",
+        lambda: _FakeHttpxModule(client),
+    )
+    manager = SecretsServiceSecretsManager(
+        SecretsManagerConfig(
+            provider="secrets-service",
+            component="proc",
+            url="http://kdcube-secrets:7777",
+            admin_token=None,
+        )
+    )
+
+    assert manager.can_write() is True
+    await manager.set_secret("platform.services.fixture.token", "secret-value")
+
+    assert client.requests == [
+        (
+            "POST",
+            "http://kdcube-secrets:7777/set",
+            {
+                "json": {
+                    "key": "platform.services.fixture.token",
+                    "value": "secret-value",
+                },
+                "headers": {},
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
 async def test_secrets_service_create_is_atomic_and_reports_collision(monkeypatch):
     client = _QueuedSecretsHttpClient(
         [

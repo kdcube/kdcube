@@ -40,6 +40,7 @@ from connection_hub.delegated_credentials.oauth.migration import (
 from kdcube_ai_app.apps.chat.sdk.config import resolve_asyncpg_ssl
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.cards.credential_handles import (
     postgres_card_credential_handle_store,
+    resident_card_secret_store,
 )
 from kdcube_ai_app.auth.bundle.session_store import PostgresBundleSessionStore
 from kdcube_ai_app.auth.migration.postgres_target import (
@@ -179,11 +180,14 @@ async def open_reset_target(settings: Any) -> ResetTargetRuntime:
             tenant=tenant,
             project=project,
         )
+        card_secret_store = resident_card_secret_store(settings)
+        await card_secret_store.probe_writable()
         card_handles = postgres_card_credential_handle_store(
             pg_pool=pool,
             tenant=tenant,
             project=project,
             settings=settings,
+            secret_store=card_secret_store,
         )
         admission = PostgresAdmissionReplayClaimStore(
             pg_pool=pool,

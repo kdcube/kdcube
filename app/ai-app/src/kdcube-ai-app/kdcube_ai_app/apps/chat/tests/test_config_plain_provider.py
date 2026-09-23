@@ -64,6 +64,7 @@ def test_missing_session_authority_selector_keeps_the_migration_source(
 def test_get_plain_reads_assembly_by_default(monkeypatch, tmp_path):
     for key in (
         "SECRETS_PROVIDER",
+        "SECRETS_SERVICE_BACKEND",
         "KDCUBE_STORAGE_PATH",
         "CB_BUNDLE_STORAGE_URL",
         "REACT_WORKSPACE_IMPLEMENTATION",
@@ -93,6 +94,7 @@ def test_get_plain_reads_assembly_by_default(monkeypatch, tmp_path):
             {
                 "secrets": {
                     "provider": "secrets-service",
+                    "service": {"backend": "host-vault"},
                 },
                 "storage": {
                     "kdcube": "s3://example/kdcube",
@@ -146,6 +148,7 @@ def test_get_plain_reads_assembly_by_default(monkeypatch, tmp_path):
     assert sdk_config.read_plain("a:frontend.routes_prefix") == "/platform"
     assert sdk_config.get_plain("secrets.provider") == "secrets-service"
     assert settings.SECRETS_PROVIDER == "secrets-service"
+    assert settings.SECRETS_SERVICE_BACKEND == "host-vault"
     assert build_secrets_manager_config(settings).provider == "secrets-service"
     assert settings.STORAGE_PATH == "s3://example/kdcube"
     assert settings.BUNDLE_STORAGE_URL == "s3://example/bundles"

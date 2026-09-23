@@ -168,6 +168,12 @@ def test_local_compose_mounts_identity_only_into_secrets_broker():
         assert services["chat-proc"]["depends_on"]["kdcube-secrets"] == {
             "condition": "service_healthy"
         }
+        assert "SECRETS_ADMIN_TOKEN=${SECRETS_ADMIN_TOKEN:-}" in services[
+            "chat-ingress"
+        ]["environment"]
+        assert "SECRETS_ADMIN_TOKEN=${SECRETS_ADMIN_TOKEN:-}" in services[
+            "chat-proc"
+        ]["environment"]
         assert set(services["chat-proc"]["networks"]) >= {
             "kdcube-internal",
             "kdcube-secrets",

@@ -1186,6 +1186,11 @@ class SecretsServiceSecretsManager(ISecretsManager):
     def _key_url(self, key: str) -> str:
         return f"{self._url}/secret/{quote(key, safe='')}"
 
+    def _admin_headers(self) -> dict[str, str]:
+        if not self._admin_token:
+            return {}
+        return {"X-KDCUBE-ADMIN-TOKEN": self._admin_token}
+
     @staticmethod
     def _validate_write_response(response: Any, *, operation: str) -> int | None:
         if response.status_code == 409:
@@ -1270,7 +1275,10 @@ class SecretsServiceSecretsManager(ISecretsManager):
         return await self._read_secret(key, strict=True)
 
     def can_write(self) -> bool:
-        return bool(self._url and self._admin_token)
+        # The local Host Vault broker intentionally permits an omitted HTTP
+        # gate token: its deployment mTLS identity is the authority boundary.
+        # A configured HTTP gate still rejects an absent or mismatched token.
+        return bool(self._url)
 
     async def set_secret(self, key: str, value: str) -> None:
         key = validate_secret_provider_key(key)
@@ -1284,7 +1292,7 @@ class SecretsServiceSecretsManager(ISecretsManager):
                 response = await client.post(
                     f"{self._url}/set",
                     json={"key": key, "value": value},
-                    headers={"X-KDCUBE-ADMIN-TOKEN": self._admin_token},
+                    headers=self._admin_headers(),
                 )
         except Exception:
             raise SecretsManagerWriteError("secrets-service set request failed") from None
@@ -1310,7 +1318,7 @@ class SecretsServiceSecretsManager(ISecretsManager):
                 response = await client.post(
                     f"{self._url}/set",
                     json={"key": key, "value": value, "expected_generation": 0},
-                    headers={"X-KDCUBE-ADMIN-TOKEN": self._admin_token},
+                    headers=self._admin_headers(),
                 )
         except Exception:
             raise SecretsManagerWriteError(
@@ -1337,7 +1345,7 @@ class SecretsServiceSecretsManager(ISecretsManager):
             async with httpx.AsyncClient(timeout=self._write_timeout) as client:
                 response = await client.delete(
                     self._key_url(key),
-                    headers={"X-KDCUBE-ADMIN-TOKEN": self._admin_token},
+                    headers=self._admin_headers(),
                 )
         except Exception:
             raise SecretsManagerWriteError("secrets-service delete request failed") from None
