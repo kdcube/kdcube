@@ -1363,6 +1363,12 @@ bundles:
                             grants:
                             - named_services:use
                             - docs:write
+                          object.action.set_cells:
+                            label: Write document table cells
+                            description: Write text into cells of one table row, addressed by table, row, and column.
+                            grants:
+                            - named_services:use
+                            - docs:write
                           object.action.export:
                             label: Export document
                             description: Deliver a portable document file without placing file bytes in model context.
@@ -1512,6 +1518,12 @@ bundles:
                           object.action.embed_image:
                             label: Embed document image
                             description: Embed an image at one explicit location.
+                            grants:
+                            - named_services:use
+                            - docs:write
+                          object.action.set_cells:
+                            label: Write document table cells
+                            description: Write text into cells of one table row, addressed by table, row, and column.
                             grants:
                             - named_services:use
                             - docs:write
@@ -2149,6 +2161,10 @@ bundles:
                 productivity_docs_embed_image:
                   label: Embed Google Doc image
                   description: Embed an image at an explicit document location.
+                  grants: [docs:write]
+                productivity_docs_set_cells:
+                  label: Write Google Doc table cells
+                  description: Write text into cells of one table row, addressed by table, row, and column.
                   grants: [docs:write]
                 productivity_docs_import:
                   label: Import Google Doc

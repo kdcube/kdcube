@@ -4,8 +4,8 @@ title: "Google Services Through KDCube (Gmail, Sheets, Docs)"
 summary: "One recipe for connecting Google services to KDCube: one Google OAuth client, one google provider, one gmail connector app serving Gmail, Sheets, and Docs (extensible to Drive/Calendar). Configure provider claims, wire each service's tools and named services, connect, grant, and verify."
 status: active
 tags: ["recipes", "connections", "connection-hub", "google", "gmail", "sheets", "docs", "oauth", "connected-accounts", "delegated-to-kdcube", "mcp"]
-keywords: ["google connected account", "google docs named service", "google sheets tools", "google oauth scopes", "document tab selector", "document comment selector"]
-updated_at: 2026-08-01
+keywords: ["google connected account", "google docs named service", "google sheets tools", "google oauth scopes", "document tab selector", "document comment selector", "document table cells", "set_cells"]
+updated_at: 2026-09-21
 see_also:
   - https://github.com/elenaviter/app-ecosystem/blob/main/docs/connection-hub/frontend/application/integrations/google.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/google/google-README.md
@@ -408,6 +408,7 @@ resources:
       productivity_docs_apply_text_style: {grants: [docs:write]}
       productivity_docs_insert_page_break:{grants: [docs:write]}
       productivity_docs_embed_image:      {grants: [docs:write]}
+      productivity_docs_set_cells:        {grants: [docs:write]}
       productivity_docs_import:           {grants: [docs:write]}
       productivity_docs_create_comment:   {grants: [docs:comment]}
       productivity_docs_reply_comment:    {grants: [docs:comment]}
@@ -447,6 +448,7 @@ comment mutations key on `docs:comment` rather than `docs:write`:
               object.action.apply_text_style:  {grants: [named_services:use, docs:write]}
               object.action.insert_page_break: {grants: [named_services:use, docs:write]}
               object.action.embed_image:       {grants: [named_services:use, docs:write]}
+              object.action.set_cells:         {grants: [named_services:use, docs:write]}
               object.action.export:            {grants: [named_services:use, docs:read]}
               object.action.import:            {grants: [named_services:use, docs:write]}
               object.action.list_comments:     {grants: [named_services:use, docs:read]}
@@ -487,6 +489,7 @@ the current `docs` provider:
 | "Append this approval note to the tab whose title contains `July`." | Read the document structure, resolve the literal title fragment to one tab, translate it to Google's `tabId`, and append only there. |
 | "Replace `Draft` with `Final` in the second tab." | Resolve the 1-based tab position from Google's current document structure and scope the replacement to that tab. A nested tab can instead be selected by its full root-to-tab hierarchy. |
 | "Replace the old company name everywhere in this document." | Use `all_tabs=true` only because the user explicitly requested every tab. An omitted tab scope never silently becomes an all-tab edit. |
+| "In the Tasks table, mark `Fix login` as Done and assign it to the reviewer." | Read the document's table list, pick the table under the `Tasks` heading, find the one row whose `Task` cell is `Fix login`, and write the `Status` and `Owner` cells of that row in one call. No provider index is computed by the agent. |
 | "Reply `Approved` to my unresolved comment about payment terms." | Read bounded document-level comment pages, match literal text, connected-user authorship, and unresolved state, translate the one match to Google's `commentId`, then reply. The same selectors support reading, resolving, and deleting a thread. |
 | "Create a report with a styled heading, a page break, this image, and give me a DOCX." | Create a native document, insert and style text, insert the page break and image, verify the document, export it, and return the portable file. |
 | "Use my work Google account for this document." | Select the requested connected account when several accounts are eligible. Without a clear selection, return `account_required` with the available choices instead of guessing. |
@@ -508,13 +511,18 @@ workflow:
 - stable Google Drive comments are document-level. The agent can select a
   thread naturally by literal text, quoted text, author, and resolved state,
   but it cannot claim that the thread belongs to a particular tab;
-- several matching tabs or comments produce bounded candidates and no write.
+- tables are addressed by tab, table, row, and column; a cell holding a nested
+  table, a cell merged into another, and (for a replacement) a cell holding an
+  image or chip are refused rather than edited partially;
+- several matching tabs, tables, rows, or comments produce bounded candidates
+  and no write.
   The agent can use the user's wording to narrow the selector or ask one short
   disambiguating question.
 
 Search returns at most 50 results. Operations are bounded: text reads and
 replacements are capped at 200,000 characters, at most 50 replacements per
-`replace_text`, comment bodies at 20,000 characters, at most 100 comments listed,
+`replace_text`, table reads at 5 tables and 2,000 cells per call (50 rows per
+table by default), comment bodies at 20,000 characters, at most 100 comments listed,
 titles at 300 characters, and export/import at 10 MiB. A natural comment
 selector may inspect up to five such comment pages; it reports an incomplete
 bounded scan when more provider pages remain.
@@ -570,6 +578,83 @@ edit when the request is ambiguous. This avoids relying on Google API defaults:
 some omitted tab ids target the first tab, while an unscoped replacement can
 span every tab.
 
+### Read and write document tables
+
+`get` on a native document lists every table under `tables`: its tab, 1-based
+position in the tab, the nearest heading of any level above it, row and column
+counts, the header row when the document marks one (`header_rows`, `header`),
+otherwise the `first_row`, and a ready `selector`. It carries no cell text and no
+provider index.
+
+To read the cells of every table, pass `include: ["tables"]`. To read named
+tables, pass `filters.tables` with one selector, or a list of up to five:
+
+```json
+{"table": {"after_heading": "Tasks"}, "rows": "1-50", "header": 1}
+```
+
+Each table returns up to 50 rows by default; `truncated` and `next_rows` say how
+to continue. All tables in one call share a 2,000-cell budget; a table that no
+longer fits returns `skipped: "cell_limit"`, and `tables_truncated` says the
+document holds more than five tables. Every cell carries its own `row` and
+`column`, so no reader counts rows itself, and names what it holds besides text -
+a person chip reads as `objects: [{"kind": "person", "email": ...}]` where the
+flat body text shows nothing. The complete JSON snapshot carries every table with all of its cells.
+
+`object.action set_cells` writes text into cells of one row:
+
+```json
+{
+  "tab_selector": {"title": "Main"},
+  "table": {"after_heading": "Tasks"},
+  "row": {"where": {"column": "Task", "equals": "Fix login"}},
+  "cells": {"Status": "Done", "Owner": "reviewer"},
+  "mode": "replace"
+}
+```
+
+- **Table:** `position`, `after_heading` (exact heading text), or
+  `header_contains` (a header cell fragment, or a first-row fragment without a
+  header). Combined with another field, `position` counts that field's matches;
+  a bare number is a position.
+- **Row:** a physical 1-based number (header rows count), or
+  `where: {column, equals | contains}` matching exactly one data row. Header
+  rows never match a `where`.
+- **Column:** a number always works; a name needs a header row. When the
+  document does not mark one, pass `header: 1` to use the first row.
+- **Mode:** `replace` (default; an empty text clears the cell), `append`, or
+  `prepend`.
+- **Person chip:** a list entry may carry `person` instead of `text`, for
+  example `[{"column": "Owner", "person": "owner-a@example.com"}]`. A cell takes
+  text or a person, not both.
+
+Nothing is written when a selector matches zero or several targets
+(`docs_table_not_found`, `docs_table_ambiguous`, `docs_table_row_not_found`,
+`docs_table_row_ambiguous`, `docs_table_column_not_found`,
+`docs_table_no_header`) or when a cell is refused: `docs_table_cell_merged`
+names the cell it is merged into, `docs_table_nested` marks a nested table, and
+`docs_table_cell_has_objects` lists images or chips a replacement would remove -
+that decision belongs to the person whose document it is. A write that does
+replace them reports them as `before_objects`, so a chip removed by mistake can
+be written back.
+
+The provider resolves the selectors on a fresh read and writes with that
+revision required. If the document changes in between, it reads again and
+resolves the selectors once more, so a `where` row survives a row inserted
+above it. A caller that reasoned over an earlier read can pass its
+`revision_id`; the write is then refused with `docs_revision_changed` when the
+document has changed since.
+
+On the typed productivity door the same reads use `all_tables` or `table_reads`
+on `productivity_docs_get`, and writes use `productivity_docs_set_cells`.
+`productivity_docs_get_structure` additionally lists each table's cells with
+`start_index`/`end_index` and `content_start`/`content_end` (the editable text
+range) for callers composing `productivity_docs_batch_edit` requests. That door
+also builds table structure: `insertTable`, `insertTableRow`,
+`insertTableColumn`, `deleteTableRow`, `deleteTableColumn`, `mergeTableCells`,
+`unmergeTableCells` and `pinTableHeaderRows`. Pin a new table's header row and
+every later read names its columns without `header`.
+
 ### Address document comments naturally
 
 The stable Drive comments path manages document-level threads. Named-service
@@ -590,7 +675,7 @@ broader document comment silently.
 For a ReAct agent, declare `docs` as both a named-service namespace and an event
 source. The namespace tools discover document and import-source refs. A native
 document resolves through `react.pull` into a complete JSON snapshot with tab
-metadata, paragraph text, table-cell text, and open comments. An import source
+metadata, paragraph text, every table with its cells, and open comments. An import source
 resolves to file metadata and conversion guidance; after `object.action.copy`,
 the returned native document ref can be pulled and inspected before bounded
 replacement edits:
@@ -660,8 +745,8 @@ disposable data:
    table-cell text and all tab titles.
 3. A write tool (`insert_text`, `copy`, `create`, ...) is denied until both the
    selected-tool grant and the `docs:write` connected-account claim exist.
-4. Copy the old document to a new title, update table values with explicit
-   replacements, and re-read the new document to verify the source is unchanged.
+4. Copy the old document to a new title, update table values with `set_cells`,
+   and re-read the new document to verify the source is unchanged.
 5. Create a document, append/insert/replace text, apply a style, insert a page
    break, embed an image, and import a source document.
 6. A comment tool (`create_comment`, `resolve_comment`, ...) is denied until the
@@ -689,6 +774,13 @@ disposable data:
     text and verify the ambiguous response performs no mutation. Add a tab
     selector to a comment request and verify
     `tab_anchored_comments_unavailable`.
+13. Under a heading, add a table with a marked header row (`Task | Status |
+    Owner`), a second table without a header, and a merged cell. Verify `get`
+    lists both tables with selectors, `filters.tables` returns cell text, and
+    `set_cells` writes one row found by `where` without touching the header.
+    Verify two rows with the same value, a merged-away cell, and a column name
+    on the headerless table each return their refusal with no write, and that
+    `header: 1` makes the name resolve.
 
 ## Add another Google service, the same way
 
