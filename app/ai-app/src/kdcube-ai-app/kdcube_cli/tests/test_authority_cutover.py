@@ -202,7 +202,7 @@ def test_apply_can_stop_and_then_verify_writer_services(tmp_path: Path) -> None:
     ]
 
 
-def test_apply_target_preflight_failure_leaves_writers_running(tmp_path: Path) -> None:
+def test_apply_schema_preflight_failure_leaves_writers_running(tmp_path: Path) -> None:
     runtime = _runtime(tmp_path)
     preview = tmp_path / "preview.json"
     preview.write_text("{}", encoding="utf-8")
@@ -214,10 +214,17 @@ def test_apply_target_preflight_failure_leaves_writers_running(tmp_path: Path) -
         return SimpleNamespace(
             returncode=1,
             stdout="",
-            stderr="resident secret destination is not writable",
+            stderr=(
+                "authority_target_schema_mismatch: "
+                "connection_hub_authority_cutovers:"
+                "missing_columns=generation_id"
+            ),
         )
 
-    with pytest.raises(SystemExit, match="target preflight failed"):
+    with pytest.raises(
+        SystemExit,
+        match="authority_target_schema_mismatch",
+    ):
         run_authority_command(
             argparse.Namespace(
                 authority_action="apply",

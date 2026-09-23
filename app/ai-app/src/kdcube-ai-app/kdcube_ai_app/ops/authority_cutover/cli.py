@@ -119,7 +119,18 @@ async def _preflight_target(args: argparse.Namespace) -> int:
 
     target = await open_reset_target(get_settings())
     try:
-        print(json.dumps({"ok": True, "target": "durable-authority"}, sort_keys=True))
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "schema_tables_verified": len(
+                        target.schema_report.verified_tables
+                    ),
+                    "target": "durable-authority",
+                },
+                sort_keys=True,
+            )
+        )
         return 0
     finally:
         await target.close()
