@@ -5,8 +5,7 @@ context:
 auth:
   sessions:
     authority:
-      backend: postgresql
-      migration_id: durable-authority-v1
+      backend: redis-migration-source
 
 paths:
   host_bundle_storage_path: ../output/bundle-storage

@@ -137,11 +137,33 @@ async def test_reset_preserves_resident_card_and_discards_reconstructable_state(
                 "session_id": "resident-session",
             }
         ),
-        f"{prefix}:kdcube:oauth:client:descriptor-client": json.dumps(
-            {"client_id": "descriptor-client"}
+        f"{prefix}:kdcube:oauth:client:dcr-test-client": json.dumps(
+            {
+                "client_id": "dcr-test-client",
+                "redirect_uris": ["https://client.example/callback"],
+                "grant_types": ["authorization_code", "refresh_token"],
+                "token_endpoint_auth_method": "none",
+                "application_type": "native",
+                "metadata": {},
+            }
         ),
-        f"{prefix}:kdcube:oauth:refresh:discarded-refresh": "{}",
-        f"{prefix}:kdcube:oauth:agrant:{hashlib.sha256(b'access').hexdigest()}": "{}",
+        f"{prefix}:kdcube:oauth:refresh:resident-worker-refresh": json.dumps(
+            {
+                "client_id": "dcr-test-client",
+                "sub": "operator",
+                "registry_access_id": authority.access_id,
+                "card_kind": CARD_KIND_AGENT,
+            }
+        ),
+        (
+            f"{prefix}:kdcube:oauth:agrant:"
+            f"{hashlib.sha256(b'resident-worker-bearer').hexdigest()}"
+        ): json.dumps(
+            {
+                "operations": ["problem-board"],
+                "registry_access_id": authority.access_id,
+            }
+        ),
         f"{prefix}:kdcube:session:registered:user-1": "{}",
     }
 
@@ -250,9 +272,9 @@ async def test_reset_preserves_resident_card_and_discards_reconstructable_state(
             "bundle_sessions": 0,
             "bundle_users": 0,
             "card_handle_metadata": 1,
-            "oauth_access_bindings": 0,
-            "oauth_clients": 0,
-            "oauth_refresh_families": 0,
+            "oauth_access_bindings": 1,
+            "oauth_clients": 1,
+            "oauth_refresh_families": 1,
             "platform_sessions": 0,
             "resident_card_secrets": 1,
         }
@@ -269,6 +291,18 @@ async def test_reset_preserves_resident_card_and_discards_reconstructable_state(
         assert (await handles.read(authority)).access_token == (
             "resident-worker-bearer"
         )
+        assert (
+            await oauth.get_client_record("dcr-test-client", ttl_seconds=1)
+            is not None
+        )
+        assert (
+            await oauth.get_refresh_token_state("resident-worker-refresh")
+            is not None
+        )
+        assert (
+            await oauth.get_access_grant_record("resident-worker-bearer")
+            is not None
+        )
         await receipts.require_activated(
             generation_id,
             required_families=(
@@ -280,6 +314,10 @@ async def test_reset_preserves_resident_card_and_discards_reconstructable_state(
         await redis.delete(*source_keys)
         assert (await handles.read(authority)).access_token == (
             "resident-worker-bearer"
+        )
+        assert (
+            await oauth.get_access_grant_record("resident-worker-bearer")
+            is not None
         )
         for key, (value, ttl_ms) in redis_snapshot.items():
             assert value is not None

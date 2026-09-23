@@ -254,7 +254,13 @@ async def test_get_or_create_does_not_write_an_unchanged_live_session() -> None:
         now=200.0,
     )
 
-    assert result == PlatformSessionStoreResult(existing, False, 7)
+    assert result == PlatformSessionStoreResult(
+        existing,
+        False,
+        7,
+        "registered:user-1",
+        1_000.0,
+    )
     assert [kind for kind, _sql, _args, _depth in connection.calls] == [
         "execute",
         "fetchrow",

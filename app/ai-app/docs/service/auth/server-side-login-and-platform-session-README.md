@@ -1,10 +1,10 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/service/auth/server-side-login-and-platform-session-README.md
 title: "Server-Side Login And The Platform Session"
-summary: "How an app-defined login turns an authenticator proof into one KDCube-owned, Redis-backed platform session, including protected browser entry, the platform-hosted OIDC lane, and its sliding lifetime."
+summary: "How an app-defined login turns an authenticator proof into one KDCube-owned platform session with PostgreSQL authority, a fenced Redis projection, protected browser entry, and sliding lifetime."
 tags: ["service", "auth", "application", "bundle", "session", "sso"]
 keywords: ["server-side login", "app-defined authenticator", "platform session", "platform principal", "connection edge", "bundle", "kst1", "login lane", "login", "logout", "register", "invalidate", "sliding session", "OIDC", "Cognito hosted UI"]
-updated_at: 2026-09-21
+updated_at: 2026-09-23
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/app-simple-idp-bridge-README.md
@@ -21,9 +21,10 @@ Server-side login turns an authenticator proof into one KDCube platform
 session. An app can host the user-facing login operation, or KDCube can host
 the OIDC redirect and callback through a definition supplied by that app.
 
-In both forms, KDCube owns the session token, Redis registry, revocation, role
-lookup, and request authentication. The browser receives one HttpOnly cookie
-and checks `/profile`; it does not manage the identity provider's tokens.
+In both forms, KDCube owns the session token, PostgreSQL authority, revocation,
+role lookup, and request authentication. Redis keeps a generation-scoped,
+TTL-bound read projection. The browser receives one HttpOnly cookie and checks
+`/profile`; it does not manage the identity provider's tokens.
 
 Use this when an app needs to accept identities from Telegram, Google,
 another OAuth/OIDC provider, a front shell, or an embedded app and then make the
@@ -48,8 +49,8 @@ resolved registry entry says what the authenticator is and where login runs.
 | `auth.type: bundle` | Resolve the selected authenticator through the app named by `auth.connection_hub.bundle_id`. |
 | Registry `type: bundle` | The app provides the server-side login operation and issues a platform session. |
 | `BundleSessionAuthority` / `BundleSessionAuthManager` | SDK/runtime implementation names. |
-| `kst1` | KDCube's signed, Redis-backed platform-session token format. |
-| `kdcube:auth:bundle-session:*` | Stable Redis storage-key family. |
+| `kst1` | KDCube's signed platform-session token format. |
+| `kdcube:auth:bundle-session:projection:*` | Generation-scoped Redis read projection; PostgreSQL remains authoritative. |
 
 The same word, `bundle`, means the app at both levels. At assembly level it is
 the hop to an app-defined entry. At registry level it is the app's own login
@@ -67,7 +68,7 @@ Application sign-in handler
   | validate external identity
   | call platform session authority
   v
-Redis-backed platform session registry
+PostgreSQL session authority + fenced Redis projection
   |
   | returns kst1 signed session token
   v
@@ -78,7 +79,7 @@ App response sets auth cookie
 Ingress/proc gateway
   |
   | effective auth provider: bundle
-  | validate kst1 token + Redis session + current user record
+  | validate kst1 token + projected session + PostgreSQL fence
   v
 Platform UserSession
 ```
@@ -90,8 +91,9 @@ Platform UserSession
 | Application public endpoint | Application | Hosts login UI or operations and validates the authenticator proof. Normal browser logout uses the platform logout endpoint. |
 | `kdcube_ai_app.auth.bundle` | Platform | Async API used by the application to register/login/logout/delete/invalidate sessions. The package name is the technical alias. |
 | Browser cookies | Connection Hub provider config | Carry the `kst1.*` auth token under configured cookie names. |
-| Gateway auth manager | Platform | Validates token, Redis session, user record, and roles on each request. |
-| Redis | Platform | Stores active session records, user records, token versions, session indexes, and digest-only login-attempt pointers bound to the current Redis run. |
+| Gateway auth manager | Platform | Validates the token and projected session against current PostgreSQL state, user version, and roles on each request. |
+| PostgreSQL | Platform | Authoritative bundle users, user versions, bundle sessions, platform sessions, revocation state, and expiry. |
+| Redis | Platform | Stores generation-scoped session projections with native TTL plus digest-only login-attempt pointers bound to the current Redis run. Cache misses rebuild from PostgreSQL. |
 | Deployment secret provider | Deployment | Stores `platform.services.session_token.secret` and short-lived login-attempt payloads. Local runtimes use the host vault; hosted runtimes use dedicated Secrets Manager records. |
 
 ## Descriptor Contract
@@ -421,9 +423,10 @@ service ownership are defined in
 
 ### Sliding renewal
 
-The token's `exp` is the hard bound (the maximum since sign-in). The Redis
-session record carries the idle bound (`exp`), the hard bound (`max_exp`) and
-`last_seen`. The gateway's `BundleSessionAuthManager` slides a validated
+The token's `exp` is the hard bound (the maximum since sign-in). The PostgreSQL
+session row carries the idle bound (`exp`), the hard bound (`max_exp`) and
+`last_seen`; Redis projects those fields with native TTL. The gateway's
+`BundleSessionAuthManager` slides a validated
 session whose last extension is older than the touch interval to the idle
 limit from now, capped at the hard bound (`BundleSessionAuthority.touch`).
 A deployment without this lane keeps fixed-expiry sessions: the manager
@@ -564,7 +567,7 @@ The current flow already enforces these boundaries:
 | Google identity proof | Server verifies the Google RS256 signature through Google's JWKS, exact configured audience, Google issuer, stable subject, and token expiry. |
 | Bootstrap administrator | An email-based bootstrap rule matches only a Google-verified email. The canonical KDCube subject remains `google:<sub>`, not the email address. |
 | KDCube session integrity | `kst1` is HMAC-SHA256 signed with the server-side `platform.services.session_token.secret`. |
-| KDCube session liveness | Every request must match an active Redis session, current user version, and enabled user record. |
+| KDCube session liveness | Every request must match active PostgreSQL session state, current user version, and an enabled user. A Redis hit is accepted only after a compact PostgreSQL fence matches its state, revisions, and expiry. |
 | Browser cookie | The default issuer sets `Secure`, `HttpOnly`, `SameSite=Lax`, and `Path=/`. |
 | Secret placement | The Google Web client id is public configuration. The KDCube session secret remains in runtime secrets and never enters browser configuration. |
 
@@ -601,15 +604,16 @@ session-invalidating operation across all replicas.
 
 ## Storage Surfaces
 
-Server-side platform sessions use Redis as mutable runtime storage. Key
-names are tenant/project namespaced.
+Server-side platform sessions use PostgreSQL as mutable authority and Redis as
+a read projection. Keys are tenant/project and generation scoped.
 
 | Storage | Shape | Lifetime | Used by |
 |---|---|---|---|
-| User record | `{tenant}:{project}:kdcube:auth:bundle-session:user:{sub}` | Until delete | Gateway validation and role freshness. |
-| Session record | `{tenant}:{project}:kdcube:auth:bundle-session:session:{sid}` | Session TTL | Token activation, logout, and token hash match. |
-| User sessions set | `{tenant}:{project}:kdcube:auth:bundle-session:user-sessions:{sub}` | Session TTL window | Invalidate/delete all sessions for a subject. |
-| User version | `{tenant}:{project}:kdcube:auth:bundle-session:user-version:{sub}` | Until delete | Role/session revocation boundary. |
+| Bundle user, user version, and session rows | PostgreSQL session-authority schema | Durable until explicit delete; sessions retain idle and hard expiry | Login, role freshness, logout, invalidate, delete, and token hash match. |
+| Bundle-session projection | `{tenant}:{project}:kdcube:auth:bundle-session:projection:<generation-hash>:session:<sid>` | Native Redis TTL to the earlier idle/hard expiry | Fast validation payload; a miss or stale fence rebuilds from PostgreSQL. |
+| Bundle user-session projection index | `{tenant}:{project}:kdcube:auth:bundle-session:projection:<generation-hash>:user-sessions:<subject-hash>` | Native Redis TTL to hard expiry | Best-effort projection invalidation; PostgreSQL revocation is authoritative. |
+| Platform-session rows | PostgreSQL session-authority schema | Durable session expiry | Platform-session create, renewal, lookup, and revoke. |
+| Platform-session projection | `{tenant}:{project}:kdcube:auth:platform-session:projection:<generation-hash>:*` | Native Redis session TTL | Read-through projection; every positive hit is fenced by PostgreSQL. |
 | Principal edge projection | `{tenant}:{project}:kdcube:connection-edge:principal:<identity-hash>` | Rebuildable | Resolve a verified issuer/subject to its platform user without reading bundle storage. |
 | Login-attempt pointer | `{tenant}:{project}:kdcube:auth:browser-login:<state-sha256>` | Attempt TTL and current Redis run | Single-use lookup containing no raw state, PKCE verifier, or browser binding. |
 | Login-attempt secret | host vault `platform.runtime.login-attempts.<ref>` or AWS `<prefix>/runtime/login-attempts/<ref>` | Attempt TTL | Raw one-time browser-login payload; consumed with forced deletion. |
@@ -770,10 +774,9 @@ application wants a single call for first login and subsequent login.
      await authority.login_or_register(...)
 
 4. Platform writes:
-     user record
-     user version
-     session record
-     user sessions set
+     PostgreSQL user record and version
+     PostgreSQL session record
+     generation-scoped Redis projection
 
 5. Application response sets:
      auth auth-token cookie = kst1.*
@@ -784,7 +787,7 @@ application wants a single call for first login and subsequent login.
 
 7. Gateway resolves:
      effective platform authenticator bundle
-     token -> Redis session -> current user record -> UserSession
+     token -> Redis projection -> PostgreSQL fence -> UserSession
 ```
 
 ### Subsequent Request
@@ -799,8 +802,9 @@ token extractor
 BundleSessionAuthManager
   |
   +-- verify signature
-  +-- read active Redis session
-  +-- read current user
+  +-- read the Redis projection
+  +-- validate its PostgreSQL fence
+  +-- rebuild from PostgreSQL on miss or mismatch
   +-- derive roles/user type
   v
 route handler / app API / SSE / Socket.IO
@@ -820,7 +824,8 @@ Platform reads configured auth cookie
   +-- if provider type is bundle:
   |     await logout_bundle_session(token=token)
   |
-  +-- delete Redis session record
+  +-- revoke the PostgreSQL session
+  +-- remove its Redis projection
   |
   v
 Response clears platform cookies
@@ -834,7 +839,7 @@ POST /api/platform/logout
 
 It clears `AUTH_TOKEN_COOKIE_NAME`, `ID_TOKEN_COOKIE_NAME`, and
 `MASQUERADED_TOKEN_COOKIE_NAME`. For the resolved `bundle` login kind it also invalidates the
-active platform-session record in Redis. This endpoint is intentionally
+active platform-session authority row and projection. This endpoint is intentionally
 platform generic: the browser uses the same route for a Cognito authenticator,
 a `bundle` login lane, or another sign-in choice.
 
@@ -901,8 +906,8 @@ Existing browser cookies no longer authenticate
 await authority.logout(token=token_from_cookie)
 ```
 
-Logout deletes the backing Redis session. The signed cookie is no longer enough
-to authenticate.
+Logout revokes the backing PostgreSQL session and removes its Redis projection.
+The signed cookie is no longer enough to authenticate.
 
 ### Invalidate User API
 
@@ -956,11 +961,12 @@ Browser                                              KDCube ingress / proc
    |                              7. Validate schema, expiry, |
    |                                 and required sid/sub     |
    |                                                          |
-   |                              8. Read tenant/project      |
-   |                                 Redis state:             |
-   |                                 - session by sid         |
-   |                                 - user by sub            |
-   |                                 - user token version     |
+   |                              8. Read the generation-     |
+   |                                 scoped Redis projection  |
+   |                                 and PostgreSQL fence:    |
+   |                                 - session state/expiry   |
+   |                                 - session/user revisions|
+   |                                 - user version/status    |
    |                                                          |
    |                              9. Require:                 |
    |                                 - active session         |
@@ -971,7 +977,8 @@ Browser                                              KDCube ingress / proc
    |                                 - existing enabled user  |
    |                                                          |
    |                             10. Load current roles and   |
-   |                                 permissions from Redis   |
+   |                                 permissions from the     |
+   |                                 fenced state             |
    |                                                          |
    |                             11. Apply the requested      |
    |                                 surface guard            |
@@ -987,15 +994,15 @@ HMAC signature
   proves that the token body was issued by a runtime holding the shared
   KDCube session secret and that the body was not modified
 
-Redis session + user records
-  prove that this exact session is still active now and supply the current
-  server-side roles, permissions, and user status
+PostgreSQL session + user authority
+  proves that this exact session is still active now and supplies the current
+  server-side roles, permissions, and user status; Redis only projects it
 ```
 
 All ingress and proc replicas that accept the session must resolve the same
-`platform.services.session_token.secret` and the same tenant/project Redis namespace.
-The token is signed, but Redis is the mutable source of truth. This gives these
-properties:
+`platform.services.session_token.secret`, PostgreSQL authority generation, and
+tenant/project Redis projection namespace. The token is signed, PostgreSQL is
+the mutable source of truth, and Redis is rebuildable. This gives these properties:
 
 | Operation | Behavior |
 |---|---|
@@ -1008,8 +1015,8 @@ properties:
 
 ## Concurrency Model
 
-All public operations are async and use Redis as the shared coordination
-surface.
+All public operations are async. PostgreSQL transactions serialize authority
+updates; Redis projection writes are best effort and recover by read-through.
 
 | Operation | Concurrency behavior |
 |---|---|
@@ -1060,7 +1067,7 @@ Claims include:
 | Claim | Purpose |
 |---|---|
 | `schema` | `kdcube.session_token.v1` |
-| `sid` | Redis session id |
+| `sid` | PostgreSQL session id, also used by the Redis projection key |
 | `sub` | Canonical platform subject |
 | `provider` / `provider_subject` | External identity source that produced the session |
 | `ver` | User token version for revocation |
@@ -1075,7 +1082,7 @@ themselves.
 |---|---|
 | Cognito | Platform owns login, registration, MFA, and JWT validation. |
 | SimpleIDP bridge | App registers an opaque token in `idp_users.json`; useful for local/embedded simple auth. |
-| Server-side login | An app-defined login operation validates an authenticator proof; KDCube owns session tokens and Redis-backed revocation. Registry type: `bundle`. |
+| Server-side login | An app-defined login operation validates an authenticator proof; KDCube owns session tokens and PostgreSQL-backed revocation with a fenced Redis projection. Registry type: `bundle`. |
 | Federated Data Bus token | Short-lived capability token for Socket.IO Data Bus after an identity is already accepted. |
 
 ## Verification
@@ -1109,5 +1116,6 @@ If `/profile` is anonymous, check these items in order:
 | Secret | `platform.services.session_token.secret` exists and is identical for ingress/proc. |
 | Cookie name | Browser sends the selected sign-in entry's auth cookie to the platform origin. |
 | Token prefix | Cookie value starts with `kst1.`. |
-| Redis session | The backing session key exists until logout/expiry. |
-| User record | The user record exists and is not disabled. |
+| PostgreSQL session | The backing authority row is active and unexpired. |
+| Redis projection | A missing key is repaired automatically; a present key must match the PostgreSQL fence. |
+| User record | The PostgreSQL user record exists and is not disabled. |

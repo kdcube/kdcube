@@ -222,6 +222,7 @@ async def test_prepare_publishes_stores_only_after_the_exact_receipt(
     snapshot = await prepare_configured_session_authority(
         pg_pool=object(),
         settings=_settings(),
+        redis=object(),
     )
 
     assert snapshot.ready is True
@@ -272,6 +273,7 @@ async def test_prepare_keeps_postgresql_fail_closed_when_receipt_is_missing(
         await prepare_configured_session_authority(
             pg_pool=object(),
             settings=_settings(),
+            redis=object(),
         )
 
     manager = SessionManager(

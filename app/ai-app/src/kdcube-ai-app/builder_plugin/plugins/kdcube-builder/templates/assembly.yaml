@@ -9,8 +9,7 @@ auth:
   type: "simple"
   sessions:
     authority:
-      backend: "postgresql"
-      generation_id: "durable-authority-v1"
+      backend: "redis-migration-source"
   cognito:
     region: "eu-west-1"
     user_pool_id: ""

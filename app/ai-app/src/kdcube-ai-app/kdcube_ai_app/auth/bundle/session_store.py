@@ -61,6 +61,18 @@ class BundleSessionValidationState:
     user_revision: int = 0
 
 
+@dataclass(frozen=True)
+class BundleSessionValidationFence:
+    session_state: str
+    idle_expires_at: int
+    hard_expires_at: int
+    user_state: str
+    user_disabled: bool
+    version: int
+    session_revision: int
+    user_revision: int
+
+
 class BundleSessionStore(Protocol):
     async def register_user(
         self,
@@ -85,6 +97,11 @@ class BundleSessionStore(Protocol):
         self,
         session_id: str,
     ) -> BundleSessionValidationState | None: ...
+
+    async def get_validation_fence(
+        self,
+        session_id: str,
+    ) -> BundleSessionValidationFence | None: ...
 
     async def touch_session(
         self,
@@ -545,6 +562,49 @@ class PostgresBundleSessionStore:
             idle_expires_at=int(value.get("idle_expires_at") or 0),
             hard_expires_at=int(value.get("hard_expires_at") or 0),
             user=_json_object(value.get("user_record")),
+            user_state=str(value.get("user_state") or ""),
+            user_disabled=bool(value.get("user_disabled")),
+            version=int(value.get("session_version") or 0),
+            session_revision=int(value.get("session_revision") or 0),
+            user_revision=int(value.get("user_revision") or 0),
+        )
+
+    async def get_validation_fence(
+        self,
+        session_id: str,
+    ) -> BundleSessionValidationFence | None:
+        """Read the compact authority facts that fence one Redis projection."""
+
+        sid = str(session_id or "").strip()
+        if not sid:
+            return None
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(
+                f"""
+                SELECT bundle_session.state AS session_state,
+                       bundle_session.revision AS session_revision,
+                       floor(extract(epoch FROM bundle_session.idle_expires_at))::bigint
+                           AS idle_expires_at,
+                       floor(extract(epoch FROM bundle_session.hard_expires_at))::bigint
+                           AS hard_expires_at,
+                       bundle_user.state AS user_state,
+                       bundle_user.disabled AS user_disabled,
+                       bundle_user.session_version,
+                       bundle_user.revision AS user_revision
+                FROM {self.schema}.{TABLE_SESSIONS} AS bundle_session
+                JOIN {self.schema}.{TABLE_USERS} AS bundle_user
+                  ON bundle_user.subject = bundle_session.subject
+                WHERE bundle_session.session_id = $1
+                """,
+                sid,
+            )
+        if row is None:
+            return None
+        value = dict(row)
+        return BundleSessionValidationFence(
+            session_state=str(value.get("session_state") or ""),
+            idle_expires_at=int(value.get("idle_expires_at") or 0),
+            hard_expires_at=int(value.get("hard_expires_at") or 0),
             user_state=str(value.get("user_state") or ""),
             user_disabled=bool(value.get("user_disabled")),
             version=int(value.get("session_version") or 0),

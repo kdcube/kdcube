@@ -69,6 +69,24 @@ class PlatformSessionStoreResult:
     record: dict[str, Any]
     created: bool
     revision: int = 0
+    authority_key: str = ""
+    expires_at: float = 0
+
+
+@dataclass(frozen=True)
+class PlatformSessionAuthorityState:
+    record: dict[str, Any]
+    authority_key: str
+    revision: int
+    expires_at: float
+
+
+@dataclass(frozen=True)
+class PlatformSessionAuthorityFence:
+    authority_key: str
+    state: str
+    revision: int
+    expires_at: float
 
 
 class PlatformSessionStore(Protocol):
@@ -303,6 +321,12 @@ class PostgresPlatformSessionStore:
                             merged,
                             False,
                             current_revision,
+                            key,
+                            (
+                                timestamp + ttl
+                                if should_extend
+                                else float(current.get("expires_at") or 0)
+                            ),
                         )
                     await connection.execute(
                         f"""
@@ -350,7 +374,13 @@ class PostgresPlatformSessionStore:
                     timestamp,
                     ttl,
                 )
-        return PlatformSessionStoreResult(created, True, 1)
+        return PlatformSessionStoreResult(
+            created,
+            True,
+            1,
+            key,
+            timestamp + ttl,
+        )
 
     async def update_session(
         self,
@@ -397,14 +427,18 @@ class PostgresPlatformSessionStore:
                 )
         return str(status) != "UPDATE 0"
 
-    async def get_session_by_id(self, session_id: str) -> dict[str, Any] | None:
+    async def get_session_state_by_id(
+        self,
+        session_id: str,
+    ) -> PlatformSessionAuthorityState | None:
         sid = str(session_id or "").strip()
         if not sid:
             return None
         async with self._pool.acquire() as connection:
             row = await connection.fetchrow(
                 f"""
-                SELECT record
+                SELECT record, authority_key, revision,
+                       extract(epoch FROM expires_at) AS expires_at
                 FROM {self.schema}.{TABLE_PLATFORM_SESSIONS}
                 WHERE session_id = $1
                   AND state = 'active'
@@ -412,16 +446,59 @@ class PostgresPlatformSessionStore:
                 """,
                 sid,
             )
-        return _json_object(dict(row).get("record")) if row is not None else None
+        if row is None:
+            return None
+        value = dict(row)
+        return PlatformSessionAuthorityState(
+            record=_json_object(value.get("record")),
+            authority_key=str(value.get("authority_key") or ""),
+            revision=int(value.get("revision") or 0),
+            expires_at=float(value.get("expires_at") or 0),
+        )
 
-    async def get_session_by_user_id(self, user_id: str) -> dict[str, Any] | None:
+    async def get_session_fence(
+        self,
+        session_id: str,
+    ) -> PlatformSessionAuthorityFence | None:
+        sid = str(session_id or "").strip()
+        if not sid:
+            return None
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(
+                f"""
+                SELECT authority_key, state, revision,
+                       extract(epoch FROM expires_at) AS expires_at
+                FROM {self.schema}.{TABLE_PLATFORM_SESSIONS}
+                WHERE session_id = $1
+                """,
+                sid,
+            )
+        if row is None:
+            return None
+        value = dict(row)
+        return PlatformSessionAuthorityFence(
+            authority_key=str(value.get("authority_key") or ""),
+            state=str(value.get("state") or ""),
+            revision=int(value.get("revision") or 0),
+            expires_at=float(value.get("expires_at") or 0),
+        )
+
+    async def get_session_by_id(self, session_id: str) -> dict[str, Any] | None:
+        state = await self.get_session_state_by_id(session_id)
+        return dict(state.record) if state is not None else None
+
+    async def get_session_state_by_user_id(
+        self,
+        user_id: str,
+    ) -> PlatformSessionAuthorityState | None:
         subject = str(user_id or "").strip()
         if not subject:
             return None
         async with self._pool.acquire() as connection:
             row = await connection.fetchrow(
                 f"""
-                SELECT record
+                SELECT record, authority_key, revision,
+                       extract(epoch FROM expires_at) AS expires_at
                 FROM {self.schema}.{TABLE_PLATFORM_SESSIONS}
                 WHERE user_id = $1
                   AND state = 'active'
@@ -431,4 +508,16 @@ class PostgresPlatformSessionStore:
                 """,
                 subject,
             )
-        return _json_object(dict(row).get("record")) if row is not None else None
+        if row is None:
+            return None
+        value = dict(row)
+        return PlatformSessionAuthorityState(
+            record=_json_object(value.get("record")),
+            authority_key=str(value.get("authority_key") or ""),
+            revision=int(value.get("revision") or 0),
+            expires_at=float(value.get("expires_at") or 0),
+        )
+
+    async def get_session_by_user_id(self, user_id: str) -> dict[str, Any] | None:
+        state = await self.get_session_state_by_user_id(user_id)
+        return dict(state.record) if state is not None else None

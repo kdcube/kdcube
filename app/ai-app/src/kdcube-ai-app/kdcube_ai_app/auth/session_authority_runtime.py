@@ -206,8 +206,9 @@ async def prepare_configured_session_authority(
     *,
     pg_pool: Any,
     settings: Any,
+    redis: Any | None = None,
 ) -> SessionAuthoritySnapshot:
-    """Prepare and atomically expose the descriptor-selected stores."""
+    """Prepare and atomically expose durable stores plus Redis projections."""
 
     config = session_authority_config_from_settings(settings)
     tenant = str(getattr(settings, "TENANT", "") or "").strip() or "default"
@@ -223,9 +224,27 @@ async def prepare_configured_session_authority(
         raise SessionAuthorityUnavailable(
             "postgresql_session_authority_requires_pg_pool"
         )
+    projection_redis = redis
+    if projection_redis is None:
+        redis_url = str(getattr(settings, "REDIS_URL", "") or "").strip()
+        if not redis_url:
+            raise SessionAuthorityUnavailable(
+                "durable_session_authority_requires_redis_projection"
+            )
+        from kdcube_ai_app.infra.redis.client import get_async_redis_client
 
+        projection_redis = get_async_redis_client(redis_url)
+
+    from kdcube_ai_app.auth.bundle.session_projection import (
+        ProjectedBundleSessionStore,
+        RedisBundleSessionProjection,
+    )
     from kdcube_ai_app.auth.bundle.session_store import (
         PostgresBundleSessionStore,
+    )
+    from kdcube_ai_app.auth.platform_session_projection import (
+        ProjectedPlatformSessionStore,
+        RedisPlatformSessionProjection,
     )
     from kdcube_ai_app.auth.platform_session_store import (
         PostgresPlatformSessionStore,
@@ -236,12 +255,12 @@ async def prepare_configured_session_authority(
     if binding.ready:
         return snapshot
 
-    bundle_store = PostgresBundleSessionStore(
+    bundle_authority = PostgresBundleSessionStore(
         pg_pool=pg_pool,
         tenant=scope[0],
         project=scope[1],
     )
-    platform_store = PostgresPlatformSessionStore(
+    platform_authority = PostgresPlatformSessionStore(
         pg_pool=pg_pool,
         tenant=scope[0],
         project=scope[1],
@@ -251,12 +270,30 @@ async def prepare_configured_session_authority(
         tenant=scope[0],
         project=scope[1],
     )
-    await bundle_store.ensure_schema()
-    await platform_store.ensure_schema()
+    await bundle_authority.ensure_schema()
+    await platform_authority.ensure_schema()
     await cutovers.ensure_schema()
     await cutovers.require_activated(
         config.generation_id,
         required_families=KDCUBE_SESSION_AUTHORITY_FAMILIES,
+    )
+    bundle_store = ProjectedBundleSessionStore(
+        authority=bundle_authority,
+        projection=RedisBundleSessionProjection(
+            projection_redis,
+            tenant=scope[0],
+            project=scope[1],
+            generation_id=config.generation_id,
+        ),
+    )
+    platform_store = ProjectedPlatformSessionStore(
+        authority=platform_authority,
+        projection=RedisPlatformSessionProjection(
+            projection_redis,
+            tenant=scope[0],
+            project=scope[1],
+            generation_id=config.generation_id,
+        ),
     )
     return activate_session_authority_stores(
         tenant=scope[0],
@@ -278,6 +315,7 @@ async def open_configured_session_authority(
         snapshot = await prepare_configured_session_authority(
             pg_pool=None,
             settings=settings,
+            redis=None,
         )
         return snapshot, None
 

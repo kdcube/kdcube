@@ -350,6 +350,7 @@ async def lifespan(app: FastAPI):
     app.state.session_authority = await prepare_configured_session_authority(
         pg_pool=app.state.pg_pool,
         settings=settings,
+        redis=app.state.redis_async,
     )
 
     try:

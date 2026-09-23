@@ -12,6 +12,41 @@ class _NoopSecretsManager:
         return None
 
 
+_REPOSITORY_ROOT = next(
+    parent
+    for parent in Path(__file__).resolve().parents
+    if (parent / "AGENTS.md").is_file() and (parent / "agents").is_dir()
+)
+_SHIPPED_ASSEMBLIES = (
+    Path("agents/claude/descriptors.template/assembly.yaml"),
+    Path("agents/langgraph/descriptors.template/assembly.yaml"),
+    Path("agents/native/descriptors.template/assembly.yaml"),
+    Path("app/ai-app/deployment/assembly.yaml"),
+    Path(
+        "app/ai-app/src/kdcube-ai-app/builder_plugin/plugins/"
+        "kdcube-builder/templates/assembly.yaml"
+    ),
+)
+
+
+@pytest.mark.parametrize("relative_path", _SHIPPED_ASSEMBLIES)
+def test_shipped_assemblies_start_from_the_migration_source(
+    monkeypatch,
+    relative_path: Path,
+) -> None:
+    assembly_path = _REPOSITORY_ROOT / relative_path
+    document = yaml.safe_load(assembly_path.read_text(encoding="utf-8"))
+    authority = document["auth"]["sessions"]["authority"]
+
+    assert authority == {"backend": "redis-migration-source"}
+
+    monkeypatch.setenv("ASSEMBLY_YAML_DESCRIPTOR_PATH", str(assembly_path))
+    settings = sdk_config.Settings()
+
+    assert settings.AUTH.SESSIONS.AUTHORITY.BACKEND == "redis-migration-source"
+    assert settings.AUTH.SESSIONS.AUTHORITY.GENERATION_ID == ""
+
+
 def test_get_plain_reads_assembly_by_default(monkeypatch, tmp_path):
     for key in (
         "SECRETS_PROVIDER",

@@ -317,14 +317,14 @@ authority versions, bundle sessions, and platform sessions:
 auth:
   sessions:
     authority:
-      backend: postgresql
-      generation_id: authority-2026-09-23
+      backend: redis-migration-source
 ```
 
-`backend: postgresql` requires the exact `generation_id` to have an activation
-receipt that covers every session family. Existing Redis-backed runtimes use
-`backend: redis-migration-source` with no `generation_id` only while creating
-and applying the reviewed cutover preview. See
+Shipped descriptors remain in source mode until a reviewed cutover succeeds.
+After apply, set `backend: postgresql` and the exact `generation_id` from the
+activation receipt. PostgreSQL then owns session authority; Redis keeps only
+generation-scoped, TTL-bound read projections whose positive hits are fenced
+against current PostgreSQL state. See
 [Move Runtime Authority To PostgreSQL](../recipes/operations/move-authority-to-postgresql-README.md).
 
 ### Connection Hub Delegated Credential Adapters

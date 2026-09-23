@@ -22,8 +22,7 @@ auth:
   type: "bundle"
   sessions:
     authority:
-      backend: "postgresql"
-      generation_id: "durable-authority-v1"
+      backend: "redis-migration-source"
   turnstile_development_token: ""            # optional local/dev frontend Turnstile bypass token; leave empty outside development
 
   authenticators:
