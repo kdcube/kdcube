@@ -4081,6 +4081,20 @@ async def _application_site_catalog(
     return catalog
 
 
+def _application_site_path(path: str) -> str:
+    """The part of the address after the site root, as the page sees it.
+
+    A site is one page application: a sub-path that names no file is served
+    the site's index.html and the page routes on it. The sub-path arrives in
+    the injected site context, so the page reads it from there instead of
+    parsing its own location against the public base. Root and the index
+    document are the empty path.
+    """
+
+    value = str(path or "").strip("/")
+    return "" if value in ("", "index.html") else value
+
+
 async def _serve_application_site(
     *,
     request: Request,
@@ -4149,6 +4163,7 @@ async def _serve_application_site(
                 "application_id": site.application_id,
                 "site_alias": site.alias,
                 "public_base": public_base,
+                "site_path": _application_site_path(path),
                 "catalog_revision": catalog.revision,
             },
             resolved_spec=site_spec,

@@ -120,8 +120,41 @@ async def test_site_alias_delegates_to_standard_static_serving(monkeypatch) -> N
     assert captured["base_href"] == "/sites/docs/"
     assert captured["html_context"]["application_id"] == "website@1"
     assert captured["html_context"]["catalog_revision"] == catalog.revision
+    # The page routes on the part after the site root, handed to it here so an
+    # application's address (/sites/<alias>/<its-own-path>) opens the page on
+    # that path without the page parsing its own location.
+    assert captured["html_context"]["public_base"] == "/sites/docs/"
+    assert captured["html_context"]["site_path"] == "guide/getting-started"
     assert captured["resolved_spec"].id == "website@1"
     assert captured["resolved_spec"].path == _SITE_TARGET.path
+
+
+@pytest.mark.asyncio
+async def test_site_root_and_index_hand_the_page_an_empty_site_path(monkeypatch) -> None:
+    sites = [ApplicationSite("website@1", "docs", False, ("docs.example.com",), _SITE_TARGET)]
+    catalog = compile_application_site_catalog(
+        tenant="tenant-a",
+        project="project-a",
+        sites=sites,
+    )
+    seen: list[str] = []
+
+    async def _catalog(_request):
+        return catalog
+
+    async def _serve_static_asset(**kwargs):
+        seen.append(kwargs["html_context"]["site_path"])
+        return SimpleNamespace(status_code=200)
+
+    monkeypatch.setattr(integrations, "_application_site_catalog", _catalog)
+    monkeypatch.setattr(integrations, "serve_static_asset", _serve_static_asset)
+
+    await integrations.application_site_root("docs", _request(path="/sites/docs"))
+    await integrations.application_site_path("docs", "index.html", _request(path="/sites/docs/index.html"))
+    await integrations.application_site_path("docs", "quickstart-works/", _request(path="/sites/docs/quickstart-works/"))
+
+    assert seen == ["", "", "quickstart-works"]
+    assert integrations._application_site_path("/a/b/") == "a/b"
 
 
 @pytest.mark.asyncio
