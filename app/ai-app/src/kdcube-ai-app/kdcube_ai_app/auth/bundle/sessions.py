@@ -25,6 +25,9 @@ from typing import Any, Awaitable, Callable, Iterable, Mapping, Optional
 
 from kdcube_ai_app.auth.AuthManager import AuthManager, AuthenticationError, User
 from kdcube_ai_app.auth.bundle.session_store import BundleSessionStore
+from kdcube_ai_app.auth.session_authority_runtime import (
+    bundle_session_store_for,
+)
 from kdcube_ai_app.infra.namespaces import ns_key
 from kdcube_ai_app.infra.redis.client import get_async_redis_client
 
@@ -261,6 +264,14 @@ class BundleSessionAuthority:
         self._secret = secret
         self._authority_store = authority_store
 
+    def _active_authority_store(self) -> BundleSessionStore | None:
+        if self._authority_store is not None:
+            return self._authority_store
+        return bundle_session_store_for(
+            tenant=self.tenant,
+            project=self.project,
+        )
+
     def _ns(self, base: str) -> str:
         return ns_key(base, tenant=self.tenant, project=self.project)
 
@@ -389,7 +400,8 @@ class BundleSessionAuthority:
         if not sub_value:
             raise BundleSessionInvalid("bundle session user sub is required")
 
-        if self._authority_store is not None:
+        authority_store = self._active_authority_store()
+        if authority_store is not None:
             updates: dict[str, Any] = {"disabled": bool(disabled)}
             optional_updates = {
                 "username": username,
@@ -411,7 +423,7 @@ class BundleSessionAuthority:
                 updates["permissions"] = _as_list(permissions)
             if metadata is not None:
                 updates["metadata"] = dict(metadata)
-            record = await self._authority_store.register_user(
+            record = await authority_store.register_user(
                 sub=sub_value,
                 updates=updates,
                 now=int(time.time()),
@@ -488,8 +500,9 @@ class BundleSessionAuthority:
         sub_value = str(sub or "").strip()
         if not sub_value:
             return None
-        if self._authority_store is not None:
-            data = await self._authority_store.get_user(sub_value)
+        authority_store = self._active_authority_store()
+        if authority_store is not None:
+            data = await authority_store.get_user(sub_value)
             return BundleSessionUser.from_mapping(data) if data else None
         data = await self._get_json(self._user_key(sub_value))
         return BundleSessionUser.from_mapping(data) if data else None
@@ -507,8 +520,10 @@ class BundleSessionAuthority:
         sub_value = str(sub or "").strip()
         if not sub_value:
             raise BundleSessionInvalid("bundle session user sub is required")
-        if self._authority_store is not None:
+        authority_store = self._active_authority_store()
+        if authority_store is not None:
             return await self._login_durable(
+                authority_store=authority_store,
                 sub=sub_value,
                 provider=provider,
                 provider_subject=provider_subject,
@@ -529,6 +544,7 @@ class BundleSessionAuthority:
     async def _login_durable(
         self,
         *,
+        authority_store: BundleSessionStore,
         sub: str,
         provider: str | None = None,
         provider_subject: str | None = None,
@@ -536,10 +552,8 @@ class BundleSessionAuthority:
         idle_ttl_seconds: int | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> BundleSessionGrant:
-        if self._authority_store is None:
-            raise BundleSessionInvalid("bundle session authority store is unavailable")
         for _attempt in range(3):
-            state = await self._authority_store.get_login_state(sub)
+            state = await authority_store.get_login_state(sub)
             if state is None:
                 raise BundleSessionInvalid("bundle session user is not registered")
             user = BundleSessionUser.from_mapping(state.user)
@@ -554,7 +568,7 @@ class BundleSessionAuthority:
                 idle_ttl_seconds=idle_ttl_seconds,
                 metadata=metadata,
             )
-            if await self._authority_store.issue_session(
+            if await authority_store.issue_session(
                 record,
                 expected_version=state.version,
             ):
@@ -717,8 +731,9 @@ class BundleSessionAuthority:
         if not sid:
             return None
         current_time = int(time.time() if now is None else now)
-        if self._authority_store is not None:
-            return await self._authority_store.touch_session(
+        authority_store = self._active_authority_store()
+        if authority_store is not None:
+            return await authority_store.touch_session(
                 sid,
                 expires_at=int(expires_at),
                 now=current_time,
@@ -744,8 +759,9 @@ class BundleSessionAuthority:
             sid = str(claims.get("sid") or "").strip()
         if not sid:
             return False
-        if self._authority_store is not None:
-            removed = await self._authority_store.revoke_session(sid)
+        authority_store = self._active_authority_store()
+        if authority_store is not None:
+            removed = await authority_store.revoke_session(sid)
             logger.info(
                 "Bundle session logout session=%s removed=%s",
                 sid,
@@ -761,8 +777,9 @@ class BundleSessionAuthority:
         sub_value = str(sub or "").strip()
         if not sub_value:
             return 0
-        if self._authority_store is not None:
-            removed = await self._authority_store.invalidate_user(sub_value)
+        authority_store = self._active_authority_store()
+        if authority_store is not None:
+            removed = await authority_store.invalidate_user(sub_value)
             logger.info(
                 "Bundle session user invalidated sub=%s sessions_removed=%s",
                 sub_value,
@@ -791,8 +808,9 @@ class BundleSessionAuthority:
         sub_value = str(sub or "").strip()
         if not sub_value:
             return False
-        if self._authority_store is not None:
-            removed = await self._authority_store.delete_user(sub_value)
+        authority_store = self._active_authority_store()
+        if authority_store is not None:
+            removed = await authority_store.delete_user(sub_value)
             logger.info(
                 "Bundle session user deleted sub=%s removed=%s",
                 sub_value,
@@ -822,8 +840,9 @@ class BundleSessionAuthority:
         if not session_id or not sub:
             raise BundleSessionInvalid("bundle session token subject/session is missing")
 
-        if self._authority_store is not None:
-            state = await self._authority_store.get_validation_state(session_id)
+        authority_store = self._active_authority_store()
+        if authority_store is not None:
+            state = await authority_store.get_validation_state(session_id)
             if state is None or state.session_state != "active":
                 raise BundleSessionInvalid("bundle session is not active")
             if (

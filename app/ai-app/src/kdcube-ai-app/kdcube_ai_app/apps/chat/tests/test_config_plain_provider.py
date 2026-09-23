@@ -70,6 +70,14 @@ def test_get_plain_reads_assembly_by_default(monkeypatch, tmp_path):
                     }
                 },
                 "frontend": {"routes_prefix": "/platform"},
+                "auth": {
+                    "sessions": {
+                        "authority": {
+                            "backend": "postgresql",
+                            "migration_id": "durable-authority-v1",
+                        }
+                    }
+                },
                 "infra": {
                     "redis": {
                         "topology": "cluster",
@@ -112,6 +120,11 @@ def test_get_plain_reads_assembly_by_default(monkeypatch, tmp_path):
     assert settings.CLAUDE_CODE_SESSION_STORE_IMPLEMENTATION == "git"
     assert settings.CLAUDE_CODE_SESSION_GIT_REPO == "https://example.com/sessions.git"
     assert settings.REDIS_TOPOLOGY == "cluster"
+    assert settings.AUTH.SESSIONS.AUTHORITY.BACKEND == "postgresql"
+    assert (
+        settings.AUTH.SESSIONS.AUTHORITY.MIGRATION_ID
+        == "durable-authority-v1"
+    )
 
 
 @pytest.mark.asyncio

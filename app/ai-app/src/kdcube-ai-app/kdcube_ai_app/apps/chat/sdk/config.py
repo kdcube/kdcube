@@ -21,7 +21,8 @@ from kdcube_ai_app.apps.chat.sdk.config_scopes import (
     MetricsConfig, MetricsRuntimeConfig, MetricsProxyConfig, MetricsExportConfig,
     MetricsCloudWatchConfig, MetricsPrometheusConfig,
     PyExecConfig, ExecConfig, ReactDebugConfig, AccountingConfig, GitBundlesConfig, ApplicationsConfig,
-    PlatformConfig, IDPLocalConfig, IDPConfig, AuthConfig, CognitoTrustedProviderConfig, ServicesConfig,
+    PlatformConfig, IDPLocalConfig, IDPConfig, AuthConfig, CognitoTrustedProviderConfig,
+    SessionAuthorityConfig, SessionsConfig, ServicesConfig,
     SIMPLE_IDP_STORE_PATH,
 )
 from connection_hub.authority_registry_config import (
@@ -1635,6 +1636,20 @@ class Settings(PLATFORM_CONFIG):
                     IDP_IMPORT_ENABLED=self._resolve_bool("IDP_IMPORT_ENABLED", f"{svc}.idp.idp_import_enabled", False),
                     IDP_IMPORT_RUN_AT=self._resolve_str("IDP_IMPORT_RUN_AT", f"{svc}.idp.idp_import_run_at"),
                     IDP_IMPORT_SCRIPT_PATH=self._resolve_str("IDP_IMPORT_SCRIPT_PATH", f"{svc}.idp.idp_import_script_path"),
+                ),
+            ),
+            SESSIONS=SessionsConfig(
+                AUTHORITY=SessionAuthorityConfig(
+                    BACKEND=(
+                        self._assembly_str("auth.sessions.authority.backend")
+                        or ""
+                    ),
+                    MIGRATION_ID=(
+                        self._assembly_str(
+                            "auth.sessions.authority.migration_id"
+                        )
+                        or ""
+                    ),
                 ),
             ),
         )

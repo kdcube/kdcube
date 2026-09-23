@@ -82,6 +82,16 @@ async def lifespan(app: FastAPI):
         logger.error(f"Failed to setup Socket.IO KB handler: {e}")
         app.state.socketio_handler = None
 
+    from kdcube_ai_app.apps.chat.sdk.config import get_settings
+    from kdcube_ai_app.auth.session_authority_runtime import (
+        open_configured_session_authority,
+    )
+
+    (
+        app.state.session_authority,
+        app.state.session_authority_pg_pool,
+    ) = await open_configured_session_authority(settings=get_settings())
+
     logger.info(f"Orchestrator listener started for {ORCHESTRATOR_TYPE}")
 
     yield
@@ -92,6 +102,8 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Error stopping Socket.IO handler: {e}")
     await heartbeat_manager.stop_heartbeat()
+    if getattr(app.state, "session_authority_pg_pool", None) is not None:
+        await app.state.session_authority_pg_pool.close()
     logger.info(f"KB service heartbeat stopped on instance {INSTANCE_ID}")
 
     logger.info("Background tasks shut down")

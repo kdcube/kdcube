@@ -2,6 +2,12 @@ context:
   tenant: standalone
   project: agent-harness-langgraph
 
+auth:
+  sessions:
+    authority:
+      backend: postgresql
+      migration_id: durable-authority-v1
+
 paths:
   host_bundle_storage_path: ../output/bundle-storage
 

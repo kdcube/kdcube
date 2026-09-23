@@ -491,7 +491,7 @@ async def test_bundle_session_revision_contract_against_real_postgres() -> None:
     pool = await asyncpg.create_pool(dsn, min_size=1, max_size=2)
     store = PostgresBundleSessionStore(
         pg_pool=pool,
-        tenant=f"w253-test-{uuid.uuid4().hex}",
+        tenant=f"session-authority-test-{uuid.uuid4().hex}",
         project="bundle-sessions",
     )
     try:

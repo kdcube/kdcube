@@ -20,6 +20,9 @@ from kdcube_ai_app.auth.session_record import (
     request_context_storage_record,
     user_session_storage_record,
 )
+from kdcube_ai_app.auth.session_authority_runtime import (
+    platform_session_store_for,
+)
 from kdcube_ai_app.infra.namespaces import REDIS, ns_key
 from kdcube_ai_app.infra.redis.client import get_async_redis_client
 
@@ -432,7 +435,20 @@ class SessionManager:
         self.SESSION_PREFIX = self.ns(REDIS.SESSION)
         self.SESSION_TTL = session_ttl
         self.SESSION_INDEX_PREFIX = f"{self.SESSION_PREFIX}:index"
-        self.authority_store = authority_store
+        self._authority_store = authority_store
+
+    @property
+    def authority_store(self) -> PlatformSessionStore | None:
+        if self._authority_store is not None:
+            return self._authority_store
+        return platform_session_store_for(
+            tenant=self.tenant,
+            project=self.project,
+        )
+
+    @authority_store.setter
+    def authority_store(self, value: PlatformSessionStore | None) -> None:
+        self._authority_store = value
 
     def ns(self, base: str) -> str:
         return ns_key(base, tenant=self.tenant, project=self.project)

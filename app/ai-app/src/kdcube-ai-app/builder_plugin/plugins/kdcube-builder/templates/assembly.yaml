@@ -7,6 +7,10 @@ context:
 
 auth:
   type: "simple"
+  sessions:
+    authority:
+      backend: "postgresql"
+      migration_id: "durable-authority-v1"
   cognito:
     region: "eu-west-1"
     user_pool_id: ""
