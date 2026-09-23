@@ -1,6 +1,10 @@
 # Core API / gateway
 aiohttp==3.12.15
 fastapi==0.116.1
+# Bound with fastapi: the Project Board source family installs mcp into every
+# image, and an unpinned sse-starlette resolves to a release that needs
+# starlette 1.x, which fastapi 0.116 refuses. Same pin as chat-processor.
+sse-starlette==3.0.3
 PyJWT[crypto]==2.10.1
 pydantic==2.11.7
 pydantic-settings==2.10.1
