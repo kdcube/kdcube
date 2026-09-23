@@ -29,6 +29,8 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/conversation/search-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-accounts/delegated-accounts-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/providers-README.md
+  - https://github.com/elenaviter/app-ecosystem/blob/main/docs/connection-hub/package/delegated-cards.md
+  - https://github.com/elenaviter/app-ecosystem/blob/main/docs/connection-hub/testing/end-to-end-acceptance.md#resident-agent-control-card-agent-card-and-conversation-projection
 ---
 # Agent Capability Control And Selection
 
@@ -39,8 +41,13 @@ inside the same boundary. The same effective projection governs the picker and
 the next agent turn.
 
 This page owns the KDCube capability-projection and picker contract. Connection
-Hub owns Card persistence, revisioning, composition, drift, and enforcement;
-see [Delegated Access Cards](../connections/delegated-cards/delegated-cards-README.md).
+Hub owns Card persistence, revisioning, composition, drift, enforcement, and
+the administrator Card workflow. The KDCube host owns the privileged
+write-through into the active application descriptor. The canonical Card
+contract is
+[Delegated Access Cards](https://github.com/elenaviter/app-ecosystem/blob/main/docs/connection-hub/package/delegated-cards.md),
+and the complete administrator/user/conversation/Slack verification is
+[Connection Hub End-To-End Acceptance](https://github.com/elenaviter/app-ecosystem/blob/main/docs/connection-hub/testing/end-to-end-acceptance.md#resident-agent-control-card-agent-card-and-conversation-projection).
 
 ## One authority ceiling, two selections
 
@@ -81,15 +88,37 @@ Agent Card is a default, not a second ceiling: that conversation can later
 select any capability permitted by the current Control Card, including one
 that was not selected on the Agent Card when the conversation started.
 
+The internal synchronization operation carries two separate values.
+`descriptor_payload.capability_defaults` is the descriptor-owned Control Card
+preset; `selected_capabilities` is the user's current Agent Card selection.
+The defaults are part of the descriptor revision, so changing only the default
+model or instruction still revises and rematerializes the Control Card. An
+existing Agent Card keeps an explicit user choice and ordinary deselections;
+synchronization fills a singleton model or instruction from the current
+default only while that selection holds no value, and never overwrites a
+chosen value. An explicit selection replacement does not fill during that
+replacement; a later synchronization fills a singleton left empty.
+
 On every read and turn, KDCube intersects the current Control authority with
 the stored conversation selection. A Control removal closes access
-immediately. A Control addition becomes selectable immediately but stays off
-until the user selects it; neither an Agent Card nor an existing conversation
-grows implicitly. The runtime translates the effective projection into its
-existing internal disabled-map adapter and narrows the tool config, skill
-config, named-service dispatcher, conversation targets, resource operations,
-resource families, and subagent installation. The adapter is not another
-authority source.
+immediately. A genuinely new Control capability becomes selectable but stays
+off until the user selects it; neither an Agent Card nor an existing
+conversation grows implicitly. A temporarily removed capability is different:
+its saved user selection remains durable while it is unavailable and becomes
+effective again if the administrator restores it. The runtime translates the
+effective projection into its existing internal disabled-map adapter and
+narrows the tool config, skill config, named-service dispatcher, conversation
+targets, resource operations, resource families, and subagent installation.
+The adapter is not another authority source.
+
+For example, a conversation created while user-configured MCPs were permitted
+may retain that older selection as history. If today's descriptor removes the
+custom-MCP resource family, the current Control intersection removes those
+tools from the turn and the operation boundary denies a direct attempt. The
+older conversation cannot preserve yesterday's authority. Its stored choice
+is retained as provenance, however, so restoring the same family makes that
+choice effective again. A conversation that had the family deselected remains
+deselected.
 
 Platform system tools are outside this user-selectable boundary. Every
 descriptor capability is inside it. If the current Control authority or the
@@ -129,11 +158,23 @@ Each selectable row has exactly one authority state:
 | `allowed_unselected` | The current Control Card permits it, but the current scope does not select it. | Unchecked and mutable. | Not exposed until selected in the current scope. |
 | `not_allowed` | It appears in the live descriptive catalog but is outside the current Control authority, or the projection is unavailable. | Unchecked, disabled, and labeled **Not permitted**; expandable details remain readable. | Not exposed. |
 
-The Agent Card picker labels values that are already persisted as **Saved
-default**. The conversation picker labels values that still match its starting
-defaults as **Inherited**, and values changed for that conversation as
-**Changed here**. These labels describe provenance; none of them locks a row.
-Only `not_allowed` is immutable.
+Picker provenance distinguishes an Agent Card default from a choice overridden
+for one conversation. That provenance is explanatory state, not authority and
+not a lock. Every `allowed_selected` and `allowed_unselected` row remains
+mutable in the scope being edited. Only `not_allowed` is immutable.
+
+The picker names that provenance in user terms:
+
+- **Current default** means the Agent Card's persisted selection.
+- **New default** means the unsaved Agent Card draft differs from that
+  persisted selection.
+- **Starting value** means this conversation still uses the selection copied
+  from the Agent Card revision recorded when the conversation was created.
+- **This conversation** means this conversation's draft or saved selection
+  differs from that starting value.
+
+These labels explain where a value came from. They do not make a permitted
+row read-only.
 
 The unscoped served picker edits Agent Card defaults and names that state in
 the surface. Saving replaces the positive Agent Card selection within the
@@ -190,21 +231,53 @@ provenance and mutable conversation selection.
 
 Connection Hub gives these two Cards different owner surfaces. The resident
 Agent Card editor and KDCube's full-page Agent Card picker change only the
-positive defaults inside the linked descriptor ceiling and write a
-revision-checked Card update. The linked descriptor Control Card displays its
-authority and presentation metadata as a descriptor-managed ceiling; changing
-the descriptor, then synchronizing, revises it. It is not shown as an empty
-generic resource Card.
-The editor groups child tools and operations beneath their tool group, MCP
-server, named service, or resource, and shows declared descriptions in the
-form. Repeated operation labels therefore retain their owning context.
+positive user defaults inside the linked descriptor ceiling and write a
+revision-checked Card update. The linked descriptor Control Card uses the same
+full Card editor for the administrator-owned ceiling and defaults. It is not
+an empty generic resource Card and it is not an ordinary-user surface.
+
+Connection Hub owns the exact Control and Agent Card resource catalogs,
+including descriptor-serializable rows and user-resource-family discovery
+containers. See
+[Delegated Access Cards](https://github.com/elenaviter/app-ecosystem/blob/main/docs/connection-hub/package/delegated-cards.md)
+for that Card read-model contract.
+
+A platform administrator's Control Card save writes through to the exact
+application and agent entry in descriptor-owned bundle properties before the
+live Card update is reported successful. It carries the reviewed defaults,
+resource authority, named-service operations and bounded metadata under
+`agent_capability_control_overrides`. Changing the source descriptor and then
+synchronizing revises the same Control projection in the other direction.
+The active descriptor remains the outer ceiling in both cases.
+
+The concrete write path is:
+
+1. Connection Hub's `DelegatedAccessPanel.tsx` calls `mergeBundleProps()` in
+   `src/api/client.ts` for the exact application and agent.
+2. The administrator-only request reaches KDCube
+   `apps/chat/proc/rest/integrations/integrations.py::set_bundle_props`.
+3. KDCube persists the merge through
+   `infra/plugin/bundle_store.py::_put_bundle_props_locked`, which owns the
+   authoritative descriptor-backed application properties.
+
+Only after that request succeeds does Connection Hub submit the corresponding
+revision-checked Control Card update. A descriptor-write refusal therefore
+leaves the live Card unchanged.
+
+Both Card editors group child tools and operations beneath their tool group,
+MCP server, named service, or resource, and show declared descriptions in the
+form. The Agent Card also retains user-owned connected accounts and custom MCP
+configuration. Repeated operation labels therefore retain their owning
+context without moving user-owned credentials into the Control Card.
 
 Descriptor, Agent Card, and conversation changes remain independent:
 
 | Change | Result |
 | --- | --- |
 | Descriptor removes a capability | The Control Card revision removes it; the next live intersection denies it without changing the credential. A retained Agent Card choice is shown as **Missing**. |
-| Descriptor adds a capability | It becomes selectable in Agent Card and conversation pickers but remains off in existing selections until explicitly chosen. |
+| Descriptor adds a genuinely new capability | It becomes selectable in Agent Card and conversation pickers but remains off in existing selections until explicitly chosen. |
+| Descriptor restores a capability selected before its removal | Its preserved selection becomes effective again; scopes that had deselected it remain off. |
+| Administrator edits the Control Card | Connection Hub writes the revision-checked ceiling/default change into descriptor-owned application properties, then updates the Card. The saved descriptor value survives runtime reload. |
 | User changes Agent Card defaults | A revision-checked Card update replaces the positive defaults. New conversations start from them; existing conversation selections do not change. |
 | User changes a chat picker | `agent_selection_update` replaces only that conversation's positive selection. It may select any current Control-allowed capability and never changes the Agent Card or another conversation. |
 | Labels or other metadata change | The picker can show the new presentation without treating it as authority. |
