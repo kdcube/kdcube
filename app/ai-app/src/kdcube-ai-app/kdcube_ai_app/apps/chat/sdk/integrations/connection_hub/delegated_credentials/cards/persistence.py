@@ -7,6 +7,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from connection_hub.delegated_credentials.cards.credential_handles import (
+    CardCredentialHandleStore,
+)
 from connection_hub.delegated_credentials.cards.persistence import (
     CardPersistence,
     DurableCardPersistence as _PortableDurableCardPersistence,
@@ -30,6 +33,7 @@ class DurableCardPersistence(_PortableDurableCardPersistence):
         card_store: Any,
         settings: Any = None,
         mutation_lock: CardMutationLock | None = None,
+        credential_handles: CardCredentialHandleStore | None = None,
     ) -> None:
         super().__init__(
             redis=redis,
@@ -38,6 +42,7 @@ class DurableCardPersistence(_PortableDurableCardPersistence):
             card_store=card_store,
             settings=settings,
             mutation_lock=mutation_lock or _kdcube_card_mutation_lock,
+            credential_handles=credential_handles,
         )
 
 
