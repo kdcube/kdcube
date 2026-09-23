@@ -94,7 +94,9 @@ preset; `selected_capabilities` is the user's current Agent Card selection.
 The defaults are part of the descriptor revision, so changing only the default
 model or instruction still revises and rematerializes the Control Card. An
 existing Agent Card keeps an explicit user choice and ordinary deselections;
-synchronization fills only a missing singleton model or instruction default.
+synchronization may fill a missing singleton model or instruction default only
+when the descriptor revision changes. An ordinary read, lease renewal, or save
+does not refill a value the user removed.
 
 On every read and turn, KDCube intersects the current Control authority with
 the stored conversation selection. A Control removal closes access
@@ -160,6 +162,19 @@ for one conversation. That provenance is explanatory state, not authority and
 not a lock. Every `allowed_selected` and `allowed_unselected` row remains
 mutable in the scope being edited. Only `not_allowed` is immutable.
 
+The picker names that provenance in user terms:
+
+- **Current default** means the Agent Card's persisted selection.
+- **New default** means the unsaved Agent Card draft differs from that
+  persisted selection.
+- **Starting value** means this conversation still uses the selection copied
+  from the Agent Card revision recorded when the conversation was created.
+- **This conversation** means this conversation's draft or saved selection
+  differs from that starting value.
+
+These labels explain where a value came from. They do not make a permitted
+row read-only.
+
 The unscoped served picker edits Agent Card defaults and names that state in
 the surface. Saving replaces the positive Agent Card selection within the
 Control ceiling. A picker opened from chat carries the current conversation id
@@ -220,6 +235,23 @@ revision-checked Card update. The linked descriptor Control Card uses the same
 full Card editor for the administrator-owned ceiling and defaults. It is not
 an empty generic resource Card and it is not an ordinary-user surface.
 
+For a descriptor-backed Control Card, the resource catalog contains only rows
+that can be serialized back into the agent descriptor: named-service and MCP
+resources. Generic aggregate rows such as **All platform and application
+APIs**, management-only resources, and user-owned connector instances are not
+offered. The selected named-service and managed-MCP resources use the standard
+Card sections for service permissions, tools, and service actions; they are
+not repeated as zero-tool entries in the additional KDCube capability metadata.
+
+A hosted Agent Card starts with the exact standard resources selected by its
+Control Card, and its add-resource choices contain only those Control resources.
+When the Control Card permits a user-owned resource family, the Agent Card also
+shows its user-facing route, for example **My MCP connectors**, plus the signed-in
+owner's matching connector resources. The route is a container for discovery,
+not authority of its own; each selected connector remains an exact Card
+resource. Other resources from the global Connection Hub catalog are outside
+this Agent Card's choices.
+
 A platform administrator's Control Card save writes through to the exact
 application and agent entry in descriptor-owned bundle properties before the
 live Card update is reported successful. It carries the reviewed defaults,
@@ -227,6 +259,20 @@ resource authority, named-service operations and bounded metadata under
 `agent_capability_control_overrides`. Changing the source descriptor and then
 synchronizing revises the same Control projection in the other direction.
 The active descriptor remains the outer ceiling in both cases.
+
+The concrete write path is:
+
+1. Connection Hub's `DelegatedAccessPanel.tsx` calls `mergeBundleProps()` in
+   `src/api/client.ts` for the exact application and agent.
+2. The administrator-only request reaches KDCube
+   `apps/chat/proc/rest/integrations/integrations.py::set_bundle_props`.
+3. KDCube persists the merge through
+   `infra/plugin/bundle_store.py::_put_bundle_props_locked`, which owns the
+   authoritative descriptor-backed application properties.
+
+Only after that request succeeds does Connection Hub submit the corresponding
+revision-checked Control Card update. A descriptor-write refusal therefore
+leaves the live Card unchanged.
 
 Both Card editors group child tools and operations beneath their tool group,
 MCP server, named service, or resource, and show declared descriptions in the
