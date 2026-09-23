@@ -84,9 +84,18 @@ def test_the_postgres_session_merge_follows_the_same_presence_rule():
 
     kept = _merge_record(existing, user_data={"user_id": "u"}, request_context=context, user_type="registered")
     assert kept["email_verified"] is True
+    same = _merge_record(existing, user_data={"user_id": "u", "email": "u@example.test"}, request_context=context, user_type="registered")
+    assert same["email_verified"] is True, "the same email without a verdict keeps the one it has"
 
     revoked = _merge_record(existing, user_data={"user_id": "u", "email_verified": False}, request_context=context, user_type="registered")
     assert revoked["email_verified"] is False
+
+    # The verdict belongs to the email it verified: a new address without a
+    # verdict is unvouched, whatever the old one was.
+    changed = _merge_record(existing, user_data={"user_id": "u", "email": "new@example.test"}, request_context=context, user_type="registered")
+    assert changed["email"] == "new@example.test" and changed["email_verified"] is None
+    vouched = _merge_record(existing, user_data={"user_id": "u", "email": "new@example.test", "email_verified": True}, request_context=context, user_type="registered")
+    assert vouched["email_verified"] is True
 
 
 @pytest.mark.asyncio
@@ -141,6 +150,18 @@ async def test_the_redis_session_merge_keeps_a_verified_email_across_logins_with
         )
         assert revoked.email_verified is False
         assert (await manager.get_session_by_id(first.session_id)).email_verified is False
+
+        # Verified again, then a login with a different email and no verdict:
+        # the new address is unvouched, the old verdict does not follow it.
+        await manager.get_or_create_session(
+            context, UserType.REGISTERED, {"user_id": user_id, "username": "alice", "email": "alice@example.test", "email_verified": True},
+        )
+        moved = await manager.get_or_create_session(
+            context, UserType.REGISTERED, {"user_id": user_id, "username": "alice", "email": "alice.new@example.test"},
+        )
+        assert moved.email == "alice.new@example.test"
+        assert moved.email_verified is None
+        assert (await manager.get_session_by_id(first.session_id)).email_verified is None
     finally:
         await manager.init_redis()
         await manager.redis.delete(

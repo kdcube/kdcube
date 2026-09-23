@@ -52,6 +52,14 @@ def _merge_record(
 ) -> dict[str, Any]:
     merged = dict(existing)
     merged["user_type"] = str(user_type)
+    if (
+        "email" in user_data
+        and user_data.get("email") != existing.get("email")
+        and "email_verified" not in user_data
+    ):
+        # The verdict belongs to the email it verified: a login that brings a
+        # different email and no verdict leaves the new address unvouched.
+        merged["email_verified"] = None
     for field in _USER_UPDATE_FIELDS:
         if field in user_data:
             merged[field] = user_data[field]

@@ -148,6 +148,12 @@ local function merge_user_data(existing_obj, user_obj)
         existing_obj["username"] = user_obj["username"]
     end
     if user_obj["email"] ~= nil then
+        -- The verdict belongs to the email it verified. A login that brings a
+        -- different email and no verdict must not leave the old verdict
+        -- standing beside the new address.
+        if existing_obj["email"] ~= user_obj["email"] and user_obj["email_verified"] == nil then
+            existing_obj["email_verified"] = nil
+        end
         existing_obj["email"] = user_obj["email"]
     end
     if user_obj["email_verified"] ~= nil then
