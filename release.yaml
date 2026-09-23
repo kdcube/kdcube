@@ -1,55 +1,32 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.09.02.1429"
+  ref: "2026.09.13.0145"
   description: |
-    This release follows 2026.09.01.110.
+    This release follows 2026.09.02.1429 and carries the authority work of the
+    two weeks after it, so the packaged CLI can be published at the version the
+    repository already declares.
 
-    Connection Hub can now govern MCP services registered by an individual
-    owner. It discovers each service's tools, projects only the operations on a
-    delegated caller's current access card, detects changes to accepted tool
-    descriptors, and keeps upstream credentials in server-side custody. Calls
-    pass through the governed proxy with exact owner, connector, tool, card,
-    and invocation-policy checks before dispatch.
+    Delegated authority is now carried by the Card itself, end to end: a Card
+    is the delegation edge through the Data Bus, application Cards downscope
+    runtime roles and are enforced per operation, conversation reads are scoped
+    on every transport, and conversation targets are enforced per application
+    across named-service calls. An application owns its delegated catalog,
+    which the CLI can check and apply as reviewed fragments.
 
-    Delegated operations support Once and Always invocation policies. A
-    one-use grant is consumed atomically, repeated delivery of the same
-    invocation id replays its recorded result without another upstream call,
-    and exhausted, revoked, disabled, or changed authority is denied before
-    dispatch. Integrated services can apply the same live authority through
-    direct admission while authenticating their own workload independently.
+    Agent capabilities became a Card boundary: a descriptor's declaration is
+    the ceiling, the per-user Agent Card holds the defaults a new conversation
+    starts from, a conversation selects within the live Control Card, and a
+    retained selection the declaration no longer allows reads as missing.
 
-    Upstream MCP OAuth supports Client ID Metadata Documents, dynamic client
-    registration, and provisioned clients registered through a provider
-    console. Provider client secrets and access or refresh tokens stay in
-    owner-scoped secret storage. PKCE, refresh rotation, reconnect,
-    replacement, revocation, deletion cleanup, and resource-qualified consent
-    are covered across the supported registration paths.
+    OAuth gained the device authorization flow for hosts without a browser,
+    whole-Card agent credentials, and a first consent seeded from the
+    requested authority instead of an empty pick list. Login state moved to
+    the host secret backend, and create-only ephemeral secret custody landed
+    beneath it.
 
-    The default descriptors expose the complete governed connector and OAuth
-    configuration, and the quick start includes a KDCube-backed localhost path
-    for external MCP clients. Runtime requirements consume the released
-    calendar-versioned Connection Hub package through a compatible release
-    family floor.
-
-    The Web Search MCP surface now has a repository-root launcher and an
-    operator-owned YAML configuration. Operators can set persistent domain
-    allowlists and blocklists, while callers can narrow a permitted search per
-    invocation. Configuration editing is exposed as an explicit operation,
-    and the install and client procedures cover stdio and hosted deployment
-    shapes.
-
-    Web requests enforce address-level SSRF checks across resolution and
-    redirects. Search and fetch results leave the service in a normalized
-    public shape, content filtering tolerates missing objectives, and optional
-    LLM processing keeps keyless search usable. The stdio launcher keeps
-    protocol output clean, accepts practical scalar input forms, and reports
-    parameter and return schemas at full fidelity.
-
-    KDCube's governed services inventory includes the Productivity Web surface
-    so the same authority model can expose it to agents. Contributor testing
-    documentation now isolates packages whose source names overlap third-party
-    MCP modules, preserving deterministic imports during broad platform test
-    runs.
+    The hybrid index re-exports from app-foundation, an empty query browses a
+    scope, a lexical-only collection stops paying for vectors, and hybrid
+    search can return the matched passage.
 
 config:
-  version: "2026.09.02.1429"
+  version: "2026.09.13.0145"
