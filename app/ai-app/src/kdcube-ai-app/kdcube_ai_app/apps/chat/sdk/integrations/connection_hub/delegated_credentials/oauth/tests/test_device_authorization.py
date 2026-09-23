@@ -32,6 +32,10 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentia
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.http import (
     routes as oauth_routes,
 )
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.http.device import (
+    verification_uri,
+    verification_uri_complete,
+)
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.tests.helpers import (
     enable_delegated_client,
     mount_test_oauth_adapter,
@@ -44,6 +48,16 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentia
 ISSUER = "https://connector.example.test"
 RESOURCE = "https://connector.example.test/public/mcp/records"
 ACCESS_ID = "con_device_card_1"
+
+
+def test_device_verification_uri_accepts_origin_or_mounted_oauth_issuer():
+    mounted_issuer = f"{ISSUER}/public/oauth"
+
+    assert verification_uri(ISSUER) == f"{ISSUER}/oauth/device"
+    assert verification_uri(mounted_issuer) == f"{mounted_issuer}/device"
+    assert verification_uri_complete(mounted_issuer, "BCDF-GHJK") == (
+        f"{mounted_issuer}/device?user_code=BCDF-GHJK"
+    )
 
 
 async def _authenticate(token: str):
