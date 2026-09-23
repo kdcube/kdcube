@@ -47,6 +47,20 @@ def test_shipped_assemblies_start_from_the_migration_source(
     assert settings.AUTH.SESSIONS.AUTHORITY.GENERATION_ID == ""
 
 
+def test_missing_session_authority_selector_keeps_the_migration_source(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    assembly_path = tmp_path / "assembly.yaml"
+    assembly_path.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setenv("ASSEMBLY_YAML_DESCRIPTOR_PATH", str(assembly_path))
+
+    settings = sdk_config.Settings()
+
+    assert settings.AUTH.SESSIONS.AUTHORITY.BACKEND == "redis-migration-source"
+    assert settings.AUTH.SESSIONS.AUTHORITY.GENERATION_ID == ""
+
+
 def test_get_plain_reads_assembly_by_default(monkeypatch, tmp_path):
     for key in (
         "SECRETS_PROVIDER",

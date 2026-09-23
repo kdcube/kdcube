@@ -72,7 +72,10 @@ refresh stages code; it does not change the descriptors above.
 Shipped and generated descriptors use this source mode by default. A fresh
 runtime therefore starts without claiming a PostgreSQL generation that has no
 activation receipt. Rebuilding an existing runtime before cutover continues to
-serve the Redis source; only step 4 changes the authority backend.
+serve the Redis source: an absent selector is normalized to
+`redis-migration-source`. Persist both explicit selectors shown above before
+preview so the reviewed cutover state is visible in both descriptors. Only
+step 4 changes the authority backend.
 
 ## 2. Create and inspect the preview
 

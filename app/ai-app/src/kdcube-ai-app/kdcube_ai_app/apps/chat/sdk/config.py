@@ -33,6 +33,9 @@ from connection_hub.authority_registry_config import (
     resolve_authority_provider_instance,
     resolve_platform_authority_provider,
 )
+from connection_hub.delegated_credentials.authority_config import (
+    AUTHORITY_BACKEND_REDIS_MIGRATION_SOURCE,
+)
 from kdcube_ai_app.infra.props import get_props_manager
 from kdcube_ai_app.infra.secrets import get_secrets_manager
 from kdcube_ai_app.apps.chat.sdk.config_cache import (
@@ -1642,7 +1645,7 @@ class Settings(PLATFORM_CONFIG):
                 AUTHORITY=SessionAuthorityConfig(
                     BACKEND=(
                         self._assembly_str("auth.sessions.authority.backend")
-                        or ""
+                        or AUTHORITY_BACKEND_REDIS_MIGRATION_SOURCE
                     ),
                     GENERATION_ID=(
                         self._assembly_str(
