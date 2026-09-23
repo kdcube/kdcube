@@ -8,6 +8,7 @@ updated_at: 2026-09-11
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/procedures/README.md
   - repo:kdcube-ai-app/app/ai-app/docs/procedures/platform-source-testing-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/recipes/operations/move-authority-to-postgresql-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/platform-settings-live-update-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/arch/security-and-trust-model-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/arch/delegated-authority-and-admission-README.md
@@ -135,6 +136,7 @@ Curated index of platform, service, and SDK documentation.
 
 ## Runtime, Storage, And Execution
 
+* Move Runtime Authority To PostgreSQL: [move-authority-to-postgresql-README.md](recipes/operations/move-authority-to-postgresql-README.md)
 * App Storage And Cache: [bundle-storage-and-cache-README.md](sdk/bundle/bundle-storage-and-cache-README.md)
 * Connection Hub Token Storage: [connection-hub-token-storage-README.md](sdk/solutions/connections/connection-hub-token-storage-README.md)
 * Delegated Access Card Lifecycle: [delegated-cards-README.md](sdk/solutions/connections/delegated-cards/delegated-cards-README.md)

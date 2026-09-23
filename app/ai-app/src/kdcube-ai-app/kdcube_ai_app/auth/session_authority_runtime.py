@@ -196,7 +196,7 @@ def session_authority_config_from_settings(settings: Any) -> DurableAuthorityCon
     return DurableAuthorityConfig.from_mapping(
         {
             "backend": getattr(authority, "BACKEND", ""),
-            "migration_id": getattr(authority, "MIGRATION_ID", ""),
+            "generation_id": getattr(authority, "GENERATION_ID", ""),
         },
         field_path="auth.sessions.authority",
     )
@@ -255,7 +255,7 @@ async def prepare_configured_session_authority(
     await platform_store.ensure_schema()
     await cutovers.ensure_schema()
     await cutovers.require_activated(
-        config.migration_id,
+        config.generation_id,
         required_families=KDCUBE_SESSION_AUTHORITY_FAMILIES,
     )
     return activate_session_authority_stores(

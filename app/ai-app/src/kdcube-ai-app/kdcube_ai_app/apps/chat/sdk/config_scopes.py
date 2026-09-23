@@ -566,7 +566,7 @@ class SessionAuthorityConfig(BaseModel):
     """Descriptor-selected authority generation for platform sessions."""
 
     BACKEND: str = ""
-    MIGRATION_ID: str = ""
+    GENERATION_ID: str = ""
 
 
 class SessionsConfig(BaseModel):

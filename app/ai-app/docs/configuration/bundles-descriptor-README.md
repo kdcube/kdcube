@@ -18,6 +18,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/arch/proc/application-startup-health-and-readiness-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/user-settings/capabilities-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/recipes/operations/move-authority-to-postgresql-README.md
 ---
 # Bundles Descriptor
 
@@ -319,6 +320,9 @@ bundles:
       config:
         connections:
           delegated_credentials:
+            authority:
+              backend: postgresql
+              generation_id: authority-2026-09-23
             oauth:
               enabled: true
               brand: "KDCube"
@@ -338,6 +342,14 @@ bundles:
 The adapter is served by the `connection-hub@1-0` public `oauth` operation. It
 issues delegated credentials that can be consumed by managed bundle surfaces,
 for example a bundle MCP endpoint with `surfaces.as_provider.mcp.<alias>.auth`.
+
+`connections.delegated_credentials.authority` selects the Connection Hub
+credential, Card-handle, and replay authority generation. PostgreSQL mode
+requires an activation receipt for the exact `generation_id`. During an
+existing-runtime cutover, select `redis-migration-source` and omit
+`generation_id` until the reviewed reset is applied. The operator sequence and
+the state that is preserved or rebuilt are defined in
+[Move Runtime Authority To PostgreSQL](../recipes/operations/move-authority-to-postgresql-README.md).
 
 ### App-owned delegated catalog declarations
 

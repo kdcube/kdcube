@@ -4,7 +4,7 @@ title: "Platform Assembly Descriptor"
 summary: "Platform-level non-secret deployment configuration in assembly.yaml: tenant/project identity, auth, models, services, ports, storage backends, local runtime paths, and frontend/runtime wiring."
 tags: ["service", "configuration", "platform", "deployment", "assembly", "descriptor"]
 keywords: ["platform deployment identity", "tenant and project scope", "auth and cognito settings", "service port layout", "storage and workspace backends", "runtime path wiring", "application preparation concurrency", "application preparation retry", "bundle descriptor provider", "frontend build metadata", "local compose topology", "aws deployment mapping"]
-updated_at: 2026-09-11
+updated_at: 2026-09-23
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/descriptors-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/service-runtime-configuration-mapping-README.md
@@ -14,6 +14,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/platform-settings-live-update-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/arch/proc/application-startup-health-and-readiness-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-credentials/oauth-delegated-credential-protocol-adapter-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/recipes/operations/move-authority-to-postgresql-README.md
 ---
 # Platform Assembly Descriptor
 
@@ -306,6 +307,25 @@ items:
 
 The server selects a verifier from token claims (`iss` plus `client_id` or
 `aud`) and then performs normal JWKS validation for that provider.
+
+### Session Authority Storage
+
+`auth.sessions.authority` selects the storage authority for bundle users,
+authority versions, bundle sessions, and platform sessions:
+
+```yaml
+auth:
+  sessions:
+    authority:
+      backend: postgresql
+      generation_id: authority-2026-09-23
+```
+
+`backend: postgresql` requires the exact `generation_id` to have an activation
+receipt that covers every session family. Existing Redis-backed runtimes use
+`backend: redis-migration-source` with no `generation_id` only while creating
+and applying the reviewed cutover preview. See
+[Move Runtime Authority To PostgreSQL](../recipes/operations/move-authority-to-postgresql-README.md).
 
 ### Connection Hub Delegated Credential Adapters
 

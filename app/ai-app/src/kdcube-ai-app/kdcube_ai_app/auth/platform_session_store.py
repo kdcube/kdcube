@@ -116,6 +116,113 @@ class PostgresPlatformSessionStore:
             async with connection.transaction():
                 await connection.execute(platform_session_schema_sql(self.schema))
 
+    async def import_session_authority(
+        self,
+        *,
+        authority_key: str,
+        record: Mapping[str, Any],
+        expires_at_ms: int,
+    ) -> bool:
+        """Insert one live Redis platform session or prove an exact rerun."""
+
+        key = str(authority_key or "").strip()
+        payload = dict(record or {})
+        session_id = str(payload.get("session_id") or "").strip()
+        user_type = str(payload.get("user_type") or "").strip()
+        created_at = float(payload.get("created_at") or 0)
+        last_seen = float(payload.get("last_seen") or created_at)
+        expiry_ms = int(expires_at_ms)
+        if (
+            not key
+            or not session_id
+            or not user_type
+            or created_at <= 0
+            or last_seen < created_at
+            or expiry_ms <= int(last_seen * 1000)
+        ):
+            raise ValueError("platform session migration record is invalid")
+        async with self._pool.acquire() as connection:
+            async with connection.transaction():
+                status = await connection.execute(
+                    f"""
+                    INSERT INTO {self.schema}.{TABLE_PLATFORM_SESSIONS} (
+                        session_id, authority_key, tenant, project,
+                        user_type, user_id, fingerprint, record, state,
+                        created_at, last_seen_at, expires_at
+                    ) VALUES (
+                        $1, $2, $3, $4,
+                        $5, $6, $7, ($8::text)::jsonb, 'active',
+                        to_timestamp($9), to_timestamp($10),
+                        to_timestamp($11::double precision / 1000.0)
+                    )
+                    ON CONFLICT DO NOTHING
+                    """,
+                    session_id,
+                    key,
+                    self.tenant,
+                    self.project,
+                    user_type,
+                    str(payload.get("user_id") or "").strip() or None,
+                    str(payload.get("fingerprint") or "").strip() or None,
+                    _json_text(payload),
+                    created_at,
+                    last_seen,
+                    expiry_ms,
+                )
+                row = await connection.fetchrow(
+                    f"""
+                    SELECT authority_key, tenant, project, user_type,
+                           user_id, fingerprint, record, state,
+                           extract(epoch FROM created_at) AS created_at,
+                           extract(epoch FROM last_seen_at) AS last_seen,
+                           floor(extract(epoch FROM expires_at) * 1000)::bigint
+                               AS expires_at_ms
+                    FROM {self.schema}.{TABLE_PLATFORM_SESSIONS}
+                    WHERE session_id = $1
+                    FOR UPDATE
+                    """,
+                    session_id,
+                )
+                value = dict(row) if row is not None else {}
+                if (
+                    str(value.get("authority_key") or "") != key
+                    or str(value.get("tenant") or "") != self.tenant
+                    or str(value.get("project") or "") != self.project
+                    or str(value.get("user_type") or "") != user_type
+                    or (str(value.get("user_id") or "").strip() or None)
+                    != (str(payload.get("user_id") or "").strip() or None)
+                    or (str(value.get("fingerprint") or "").strip() or None)
+                    != (str(payload.get("fingerprint") or "").strip() or None)
+                    or _json_object(value.get("record")) != payload
+                    or str(value.get("state") or "") != "active"
+                    or abs(float(value.get("created_at") or 0) - created_at) > 0.001
+                    or abs(float(value.get("last_seen") or 0) - last_seen) > 0.001
+                    or int(value.get("expires_at_ms") or 0) != expiry_ms
+                ):
+                    raise RuntimeError("platform_session_migration_target_conflict")
+        return str(status or "").strip().endswith(" 1")
+
+    async def migration_rows(self, *, captured_at_ms: int) -> list[dict[str, Any]]:
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(
+                f"""
+                SELECT session_id, authority_key, record,
+                       floor(extract(epoch FROM expires_at) * 1000)::bigint
+                           AS expires_at_ms
+                FROM {self.schema}.{TABLE_PLATFORM_SESSIONS}
+                WHERE state = 'active'
+                  AND expires_at > to_timestamp($1::double precision / 1000.0)
+                ORDER BY session_id
+                """,
+                int(captured_at_ms),
+            )
+        values = []
+        for row in rows:
+            value = dict(row)
+            value["record"] = _json_object(value.get("record"))
+            values.append(value)
+        return values
+
     async def get_or_create(
         self,
         *,

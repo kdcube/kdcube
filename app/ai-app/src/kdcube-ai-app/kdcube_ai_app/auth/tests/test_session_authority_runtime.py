@@ -28,10 +28,10 @@ def _clean_runtime_registry():
 
 def _config(
     backend: str = "postgresql",
-    migration_id: str = "durable-authority-v1",
+    generation_id: str = "durable-authority-v1",
 ) -> DurableAuthorityConfig:
     return DurableAuthorityConfig.from_mapping(
-        {"backend": backend, "migration_id": migration_id},
+        {"backend": backend, "generation_id": generation_id},
         field_path="auth.sessions.authority",
     )
 
@@ -127,7 +127,7 @@ async def test_explicit_stores_override_an_unprepared_process_binding() -> None:
 async def test_redis_migration_source_remains_an_explicit_compatibility_mode() -> None:
     config = _config(
         backend="redis-migration-source",
-        migration_id="",
+        generation_id="",
     )
     snapshot = configure_session_authority(
         tenant="tenant-a",
@@ -165,12 +165,12 @@ class _Cutovers(_PreparedStore):
 
     async def require_activated(
         self,
-        migration_id: str,
+        generation_id: str,
         *,
         required_families: tuple[str, ...],
     ) -> object:
         self.events.append(
-            ("receipt", migration_id, required_families)
+            ("receipt", generation_id, required_families)
         )
         if self.failure is not None:
             raise self.failure
@@ -180,7 +180,7 @@ class _Cutovers(_PreparedStore):
 def _settings() -> SimpleNamespace:
     authority = SimpleNamespace(
         BACKEND="postgresql",
-        MIGRATION_ID="durable-authority-v1",
+        GENERATION_ID="durable-authority-v1",
     )
     return SimpleNamespace(
         TENANT="tenant-a",

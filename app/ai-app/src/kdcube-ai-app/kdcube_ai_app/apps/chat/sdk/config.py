@@ -1644,9 +1644,9 @@ class Settings(PLATFORM_CONFIG):
                         self._assembly_str("auth.sessions.authority.backend")
                         or ""
                     ),
-                    MIGRATION_ID=(
+                    GENERATION_ID=(
                         self._assembly_str(
-                            "auth.sessions.authority.migration_id"
+                            "auth.sessions.authority.generation_id"
                         )
                         or ""
                     ),

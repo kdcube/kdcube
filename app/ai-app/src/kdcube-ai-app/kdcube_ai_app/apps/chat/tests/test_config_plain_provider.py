@@ -74,7 +74,7 @@ def test_get_plain_reads_assembly_by_default(monkeypatch, tmp_path):
                     "sessions": {
                         "authority": {
                             "backend": "postgresql",
-                            "migration_id": "durable-authority-v1",
+                            "generation_id": "durable-authority-v1",
                         }
                     }
                 },
@@ -122,7 +122,7 @@ def test_get_plain_reads_assembly_by_default(monkeypatch, tmp_path):
     assert settings.REDIS_TOPOLOGY == "cluster"
     assert settings.AUTH.SESSIONS.AUTHORITY.BACKEND == "postgresql"
     assert (
-        settings.AUTH.SESSIONS.AUTHORITY.MIGRATION_ID
+        settings.AUTH.SESSIONS.AUTHORITY.GENERATION_ID
         == "durable-authority-v1"
     )
 

@@ -120,6 +120,199 @@ class PostgresBundleSessionStore:
             async with connection.transaction():
                 await connection.execute(bundle_session_schema_sql(self.schema))
 
+    async def import_user_authority(
+        self,
+        *,
+        subject: str,
+        record: Mapping[str, Any] | None,
+        session_version: int,
+    ) -> bool:
+        """Insert one Redis user/version authority or prove an exact rerun."""
+
+        sub = str(subject or "").strip()
+        version = int(session_version)
+        if not sub or version < 1:
+            raise ValueError("bundle user migration identity is invalid")
+        source_record = dict(record) if record is not None else None
+        state = "active" if source_record is not None else "deleted"
+        stored_record = source_record or {"sub": sub, "disabled": True}
+        if str(stored_record.get("sub") or "") != sub:
+            raise ValueError("bundle user migration subject mismatch")
+        disabled = bool(stored_record.get("disabled") or state == "deleted")
+        created_at = int(stored_record.get("created_at") or 0)
+        updated_at = int(stored_record.get("updated_at") or created_at)
+        async with self._pool.acquire() as connection:
+            async with connection.transaction():
+                status = await connection.execute(
+                    f"""
+                    INSERT INTO {self.schema}.{TABLE_USERS} (
+                        subject, tenant, project, record, session_version,
+                        state, disabled, created_at, updated_at
+                    ) VALUES (
+                        $1, $2, $3, ($4::text)::jsonb, $5,
+                        $6, $7, to_timestamp($8), to_timestamp($9)
+                    )
+                    ON CONFLICT (subject) DO NOTHING
+                    """,
+                    sub,
+                    self.tenant,
+                    self.project,
+                    _json_text(stored_record),
+                    version,
+                    state,
+                    disabled,
+                    created_at,
+                    updated_at,
+                )
+                row = await connection.fetchrow(
+                    f"""
+                    SELECT tenant, project, record, session_version,
+                           state, disabled
+                    FROM {self.schema}.{TABLE_USERS}
+                    WHERE subject = $1
+                    FOR UPDATE
+                    """,
+                    sub,
+                )
+                value = dict(row) if row is not None else {}
+                if (
+                    str(value.get("tenant") or "") != self.tenant
+                    or str(value.get("project") or "") != self.project
+                    or _json_object(value.get("record")) != stored_record
+                    or int(value.get("session_version") or 0) != version
+                    or str(value.get("state") or "") != state
+                    or bool(value.get("disabled")) != disabled
+                ):
+                    raise RuntimeError("bundle_user_migration_target_conflict")
+        return str(status or "").strip().endswith(" 1")
+
+    async def import_session_authority(self, record: Mapping[str, Any]) -> bool:
+        """Insert one live Redis bundle session without renewing its expiry."""
+
+        payload = dict(record or {})
+        subject = str(payload.get("sub") or "").strip()
+        session_id = str(payload.get("session_id") or "").strip()
+        token_sha256 = str(payload.get("token_sha256") or "").strip().lower()
+        issued_at = int(payload.get("iat") or 0)
+        idle_expires_at = int(payload.get("exp") or 0)
+        hard_expires_at = int(payload.get("max_exp") or idle_expires_at)
+        last_seen = int(payload.get("last_seen") or issued_at)
+        if (
+            not subject
+            or not session_id
+            or len(token_sha256) != 64
+            or issued_at <= 0
+            or idle_expires_at <= issued_at
+            or hard_expires_at < idle_expires_at
+        ):
+            raise ValueError("bundle session migration record is invalid")
+        async with self._pool.acquire() as connection:
+            async with connection.transaction():
+                user = await connection.fetchrow(
+                    f"""
+                    SELECT session_version, state, disabled
+                    FROM {self.schema}.{TABLE_USERS}
+                    WHERE subject = $1
+                    FOR UPDATE
+                    """,
+                    subject,
+                )
+                user_value = dict(user) if user is not None else {}
+                if (
+                    str(user_value.get("state") or "") != "active"
+                    or bool(user_value.get("disabled"))
+                    or int(user_value.get("session_version") or 0)
+                    != int(payload.get("version") or 0)
+                ):
+                    raise RuntimeError("bundle_session_migration_user_conflict")
+                status = await connection.execute(
+                    f"""
+                    INSERT INTO {self.schema}.{TABLE_SESSIONS} (
+                        session_id, subject, token_sha256, record, state,
+                        issued_at, idle_expires_at, hard_expires_at,
+                        last_seen_at
+                    ) VALUES (
+                        $1, $2, $3, ($4::text)::jsonb, 'active',
+                        to_timestamp($5), to_timestamp($6), to_timestamp($7),
+                        to_timestamp($8)
+                    )
+                    ON CONFLICT DO NOTHING
+                    """,
+                    session_id,
+                    subject,
+                    token_sha256,
+                    _json_text(payload),
+                    issued_at,
+                    idle_expires_at,
+                    hard_expires_at,
+                    last_seen,
+                )
+                row = await connection.fetchrow(
+                    f"""
+                    SELECT subject, token_sha256, record, state,
+                           floor(extract(epoch FROM issued_at))::bigint AS issued_at,
+                           floor(extract(epoch FROM idle_expires_at))::bigint
+                               AS idle_expires_at,
+                           floor(extract(epoch FROM hard_expires_at))::bigint
+                               AS hard_expires_at,
+                           floor(extract(epoch FROM last_seen_at))::bigint AS last_seen
+                    FROM {self.schema}.{TABLE_SESSIONS}
+                    WHERE session_id = $1
+                    FOR UPDATE
+                    """,
+                    session_id,
+                )
+                value = dict(row) if row is not None else {}
+                if (
+                    str(value.get("subject") or "") != subject
+                    or str(value.get("token_sha256") or "") != token_sha256
+                    or _json_object(value.get("record")) != payload
+                    or str(value.get("state") or "") != "active"
+                    or int(value.get("issued_at") or 0) != issued_at
+                    or int(value.get("idle_expires_at") or 0) != idle_expires_at
+                    or int(value.get("hard_expires_at") or 0) != hard_expires_at
+                    or int(value.get("last_seen") or 0) != last_seen
+                ):
+                    raise RuntimeError("bundle_session_migration_target_conflict")
+        return str(status or "").strip().endswith(" 1")
+
+    async def migration_rows(
+        self,
+        *,
+        captured_at_ms: int,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        async with self._pool.acquire() as connection:
+            users = await connection.fetch(
+                f"""
+                SELECT subject, record, session_version, state, disabled
+                FROM {self.schema}.{TABLE_USERS}
+                ORDER BY subject
+                """
+            )
+            sessions = await connection.fetch(
+                f"""
+                SELECT session_id, record,
+                       floor(extract(epoch FROM idle_expires_at) * 1000)::bigint
+                           AS expires_at_ms
+                FROM {self.schema}.{TABLE_SESSIONS}
+                WHERE state = 'active'
+                  AND idle_expires_at > to_timestamp($1::double precision / 1000.0)
+                ORDER BY session_id
+                """,
+                int(captured_at_ms),
+            )
+        user_rows = []
+        for row in users:
+            value = dict(row)
+            value["record"] = _json_object(value.get("record"))
+            user_rows.append(value)
+        session_rows = []
+        for row in sessions:
+            value = dict(row)
+            value["record"] = _json_object(value.get("record"))
+            session_rows.append(value)
+        return user_rows, session_rows
+
     async def register_user(
         self,
         *,
