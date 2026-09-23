@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from importlib import import_module
 from typing import Any
 
 import pytest
@@ -31,6 +32,13 @@ from connection_hub.contract import AGENT_CAPABILITY_SYNC
 
 def test_portable_contract_is_reexported_without_a_second_implementation():
     assert ConnectionEdgeStore is PortableConnectionEdgeStore
+
+
+def test_oauth_consent_compatibility_path_is_the_portable_module():
+    assert import_module(
+        "kdcube_ai_app.apps.chat.sdk.integrations.connection_hub."
+        "delegated_credentials.oauth.consent"
+    ) is import_module("connection_hub.delegated_credentials.oauth.consent")
 
 
 def test_kdcube_ports_are_explicit_host_types():
