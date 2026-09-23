@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
@@ -16,6 +17,7 @@ from connection_hub.delegated_credentials.cards.resident_secrets.model import (
 )
 from connection_hub.delegated_credentials.migration.apply import (
     AuthorityCutoverReceiptTarget,
+    AuthorityMigrationImportFailed,
     AuthorityMigrationSource,
     AuthorityMigrationTarget,
     apply_reviewed_migration,
@@ -62,7 +64,8 @@ class CompensatingResidentSecretStore:
             )
         except Exception:
             # A create exception has an unknown outcome. A successful read of
-            # the exact candidate makes compensating deletion safe.
+            # the exact candidate makes compensating deletion safe because
+            # ResidentCardSecretService creates a fresh random ref per attempt.
             try:
                 stored = await self._delegate.get(secret_ref=secret_ref)
             except Exception:
@@ -118,6 +121,12 @@ TransactionalApplyTargetFactory = Callable[
 ]
 
 
+def _operation_failure_summary(error: BaseException) -> str:
+    if isinstance(error, AuthorityMigrationImportFailed):
+        return str(error)
+    return type(error).__name__
+
+
 async def apply_migration_in_transaction(
     *,
     pg_pool: Any,
@@ -147,14 +156,20 @@ async def apply_migration_in_transaction(
                 confirmed_preview_sha256=confirmed_preview_sha256,
                 source_is_quiesced=source_is_quiesced,
             )
-        except Exception:
+        except BaseException as operation_error:
             try:
-                await transaction.rollback()
-            except Exception as rollback_error:
+                await asyncio.shield(transaction.rollback())
+            except BaseException as rollback_error:
                 raise AuthorityMigrationTransactionOutcomeUnknown(
                     "authority_migration_transaction_rollback_outcome_unknown"
                 ) from rollback_error
-            await custody.compensate()
+            try:
+                await asyncio.shield(custody.compensate())
+            except AuthorityMigrationSecretCompensationFailed as compensation_error:
+                raise AuthorityMigrationSecretCompensationFailed(
+                    f"{compensation_error}:operation="
+                    f"{_operation_failure_summary(operation_error)}"
+                ) from operation_error
             raise
 
         try:
