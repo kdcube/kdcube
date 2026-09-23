@@ -283,6 +283,8 @@ def test_sign_in_round_trip_issues_a_platform_session(issuer):
 
     user = asyncio.run(manager.authenticate(token))
     assert user.email == "person@example.com"
+    # The issuer's id token said email_verified true and the login lane kept it.
+    assert user.email_verified is True
     assert user.sub == "mock-idp:idp-user-1"
     assert "staff" in user.roles and "kdcube:role:registered" in user.roles
 

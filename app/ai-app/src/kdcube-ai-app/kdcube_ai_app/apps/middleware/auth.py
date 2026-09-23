@@ -16,7 +16,7 @@ from starlette.status import HTTP_400_BAD_REQUEST
 
 from kdcube_ai_app.auth.AuthManager import AuthManager, RequirementBase, AuthenticationError, AuthorizationError, \
     HTTP_401_UNAUTHORIZED, PRIVILEGED_ROLES
-from kdcube_ai_app.auth.sessions import RequestContext, UserType
+from kdcube_ai_app.auth.sessions import RequestContext, UserType, session_user_data
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.middleware.token_extract import (
     extract_auth_tokens_from_cookies,
@@ -159,13 +159,7 @@ class FastAPIAuthAdapter:
                     require_all=require_all
                 )
                 user_type = user_type_from_roles(user.roles)
-                user_data = {
-                    "user_id": getattr(user, 'sub', None) or user.username,
-                    "username": user.username,
-                    "email": user.email,
-                    "roles": user.roles or [],
-                    "permissions": user.permissions or []
-                }
+                user_data = session_user_data(user)
                 if _auth_debug_enabled():
                     logger.info(
                         "Auth session: user=%s roles=%s perms=%s privileged=%s",

@@ -25,9 +25,37 @@ HTTP_403_FORBIDDEN = 403
 # credentials; never grants write/admin access.
 FEEDBACK_READER_ROLE = "kdcube:role:feedback-reader"
 
+def email_verified_claim(value) -> Optional[bool]:
+    """The provider's `email_verified` claim as a flag, None when it is absent.
+
+    Providers differ in the wire shape (Cognito sends the string "true" in
+    some flows, OIDC providers a JSON boolean). An absent claim stays None so a
+    reader can tell "not verified" from "the provider said nothing".
+    """
+
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in ("true", "1", "yes"):
+            return True
+        if text in ("false", "0", "no"):
+            return False
+        return None
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return None
+
+
 class User(BaseModel):
     username: str = None
     email: Optional[str] = None
+    # Whether the sign-in provider vouched for `email`. None when the provider
+    # said nothing, which is distinct from False. An application that binds an
+    # emailed invitation to an account relies on this being True.
+    email_verified: Optional[bool] = None
     name: Optional[str] = None
     roles: Optional[list] = []
     permissions: Optional[list] = []

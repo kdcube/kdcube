@@ -5,7 +5,7 @@
 from typing import Any, Dict, Optional
 import os
 import logging
-from kdcube_ai_app.auth.AuthManager import AuthenticationError, User
+from kdcube_ai_app.auth.AuthManager import AuthenticationError, User, email_verified_claim
 from kdcube_ai_app.auth.OAuthManager import OAuthManager, OAuth2Config
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 
@@ -229,6 +229,7 @@ class CognitoAuthManager(OAuthManager):
                     payload.get("email")
             ),
             email=payload.get("email"),
+            email_verified=email_verified_claim(payload.get("email_verified")),
             name=(
                     payload.get("name") or
                     payload.get("given_name") or

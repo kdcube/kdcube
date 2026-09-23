@@ -17,7 +17,7 @@ from fastapi import HTTPException, Request  # only if you put this in a place wh
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.external_events import build_conversation_external_event_source
 from kdcube_ai_app.apps.chat.sdk.util import _iso
-from kdcube_ai_app.auth.sessions import RequestContext, UserType, UserSession
+from kdcube_ai_app.auth.sessions import RequestContext, UserType, UserSession, session_user_data
 from kdcube_ai_app.apps.chat.emitters import ChatRelayCommunicator, ChatCommunicator
 from kdcube_ai_app.apps.chat.sdk.protocol import (
     ExternalEventPayload, ExternalEventMeta, ExternalEventRouting, ExternalEventActor, ExternalEventUser,
@@ -2299,13 +2299,7 @@ async def upgrade_session_from_tokens(
     else:
         user_type = UserType.REGISTERED
 
-    user_data = {
-        "user_id": user.id,
-        "username": user.username,
-        "roles": roles,
-        "permissions": user.permissions or [],
-        "email": user.email,
-    }
+    user_data = session_user_data(user, user_id=user.id, roles=roles)
 
     new_session = await gateway_adapter.gateway.get_or_create_session_with_econ_role(
         ctx,

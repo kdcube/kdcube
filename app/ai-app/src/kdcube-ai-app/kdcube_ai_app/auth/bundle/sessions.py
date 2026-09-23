@@ -23,7 +23,7 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
 from typing import Any, Awaitable, Callable, Iterable, Mapping, Optional
 
-from kdcube_ai_app.auth.AuthManager import AuthManager, AuthenticationError, User
+from kdcube_ai_app.auth.AuthManager import AuthManager, AuthenticationError, User, email_verified_claim
 from kdcube_ai_app.auth.bundle.session_store import BundleSessionStore
 from kdcube_ai_app.auth.session_authority_runtime import (
     bundle_session_store_for,
@@ -1064,6 +1064,10 @@ class BundleSessionAuthManager(AuthManager):
         return BundleSessionAuthUser(
             username=user.username or user.sub,
             email=user.email,
+            # The login lane recorded the provider's verdict on the email in
+            # the user's metadata at sign-in. A user registered before that
+            # was recorded has no entry, and reads as None: unknown.
+            email_verified=email_verified_claim(dict(user.metadata or {}).get("email_verified")),
             name=user.name or user.username,
             roles=list(user.roles or []),
             permissions=list(user.permissions or []),

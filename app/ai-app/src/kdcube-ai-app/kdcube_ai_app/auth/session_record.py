@@ -47,6 +47,7 @@ def user_session_storage_record(session: Any) -> dict[str, Any]:
         "created_at": float(getattr(session, "created_at", 0) or 0),
         "last_seen": float(getattr(session, "last_seen", 0) or 0),
         "email": getattr(session, "email", None),
+        "email_verified": getattr(session, "email_verified", None),
         "timezone": getattr(session, "timezone", None),
         "request_context": request_context_storage_record(
             getattr(session, "request_context", None)

@@ -21,7 +21,7 @@ from kdcube_ai_app.infra.gateway.definitions import DynamicCapacityCalculator
 from kdcube_ai_app.infra.gateway.rate_limiter import RateLimitError, RateLimiter
 from kdcube_ai_app.infra.gateway.thorttling import ThrottlingMonitor
 from kdcube_ai_app.infra.gateway.config import GatewayConfiguration, validate_gateway_config
-from kdcube_ai_app.auth.sessions import SessionManager, UserType, UserSession, RequestContext
+from kdcube_ai_app.auth.sessions import SessionManager, UserType, UserSession, RequestContext, session_user_data
 
 logger = logging.getLogger(__name__)
 
@@ -337,13 +337,7 @@ class RequestGateway:
                     len(user.permissions or []),
                     user_type.value,
                 )
-            return user_type, {
-                "user_id": getattr(user, 'sub', None) or user.username,
-                "username": user.username,
-                "email": user.email,
-                "roles": user.roles,
-                "permissions": user.permissions
-            }
+            return user_type, session_user_data(user)
 
         except AuthenticationError as ex:
             if _auth_debug_enabled():
