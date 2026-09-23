@@ -94,9 +94,10 @@ preset; `selected_capabilities` is the user's current Agent Card selection.
 The defaults are part of the descriptor revision, so changing only the default
 model or instruction still revises and rematerializes the Control Card. An
 existing Agent Card keeps an explicit user choice and ordinary deselections;
-synchronization may fill a missing singleton model or instruction default only
-when the descriptor revision changes. An ordinary read, lease renewal, or save
-does not refill a value the user removed.
+synchronization fills a singleton model or instruction from the current
+default only while that selection holds no value, and never overwrites a
+chosen value. An explicit selection replacement does not fill during that
+replacement; a later synchronization fills a singleton left empty.
 
 On every read and turn, KDCube intersects the current Control authority with
 the stored conversation selection. A Control removal closes access
@@ -235,22 +236,11 @@ revision-checked Card update. The linked descriptor Control Card uses the same
 full Card editor for the administrator-owned ceiling and defaults. It is not
 an empty generic resource Card and it is not an ordinary-user surface.
 
-For a descriptor-backed Control Card, the resource catalog contains only rows
-that can be serialized back into the agent descriptor: named-service and MCP
-resources. Generic aggregate rows such as **All platform and application
-APIs**, management-only resources, and user-owned connector instances are not
-offered. The selected named-service and managed-MCP resources use the standard
-Card sections for service permissions, tools, and service actions; they are
-not repeated as zero-tool entries in the additional KDCube capability metadata.
-
-A hosted Agent Card starts with the exact standard resources selected by its
-Control Card, and its add-resource choices contain only those Control resources.
-When the Control Card permits a user-owned resource family, the Agent Card also
-shows its user-facing route, for example **My MCP connectors**, plus the signed-in
-owner's matching connector resources. The route is a container for discovery,
-not authority of its own; each selected connector remains an exact Card
-resource. Other resources from the global Connection Hub catalog are outside
-this Agent Card's choices.
+Connection Hub owns the exact Control and Agent Card resource catalogs,
+including descriptor-serializable rows and user-resource-family discovery
+containers. See
+[Delegated Access Cards](https://github.com/elenaviter/app-ecosystem/blob/main/docs/connection-hub/package/delegated-cards.md)
+for that Card read-model contract.
 
 A platform administrator's Control Card save writes through to the exact
 application and agent entry in descriptor-owned bundle properties before the
