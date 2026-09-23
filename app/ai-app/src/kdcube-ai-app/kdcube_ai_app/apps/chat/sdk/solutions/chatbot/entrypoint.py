@@ -1027,6 +1027,7 @@ class BaseEntrypoint:
             from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import (
                 agent_card_revision,
                 annotate_capability_states,
+                capability_preferences_from_projection,
                 conversation_capability_projections,
                 deny_all_capabilities,
                 disabled_from_projection,
@@ -1131,6 +1132,17 @@ class BaseEntrypoint:
                     "scope": capability_scope,
                     "capability_source": capability_source,
                 }
+                card_preferences = capability_preferences_from_projection(
+                    catalog,
+                    live_base,
+                )
+                catalog["default_model"] = card_preferences["model"]
+                profiles = catalog.get("instruction_profiles")
+                if isinstance(profiles, dict):
+                    profiles["default"] = card_preferences["instructions"]
+                if not conversation_id:
+                    selection["model"] = None
+                    selection["instructions"] = None
         except Exception as exc:
             from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import (
                 annotate_capability_states,
@@ -1224,13 +1236,16 @@ class BaseEntrypoint:
 
         The single model pick rides the same body: ``"model": {"provider": …,
         "model": …}`` sets it (clamped to the agent's ``supported_models``),
-        ``"model": null`` clears it back to the configured default; omitted
-        keeps the stored pick.
+        and ``"model": null`` restores the administrator's descriptor default.
+        Without a conversation id this changes the Agent Card default; with a
+        conversation id it changes only that conversation.
 
         The instruction-profile pick rides the same body as an id:
         ``"instructions": "<profile_id>"`` sets it (clamped to the agent's
         declared ``instruction_profiles`` options), ``"instructions": null``
-        clears it back to the declared default; omitted keeps the stored pick.
+        restores the administrator's descriptor default. Without a conversation
+        id this changes the Agent Card default; with one it changes only that
+        conversation.
 
         The presentation-facet picks ride the same body as a facet map:
         ``"presentation": {"tool_catalog": "compact", "skills_form": "full"}``
@@ -1273,14 +1288,16 @@ class BaseEntrypoint:
         identity = self._agent_selection_identity()
         if not identity.get("bundle_id"):
             return {"ok": False, "error": "agent_capability_identity_missing"}
-        updates_preferences = bool(
-            has_model
-            or has_instructions
-            or has_presentation
+        updates_card_preferences = bool(
+            not conversation_id and (has_model or has_instructions)
+        )
+        updates_stored_preferences = bool(
+            has_presentation
             or isinstance(raw_cache_policy, Mapping)
+            or (conversation_id and (has_model or has_instructions))
         )
         if (
-            updates_preferences
+            updates_stored_preferences
             or (updates_capabilities and bool(conversation_id))
         ) and self.pg_pool is None:
             return {"ok": False, "error": "storage_unavailable"}
@@ -1291,8 +1308,10 @@ class BaseEntrypoint:
         try:
             from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import (
                 agent_card_revision,
+                capability_preferences_from_projection,
                 conversation_capability_projections,
                 disabled_from_projection,
+                replace_capability_preferences,
                 selected_capabilities_from_disabled,
                 sync_agent_capability_projection,
             )
@@ -1331,7 +1350,7 @@ class BaseEntrypoint:
                         materialize=bool(conversation_id),
                     )
                 except Exception:
-                    if updates_preferences:
+                    if updates_stored_preferences:
                         raise
                     store = None
                     initial_disabled = None
@@ -1367,7 +1386,7 @@ class BaseEntrypoint:
                 conversation_selection,
             )
             current_disabled = disabled_from_projection(catalog, effective_projection)
-            if updates_preferences:
+            if updates_stored_preferences:
                 assert store is not None
                 selection = await store.set_selection(
                     user_id=identity["user_id"],
@@ -1388,17 +1407,31 @@ class BaseEntrypoint:
                     **({"presentation": payload.get("presentation")} if has_presentation else {}),
                 )
                 preference_update_applied = True
-            if updates_capabilities:
+            if updates_capabilities or updates_card_preferences:
                 target_disabled = merge_selection_patch(
                     {} if bool(payload.get("replace")) else current_disabled,
-                    patch,
+                    patch if updates_capabilities else None,
                 )
                 target_disabled = clamp_selection(target_disabled, catalog)
-                selected_capabilities = selected_capabilities_from_disabled(
-                    authority=capability_control["authority"],
-                    catalog=catalog,
-                    disabled=target_disabled,
+                selected_capabilities = (
+                    selected_capabilities_from_disabled(
+                        authority=capability_control["authority"],
+                        catalog=catalog,
+                        disabled=target_disabled,
+                        existing_selection=card_projection,
+                    )
+                    if updates_capabilities
+                    else card_projection
                 )
+                if updates_card_preferences:
+                    selected_capabilities = replace_capability_preferences(
+                        selected_capabilities,
+                        catalog,
+                        replace_model=has_model,
+                        model=payload.get("model"),
+                        replace_instructions=has_instructions,
+                        instructions=payload.get("instructions"),
+                    )
                 if conversation_id:
                     assert capability_store is not None
                     conversation_selection = await capability_store.set_projection(
@@ -1426,6 +1459,8 @@ class BaseEntrypoint:
                     )
                     conversation_selection = None
                 capability_update_applied = True
+                if updates_card_preferences:
+                    preference_update_applied = True
                 live_base, effective_projection = conversation_capability_projections(
                     capability_control["authority"],
                     card_projection,
@@ -1435,6 +1470,16 @@ class BaseEntrypoint:
                     catalog,
                     effective_projection,
                 )
+                if updates_card_preferences:
+                    card_preferences = capability_preferences_from_projection(
+                        catalog,
+                        card_projection,
+                    )
+                    selection = {
+                        **selection,
+                        "model": card_preferences["model"],
+                        "instructions": card_preferences["instructions"],
+                    }
             selection = {
                 **selection,
                 "disabled": current_disabled,

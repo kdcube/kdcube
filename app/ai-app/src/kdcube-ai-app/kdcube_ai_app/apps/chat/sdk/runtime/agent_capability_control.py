@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Elena Viter
 
-"""Project one agent descriptor into its live Connection Hub Card boundary."""
+"""Materialize one agent descriptor as live Connection Hub Card authority."""
 
 from __future__ import annotations
 
@@ -33,6 +33,8 @@ NAMED_SERVICE_OPERATIONS = "named_service_operations"
 RESOURCES = "resources"
 RESOURCE_OPERATIONS = "resource_operations"
 SKILLS = "skills"
+MODELS = "models"
+INSTRUCTION_PROFILES = "instruction_profiles"
 CONVERSATION_TARGETS = "conversation_targets"
 RESOURCE_FAMILIES = "resource_families"
 SUBAGENTS = "subagents"
@@ -97,6 +99,118 @@ def _split_member(value: str) -> tuple[str, str] | None:
     if not separator:
         return None
     return unquote(left), unquote(right)
+
+
+def _model_member(value: Mapping[str, Any] | None) -> str:
+    if not isinstance(value, Mapping):
+        return ""
+    model = _text(value.get("model"))
+    if not model:
+        return ""
+    return _member(_text(value.get("provider")) or "anthropic", model)
+
+
+def _default_model_member(catalog: Mapping[str, Any]) -> str:
+    configured = catalog.get("default_model")
+    if not isinstance(configured, Mapping):
+        return ""
+    configured_model = _text(configured.get("model"))
+    configured_provider = _text(configured.get("provider"))
+    if not configured_model:
+        return ""
+    for row in catalog.get("supported_models") or ():
+        if not isinstance(row, Mapping) or _text(row.get("model")) != configured_model:
+            continue
+        row_provider = _text(row.get("provider")) or "anthropic"
+        if configured_provider and configured_provider != row_provider:
+            continue
+        return _member(row_provider, configured_model)
+    return ""
+
+
+def capability_preferences_from_projection(
+    catalog: Mapping[str, Any],
+    projection: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Resolve the single model and instruction defaults carried by a Card."""
+
+    selected = _policy_sets(projection)
+    selected_models = selected.get(MODELS, set())
+    model = None
+    for row in catalog.get("supported_models") or ():
+        if not isinstance(row, Mapping) or _model_member(row) not in selected_models:
+            continue
+        model = {
+            "provider": _text(row.get("provider")) or "anthropic",
+            "model": _text(row.get("model")),
+        }
+        break
+
+    selected_profiles = selected.get(INSTRUCTION_PROFILES, set())
+    instructions = None
+    profiles = catalog.get("instruction_profiles")
+    if isinstance(profiles, Mapping):
+        for row in profiles.get("options") or ():
+            if not isinstance(row, Mapping):
+                continue
+            profile_id = _text(row.get("id"))
+            if profile_id and profile_id in selected_profiles:
+                instructions = profile_id
+                break
+    return {"model": model, "instructions": instructions}
+
+
+def replace_capability_preferences(
+    projection: Mapping[str, Any],
+    catalog: Mapping[str, Any],
+    *,
+    replace_model: bool = False,
+    model: Any = None,
+    replace_instructions: bool = False,
+    instructions: Any = None,
+) -> dict[str, Any]:
+    """Replace the single-choice Card defaults after validating the catalog."""
+
+    policy = AgentCapabilityPolicy.from_property(projection)
+    capabilities = {
+        category: set(values)
+        for category, values in policy.capabilities.items()
+    }
+    if replace_model:
+        wanted = _model_member(model) if isinstance(model, Mapping) else ""
+        if model is None:
+            wanted = _default_model_member(catalog)
+        allowed = {
+            capability
+            for row in catalog.get("supported_models") or ()
+            if isinstance(row, Mapping)
+            for capability in (_model_member(row),)
+            if capability
+        }
+        if model is not None and (not wanted or wanted not in allowed):
+            raise ValueError("agent_model_not_allowed")
+        capabilities[MODELS] = {wanted} if wanted and wanted in allowed else set()
+    if replace_instructions:
+        wanted = _text(instructions)
+        profiles = catalog.get("instruction_profiles")
+        if instructions is None and isinstance(profiles, Mapping):
+            wanted = _text(profiles.get("default"))
+        profile_rows = (
+            (profiles.get("options") or ())
+            if isinstance(profiles, Mapping)
+            else ()
+        )
+        allowed = {
+            _text(row.get("id"))
+            for row in profile_rows
+            if isinstance(row, Mapping) and _text(row.get("id"))
+        }
+        if instructions is not None and (not wanted or wanted not in allowed):
+            raise ValueError("agent_instruction_profile_not_allowed")
+        capabilities[INSTRUCTION_PROFILES] = (
+            {wanted} if wanted and wanted in allowed else set()
+        )
+    return _policy(policy.resource, capabilities)
 
 
 def _target_resource(
@@ -334,6 +448,16 @@ def _capability_inventory(
         if isinstance(raw, Mapping):
             add(SKILLS, raw.get("id"))
 
+    for raw in catalog.get("supported_models") or ():
+        if isinstance(raw, Mapping):
+            add(MODELS, _model_member(raw))
+
+    profiles = catalog.get("instruction_profiles")
+    if isinstance(profiles, Mapping):
+        for raw in profiles.get("options") or ():
+            if isinstance(raw, Mapping):
+                add(INSTRUCTION_PROFILES, raw.get("id"))
+
     for raw in catalog.get("conversation_targets") or ():
         if not isinstance(raw, Mapping):
             continue
@@ -423,6 +547,37 @@ def _metadata_entries(catalog: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
                 description=_text(entry.get("description")),
             )
 
+    for raw in catalog.get("supported_models") or ():
+        if not isinstance(raw, Mapping):
+            continue
+        capability = _model_member(raw)
+        put(
+            MODELS,
+            capability,
+            title=_text(raw.get("label")) or _text(raw.get("model")),
+            description=" / ".join(
+                value
+                for value in (
+                    _text(raw.get("provider")) or "anthropic",
+                    _text(raw.get("model")),
+                )
+                if value
+            ),
+        )
+
+    profiles = catalog.get("instruction_profiles")
+    if isinstance(profiles, Mapping):
+        for raw in profiles.get("options") or ():
+            if not isinstance(raw, Mapping):
+                continue
+            profile_id = _text(raw.get("id"))
+            put(
+                INSTRUCTION_PROFILES,
+                profile_id,
+                title=_text(raw.get("label")) or profile_id,
+                description=_text(raw.get("description")),
+            )
+
     return entries
 
 
@@ -502,6 +657,36 @@ def _declared_named_service_authority(
             for resource, namespaces in operations_by_resource.items()
         },
     )
+
+
+def _selected_named_service_authority(
+    bundle_props: Mapping[str, Any] | None,
+    catalog: Mapping[str, Any],
+    selected_capabilities: Mapping[str, Any],
+) -> tuple[dict[str, list[str]], dict[str, dict[str, list[str]]]]:
+    """Project the positive capability choice into ordinary Card authority."""
+
+    policy = AgentCapabilityPolicy.from_property(selected_capabilities)
+    selected_namespaces = set(policy.capabilities.get(NAMED_SERVICES, ()))
+    selected_operations: dict[str, set[str]] = {}
+    for value in policy.capabilities.get(NAMED_SERVICE_OPERATIONS, ()):
+        member = _split_member(value)
+        if member is not None:
+            selected_operations.setdefault(member[0], set()).add(member[1])
+
+    selected_catalog = copy.deepcopy(dict(catalog))
+    rows: list[dict[str, Any]] = []
+    for raw in catalog.get("named_services") or ():
+        if not isinstance(raw, Mapping):
+            continue
+        namespace = _text(raw.get("namespace"))
+        if not namespace or namespace not in selected_namespaces:
+            continue
+        row = copy.deepcopy(dict(raw))
+        row["operations"] = sorted(selected_operations.get(namespace, set()))
+        rows.append(row)
+    selected_catalog["named_services"] = rows
+    return _declared_named_service_authority(bundle_props, selected_catalog)
 
 
 def descriptor_capability_payload(
@@ -585,6 +770,7 @@ def selected_capabilities_from_disabled(
     authority: Mapping[str, Any],
     catalog: Mapping[str, Any],
     disabled: Mapping[str, Any] | None,
+    existing_selection: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Convert the existing deny-map wire shape into a positive Card choice."""
 
@@ -629,6 +815,26 @@ def selected_capabilities_from_disabled(
 
     denied_skills = set(_strings(disabled.get("skills")))
     selected[SKILLS] = selected.get(SKILLS, set()) - denied_skills
+
+    default_model = _default_model_member(catalog)
+    selected[MODELS] = {default_model} if default_model in selected.get(MODELS, set()) else set()
+
+    profiles = catalog.get("instruction_profiles")
+    default_profile = _text(profiles.get("default")) if isinstance(profiles, Mapping) else ""
+    selected[INSTRUCTION_PROFILES] = (
+        {default_profile}
+        if default_profile in selected.get(INSTRUCTION_PROFILES, set())
+        else set()
+    )
+    if existing_selection is not None:
+        existing = _policy_sets(existing_selection)
+        for category in (MODELS, INSTRUCTION_PROFILES):
+            selected[category] = (
+                existing.get(category, set())
+                & set(policy.capabilities.get(category, ()))
+                if category in policy.capabilities
+                else set()
+            )
 
     denied_targets = {
         _text(target)
@@ -911,6 +1117,17 @@ def annotate_capability_states(
     for row in result.get("skills") or ():
         if isinstance(row, dict):
             row["authority_state"] = state(SKILLS, _text(row.get("id")))
+    for row in result.get("supported_models") or ():
+        if isinstance(row, dict):
+            row["authority_state"] = state(MODELS, _model_member(row))
+    profiles = result.get("instruction_profiles")
+    if isinstance(profiles, dict):
+        for row in profiles.get("options") or ():
+            if isinstance(row, dict):
+                row["authority_state"] = state(
+                    INSTRUCTION_PROFILES,
+                    _text(row.get("id")),
+                )
     for row in result.get("conversation_targets") or ():
         if not isinstance(row, dict):
             continue
@@ -979,6 +1196,18 @@ async def sync_agent_capability_projection(
         )
     if selected_capabilities is not None:
         payload["selected_capabilities"] = copy.deepcopy(dict(selected_capabilities))
+        (
+            selected_resource_grants,
+            selected_named_service_operations,
+        ) = _selected_named_service_authority(
+            getattr(entrypoint, "bundle_props", None),
+            catalog,
+            selected_capabilities,
+        )
+        payload["selected_resource_grants"] = selected_resource_grants
+        payload["selected_named_service_operations"] = (
+            selected_named_service_operations
+        )
     if replace_selection:
         payload["replace_selection"] = True
 
@@ -1016,6 +1245,7 @@ async def sync_agent_capability_projection(
 __all__ = [
     "AgentCapabilityControlUnavailable",
     "agent_card_revision",
+    "capability_preferences_from_projection",
     "agent_capability_identity",
     "annotate_capability_states",
     "conversation_capability_projections",
@@ -1024,6 +1254,7 @@ __all__ = [
     "disabled_from_projection",
     "intersect_capability_projections",
     "missing_control_capabilities",
+    "replace_capability_preferences",
     "selected_capabilities_from_disabled",
     "sync_agent_capability_projection",
     "unavailable_capability_states",

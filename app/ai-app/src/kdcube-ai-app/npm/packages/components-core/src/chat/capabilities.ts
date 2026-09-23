@@ -276,6 +276,7 @@ export interface AgentSupportedModel {
   label: string
   /** Optional admin-owned context-window override; not part of the saved pick. */
   num_ctx?: number
+  authority_state?: AgentCapabilityAuthorityValue
 }
 
 /** One admin-declared instruction-set option (id-based; resolution is the
@@ -284,6 +285,7 @@ export interface AgentInstructionOption {
   id: string
   label: string
   description?: string
+  authority_state?: AgentCapabilityAuthorityValue
 }
 
 /** The declared instruction-profile inventory; absent = section hidden. */
