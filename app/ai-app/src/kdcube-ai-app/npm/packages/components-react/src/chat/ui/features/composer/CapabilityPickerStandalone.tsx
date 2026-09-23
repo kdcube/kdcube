@@ -4,9 +4,9 @@
  * The full chat widget drives the picker through the chat engine; a served
  * widget has no engine and talks straight to the same two operations
  * (`agent_capabilities` read, `agent_selection_update` merge-write) with its
- * own auth. Its injected fetchers decide whether those calls carry a
- * conversation id or show the unscoped Agent Card base. This hook reproduces the engine's
- * capabilities contract (local draft + explicit save + explicit cache
+ * own auth. Its injected fetchers decide the scope; the served full-page
+ * widget uses the unscoped Agent Card defaults. This hook reproduces the
+ * engine's capabilities contract (local draft + explicit save + explicit cache
  * decisions) over injected fetchers and shapes the result as the `vm` slice
  * `useCapabilityPickerBody` consumes — the picker logic itself is not forked.
  */

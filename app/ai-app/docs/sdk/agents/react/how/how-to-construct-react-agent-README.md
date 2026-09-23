@@ -86,12 +86,12 @@ beating app-level `role_models`. The full resolution chain (code defaults →
 [Bundle Agent Integration §2A](../../../bundle/bundle-agent-integration-README.md#2a-model-selection-for-agent-roles).
 
 Step 3 is the turn-start authority pass. It resolves the current descriptor
-Control Card and Agent Card, intersects the conversation's frozen positive base
-and current positive selection, narrows tools, skills, named services, targets,
-resources, and subagents, then applies validated
-model/instruction/presentation preferences. An unavailable Card or conversation
-projection removes every selectable capability; a preference-store error uses
-configured preference defaults without widening that projection. Step 4
+Control Card, intersects it with the conversation's current positive selection,
+narrows tools, skills, named services, targets, resources, and subagents, then
+applies validated model/instruction/presentation preferences. The Agent Card
+supplies the conversation's starting defaults. Unavailable Control authority or
+conversation selection removes every selectable capability; a preference-store
+error uses configured preference defaults without widening that projection. Step 4
 is deliberately **not** another narrower. Connected-account claims remain
 attached to selected tools and are enforced at the concrete tool attempt. The
 turn-start hook only checks whether a claim demanded earlier in this

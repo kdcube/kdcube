@@ -4,7 +4,7 @@ title: "Chat Engine"
 summary: "The framework-agnostic chat controller from @kdcube/components-core/chat: state, transport, conversation lifecycle, scoped capability drafts with explicit save, context chips, and host events without React or iframe coupling."
 status: implementation
 tags: ["sdk", "npm", "components-core", "chat", "createChatEngine", "controller", "headless"]
-updated_at: 2026-07-12
+updated_at: 2026-09-23
 keywords:
   [
     "createChatEngine",
@@ -110,9 +110,9 @@ config live in
 - Switching conversations discards an unsaved draft and loads the target
   conversation's selection. Late load/save responses are ignored if their
   conversation is no longer active.
-- `capabilities.open` carries the active conversation id when chat asks a
-  scene host to open the full-page picker, preserving the same persistence
-  scope across the presentation change.
+- `capabilities.open` asks a scene host to open the full-page Agent Card
+  defaults. Conversation selection stays in the composer's popover or expanded
+  modal, preserving the persistence scope of each surface.
 - `submitAgentSelectionDecision(patch, {apply, cachePolicy})` is the confirm
   picker's explicit cache-cost decision, `apply` = `now` |
   `next_conversation` | `when_cold` (deferred modes park the change as

@@ -1,14 +1,14 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Elena Viter
 
-"""Durable capability snapshots for one user, agent, and conversation.
+"""Durable capability selection for one user, agent, and conversation.
 
-The Agent Card is the base for a newly started conversation. At the first
-materialized read, this store snapshots that positive Card projection twice:
-``base_projection`` records what the conversation inherited and ``projection``
-records what it currently selects. ``base_card_revision`` records which Agent
-Card revision supplied that base. Later picker writes replace only the current
-projection and preserve both inherited facts.
+The Agent Card supplies the defaults for a newly started conversation. At the
+first materialized read, this store records that positive selection twice:
+``base_projection`` preserves starting provenance and ``projection`` records
+what the conversation currently selects. ``base_card_revision`` records which
+Agent Card revision supplied the defaults. Later picker writes replace only the
+current projection and preserve both provenance facts.
 
 Positive projections are intentional. The descriptor-derived Control Card is
 the only ceiling; the Agent Card supplies the initial selection, not authority.

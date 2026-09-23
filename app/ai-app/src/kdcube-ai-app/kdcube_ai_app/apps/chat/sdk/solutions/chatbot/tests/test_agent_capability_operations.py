@@ -570,7 +570,7 @@ async def test_mixed_update_reports_preference_commit_before_conversation_failur
 
 
 @pytest.mark.asyncio
-async def test_capability_update_without_conversation_replaces_agent_card_base(
+async def test_capability_update_without_conversation_replaces_agent_card_defaults(
     monkeypatch,
 ) -> None:
     authority = _authority()

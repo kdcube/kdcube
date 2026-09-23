@@ -227,9 +227,9 @@ export function defaultComponentSpecs(): SceneComponentSpec[] {
       full: { w: 1040, h: 760 },
       targetSurfaces: ['sdk.agent.capabilities'],
       placement: 'floating',
-      // No rail chip: the capability choice is PER AGENT, so this window is
-      // only summoned via `capabilities.open` from agent-scoped emitters
-      // (the chat picker's expand, banner spotlights) that carry agent_id.
+      // No rail chip: this Agent Card defaults window is summoned through
+      // `capabilities.open` by an agent-scoped affordance carrying agent_id.
+      // Conversation selection expands inside the chat composer.
       rail: false,
       defaultOpen: false,
       enabled: true,
