@@ -230,6 +230,12 @@ def _realm_operation_entries(row: Mapping[str, Any]) -> list[dict[str, Any]]:
     return entries
 
 
+def _operation_covers(declared: str, operation: str) -> bool:
+    """Return whether one declared namespace operation covers ``operation``."""
+
+    return operation == declared or operation.startswith(f"{declared}.")
+
+
 def _capability_inventory(
     catalog: Mapping[str, Any],
     *,
@@ -280,12 +286,24 @@ def _capability_inventory(
         if not namespace:
             continue
         add(NAMED_SERVICES, namespace)
+        declared = _strings(raw.get("operations"))
+        realm_entries = _realm_operation_entries(raw)
         if authority:
-            operations = ({"name": value} for value in _strings(raw.get("operations")))
+            operations = [
+                *({"name": value} for value in declared),
+                *(
+                    entry
+                    for entry in realm_entries
+                    if any(
+                        _operation_covers(value, _text(entry.get("name")))
+                        for value in declared
+                    )
+                ),
+            ]
         else:
             operations = [
-                *({"name": value} for value in _strings(raw.get("operations"))),
-                *_realm_operation_entries(raw),
+                *({"name": value} for value in declared),
+                *realm_entries,
             ]
         for operation in operations:
             if not isinstance(operation, Mapping):
@@ -443,22 +461,26 @@ def _declared_named_service_authority(
                 if not isinstance(raw_tool, Mapping):
                     continue
                 operation = _text(raw_tool.get("operation"))
-                if operation:
-                    operation_grants.setdefault(operation, set()).update(
-                        _strings(raw_tool.get("grants"))
-                    )
                 nested = raw_tool.get("operations")
-                if isinstance(nested, Mapping):
+                if isinstance(nested, Mapping) and nested:
+                    parent_grants = set(_strings(raw_tool.get("grants")))
                     for nested_operation, raw_nested in nested.items():
                         if not isinstance(raw_nested, Mapping):
                             continue
                         operation_grants.setdefault(
                             _text(nested_operation), set()
-                        ).update(_strings(raw_nested.get("grants")))
+                        ).update(
+                            parent_grants | set(_strings(raw_nested.get("grants")))
+                        )
+                elif operation:
+                    operation_grants.setdefault(operation, set()).update(
+                        _strings(raw_tool.get("grants"))
+                    )
             matched = {
-                operation
+                candidate
+                for candidate in operation_grants
                 for operation in wanted
-                if operation in operation_grants
+                if _operation_covers(operation, candidate)
             }
             if not matched:
                 continue

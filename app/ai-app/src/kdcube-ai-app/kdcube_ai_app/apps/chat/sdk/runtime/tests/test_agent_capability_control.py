@@ -540,3 +540,114 @@ async def test_sync_without_a_saved_preference_uses_the_descriptor_default() -> 
     payload = calls[0].request["payload"]
     assert payload["selected_capabilities"] == payload["capability_authority"]
     assert result["projection"] == payload["capability_authority"]
+
+
+def _namespace_operation_catalog() -> dict:
+    return {
+        "agent": AGENT,
+        "tools": [],
+        "mcp": [],
+        "named_services": [
+            {
+                "namespace": "slack",
+                "alias": "named_services",
+                "operations": ["object.list", "object.action"],
+                "realm": {
+                    "label": "Slack",
+                    "operations": [{"name": "object.list"}],
+                    "actions": [
+                        {"name": "post_message", "description": "Post a message."},
+                        {"name": "upload_file", "description": "Upload a file."},
+                    ],
+                },
+            }
+        ],
+        "resources": [],
+        "skills": [],
+        "conversation_targets": [],
+        "delegated_resource_families": [],
+        "subagents": {"available": False},
+    }
+
+
+def _namespace_operation_props() -> dict:
+    return {
+        "delegated_catalog": {
+            "version": "1",
+            "named_service_namespaces": [
+                {
+                    "resource": NAMED_SERVICES_RESOURCE,
+                    "namespaces": {
+                        "slack": {
+                            "tools": {
+                                "list": {
+                                    "operation": "object.list",
+                                    "grants": ["named_services:use"],
+                                },
+                                "action": {
+                                    "operation": "object.action",
+                                    "operations": {
+                                        "object.action.post_message": {
+                                            "grants": [
+                                                "named_services:use",
+                                                "slack:post",
+                                            ],
+                                        },
+                                        "object.action.upload_file": {
+                                            "grants": [
+                                                "named_services:use",
+                                                "slack:files:write",
+                                            ],
+                                        },
+                                    },
+                                },
+                            }
+                        }
+                    },
+                }
+            ],
+        }
+    }
+
+
+def test_granting_a_namespace_operation_grants_the_actions_reached_through_it() -> None:
+    payload = descriptor_capability_payload(
+        bundle_props=_namespace_operation_props(),
+        catalog=_namespace_operation_catalog(),
+        tenant=TENANT,
+        project=PROJECT,
+        application=APPLICATION,
+        agent_id=AGENT,
+    )
+    authority = payload["capability_authority"]["capabilities"][
+        "named_service_operations"
+    ]
+    catalog = payload["capability_catalog"]["capabilities"][
+        "named_service_operations"
+    ]
+
+    assert "slack/object.action.post_message" in authority
+    assert "slack/object.action.upload_file" in authority
+    assert set(catalog) <= set(authority)
+
+
+def test_a_granted_action_carries_the_claims_that_action_needs() -> None:
+    payload = descriptor_capability_payload(
+        bundle_props=_namespace_operation_props(),
+        catalog=_namespace_operation_catalog(),
+        tenant=TENANT,
+        project=PROJECT,
+        application=APPLICATION,
+        agent_id=AGENT,
+    )
+
+    assert payload["resource_grants"][NAMED_SERVICES_RESOURCE] == [
+        "named_services:use",
+        "slack:files:write",
+        "slack:post",
+    ]
+    assert payload["named_service_operations"][NAMED_SERVICES_RESOURCE]["slack"] == [
+        "object.action.post_message",
+        "object.action.upload_file",
+        "object.list",
+    ]
