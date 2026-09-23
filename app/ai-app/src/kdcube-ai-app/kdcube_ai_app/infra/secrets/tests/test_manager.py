@@ -295,7 +295,7 @@ async def test_secrets_service_accepts_host_vault_generation(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_secrets_service_omits_unconfigured_optional_http_gate(monkeypatch):
+async def test_secrets_service_without_admin_token_fails_closed(monkeypatch):
     client = _FakeSecretsHttpClient(
         response=_FakeHttpResponse(200, {"status": "ok", "generation": 1})
     )
@@ -313,22 +313,13 @@ async def test_secrets_service_omits_unconfigured_optional_http_gate(monkeypatch
         )
     )
 
-    assert manager.can_write() is True
-    await manager.set_secret("platform.services.fixture.token", "secret-value")
-
-    assert client.requests == [
-        (
-            "POST",
-            "http://kdcube-secrets:7777/set",
-            {
-                "json": {
-                    "key": "platform.services.fixture.token",
-                    "value": "secret-value",
-                },
-                "headers": {},
-            },
-        )
-    ]
+    assert manager.can_write() is False
+    with pytest.raises(
+        SecretsManagerWriteError,
+        match="provider is not configured for writes",
+    ):
+        await manager.set_secret("platform.services.fixture.token", "secret-value")
+    assert client.requests == []
 
 
 @pytest.mark.asyncio

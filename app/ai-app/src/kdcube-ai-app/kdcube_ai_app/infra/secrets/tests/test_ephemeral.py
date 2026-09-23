@@ -8,7 +8,11 @@ from kdcube_ai_app.infra.secrets.ephemeral import ephemeral_secret_store
 from kdcube_ai_app.infra.secrets.manager import SecretsManagerError
 
 
-def _settings(*, backend: str) -> SimpleNamespace:
+def _settings(
+    *,
+    backend: str,
+    admin_token: str | None = "admin-token",
+) -> SimpleNamespace:
     return SimpleNamespace(
         GATEWAY_COMPONENT="proc",
         TENANT="demo-tenant",
@@ -17,7 +21,7 @@ def _settings(*, backend: str) -> SimpleNamespace:
         SECRETS_SERVICE_BACKEND=backend,
         SECRETS_URL=None,
         SECRETS_TOKEN=None,
-        SECRETS_ADMIN_TOKEN=None,
+        SECRETS_ADMIN_TOKEN=admin_token,
         SECRETS_AWS_SM_PREFIX=None,
         SECRETS_SM_PREFIX=None,
         GLOBAL_SECRETS_YAML="file:///config/secrets.yaml",
@@ -42,6 +46,28 @@ def test_ephemeral_sidecar_does_not_become_durable_runtime_custody() -> None:
         ephemeral_secret_store(
             namespace="resident-card-credentials",
             settings=_settings(backend="ephemeral"),
+        )
+
+
+def test_runtime_custody_ignores_backend_environment_fallbacks(monkeypatch) -> None:
+    monkeypatch.setenv("SECRETS_SERVICE_BACKEND", "host-vault")
+    monkeypatch.setenv("KDCUBE_SECRETS_SERVICE_BACKEND", "host-vault")
+
+    with pytest.raises(SecretsManagerError, match="require the host vault"):
+        ephemeral_secret_store(
+            namespace="resident-card-credentials",
+            settings=_settings(backend="ephemeral"),
+        )
+
+
+def test_host_vault_runtime_custody_requires_admin_token() -> None:
+    with pytest.raises(
+        SecretsManagerError,
+        match="not configured for runtime writes",
+    ):
+        ephemeral_secret_store(
+            namespace="resident-card-credentials",
+            settings=_settings(backend="host-vault", admin_token=None),
         )
 
 

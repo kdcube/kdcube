@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import os
 import uuid
 from dataclasses import replace
 from typing import Any
@@ -38,10 +37,7 @@ def _runtime_secret_manager(settings: Any | None) -> ISecretsManager:
         return manager
 
     backend = str(
-        getattr(settings, "SECRETS_SERVICE_BACKEND", None)
-        or os.getenv("SECRETS_SERVICE_BACKEND")
-        or os.getenv("KDCUBE_SECRETS_SERVICE_BACKEND")
-        or ""
+        getattr(settings, "SECRETS_SERVICE_BACKEND", None) or ""
     ).strip().lower().replace("_", "-")
     if manager.provider_type != "secrets-file" or backend != "host-vault":
         return manager
