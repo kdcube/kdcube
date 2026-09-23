@@ -1,11 +1,11 @@
 name: Release KDCube Platform (Images + CLI)
 
+# A release is started by hand, never by a merge. release.yaml is the record of
+# what a release contains, and it is edited, reviewed and merged like any other
+# file. Firing the release from a push to it meant a merge and a release were
+# the same act, so the record could not be corrected, prepared ahead, or merged
+# while the release itself was not ready to run.
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - release.yaml
   workflow_dispatch:
 
 env:

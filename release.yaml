@@ -1,55 +1,61 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.09.02.1429"
+  ref: "2026.09.23.0218"
   description: |
-    This release follows 2026.09.01.110.
+    This release follows 2026.09.02.1429 and covers the three weeks after it.
+    It publishes the platform images and the tag, and it is the record the
+    packaged CLI is published from.
 
-    Connection Hub can now govern MCP services registered by an individual
-    owner. It discovers each service's tools, projects only the operations on a
-    delegated caller's current access card, detects changes to accepted tool
-    descriptors, and keeps upstream credentials in server-side custody. Calls
-    pass through the governed proxy with exact owner, connector, tool, card,
-    and invocation-policy checks before dispatch.
+    **Delegated authority is carried by the Card, end to end.** A Card is the
+    delegation edge through the Data Bus, application Cards downscope runtime
+    roles and are enforced per operation, conversation reads are scoped on
+    every transport, and conversation targets are enforced per application
+    across named-service calls. An application owns its delegated catalog,
+    which the CLI checks and applies as reviewed fragments.
 
-    Delegated operations support Once and Always invocation policies. A
-    one-use grant is consumed atomically, repeated delivery of the same
-    invocation id replays its recorded result without another upstream call,
-    and exhausted, revoked, disabled, or changed authority is denied before
-    dispatch. Integrated services can apply the same live authority through
-    direct admission while authenticating their own workload independently.
+    **Agent capabilities became a Card boundary.** A descriptor's declaration
+    is the ceiling, expressed as a Control Card. The per-user Agent Card holds
+    the editable defaults a new conversation starts from. A conversation
+    selects anywhere inside the live Control, a removal from the declaration
+    applies at once, an addition stays off until selected, and a retained
+    selection the declaration no longer allows reads as missing.
 
-    Upstream MCP OAuth supports Client ID Metadata Documents, dynamic client
-    registration, and provisioned clients registered through a provider
-    console. Provider client secrets and access or refresh tokens stay in
-    owner-scoped secret storage. PKCE, refresh rotation, reconnect,
-    replacement, revocation, deletion cleanup, and resource-qualified consent
-    are covered across the supported registration paths.
+    **Secrets moved to a host vault.** The protocol, workload identity,
+    durable store and broker, durable local integration, governed management
+    with human export, a canonical CLI with portable approval, a verified
+    migration lifecycle, provider-neutral maintenance, and a runtime start
+    that ensures a configured vault before it runs. Browser login state and
+    create-only ephemeral secret custody live there.
 
-    The default descriptors expose the complete governed connector and OAuth
-    configuration, and the quick start includes a KDCube-backed localhost path
-    for external MCP clients. Runtime requirements consume the released
-    calendar-versioned Connection Hub package through a compatible release
-    family floor.
+    **Browser sign-in is platform-hosted and descriptor-owned.** One session
+    lane and one session helper for every surface, a sign-out URL per origin
+    with declared return origins, proxylogin optional rather than required,
+    the platform principal preserved across login lanes, protected app shells
+    requiring login, and auth provider edits applied live from Connection Hub
+    over a platform settings bus.
 
-    The Web Search MCP surface now has a repository-root launcher and an
-    operator-owned YAML configuration. Operators can set persistent domain
-    allowlists and blocklists, while callers can narrow a permitted search per
-    invocation. Configuration editing is exposed as an explicit operation,
-    and the install and client procedures cover stdio and hosted deployment
-    shapes.
+    **OAuth** gained the device authorization flow for hosts with no browser,
+    whole-Card agent credentials, and a first consent seeded from the
+    requested authority instead of an empty pick list.
 
-    Web requests enforce address-level SSRF checks across resolution and
-    redirects. Search and fetch results leave the service in a normalized
-    public shape, content filtering tolerates missing objectives, and optional
-    LLM processing keeps keyless search usable. The stdio launcher keeps
-    protocol output clean, accepts practical scalar input forms, and reports
-    parameter and return schemas at full fidelity.
+    **The CLI gained deployment control.** A deployment target control API and
+    a delegated deployment control service with hardened delegated sessions,
+    local platform targets, deleting one bundle by id behind a guarded
+    deprovision, and activation records that name what loaded and fence it on
+    a commit. This is the first published version carrying
+    `kdcube_cli.management` and `kdcube_cli.control`, which the Connection Hub
+    CLI builds on.
 
-    KDCube's governed services inventory includes the Productivity Web surface
-    so the same authority model can expose it to agents. Contributor testing
-    documentation now isolates packages whose source names overlap third-party
-    MCP modules, preserving deterministic imports during broad platform test
-    runs.
+    **Productivity mail is a realm across providers.** iCloud joins Gmail on
+    both doors, with drafts, send and send-draft, filing a sent message,
+    reading one attachment inline, and Drive folder placement at parity with
+    the productivity door. Conversations gained keyset message paging and
+    scoped durable search, and the agent harness runs standalone outside a
+    container.
+
+    **The hybrid index** re-exports from app-foundation, an empty query
+    browses a scope, a lexical-only collection stops paying for vectors, and
+    hybrid search can return the matched passage.
 
 config:
-  version: "2026.09.02.1429"
+  version: "2026.09.23.0218"
