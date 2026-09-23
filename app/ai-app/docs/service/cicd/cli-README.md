@@ -610,10 +610,52 @@ a selected-source edit repeats the browser download. Every pip layer shares a
 BuildKit cache mount, so a layer that does re-run reinstalls from cached
 wheels instead of the network.
 
-`service-foundation` currently supplies host-process relay lifecycle and is not
-imported by KDCube runtime images. Install it in the host command's Python
-environment. Add it to this image-build command when platform-image code begins
-to import that distribution.
+##### Pinned Project Board source family
+
+Project Board deployments use two dedicated, clean source trees checked out at
+approved full commits: KDCube supplies `kdcube-cli`, and App Ecosystem supplies
+the five distributions that make up the client and its governed transport.
+Record both commits with the resulting image identifiers, then stage the whole
+family in one build:
+
+```bash
+KDCUBE_COMMIT=$(git -C "$KDCUBE_REPO" rev-parse HEAD^{commit})
+APP_ECOSYSTEM_COMMIT=$(git -C "$APP_ECOSYSTEM_REPO" rev-parse HEAD^{commit})
+test -z "$(git -C "$KDCUBE_REPO" status --porcelain)"
+test -z "$(git -C "$APP_ECOSYSTEM_REPO" status --porcelain)"
+
+kdcube refresh \
+  --tenant <tenant> \
+  --project <project> \
+  --path "$KDCUBE_REPO" \
+  --build \
+  --maintainer-local-python-package \
+    "kdcube-cli=$KDCUBE_REPO/app/ai-app/src/kdcube-ai-app/kdcube_cli" \
+  --maintainer-local-python-package \
+    "app-foundation=$APP_ECOSYSTEM_REPO/packages/app-foundation" \
+  --maintainer-local-python-package \
+    "service-foundation=$APP_ECOSYSTEM_REPO/packages/service-foundation" \
+  --maintainer-local-python-package \
+    "connection-hub=$APP_ECOSYSTEM_REPO/products/connection-hub/packages/connection-hub" \
+  --maintainer-local-python-package \
+    "connection-hub-cli=$APP_ECOSYSTEM_REPO/products/connection-hub/packages/connection-hub-cli" \
+  --maintainer-local-python-package \
+    "project-board=$APP_ECOSYSTEM_REPO/products/project-board/packages/project-board"
+```
+
+The service requirement files retain `connection-hub` and `project-board`
+compatibility floors. During this source build, the planner replaces those
+lines with the selected directories, while the four transitive packages are
+also present in the same local install set. The deployed source path therefore
+uses the two recorded repository commits as its first-party package source.
+An index release remains an independent distribution path for installations
+that choose released packages.
+
+Outside the complete Project Board source family above, select
+`service-foundation` only for a process or image that imports it. The ordinary
+Connection Hub platform-image path does not import that distribution; the
+Project Board family includes it because the `project-board` distribution
+declares it as a runtime dependency.
 
 The build-storage policy is host-independent. It applies to the Docker host's
 disposable objects through commands supported by Docker Engine and Docker
