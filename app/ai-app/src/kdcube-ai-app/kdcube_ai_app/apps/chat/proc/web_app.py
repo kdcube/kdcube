@@ -343,6 +343,15 @@ async def lifespan(app: FastAPI):
 
     # Postgres
     app.state.pg_pool = await get_pg_pool()
+    from kdcube_ai_app.auth.session_authority_runtime import (
+        prepare_configured_session_authority,
+    )
+
+    app.state.session_authority = await prepare_configured_session_authority(
+        pg_pool=app.state.pg_pool,
+        settings=settings,
+        redis=app.state.redis_async,
+    )
 
     try:
         from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.authentication_surface import (

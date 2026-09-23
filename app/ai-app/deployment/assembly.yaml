@@ -20,6 +20,9 @@ context:
 # ---------------------------------------------------------------------------
 auth:
   type: "bundle"
+  sessions:
+    authority:
+      backend: "redis-migration-source"
   turnstile_development_token: ""            # optional local/dev frontend Turnstile bypass token; leave empty outside development
 
   authenticators:

@@ -8,13 +8,21 @@ import time
 import logging
 import os
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Optional, Dict, List
 
 from redis import asyncio as aioredis
 
 from kdcube_ai_app.auth.AuthManager import User
+from kdcube_ai_app.auth.platform_session_store import PlatformSessionStore
+from kdcube_ai_app.auth.session_record import (
+    request_context_storage_record,
+    user_session_storage_record,
+)
+from kdcube_ai_app.auth.session_authority_runtime import (
+    platform_session_store_for,
+)
 from kdcube_ai_app.infra.namespaces import REDIS, ns_key
 from kdcube_ai_app.infra.redis.client import get_async_redis_client
 
@@ -391,7 +399,8 @@ class UserSession:
             self.permissions = []
         if self.created_at == 0:
             self.created_at = time.time()
-        self.last_seen = time.time()
+        if self.last_seen == 0:
+            self.last_seen = time.time()
 
     def to_user(self) -> User:
         """Convert session to User object for auth validation"""
@@ -408,10 +417,7 @@ class UserSession:
         )
 
     def serialize_to_dict(self):
-        session_dict=asdict(self)
-        if isinstance(self.user_type, UserType):
-            session_dict["user_type"] = self.user_type.value
-        return session_dict
+        return user_session_storage_record(self)
 
 class SessionManager:
     """Simple session management"""
@@ -420,7 +426,8 @@ class SessionManager:
                  redis_url: str,
                  tenant: str,
                  project: str,
-                 session_ttl: int = 86400):
+                 session_ttl: int = 86400,
+                 authority_store: PlatformSessionStore | None = None):
         self.redis_url = redis_url
         self.redis = None
         self.tenant = tenant
@@ -428,6 +435,20 @@ class SessionManager:
         self.SESSION_PREFIX = self.ns(REDIS.SESSION)
         self.SESSION_TTL = session_ttl
         self.SESSION_INDEX_PREFIX = f"{self.SESSION_PREFIX}:index"
+        self._authority_store = authority_store
+
+    @property
+    def authority_store(self) -> PlatformSessionStore | None:
+        if self._authority_store is not None:
+            return self._authority_store
+        return platform_session_store_for(
+            tenant=self.tenant,
+            project=self.project,
+        )
+
+    @authority_store.setter
+    def authority_store(self, value: PlatformSessionStore | None) -> None:
+        self._authority_store = value
 
     def ns(self, base: str) -> str:
         return ns_key(base, tenant=self.tenant, project=self.project)
@@ -443,19 +464,18 @@ class SessionManager:
             user_data: Optional[Dict] = None
     ) -> UserSession:
         """Get existing session or create new one (atomic for all types)."""
-        await self.init_redis()
-
         fingerprint = context.get_fingerprint()
 
-        # Decide key exactly as before
+        # One authority key identifies the active session for this principal.
         if user_type == UserType.PAID and user_data:
-            session_key = f"{self.SESSION_PREFIX}:paid:{user_data['user_id']}"
+            authority_key = f"paid:{user_data['user_id']}"
         elif user_type in [UserType.REGISTERED, UserType.PRIVILEGED] and user_data:
-            session_key = f"{self.SESSION_PREFIX}:registered:{user_data['user_id']}"
+            authority_key = f"registered:{user_data['user_id']}"
         elif user_type in [UserType.EXTERNAL, UserType.ANONYMOUS] and user_data and user_data.get("user_id"):
-            session_key = f"{self.SESSION_PREFIX}:external:{user_data['user_id']}"
+            authority_key = f"external:{user_data['user_id']}"
         else:
-            session_key = f"{self.SESSION_PREFIX}:anonymous:{fingerprint}"
+            authority_key = f"anonymous:{fingerprint}"
+        session_key = f"{self.SESSION_PREFIX}:{authority_key}"
 
         # Build candidate (GUID session_id) exactly as your semantics
         session = UserSession(
@@ -481,9 +501,28 @@ class SessionManager:
                 len(user_data.get("permissions") or []) if user_data else 0,
             )
 
+        if self.authority_store is not None:
+            result = await self.authority_store.get_or_create(
+                authority_key=authority_key,
+                candidate=session.serialize_to_dict(),
+                user_data=dict(user_data or {}),
+                request_context=request_context_storage_record(context) or {},
+                user_type=user_type.value,
+                ttl_seconds=self.SESSION_TTL,
+                now=time.time(),
+            )
+            stored = UserSession(**result.record)
+            stored.request_context = context
+            stored.is_new_session = result.created
+            return stored
+
+        await self.init_redis()
         payload = json.dumps(session.serialize_to_dict(), ensure_ascii=False)
         user_data_json = json.dumps(user_data, ensure_ascii=False) if user_data else ""
-        context_json = json.dumps(asdict(context), ensure_ascii=False)
+        context_json = json.dumps(
+            request_context_storage_record(context),
+            ensure_ascii=False,
+        )
 
         # Atomic get-or-create + index repair/create
         result = await self.redis.eval(
@@ -535,6 +574,13 @@ class SessionManager:
         Persist updates for an existing session by session_id.
         Safe no-op if session key cannot be found.
         """
+        if self.authority_store is not None:
+            await self.authority_store.update_session(
+                session.serialize_to_dict(),
+                ttl_seconds=self.SESSION_TTL,
+                now=time.time(),
+            )
+            return
         await self.init_redis()
         index_key = f"{self.SESSION_INDEX_PREFIX}:{session.session_id}"
         session_key_raw = await self.redis.get(index_key)
@@ -554,6 +600,16 @@ class SessionManager:
 
     async def get_session_by_id(self, session_id: str) -> Optional[UserSession]:
         """Retrieve a session by its session_id"""
+        if self.authority_store is not None:
+            session_dict = await self.authority_store.get_session_by_id(
+                session_id
+            )
+            if not session_dict:
+                return None
+            try:
+                return UserSession(**session_dict)
+            except Exception:
+                return None
         await self.init_redis()
         index_key = f"{self.SESSION_INDEX_PREFIX}:{session_id}"
         session_key_raw = await self.redis.get(index_key)
@@ -583,6 +639,16 @@ class SessionManager:
         user_id_value = str(user_id or "").strip()
         if not user_id_value:
             return None
+        if self.authority_store is not None:
+            session_dict = await self.authority_store.get_session_by_user_id(
+                user_id_value
+            )
+            if not session_dict:
+                return None
+            try:
+                return UserSession(**session_dict)
+            except Exception:
+                return None
         await self.init_redis()
         # Privileged sessions are stored under the registered user key by
         # get_or_create_session(); paid users may use the paid key.

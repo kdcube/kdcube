@@ -9,6 +9,7 @@ updated_at: 2026-09-03
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/operations/install-clean-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/operations/install-from-descriptors-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/recipes/operations/move-authority-to-postgresql-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/cli-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/procedures/platform-source-testing-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/ngrok-README.md
@@ -85,6 +86,11 @@ kdcube reload <app-id>
 ```
 
 Never rerun `init` on an existing runtime — it refuses, by design.
+
+Moving an existing runtime's session and Connection Hub authority from Redis
+to PostgreSQL is a dry-run-first generation cutover. Follow
+[Move Runtime Authority To PostgreSQL](move-authority-to-postgresql-README.md);
+do not switch either descriptor backend before its activation receipt exists.
 
 ## Export / import (environment as an artifact)
 

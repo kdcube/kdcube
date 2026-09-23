@@ -26,6 +26,11 @@ from rich.text import Text
 
 from kdcube_cli import installer as installer_mod
 from kdcube_cli import bundle_activation
+from kdcube_cli.authority_cutover import (
+    AuthorityCutoverRuntime,
+    configure_authority_parser,
+    run_authority_command,
+)
 from kdcube_cli.banner import print_cli_banner
 from kdcube_cli.bundle_delete_transaction import (
     advance_bundle_delete_transaction,
@@ -4707,6 +4712,16 @@ def main() -> None:
             help="With `reload --commit`, the full sha the ref must resolve to on the proc (default: the host pin).",
         )
 
+    _sp = subparsers.add_parser(
+        "authority",
+        help="Preview or apply the durable authority generation cutover.",
+    )
+    configure_authority_parser(
+        _sp,
+        add_quiet=_add_quiet_arg,
+        default_path=DEFAULT_DIR,
+    )
+
     _sp = subparsers.add_parser("stop", help="Stop the local Docker Compose stack")
     _add_quiet_arg(_sp)
     _sp.add_argument("--tenant", default="", help="Tenant of the runtime to stop. With --project, composes under the platform default base.")
@@ -5274,6 +5289,33 @@ def main() -> None:
         else implicit_descriptors_location
     )
     try:
+        if args.command == "authority":
+            _authority_workdir = _resolve_subcommand_workdir(
+                args.workdir,
+                cli_defaults,
+                tenant_arg=getattr(args, "tenant", "") or "",
+                project_arg=getattr(args, "project", "") or "",
+            )
+            _authority_repo = _resolve_subcommand_repo(
+                args.path,
+                workdir=_authority_workdir,
+                path_provided=_arg_provided("--path"),
+            )
+            _authority_context = _build_paths_for_repo(
+                _authority_repo,
+                _authority_workdir,
+            )
+            output = run_authority_command(
+                args,
+                runtime=AuthorityCutoverRuntime(
+                    docker_dir=_authority_context.docker_dir,
+                    config_dir=_authority_context.config_dir,
+                    env_file=_authority_context.config_dir / ".env",
+                ),
+            )
+            if output.strip() and not args.verbose:
+                console.print(output.rstrip())
+            return
         if args.command == "secrets":
             _explicit_secret_workdir = bool(
                 str(getattr(args, "workdir", "") or "").strip()

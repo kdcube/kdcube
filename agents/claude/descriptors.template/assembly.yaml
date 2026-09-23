@@ -2,6 +2,11 @@ context:
   tenant: standalone
   project: agent-harness-claude
 
+auth:
+  sessions:
+    authority:
+      backend: redis-migration-source
+
 paths:
   host_bundle_storage_path: ../output/bundle-storage
 

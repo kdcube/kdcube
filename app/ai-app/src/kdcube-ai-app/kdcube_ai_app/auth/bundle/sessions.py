@@ -24,6 +24,10 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Awaitable, Callable, Iterable, Mapping, Optional
 
 from kdcube_ai_app.auth.AuthManager import AuthManager, AuthenticationError, User
+from kdcube_ai_app.auth.bundle.session_store import BundleSessionStore
+from kdcube_ai_app.auth.session_authority_runtime import (
+    bundle_session_store_for,
+)
 from kdcube_ai_app.infra.namespaces import ns_key
 from kdcube_ai_app.infra.redis.client import get_async_redis_client
 
@@ -237,9 +241,10 @@ class BundleSessionAuthority:
     """
     Async authority for bundle-owned platform login sessions.
 
-    Redis stores the mutable truth: user profile, active session records, and
-    per-user token version. The signed cookie token carries only enough data to
-    locate and verify the backing session.
+    The configured authority store owns user profiles, active session records,
+    and per-user token versions. The signed cookie token carries only enough
+    data to locate and verify the backing session. Redis remains a bounded
+    migration/test source when no durable store is supplied.
     """
 
     def __init__(
@@ -250,12 +255,22 @@ class BundleSessionAuthority:
         redis: Any | None = None,
         redis_url: str | None = None,
         secret: str | bytes | None = None,
+        authority_store: BundleSessionStore | None = None,
     ):
         self.tenant = tenant
         self.project = project
         self._redis = redis
         self._redis_url = redis_url
         self._secret = secret
+        self._authority_store = authority_store
+
+    def _active_authority_store(self) -> BundleSessionStore | None:
+        if self._authority_store is not None:
+            return self._authority_store
+        return bundle_session_store_for(
+            tenant=self.tenant,
+            project=self.project,
+        )
 
     def _ns(self, base: str) -> str:
         return ns_key(base, tenant=self.tenant, project=self.project)
@@ -385,6 +400,43 @@ class BundleSessionAuthority:
         if not sub_value:
             raise BundleSessionInvalid("bundle session user sub is required")
 
+        authority_store = self._active_authority_store()
+        if authority_store is not None:
+            updates: dict[str, Any] = {"disabled": bool(disabled)}
+            optional_updates = {
+                "username": username,
+                "email": email,
+                "name": name,
+                "provider": provider,
+                "provider_subject": provider_subject,
+            }
+            updates.update(
+                {
+                    key: value
+                    for key, value in optional_updates.items()
+                    if value is not None
+                }
+            )
+            if roles is not None:
+                updates["roles"] = _as_list(roles)
+            if permissions is not None:
+                updates["permissions"] = _as_list(permissions)
+            if metadata is not None:
+                updates["metadata"] = dict(metadata)
+            record = await authority_store.register_user(
+                sub=sub_value,
+                updates=updates,
+                now=int(time.time()),
+            )
+            user = BundleSessionUser.from_mapping(record)
+            logger.info(
+                "Bundle session user registered sub=%s provider=%s roles=%s",
+                sub_value,
+                user.provider,
+                len(user.roles),
+            )
+            return user
+
         async with self._user_mutation_lock(sub_value):
             return await self._register_user_unlocked(
                 sub=sub_value,
@@ -448,6 +500,10 @@ class BundleSessionAuthority:
         sub_value = str(sub or "").strip()
         if not sub_value:
             return None
+        authority_store = self._active_authority_store()
+        if authority_store is not None:
+            data = await authority_store.get_user(sub_value)
+            return BundleSessionUser.from_mapping(data) if data else None
         data = await self._get_json(self._user_key(sub_value))
         return BundleSessionUser.from_mapping(data) if data else None
 
@@ -464,6 +520,17 @@ class BundleSessionAuthority:
         sub_value = str(sub or "").strip()
         if not sub_value:
             raise BundleSessionInvalid("bundle session user sub is required")
+        authority_store = self._active_authority_store()
+        if authority_store is not None:
+            return await self._login_durable(
+                authority_store=authority_store,
+                sub=sub_value,
+                provider=provider,
+                provider_subject=provider_subject,
+                ttl_seconds=ttl_seconds,
+                idle_ttl_seconds=idle_ttl_seconds,
+                metadata=metadata,
+            )
         async with self._user_mutation_lock(sub_value):
             return await self._login_unlocked(
                 sub=sub_value,
@@ -473,6 +540,107 @@ class BundleSessionAuthority:
                 idle_ttl_seconds=idle_ttl_seconds,
                 metadata=metadata,
             )
+
+    async def _login_durable(
+        self,
+        *,
+        authority_store: BundleSessionStore,
+        sub: str,
+        provider: str | None = None,
+        provider_subject: str | None = None,
+        ttl_seconds: int | None = None,
+        idle_ttl_seconds: int | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> BundleSessionGrant:
+        for _attempt in range(3):
+            state = await authority_store.get_login_state(sub)
+            if state is None:
+                raise BundleSessionInvalid("bundle session user is not registered")
+            user = BundleSessionUser.from_mapping(state.user)
+            if user.disabled:
+                raise BundleSessionInvalid("bundle session user is disabled")
+            grant, record, ttl, idle = await self._new_session(
+                user=user,
+                version=state.version,
+                provider=provider,
+                provider_subject=provider_subject,
+                ttl_seconds=ttl_seconds,
+                idle_ttl_seconds=idle_ttl_seconds,
+                metadata=metadata,
+            )
+            if await authority_store.issue_session(
+                record,
+                expected_version=state.version,
+            ):
+                logger.info(
+                    "Bundle session login issued sub=%s session=%s ttl=%s idle=%s",
+                    sub,
+                    grant.session_id,
+                    ttl,
+                    idle,
+                )
+                return grant
+        raise BundleSessionInvalid(
+            "bundle session user changed while issuing the session"
+        )
+
+    async def _new_session(
+        self,
+        *,
+        user: BundleSessionUser,
+        version: int,
+        provider: str | None,
+        provider_subject: str | None,
+        ttl_seconds: int | None,
+        idle_ttl_seconds: int | None,
+        metadata: Mapping[str, Any] | None,
+    ) -> tuple[BundleSessionGrant, dict[str, Any], int, int]:
+        ttl = _bounded_ttl(ttl_seconds)
+        idle = min(_bounded_ttl(idle_ttl_seconds), ttl) if idle_ttl_seconds else ttl
+        issued_at = int(time.time())
+        expires_at = issued_at + ttl
+        idle_expires_at = issued_at + idle
+        session_id = f"bsn_{uuid.uuid4().hex}"
+        session_record = {
+            "schema": SESSION_TOKEN_SCHEMA,
+            "session_id": session_id,
+            "sub": user.sub,
+            "provider": provider or user.provider,
+            "provider_subject": provider_subject or user.provider_subject,
+            "token_sha256": None,
+            "version": version,
+            "active": True,
+            "metadata": dict(metadata or {}),
+            "iat": issued_at,
+            "exp": idle_expires_at,
+            "max_exp": expires_at,
+            "last_seen": issued_at,
+        }
+        claims = {
+            "schema": SESSION_TOKEN_SCHEMA,
+            "iss": "kdcube-bundle-session",
+            "sid": session_id,
+            "sub": user.sub,
+            "provider": session_record["provider"],
+            "provider_subject": session_record["provider_subject"],
+            "ver": version,
+            "iat": issued_at,
+            "exp": expires_at,
+        }
+        credential_claim = _session_credential_claim(metadata)
+        if credential_claim is not None:
+            claims["credential"] = credential_claim
+        secret = await self._resolve_secret()
+        token = _make_token(claims, secret=secret)
+        session_record["token_sha256"] = _hash_token(token)
+        grant = BundleSessionGrant(
+            token=token,
+            session_id=session_id,
+            user=user,
+            claims=claims,
+            expires_at=idle_expires_at,
+        )
+        return grant, session_record, ttl, idle
 
     async def _login_unlocked(
         self,
@@ -491,62 +659,33 @@ class BundleSessionAuthority:
         if user.disabled:
             raise BundleSessionInvalid("bundle session user is disabled")
 
-        # ``ttl`` is the hard bound the token carries (its ``exp``). A sliding
-        # session also has an idle bound, shorter, kept on the Redis record and
-        # moved forward by ``touch``; the record decides liveness, the token
-        # only proves issuance. Without an idle bound both are the same.
-        ttl = _bounded_ttl(ttl_seconds)
-        idle = min(_bounded_ttl(idle_ttl_seconds), ttl) if idle_ttl_seconds else ttl
-        issued_at = int(time.time())
-        expires_at = issued_at + ttl
-        idle_expires_at = issued_at + idle
-        session_id = f"bsn_{uuid.uuid4().hex}"
         version = await self._current_version(sub_value)
-        session_record = {
-            "schema": SESSION_TOKEN_SCHEMA,
-            "session_id": session_id,
-            "sub": sub_value,
-            "provider": provider or user.provider,
-            "provider_subject": provider_subject or user.provider_subject,
-            "token_sha256": None,
-            "version": version,
-            "active": True,
-            "metadata": dict(metadata or {}),
-            "iat": issued_at,
-            "exp": idle_expires_at,
-            "max_exp": expires_at,
-            "last_seen": issued_at,
-        }
-        claims = {
-            "schema": SESSION_TOKEN_SCHEMA,
-            "iss": "kdcube-bundle-session",
-            "sid": session_id,
-            "sub": sub_value,
-            "provider": session_record["provider"],
-            "provider_subject": session_record["provider_subject"],
-            "ver": version,
-            "iat": issued_at,
-            "exp": expires_at,
-        }
-        credential_claim = _session_credential_claim(metadata)
-        if credential_claim is not None:
-            claims["credential"] = credential_claim
-        secret = await self._resolve_secret()
-        token = _make_token(claims, secret=secret)
-        session_record["token_sha256"] = _hash_token(token)
+        grant, session_record, ttl, idle = await self._new_session(
+            user=user,
+            version=version,
+            provider=provider,
+            provider_subject=provider_subject,
+            ttl_seconds=ttl_seconds,
+            idle_ttl_seconds=idle_ttl_seconds,
+            metadata=metadata,
+        )
 
         redis = await self._redis_client()
-        await self._set_json(self._session_key(session_id), session_record, ttl_seconds=idle)
-        await redis.sadd(self._user_sessions_key(sub_value), session_id)
-        await redis.expire(self._user_sessions_key(sub_value), max(ttl, BUNDLE_SESSION_DEFAULT_TTL_SECONDS))
-        logger.info("Bundle session login issued sub=%s session=%s ttl=%s idle=%s", sub_value, session_id, ttl, idle)
-        return BundleSessionGrant(
-            token=token,
-            session_id=session_id,
-            user=user,
-            claims=claims,
-            expires_at=idle_expires_at,
+        await self._set_json(
+            self._session_key(grant.session_id),
+            session_record,
+            ttl_seconds=idle,
         )
+        await redis.sadd(self._user_sessions_key(sub_value), grant.session_id)
+        await redis.expire(self._user_sessions_key(sub_value), max(ttl, BUNDLE_SESSION_DEFAULT_TTL_SECONDS))
+        logger.info(
+            "Bundle session login issued sub=%s session=%s ttl=%s idle=%s",
+            sub_value,
+            grant.session_id,
+            ttl,
+            idle,
+        )
+        return grant
 
 
     async def login_or_register(
@@ -592,6 +731,13 @@ class BundleSessionAuthority:
         if not sid:
             return None
         current_time = int(time.time() if now is None else now)
+        authority_store = self._active_authority_store()
+        if authority_store is not None:
+            return await authority_store.touch_session(
+                sid,
+                expires_at=int(expires_at),
+                now=current_time,
+            )
         record = await self._get_json(self._session_key(sid))
         if not record or not record.get("active", True):
             return None
@@ -613,6 +759,15 @@ class BundleSessionAuthority:
             sid = str(claims.get("sid") or "").strip()
         if not sid:
             return False
+        authority_store = self._active_authority_store()
+        if authority_store is not None:
+            removed = await authority_store.revoke_session(sid)
+            logger.info(
+                "Bundle session logout session=%s removed=%s",
+                sid,
+                removed,
+            )
+            return removed
         redis = await self._redis_client()
         removed = await redis.delete(self._session_key(sid))
         logger.info("Bundle session logout session=%s removed=%s", sid, bool(removed))
@@ -622,6 +777,15 @@ class BundleSessionAuthority:
         sub_value = str(sub or "").strip()
         if not sub_value:
             return 0
+        authority_store = self._active_authority_store()
+        if authority_store is not None:
+            removed = await authority_store.invalidate_user(sub_value)
+            logger.info(
+                "Bundle session user invalidated sub=%s sessions_removed=%s",
+                sub_value,
+                removed,
+            )
+            return removed
         async with self._user_mutation_lock(sub_value):
             return await self._invalidate_user_unlocked(sub_value)
 
@@ -644,6 +808,15 @@ class BundleSessionAuthority:
         sub_value = str(sub or "").strip()
         if not sub_value:
             return False
+        authority_store = self._active_authority_store()
+        if authority_store is not None:
+            removed = await authority_store.delete_user(sub_value)
+            logger.info(
+                "Bundle session user deleted sub=%s removed=%s",
+                sub_value,
+                removed,
+            )
+            return removed
         async with self._user_mutation_lock(sub_value):
             await self._invalidate_user_unlocked(sub_value)
             redis = await self._redis_client()
@@ -666,6 +839,35 @@ class BundleSessionAuthority:
         sub = str(claims.get("sub") or "").strip()
         if not session_id or not sub:
             raise BundleSessionInvalid("bundle session token subject/session is missing")
+
+        authority_store = self._active_authority_store()
+        if authority_store is not None:
+            state = await authority_store.get_validation_state(session_id)
+            if state is None or state.session_state != "active":
+                raise BundleSessionInvalid("bundle session is not active")
+            if (
+                state.idle_expires_at < current_time
+                or state.hard_expires_at < current_time
+            ):
+                raise BundleSessionExpired("bundle session record is expired")
+            session_record = state.session
+            if session_record.get("sub") != sub:
+                raise BundleSessionInvalid("bundle session subject does not match")
+            if session_record.get("token_sha256") != _hash_token(token):
+                raise BundleSessionInvalid("bundle session token record does not match")
+            if int(claims.get("ver") or 0) != state.version:
+                raise BundleSessionInvalid("bundle session token was invalidated")
+            if state.user_state != "active" or not state.user:
+                raise BundleSessionInvalid("bundle session user is unavailable")
+            user = BundleSessionUser.from_mapping(state.user)
+            if state.user_disabled or user.disabled:
+                raise BundleSessionInvalid("bundle session user is disabled")
+            return BundleSessionVerification(
+                session_id=session_id,
+                user=user,
+                claims=claims,
+                record=dict(session_record),
+            )
 
         session_record = await self._get_json(self._session_key(session_id))
         if not session_record or not session_record.get("active", True):
@@ -701,14 +903,16 @@ def get_bundle_session_authority(
     redis: Any | None = None,
     redis_url: str | None = None,
     secret: str | bytes | None = None,
+    authority_store: BundleSessionStore | None = None,
 ) -> BundleSessionAuthority:
-    if redis is not None or secret is not None:
+    if redis is not None or secret is not None or authority_store is not None:
         return BundleSessionAuthority(
             tenant=tenant,
             project=project,
             redis=redis,
             redis_url=redis_url,
             secret=secret,
+            authority_store=authority_store,
         )
     key = (tenant, project, redis_url)
     authority = _AUTHORITIES.get(key)

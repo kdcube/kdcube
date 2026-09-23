@@ -7,6 +7,9 @@ context:
 
 auth:
   type: "simple"
+  sessions:
+    authority:
+      backend: "redis-migration-source"
   cognito:
     region: "eu-west-1"
     user_pool_id: ""

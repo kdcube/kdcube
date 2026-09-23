@@ -562,6 +562,19 @@ class CognitoTrustedProviderConfig(BaseModel):
     hosted_ui_domain: str | None = None
 
 
+class SessionAuthorityConfig(BaseModel):
+    """Descriptor-selected authority generation for platform sessions."""
+
+    BACKEND: str = ""
+    GENERATION_ID: str = ""
+
+
+class SessionsConfig(BaseModel):
+    AUTHORITY: SessionAuthorityConfig = Field(
+        default_factory=SessionAuthorityConfig
+    )
+
+
 class AuthConfig(BaseModel):
     """Auth settings.  Access via get_settings().AUTH.<attr>."""
     COGNITO_REGION: str | None = None
@@ -578,6 +591,7 @@ class AuthConfig(BaseModel):
     OIDC_SERVICE_ADMIN_USERNAME: str | None = None
     OIDC_SERVICE_ADMIN_PASSWORD: str | None = None
     IDP: IDPConfig = Field(default_factory=IDPConfig)
+    SESSIONS: SessionsConfig = Field(default_factory=SessionsConfig)
 
 
 # ─── SERVICES ─────────────────────────────────────────────────────────────────

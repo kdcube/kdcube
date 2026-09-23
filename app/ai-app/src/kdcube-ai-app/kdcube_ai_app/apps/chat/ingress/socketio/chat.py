@@ -21,6 +21,7 @@ from fastapi import HTTPException
 
 from kdcube_ai_app.auth.AuthManager import AuthenticationError
 from kdcube_ai_app.auth.sessions import UserSession, UserType, RequestContext
+from kdcube_ai_app.auth.session_record import request_context_storage_record
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.federated_tokens.data_bus import (
     FederatedTokenError,
     verify_federated_data_bus_token,
@@ -421,7 +422,10 @@ class SocketIOChatHandler:
             client_role = str(auth.get("client_role") or "user").strip() or "user"
             socket_meta = {
                 "user_session": session.serialize_to_dict(),
-                "request_context": ctx.model_dump() if hasattr(ctx, "model_dump") else ctx.__dict__,  # safe bridge
+                "request_context": request_context_storage_record(
+                    ctx,
+                    include_network_identity=True,
+                ),
                 "authenticated": session.user_type.value != "anonymous",
                 "project": project,
                 "tenant": tenant,
