@@ -295,6 +295,34 @@ async def test_secrets_service_accepts_host_vault_generation(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_secrets_service_without_admin_token_fails_closed(monkeypatch):
+    client = _FakeSecretsHttpClient(
+        response=_FakeHttpResponse(200, {"status": "ok", "generation": 1})
+    )
+    monkeypatch.setattr(
+        secrets_manager_module,
+        "_get_httpx",
+        lambda: _FakeHttpxModule(client),
+    )
+    manager = SecretsServiceSecretsManager(
+        SecretsManagerConfig(
+            provider="secrets-service",
+            component="proc",
+            url="http://kdcube-secrets:7777",
+            admin_token=None,
+        )
+    )
+
+    assert manager.can_write() is False
+    with pytest.raises(
+        SecretsManagerWriteError,
+        match="provider is not configured for writes",
+    ):
+        await manager.set_secret("platform.services.fixture.token", "secret-value")
+    assert client.requests == []
+
+
+@pytest.mark.asyncio
 async def test_secrets_service_create_is_atomic_and_reports_collision(monkeypatch):
     client = _QueuedSecretsHttpClient(
         [

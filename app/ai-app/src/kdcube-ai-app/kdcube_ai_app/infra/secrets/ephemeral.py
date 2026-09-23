@@ -5,11 +5,15 @@
 
 from __future__ import annotations
 
+import uuid
+from dataclasses import replace
 from typing import Any
 
 from kdcube_ai_app.infra.secrets.manager import (
     ISecretsManager,
     SecretsManagerError,
+    build_secrets_manager_config,
+    create_secrets_manager,
     get_secrets_manager,
 )
 
@@ -17,6 +21,35 @@ from kdcube_ai_app.infra.secrets.manager import (
 SUPPORTED_EPHEMERAL_SECRET_PROVIDERS = frozenset(
     {"aws-sm", "secrets-service", "in-memory"}
 )
+LOCAL_SECRETS_SERVICE_URL = "http://kdcube-secrets:7777"
+
+
+def _runtime_secret_manager(settings: Any | None) -> ISecretsManager:
+    """Select custody independently from provider-value reads.
+
+    During local Host Vault shadow staging, provider values intentionally stay
+    file-backed while runtime-owned secrets already require durable custody.
+    ``secrets.service.backend`` owns that second decision.
+    """
+
+    manager = get_secrets_manager(settings)
+    if manager.provider_type in SUPPORTED_EPHEMERAL_SECRET_PROVIDERS:
+        return manager
+
+    backend = str(
+        getattr(settings, "SECRETS_SERVICE_BACKEND", None) or ""
+    ).strip().lower().replace("_", "-")
+    if manager.provider_type != "secrets-file" or backend != "host-vault":
+        return manager
+
+    config = build_secrets_manager_config(settings)
+    return create_secrets_manager(
+        replace(
+            config,
+            provider="secrets-service",
+            url=config.url or LOCAL_SECRETS_SERVICE_URL,
+        )
+    )
 
 
 class KDCubeEphemeralSecretStore:
@@ -82,6 +115,14 @@ class KDCubeEphemeralSecretStore:
             limit=limit,
         )
 
+    async def probe_writable(self) -> None:
+        """Exercise the mutation lane without creating a stored value."""
+
+        await self._manager.delete_ephemeral_secret(
+            namespace=self._namespace,
+            secret_ref=uuid.uuid4().hex,
+        )
+
 
 def ephemeral_secret_store(
     *,
@@ -92,13 +133,14 @@ def ephemeral_secret_store(
     """Build the deployment-selected host-vault or AWS adapter."""
 
     return KDCubeEphemeralSecretStore(
-        manager or get_secrets_manager(settings),
+        manager or _runtime_secret_manager(settings),
         namespace=namespace,
     )
 
 
 __all__ = [
     "KDCubeEphemeralSecretStore",
+    "LOCAL_SECRETS_SERVICE_URL",
     "SUPPORTED_EPHEMERAL_SECRET_PROVIDERS",
     "ephemeral_secret_store",
 ]

@@ -69,6 +69,11 @@ Run this procedure with the runtime version that contains the `kdcube
 authority` command and the corresponding Connection Hub package. A source
 refresh stages code; it does not change the descriptors above.
 
+For a local runtime, `secrets.service.backend` must already be `host-vault`
+and its broker must be healthy. Provider values may remain on
+`secrets.provider: secrets-file`; resident Card credentials use the Host Vault
+broker independently during this shadow state.
+
 Shipped and generated descriptors use this source mode by default. A fresh
 runtime therefore starts without claiming a PostgreSQL generation that has no
 activation receipt. Rebuilding an existing runtime before cutover continues to
@@ -112,6 +117,11 @@ tokens, token-bearing keys, record payloads, or user identities. Check:
 ```shell
 PREVIEW_SHA256="$(jq -r '.preview_sha256' "$PREVIEW")"
 
+kdcube authority preflight \
+  --workdir "$WORKDIR" \
+  --preview-file "$PREVIEW" \
+  --confirm-preview-sha256 "$PREVIEW_SHA256"
+
 kdcube authority apply \
   --workdir "$WORKDIR" \
   --preview-file "$PREVIEW" \
@@ -122,6 +132,13 @@ kdcube authority apply \
 `--stop-writers` explicitly stops `chat-ingress` and `chat-proc`, verifies they
 are stopped, and leaves them stopped. PostgreSQL, Redis, and the secret service
 remain available to the one-off operation.
+
+`preflight` validates the reviewed artifact, opens the PostgreSQL target, and
+exercises the resident-secret mutation path through the real broker and Host
+Vault while both writers remain running. `apply` repeats that preflight before
+it stops either writer. A target or vault failure therefore leaves both
+writers running. The command repeats the authoritative evidence and generation
+checks after quiescence before it imports anything.
 
 Apply reads the source again after quiescence. If any count or preserved record
 changed since preview, it refuses without activating the generation. Leave the

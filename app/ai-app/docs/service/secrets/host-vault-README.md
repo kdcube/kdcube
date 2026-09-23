@@ -72,6 +72,14 @@ the broker; it does not provision a vault service, enroll the deployment, copy
 values, or reroute consumers by itself. `identity_dir: null` is a template
 placeholder and must become an absolute host path before the backend can start.
 
+Runtime-owned one-time and resident secrets use a narrower rule. They are not
+provider values, so a trusted KDCube service routes them to the durable broker
+as soon as `secrets.service.backend` is `host-vault`, including during shadow
+staging while `secrets.provider` remains `secrets-file`. Provider-value reads
+still come from the files until activation. This lets login attempts and
+resident Card credentials survive restarts without prematurely changing the
+provider source of truth.
+
 The supported transition is deliberately staged:
 
 ```text
