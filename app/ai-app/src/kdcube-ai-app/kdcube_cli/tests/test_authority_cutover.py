@@ -128,12 +128,14 @@ def test_apply_uses_a_one_off_container_after_quiescence(tmp_path: Path) -> None
     )
 
     assert result == "applied\n"
-    assert commands[1][4:10] == [
+    assert commands[1][4:12] == [
         "run",
         "--rm",
         "--no-deps",
         "chat-proc",
-        "kdcube-authority-cutover",
+        "python",
+        "-m",
+        "kdcube_ai_app.ops.authority_cutover.cli",
         "apply",
     ]
     assert list(runtime.config_dir.glob(".authority-cutover-*.json")) == []

@@ -167,7 +167,9 @@ def _container_command(
         "--rm",
         "--no-deps",
         "chat-proc",
-        "kdcube-authority-cutover",
+        "python",
+        "-m",
+        "kdcube_ai_app.ops.authority_cutover.cli",
         *operation,
     ]
 
