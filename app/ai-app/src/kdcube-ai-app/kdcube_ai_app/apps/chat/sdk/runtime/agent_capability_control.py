@@ -23,6 +23,8 @@ from connection_hub.delegated_credentials.application_resources import (
 
 
 DESCRIPTOR_PAYLOAD_SCHEMA = "kdcube.agent_capability_descriptor.v1"
+CONTROL_OVERRIDE_SCHEMA = "kdcube.agent_capability_control_override.v1"
+CONTROL_OVERRIDES_PROPERTY = "agent_capability_control_overrides"
 
 TOOL_GROUPS = "tool_groups"
 TOOLS = "tools"
@@ -88,6 +90,101 @@ def _strings(value: Any) -> list[str]:
     if not isinstance(value, (list, tuple, set, frozenset)):
         return []
     return [str(item).strip() for item in value if str(item or "").strip()]
+
+
+def _authority_map(value: Any, *, field: str) -> dict[str, list[str]]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError(f"agent_control_override_{field}_invalid")
+    result: dict[str, list[str]] = {}
+    for resource, raw_values in value.items():
+        key = _text(resource)
+        values = _strings(raw_values)
+        if not key or (raw_values is not None and not isinstance(
+            raw_values, (str, list, tuple, set, frozenset)
+        )):
+            raise ValueError(f"agent_control_override_{field}_invalid")
+        result[key] = sorted(set(values))
+    return result
+
+
+def _named_authority(value: Any) -> dict[str, dict[str, list[str]]] | str:
+    if value == "*":
+        return "*"
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError("agent_control_override_named_services_invalid")
+    result: dict[str, dict[str, list[str]]] = {}
+    for resource, raw_namespaces in value.items():
+        if not _text(resource) or not isinstance(raw_namespaces, Mapping):
+            raise ValueError("agent_control_override_named_services_invalid")
+        result[_text(resource)] = {}
+        for namespace, raw_operations in raw_namespaces.items():
+            if not _text(namespace) or not isinstance(
+                raw_operations, (str, list, tuple, set, frozenset)
+            ):
+                raise ValueError("agent_control_override_named_services_invalid")
+            result[_text(resource)][_text(namespace)] = sorted(
+                set(_strings(raw_operations))
+            )
+    return result
+
+
+def _agent_control_override(
+    bundle_props: Mapping[str, Any] | None,
+    *,
+    agent_id: str,
+    resource: str,
+    authority: AgentCapabilityPolicy,
+) -> dict[str, Any] | None:
+    overrides = (bundle_props or {}).get(CONTROL_OVERRIDES_PROPERTY)
+    if not isinstance(overrides, Mapping) or agent_id not in overrides:
+        return None
+    rows = overrides.get(agent_id)
+    if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], Mapping):
+        raise ValueError("agent_control_override_invalid")
+    raw = rows[0]
+    if raw.get("schema") != CONTROL_OVERRIDE_SCHEMA:
+        raise ValueError("agent_control_override_schema_mismatch")
+
+    raw_defaults = raw.get("capability_defaults")
+    defaults = (
+        AgentCapabilityPolicy.from_property(raw_defaults).intersection(authority)
+        if raw_defaults is not None
+        else AgentCapabilityPolicy.empty(resource)
+    )
+    if defaults.resource != resource:
+        raise ValueError("agent_control_override_resource_mismatch")
+
+    properties = raw.get("properties")
+    if properties is not None and not isinstance(properties, Mapping):
+        raise ValueError("agent_control_override_properties_invalid")
+    safe_properties = {
+        name: copy.deepcopy(value)
+        for name, value in dict(properties or {}).items()
+        if name in {"kdcube.application_operations", "kdcube.conversation_targets"}
+    }
+    allowed_targets = set(authority.capabilities.get(CONVERSATION_TARGETS, ()))
+    if "kdcube.conversation_targets" in safe_properties:
+        safe_properties["kdcube.conversation_targets"] = sorted(
+            set(_strings(safe_properties["kdcube.conversation_targets"]))
+            & allowed_targets
+        )
+    return {
+        "capability_defaults": defaults.to_property(),
+        "resource_grants": _authority_map(
+            raw.get("resource_grants"), field="resource_grants"
+        ),
+        "resource_operations": _authority_map(
+            raw.get("resource_operations"), field="resource_operations"
+        ),
+        "named_service_operations": _named_authority(
+            raw.get("named_service_operations")
+        ),
+        "properties": safe_properties,
+    }
 
 
 def _member(parent: str, child: str) -> str:
@@ -578,6 +675,24 @@ def _metadata_entries(catalog: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
                 description=_text(raw.get("description")),
             )
 
+    for raw in catalog.get("delegated_resource_families") or ():
+        if not isinstance(raw, Mapping):
+            continue
+        family_id = _text(raw.get("id"))
+        put(
+            RESOURCE_FAMILIES,
+            family_id,
+            title=_text(raw.get("label")) or family_id,
+            description=_text(raw.get("description")),
+            resource_kinds=_strings(raw.get("resource_kinds")),
+            authority_sources=_strings(raw.get("authority_sources")),
+            transports=_strings(raw.get("transports")),
+            resource_patterns=_strings(raw.get("resource_patterns")),
+            allowed_tools=_strings(raw.get("allowed_tools")),
+            max_resources=raw.get("max_resources"),
+            max_tools_per_resource=raw.get("max_tools_per_resource"),
+        )
+
     return entries
 
 
@@ -659,6 +774,62 @@ def _declared_named_service_authority(
     )
 
 
+def _descriptor_standard_authority(catalog: Mapping[str, Any]) -> dict[str, Any]:
+    """Describe standard Card authority without owning provider catalog data.
+
+    Consumer descriptors know the resource and requested capability names.
+    Connection Hub owns the active provider catalog that resolves those names
+    to exact grants and operations. Keeping this request in the descriptor
+    payload avoids requiring every consumer bundle to copy a provider's
+    ``delegated_catalog`` block.
+    """
+
+    resources: list[dict[str, Any]] = []
+    for raw in catalog.get("mcp") or ():
+        if not isinstance(raw, Mapping) or not bool(raw.get("delegated")):
+            continue
+        resource = _text(raw.get("resource") or raw.get("resource_id"))
+        server_id = _text(raw.get("server_id"))
+        if not resource or not server_id:
+            continue
+        operations = _strings(raw.get("tools"))
+        if not operations:
+            operations = [
+                _text(entry.get("name"))
+                for entry in raw.get("tool_entries") or ()
+                if isinstance(entry, Mapping) and _text(entry.get("name"))
+            ]
+        resources.append(
+            {
+                "server_id": server_id,
+                "resource": resource,
+                "grants": sorted(
+                    set(_strings(raw.get("claims") or raw.get("scopes")))
+                ),
+                "operations": sorted(set(operations)),
+            }
+        )
+
+    named_services = [
+        {
+            "namespace": _text(raw.get("namespace")),
+            "operations": sorted(set(_strings(raw.get("operations")))),
+        }
+        for raw in catalog.get("named_services") or ()
+        if isinstance(raw, Mapping) and _text(raw.get("namespace"))
+    ]
+    families = [
+        copy.deepcopy(dict(raw))
+        for raw in catalog.get("delegated_resource_families") or ()
+        if isinstance(raw, Mapping) and _text(raw.get("id"))
+    ]
+    return {
+        "resources": resources,
+        "named_services": named_services,
+        "resource_families": families,
+    }
+
+
 def _selected_named_service_authority(
     bundle_props: Mapping[str, Any] | None,
     catalog: Mapping[str, Any],
@@ -728,6 +899,23 @@ def descriptor_capability_payload(
         bundle_props,
         catalog,
     )
+    resource_operations: dict[str, list[str]] = {}
+    standard_authority = _descriptor_standard_authority(catalog)
+    authority_policy = AgentCapabilityPolicy.from_property(authority)
+    override = _agent_control_override(
+        bundle_props,
+        agent_id=agent_id,
+        resource=resource,
+        authority=authority_policy,
+    )
+    capability_defaults = None
+    control_properties: dict[str, Any] = {}
+    if override is not None:
+        resource_grants = override["resource_grants"]
+        resource_operations = override["resource_operations"]
+        named_service_operations = override["named_service_operations"]
+        capability_defaults = override["capability_defaults"]
+        control_properties = override["properties"]
     descriptor = {
         "schema": DESCRIPTOR_PAYLOAD_SCHEMA,
         "resource": resource,
@@ -736,7 +924,12 @@ def descriptor_capability_payload(
             authority.get("capabilities", {}).get(CONVERSATION_TARGETS, ())
         ),
         "resource_grants": resource_grants,
+        "resource_operations": resource_operations,
         "named_service_operations": named_service_operations,
+        "standard_authority": standard_authority,
+        "standard_authority_overridden": override is not None,
+        "capability_defaults": capability_defaults,
+        "properties": control_properties,
     }
     encoded = json.dumps(
         descriptor,
@@ -744,7 +937,7 @@ def descriptor_capability_payload(
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
-    return {
+    result = {
         "application": application,
         "agent_id": agent_id,
         "descriptor_revision": hashlib.sha256(encoded).hexdigest(),
@@ -760,9 +953,19 @@ def descriptor_capability_payload(
             authority.get("capabilities", {}).get(CONVERSATION_TARGETS, ())
         ),
         "resource_grants": resource_grants,
+        "resource_operations": resource_operations,
         "named_service_operations": named_service_operations,
+        "standard_authority": standard_authority,
         "issuer_label": f"{application} / {agent_id}",
     }
+    if capability_defaults is not None:
+        result["capability_defaults"] = capability_defaults
+    if control_properties:
+        result["properties"] = control_properties
+        targets = control_properties.get("kdcube.conversation_targets")
+        if isinstance(targets, list):
+            result["conversation_target_resources"] = list(targets)
+    return result
 
 
 def selected_capabilities_from_disabled(
@@ -1188,26 +1391,47 @@ async def sync_agent_capability_projection(
         application=application,
         agent_id=agent_id,
     )
+    descriptor_default = selected_capabilities is None
     if selected_capabilities is None:
-        selected_capabilities = selected_capabilities_from_disabled(
-            authority=payload["capability_authority"],
-            catalog=catalog,
-            disabled=initial_disabled or {},
+        selected_capabilities = copy.deepcopy(
+            payload.get("capability_defaults")
+        ) if isinstance(payload.get("capability_defaults"), Mapping) else (
+            selected_capabilities_from_disabled(
+                authority=payload["capability_authority"],
+                catalog=catalog,
+                disabled=initial_disabled or {},
+            )
         )
     if selected_capabilities is not None:
         payload["selected_capabilities"] = copy.deepcopy(dict(selected_capabilities))
-        (
-            selected_resource_grants,
-            selected_named_service_operations,
-        ) = _selected_named_service_authority(
-            getattr(entrypoint, "bundle_props", None),
-            catalog,
-            selected_capabilities,
+        override_active = bool(
+            payload.get("descriptor_payload", {}).get(
+                "standard_authority_overridden"
+            )
         )
-        payload["selected_resource_grants"] = selected_resource_grants
-        payload["selected_named_service_operations"] = (
-            selected_named_service_operations
-        )
+        if override_active and descriptor_default:
+            payload["selected_resource_grants"] = copy.deepcopy(
+                payload.get("resource_grants") or {}
+            )
+            payload["selected_resource_operations"] = copy.deepcopy(
+                payload.get("resource_operations") or {}
+            )
+            payload["selected_named_service_operations"] = copy.deepcopy(
+                payload.get("named_service_operations") or {}
+            )
+        elif not override_active:
+            (
+                selected_resource_grants,
+                selected_named_service_operations,
+            ) = _selected_named_service_authority(
+                getattr(entrypoint, "bundle_props", None),
+                catalog,
+                selected_capabilities,
+            )
+            payload["selected_resource_grants"] = selected_resource_grants
+            payload["selected_named_service_operations"] = (
+                selected_named_service_operations
+            )
     if replace_selection:
         payload["replace_selection"] = True
 

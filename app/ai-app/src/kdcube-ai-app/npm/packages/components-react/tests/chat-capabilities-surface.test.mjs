@@ -37,6 +37,7 @@ test('emit carries the contract shape and resolves on a positive ack', async () 
   const pending = openCapabilitiesOnHost(
     {
       agent_id: 'main',
+      conversation_id: 'conv-42',
       spotlight_tools: ['slack', ''],
       section: 'services',
     },
@@ -52,6 +53,7 @@ test('emit carries the contract shape and resolves on a positive ack', async () 
   assert.ok(String(command.command_id).startsWith('caps_'))
   assert.deepEqual(command.ui_event, {
     agent_id: 'main',
+    conversation_id: 'conv-42',
     spotlight_tools: ['slack'],
     section: 'services',
   })
@@ -110,6 +112,7 @@ test('the widget parses only its own routed command', () => {
   assert.equal(parsed.commandId, 'caps_1')
   assert.deepEqual(parsed.payload, {
     agent_id: 'main',
+    conversation_id: 'conv-42',
     spotlight_tools: ['mail', '42'],
     section: 'services',
   })
@@ -218,7 +221,7 @@ test('the served widget opens the hub host-first with the deep-link fallback', (
   assert.match(source, /window\.open\(connectionsDeepLink\(consent\), '_blank', 'noopener'\)/)
 })
 
-test('standalone capability windows edit Agent Card defaults, not a conversation', () => {
+test('composer expansion keeps conversation scope while direct widget opens keep Agent Card defaults', () => {
   const composerSource = readFileSync(
     new URL('../src/chat/ui/features/composer/ComposerMenu.tsx', import.meta.url),
     'utf8',
@@ -230,10 +233,13 @@ test('standalone capability windows edit Agent Card defaults, not a conversation
     ),
     'utf8',
   )
-  assert.doesNotMatch(composerSource, /openCapabilitiesOnHost/)
+  assert.match(composerSource, /openCapabilitiesOnHost/)
+  assert.match(composerSource, /conversation_id: vm\.state\.conversationId \|\| undefined/)
   assert.match(composerSource, /Saved for this conversation\. Changes apply from your next message\./)
-  assert.doesNotMatch(widgetSource, /conversationRef|conversation_id:/)
+  assert.match(widgetSource, /const conversationRef = useRef\(conversationId\)/)
+  assert.match(widgetSource, /conversation_id: conversationRef\.current/)
   assert.match(widgetSource, /caller_surface: 'capabilities_widget'/)
+  assert.match(widgetSource, /Choose what the \$\{agentId\} agent may use in this conversation\./)
   assert.match(widgetSource, /Choose the defaults new conversations with the \$\{agentId\} agent start from/)
 })
 
@@ -290,7 +296,7 @@ test('agent-base selection is editable inside the Control Card and model choice 
     menu.indexOf('function ModelsSection'),
     menu.indexOf('function InstructionsSection'),
   )
-  assert.match(models, /scopeLocked=\{false\}/)
+  assert.match(models, /scopeLocked=\{scope\?\.capabilities_editable === false\}/)
   assert.match(menu, /const editingAgentBase = selectionScope === 'agent_base'/)
   assert.match(menu, /const locked = notAllowed \|\| scopeLocked/)
   assert.doesNotMatch(menu, /outsideAgentBase|outsideConversationBase/)

@@ -14,7 +14,13 @@
  */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { agentGrantConsentOpen, chatActions, consentOpenForClaims, openSurfaceOnHost } from '@kdcube/components-core/chat'
+import {
+  agentGrantConsentOpen,
+  chatActions,
+  consentOpenForClaims,
+  openCapabilitiesOnHost,
+  openSurfaceOnHost,
+} from '@kdcube/components-core/chat'
 import type { AgentCapabilityConsent, ConnectionsConsentOpen } from '@kdcube/components-core/chat'
 import { useAppDispatch } from '../../support/hooks.ts'
 import type {
@@ -1682,6 +1688,18 @@ export function ComposerMenu({
   const anchorRef = useRef<HTMLDivElement | null>(null)
   const capabilities = vm.capabilities
 
+  const openExpandedOnHost = (
+    source: 'composer-expand' | 'chat-spotlight',
+    spotlightTools?: string[],
+  ) => openCapabilitiesOnHost(
+    {
+      agent_id: vm.agentId,
+      conversation_id: vm.state.conversationId || undefined,
+      ...(spotlightTools?.length ? { spotlight_tools: spotlightTools } : {}),
+    },
+    { source },
+  )
+
   const openForCurrentContext = (nextView: 'popover' | 'modal') => {
     // Enter loading before the surface renders. A cached Agent Card answer is
     // never presented as this conversation's answer while the scoped request
@@ -1703,7 +1721,14 @@ export function ComposerMenu({
     const targets = vm.state.toolSpotlight?.tools
     const preferred = preferredMenuPresentation(targets, capabilities.inventory)
     if (preferred === 'modal') {
-      openForCurrentContext('modal')
+      void openExpandedOnHost('chat-spotlight', targets).then((acked) => {
+        if (acked) {
+          dispatch(chatActions.clearToolSpotlight())
+          setOpen(false)
+          return
+        }
+        openForCurrentContext('modal')
+      })
       return
     }
     openForCurrentContext(preferred)
@@ -1786,7 +1811,12 @@ export function ComposerMenu({
                 {agentName ? <span className="k-menu-head-agent">· {agentName} agent</span> : null}
               </span>
               <CanvasExpandButton
-                onClick={() => setView('modal')}
+                onClick={() => {
+                  void openExpandedOnHost('composer-expand').then((acked) => {
+                    if (acked) close()
+                    else setView('modal')
+                  })
+                }}
                 title="Expand"
               />
             </div>

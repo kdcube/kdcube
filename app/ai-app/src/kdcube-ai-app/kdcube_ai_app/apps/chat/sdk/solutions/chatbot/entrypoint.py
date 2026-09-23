@@ -987,10 +987,20 @@ class BaseEntrypoint:
 
         started_at = time.monotonic()
         try:
+            descriptor_catalog_loader = getattr(
+                self, "_agent_capabilities_catalog", None
+            )
+            descriptor_catalog = (
+                descriptor_catalog_loader(agent_id)
+                if callable(descriptor_catalog_loader)
+                else None
+            )
             catalog = await self._agent_capabilities_catalog_enriched(
                 agent_id,
                 conversation_id=conversation_id,
             )
+            if descriptor_catalog is None:
+                descriptor_catalog = catalog
         except Exception as exc:
             self.logger.log(f"[agent_capabilities] catalog failed: {traceback.format_exc()}", "ERROR")
             _log_request_scope({}, outcome="catalog_failed")
@@ -1037,7 +1047,7 @@ class BaseEntrypoint:
 
             capability_control = await sync_agent_capability_projection(
                 self,
-                catalog=catalog,
+                catalog=descriptor_catalog,
                 agent_id=agent_id,
                 initial_disabled=initial_disabled,
             )
@@ -1325,10 +1335,20 @@ class BaseEntrypoint:
 
             # Enriched so per-tool MCP denials clamp against the same listing
             # the picker showed.
+            descriptor_catalog_loader = getattr(
+                self, "_agent_capabilities_catalog", None
+            )
+            descriptor_catalog = (
+                descriptor_catalog_loader(agent_id)
+                if callable(descriptor_catalog_loader)
+                else None
+            )
             catalog = await self._agent_capabilities_catalog_enriched(
                 agent_id,
                 conversation_id=conversation_id,
             )
+            if descriptor_catalog is None:
+                descriptor_catalog = catalog
             store = None
             capability_store = None
             initial_disabled: Optional[Dict[str, Any]] = None
@@ -1361,7 +1381,7 @@ class BaseEntrypoint:
                     )
             capability_control = await sync_agent_capability_projection(
                 self,
-                catalog=catalog,
+                catalog=descriptor_catalog,
                 agent_id=agent_id,
                 initial_disabled=initial_disabled,
             )
@@ -1446,7 +1466,7 @@ class BaseEntrypoint:
                 else:
                     capability_control = await sync_agent_capability_projection(
                         self,
-                        catalog=catalog,
+                        catalog=descriptor_catalog,
                         agent_id=agent_id,
                         selected_capabilities=selected_capabilities,
                         replace_selection=True,

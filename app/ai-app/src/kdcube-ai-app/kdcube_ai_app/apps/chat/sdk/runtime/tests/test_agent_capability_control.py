@@ -18,6 +18,8 @@ from connection_hub.delegated_credentials.application_resources import (
 )
 
 from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import (
+    CONTROL_OVERRIDE_SCHEMA,
+    CONTROL_OVERRIDES_PROPERTY,
     annotate_capability_states,
     capability_preferences_from_projection,
     conversation_capability_projections,
@@ -145,6 +147,67 @@ def _props() -> dict:
     }
 
 
+def _override_props() -> dict:
+    resource = application_resource(
+        tenant=TENANT,
+        project=PROJECT,
+        application=APPLICATION,
+        agent=AGENT,
+    )
+    props = _props()
+    props[CONTROL_OVERRIDES_PROPERTY] = {
+        AGENT: [{
+            "schema": CONTROL_OVERRIDE_SCHEMA,
+            "capability_defaults": {
+                "schema": AGENT_CAPABILITY_POLICY_SCHEMA,
+                "resource": resource,
+                "capabilities": {
+                    "tools": ["web/search", "web/not-declared"],
+                    "models": ["anthropic/claude-haiku-4-5"],
+                    "instruction_profiles": ["compact"],
+                    "resource_families": ["user_external_mcp"],
+                },
+            },
+            "resource_grants": {
+                NAMED_SERVICES_RESOURCE: [
+                    "named_services:use",
+                    "work:observe",
+                ],
+            },
+            "resource_operations": {
+                NAMED_SERVICES_RESOURCE: ["named_services_search"],
+            },
+            "named_service_operations": {
+                NAMED_SERVICES_RESOURCE: {
+                    "work": ["object.search"],
+                },
+            },
+            "properties": {
+                "kdcube.application_operations": {
+                    "schema": "connection_hub.application_operations.v1",
+                    "operations": ["work.search"],
+                },
+                "kdcube.conversation_targets": [
+                    application_resource(
+                        tenant=TENANT,
+                        project=PROJECT,
+                        application="workspace@1-0",
+                        agent="*",
+                    ),
+                    application_resource(
+                        tenant=TENANT,
+                        project=PROJECT,
+                        application="not-declared@1-0",
+                        agent="*",
+                    ),
+                ],
+                "not.persisted": True,
+            },
+        }],
+    }
+    return props
+
+
 def _payload(*, include_future: bool = False) -> dict:
     return descriptor_capability_payload(
         bundle_props=_props(),
@@ -224,6 +287,130 @@ def test_operation_to_grant_mapping_is_projected_from_the_owner_descriptor() -> 
         NAMED_SERVICES_RESOURCE: {
             "work": ["object.action.review.accept", "object.search"]
         }
+    }
+
+
+def test_consumer_descriptor_carries_standard_card_requests_without_provider_catalog() -> None:
+    catalog = _catalog()
+    catalog["mcp"] = [
+        {
+            "server_id": "knowledge",
+            "delegated": True,
+            "resource": "*/api/integrations/bundles/*/*/knowledge@1-0/public/mcp/knowledge_managed*",
+            "claims": ["knowledge:read"],
+            "tools": ["*"],
+        }
+    ]
+
+    payload = descriptor_capability_payload(
+        bundle_props={},
+        catalog=catalog,
+        tenant=TENANT,
+        project=PROJECT,
+        application=APPLICATION,
+        agent_id=AGENT,
+    )
+
+    assert payload["resource_grants"] == {}
+    assert payload["descriptor_payload"]["standard_authority"] == {
+        "resources": [
+            {
+                "server_id": "knowledge",
+                "resource": "*/api/integrations/bundles/*/*/knowledge@1-0/public/mcp/knowledge_managed*",
+                "grants": ["knowledge:read"],
+                "operations": ["*"],
+            }
+        ],
+        "named_services": [
+            {
+                "namespace": "work",
+                "operations": ["object.action.review.accept", "object.search"],
+            }
+        ],
+        "resource_families": [{"id": "user_external_mcp"}],
+    }
+
+
+def test_control_override_is_descriptor_owned_and_bounded_to_native_authority() -> None:
+    baseline = _payload()
+    payload = descriptor_capability_payload(
+        bundle_props=_override_props(),
+        catalog=_catalog(),
+        tenant=TENANT,
+        project=PROJECT,
+        application=APPLICATION,
+        agent_id=AGENT,
+    )
+
+    assert payload["descriptor_revision"] != baseline["descriptor_revision"]
+    assert payload["descriptor_payload"]["standard_authority_overridden"] is True
+    defaults = payload["capability_defaults"]["capabilities"]
+    assert defaults["instruction_profiles"] == ["compact"]
+    assert defaults["models"] == ["anthropic/claude-haiku-4-5"]
+    assert defaults["resource_families"] == ["user_external_mcp"]
+    assert defaults["tools"] == ["web/search"]
+    assert "web/not-declared" not in defaults["tools"]
+    assert payload["resource_grants"] == {
+        NAMED_SERVICES_RESOURCE: ["named_services:use", "work:observe"],
+    }
+    assert payload["resource_operations"] == {
+        NAMED_SERVICES_RESOURCE: ["named_services_search"],
+    }
+    assert payload["named_service_operations"] == {
+        NAMED_SERVICES_RESOURCE: {"work": ["object.search"]},
+    }
+    assert payload["properties"] == {
+        "kdcube.application_operations": {
+            "schema": "connection_hub.application_operations.v1",
+            "operations": ["work.search"],
+        },
+        "kdcube.conversation_targets": [
+            application_resource(
+                tenant=TENANT,
+                project=PROJECT,
+                application="workspace@1-0",
+                agent="*",
+            ),
+        ],
+    }
+
+
+def test_resource_family_metadata_carries_custom_connector_limits() -> None:
+    catalog = _catalog()
+    catalog["delegated_resource_families"] = [{
+        "id": "user_external_mcp",
+        "label": "My MCP connectors",
+        "description": "User-selected MCP servers.",
+        "resource_kinds": ["mcp"],
+        "authority_sources": ["user"],
+        "transports": ["streamable-http"],
+        "resource_patterns": ["urn:connection-hub:mcp:user:*"],
+        "allowed_tools": ["search", "read"],
+        "max_resources": 3,
+        "max_tools_per_resource": 8,
+    }]
+
+    payload = descriptor_capability_payload(
+        bundle_props=_props(),
+        catalog=catalog,
+        tenant=TENANT,
+        project=PROJECT,
+        application=APPLICATION,
+        agent_id=AGENT,
+    )
+
+    assert payload["capability_metadata"]["entries"]["resource_families"][
+        "user_external_mcp"
+    ] == {
+        "title": "My MCP connectors",
+        "description": "User-selected MCP servers.",
+        "resource_kinds": ["mcp"],
+        "authority_sources": ["user"],
+        "transports": ["streamable-http"],
+        "resource_patterns": ["urn:connection-hub:mcp:user:*"],
+        "allowed_tools": ["search", "read"],
+        "max_resources": 3,
+        "max_tools_per_resource": 8,
     }
 
 
@@ -635,6 +822,53 @@ async def test_sync_without_a_saved_preference_uses_the_descriptor_default() -> 
         "instruction_profiles"
     ] == ["full"]
     assert result["projection"] == payload["selected_capabilities"]
+
+
+@pytest.mark.asyncio
+async def test_sync_rebuilds_agent_defaults_from_the_saved_control_override() -> None:
+    calls = []
+    owner = SimpleNamespace(
+        bundle_props=_override_props(),
+        _agent_selection_identity=lambda: {
+            "tenant": TENANT,
+            "project": PROJECT,
+            "user_id": "user-a",
+            "bundle_id": APPLICATION,
+        },
+    )
+
+    async def _call(call):
+        calls.append(call)
+        payload = call.request["payload"]
+        selection = payload["selected_capabilities"]
+        return BundleNamedServiceResult(
+            value=NamedServiceResponse.ok_response(
+                object={
+                    "ok": True,
+                    "authority": payload["capability_authority"],
+                    "selection": selection,
+                    "projection": selection,
+                    "states": {},
+                }
+            )
+        )
+
+    with bind_bundle_named_service_caller(_call):
+        result = await sync_agent_capability_projection(
+            owner,
+            catalog=_catalog(),
+            agent_id=AGENT,
+        )
+
+    payload = calls[0].request["payload"]
+    assert payload["selected_capabilities"] == payload["capability_defaults"]
+    assert payload["selected_resource_grants"] == payload["resource_grants"]
+    assert payload["selected_resource_operations"] == payload["resource_operations"]
+    assert (
+        payload["selected_named_service_operations"]
+        == payload["named_service_operations"]
+    )
+    assert result["projection"] == payload["capability_defaults"]
 
 
 def _namespace_operation_catalog() -> dict:
