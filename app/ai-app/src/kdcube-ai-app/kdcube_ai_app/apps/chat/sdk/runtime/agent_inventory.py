@@ -1760,8 +1760,16 @@ def namespace_claim_policies(
                 claims = sorted(set(_string_list(raw.get("claims"))))
             if not claims:
                 continue
+            provider_id = _norm(raw.get("provider_id"))
+            if not provider_id:
+                # A requirement keyed by adapter family (the mail realm's
+                # IMAP/SMTP entry) names no provider instance: the realm
+                # resolves those from the hub catalog at call time. A claim
+                # policy is per provider, and ToolClaimPolicy.from_config drops
+                # a requirement without one, so it is not emitted here either.
+                continue
             effective_requirements.append({
-                "provider_id": _norm(raw.get("provider_id")),
+                "provider_id": provider_id,
                 "connector_app_id": _norm(raw.get("connector_app_id")),
                 "claims": claims,
             })

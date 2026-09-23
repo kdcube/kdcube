@@ -774,10 +774,14 @@ async def test_realm_enrichment_scopes_mail_claims_to_allowed_operations():
         catalog, discovery=_FakeDiscovery({"mail": spec}),
     )
     realm = out["named_services"][0]["realm"]
-    assert realm["connected_accounts"][0]["claims"] == ["gmail:read", "gmail:send"]
+    # Every action is allowed, drafting included: since 2026-09-03 a Gmail
+    # draft needs gmail:compose (drafts are not covered by send), so the
+    # provider-wide requirement carries all three claims.
+    assert realm["connected_accounts"][0]["claims"] == ["gmail:compose", "gmail:read", "gmail:send"]
     actions = {item["name"]: item for item in realm["actions"]}
     assert "send" in actions and "forward" in actions
     assert actions["send"]["claims"] == ["gmail:send"]
+    assert actions["draft"]["claims"] == ["gmail:compose"]
     assert actions["forward"]["claims"] == ["gmail:read", "gmail:send"]
     assert actions["download_attachments"]["claims"] == ["gmail:read"]
     assert actions["send"]["description"]
@@ -1015,25 +1019,41 @@ def test_namespace_claim_policies_recompute_effective_claims_over_denies():
 
     catalog = _mail_catalog()
 
-    # No denies: both claims.
+    # No denies: every action is allowed, so the read, send and compose
+    # claims. The realm's second requirement, the IMAP/SMTP adapter family,
+    # names no provider instance (the realm resolves those from the hub
+    # catalog at call time) and cannot be a per-provider claim policy, so the
+    # Google account is the only policy entry.
     policies = namespace_claim_policies(catalog, {})
     assert policies == [{
         "tool_name": "mail",
         "connected_accounts": [{
             "provider_id": "google", "connector_app_id": "",
-            "claims": ["gmail:read", "gmail:send"],
+            "claims": ["gmail:compose", "gmail:read", "gmail:send"],
         }],
     }]
 
     # Denying every send-class action drops the send claim: the user is never
-    # asked for gmail:send.
+    # asked for gmail:send. Drafting is still allowed, so compose stays.
+    send_class = [
+        "object.action.send",
+        "object.action.forward",
+        "object.action.request_upload",
+        "object.action.discard_upload",
+    ]
+    policies = namespace_claim_policies(catalog, {"named_services": {"mail": send_class}})
+    assert policies[0]["connected_accounts"][0]["claims"] == ["gmail:compose", "gmail:read"]
+
+    # An agent that only reads and sends is never asked for gmail:compose:
+    # the compose claim rides on the draft action alone.
     policies = namespace_claim_policies(catalog, {
-        "named_services": {"mail": [
-            "object.action.send",
-            "object.action.forward",
-            "object.action.request_upload",
-            "object.action.discard_upload",
-        ]},
+        "named_services": {"mail": ["object.action.draft"]},
+    })
+    assert policies[0]["connected_accounts"][0]["claims"] == ["gmail:read", "gmail:send"]
+
+    # Denying drafting as well as every send-class action leaves the read claim.
+    policies = namespace_claim_policies(catalog, {
+        "named_services": {"mail": send_class + ["object.action.draft"]},
     })
     assert policies[0]["connected_accounts"][0]["claims"] == ["gmail:read"]
 
@@ -1135,7 +1155,9 @@ async def test_realm_card_carries_the_services_own_human_contract():
 
     # Purpose + third-party, in user terms.
     assert mail_realm["about"] == "Read, search, and send email from the mail accounts you connect."
-    assert mail_realm["third_party"] == "Works with your mailbox through your connected Google account."
+    assert mail_realm["third_party"] == (
+        "Works with your mailboxes through your connected Google and IMAP/SMTP (for example iCloud Mail) accounts."
+    )
     assert slack_realm["about"] == "Search, read, and post in the Slack workspaces you connect."
     assert slack_realm["third_party"] == "Works with your Slack workspace through your connected Slack account."
 
