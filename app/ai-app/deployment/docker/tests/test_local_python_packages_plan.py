@@ -72,3 +72,34 @@ def test_manifest_absent_falls_back_to_staged_paths(tmp_path: Path):
     stage.mkdir()
     (stage / "requirements.txt").write_text("/tmp/kdcube-local-python-packages/sources/connection_hub\n")
     assert tool.selected_distributions(stage) == ["connection-hub"]
+
+
+def test_problem_board_source_family_is_installed_from_one_local_set(tmp_path: Path):
+    tool = _load()
+    req = tmp_path / "requirements.txt"
+    req.write_text(
+        "fastapi>=0.110\n"
+        "connection-hub>=2026.09.23.0158,<2027\n"
+        "project-board>=2026.09.23.0158,<2027\n"
+    )
+    distributions = [
+        "kdcube-cli",
+        "app-foundation",
+        "service-foundation",
+        "connection-hub",
+        "connection-hub-cli",
+        "project-board",
+    ]
+    stage = _stage(tmp_path, distributions)
+    out = tmp_path / "plan"
+
+    dropped, local = tool.plan(req, stage, out)
+
+    ordinary = (out / "requirements.txt").read_text()
+    assert "fastapi>=0.110" in ordinary
+    assert "\nconnection-hub>=" not in ordinary
+    assert "\nproject-board>=" not in ordinary
+    assert dropped == 2
+    assert local == [
+        f"{stage}/sources/{distribution}" for distribution in distributions
+    ]
