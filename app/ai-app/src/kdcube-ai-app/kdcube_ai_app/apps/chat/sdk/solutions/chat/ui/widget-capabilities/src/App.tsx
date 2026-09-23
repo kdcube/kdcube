@@ -86,18 +86,22 @@ function openConnections(consent?: ConnectionsConsentOpen): void {
 
 function PickerApp() {
   // Scene hosts summon this widget with a `capabilities.open` surface
-  // command. This full-page surface always edits the Agent Card defaults;
-  // conversation capability changes stay in the chat composer's picker.
+  // command. Composer expansion carries its conversation id; direct opens
+  // without one edit the Agent Card defaults.
   const [agentId, setAgentId] = useState(settings.getAgentId())
+  const [conversationId, setConversationId] = useState('')
   const [spotlight, setSpotlight] = useState<{ tools: string[]; nonce: number } | null>(null)
   const agentRef = useRef(agentId)
+  const conversationRef = useRef(conversationId)
   agentRef.current = agentId
+  conversationRef.current = conversationId
 
   const vm = useStandaloneCapabilitiesVm({
     agentId,
     fetchCapabilities: () => callOperation('agent_capabilities', {
       agent: agentRef.current,
       caller_surface: 'capabilities_widget',
+      ...(conversationRef.current ? { conversation_id: conversationRef.current } : {}),
     }),
     submitUpdate: (patch: AgentSelectionPatch, options?: StandaloneSelectionWriteOptions) => {
       const { model, instructions, presentation, ...disabled } = patch
@@ -106,6 +110,7 @@ function PickerApp() {
       return callOperation('agent_selection_update', {
         agent: agentRef.current,
         caller_surface: 'capabilities_widget',
+        ...(conversationRef.current ? { conversation_id: conversationRef.current } : {}),
         ...(hasCapabilityPatch ? { disabled } : {}),
         ...(model !== undefined ? { model } : {}),
         ...(instructions !== undefined ? { instructions } : {}),
@@ -130,6 +135,12 @@ function PickerApp() {
         setAgentId(payload.agent_id)
         reload = true
       }
+      const nextConversation = payload.conversation_id || ''
+      if (nextConversation !== conversationRef.current) {
+        conversationRef.current = nextConversation
+        setConversationId(nextConversation)
+        reload = true
+      }
       if (payload.spotlight_tools?.length) {
         setSpotlight({ tools: payload.spotlight_tools, nonce: Date.now() })
       }
@@ -150,7 +161,9 @@ function PickerApp() {
     <CapabilityPickerPage
       vm={vm}
       title="Capabilities"
-      subtitle={`Choose the defaults new conversations with the ${agentId} agent start from.`}
+      subtitle={conversationId
+        ? `Choose what the ${agentId} agent may use in this conversation.`
+        : `Choose the defaults new conversations with the ${agentId} agent start from.`}
     />
   )
 }

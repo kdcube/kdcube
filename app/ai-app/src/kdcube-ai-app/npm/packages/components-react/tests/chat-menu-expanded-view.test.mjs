@@ -52,10 +52,12 @@ test('one body renders into every shell (shared interaction state)', () => {
 })
 
 test('expand and collapse affordances are present', () => {
-  // Expand stays in the composer surface, so it keeps the active conversation.
-  // The served full-page surface has a different contract: Agent Card defaults.
-  assert.match(SOURCE, /CanvasExpandButton\n?[\s\S]{0,200}onClick=\{\(\) => setView\('modal'\)\}/)
-  assert.doesNotMatch(SOURCE, /openCapabilitiesOnHost/)
+  // Expand asks the scene host for an unclipped window with the active
+  // conversation, retaining the iframe modal as its no-ack fallback.
+  assert.match(SOURCE, /CanvasExpandButton/)
+  assert.match(SOURCE, /openCapabilitiesOnHost/)
+  assert.match(SOURCE, /conversation_id: vm\.state\.conversationId \|\| undefined/)
+  assert.match(SOURCE, /if \(acked\) close\(\)\n\s+else setView\('modal'\)/)
   assert.match(SOURCE, /aria-label="Collapse to menu"/)
   assert.match(SOURCE, /aria-label="Close \(Esc\)"/)
 })

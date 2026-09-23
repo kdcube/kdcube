@@ -31,7 +31,7 @@ from kdcube_ai_app.apps.chat.ingress.resolvers import (
     get_user_session_dependency,
 )
 from kdcube_ai_app.apps.middleware.gateway import STATE_SESSION, STATE_STREAM_ID, extract_stream_id
-from kdcube_ai_app.auth.AuthManager import RequireUser
+from kdcube_ai_app.auth.AuthManager import RequireRoles, RequireUser
 from kdcube_ai_app.auth.role_hierarchy import roles_satisfy_any
 from kdcube_ai_app.auth.sessions import RequestContext, UserSession, UserType
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
@@ -2357,7 +2357,10 @@ async def set_bundle_props(
         bundle_id: str,
         payload: BundlePropsUpdateRequest,
         request: Request,
-        session: UserSession = Depends(auth_without_pressure()),
+        session: UserSession = Depends(auth_without_pressure([
+            RequireUser(),
+            RequireRoles("kdcube:role:super-admin"),
+        ])),
 ):
     settings = get_settings()
     tenant_id = payload.tenant or settings.TENANT
