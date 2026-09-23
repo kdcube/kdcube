@@ -12,13 +12,14 @@ from connection_hub.delegated_credentials.migration.model import (
 from kdcube_ai_app.ops.authority_cutover import cli
 
 
-def test_target_preflight_opens_and_closes_configured_target(
+def test_target_preflight_rehearses_and_closes_source_and_target(
     monkeypatch,
     capsys,
     tmp_path,
 ) -> None:
     settings = object()
-    closed = False
+    source_closed = False
+    target_closed = False
     preview_path = tmp_path / "preview.json"
     preview = SimpleNamespace(
         prerequisites={"activation": {"kind": "reset"}},
@@ -30,12 +31,21 @@ def test_target_preflight_opens_and_closes_configured_target(
         assert actual_path == str(preview_path)
         return preview
 
+    async def open_source(actual_settings):
+        assert actual_settings is settings
+
+        async def close() -> None:
+            nonlocal source_closed
+            source_closed = True
+
+        return SimpleNamespace(source="migration-source", close=close)
+
     async def open_target(actual_settings):
         assert actual_settings is settings
 
         async def close() -> None:
-            nonlocal closed
-            closed = True
+            nonlocal target_closed
+            target_closed = True
 
         return SimpleNamespace(
             close=close,
@@ -44,8 +54,27 @@ def test_target_preflight_opens_and_closes_configured_target(
             ),
         )
 
+    async def rehearse(
+        actual_settings,
+        *,
+        source,
+        target_runtime,
+        preview: object,
+        confirmed_preview_sha256,
+    ):
+        assert actual_settings is settings
+        assert source == "migration-source"
+        assert target_runtime.schema_report.verified_tables == tuple(
+            f"table-{index}" for index in range(12)
+        )
+        assert preview is not None
+        assert confirmed_preview_sha256 == "a" * 64
+        return SimpleNamespace(records=("record-1", "record-2"))
+
     monkeypatch.setattr(cli, "get_settings", lambda: settings)
+    monkeypatch.setattr(cli, "open_reset_source", open_source)
     monkeypatch.setattr(cli, "open_reset_target", open_target)
+    monkeypatch.setattr(cli, "rehearse_reset_target", rehearse)
     monkeypatch.setattr(cli, "read_migration_preview", read_preview)
     monkeypatch.setattr(cli, "require_reviewed_reset", lambda value: None)
 
@@ -63,9 +92,11 @@ def test_target_preflight_opens_and_closes_configured_target(
         )
         == 0
     )
-    assert closed is True
+    assert source_closed is True
+    assert target_closed is True
     assert json.loads(capsys.readouterr().out) == {
         "ok": True,
+        "rehearsed_records": 2,
         "schema_tables_verified": 12,
         "target": "durable-authority",
     }

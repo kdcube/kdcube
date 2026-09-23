@@ -58,6 +58,10 @@ from kdcube_ai_app.ops.authority_cutover.schema_preflight import (
     AuthorityTargetSchemaReport,
     require_authority_target_schema,
 )
+from kdcube_ai_app.ops.authority_cutover.rehearsal import (
+    TransactionBoundPool,
+    rehearse_migration_in_rollback,
+)
 
 
 CONNECTION_HUB_BUNDLE_ID = "connection-hub@1-0"
@@ -77,6 +81,7 @@ class ResetTargetRuntime:
     target: RuntimeAuthorityMigrationTarget
     receipts: PostgresAuthorityCutoverStore
     schema_report: AuthorityTargetSchemaReport
+    resident_secret_store: Any
     pool: Any
 
     async def close(self) -> None:
@@ -172,62 +177,58 @@ async def _open_postgres_pool(settings: Any) -> Any:
     )
 
 
-async def open_reset_target(settings: Any) -> ResetTargetRuntime:
+@dataclass(frozen=True)
+class _ResetTargetComponents:
+    target: RuntimeAuthorityMigrationTarget
+    receipts: PostgresAuthorityCutoverStore
+    stores: tuple[Any, ...]
+
+
+async def _compose_reset_target(
+    settings: Any,
+    *,
+    pool: Any,
+    resident_secret_store: Any,
+) -> _ResetTargetComponents:
     tenant, project = _scope(settings)
-    pool = await _open_postgres_pool(settings)
-    try:
-        cards = await _card_authorities(
-            tenant=tenant,
-            project=project,
-        )
-        oauth_store = PostgresOAuthAuthorityStore(
-            pg_pool=pool,
-            tenant=tenant,
-            project=project,
-        )
-        card_secret_store = resident_card_secret_store(settings)
-        await card_secret_store.probe_writable()
-        card_handles = postgres_card_credential_handle_store(
-            pg_pool=pool,
-            tenant=tenant,
-            project=project,
-            settings=settings,
-            secret_store=card_secret_store,
-        )
-        admission = PostgresAdmissionReplayClaimStore(
-            pg_pool=pool,
-            tenant=tenant,
-            project=project,
-        )
-        bundle_sessions = PostgresBundleSessionStore(
-            pg_pool=pool,
-            tenant=tenant,
-            project=project,
-        )
-        platform_sessions = PostgresPlatformSessionStore(
-            pg_pool=pool,
-            tenant=tenant,
-            project=project,
-        )
-        receipts = PostgresAuthorityCutoverStore(
-            pg_pool=pool,
-            tenant=tenant,
-            project=project,
-        )
-        for store in (
-            oauth_store,
-            card_handles,
-            admission,
-            bundle_sessions,
-            platform_sessions,
-            receipts,
-        ):
-            await store.ensure_schema()
-        schema_report = await require_authority_target_schema(
-            pool=pool,
-            schema=receipts.schema,
-        )
-        target = RuntimeAuthorityMigrationTarget(
+    cards = await _card_authorities(
+        tenant=tenant,
+        project=project,
+    )
+    oauth_store = PostgresOAuthAuthorityStore(
+        pg_pool=pool,
+        tenant=tenant,
+        project=project,
+    )
+    card_handles = postgres_card_credential_handle_store(
+        pg_pool=pool,
+        tenant=tenant,
+        project=project,
+        settings=settings,
+        secret_store=resident_secret_store,
+    )
+    admission = PostgresAdmissionReplayClaimStore(
+        pg_pool=pool,
+        tenant=tenant,
+        project=project,
+    )
+    bundle_sessions = PostgresBundleSessionStore(
+        pg_pool=pool,
+        tenant=tenant,
+        project=project,
+    )
+    platform_sessions = PostgresPlatformSessionStore(
+        pg_pool=pool,
+        tenant=tenant,
+        project=project,
+    )
+    receipts = PostgresAuthorityCutoverStore(
+        pg_pool=pool,
+        tenant=tenant,
+        project=project,
+    )
+    return _ResetTargetComponents(
+        target=RuntimeAuthorityMigrationTarget(
             connection_hub=ConnectionHubPostgresMigrationTarget(
                 oauth=PostgresOAuthMigrationTarget(oauth_store),
                 card_handles=card_handles,
@@ -238,16 +239,74 @@ async def open_reset_target(settings: Any) -> ResetTargetRuntime:
                 bundle_sessions=bundle_sessions,
                 platform_sessions=platform_sessions,
             ),
+        ),
+        receipts=receipts,
+        stores=(
+            oauth_store,
+            card_handles,
+            admission,
+            bundle_sessions,
+            platform_sessions,
+            receipts,
+        ),
+    )
+
+
+async def open_reset_target(settings: Any) -> ResetTargetRuntime:
+    pool = await _open_postgres_pool(settings)
+    try:
+        card_secret_store = resident_card_secret_store(settings)
+        await card_secret_store.probe_writable()
+        components = await _compose_reset_target(
+            settings,
+            pool=pool,
+            resident_secret_store=card_secret_store,
+        )
+        for store in components.stores:
+            await store.ensure_schema()
+        schema_report = await require_authority_target_schema(
+            pool=pool,
+            schema=components.receipts.schema,
         )
         return ResetTargetRuntime(
-            target=target,
-            receipts=receipts,
+            target=components.target,
+            receipts=components.receipts,
             schema_report=schema_report,
+            resident_secret_store=card_secret_store,
             pool=pool,
         )
     except Exception:
         await pool.close()
         raise
+
+
+async def rehearse_reset_target(
+    settings: Any,
+    *,
+    source: Any,
+    target_runtime: ResetTargetRuntime,
+    preview: Any,
+    confirmed_preview_sha256: str,
+) -> Any:
+    async def _target_factory(
+        pg_pool: TransactionBoundPool,
+        resident_secret_store: Any,
+    ) -> RuntimeAuthorityMigrationTarget:
+        components = await _compose_reset_target(
+            settings,
+            pool=pg_pool,
+            resident_secret_store=resident_secret_store,
+        )
+        return components.target
+
+    return await rehearse_migration_in_rollback(
+        pg_pool=target_runtime.pool,
+        resident_secret_store=target_runtime.resident_secret_store,
+        target_factory=_target_factory,
+        preview=preview,
+        source=source,
+        confirmed_preview_sha256=confirmed_preview_sha256,
+    )
 
 
 __all__ = [
@@ -256,4 +315,5 @@ __all__ = [
     "ResetTargetRuntime",
     "open_reset_source",
     "open_reset_target",
+    "rehearse_reset_target",
 ]

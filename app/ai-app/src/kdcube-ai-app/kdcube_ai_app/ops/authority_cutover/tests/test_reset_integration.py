@@ -74,6 +74,9 @@ from kdcube_ai_app.infra.secrets.manager import InMemorySecretsManager
 from kdcube_ai_app.ops.authority_cutover.evidence import (
     reviewed_reset_prerequisites,
 )
+from kdcube_ai_app.ops.authority_cutover.rehearsal import (
+    rehearse_migration_in_rollback,
+)
 from kdcube_ai_app.ops.authority_cutover.schema_preflight import (
     require_authority_target_schema,
 )
@@ -144,7 +147,6 @@ async def test_reset_preserves_resident_card_and_discards_reconstructable_state(
             {
                 "client_id": "dcr-test-client",
                 "redirect_uris": ["https://client.example/callback"],
-                "grant_types": ["authorization_code", "refresh_token"],
                 "token_endpoint_auth_method": "none",
                 "application_type": "native",
                 "metadata": {},
@@ -180,12 +182,13 @@ async def test_reset_preserves_resident_card_and_discards_reconstructable_state(
         tenant=tenant,
         project=project,
     )
+    resident_secret_store = KDCubeEphemeralSecretStore(
+        InMemorySecretsManager(),
+        namespace="resident-card-credentials",
+    )
     secrets = ResidentCardSecretService(
         metadata_store=metadata,
-        secret_store=KDCubeEphemeralSecretStore(
-            InMemorySecretsManager(),
-            namespace="resident-card-credentials",
-        ),
+        secret_store=resident_secret_store,
     )
     handles = PostgresCardCredentialHandleStore(
         metadata_store=metadata,
@@ -286,6 +289,68 @@ async def test_reset_preserves_resident_card_and_discards_reconstructable_state(
             "platform_sessions": 0,
             "resident_card_secrets": 1,
         }
+
+        async def rehearsal_target_factory(
+            rehearsal_pool,
+            rehearsal_secret_store,
+        ):
+            rehearsal_oauth = PostgresOAuthAuthorityStore(
+                pg_pool=rehearsal_pool,
+                tenant=tenant,
+                project=project,
+            )
+            rehearsal_metadata = PostgresCardHandleMetadataStore(
+                pg_pool=rehearsal_pool,
+                tenant=tenant,
+                project=project,
+            )
+            rehearsal_handles = PostgresCardCredentialHandleStore(
+                metadata_store=rehearsal_metadata,
+                resident_secrets=ResidentCardSecretService(
+                    metadata_store=rehearsal_metadata,
+                    secret_store=rehearsal_secret_store,
+                ),
+            )
+            return RuntimeAuthorityMigrationTarget(
+                connection_hub=ConnectionHubPostgresMigrationTarget(
+                    oauth=PostgresOAuthMigrationTarget(rehearsal_oauth),
+                    card_handles=rehearsal_handles,
+                    card_authorities=card_loader,
+                    admission_replay=PostgresAdmissionReplayClaimStore(
+                        pg_pool=rehearsal_pool,
+                        tenant=tenant,
+                        project=project,
+                    ),
+                ),
+                kdcube_sessions=KdcubePostgresSessionMigrationTarget(
+                    bundle_sessions=PostgresBundleSessionStore(
+                        pg_pool=rehearsal_pool,
+                        tenant=tenant,
+                        project=project,
+                    ),
+                    platform_sessions=PostgresPlatformSessionStore(
+                        pg_pool=rehearsal_pool,
+                        tenant=tenant,
+                        project=project,
+                    ),
+                ),
+            )
+
+        rehearsed = await rehearse_migration_in_rollback(
+            pg_pool=pool,
+            resident_secret_store=resident_secret_store,
+            target_factory=rehearsal_target_factory,
+            preview=preview,
+            source=source,
+            confirmed_preview_sha256=preview.preview_sha256,
+        )
+        assert rehearsed.generation == preview.source_generation
+        assert rehearsed.counts == preview.source_counts
+        empty_target = await target.snapshot(
+            captured_at_ms=preview.created_at_ms
+        )
+        assert all(count == 0 for count in empty_target.counts.values())
+        assert await receipts.read(generation_id) is None
 
         receipt = await apply_reviewed_migration(
             preview=preview,
