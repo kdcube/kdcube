@@ -274,8 +274,8 @@ test('picker names conversation provenance and Agent Card defaults separately', 
     new URL('../src/chat/ui/features/composer/ComposerMenu.tsx', import.meta.url),
     'utf8',
   )
-  assert.match(menu, /inherited \? 'Saved default' : 'Changed here'/)
-  assert.match(menu, /inherited \? 'Inherited' : 'Changed here'/)
+  assert.match(menu, /inherited \? 'Current default' : 'New default'/)
+  assert.match(menu, /inherited \? 'Starting value' : 'This conversation'/)
   assert.match(menu, /Saved for this conversation\. Changes apply from your next message\./)
   assert.match(menu, /Saved as the defaults for new conversations\./)
   assert.match(menu, /changesConversationCapabilities\(patch\)/)

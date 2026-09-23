@@ -25,6 +25,9 @@ def _mount(monkeypatch, *, registry: BundlesRegistry, previously_loaded: dict | 
         async def reconcile(self, reg, *, force=None):
             calls["lifecycle"] = (reg, force)
 
+        async def publish_authority_discovery_change(self, reg):
+            calls["authority_discovery"] = reg
+
     class _Redis:
         async def publish(self, channel, payload):
             calls["publish"] = (channel, payload)

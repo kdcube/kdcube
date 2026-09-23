@@ -6,7 +6,10 @@ from __future__ import annotations
 
 import pytest
 
-from connection_hub.delegated_credentials.cards.identity import ResidentCallerProfile
+from connection_hub.delegated_credentials.cards.identity import (
+    CARD_KIND_AGENT,
+    ResidentCallerProfile,
+)
 from connection_hub.delegated_credentials.cards.model import (
     CardAuthority,
     NamedServiceSelection,
@@ -148,6 +151,7 @@ def test_adapter_preserves_card_resource_operation_policy_and_account_facts():
 def test_adapter_accepts_a_view_built_by_the_published_card_contract():
     authority = CardAuthority(
         access_id="agent-pre-migration",
+        card_kind=CARD_KIND_AGENT,
         client_id=_profile().client_id,
         grantor_subject=USER,
         delegate_subject=f"integration:{_profile().client_id}:{USER}",
