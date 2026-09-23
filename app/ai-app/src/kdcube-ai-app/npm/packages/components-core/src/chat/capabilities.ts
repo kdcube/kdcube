@@ -438,8 +438,8 @@ export interface AgentCapabilitiesState {
   /** Agent Card values inherited when this conversation started. Comparing a
    *  row with this map identifies conversation-local changes. */
   baseDisabled: AgentSelectionDisabled
-  /** Current Agent Card base. This can differ from an open conversation's
-   *  frozen start snapshot. */
+  /** Current Agent Card defaults. These can differ from a conversation's
+   *  starting provenance and current selection. */
   agentBaseDisabled: AgentSelectionDisabled
   scope: AgentCapabilitySelectionScope | null
   /** The user's model pick; null = the configured default runs. */

@@ -2,18 +2,16 @@
  * `capabilities.open` — the scene surface-command contract for the capability
  * picker, mirroring `connections.hub.open`.
  *
- * EMIT (the chat composer's expand affordance, and the consent-banner
- * spotlight when it prefers the readable presentation): post a
+ * EMIT (an Agent Card affordance that prefers a scene window): post a
  * `kdcube.surface.command` to the parent frame targeting
  * `sdk.agent.capabilities` and await the host's `{command_id, ok}` ack. An
  * acked command means a scene window opened (resizable/dockable like every
  * widget); a timeout or standalone context keeps the in-chat modal.
  *
- * RECEIVE (the served `capabilities` widget): parse the routed command,
- * apply `{agent_id?, conversation_id?, spotlight_tools?, section?}` at
- * runtime, and ack for host diagnostics. A chat-originated open carries the
- * active conversation id; an independently mounted widget has no id and shows
- * the Agent Card base, which is edited in Connection Hub.
+ * RECEIVE (the served `capabilities` widget): parse the routed command, apply
+ * `{agent_id?, spotlight_tools?, section?}` at runtime, and ack for host
+ * diagnostics. The scene window edits Agent Card defaults; conversation
+ * selection stays in the chat composer.
  */
 
 export const CAPABILITIES_SURFACE = 'sdk.agent.capabilities'
@@ -28,8 +26,6 @@ const CAPABILITIES_ACK_TIMEOUT_MS = 600
 export interface CapabilitiesOpenPayload {
   /** The bundle agent whose inventory the picker should manage. */
   agent_id?: string
-  /** Exact conversation to edit; absent shows the Agent Card base. */
-  conversation_id?: string
   /** Entries to highlight + scroll to (`alias.tool` or a namespace token). */
   spotlight_tools?: string[]
   /** Section to bring into view: model | skills | tools | mcp | services. */
@@ -68,8 +64,6 @@ export function openCapabilitiesOnHost(
   const ui_event: Record<string, unknown> = {}
   const agent = String(payload.agent_id || '').trim()
   if (agent) ui_event.agent_id = agent
-  const conversation = String(payload.conversation_id || '').trim()
-  if (conversation) ui_event.conversation_id = conversation
   const spotlight = (payload.spotlight_tools ?? []).map((item) => String(item || '').trim()).filter(Boolean)
   if (spotlight.length) ui_event.spotlight_tools = spotlight
   const section = String(payload.section || '').trim()
@@ -171,8 +165,6 @@ export function parseCapabilitiesOpen(data: unknown): CapabilitiesOpenCommand | 
   const payload: CapabilitiesOpenPayload = {}
   const agent = typeof source.agent_id === 'string' ? source.agent_id.trim() : ''
   if (agent) payload.agent_id = agent
-  const conversation = typeof source.conversation_id === 'string' ? source.conversation_id.trim() : ''
-  if (conversation) payload.conversation_id = conversation
   if (Array.isArray(source.spotlight_tools)) {
     const spotlight = source.spotlight_tools.map((item) => String(item || '').trim()).filter(Boolean)
     if (spotlight.length) payload.spotlight_tools = spotlight

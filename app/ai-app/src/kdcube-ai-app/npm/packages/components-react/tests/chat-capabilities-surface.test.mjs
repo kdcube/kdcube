@@ -9,9 +9,9 @@ import {
   parseCapabilitiesOpen,
 } from '../../components-core/dist/chat/index.js'
 
-// The `capabilities.open` scene contract (the connections.hub.open twin):
-// emit shape + command_id ack semantics + the honest fallback, pinned at the
-// core layer where every shell (composer popover/modal, served widget) reads it.
+// The `capabilities.open` Agent Card scene contract (the
+// connections.hub.open twin): emit shape + command_id ack semantics + the
+// honest fallback, pinned at the shared core layer.
 
 function fakeWindow({ embedded = true } = {}) {
   const listeners = new Set()
@@ -37,23 +37,21 @@ test('emit carries the contract shape and resolves on a positive ack', async () 
   const pending = openCapabilitiesOnHost(
     {
       agent_id: 'main',
-      conversation_id: 'conv-42',
       spotlight_tools: ['slack', ''],
       section: 'services',
     },
-    { source: 'composer-expand', widget: 'workspace_chat', win },
+    { source: 'agent-card-open', widget: 'workspace_chat', win },
   )
   assert.equal(win.posted.length, 1)
   const command = win.posted[0]
   assert.equal(command.type, 'kdcube.surface.command')
   assert.equal(command.target_surface, CAPABILITIES_SURFACE)
   assert.equal(command.action, 'open')
-  assert.equal(command.source, 'composer-expand')
+  assert.equal(command.source, 'agent-card-open')
   assert.equal(command.widget, 'workspace_chat')
   assert.ok(String(command.command_id).startsWith('caps_'))
   assert.deepEqual(command.ui_event, {
     agent_id: 'main',
-    conversation_id: 'conv-42',
     spotlight_tools: ['slack'],
     section: 'services',
   })
@@ -112,7 +110,6 @@ test('the widget parses only its own routed command', () => {
   assert.equal(parsed.commandId, 'caps_1')
   assert.deepEqual(parsed.payload, {
     agent_id: 'main',
-    conversation_id: 'conv-42',
     spotlight_tools: ['mail', '42'],
     section: 'services',
   })
