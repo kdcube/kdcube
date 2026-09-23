@@ -5,7 +5,7 @@ summary: "Points from KDCube's OAuth host routes to Connection Hub's canonical d
 status: active
 tags: ["sdk", "connections", "connection-hub", "oauth", "delegated-credentials"]
 keywords: ["OAuth2 authorization server", "PKCE", "CIMD", "dynamic client registration", "client metadata", "Connection Hub"]
-updated_at: 2026-09-09
+updated_at: 2026-09-23
 see_also:
   - https://github.com/elenaviter/app-ecosystem/blob/main/docs/connection-hub/package/oauth-delegated-credential-protocol.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
@@ -20,6 +20,12 @@ credential issuance, card lookup, and revocation contract. Read
 KDCube remains the first protocol host. Its authentication, descriptor, and MCP
 recipes describe how the Connection Hub state machine is mounted on KDCube public
 operations and guarded application surfaces.
+
+Portable callers import consent and protocol policy from
+`connection_hub.delegated_credentials.oauth`. The KDCube module
+`kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.consent`
+is a compatibility alias for split-era consumers; both paths resolve to the same
+canonical module object.
 
 The KDCube DCR host accepts the bounded public registration metadata defined by
 that canonical contract, persists it with the client snapshot, and passes it to
