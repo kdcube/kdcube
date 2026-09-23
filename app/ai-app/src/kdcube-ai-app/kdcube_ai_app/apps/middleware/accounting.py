@@ -6,7 +6,7 @@ from typing import Callable, Optional, Mapping
 from fastapi import Depends, Request
 from fastapi.security import HTTPBearer
 
-from kdcube_ai_app.auth.sessions import UserSession, UserType, RequestContext
+from kdcube_ai_app.auth.sessions import UserSession, UserType, RequestContext, session_user_data
 from kdcube_ai_app.infra.accounting import AccountingSystem
 from kdcube_ai_app.apps.middleware.auth import FastAPIAuthAdapter, user_type_from_roles
 from kdcube_ai_app.auth.AuthManager import RequirementBase, User, AuthenticationError, ensure_platform_registered_role
@@ -132,13 +132,7 @@ class MiddlewareAuthWithAccounting:
                         authorization_header=f"Bearer {bearer_token}",
                         id_token=id_token,
                     )
-                    user_data = {
-                        "user_id": getattr(user, "sub", None) or user.username,
-                        "username": user.username,
-                        "email": getattr(user, "email", None),
-                        "roles": list(roles),
-                        "permissions": list(getattr(user, "permissions", []) or []),
-                    }
+                    user_data = session_user_data(user, roles=list(roles))
                     session = await self.base_auth.session_manager.get_or_create_session(ctx, user_type, user_data)
 
         if verify_token_session_match and session and session.user_type.value != "anonymous":

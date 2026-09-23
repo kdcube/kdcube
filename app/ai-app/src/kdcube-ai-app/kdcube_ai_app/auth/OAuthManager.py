@@ -20,7 +20,7 @@ import jwt
 from jwt import PyJWTError
 from pydantic import BaseModel
 
-from kdcube_ai_app.auth.AuthManager import AuthManager, User, AuthenticationError
+from kdcube_ai_app.auth.AuthManager import AuthManager, User, AuthenticationError, email_verified_claim
 
 logger = logging.getLogger("OAuthManager")
 
@@ -328,6 +328,7 @@ class OAuthManager(AuthManager):
         user_data = {
             "sub": payload.get("sub"),
             "email": payload.get("email"),
+            "email_verified": email_verified_claim(payload.get("email_verified")),
             "name": payload.get("name") or payload.get("username"),
             "roles": payload.get("roles", []),
             "permissions": payload.get("permissions", []),
@@ -340,6 +341,8 @@ class OAuthManager(AuthManager):
             ui = await self.get_user_info(token)
             user_data["email"] = ui.get("email") or user_data.get("email")
             user_data["name"] = ui.get("name") or user_data.get("name")
+            if ui.get("email_verified") is not None:
+                user_data["email_verified"] = email_verified_claim(ui.get("email_verified"))
 
         if not user_data.get("sub"):
             raise AuthenticationError("Invalid token payload")
@@ -374,6 +377,8 @@ class OAuthManager(AuthManager):
         merged = user.model_dump()
         for k in ("email", "name", "preferred_username", "username"):
             merged[k] = id_payload.get(k) or merged.get(k)
+        if id_payload.get("email_verified") is not None:
+            merged["email_verified"] = email_verified_claim(id_payload.get("email_verified"))
 
         # cache merged view under the access token key
         self._cache_put(access_token, merged, id_payload.get("exp"))

@@ -150,6 +150,9 @@ local function merge_user_data(existing_obj, user_obj)
     if user_obj["email"] ~= nil then
         existing_obj["email"] = user_obj["email"]
     end
+    if user_obj["email_verified"] ~= nil then
+        existing_obj["email_verified"] = user_obj["email_verified"]
+    end
     if user_obj["identity_authority"] ~= nil then
         existing_obj["identity_authority"] = user_obj["identity_authority"]
     end
@@ -366,6 +369,11 @@ class UserSession:
     created_at: float = 0
     last_seen: float = 0
     email: Optional[str] = None
+    # Whether the sign-in provider verified `email`, as the login recorded it.
+    # None for a session stored before this field existed or issued by a path
+    # that carries no such claim: unknown, not "unverified". An application
+    # redeeming an emailed invitation reads this from the session it is handed.
+    email_verified: Optional[bool] = None
     timezone: Optional[str] = None
     request_context: Optional[RequestContext] = None
     identity_authority: Optional[Dict[str, Any]] = None
@@ -386,6 +394,8 @@ class UserSession:
                 self.request_context = None
         if self.identity_authority is not None and not isinstance(self.identity_authority, dict):
             self.identity_authority = None
+        if self.email_verified is not None:
+            self.email_verified = bool(self.email_verified)
         if self.rate_limit_subject is not None:
             self.rate_limit_subject = str(self.rate_limit_subject).strip() or None
 
@@ -410,6 +420,7 @@ class UserSession:
         return User(
             username=self.username or self.fingerprint,
             email=self.email,
+            email_verified=self.email_verified,
             name=self.username,
             roles=self.roles,
             permissions=self.permissions,
@@ -418,6 +429,38 @@ class UserSession:
 
     def serialize_to_dict(self):
         return user_session_storage_record(self)
+
+
+def session_user_data(
+        user: Any,
+        *,
+        user_id: Optional[str] = None,
+        roles: Optional[List[str]] = None,
+        permissions: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """The user fields a login hands to `get_or_create_session`.
+
+    Every entry path (REST middleware, socket accounting, the ingress
+    connect, the gateway) builds this same dict, so the session carries the
+    same identity facts whichever door the request came through. The merge on
+    an existing session is presence-based: a key that is present replaces the
+    stored value. `email_verified` is therefore included only when the login
+    actually knows it, so a path without the claim never turns a verified
+    session back into an unknown one.
+    """
+
+    data: Dict[str, Any] = {
+        "user_id": user_id or getattr(user, "sub", None) or getattr(user, "username", None),
+        "username": getattr(user, "username", None),
+        "email": getattr(user, "email", None),
+        "roles": list(roles if roles is not None else (getattr(user, "roles", None) or [])),
+        "permissions": list(permissions if permissions is not None else (getattr(user, "permissions", None) or [])),
+    }
+    verified = getattr(user, "email_verified", None)
+    if isinstance(verified, bool):
+        data["email_verified"] = verified
+    return data
+
 
 class SessionManager:
     """Simple session management"""
@@ -487,6 +530,7 @@ class SessionManager:
             roles=user_data.get("roles", []) if user_data else [],
             permissions=user_data.get("permissions", []) if user_data else [],
             email=user_data.get("email") if user_data else None,
+            email_verified=user_data.get("email_verified") if user_data else None,
             request_context=context,
             timezone=context.user_timezone,
             identity_authority=user_data.get("identity_authority") if user_data else None,

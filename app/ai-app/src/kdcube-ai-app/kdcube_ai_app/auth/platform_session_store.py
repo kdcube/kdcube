@@ -19,6 +19,7 @@ _USER_UPDATE_FIELDS = (
     "user_id",
     "username",
     "email",
+    "email_verified",
     "identity_authority",
     "rate_limit_subject",
 )
