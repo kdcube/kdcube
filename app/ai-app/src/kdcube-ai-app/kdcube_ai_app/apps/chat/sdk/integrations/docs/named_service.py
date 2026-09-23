@@ -29,6 +29,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.docs.selectors import (
     resolve_tab_selector,
     tab_candidates,
 )
+from kdcube_ai_app.apps.chat.sdk.integrations.docs.tables import spread_table_selector
 from kdcube_ai_app.apps.chat.sdk.integrations.named_service_consent import (
     CONSENT_ERROR_CONTRACT,
     tool_error_response,
@@ -109,6 +110,7 @@ ACTION_REPLACE_TEXT = "replace_text"
 ACTION_APPLY_TEXT_STYLE = "apply_text_style"
 ACTION_INSERT_PAGE_BREAK = "insert_page_break"
 ACTION_EMBED_IMAGE = "embed_image"
+ACTION_SET_CELLS = "set_cells"
 ACTION_EXPORT = "export"
 ACTION_IMPORT = "import"
 ACTION_LIST_COMMENTS = "list_comments"
@@ -140,6 +142,7 @@ DOCS_WRITE_ACTIONS = frozenset(
         ACTION_APPLY_TEXT_STYLE,
         ACTION_INSERT_PAGE_BREAK,
         ACTION_EMBED_IMAGE,
+        ACTION_SET_CELLS,
         ACTION_IMPORT,
     }
 )
@@ -165,6 +168,7 @@ DOCS_ACTIONS = (
     ACTION_APPLY_TEXT_STYLE,
     ACTION_INSERT_PAGE_BREAK,
     ACTION_EMBED_IMAGE,
+    ACTION_SET_CELLS,
     ACTION_EXPORT,
     ACTION_IMPORT,
     ACTION_LIST_COMMENTS,
@@ -184,6 +188,7 @@ DOCS_SINGLE_TAB_ACTIONS = frozenset(
         ACTION_APPLY_TEXT_STYLE,
         ACTION_INSERT_PAGE_BREAK,
         ACTION_EMBED_IMAGE,
+        ACTION_SET_CELLS,
     }
 )
 DOCS_COMMENT_REFERENCE_ACTIONS = frozenset(
@@ -434,6 +439,40 @@ DOCS_SCHEMA = {
                 "A tab-scoped request returns tab_anchored_comments_unavailable."
             ),
         },
+        "table": {
+            "description": (
+                "Identify one table in the selected tab from object.get's tables. "
+                "A bare number is a position. Matching is case-insensitive and "
+                "lexical; several matches return bounded candidates."
+            ),
+            "fields": {
+                "position": (
+                    "1-based table position in the tab; combined with another "
+                    "field, the position among that field's matches."
+                ),
+                "after_heading": (
+                    "Exact text of the nearest heading of any level above the "
+                    "table; text between them does not matter."
+                ),
+                "header_contains": (
+                    "Literal fragment of a header cell, or of a first-row cell "
+                    "when the table has no header row."
+                ),
+            },
+        },
+        "row": {
+            "description": (
+                "Identify one row of the selected table. Rows are physical and "
+                "1-based, header rows included."
+            ),
+            "fields": {
+                "number": "1-based row number; a bare number means the same.",
+                "where": (
+                    "{column, equals | contains}: the one data row whose cell in "
+                    "that column matches. Header rows never match."
+                ),
+            },
+        },
     },
     "search": {
         "description": (
@@ -455,19 +494,33 @@ DOCS_SCHEMA = {
         "description": (
             "Read an object by ref. A native document returns metadata and "
             "extracted body text plus tab_count, each tab's id, title, hierarchy, "
-            "and end index, and whether mutation requires tab selection. An "
+            "and end index, and whether mutation requires tab selection. A "
+            "native document also returns tables: each table's tab, position, "
+            "nearest heading above it, size, header row or first row, and a "
+            "ready selector. To read cell text, pass include: [\"tables\"] for "
+            "every table, or filters.tables with a selector (or a list of "
+            "up to 5), optionally with rows: \"1-50\" and header: 1 (a number "
+            "of header rows); each table returns up to 50 "
+            "rows by default and next_rows when more remain, within 2,000 "
+            "cells per call, and tables_truncated when the document holds more "
+            "than 5 tables. Each cell carries its own row and column and names "
+            "what it holds besides text: a person chip names its email, a "
+            "rich link its uri; rows count "
+            "header rows. Write cells with object.action set_cells, passing "
+            "the same selector as its selector field. An "
             "import source returns file metadata and "
             "the instruction to copy it into an editable native document. On "
             "a configured turnless transport, native documents can also offer "
             "a short-lived URL for the complete JSON snapshot."
         ),
-        "filters": ["include_text"],
+        "filters": ["include_text", "tables"],
     },
     "materialization": {
         "description": (
             "A materializing client can resolve a document ref through "
             "object.get with response_mode=stream. The JSON snapshot carries "
-            "document metadata, the extracted body text, and open comments. "
+            "document metadata, the extracted body text, every table with its "
+            "cells, and open comments. "
             "An export ref streams the complete portable file bytes instead."
         ),
         "schema": DOCS_SNAPSHOT_SCHEMA,
@@ -484,7 +537,8 @@ DOCS_SCHEMA = {
                 "Use a document ref with object.text/index to insert or append "
                 "body text, or object.replacements to substitute text. Multi-tab "
                 "edits accept tab selectors resolved from document metadata. "
-                "Replacement can also use explicit all_tabs=true."
+                "Replacement can also use explicit all_tabs=true. Table cells "
+                "are written with object.action set_cells, not here."
             ),
             "object": [
                 "text",
@@ -542,7 +596,8 @@ DOCS_SCHEMA = {
         ACTION_REPLACE_TEXT: {
             "description": (
                 "Replace matches in selected tab_ids/tab_selectors, or in every "
-                "tab only when all_tabs=true is explicit."
+                "tab only when all_tabs=true is explicit. Every match changes, "
+                "table cells included; to change one table cell use set_cells."
             ),
             "object_ref": "document ref",
             "payload": [
@@ -593,6 +648,49 @@ DOCS_SCHEMA = {
                 "tab_id",
                 "tab_selector",
             ],
+            "claim": "docs:write",
+        },
+        ACTION_SET_CELLS: {
+            "description": (
+                "Write text into cells of one table row. Name the table by "
+                "passing a tables[].selector from object.get as selector, or by "
+                "tab_selector plus table (position, after_heading, or "
+                "header_contains). Name the row by 1-based number or "
+                "{where: {column, equals | contains}} - a value the caller knows "
+                "survives rows moving, and a number read from cells[].row does "
+                "not have to be counted. Pass cells as "
+                "{column: text}: a key naming a header is that column, otherwise "
+                "a digit key is a 1-based number; for an explicit number pass a "
+                "list of {column: <number>, text}. A list entry may carry "
+                'person: "someone@example.com" instead of text, which writes a '
+                "person chip. Rows count header rows; a "
+                "where predicate never matches them. Column names need a "
+                "header row: the document's own, or header: 1. mode is replace "
+                "(default), append, or prepend; an empty replace clears the "
+                "cell. replace refuses a cell holding images or chips, and a "
+                "merged-away cell is refused. remove_objects=true replaces "
+                "them anyway; the result then lists them as before_objects, "
+                "and an answer that removed someone's chip or image says so. "
+                "Nested "
+                "tables are refused. An optional revision_id from object.get "
+                "refuses the write if the document changed since. Nothing is "
+                "written when any cell is refused or a selector is ambiguous. "
+                "The result names the row it wrote as row and row_label."
+            ),
+            "object_ref": "document ref",
+            "payload": [
+                "selector",
+                "table",
+                "row",
+                "cells",
+                "mode",
+                "header",
+                "remove_objects",
+                "revision_id",
+                "tab_id",
+                "tab_selector",
+            ],
+            "modes": ["replace", "append", "prepend"],
             "claim": "docs:write",
         },
         ACTION_EXPORT: {
@@ -730,7 +828,7 @@ DOCS_SCHEMA_PROJECTION = {
                         "id": "edit",
                         "label": "Create and edit",
                         "object_kind": DOCS_DOCUMENT_KIND,
-                        "keywords": ["write", "modify", "format", "image", "page"],
+                        "keywords": ["write", "modify", "format", "image", "page", "table", "cell"],
                         "operations": [
                             "object.upsert",
                             "object.delete",
@@ -740,6 +838,7 @@ DOCS_SCHEMA_PROJECTION = {
                             f"object.action:{ACTION_APPLY_TEXT_STYLE}",
                             f"object.action:{ACTION_INSERT_PAGE_BREAK}",
                             f"object.action:{ACTION_EMBED_IMAGE}",
+                            f"object.action:{ACTION_SET_CELLS}",
                         ],
                     },
                     {
@@ -791,7 +890,7 @@ DOCS_SCHEMA_PROJECTION = {
     "kinds": {
         DOCS_DOCUMENT_KIND: {
             "refs": ["document"],
-            "selectors": ["tab_selector", "comment_selector"],
+            "selectors": ["tab_selector", "comment_selector", "table", "row"],
             "related_kinds": [DOCS_IMPORT_SOURCE_KIND, DOCS_EXPORT_KIND],
             "operations": {
                 "object.list": {},
@@ -811,6 +910,7 @@ DOCS_SCHEMA_PROJECTION = {
                 ACTION_APPLY_TEXT_STYLE,
                 ACTION_INSERT_PAGE_BREAK,
                 ACTION_EMBED_IMAGE,
+                ACTION_SET_CELLS,
                 ACTION_EXPORT,
                 ACTION_IMPORT,
                 ACTION_LIST_COMMENTS,
@@ -1096,6 +1196,27 @@ def _export_object(
     return obj
 
 
+_INCLUDE_TABLE_CELLS = frozenset({"tables", "cells", "table_cells"})
+
+
+def _wants_table_cells(include: Sequence[Any] | None) -> bool:
+    """Whether include asks for cell content. An unknown name is refused."""
+
+    wanted = False
+    for entry in include or ():
+        name = _text(entry).lower()
+        if not name:
+            continue
+        if name in _INCLUDE_TABLE_CELLS:
+            wanted = True
+            continue
+        raise ValueError(
+            f"include does not support {name!r}. Read every table's cells with "
+            'include: ["tables"], or name tables with filters.tables.'
+        )
+    return wanted
+
+
 def _document_object(
     value: Mapping[str, Any],
     *,
@@ -1355,6 +1476,18 @@ class DocsNamedServiceProvider(NamedServiceProvider):
     ) -> NamedServiceResponse:
         return NamedServiceResponse.error_response(
             code="invalid_docs_ref",
+            message=str(exc),
+            status=400,
+            provider=self._provider_identity(),
+            namespace=request.namespace or DOCS_NAMESPACE,
+            object_ref=request.object_ref,
+        )
+
+    def _unsupported_include(
+        self, request: NamedServiceRequest, exc: Exception
+    ) -> NamedServiceResponse:
+        return NamedServiceResponse.error_response(
+            code="docs_include_unsupported",
             message=str(exc),
             status=400,
             provider=self._provider_identity(),
@@ -1812,6 +1945,12 @@ class DocsNamedServiceProvider(NamedServiceProvider):
                         "title, title fragment, 1-based position, or hierarchy."
                     ),
                     (
+                        "object.get lists the document's tables with ready "
+                        "selectors; pass filters.tables to read cells, then "
+                        "object.action set_cells to write one row's cells by "
+                        "column name or number."
+                    ),
+                    (
                         "To clone a document, search for the target title first, "
                         "then call object.action copy on the source ref."
                     ),
@@ -2143,6 +2282,15 @@ class DocsNamedServiceProvider(NamedServiceProvider):
         payload: dict[str, Any] = {"document_ref": parsed["document_id"]}
         if include_text is not None:
             payload["include_text"] = bool(include_text)
+        table_filter = filters.get("tables")
+        try:
+            wants_cells = _wants_table_cells(request.include)
+        except ValueError as exc:
+            return self._unsupported_include(request, exc)
+        if table_filter in (None, "", []) and wants_cells:
+            table_filter = "all"
+        if table_filter not in (None, "", []) and not import_source:
+            payload["tables"] = table_filter
         ret, error = await self._execute(
             request=request,
             operation="get_source" if import_source else "get",
@@ -2357,7 +2505,11 @@ class DocsNamedServiceProvider(NamedServiceProvider):
             request=request,
             operation="get_source" if import_source else "get",
             claim=DOCS_READ_CLAIM,
-            payload={"document_ref": document_id, "include_text": True},
+            payload={
+                "document_ref": document_id,
+                "include_text": True,
+                **({} if import_source else {"include_table_cells": True}),
+            },
             account_id=_text(parsed.get("account_id")),
         )
         if error is not None:
@@ -2647,6 +2799,8 @@ class DocsNamedServiceProvider(NamedServiceProvider):
                 parsed=export_parsed,
             )
         payload = dict(request.payload or {})
+        if action == ACTION_SET_CELLS:
+            payload = spread_table_selector(payload)
         payload["document_ref"] = parsed["document_id"]
         if request.idempotency_key:
             payload["idempotency_key"] = request.idempotency_key
@@ -2826,6 +2980,7 @@ __all__ = [
     "ACTION_REPLACE_TEXT",
     "ACTION_REPLY_COMMENT",
     "ACTION_RESOLVE_COMMENT",
+    "ACTION_SET_CELLS",
     "DOCS_ACTIONS",
     "DOCS_COMMENT_CLAIM",
     "DOCS_CONNECTED_ACCOUNT_REQUIREMENTS",

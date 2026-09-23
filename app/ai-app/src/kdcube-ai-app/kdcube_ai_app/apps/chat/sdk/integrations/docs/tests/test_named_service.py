@@ -15,6 +15,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.docs.named_service import (
     ACTION_APPEND_TEXT,
     ACTION_REPLACE_TEXT,
     ACTION_REPLY_COMMENT,
+    ACTION_SET_CELLS,
     ACTION_IMPORT,
     ACTION_LIST_FOLDER,
     ACTION_UPLOAD_FILE,
@@ -1671,3 +1672,153 @@ async def test_unknown_provider_fails_before_google_call() -> None:
     assert response.ok is False
     assert response.error.code == "docs_provider_not_implemented"
     assert fake.calls == []
+
+
+@pytest.mark.anyio
+async def test_get_passes_table_reads_to_the_provider() -> None:
+    fake = _FakeDocs()
+    selector = {"table": {"after_heading": "Tasks"}, "rows": "1-10"}
+
+    response = await _provider(fake).dispatch(
+        _ctx(),
+        NamedServiceRequest(
+            operation=OBJECT_GET,
+            namespace="docs",
+            object_ref="docs:google:account-1:document:doc-1",
+            filters={"tables": selector},
+        ),
+    )
+
+    assert response.ok is True
+    assert fake.calls[-1]["operation"] == "get"
+    assert fake.calls[-1]["claim"] == DOCS_READ_CLAIM
+    assert fake.calls[-1]["payload"]["tables"] == selector
+
+
+@pytest.mark.anyio
+async def test_include_tables_reads_every_table() -> None:
+    fake = _FakeDocs()
+
+    response = await _provider(fake).dispatch(
+        _ctx(),
+        NamedServiceRequest(
+            operation=OBJECT_GET,
+            namespace="docs",
+            object_ref="docs:google:account-1:document:doc-1",
+            include=["tables"],
+        ),
+    )
+
+    assert response.ok is True
+    assert fake.calls[-1]["payload"]["tables"] == "all"
+
+
+@pytest.mark.anyio
+async def test_named_tables_win_over_include() -> None:
+    fake = _FakeDocs()
+    selector = {"table": {"position": 2}}
+
+    response = await _provider(fake).dispatch(
+        _ctx(),
+        NamedServiceRequest(
+            operation=OBJECT_GET,
+            namespace="docs",
+            object_ref="docs:google:account-1:document:doc-1",
+            include=["cells"],
+            filters={"tables": selector},
+        ),
+    )
+
+    assert response.ok is True
+    assert fake.calls[-1]["payload"]["tables"] == selector
+
+
+@pytest.mark.anyio
+async def test_an_unknown_include_is_refused_instead_of_dropped() -> None:
+    fake = _FakeDocs()
+
+    response = await _provider(fake).dispatch(
+        _ctx(),
+        NamedServiceRequest(
+            operation=OBJECT_GET,
+            namespace="docs",
+            object_ref="docs:google:account-1:document:doc-1",
+            include=["comments"],
+        ),
+    )
+
+    assert response.ok is False
+    assert response.error.code == "docs_include_unsupported"
+    assert "filters.tables" in response.error.message
+    # Nothing was read: a silently dropped hint is what made an agent report
+    # that a cell held no chip.
+    assert fake.calls == []
+
+
+@pytest.mark.anyio
+async def test_set_cells_resolves_the_tab_and_needs_read_and_write() -> None:
+    fake = _FakeDocs()
+    fake.tabs = [
+        {"tab_id": "tab-main", "title": "Main", "parent_tab_id": "", "nesting_level": 0},
+        {"tab_id": "tab-budget", "title": "Budget", "parent_tab_id": "", "nesting_level": 0},
+    ]
+    payload = {
+        "tab_selector": {"title": "budget"},
+        "table": 1,
+        "row": {"where": {"column": "Item", "equals": "Office"}},
+        "cells": {"Amount": "130"},
+        "mode": "replace",
+        "revision_id": "rev-1",
+    }
+
+    response = await _provider(fake).dispatch(
+        _ctx(),
+        NamedServiceRequest(
+            operation=OBJECT_ACTION,
+            namespace="docs",
+            object_ref="docs:google:account-1:document:doc-1",
+            action=ACTION_SET_CELLS,
+            payload=payload,
+        ),
+    )
+
+    assert response.ok is True
+    call = fake.calls[-1]
+    assert call["operation"] == ACTION_SET_CELLS
+    assert call["claim"] == (DOCS_READ_CLAIM, DOCS_WRITE_CLAIM)
+    assert call["payload"]["tab_id"] == "tab-budget"
+    for key in ("table", "row", "cells", "mode", "revision_id"):
+        assert call["payload"][key] == payload[key]
+
+
+@pytest.mark.anyio
+async def test_snapshot_asks_the_provider_for_every_table_cell() -> None:
+    fake = _FakeDocs()
+
+    await _provider(fake).dispatch(
+        _ctx(),
+        NamedServiceRequest(
+            operation=OBJECT_GET,
+            namespace="docs",
+            object_ref="docs:google:account-1:document:doc-1",
+            response_mode="stream",
+            context={"source": "react.pull", "materialize": True},
+        ),
+    )
+
+    assert fake.calls[0]["operation"] == "get"
+    assert fake.calls[0]["payload"]["include_table_cells"] is True
+
+
+def test_schema_declares_set_cells_and_table_selectors() -> None:
+    schema = docs_named_service.DOCS_SCHEMA
+    action = schema["actions"][ACTION_SET_CELLS]
+    assert action["claim"] == "docs:write"
+    assert action["modes"] == ["replace", "append", "prepend"]
+    assert {"table", "row", "cells", "remove_objects"} <= set(action["payload"])
+    assert {"table", "row"} <= set(schema["selectors"])
+    assert "tables" in schema["get"]["filters"]
+    assert ACTION_SET_CELLS in docs_named_service.DOCS_WRITE_ACTIONS
+    assert docs_named_service.DOCS_GRANT_HINTS[f"object.action.{ACTION_SET_CELLS}"] == [
+        DOCS_WRITE_CLAIM
+    ]

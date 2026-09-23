@@ -22,12 +22,33 @@ so the service layer's ``credential_failure`` handling matches Gmail and Slack.
 from __future__ import annotations
 
 import base64
+import copy
 import re
 from collections.abc import Iterator, Mapping, Sequence
 from typing import Any
 
 import httpx
 
+from kdcube_ai_app.apps.chat.sdk.integrations.docs.selectors import (
+    DocsSelectorError,
+    resolve_tab_selector,
+)
+from kdcube_ai_app.apps.chat.sdk.integrations.docs.tables import (
+    MAX_TABLE_READ_CELLS,
+    MAX_TABLE_READS,
+    effective_header_rows,
+    header_names,
+    parse_row_range,
+    resolve_column,
+    resolve_row,
+    resolve_table,
+    spread_table_selector,
+)
+from kdcube_ai_app.apps.chat.sdk.integrations.google.docs_structure import (
+    body_tables,
+    public_cell,
+    public_table,
+)
 from kdcube_ai_app.apps.chat.sdk.integrations.provider_errors import (
     ProviderFailure,
     provider_failure_from_exception,
@@ -61,6 +82,7 @@ MAX_TITLE_CHARS = 300
 MAX_REPLACEMENTS = 50
 MAX_COMMENT_CHARS = 20_000
 MAX_COMMENTS = 100
+TABLE_WRITE_MODES = ("replace", "append", "prepend")
 
 _DOC_URL_RE = re.compile(
     r"https?://docs\.google\.com/document/(?:u/\d+/)?d/([A-Za-z0-9_-]+)"
@@ -602,6 +624,183 @@ def _replace_tab_selection(
 
 
 # --------------------------------------------------------------------------- #
+# Tables: inventory, bounded reads, and selector resolution
+# --------------------------------------------------------------------------- #
+
+
+def _selector_failure(exc: DocsSelectorError) -> DocsValidationError:
+    return DocsValidationError(
+        exc.code, str(exc), details={**exc.details, "status": exc.status}
+    )
+
+
+def _tab_selector_for(tabs: Sequence[Mapping[str, Any]], tab_id: str) -> dict[str, Any]:
+    """The shortest tab selector that names one tab: title when unique, else position."""
+
+    for position, tab in enumerate(tabs, start=1):
+        if _clean(tab.get("tab_id")) != tab_id:
+            continue
+        title = _clean(tab.get("title"))
+        same = [row for row in tabs if _clean(row.get("title")).casefold() == title.casefold()]
+        return {"title": title} if title and len(same) == 1 else {"position": position}
+    return {}
+
+
+def _document_tables(
+    document: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    tables: list[dict[str, Any]] = []
+    tabs: list[dict[str, Any]] = []
+    for record, body in _document_tab_entries(document):
+        tabs.append(record)
+        tables.extend(
+            body_tables(body, tab_id=record["tab_id"], tab_title=record["title"])
+        )
+    return tables, tabs
+
+
+def _tables_inventory(
+    tables: Sequence[Mapping[str, Any]],
+    tabs: Sequence[Mapping[str, Any]],
+    *,
+    include_cells: bool = False,
+) -> list[dict[str, Any]]:
+    return [
+        public_table(
+            table,
+            tab_selector=(
+                _tab_selector_for(tabs, _clean(table.get("tab_id")))
+                if len(tabs) > 1
+                else None
+            ),
+            include_cells=include_cells,
+        )
+        for table in tables
+    ]
+
+
+def _resolve_tab_id(
+    tabs: Sequence[Mapping[str, Any]], selector: Mapping[str, Any]
+) -> str:
+    tab_id = _clean(selector.get("tab_id"))
+    if tab_id:
+        if not any(_clean(tab.get("tab_id")) == tab_id for tab in tabs):
+            raise DocsValidationError(
+                "docs_tab_not_found",
+                f"tab_id '{tab_id}' does not identify a tab in this document.",
+                details=_tab_selection_details(tabs),
+            )
+        return tab_id
+    tab_selector = selector.get("tab_selector")
+    if tab_selector not in (None, "", {}):
+        try:
+            return _clean(resolve_tab_selector(tabs, tab_selector).get("tab_id"))
+        except DocsSelectorError as exc:
+            raise _selector_failure(exc) from exc
+    if len(tabs) > 1:
+        raise DocsValidationError(
+            "docs_tab_selection_required",
+            "This document has multiple tabs. Name the tab that holds the table.",
+            details=_tab_selection_details(tabs),
+        )
+    return _clean(tabs[0].get("tab_id")) if tabs else ""
+
+
+def _resolve_document_table(
+    tables: Sequence[Mapping[str, Any]],
+    tabs: Sequence[Mapping[str, Any]],
+    selector: Mapping[str, Any],
+    *,
+    tab_id: str | None = None,
+) -> Mapping[str, Any]:
+    if tab_id is None:
+        tab_id = _resolve_tab_id(tabs, selector)
+    in_tab = [table for table in tables if _clean(table.get("tab_id")) == tab_id]
+    try:
+        return resolve_table(in_tab, selector.get("table"))
+    except DocsSelectorError as exc:
+        raise _selector_failure(exc) from exc
+
+
+def _table_read_selectors(
+    value: Any,
+    *,
+    inventory: Sequence[Mapping[str, Any]] = (),
+) -> tuple[list[Mapping[str, Any]], bool]:
+    """Selectors to read, and whether the document holds more than the cap."""
+
+    if isinstance(value, str) and value.strip().lower() == "all":
+        selectors = [dict(row["selector"]) for row in inventory if row.get("selector")]
+        return selectors[:MAX_TABLE_READS], len(selectors) > MAX_TABLE_READS
+    if isinstance(value, Mapping):
+        selectors = [value]
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        selectors = list(value)
+    else:
+        selectors = []
+    if not selectors or not all(isinstance(item, Mapping) for item in selectors):
+        raise DocsValidationError(
+            "docs_table_selector_invalid",
+            'tables must be one table selector object, a list of them, or "all".',
+        )
+    if len(selectors) > MAX_TABLE_READS:
+        raise DocsValidationError(
+            "request_too_large",
+            f"Read at most {MAX_TABLE_READS} tables per call.",
+        )
+    return selectors, False
+
+
+def _read_tables(
+    tables: Sequence[Mapping[str, Any]],
+    tabs: Sequence[Mapping[str, Any]],
+    selectors: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    budget = MAX_TABLE_READ_CELLS
+    reads: list[dict[str, Any]] = []
+    for selector in selectors:
+        selector = spread_table_selector(selector)
+        table = _resolve_document_table(tables, tabs, selector)
+        try:
+            header_rows = effective_header_rows(table, selector.get("header"))
+            first, last = parse_row_range(selector.get("rows"), rows=int(table["rows"]))
+        except DocsSelectorError as exc:
+            raise _selector_failure(exc) from exc
+        summary = public_table(
+            {**table, "header_rows": header_rows},
+            tab_selector=(
+                _tab_selector_for(tabs, _clean(table.get("tab_id")))
+                if len(tabs) > 1
+                else None
+            ),
+        )
+        columns = max(1, int(table.get("columns") or 1))
+        wanted = max(0, last - first + 1)
+        fit = min(wanted, budget // columns)
+        if wanted and not fit:
+            reads.append({**summary, "skipped": "cell_limit"})
+            continue
+        stop = first + fit - 1
+        summary["cells"] = [
+            [
+                public_cell(cell, row=number, column=index + 1)
+                for index, cell in enumerate(row)
+            ]
+            for number, row in enumerate(table["cells"][first - 1 : stop], start=first)
+        ]
+        summary["first_row_number"] = first
+        summary["rows_returned"] = fit
+        summary["rows_total"] = table["rows"]
+        truncated = stop < int(table["rows"])
+        summary["truncated"] = truncated
+        if truncated:
+            summary["next_rows"] = f"{stop + 1}-{stop + (last - first + 1)}"
+        budget -= fit * columns
+        reads.append(summary)
+    return reads
+
+
+# --------------------------------------------------------------------------- #
 # Read operations (docs:read)
 # --------------------------------------------------------------------------- #
 
@@ -738,8 +937,8 @@ async def _get(
     text = ""
     if include_text is None or bool(include_text):
         text = _extract_document_text(document, limit=MAX_TEXT_CHARS)
-    tabs = _document_tabs(document)
-    return {
+    tables, tabs = _document_tables(document)
+    result: dict[str, Any] = {
         "document_id": document_id,
         "title": _clean(document.get("title")),
         "revision_id": _clean(document.get("revisionId")),
@@ -753,7 +952,18 @@ async def _get(
             "single_tab_parameter": "tab_id",
             "replace_parameters": ["tab_ids", "all_tabs"],
         },
+        "tables": _tables_inventory(
+            tables, tabs, include_cells=payload.get("include_table_cells") is True
+        ),
     }
+    if payload.get("tables") not in (None, "", []):
+        selectors, truncated = _table_read_selectors(
+            payload.get("tables"), inventory=result["tables"]
+        )
+        result["table_reads"] = _read_tables(tables, tabs, selectors)
+        if truncated:
+            result["tables_truncated"] = True
+    return result
 
 
 async def _export(
@@ -816,11 +1026,15 @@ async def _batch_update(
     document_id: str,
     requests: list[dict[str, Any]],
     operation: str,
+    write_control: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    body: dict[str, Any] = {"requests": requests}
+    if write_control:
+        body["writeControl"] = dict(write_control)
     response = await client.post(
         f"{DOCS_API}/documents/{document_id}:batchUpdate",
         headers=_headers(access_token),
-        json={"requests": requests},
+        json=body,
     )
     _raise_for_status(response, operation=operation, mutating=True)
     body = response.json()
@@ -1190,6 +1404,254 @@ async def _apply_text_style(
         "tab_id": tab_id,
         "tab_count": len(tabs),
     }
+
+
+def _cell_value(item: Mapping[str, Any]) -> dict[str, Any]:
+    """One cell's content: text, or a person chip named by email."""
+
+    person = item.get("person")
+    if person in (None, ""):
+        return {"kind": "text", "text": "" if item.get("text") is None else str(item["text"])}
+    email = _clean(person.get("email")) if isinstance(person, Mapping) else _clean(person)
+    if "@" not in email:
+        raise DocsValidationError(
+            "docs_person_email_invalid",
+            'person must be the email address the chip points at, or {"email": ...}.',
+        )
+    if item.get("text"):
+        raise DocsValidationError(
+            "docs_cell_value_ambiguous",
+            "A cell takes text or person, not both. Write the chip, then "
+            "append the text.",
+        )
+    return {"kind": "person", "email": email}
+
+
+def _cells_payload(value: Any) -> list[tuple[Any, dict[str, Any]]]:
+    if isinstance(value, Mapping):
+        items = [
+            (column, _cell_value(text if isinstance(text, Mapping) else {"text": text}))
+            for column, text in value.items()
+        ]
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        rows = [item for item in value if isinstance(item, Mapping)]
+        items = (
+            [(item.get("column"), _cell_value(item)) for item in rows]
+            if len(rows) == len(value)
+            else []
+        )
+    else:
+        items = []
+    if not items:
+        raise DocsValidationError(
+            "cells_required",
+            "cells must map column names or numbers to text, e.g. "
+            '{"Status": "Done"}, or be a list of {column, text} - or '
+            '{column, person: "someone@example.com"} for a person chip.',
+        )
+    return items
+
+
+def _is_revision_mismatch(exc: _DocsApiError) -> bool:
+    failure = exc.failure
+    return failure.provider_status == 400 and "revision" in (
+        f"{failure.message} {failure.provider_reason}".lower()
+    )
+
+
+def _set_cells_requests(
+    targets: Sequence[tuple[Mapping[str, Any], Mapping[str, Any]]],
+    *,
+    mode: str,
+    tab_id: str,
+) -> list[dict[str, Any]]:
+    scope = {"tabId": tab_id} if tab_id else {}
+    requests: list[dict[str, Any]] = []
+    # Last cell first: earlier cells' indices stay valid while later ones change.
+    for cell, value in sorted(targets, key=lambda item: -int(item[0]["content_start"])):
+        start = int(cell["content_start"])
+        end = int(cell["content_end"])
+        if mode == "replace" and end > start:
+            requests.append(
+                {"deleteContentRange": {"range": {"startIndex": start, "endIndex": end, **scope}}}
+            )
+        index = end if mode == "append" else start
+        if value["kind"] == "person":
+            requests.append(
+                {
+                    "insertPerson": {
+                        "personProperties": {"email": value["email"]},
+                        "location": {"index": index, **scope},
+                    }
+                }
+            )
+        elif value["text"]:
+            requests.append(
+                {"insertText": {"location": {"index": index, **scope}, "text": value["text"]}}
+            )
+    return requests
+
+
+def _row_label(
+    table: Mapping[str, Any], row: int, report: Sequence[Mapping[str, Any]]
+) -> str:
+    written = next((entry for entry in report if entry["column"] == 1), None)
+    if written is None:
+        return str(table["cells"][row - 1][0].get("text") or "")
+    wrote = written.get("wrote")
+    if isinstance(wrote, Mapping):
+        return str(wrote.get("email") or "")
+    return str(written.get("after") or "")
+
+
+async def _set_cells(
+    client: httpx.AsyncClient, *, access_token: str, payload: Mapping[str, Any]
+) -> dict[str, Any]:
+    payload = spread_table_selector(payload)
+    document_id = _document_id(payload.get("document_ref"))
+    mode = _clean(payload.get("mode")).lower() or "replace"
+    if mode not in TABLE_WRITE_MODES:
+        raise DocsValidationError(
+            "invalid_mode", f"mode must be one of: {', '.join(TABLE_WRITE_MODES)}."
+        )
+    cells_in = _cells_payload(payload.get("cells"))
+    for _column, value in cells_in:
+        # An empty replace clears the cell; every other write needs text.
+        if value["kind"] == "text" and (mode != "replace" or value["text"]):
+            _bounded_text(value["text"])
+    expected_revision = _clean(payload.get("revision_id"))
+    remove_objects = payload.get("remove_objects") is True
+
+    attempts = 0
+    while True:
+        attempts += 1
+        document = await _fetch_document(
+            client, access_token=access_token, document_id=document_id
+        )
+        revision = _clean(document.get("revisionId"))
+        if expected_revision and expected_revision != revision:
+            raise DocsValidationError(
+                "docs_revision_changed",
+                "The document changed after the revision_id you read. Read it "
+                "again, check the table, and retry with the new revision_id.",
+                details={"expected_revision_id": expected_revision, "revision_id": revision},
+            )
+        tables, tabs = _document_tables(document)
+        tab_id = _resolve_tab_id(tabs, payload)
+        table = _resolve_document_table(tables, tabs, payload, tab_id=tab_id)
+        try:
+            header_rows = effective_header_rows(table, payload.get("header"))
+            row = resolve_row(table, payload.get("row"), header_rows=header_rows)
+            columns = [
+                resolve_column(table, column, header_rows=header_rows)
+                for column, _value in cells_in
+            ]
+        except DocsSelectorError as exc:
+            raise _selector_failure(exc) from exc
+        if len(set(columns)) != len(columns):
+            raise DocsValidationError(
+                "docs_table_column_repeated",
+                "cells names the same column more than once.",
+                details={"columns": columns},
+            )
+        names = header_names(table, header_rows)
+        targets: list[tuple[Mapping[str, Any], Mapping[str, Any]]] = []
+        report: list[dict[str, Any]] = []
+        for column, (_key, value) in zip(columns, cells_in):
+            cell = table["cells"][row - 1][column - 1]
+            where = {"row": row, "column": column}
+            if cell.get("merged_into"):
+                head_row, head_column = cell["merged_into"]
+                head_text = str(table["cells"][head_row - 1][head_column - 1].get("text") or "")
+                raise DocsValidationError(
+                    "docs_table_cell_merged",
+                    f"Row {row}, column {column} is merged into row {head_row}, "
+                    f"column {head_column}, which holds {head_text!r}. Writing there "
+                    "changes that cell. Ask the user which cell to write before "
+                    "retrying.",
+                    details={
+                        **where,
+                        "merged_into": cell["merged_into"],
+                        "merged_cell_text": head_text,
+                    },
+                )
+            if cell.get("nested_table"):
+                raise DocsValidationError(
+                    "docs_table_nested",
+                    f"Row {row}, column {column} holds a nested table, which "
+                    "this action does not edit.",
+                    details=where,
+                )
+            if mode == "replace" and cell.get("objects") and not remove_objects:
+                raise DocsValidationError(
+                    "docs_table_cell_has_objects",
+                    f"Row {row}, column {column} holds "
+                    f"{', '.join(sorted({row['kind'] for row in cell['objects']}))} "
+                    "besides text; replacing it "
+                    "would delete them. Ask the user what to do with them "
+                    "before writing this cell.",
+                    details={**where, "objects": list(cell["objects"])},
+                )
+            before = str(cell.get("text") or "")
+            text = value["text"] if value["kind"] == "text" else ""
+            after = (
+                text if mode == "replace"
+                else before + text if mode == "append"
+                else text + before
+            )
+            targets.append((cell, value))
+            entry = {
+                "column": column,
+                "header": names[column - 1] if names else None,
+                "before": before,
+                "after": after,
+            }
+            if cell.get("objects"):
+                entry["before_objects"] = copy.deepcopy(list(cell["objects"]))
+            if value["kind"] == "person":
+                entry["wrote"] = dict(value)
+            report.append(entry)
+        requests = _set_cells_requests(targets, mode=mode, tab_id=tab_id)
+        response: dict[str, Any] = {}
+        if requests:
+            try:
+                response = await _batch_update(
+                    client,
+                    access_token=access_token,
+                    document_id=document_id,
+                    requests=requests,
+                    operation="set_cells",
+                    write_control={"requiredRevisionId": revision} if revision else None,
+                )
+            except _DocsApiError as exc:
+                if attempts == 1 and not expected_revision and _is_revision_mismatch(exc):
+                    continue
+                raise
+        new_revision = _clean(
+            (response.get("writeControl") or {}).get("requiredRevisionId")
+            if isinstance(response.get("writeControl"), Mapping)
+            else ""
+        ) or revision
+        return {
+            "document_id": document_id,
+            "web_url": _web_url(document_id),
+            "revision_id": new_revision,
+            "tab_id": tab_id,
+            "tab_count": len(tabs),
+            "table": {
+                key: value
+                for key, value in public_table({**table, "header_rows": header_rows}).items()
+                if key in ("position", "after_heading", "rows", "columns", "header_rows", "header")
+            },
+            "row": row,
+            # The row's own first cell as this write leaves it, so a
+            # confirmation shows which row was written.
+            "row_label": _row_label(table, row, report),
+            "mode": mode,
+            "cells": report,
+            "attempts": attempts,
+            "idempotency_key": _clean(payload.get("idempotency_key")),
+        }
 
 
 async def _insert_page_break(
@@ -1730,6 +2192,7 @@ _OPERATIONS = {
     "apply_text_style": _apply_text_style,
     "insert_page_break": _insert_page_break,
     "embed_image": _embed_image,
+    "set_cells": _set_cells,
     "import": _import_document,
     # drive files as themselves (drive:read / drive:write)
     "drive_upload": _drive_upload_file,
@@ -1751,6 +2214,7 @@ MUTATING_OPERATIONS = frozenset(
         "apply_text_style",
         "insert_page_break",
         "embed_image",
+        "set_cells",
         "import",
         "drive_upload",
         "create_comment",
@@ -1823,12 +2287,20 @@ async def execute_google_docs_operation(
     except _DocsApiError as exc:
         return exc.failure.error_result(where=where)
     except httpx.HTTPError as exc:
+        fallback = "Google Docs did not return a response."
+        if op == "set_cells" and _clean(body.get("mode")).lower() in ("append", "prepend"):
+            # A lost answer can still have reached Google; repeating an append
+            # would write the text twice.
+            fallback = (
+                "Google Docs did not return a response, so this write may or "
+                "may not have landed. Read the cell again before retrying."
+            )
         failure = provider_failure_from_exception(
             exc,
             provider=_PROVIDER_ID,
             service=_SERVICE,
             operation=op,
-            fallback="Google Docs did not return a response.",
+            fallback=fallback,
             mutating=op in MUTATING_OPERATIONS,
         )
         return failure.error_result(where=where)

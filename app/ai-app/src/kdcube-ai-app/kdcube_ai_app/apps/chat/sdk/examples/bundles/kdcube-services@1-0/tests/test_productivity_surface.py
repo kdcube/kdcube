@@ -51,6 +51,7 @@ DOCS_WRITE_TOOLS = {
     "productivity_docs_apply_text_style",
     "productivity_docs_insert_page_break",
     "productivity_docs_embed_image",
+    "productivity_docs_set_cells",
     "productivity_docs_import",
     # flexible native batch edit (evaluation surface, side by side with typed)
     "productivity_docs_batch_edit",
