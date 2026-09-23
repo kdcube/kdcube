@@ -413,7 +413,9 @@ interface CapabilityRowsProps {
  *  carries a "default" tag); choosing the default row clears the pick. Hidden
  *  entirely when the admin declared no list. */
 function ModelsSection({ vm }: ComposerMenuSectionContext) {
-  const { inventory, model: pick, toggle, pending } = vm.capabilities
+  const {
+    inventory, model: pick, pending, scope, toggle,
+  } = vm.capabilities
   const supported = inventory?.supported_models ?? []
   if (!supported.length) return null
   const defaultModel = inventory?.default_model ?? null
@@ -440,7 +442,9 @@ function ModelsSection({ vm }: ComposerMenuSectionContext) {
             }
             hint={`${row.provider} · ${row.model}`}
             checked={active ? 'on' : 'off'}
-            scopeLocked={false}
+            authorityState={row.authority_state}
+            scopeLocked={scope?.capabilities_editable === false}
+            selectionScope={scope?.kind}
             onToggle={() => {
               if (active) return
               toggle({
@@ -460,7 +464,9 @@ function ModelsSection({ vm }: ComposerMenuSectionContext) {
  *  default (tagged); choosing the default row clears the pick. Hidden when
  *  the agent declares no profiles. */
 function InstructionsSection({ vm }: ComposerMenuSectionContext) {
-  const { inventory, instructions: pick, toggle, pending } = vm.capabilities
+  const {
+    instructions: pick, inventory, pending, scope, toggle,
+  } = vm.capabilities
   const profiles = inventory?.instruction_profiles ?? null
   const options = profiles?.options ?? []
   if (!options.length) return null
@@ -484,6 +490,9 @@ function InstructionsSection({ vm }: ComposerMenuSectionContext) {
             }
             sub={firstLine(row.description ?? '')}
             checked={active ? 'on' : 'off'}
+            authorityState={row.authority_state}
+            scopeLocked={scope?.capabilities_editable === false}
+            selectionScope={scope?.kind}
             onToggle={() => {
               if (active) return
               toggle({ instructions: isDefaultRow ? null : row.id })

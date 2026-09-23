@@ -30,6 +30,11 @@ CATALOG = {
     "named_services": [],
     "resources": [],
     "skills": [],
+    "supported_models": [
+        {"provider": "test", "model": "large", "label": "Large"},
+        {"provider": "test", "model": "small", "label": "Small"},
+    ],
+    "default_model": {"provider": "test", "model": "large"},
     "conversation_targets": [],
     "delegated_resource_families": [],
     "subagents": None,
@@ -288,16 +293,23 @@ async def test_capability_only_update_does_not_depend_on_preference_storage(monk
 
 
 @pytest.mark.asyncio
-async def test_model_preference_is_editable_without_a_conversation(monkeypatch) -> None:
+async def test_model_pick_without_a_conversation_revises_the_agent_card(monkeypatch) -> None:
     authority = _authority()
     events: list[str] = []
     store = _Store(events)
+    calls: list[dict[str, Any]] = []
 
-    async def _sync(_entrypoint: Any, **_kwargs: Any):
+    async def _sync(_entrypoint: Any, **kwargs: Any):
+        calls.append(dict(kwargs))
+        projection = kwargs.get("selected_capabilities") or capability_control.selected_capabilities_from_disabled(
+            authority=authority,
+            catalog=CATALOG,
+            disabled={},
+        )
         return {
             "authority": authority,
-            "projection": authority,
-            "selection": authority,
+            "projection": projection,
+            "selection": projection,
             "states": {},
             "card": {"access_id": "agent-main", "card_revision": 7},
         }
@@ -313,7 +325,7 @@ async def test_model_preference_is_editable_without_a_conversation(monkeypatch) 
         },
     )
 
-    assert result["ok"] is True
+    assert result["ok"] is True, result
     assert result["selection"]["model"] == {
         "provider": "test",
         "model": "small",
@@ -324,7 +336,11 @@ async def test_model_preference_is_editable_without_a_conversation(monkeypatch) 
         "capabilities_editable": True,
         "agent_card_revision": 7,
     }
-    assert events == ["preference-write"]
+    assert calls[-1]["replace_selection"] is True
+    assert calls[-1]["selected_capabilities"]["capabilities"]["models"] == [
+        "test/small"
+    ]
+    assert events == []
 
 
 @pytest.mark.asyncio

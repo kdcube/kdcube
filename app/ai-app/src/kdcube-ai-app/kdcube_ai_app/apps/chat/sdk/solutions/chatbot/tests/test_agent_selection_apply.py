@@ -168,6 +168,11 @@ def _legacy_selection_as_card_projection(monkeypatch):
         "conversation_capability_projections",
         _conversation_projection,
     )
+    monkeypatch.setattr(
+        agent_capability_control,
+        "capability_preferences_from_projection",
+        lambda _catalog, _projection: {"model": None, "instructions": None},
+    )
 
 
 @pytest.mark.asyncio
@@ -571,6 +576,46 @@ async def test_no_pick_resets_agent_role_models_to_config_base():
             "provider": "anthropic",
             "model": "claude-sonnet-4-6",
         },
+    }
+
+
+@pytest.mark.asyncio
+async def test_agent_card_model_and_instructions_are_runtime_defaults(monkeypatch):
+    props = copy.deepcopy(_MODEL_PROPS)
+    props["react"]["default_agent"]["instruction_profiles"] = {
+        "default": "full",
+        "options": [
+            {"id": "full", "label": "Full"},
+            {"id": "lite", "label": "Lite", "body": "Keep it concise."},
+        ],
+    }
+    stub = _workflow_stub(pg_pool=_FakePool(), bundle_props=props)
+    monkeypatch.setattr(
+        agent_capability_control,
+        "capability_preferences_from_projection",
+        lambda _catalog, _projection: {
+            "model": {
+                "provider": "anthropic",
+                "model": "claude-haiku-4-5-20251001",
+            },
+            "instructions": "lite",
+        },
+    )
+
+    await BaseWorkflow.apply_user_agent_selection(
+        stub,
+        _tool_cfg(),
+        AgentSkillConfig(),
+    )
+
+    assert stub.runtime_ctx.agent_role_models[USER_MODEL_TARGET_ROLE] == {
+        "provider": "anthropic",
+        "model": "claude-haiku-4-5-20251001",
+    }
+    assert stub.runtime_ctx.agent_instruction_profile == {
+        "id": "lite",
+        "label": "Lite",
+        "body": "Keep it concise.",
     }
 
 

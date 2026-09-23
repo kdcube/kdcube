@@ -19,6 +19,7 @@ from connection_hub.delegated_credentials.application_resources import (
 
 from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import (
     annotate_capability_states,
+    capability_preferences_from_projection,
     conversation_capability_projections,
     deny_all_capabilities,
     descriptor_capability_payload,
@@ -84,6 +85,29 @@ def _catalog(*, include_future: bool = False) -> dict:
         ],
         "resources": [],
         "skills": [{"id": "work.review"}],
+        "supported_models": [
+            {
+                "provider": "anthropic",
+                "model": "claude-sonnet-4-6",
+                "label": "Sonnet 4.6",
+            },
+            {
+                "provider": "anthropic",
+                "model": "claude-haiku-4-5",
+                "label": "Haiku 4.5",
+            },
+        ],
+        "default_model": {
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-6",
+        },
+        "instruction_profiles": {
+            "default": "full",
+            "options": [
+                {"id": "full", "label": "Full"},
+                {"id": "compact", "label": "Compact"},
+            ],
+        },
         "conversation_targets": [{"bundle_id": "workspace@1-0"}],
         "delegated_resource_families": [{"id": "user_external_mcp"}],
         "subagents": {"available": True, "default_on": True},
@@ -152,7 +176,38 @@ def test_descriptor_projection_separates_authority_from_metadata() -> None:
         "description": "Search records.",
         "title": "search",
     }
+    assert authority["capabilities"]["models"] == [
+        "anthropic/claude-haiku-4-5",
+        "anthropic/claude-sonnet-4-6",
+    ]
+    assert authority["capabilities"]["instruction_profiles"] == [
+        "compact",
+        "full",
+    ]
     assert "entries" not in authority
+
+
+def test_agent_card_starts_with_the_descriptor_model_and_instruction_defaults() -> None:
+    catalog = _catalog()
+    authority = _payload()["capability_authority"]
+
+    selected = selected_capabilities_from_disabled(
+        authority=authority,
+        catalog=catalog,
+        disabled={},
+    )
+
+    assert selected["capabilities"]["models"] == [
+        "anthropic/claude-sonnet-4-6"
+    ]
+    assert selected["capabilities"]["instruction_profiles"] == ["full"]
+    assert capability_preferences_from_projection(catalog, selected) == {
+        "model": {
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-6",
+        },
+        "instructions": "full",
+    }
 
 
 def test_operation_to_grant_mapping_is_projected_from_the_owner_descriptor() -> None:
@@ -340,6 +395,14 @@ def test_three_state_annotation_keeps_not_allowed_distinct_from_unselected() -> 
             "mcp%3A%2F%2Fexample%2Fresource-a/read": CAPABILITY_NOT_ALLOWED,
         },
         "skills": {"work.review": CAPABILITY_ALLOWED_UNSELECTED},
+        "models": {
+            "anthropic/claude-sonnet-4-6": CAPABILITY_ALLOWED_SELECTED,
+            "anthropic/claude-haiku-4-5": CAPABILITY_ALLOWED_UNSELECTED,
+        },
+        "instruction_profiles": {
+            "full": CAPABILITY_ALLOWED_SELECTED,
+            "compact": CAPABILITY_ALLOWED_UNSELECTED,
+        },
         "conversation_targets": {target: CAPABILITY_NOT_ALLOWED},
         "resource_families": {"user_external_mcp": CAPABILITY_ALLOWED_SELECTED},
         "subagents": {"enabled": CAPABILITY_ALLOWED_UNSELECTED},
@@ -364,6 +427,15 @@ def test_three_state_annotation_keeps_not_allowed_distinct_from_unselected() -> 
         CAPABILITY_NOT_ALLOWED
     )
     assert annotated["skills"][0]["authority_state"] == CAPABILITY_ALLOWED_UNSELECTED
+    assert annotated["supported_models"][0]["authority_state"] == (
+        CAPABILITY_ALLOWED_SELECTED
+    )
+    assert annotated["supported_models"][1]["authority_state"] == (
+        CAPABILITY_ALLOWED_UNSELECTED
+    )
+    assert annotated["instruction_profiles"]["options"][0]["authority_state"] == (
+        CAPABILITY_ALLOWED_SELECTED
+    )
     assert annotated["conversation_targets"][0]["authority_state"] == (
         CAPABILITY_NOT_ALLOWED
     )
@@ -392,6 +464,10 @@ def test_unavailable_state_marks_every_descriptor_capability_not_allowed() -> No
     )
     assert annotated["tools"][1]["authority_state"] == CAPABILITY_NOT_ALLOWED
     assert annotated["skills"][0]["authority_state"] == CAPABILITY_NOT_ALLOWED
+    assert annotated["supported_models"][0]["authority_state"] == CAPABILITY_NOT_ALLOWED
+    assert annotated["instruction_profiles"]["options"][0]["authority_state"] == (
+        CAPABILITY_NOT_ALLOWED
+    )
     assert annotated["conversation_targets"][0]["authority_state"] == (
         CAPABILITY_NOT_ALLOWED
     )
@@ -498,6 +574,19 @@ async def test_sync_uses_the_local_trusted_connection_hub_operation() -> None:
     assert calls[0].bundle_id == "connection-hub@1-0"
     assert calls[0].request["namespace"] == "connections"
     assert calls[0].request["operation"] == "agent_capability.sync"
+    wire_payload = calls[0].request["payload"]
+    assert wire_payload["selected_resource_grants"] == {
+        NAMED_SERVICES_RESOURCE: [
+            "named_services:use",
+            "work:observe",
+            "work:review",
+        ]
+    }
+    assert wire_payload["selected_named_service_operations"] == {
+        NAMED_SERVICES_RESOURCE: {
+            "work": ["object.action.review.accept", "object.search"],
+        }
+    }
     assert result["projection"]["capabilities"]["skills"] == []
 
 
@@ -538,5 +627,122 @@ async def test_sync_without_a_saved_preference_uses_the_descriptor_default() -> 
         )
 
     payload = calls[0].request["payload"]
-    assert payload["selected_capabilities"] == payload["capability_authority"]
-    assert result["projection"] == payload["capability_authority"]
+    assert payload["selected_capabilities"] != payload["capability_authority"]
+    assert payload["selected_capabilities"]["capabilities"]["models"] == [
+        "anthropic/claude-sonnet-4-6"
+    ]
+    assert payload["selected_capabilities"]["capabilities"][
+        "instruction_profiles"
+    ] == ["full"]
+    assert result["projection"] == payload["selected_capabilities"]
+
+
+def _namespace_operation_catalog() -> dict:
+    return {
+        "agent": AGENT,
+        "tools": [],
+        "mcp": [],
+        "named_services": [
+            {
+                "namespace": "slack",
+                "alias": "named_services",
+                "operations": ["object.list", "object.action"],
+                "realm": {
+                    "label": "Slack",
+                    "operations": [{"name": "object.list"}],
+                    "actions": [
+                        {"name": "post_message", "description": "Post a message."},
+                        {"name": "upload_file", "description": "Upload a file."},
+                    ],
+                },
+            }
+        ],
+        "resources": [],
+        "skills": [],
+        "conversation_targets": [],
+        "delegated_resource_families": [],
+        "subagents": {"available": False},
+    }
+
+
+def _namespace_operation_props() -> dict:
+    return {
+        "delegated_catalog": {
+            "version": "1",
+            "named_service_namespaces": [
+                {
+                    "resource": NAMED_SERVICES_RESOURCE,
+                    "namespaces": {
+                        "slack": {
+                            "tools": {
+                                "list": {
+                                    "operation": "object.list",
+                                    "grants": ["named_services:use"],
+                                },
+                                "action": {
+                                    "operation": "object.action",
+                                    "operations": {
+                                        "object.action.post_message": {
+                                            "grants": [
+                                                "named_services:use",
+                                                "slack:post",
+                                            ],
+                                        },
+                                        "object.action.upload_file": {
+                                            "grants": [
+                                                "named_services:use",
+                                                "slack:files:write",
+                                            ],
+                                        },
+                                    },
+                                },
+                            }
+                        }
+                    },
+                }
+            ],
+        }
+    }
+
+
+def test_granting_a_namespace_operation_grants_the_actions_reached_through_it() -> None:
+    payload = descriptor_capability_payload(
+        bundle_props=_namespace_operation_props(),
+        catalog=_namespace_operation_catalog(),
+        tenant=TENANT,
+        project=PROJECT,
+        application=APPLICATION,
+        agent_id=AGENT,
+    )
+    authority = payload["capability_authority"]["capabilities"][
+        "named_service_operations"
+    ]
+    catalog = payload["capability_catalog"]["capabilities"][
+        "named_service_operations"
+    ]
+
+    assert "slack/object.action.post_message" in authority
+    assert "slack/object.action.upload_file" in authority
+    assert set(catalog) <= set(authority)
+
+
+def test_a_granted_action_carries_the_claims_that_action_needs() -> None:
+    payload = descriptor_capability_payload(
+        bundle_props=_namespace_operation_props(),
+        catalog=_namespace_operation_catalog(),
+        tenant=TENANT,
+        project=PROJECT,
+        application=APPLICATION,
+        agent_id=AGENT,
+    )
+
+    assert payload["resource_grants"][NAMED_SERVICES_RESOURCE] == [
+        "named_services:use",
+        "slack:files:write",
+        "slack:post",
+    ]
+    assert payload["named_service_operations"][NAMED_SERVICES_RESOURCE]["slack"] == [
+        "object.action.post_message",
+        "object.action.upload_file",
+        "object.list",
+    ]

@@ -2927,8 +2927,8 @@ class BaseWorkflow():
         conversation while later revocations still close immediately. An
         unavailable Card or conversation projection closes every selectable
         capability while platform system tools remain outside this boundary.
-        PostgreSQL separately stores model, instruction, presentation, and
-        cache preferences.
+        The Agent Card supplies model and instruction defaults. PostgreSQL
+        stores conversation overrides, presentation, and cache preferences.
         """
         BaseWorkflow._clear_resident_runtime_projection(self)
         narrowed_tools = tool_config
@@ -3079,6 +3079,7 @@ class BaseWorkflow():
 
             from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import (
                 agent_card_revision,
+                capability_preferences_from_projection,
                 conversation_capability_projections,
                 deny_all_capabilities,
                 disabled_from_projection,
@@ -3098,6 +3099,7 @@ class BaseWorkflow():
                     else None
                 ),
             )
+            card_preferences: Dict[str, Any] = {}
             try:
                 capability_control = await sync_agent_capability_projection(
                     self,
@@ -3128,6 +3130,10 @@ class BaseWorkflow():
                     conversation_selection,
                 )
                 disabled = disabled_from_projection(
+                    capability_catalog,
+                    effective_projection,
+                )
+                card_preferences = capability_preferences_from_projection(
                     capability_catalog,
                     effective_projection,
                 )
@@ -3166,6 +3172,11 @@ class BaseWorkflow():
                 runtime_ctx.memory_hotset_error = None
             supported = react_supported_models(bundle_props, agent_id)
             matched_pick = match_supported_model((selection or {}).get("model"), supported)
+            if not matched_pick:
+                matched_pick = match_supported_model(
+                    card_preferences.get("model"),
+                    supported,
+                )
             from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import (
                 match_instruction_profile,
                 normalize_presentation_pick,
@@ -3175,6 +3186,11 @@ class BaseWorkflow():
             matched_instructions = match_instruction_profile(
                 (selection or {}).get("instructions"), _instruction_profiles,
             )
+            if not matched_instructions:
+                matched_instructions = match_instruction_profile(
+                    card_preferences.get("instructions"),
+                    _instruction_profiles,
+                )
             matched_presentation = normalize_presentation_pick(
                 (selection or {}).get("presentation")
             )
