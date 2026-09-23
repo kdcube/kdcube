@@ -424,10 +424,10 @@ class BaseEntrypoint:
             return {"ok": False, "error": str(exc), "status": 500}
 
     # -- per-user agent capability selection ----------------------------------
-    # The descriptor Control Card bounds the user's Agent Card. A conversation
-    # snapshots that positive Agent Card projection once, then narrows only its
-    # own stored projection. PostgreSQL separately keeps model/prompt
-    # preferences and the conversation capability snapshot.
+    # The descriptor Control Card is the live ceiling. An Agent Card supplies
+    # starting defaults; each conversation stores its own selection anywhere
+    # inside Control. PostgreSQL separately keeps model/prompt preferences and
+    # conversation capability provenance.
 
     @staticmethod
     def _agent_selection_payload(data: Optional[Dict[str, Any]], kwargs: Dict[str, Any]) -> Dict[str, Any]:

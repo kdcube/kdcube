@@ -1,18 +1,18 @@
 /**
- * Conversation-scoped agent capabilities — the composer-menu read model and
- * explicit-save draft logic.
+ * Agent capability selection — the shared picker read model and explicit-save
+ * draft logic for Agent Card defaults and conversation selection.
  *
  * The server owns the truth: `agent_capabilities` returns the agent's configured
  * inventory (python tool groups with per-tool docs, MCP servers, named-service
- * namespaces, expanded skills) plus the caller's saved selection (a DENY-LIST:
- * what the user turned off; empty = the full configured set). `agent_selection_update`
- * merge-writes partial toggles and clamps them against the live inventory.
+ * namespaces, expanded skills) plus the active scope's saved selection through
+ * a disabled-map adapter. `agent_selection_update` merge-writes partial toggles
+ * and clamps them against the live Control Card inventory.
  *
  * This module holds the wire types and the PURE selection logic the engine and
  * the menu share: applying a toggle patch to the local deny-list (the client
  * mirror of the server's merge semantics) and computing the patch a row toggle
- * produces. Toggles apply from the next message — the backend reads the saved
- * selection per turn, so there is no session invalidation.
+ * produces. Conversation toggles apply from the next message; Agent Card
+ * toggles become the defaults for future conversations.
  */
 
 export type LatestCapabilityRequestOutcome = 'applied' | 'stale' | 'failed'

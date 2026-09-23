@@ -157,7 +157,7 @@ chat widget) renders the composer "+" menu automatically for signed-in users.
   expanded in-chat modal, and a served full-page `capabilities` widget a
   scene can mount and summon (`capabilities.open`). Model, granularity, and
   enforcement:
-  [Conversation-Scoped Agent Capabilities](../../sdk/solutions/user-settings/capabilities-README.md).
+  [Agent Capability Control And Selection](../../sdk/solutions/user-settings/capabilities-README.md).
 - The two chat shells edit a local draft for the active conversation. The user
   presses **Save changes** once; the saved model/capabilities apply from that
   conversation's next message. The independently mounted capability widget
