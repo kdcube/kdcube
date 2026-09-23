@@ -1,32 +1,46 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.09.13.0145"
+  ref: "2026.09.23.0218"
   description: |
-    This release follows 2026.09.02.1429 and carries the authority work of the
-    two weeks after it, so the packaged CLI can be published at the version the
-    repository already declares.
+    This release follows 2026.09.02.1429 and covers the three weeks after it.
+    It publishes the platform images and the tag, and it is the record the
+    packaged CLI is published from.
 
-    Delegated authority is now carried by the Card itself, end to end: a Card
-    is the delegation edge through the Data Bus, application Cards downscope
-    runtime roles and are enforced per operation, conversation reads are scoped
-    on every transport, and conversation targets are enforced per application
+    **Delegated authority is carried by the Card, end to end.** A Card is the
+    delegation edge through the Data Bus, application Cards downscope runtime
+    roles and are enforced per operation, conversation reads are scoped on
+    every transport, and conversation targets are enforced per application
     across named-service calls. An application owns its delegated catalog,
-    which the CLI can check and apply as reviewed fragments.
+    which the CLI checks and applies as reviewed fragments.
 
-    Agent capabilities became a Card boundary: a descriptor's declaration is
-    the ceiling, the per-user Agent Card holds the defaults a new conversation
-    starts from, a conversation selects within the live Control Card, and a
-    retained selection the declaration no longer allows reads as missing.
+    **Agent capabilities became a Card boundary.** A descriptor's declaration
+    is the ceiling, expressed as a Control Card. The per-user Agent Card holds
+    the editable defaults a new conversation starts from. A conversation
+    selects anywhere inside the live Control, a removal from the declaration
+    applies at once, an addition stays off until selected, and a retained
+    selection the declaration no longer allows reads as missing.
 
-    OAuth gained the device authorization flow for hosts without a browser,
+    **Secrets moved to a host vault.** The protocol, workload identity,
+    durable store and broker, durable local integration, governed management
+    with human export, a canonical CLI with portable approval, a verified
+    migration lifecycle, provider-neutral maintenance, and a runtime start
+    that ensures a configured vault before it runs. Browser login state and
+    create-only ephemeral secret custody live there.
+
+    **Browser sign-in is platform-hosted and descriptor-owned.** One session
+    lane and one session helper for every surface, a sign-out URL per origin
+    with declared return origins, proxylogin optional rather than required,
+    the platform principal preserved across login lanes, protected app shells
+    requiring login, and auth provider edits applied live from Connection Hub
+    over a platform settings bus.
+
+    **OAuth** gained the device authorization flow for hosts with no browser,
     whole-Card agent credentials, and a first consent seeded from the
-    requested authority instead of an empty pick list. Login state moved to
-    the host secret backend, and create-only ephemeral secret custody landed
-    beneath it.
+    requested authority instead of an empty pick list.
 
-    The hybrid index re-exports from app-foundation, an empty query browses a
-    scope, a lexical-only collection stops paying for vectors, and hybrid
-    search can return the matched passage.
+    **The hybrid index** re-exports from app-foundation, an empty query
+    browses a scope, a lexical-only collection stops paying for vectors, and
+    hybrid search can return the matched passage.
 
 config:
-  version: "2026.09.13.0145"
+  version: "2026.09.23.0218"
