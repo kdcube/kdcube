@@ -38,6 +38,21 @@ platform:
     whole-Card agent credentials, and a first consent seeded from the
     requested authority instead of an empty pick list.
 
+    **The CLI gained deployment control.** A deployment target control API and
+    a delegated deployment control service with hardened delegated sessions,
+    local platform targets, deleting one bundle by id behind a guarded
+    deprovision, and activation records that name what loaded and fence it on
+    a commit. This is the first published version carrying
+    `kdcube_cli.management` and `kdcube_cli.control`, which the Connection Hub
+    CLI builds on.
+
+    **Productivity mail is a realm across providers.** iCloud joins Gmail on
+    both doors, with drafts, send and send-draft, filing a sent message,
+    reading one attachment inline, and Drive folder placement at parity with
+    the productivity door. Conversations gained keyset message paging and
+    scoped durable search, and the agent harness runs standalone outside a
+    container.
+
     **The hybrid index** re-exports from app-foundation, an empty query
     browses a scope, a lexical-only collection stops paying for vectors, and
     hybrid search can return the matched passage.
