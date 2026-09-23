@@ -76,7 +76,9 @@ def device_consent_binding(context: Mapping[str, Any]) -> dict[str, Any] | None:
 
 
 def verification_uri(issuer: str) -> str:
-    return f"{str(issuer or '').rstrip('/')}/oauth/device"
+    base = str(issuer or "").rstrip("/")
+    suffix = "/device" if base.endswith("/oauth") else "/oauth/device"
+    return f"{base}{suffix}"
 
 
 def verification_uri_complete(issuer: str, user_code: str) -> str:
