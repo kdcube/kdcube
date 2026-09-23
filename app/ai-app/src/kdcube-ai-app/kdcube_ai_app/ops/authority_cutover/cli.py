@@ -31,6 +31,7 @@ from kdcube_ai_app.ops.authority_cutover.evidence import (
 from kdcube_ai_app.ops.authority_cutover.runtime import (
     open_reset_source,
     open_reset_target,
+    rehearse_reset_target,
 )
 
 
@@ -107,7 +108,7 @@ async def _apply(args: argparse.Namespace) -> int:
 
 
 async def _preflight_target(args: argparse.Namespace) -> int:
-    """Validate reviewed evidence and open the target before quiescence."""
+    """Rehearse reviewed data against the target before quiescence."""
 
     preview = await read_migration_preview(args.preview_file)
     require_reviewed_reset(dict(preview.prerequisites))
@@ -117,8 +118,19 @@ async def _preflight_target(args: argparse.Namespace) -> int:
     if preview.blockers:
         raise MigrationEvidenceMismatch("authority_migration_preview_has_blockers")
 
-    target = await open_reset_target(get_settings())
+    settings = get_settings()
+    source = None
+    target = None
     try:
+        source = await open_reset_source(settings)
+        target = await open_reset_target(settings)
+        destination = await rehearse_reset_target(
+            settings,
+            source=source.source,
+            target_runtime=target,
+            preview=preview,
+            confirmed_preview_sha256=confirmed,
+        )
         print(
             json.dumps(
                 {
@@ -127,13 +139,17 @@ async def _preflight_target(args: argparse.Namespace) -> int:
                         target.schema_report.verified_tables
                     ),
                     "target": "durable-authority",
+                    "rehearsed_records": len(destination.records),
                 },
                 sort_keys=True,
             )
         )
         return 0
     finally:
-        await target.close()
+        if target is not None:
+            await target.close()
+        if source is not None:
+            await source.close()
 
 
 async def async_main(argv: Sequence[str] | None = None) -> int:

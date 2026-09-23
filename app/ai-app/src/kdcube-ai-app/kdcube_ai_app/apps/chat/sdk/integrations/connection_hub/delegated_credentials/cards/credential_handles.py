@@ -16,6 +16,9 @@ from connection_hub.delegated_credentials.cards.handle_authority import (
 from connection_hub.delegated_credentials.cards.resident_secrets import (
     ResidentCardSecretService,
 )
+from connection_hub.delegated_credentials.cards.resident_secrets.model import (
+    ResidentSecretStore,
+)
 from kdcube_ai_app.infra.secrets.ephemeral import (
     KDCubeEphemeralSecretStore,
     ephemeral_secret_store,
@@ -41,7 +44,7 @@ def postgres_card_credential_handle_store(
     tenant: str,
     project: str,
     settings: Any | None = None,
-    secret_store: KDCubeEphemeralSecretStore | None = None,
+    secret_store: ResidentSecretStore | None = None,
 ) -> PostgresCardCredentialHandleStore:
     """Bind package-owned metadata and lifecycle to KDCube host custody."""
 
