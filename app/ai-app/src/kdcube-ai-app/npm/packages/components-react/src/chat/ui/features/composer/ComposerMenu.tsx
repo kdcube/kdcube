@@ -197,8 +197,8 @@ function MenuRow({
           {baseChecked !== undefined ? (
             <span className="k-menu-tag">
               {editingAgentBase
-                ? inherited ? 'Saved default' : 'Changed here'
-                : inherited ? 'Inherited' : 'Changed here'}
+                ? inherited ? 'Current default' : 'New default'
+                : inherited ? 'Starting value' : 'This conversation'}
             </span>
           ) : null}
           {aside}
