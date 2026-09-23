@@ -1,17 +1,17 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/user-settings/capabilities-README.md
 title: "Agent Capability Control And Selection"
-summary: "How descriptor authority, a user's Agent Card base, and a conversation-local positive selection combine to govern runtime exposure and the capability picker."
+summary: "How descriptor authority defines the capability ceiling, Agent Card selections define user defaults, and conversations choose within that live range."
 status: current
 tags: ["sdk", "solutions", "capabilities", "agent-selection", "control-card", "connection-hub", "picker", "widget"]
-updated_at: 2026-09-22
+updated_at: 2026-09-23
 keywords:
   [
     "agent_capabilities",
     "agent_selection_update",
     "agent capability Control Card",
-    "Agent Card base",
-    "conversation capability snapshot",
+    "Agent Card defaults",
+    "conversation capability selection",
     "capability projection",
     "allowed_selected",
     "allowed_unselected",
@@ -33,16 +33,16 @@ see_also:
 # Agent Capability Control And Selection
 
 An application descriptor says what one hosted agent may use. KDCube turns
-that declaration into a live Connection Hub boundary, lets each user keep a
-positive Agent Card base inside it, and lets each conversation narrow that
-base without rewriting it. The same effective projection governs the picker
-and the next agent turn.
+that declaration into a live Connection Hub boundary, lets each user save
+Agent Card defaults inside it, and lets each conversation choose independently
+inside the same boundary. The same effective projection governs the picker and
+the next agent turn.
 
 This page owns the KDCube capability-projection and picker contract. Connection
 Hub owns Card persistence, revisioning, composition, drift, and enforcement;
 see [Delegated Access Cards](../connections/delegated-cards/delegated-cards-README.md).
 
-## Three authority layers, one effective projection
+## One authority ceiling, two selections
 
 ```text
 APP + AGENT DESCRIPTOR
@@ -58,43 +58,43 @@ STABLE CREDENTIALLESS CONTROL CARD
               | linked when the user's stable Agent Card is created
               v
 STABLE AGENT CARD
-  positive base explicitly selected for this user and agent
-  edited in Connection Hub
+  positive defaults explicitly selected for this user and agent
+  editable in the Agent Card picker or Connection Hub
               |
-              v  snapshot once for a new conversation
-CONVERSATION BASE + CONVERSATION SELECTION
-  finite positive projections stored for this conversation
-  picker writes replace only the conversation selection
+              v  copied as the initial value for a new conversation
+CONVERSATION SELECTION
+  positive selection stored for this conversation
+  picker may choose any current Control-allowed capability
               |
-              v  intersect on every read and turn
+              v  intersect with current Control on every read and turn
 EFFECTIVE PROJECTION
-  current Control ∩ current Agent Card ∩ conversation base ∩ conversation selection
+  current Control ∩ conversation selection
               |
               +-- runtime tool/skill/service/target exposure
               +-- picker state for the same catalog rows
 ```
 
-`agent_capability.sync` resolves the current Control Card and Agent Card
-composition. On the first materialized read for a conversation, KDCube stores
-that finite positive projection as both the conversation base and its initial
-selection. On every later read and turn, KDCube intersects the current Card
-projection with the stored base and stored selection. The runtime translates
-that result into its existing internal disabled-map adapter and narrows the
-tool config, skill config, named-service dispatcher, conversation targets,
-resource operations, resource families, and subagent installation. The
-adapter is not another authority source.
+`agent_capability.sync` resolves the current Control Card and Agent Card. On
+the first materialized read for a conversation, KDCube stores the Agent Card
+selection as both provenance and the conversation's initial selection. The
+Agent Card is a default, not a second ceiling: that conversation can later
+select any capability permitted by the current Control Card, including one
+that was not selected on the Agent Card when the conversation started.
 
-A finite positive base is required. A deny list cannot name a capability that
-did not exist when the conversation started, so a later catalog or Agent Card
-addition could otherwise enter an open conversation implicitly. Current Card
-revocations still close access immediately. If a capability that belonged to
-the original conversation base is later re-granted, it becomes effective again
-only when the conversation selection still includes it.
+On every read and turn, KDCube intersects the current Control authority with
+the stored conversation selection. A Control removal closes access
+immediately. A Control addition becomes selectable immediately but stays off
+until the user selects it; neither an Agent Card nor an existing conversation
+grows implicitly. The runtime translates the effective projection into its
+existing internal disabled-map adapter and narrows the tool config, skill
+config, named-service dispatcher, conversation targets, resource operations,
+resource families, and subagent installation. The adapter is not another
+authority source.
 
 Platform system tools are outside this user-selectable boundary. Every
-descriptor capability is inside it. If the current Card projection or the
-conversation projection cannot be resolved, selectable capabilities close for
-the turn; preference-store availability never widens that result.
+descriptor capability is inside it. If the current Control authority or the
+required conversation selection cannot be resolved, selectable capabilities
+close for the turn; preference-store availability never widens that result.
 
 ## Authority is data, presentation is metadata
 
@@ -125,29 +125,35 @@ Each selectable row has exactly one authority state:
 
 | State | Meaning | Picker behavior | Runtime behavior |
 | --- | --- | --- | --- |
-| `allowed_selected` | The current Control Card permits it and the Agent Card selects it. | Its conversation state is shown below. | Exposed only if the conversation base and selection also include it. |
-| `allowed_unselected` | The current Control Card permits it, but the Agent Card does not select it. | Unchecked, disabled, and labeled **Not in Agent Card**. | Not exposed. |
+| `allowed_selected` | The current Control Card permits it and the current scope selects it. | Checked and mutable. The scope label distinguishes an Agent Card default from a conversation choice. | Exposed in the current scope. |
+| `allowed_unselected` | The current Control Card permits it, but the current scope does not select it. | Unchecked and mutable. | Not exposed until selected in the current scope. |
 | `not_allowed` | It appears in the live descriptive catalog but is outside the current Control authority, or the projection is unavailable. | Unchecked, disabled, and labeled **Not permitted**; expandable details remain readable. | Not exposed. |
 
-Within `allowed_selected`, the conversation adds two visible facts:
+The Agent Card picker labels values that are already persisted as **Saved
+default**. The conversation picker labels values that still match its starting
+defaults as **Inherited**, and values changed for that conversation as
+**Changed here**. These labels describe provenance; none of them locks a row.
+Only `not_allowed` is immutable.
 
-- a row outside the conversation's frozen base is disabled and labeled **Not
-  in conversation base**;
-- a row inside that base is tagged **Inherited** while it matches the starting
-  state, or **Changed here** after this conversation turns it off or back on.
-
-The unscoped served picker shows capability rows from the Agent Card base
-read-only and names that state in the surface. Its Connection Hub action carries
-the stable resident Card id and opens that exact Card's editor. Model,
-instruction, presentation, and cache choices remain user preferences and do not
-inherit the capability-row lock. A picker opened from a chat carries that
-conversation id and changes only that conversation.
+The unscoped served picker edits Agent Card defaults and names that state in
+the surface. Saving replaces the positive Agent Card selection within the
+Control ceiling. A picker opened from chat carries the current conversation id
+and changes only that conversation. Every open fetches its own scope; while
+that request is pending, the picker shows loading rather than presenting a
+cached Agent Card or another conversation as current.
 
 The first materialized conversation snapshot stores both its finite positive
-base and the exact Agent Card revision that supplied it. The picker displays
-that revision. Current Card revocations still intersect the frozen base on
-every read, while capabilities added by later Card revisions remain outside the
-conversation until a new conversation is started.
+starting value and the exact Agent Card revision that supplied it. The picker
+displays that revision as provenance. Later Agent Card edits change defaults
+for future conversations, not this conversation. Current Control revisions
+still govern the live range: removals deny immediately and additions become
+available for explicit selection.
+
+When an Agent Card still selects an identity that a later Control revision no
+longer declares, the picker retains and displays that saved identity under
+**Missing from Control Card**. It is unavailable and excluded from the
+effective projection, but it is not silently erased from the durable user
+choice.
 
 Selecting one operation selects only that operation. Sharing a claim with a
 sibling operation does not select the sibling visually or operationally. A
@@ -179,15 +185,16 @@ the descriptor defaults into the initial positive Agent Card selection. An
 existing saved deny map is applied to those defaults before that first Card is
 created. Once the Card exists, its positive selection is the durable user
 choice; later synchronization does not replace it from PostgreSQL or from a
-new descriptor default. PostgreSQL owns each conversation's immutable starting
-base and mutable conversation selection.
+new descriptor default. PostgreSQL owns each conversation's starting
+provenance and mutable conversation selection.
 
 Connection Hub gives these two Cards different owner surfaces. The resident
-Agent Card editor changes only the positive base inside the linked descriptor
-ceiling and writes a revision-checked Card update. The linked descriptor
-Control Card displays its authority and presentation metadata as a
-descriptor-managed ceiling; changing the descriptor, then synchronizing,
-revises it. It is not shown as an empty generic resource Card.
+Agent Card editor and KDCube's full-page Agent Card picker change only the
+positive defaults inside the linked descriptor ceiling and write a
+revision-checked Card update. The linked descriptor Control Card displays its
+authority and presentation metadata as a descriptor-managed ceiling; changing
+the descriptor, then synchronizing, revises it. It is not shown as an empty
+generic resource Card.
 The editor groups child tools and operations beneath their tool group, MCP
 server, named service, or resource, and shows declared descriptions in the
 form. Repeated operation labels therefore retain their owning context.
@@ -196,10 +203,10 @@ Descriptor, Agent Card, and conversation changes remain independent:
 
 | Change | Result |
 | --- | --- |
-| Descriptor removes a capability | The Control Card revision removes it; the next live intersection denies it without changing the Agent Card, conversation rows, or credential. |
-| Descriptor adds a capability | It appears outside existing Agent Cards and conversations. An authorized user must add it to an Agent Card in Connection Hub; only a conversation first materialized afterward can inherit it. |
-| User changes an Agent Card | Connection Hub writes a new Card revision. New conversations inherit the new base; open conversations remain bounded by their stored starting base and current revocations. |
-| User changes a chat picker | `agent_selection_update` replaces only that conversation's positive selection. It never changes the Agent Card or another conversation. |
+| Descriptor removes a capability | The Control Card revision removes it; the next live intersection denies it without changing the credential. A retained Agent Card choice is shown as **Missing**. |
+| Descriptor adds a capability | It becomes selectable in Agent Card and conversation pickers but remains off in existing selections until explicitly chosen. |
+| User changes Agent Card defaults | A revision-checked Card update replaces the positive defaults. New conversations start from them; existing conversation selections do not change. |
+| User changes a chat picker | `agent_selection_update` replaces only that conversation's positive selection. It may select any current Control-allowed capability and never changes the Agent Card or another conversation. |
 | Labels or other metadata change | The picker can show the new presentation without treating it as authority. |
 
 The remint rule depends on the authorization representation. A static or
@@ -207,10 +214,10 @@ embedded credential grant never grows because a descriptor/catalog grew; it
 needs an explicit new grant and, for snapshot credentials, re-consent or
 re-minting. This hosted-agent capability relationship is pointer-backed: the
 credential continues to identify the Agent Card, while the current Control
-Card and Agent Card selection are resolved live. Revising descriptor authority
-therefore does not remint that credential. A newly offered capability still
-stays outside the Agent Card until the user chooses it in Connection Hub, and
-outside existing conversation bases afterward.
+Card authority is resolved live. Revising descriptor authority therefore does
+not remint that credential. A newly offered capability stays off in each
+existing Agent Card and conversation selection until the user chooses it in
+that scope.
 
 ## Resource selectors and data ownership
 
@@ -243,10 +250,12 @@ boundary is documented in [Conversation Search](../conversation/search-README.md
 Two app operations carry the surface:
 
 - `agent_capabilities` reads the descriptive catalog, preference choices,
-  current Card projection, and the named conversation snapshot. With no
-  conversation id it returns the Agent Card base as a read-only scope.
-- `agent_selection_update` requires a conversation id for capability changes
-  and saves the draft as that conversation's positive selection. The same
+  current Control and Agent Card projection, and the named conversation
+  selection. With no conversation id it returns the editable Agent Card
+  defaults.
+- `agent_selection_update` saves according to the explicit scope. With a
+  conversation id it replaces that conversation's positive selection. Without
+  one it replaces the Agent Card defaults through Connection Hub. The same
   request may update model, instruction, presentation, and cache preferences
   in PostgreSQL; those fields are not Card authority.
 
@@ -255,17 +264,18 @@ The picker body (`useCapabilityPickerBody` in
 expanded modal, and the served `capabilities` widget. The shells share one
 draft and save only on **Save changes**. Closing and reopening retains the
 draft for the active chat; changing conversations drops unsaved UI state.
-Saved capability changes apply to that conversation from its next message.
-Cache timing choices do not change their scope. Model, instruction,
-presentation, and cache preferences retain their own baseline and conversation
-rules described below.
+Saved composer changes apply to that conversation from its next message;
+saved full-page changes become the defaults for new conversations. Cache
+timing choices do not change their scope. Model, instruction, presentation,
+and cache preferences retain their own baseline and conversation rules
+described below.
 
 ## Preferences, consent, and service descriptions
 
 Model, instruction, presentation, and cold-cache-policy choices remain typed
 preferences in `user_bundle_props`; see the
 [User Settings Solution](user-settings-solution-README.md). A preference-store
-failure falls back to configured preference defaults while the current Card
+failure falls back to configured preference defaults while the current Control
 and conversation capability projection remains in force.
 
 Connected-account coverage is also separate. Coverage chips describe whether

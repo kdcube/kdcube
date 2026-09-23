@@ -4,7 +4,7 @@ title: "How To Construct A ReAct Agent"
 summary: "The full story of creating and customizing a ReAct agent from app code and config: construction, Card and conversation capability projection, user preferences, and prompt-cache consequences."
 status: current
 tags: ["sdk", "agents", "react", "how-to", "configuration", "per-user-selection", "control-card", "supported-models", "composer-menu"]
-updated_at: 2026-09-21
+updated_at: 2026-09-23
 keywords:
   [
     "build_react",
@@ -57,8 +57,8 @@ turn arrives (BaseWorkflow.__init__ built runtime_ctx: tenant/project/user_id/
   │      → AgentSkillConfig: custom_skills_root, agents_config
   │                                     (from surfaces.as_consumer.agents.<id>.skills)
   ├─ 3. apply_user_agent_selection(tool_config, skill_config)
-  │      → current Control Card ∩ Agent Card ∩ conversation base ∩
-  │        conversation selection narrows both configs; scoped preference
+  │      → current Control Card ∩ conversation selection narrows both
+  │        configs; Agent Card supplies initial defaults; scoped preference
   │        picks overlay the runtime context (capabilities fail closed;
   │        preferences use configured fallbacks)
   ├─ 4. apply_delegated_tool_claims(tool_config)
@@ -205,39 +205,40 @@ account is connected.
 On top of the descriptor inventory, each signed-in user has one stable Agent
 Card for an app/agent caller profile. KDCube also materializes a stable
 credentialless Control Card from that app/agent descriptor and links it to the
-Agent Card. A conversation snapshots their finite positive intersection once,
-then Step 3 applies all four layers on every turn:
+Agent Card. The Agent Card supplies the defaults copied into a new
+conversation; it is not another authority ceiling. Step 3 applies the live
+Control ceiling to that conversation's current selection on every turn:
 
 ```text
-effective capabilities = current Control ∩ current Agent Card
-                       ∩ conversation base ∩ conversation selection
+effective capabilities = current Control ∩ conversation selection
 ```
 
-The Agent Card stores the user's positive base and is edited in Connection
-Hub. A newly published descriptor capability stays outside that base until the
-user adds it there. A new conversation inherits the Agent Card state once;
-later additions do not enter an open conversation, while current Card
-revocations deny it on the next intersection. Neither change creates a new
-resident identity or requires a new hosted-agent credential. System tools
-remain outside the selectable boundary.
+The Agent Card stores the user's positive defaults and is editable through the
+Agent Card picker or Connection Hub. A new conversation starts from those
+defaults, then may select any capability inside the current Control Card even
+when that capability is absent from the Agent Card. Control additions remain
+off until explicitly selected and Control removals deny on the next
+intersection. Neither change creates a new resident identity or requires a new
+hosted-agent credential. System tools remain outside the selectable boundary.
 
 Two operations on the SDK entrypoint base expose this contract to registered
 users and above:
 
 - `agent_capabilities` returns the descriptive catalog, scoped preference
-  choices, the current Card projection, the conversation base and selection,
-  and their visible state on each capability row.
-- `agent_selection_update` requires a conversation id for capability changes,
-  replaces only that conversation's positive selection, and may update model,
-  instruction, presentation, and cache preferences in the same save.
+  choices, current Control and Agent Card state, the conversation selection,
+  and the visible state of each capability row.
+- `agent_selection_update` replaces the named conversation's positive
+  selection when a conversation id is present; without one it replaces the
+  Agent Card defaults. The request may update model, instruction,
+  presentation, and cache preferences in the same save.
 
-An unavailable Card projection fails closed for selectable capabilities. The
-picker identifies Control, Agent Card, and conversation-base exclusions, and
-the runtime removes them. PostgreSQL stores the conversation capability
-snapshot plus preference fields and a compatibility seed for the first Card
-migration. Capability-snapshot failures close selectable capabilities;
-preference failures fall back to configured model and presentation behavior
-without granting any missing capability.
+Unavailable Control authority or a required conversation selection fails
+closed for selectable capabilities. The picker keeps every Control-allowed row
+mutable, disables only rows outside Control, and exposes retained Agent Card
+defaults removed from Control as missing. PostgreSQL stores conversation
+selection and provenance plus preference fields. Capability-selection failures
+close selectable capabilities; preference failures fall back to configured
+model and presentation behavior without granting any missing capability.
 
 The complete capability families, Card bootstrap, three-state picker, wildcard
 resource semantics, and descriptor-change rules are owned by
@@ -303,11 +304,11 @@ The chat engine carries the agent identity and the selection UI end to end:
   Connection-Hub entry that renders only when opening it can actually happen —
   a host that acks the `connection_hub.settings` surface command owns the
   open, and without an ack the served connections widget opens directly.
-- Saved capability toggles revise only the active conversation and affect its
-  next turn. Saved preference changes follow their selected cache-policy
-  timing. Switching conversations discards unsaved UI edits and loads that
-  conversation's own projection. A chat-originated Capabilities window carries
-  the conversation id; an unscoped window shows the Agent Card base read-only.
+- Saved composer capability toggles revise only the active conversation and
+  affect its next turn. Saved preference changes follow their selected
+  cache-policy timing. Switching conversations discards unsaved UI edits and
+  loads that conversation's own projection. The unscoped capability window
+  edits the Agent Card defaults used by future conversations.
 
 The engine API detail (state branch, draft/save methods, switch-race handling) is owned by
 [Chat Engine](../../../npm/components-core/chat-engine-README.md); the

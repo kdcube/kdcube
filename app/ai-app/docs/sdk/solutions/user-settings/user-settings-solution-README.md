@@ -1,10 +1,10 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/user-settings/user-settings-solution-README.md
 title: "User Settings Solution"
-summary: "The typed user-settings construct over user_bundle_props: durable preferences, explicit scope, and the conversation-local capability restriction composed beneath Connection Hub Cards."
+summary: "The typed user-settings construct over user_bundle_props: durable preferences, explicit scope, and conversation capability selection within a live Control Card ceiling."
 status: current
 tags: ["sdk", "solutions", "user-settings", "user_bundle_props", "preferences", "conversation-settings", "storage"]
-updated_at: 2026-09-21
+updated_at: 2026-09-23
 keywords:
   [
     "user_bundle_props",
@@ -35,10 +35,10 @@ and read at the runtime boundary that owns the choice. Each setting family
 defines its scope, typed key, defaults, and write semantics.
 
 Control Card and Agent Card authority are not user-settings records. A hosted
-agent's current capabilities are the current Card intersection narrowed by a
-finite positive conversation base and conversation selection. PostgreSQL
-stores that conversation-local restriction alongside model, instruction,
-presentation, and cache preferences. The complete distinction is owned by
+agent's authority ceiling is the current Control Card; its Agent Card stores
+defaults for new conversations. PostgreSQL stores each conversation's positive
+selection and starting provenance alongside model, instruction, presentation,
+and cache preferences. The complete distinction is owned by
 [Agent Capability Control And Selection](capabilities-README.md).
 
 ## Storage model
@@ -64,9 +64,9 @@ hoc; see the [App User Settings recipe](../../../recipes/constructs/user-setting
 
 Secrets, credential handles, Control or Agent Card authority, turn logs,
 timelines, cache warmness, summaries, and artifacts do not belong in
-`value_json`. A conversation's positive capability snapshot does belong here:
-it can only narrow the Cards and is checked against their current projection
-on every turn.
+`value_json`. A conversation's positive capability selection does belong here:
+it chooses within the current Control Card and is checked against that live
+ceiling on every turn.
 
 ## Shipped stores
 
@@ -128,14 +128,16 @@ selection. Current Agent Card reads and writes then use Connection Hub.
 `conversation:<conversation_id>:agent_capability_selection:<agent_id>`. Its
 record contains two finite positive projections:
 
-- `base_projection` is written once from the current Agent Card projection;
-- `projection` starts equal to that base and is replaced by explicit saves in
-  that conversation's picker.
+- `base_projection` records the Agent Card defaults from which the conversation
+  started;
+- `projection` starts equal to those defaults and is replaced by explicit saves
+  in that conversation's picker.
 
-Insert-if-absent makes simultaneous first reads converge on one base. The
-stored projections never widen Card authority: every read and turn computes
-`current Cards ∩ base_projection ∩ projection`. Storage failure closes
-selectable capabilities instead of applying preference fallback behavior.
+Insert-if-absent makes simultaneous first reads converge on one starting
+value. `base_projection` is provenance, not a ceiling: the conversation can
+select any capability in the current Control Card. Every read and turn computes
+`current Control ∩ projection`. Storage failure closes selectable
+capabilities instead of applying preference fallback behavior.
 
 ## Preference semantics
 
@@ -162,23 +164,24 @@ selectable capabilities instead of applying preference fallback behavior.
 ```text
 composer / capabilities widget
   -> agent_capabilities
-       current Cards + conversation capability snapshot + typed preferences
+       current Control + Agent defaults or conversation selection + typed preferences
   -> local draft
   -> explicit Save changes
   -> agent_selection_update
-       capability draft -> this conversation's positive projection
+       scoped capability draft -> Agent Card defaults or conversation projection
        preference fields -> user_bundle_props at the explicit scope
 
 turn start
-  -> resolve current Control Card and Agent Card (fail closed)
-  -> intersect the conversation base and selection (fail closed)
+  -> resolve current Control Card (fail closed)
+  -> intersect the conversation selection (fail closed)
   -> read scoped preferences (configured fallback on failure)
   -> narrow executable capabilities, then apply preference overlays
 ```
 
 The capability picker can save both halves in one operation, but that transport
 convenience does not merge their authority models. Capability changes revise
-only the named conversation and apply from its next message. The Agent Card
-base is edited separately in Connection Hub. Model, instruction, presentation,
-and deferred cache behavior retain their explicit baseline or conversation
-scope.
+the named conversation when a conversation id is present and apply from its
+next message. Without a conversation id, they replace Agent Card defaults
+through Connection Hub for future conversations. Model, instruction,
+presentation, and deferred cache behavior retain their explicit baseline or
+conversation scope.
