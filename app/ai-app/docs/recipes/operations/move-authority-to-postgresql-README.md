@@ -133,12 +133,20 @@ kdcube authority apply \
 are stopped, and leaves them stopped. PostgreSQL, Redis, and the secret service
 remain available to the one-off operation.
 
-`preflight` validates the reviewed artifact, opens the PostgreSQL target, and
-exercises the resident-secret mutation path through the real broker and Host
-Vault while both writers remain running. `apply` repeats that preflight before
-it stops either writer. A target or vault failure therefore leaves both
-writers running. The command repeats the authoritative evidence and generation
-checks after quiescence before it imports anything.
+`preflight` validates the reviewed artifact, opens the PostgreSQL target,
+probes real broker and Host Vault writability, and runs the complete reviewed
+import plus two-way reconciliation while both writers remain running. Every
+SQL-backed store uses one rollback-only transaction. Existing resident secrets
+are read through real custody; new secret creates are staged in memory, leaving
+real custody unchanged. Its result reports `rehearsed_records` and
+`schema_tables_verified`.
+
+`apply` repeats that preflight before it stops either writer. A target or vault
+probe failure therefore leaves both writers running. The command repeats the
+authoritative evidence and generation checks after quiescence before it imports
+anything. It binds every PostgreSQL-backed target store and the activation
+receipt to one outer transaction. PostgreSQL commits only after import and
+two-way reconciliation succeed and the receipt has been written.
 
 Apply reads the source again after quiescence. If any count or preserved record
 changed since preview, it refuses without activating the generation. Leave the
@@ -153,9 +161,19 @@ sync issues a credential for a legacy live descriptor-synchronized Agent Card
 that has none; run that sync before creating a new preview. Repair or explicitly
 expire any remaining incomplete Card; apply never silently disconnects it.
 
-An interrupted apply is rerunnable. Imports refuse conflicting target content,
-the activation receipt is written last, and an exact rerun after activation
-returns the receipt without reading Redis.
+Resident-secret custody remains an external system and cannot participate in a
+PostgreSQL transaction. Apply tracks each secret it creates and deletes it after
+a known SQL rollback. A secret left by an outcome-unknown provider failure is
+inert without its PostgreSQL metadata and expires in custody. A commit,
+rollback, or compensation outcome that cannot be proved is reported explicitly;
+the command does not claim success.
+
+An interrupted apply is rerunnable. Keep the writers stopped and retry the same
+preview path and SHA-256. A known pre-commit failure leaves no imported SQL rows
+or activation receipt. An exact rerun after activation returns the receipt
+without reading Redis. For an outcome-unknown error, inspect the receipt and
+target before retrying; keep the source quiesced until the outcome is resolved.
+Direct table or Host Vault edits are outside this procedure.
 
 ## 4. Select the activated generation
 

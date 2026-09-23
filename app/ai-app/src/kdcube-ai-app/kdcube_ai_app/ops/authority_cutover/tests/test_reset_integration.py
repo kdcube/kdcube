@@ -34,7 +34,7 @@ from connection_hub.delegated_credentials.cards.store import (
     subject_hash_for,
 )
 from connection_hub.delegated_credentials.migration.apply import (
-    apply_reviewed_migration,
+    AuthorityMigrationImportFailed,
 )
 from connection_hub.delegated_credentials.migration.card_source import (
     BundleStorageCardAuthorityLoader,
@@ -80,11 +80,44 @@ from kdcube_ai_app.ops.authority_cutover.rehearsal import (
 from kdcube_ai_app.ops.authority_cutover.schema_preflight import (
     require_authority_target_schema,
 )
+from kdcube_ai_app.ops.authority_cutover.transactional_apply import (
+    TransactionalApplyTarget,
+    apply_migration_in_transaction,
+)
 
 
 class _UnavailableSource:
     async def inspect(self, *, captured_at_ms=None):
         raise AssertionError("an activated rerun must not read Redis")
+
+
+class _InterruptingTarget:
+    def __init__(self, target, *, fail_after: int) -> None:
+        self._target = target
+        self._fail_after = int(fail_after)
+        self.imported = 0
+
+    async def import_record(self, record):
+        if self.imported == self._fail_after:
+            raise RuntimeError("simulated-interruption")
+        result = await self._target.import_record(record)
+        self.imported += 1
+        return result
+
+    async def snapshot(self, *, captured_at_ms=None):
+        return await self._target.snapshot(captured_at_ms=captured_at_ms)
+
+
+class _InterruptingReceipts:
+    def __init__(self, receipts) -> None:
+        self._receipts = receipts
+
+    async def read(self, generation_id):
+        return await self._receipts.read(generation_id)
+
+    async def activate(self, receipt):
+        await self._receipts.activate(receipt)
+        raise RuntimeError("simulated-activation-interruption")
 
 
 @pytest.mark.asyncio
@@ -352,11 +385,110 @@ async def test_reset_preserves_resident_card_and_discards_reconstructable_state(
         assert all(count == 0 for count in empty_target.counts.values())
         assert await receipts.read(generation_id) is None
 
-        receipt = await apply_reviewed_migration(
+        interrupted_targets = []
+
+        async def interrupted_target_factory(
+            transaction_pool,
+            transaction_secret_store,
+        ):
+            interrupted_target = _InterruptingTarget(
+                await rehearsal_target_factory(
+                    transaction_pool,
+                    transaction_secret_store,
+                ),
+                fail_after=2,
+            )
+            interrupted_targets.append(interrupted_target)
+            return TransactionalApplyTarget(
+                target=interrupted_target,
+                receipts=PostgresAuthorityCutoverStore(
+                    pg_pool=transaction_pool,
+                    tenant=tenant,
+                    project=project,
+                ),
+            )
+
+        with pytest.raises(
+            AuthorityMigrationImportFailed,
+            match="simulated-interruption",
+        ):
+            await apply_migration_in_transaction(
+                pg_pool=pool,
+                resident_secret_store=resident_secret_store,
+                target_factory=interrupted_target_factory,
+                preview=preview,
+                source=source,
+                confirmed_preview_sha256=preview.preview_sha256,
+                source_is_quiesced=True,
+            )
+        assert interrupted_targets[0].imported == 2
+        assert await receipts.read(generation_id) is None
+        rolled_back_target = await target.snapshot(
+            captured_at_ms=preview.created_at_ms
+        )
+        assert all(count == 0 for count in rolled_back_target.counts.values())
+
+        async def activation_failure_target_factory(
+            transaction_pool,
+            transaction_secret_store,
+        ):
+            return TransactionalApplyTarget(
+                target=await rehearsal_target_factory(
+                    transaction_pool,
+                    transaction_secret_store,
+                ),
+                receipts=_InterruptingReceipts(
+                    PostgresAuthorityCutoverStore(
+                        pg_pool=transaction_pool,
+                        tenant=tenant,
+                        project=project,
+                    )
+                ),
+            )
+
+        with pytest.raises(
+            RuntimeError,
+            match="simulated-activation-interruption",
+        ):
+            await apply_migration_in_transaction(
+                pg_pool=pool,
+                resident_secret_store=resident_secret_store,
+                target_factory=activation_failure_target_factory,
+                preview=preview,
+                source=source,
+                confirmed_preview_sha256=preview.preview_sha256,
+                source_is_quiesced=True,
+            )
+        assert await receipts.read(generation_id) is None
+        receipt_rollback_target = await target.snapshot(
+            captured_at_ms=preview.created_at_ms
+        )
+        assert all(
+            count == 0 for count in receipt_rollback_target.counts.values()
+        )
+
+        async def apply_target_factory(
+            transaction_pool,
+            transaction_secret_store,
+        ):
+            return TransactionalApplyTarget(
+                target=await rehearsal_target_factory(
+                    transaction_pool,
+                    transaction_secret_store,
+                ),
+                receipts=PostgresAuthorityCutoverStore(
+                    pg_pool=transaction_pool,
+                    tenant=tenant,
+                    project=project,
+                ),
+            )
+
+        receipt = await apply_migration_in_transaction(
+            pg_pool=pool,
+            resident_secret_store=resident_secret_store,
+            target_factory=apply_target_factory,
             preview=preview,
             source=source,
-            target=target,
-            receipts=receipts,
             confirmed_preview_sha256=preview.preview_sha256,
             source_is_quiesced=True,
         )
@@ -426,11 +558,12 @@ async def test_reset_preserves_resident_card_and_discards_reconstructable_state(
             await durable_sessions.validate_token(durable_grant.token)
         ).session_id == durable_grant.session_id
 
-        replayed = await apply_reviewed_migration(
+        replayed = await apply_migration_in_transaction(
+            pg_pool=pool,
+            resident_secret_store=resident_secret_store,
+            target_factory=apply_target_factory,
             preview=preview,
             source=_UnavailableSource(),
-            target=target,
-            receipts=receipts,
             confirmed_preview_sha256=preview.preview_sha256,
             source_is_quiesced=True,
         )

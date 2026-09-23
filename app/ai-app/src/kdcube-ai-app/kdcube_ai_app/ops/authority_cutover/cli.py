@@ -10,9 +10,6 @@ import asyncio
 import json
 from collections.abc import Sequence
 
-from connection_hub.delegated_credentials.migration.apply import (
-    apply_reviewed_migration,
-)
 from connection_hub.delegated_credentials.migration.artifact import (
     read_migration_preview,
     write_migration_preview,
@@ -29,6 +26,7 @@ from kdcube_ai_app.ops.authority_cutover.evidence import (
     reviewed_reset_prerequisites,
 )
 from kdcube_ai_app.ops.authority_cutover.runtime import (
+    apply_reset_target,
     open_reset_source,
     open_reset_target,
     rehearse_reset_target,
@@ -78,11 +76,11 @@ async def _apply(args: argparse.Namespace) -> int:
     target = None
     try:
         target = await open_reset_target(settings)
-        receipt = await apply_reviewed_migration(
+        receipt = await apply_reset_target(
+            settings,
             preview=preview,
             source=source.source,
-            target=target.target,
-            receipts=target.receipts,
+            target_runtime=target,
             confirmed_preview_sha256=args.confirm_preview_sha256,
             source_is_quiesced=bool(args.source_quiesced),
         )

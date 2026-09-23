@@ -59,8 +59,12 @@ from kdcube_ai_app.ops.authority_cutover.schema_preflight import (
     require_authority_target_schema,
 )
 from kdcube_ai_app.ops.authority_cutover.rehearsal import (
-    TransactionBoundPool,
     rehearse_migration_in_rollback,
+)
+from kdcube_ai_app.ops.authority_cutover.transaction import TransactionBoundPool
+from kdcube_ai_app.ops.authority_cutover.transactional_apply import (
+    TransactionalApplyTarget,
+    apply_migration_in_transaction,
 )
 
 
@@ -309,10 +313,47 @@ async def rehearse_reset_target(
     )
 
 
+async def apply_reset_target(
+    settings: Any,
+    *,
+    source: Any,
+    target_runtime: ResetTargetRuntime,
+    preview: Any,
+    confirmed_preview_sha256: str,
+    source_is_quiesced: bool,
+) -> Any:
+    """Apply one reviewed reset with all PostgreSQL writes in one transaction."""
+
+    async def _target_factory(
+        pg_pool: TransactionBoundPool,
+        resident_secret_store: Any,
+    ) -> TransactionalApplyTarget:
+        components = await _compose_reset_target(
+            settings,
+            pool=pg_pool,
+            resident_secret_store=resident_secret_store,
+        )
+        return TransactionalApplyTarget(
+            target=components.target,
+            receipts=components.receipts,
+        )
+
+    return await apply_migration_in_transaction(
+        pg_pool=target_runtime.pool,
+        resident_secret_store=target_runtime.resident_secret_store,
+        target_factory=_target_factory,
+        preview=preview,
+        source=source,
+        confirmed_preview_sha256=confirmed_preview_sha256,
+        source_is_quiesced=source_is_quiesced,
+    )
+
+
 __all__ = [
     "CONNECTION_HUB_BUNDLE_ID",
     "ResetSourceRuntime",
     "ResetTargetRuntime",
+    "apply_reset_target",
     "open_reset_source",
     "open_reset_target",
     "rehearse_reset_target",
