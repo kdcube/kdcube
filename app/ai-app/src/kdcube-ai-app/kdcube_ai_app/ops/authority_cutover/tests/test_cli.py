@@ -37,7 +37,12 @@ def test_target_preflight_opens_and_closes_configured_target(
             nonlocal closed
             closed = True
 
-        return SimpleNamespace(close=close)
+        return SimpleNamespace(
+            close=close,
+            schema_report=SimpleNamespace(
+                verified_tables=tuple(f"table-{index}" for index in range(12))
+            ),
+        )
 
     monkeypatch.setattr(cli, "get_settings", lambda: settings)
     monkeypatch.setattr(cli, "open_reset_target", open_target)
@@ -61,6 +66,7 @@ def test_target_preflight_opens_and_closes_configured_target(
     assert closed is True
     assert json.loads(capsys.readouterr().out) == {
         "ok": True,
+        "schema_tables_verified": 12,
         "target": "durable-authority",
     }
 

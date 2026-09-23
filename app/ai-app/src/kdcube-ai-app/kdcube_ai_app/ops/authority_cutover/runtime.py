@@ -54,6 +54,10 @@ from kdcube_ai_app.auth.migration.target import RuntimeAuthorityMigrationTarget
 from kdcube_ai_app.auth.platform_session_store import PostgresPlatformSessionStore
 from kdcube_ai_app.infra.plugin.bundle_storage import bundle_storage_dir
 from kdcube_ai_app.infra.redis.client import create_async_redis_client
+from kdcube_ai_app.ops.authority_cutover.schema_preflight import (
+    AuthorityTargetSchemaReport,
+    require_authority_target_schema,
+)
 
 
 CONNECTION_HUB_BUNDLE_ID = "connection-hub@1-0"
@@ -72,6 +76,7 @@ class ResetSourceRuntime:
 class ResetTargetRuntime:
     target: RuntimeAuthorityMigrationTarget
     receipts: PostgresAuthorityCutoverStore
+    schema_report: AuthorityTargetSchemaReport
     pool: Any
 
     async def close(self) -> None:
@@ -218,6 +223,10 @@ async def open_reset_target(settings: Any) -> ResetTargetRuntime:
             receipts,
         ):
             await store.ensure_schema()
+        schema_report = await require_authority_target_schema(
+            pool=pool,
+            schema=receipts.schema,
+        )
         target = RuntimeAuthorityMigrationTarget(
             connection_hub=ConnectionHubPostgresMigrationTarget(
                 oauth=PostgresOAuthMigrationTarget(oauth_store),
@@ -233,6 +242,7 @@ async def open_reset_target(settings: Any) -> ResetTargetRuntime:
         return ResetTargetRuntime(
             target=target,
             receipts=receipts,
+            schema_report=schema_report,
             pool=pool,
         )
     except Exception:

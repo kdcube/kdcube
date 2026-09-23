@@ -74,6 +74,9 @@ from kdcube_ai_app.infra.secrets.manager import InMemorySecretsManager
 from kdcube_ai_app.ops.authority_cutover.evidence import (
     reviewed_reset_prerequisites,
 )
+from kdcube_ai_app.ops.authority_cutover.schema_preflight import (
+    require_authority_target_schema,
+)
 
 
 class _UnavailableSource:
@@ -93,7 +96,7 @@ async def test_reset_preserves_resident_card_and_discards_reconstructable_state(
     import asyncpg
     from redis.asyncio import Redis
 
-    tenant = f"authority-reset-{uuid.uuid4().hex}"
+    tenant = f"ar-{uuid.uuid4().hex[:16]}"
     project = "integration"
     generation_id = f"generation-{uuid.uuid4().hex}"
     now = int(time.time())
@@ -260,6 +263,11 @@ async def test_reset_preserves_resident_card_and_discards_reconstructable_state(
         }
         for store in (oauth, handles, admission, bundle, platform, receipts):
             await store.ensure_schema()
+        schema_report = await require_authority_target_schema(
+            pool=pool,
+            schema=receipts.schema,
+        )
+        assert len(schema_report.verified_tables) == 12
 
         preview = await create_migration_preview(
             source=source,
