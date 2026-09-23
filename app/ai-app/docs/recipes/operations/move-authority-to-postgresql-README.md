@@ -19,8 +19,9 @@ authority currently comes from Redis. It creates a reviewed PostgreSQL
 generation and then makes that generation permanent in descriptors.
 
 The cutover preserves every complete, active, unexpired Card credential chain,
-so hosted workers and external OAuth/MCP clients keep valid credentials. It
-intentionally starts other reconstructable state clean:
+so agents keep their Card bearer whether they run under hosted runtime custody
+or present it over the network, and external OAuth/MCP clients keep their OAuth
+credentials. It intentionally starts other reconstructable state clean:
 
 - users sign in once after restart;
 - current user identity, roles, permissions, and authority versions rebuild on
@@ -35,7 +36,10 @@ PostgreSQL is authoritative after activation. Redis keeps generation-scoped
 session projections with native TTL. A missing or stale projection rebuilds
 from PostgreSQL, and every positive projection hit is checked against a compact
 PostgreSQL revision/state fence. Restoring an old Redis snapshot therefore
-cannot revive a logged-out, invalidated, deleted, or expired session.
+cannot revive a logged-out, invalidated, deleted, or expired session. Redis
+removes full session reconstruction from the common path; it does not create a
+Redis-only validation path because each positive hit still reads that compact
+PostgreSQL fence.
 
 The operation never deletes Redis. Keep the old Redis data until verification
 is complete, then remove it as a separate maintenance decision.
@@ -92,8 +96,9 @@ tokens, token-bearing keys, record payloads, or user identities. Check:
 - `blockers` is empty;
 - `source_summary.preserved.card_handles` is the expected count of all live
   Cards that must remain connected;
-- the preserved OAuth access, refresh, and client counts account for each
-  hosted worker and external OAuth/MCP client that needs continuity;
+- each Agent Card that needs continuity contributes its bearer handle and
+  access binding, while preserved OAuth access, refresh, and client counts
+  account for each OAuth/MCP client that needs continuity;
 - every `source_summary.reset` count is understood;
 - `source_counts` names every authority family, including families whose count
   is zero;
@@ -121,10 +126,12 @@ writers stopped, create a new preview at a new path, inspect its new hash, and
 apply that artifact.
 
 A blocker named `live_card_access_binding_missing`,
+`live_card_resident_bearer_missing`, `live_card_refresh_generation_missing`,
 `live_card_oauth_chain_missing`, or `live_card_oauth_client_missing` means a
-Card appears live but its credential chain is incomplete. Repair or explicitly
-expire that Card before creating a new preview; apply never silently disconnects
-it.
+Card appears live but its credential chain is incomplete. A normal descriptor
+sync issues a credential for a legacy live descriptor-synchronized Agent Card
+that has none; run that sync before creating a new preview. Repair or explicitly
+expire any remaining incomplete Card; apply never silently disconnects it.
 
 An interrupted apply is rerunnable. Imports refuse conflicting target content,
 the activation receipt is written last, and an exact rerun after activation
@@ -179,7 +186,7 @@ The preview's operator-facing survival matrix is:
 
 | Caller state before cutover | Result after activation |
 | --- | --- |
-| Active hosted worker or relay with a complete Card chain | Keeps its current credential. |
+| Active Agent Card with a bearer and access binding | Keeps its current credential under hosted runtime custody or network presentation. |
 | Active external OAuth/MCP client with a complete Card chain | Keeps its access/refresh/client chain. |
 | Pending agent with no issued credential | Remains pending and authorizes when activated. |
 | Expired Card credential | Stays expired. The durable Card and grants remain; renewal or a new grant issues a new credential. |
