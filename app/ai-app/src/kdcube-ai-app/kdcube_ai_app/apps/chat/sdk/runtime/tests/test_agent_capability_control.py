@@ -252,18 +252,14 @@ def test_descriptor_projection_separates_authority_from_metadata() -> None:
 
 def test_agent_card_starts_with_the_descriptor_model_and_instruction_defaults() -> None:
     catalog = _catalog()
-    authority = _payload()["capability_authority"]
-
-    selected = selected_capabilities_from_disabled(
-        authority=authority,
-        catalog=catalog,
-        disabled={},
-    )
+    payload = _payload()
+    selected = payload["capability_defaults"]
 
     assert selected["capabilities"]["models"] == [
         "anthropic/claude-sonnet-4-6"
     ]
     assert selected["capabilities"]["instruction_profiles"] == ["full"]
+    assert payload["descriptor_payload"]["capability_defaults"] == selected
     assert capability_preferences_from_projection(catalog, selected) == {
         "model": {
             "provider": "anthropic",
@@ -271,6 +267,33 @@ def test_agent_card_starts_with_the_descriptor_model_and_instruction_defaults() 
         },
         "instructions": "full",
     }
+
+
+def test_descriptor_revision_changes_with_model_and_instruction_defaults() -> None:
+    baseline = _payload()
+    catalog = _catalog()
+    catalog["default_model"] = {
+        "provider": "anthropic",
+        "model": "claude-haiku-4-5",
+    }
+    catalog["instruction_profiles"]["default"] = "compact"
+
+    changed = descriptor_capability_payload(
+        bundle_props=_props(),
+        catalog=catalog,
+        tenant=TENANT,
+        project=PROJECT,
+        application=APPLICATION,
+        agent_id=AGENT,
+    )
+
+    assert changed["descriptor_revision"] != baseline["descriptor_revision"]
+    assert changed["capability_defaults"]["capabilities"]["models"] == [
+        "anthropic/claude-haiku-4-5"
+    ]
+    assert changed["capability_defaults"]["capabilities"][
+        "instruction_profiles"
+    ] == ["compact"]
 
 
 def test_operation_to_grant_mapping_is_projected_from_the_owner_descriptor() -> None:

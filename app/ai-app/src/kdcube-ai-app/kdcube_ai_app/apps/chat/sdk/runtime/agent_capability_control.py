@@ -908,7 +908,11 @@ def descriptor_capability_payload(
         resource=resource,
         authority=authority_policy,
     )
-    capability_defaults = None
+    capability_defaults = selected_capabilities_from_disabled(
+        authority=authority,
+        catalog=catalog,
+        disabled={},
+    )
     control_properties: dict[str, Any] = {}
     if override is not None:
         resource_grants = override["resource_grants"]
@@ -958,8 +962,7 @@ def descriptor_capability_payload(
         "standard_authority": standard_authority,
         "issuer_label": f"{application} / {agent_id}",
     }
-    if capability_defaults is not None:
-        result["capability_defaults"] = capability_defaults
+    result["capability_defaults"] = capability_defaults
     if control_properties:
         result["properties"] = control_properties
         targets = control_properties.get("kdcube.conversation_targets")
@@ -1392,10 +1395,16 @@ async def sync_agent_capability_projection(
         agent_id=agent_id,
     )
     descriptor_default = selected_capabilities is None
+    override_active = bool(
+        payload.get("descriptor_payload", {}).get(
+            "standard_authority_overridden"
+        )
+    )
     if selected_capabilities is None:
-        selected_capabilities = copy.deepcopy(
-            payload.get("capability_defaults")
-        ) if isinstance(payload.get("capability_defaults"), Mapping) else (
+        selected_capabilities = (
+            copy.deepcopy(payload["capability_defaults"])
+            if override_active
+            else
             selected_capabilities_from_disabled(
                 authority=payload["capability_authority"],
                 catalog=catalog,
@@ -1404,11 +1413,6 @@ async def sync_agent_capability_projection(
         )
     if selected_capabilities is not None:
         payload["selected_capabilities"] = copy.deepcopy(dict(selected_capabilities))
-        override_active = bool(
-            payload.get("descriptor_payload", {}).get(
-                "standard_authority_overridden"
-            )
-        )
         if override_active and descriptor_default:
             payload["selected_resource_grants"] = copy.deepcopy(
                 payload.get("resource_grants") or {}
