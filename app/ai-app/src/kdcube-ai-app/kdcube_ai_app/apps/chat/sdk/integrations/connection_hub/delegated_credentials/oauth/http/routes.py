@@ -1046,36 +1046,6 @@ def _delegation_grants(
     return out
 
 
-def _profile_catalog_scope(
-    cfg: OAuthDelegatedClientConfig,
-    scopes: Iterable[str],
-    catalog_scope: Mapping[str, Any],
-) -> dict[str, Any]:
-    """The services a profile request reviews: those that declare the profile (W272).
-
-    `pb worker authorize` names no service, so its seed scope is the whole
-    catalog. A worker or coordinator profile belongs to the service that
-    declares it, and the consent page offers exactly those services, never
-    the all-resource row or an unrelated door.
-    """
-    scope = dict(catalog_scope)
-    profile_scopes = getattr(cfg, "authorization_profile_scopes", None)
-    markers = _as_set(scopes) & set(profile_scopes() if callable(profile_scopes) else ())
-    if not markers or scope.get("mode") != "full":
-        return scope
-    declaring: list[str] = []
-    for resource_cfg in getattr(cfg, "resources", ()) or ():
-        if not any(
-            profile.scope in markers
-            for profile in getattr(resource_cfg, "authorization_profiles", ()) or ()
-        ):
-            continue
-        selector, _literal = resolve_declared_resource(cfg, resource_cfg.resource)
-        if selector and selector not in declaring:
-            declaring.append(selector)
-    return {"mode": "entry", "resources": declaring}
-
-
 def _visible_scopes(
     cfg: OAuthDelegatedClientConfig,
     scopes: Iterable[str],
@@ -2314,23 +2284,7 @@ async def authorize_consent_draft(request: Request) -> Response:
         connected_accounts,
         cfg=cfg,
     )
-    catalog_scope = _profile_catalog_scope(
-        cfg,
-        req.scopes,
-        seed.get("catalog_scope") or {
-            "mode": "entry",
-            "resources": [req.resource],
-        },
-    )
-    # A profile request that names no service enters through the one
-    # service that declares the profile, and the page names that service.
-    entry_resource = req.resource or (
-        catalog_scope["resources"][0]
-        if len(catalog_scope.get("resources") or ()) == 1
-        and cfg.authorization_profile_requested(list(req.scopes))
-        else req.resource
-    )
-    resource_cfg = cfg.resource_config(entry_resource)
+    resource_cfg = cfg.resource_config(req.resource)
     client = req.client.snapshot() if req.client is not None else {"client_id": req.client_id}
     derived_label = _oauth_card_label(client, resource=req.resource)
     payload = {
@@ -2348,11 +2302,11 @@ async def authorize_consent_draft(request: Request) -> Response:
             and req.client.registration_kind == CLIENT_REGISTRATION_PRE_REGISTERED
         ),
         "entry_door": {
-            "resource": entry_resource,
+            "resource": req.resource,
             "label": (
                 str(getattr(resource_cfg, "label", "") or "")
                 if resource_cfg is not None
-                else entry_resource
+                else req.resource
             ),
             "requested_grants": list(req.scopes),
             "operations": [
@@ -2362,7 +2316,7 @@ async def authorize_consent_draft(request: Request) -> Response:
                     "description": tool.description,
                     "grants": list(tool.grants),
                 }
-                for tool in cfg.tools_for_scopes(req.scopes, resource=entry_resource)
+                for tool in cfg.tools_for_scopes(req.scopes, resource=req.resource)
             ],
         },
         "oauth": {
@@ -2380,7 +2334,10 @@ async def authorize_consent_draft(request: Request) -> Response:
             else {}
         ),
         "account_requirements": _account_requirements_payload(requirements),
-        "catalog_scope": catalog_scope,
+        "catalog_scope": seed.get("catalog_scope") or {
+            "mode": "entry",
+            "resources": [req.resource],
+        },
         "selection_source": "existing_card" if has_existing_card else "request",
         "selection": {
             "label": _consent_label(
