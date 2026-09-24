@@ -120,7 +120,7 @@ from kdcube_ai_app.infra.plugin.bundle_registry import ADMIN_BUNDLE_ID
 from kdcube_ai_app.apps.chat.sdk.solutions.chat import DEFAULT_CHAT_WIDGET_ALIAS
 from kdcube_ai_app.apps.chat.proc.app_deployment.coordinator import (
     props_fingerprint,
-    source_generation_for_identity,
+    source_generation_for_spec,
 )
 from kdcube_ai_app.apps.chat.proc.app_deployment.delegated_catalog import (
     check_authoritative_delegated_catalog,
@@ -4896,15 +4896,16 @@ def _deployed_widget_unavailable(
 def _serving_source_generation(request: Request, entry: Any) -> str:
     """The generation this process expects the deployed widget to carry.
 
-    The lifecycle that prepared the app records the source identity it loaded
-    and the deploy side keyed the manifest on it, so the comparison is by
-    activation identity, not by a path (W202). A process without that record
-    falls back to the registry entry's coordinates.
+    The registry entry's declared coordinates give it in every process
+    (``source_generation_for_spec``). A process whose lifecycle prepared an
+    activation whose commit came only from a reload request holds that
+    activation's generation, which the descriptor cannot give (W202).
     """
     lifecycle = getattr(getattr(getattr(request, "app", None), "state", None), "application_lifecycle", None)
     reader = getattr(lifecycle, "loaded_source_diagnostic", None)
     loaded = reader(str(getattr(entry, "id", "") or "")) if callable(reader) else None
-    return source_generation_for_identity(entry, (loaded or {}).get("source"))
+    prepared = str((loaded or {}).get("source_generation") or "")
+    return prepared or source_generation_for_spec(entry)
 
 
 async def _try_serve_deployed_static_widget_app(

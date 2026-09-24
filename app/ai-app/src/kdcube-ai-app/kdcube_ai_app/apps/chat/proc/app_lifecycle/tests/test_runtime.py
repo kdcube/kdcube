@@ -112,6 +112,7 @@ async def test_loaded_source_is_published_only_after_preparation_succeeds(
 
     assert lifecycle.loaded_source_diagnostic("app@1-0") == {
         "source": {"mode": "local-path", "path": str(source)},
+        "source_generation": runtime.source_generation_for_spec(runtime.bundle_entry_to_spec(entry)),
         "application_generation": "generation-1",
         "path": str(source),
     }

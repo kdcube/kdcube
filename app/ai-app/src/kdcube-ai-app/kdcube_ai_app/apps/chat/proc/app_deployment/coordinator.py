@@ -61,10 +61,34 @@ def props_fingerprint(props: Mapping[str, Any] | None) -> str:
     return hashlib.sha256(_stable_json(dict(props or {})).encode("utf-8")).hexdigest()
 
 
+def _declared_activation_commit(spec: Any) -> str:
+    commit = getattr(spec, "activation_commit", None)
+    if not commit:
+        commit = getattr(getattr(spec, "activation", None), "commit", None)
+    return str(commit or "").strip()
+
+
 def source_generation_for_spec(spec: Any) -> str:
+    """The app's source generation from its declared coordinates.
+
+    Every process computes the same value from the registry entry alone, on
+    the deploy side and on any serving process (W202, 2026-09-24: a pinned
+    app's widget was refused as ``deployment_manifest_mismatch`` because the
+    deploy side hashed the snapshot path the activation loaded and the serving
+    side the declared path). The location is the declared one (``mounted_path``
+    when ``path`` is a snapshot), and a declared ``activation.commit`` joins the
+    payload. An app without a pin keeps the generation it had.
+
+    A commit that arrives only in a reload request (``kdcube bundle reload
+    --commit`` without a descriptor pin) is not in the descriptor, so only a
+    process whose lifecycle prepared that activation knows it
+    (``_serving_source_generation`` reads that record). That is acceptable:
+    such an activation is not durable, and a durable pin is written to the
+    descriptor as the full commit.
+    """
     payload = {
         "id": str(getattr(spec, "id", "") or ""),
-        "path": str(getattr(spec, "path", "") or ""),
+        "path": str(getattr(spec, "mounted_path", "") or getattr(spec, "path", "") or ""),
         "module": str(getattr(spec, "module", "") or ""),
         "singleton": bool(getattr(spec, "singleton", False)),
         "repo": str(getattr(spec, "repo", "") or ""),
@@ -72,41 +96,9 @@ def source_generation_for_spec(spec: Any) -> str:
         "subdir": str(getattr(spec, "subdir", "") or ""),
         "git_commit": str(getattr(spec, "git_commit", "") or ""),
     }
-    return hashlib.sha256(_stable_json(payload).encode("utf-8")).hexdigest()[:24]
-
-
-# What names the loaded code in a source identity (bundle_source_identity).
-# Observation fields (head, dirty, error) and the snapshot's own path are left
-# out: the snapshot path is where a commit was exported, not what it is.
-_ACTIVATION_IDENTITY_KEYS = ("mode", "repository", "subdir", "ref", "commit", "tree", "git_commit")
-
-
-def source_generation_for_identity(spec: Any, source_identity: Mapping[str, Any] | None) -> str:
-    """The deployed source's generation, keyed on its activation identity.
-
-    The deploy side and the serving side both hold the identity the lifecycle
-    recorded when it prepared the app, so both compute the same value. A
-    commit activation loads a snapshot whose ``path`` is in the managed root,
-    while the registry names the declared path; hashing a path made the two
-    sides disagree and refused a pinned app's widget as
-    ``deployment_manifest_mismatch`` (W202, 2026-09-24).
-
-    Without an identity, the spec's own coordinates apply
-    (``source_generation_for_spec``).
-    """
-    identity = dict(source_identity or {})
-    if not identity:
-        return source_generation_for_spec(spec)
-    payload: dict[str, Any] = {
-        "id": str(getattr(spec, "id", "") or ""),
-        "module": str(getattr(spec, "module", "") or ""),
-        "singleton": bool(getattr(spec, "singleton", False)),
-        "location": str(identity.get("mounted_path") or identity.get("path") or ""),
-    }
-    for key in _ACTIVATION_IDENTITY_KEYS:
-        value = identity.get(key)
-        if value not in (None, ""):
-            payload[key] = value
+    activation_commit = _declared_activation_commit(spec)
+    if activation_commit:
+        payload["activation_commit"] = activation_commit
     return hashlib.sha256(_stable_json(payload).encode("utf-8")).hexdigest()[:24]
 
 
@@ -349,8 +341,8 @@ async def deploy_loaded_bundle_app_resources(
         raise RuntimeError(f"Bundle storage is unavailable for app deployment: {bundle_id}")
 
     logger = AgentLogger("bundle.on_app_deploy", getattr(getattr(workflow, "config", None), "log_level", "INFO"))
+    source_generation = source_generation_for_spec(bundle_spec)
     stable_source_identity = copy.deepcopy(dict(source_identity or {}))
-    source_generation = source_generation_for_identity(bundle_spec, stable_source_identity)
     descriptor_props_hash = props_fingerprint(descriptor_props)
     source_fingerprint = await app_source_fingerprint(bundle_spec)
     resource_generation = hashlib.sha256(
