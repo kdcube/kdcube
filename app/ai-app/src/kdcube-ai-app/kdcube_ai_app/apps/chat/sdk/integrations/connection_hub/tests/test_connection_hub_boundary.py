@@ -145,6 +145,34 @@ async def test_agent_capability_sync_forwards_authenticated_user_and_payload():
     assert service.calls[0][1]["application"] == "problem-board@1-0"
 
 
+@pytest.mark.asyncio
+async def test_agent_capability_sync_accepts_an_async_access_factory():
+    service = _CapabilityService()
+    factory_calls = []
+
+    async def _factory():
+        factory_calls.append("awaited")
+        return service
+
+    provider = ConnectionHubProvider(
+        entrypoint=object(),
+        automation_access_factory=_factory,
+    )
+    context = NamedServiceContext(
+        user_id="user-1",
+        user_type="registered",
+        metadata={SOURCE_BUNDLE_ID_METADATA: "problem-board@1-0"},
+    )
+
+    response = await provider.agent_capability_sync(
+        context,
+        _capability_request(),
+    )
+
+    assert response.ok is True
+    assert factory_calls == ["awaited"]
+
+
 def test_agent_capability_sync_is_local_only():
     operation = ConnectionHubProvider(
         entrypoint=object(),
