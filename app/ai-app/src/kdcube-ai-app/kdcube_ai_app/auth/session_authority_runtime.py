@@ -159,10 +159,22 @@ def _resolved_binding(
     project: str | None,
 ) -> _SessionAuthorityBinding | None:
     scope = _configured_scope(tenant, project)
-    if scope is None:
-        return None
-    binding = _BINDINGS.get(scope)
+    binding = _BINDINGS.get(scope) if scope is not None else None
     if binding is None:
+        try:
+            from kdcube_ai_app.apps.chat.sdk.config import get_settings
+
+            selected = session_authority_config_from_settings(get_settings())
+        except SessionAuthorityUnavailable:
+            raise
+        except Exception as exc:
+            raise SessionAuthorityUnavailable(
+                "session_authority_configuration_unavailable"
+            ) from exc
+        if selected.backend == AUTHORITY_BACKEND_POSTGRESQL:
+            raise SessionAuthorityUnavailable(
+                "session_authority_postgresql_store_not_bound"
+            )
         return None
     if not binding.ready:
         raise SessionAuthorityUnavailable(

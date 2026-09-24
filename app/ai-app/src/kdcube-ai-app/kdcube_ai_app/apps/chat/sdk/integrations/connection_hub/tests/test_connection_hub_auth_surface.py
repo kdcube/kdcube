@@ -5,9 +5,17 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
 from starlette.requests import Request
 
 from connection_hub.authenticators.models import AuthenticatedRequest
+from connection_hub.delegated_credentials.oauth.store import (
+    GrantStore,
+    GrantStoreUnavailable,
+)
+from kdcube_ai_app.apps.chat.ingress.socketio.delegated_data_bus_auth import (
+    admit_delegated_data_bus_bearer,
+)
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub import (
     authentication_surface as auth_surface,
 )
@@ -15,6 +23,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.authentication_surf
     ConnectionHubAuthenticationSurface,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth import (
+    runtime_store,
     surface_guard,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.request_auth import (
@@ -495,6 +504,211 @@ async def test_non_http_adapter_authenticates_card_for_selected_resource(monkeyp
         "app": app,
     }
     assert session.request_context.authorization_header is None
+
+
+async def test_data_bus_admission_reads_postgresql_selected_grant_store(
+    monkeypatch,
+):
+    resource = (
+        "https://board.example/api/integrations/bundles/demo-tenant/"
+        "demo-project/problem-board@1-0/public/mcp/problem_board"
+    )
+    credential = _authority(
+        scopes=["work:relay"],
+        resource=resource,
+        grantor_subject="platform-user-1",
+        subject="integration:worker:platform-user-1",
+    )
+    grant_record = {
+        "registry_access_id": "worker-card-a",
+        "client_id": "worker-client-a",
+        "expires_at": 4_000_000_000,
+        "credential": credential,
+        "grantor_authority": {
+            "grantor_roles": ["kdcube:role:registered"],
+            "grantor_permissions": ["work:relay"],
+        },
+    }
+
+    class RedisMustNotReadGrant:
+        def __init__(self) -> None:
+            self.get_calls = 0
+
+        async def get(self, _key):
+            self.get_calls += 1
+            raise AssertionError("PostgreSQL-selected grants must not read Redis")
+
+    class PostgresIssuedAuthority:
+        def __init__(self) -> None:
+            self.tokens = []
+
+        async def get_access_grant_record(self, token):
+            self.tokens.append(token)
+            return grant_record
+
+    redis = RedisMustNotReadGrant()
+    authority = PostgresIssuedAuthority()
+    selected_store = GrantStore(
+        redis,
+        "demo-tenant",
+        "demo-project",
+        authority_store=authority,
+    )
+    resolve_calls = []
+
+    class Provider:
+        config = SimpleNamespace(
+            backend="postgresql",
+            generation_id="authority-v9",
+        )
+
+        async def resolve(self):
+            resolve_calls.append(True)
+            return selected_store
+
+    monkeypatch.setattr(
+        runtime_store.OAuthGrantStoreProvider,
+        "from_config",
+        lambda **_kwargs: Provider(),
+    )
+
+    async def fake_authenticate(token: str):
+        assert token == "postgres-issued-card-bearer"
+        return {
+            "sub": "integration:worker:platform-user-1",
+            "roles": ["kdcube:role:delegated-client"],
+            "permissions": ["work:relay"],
+        }
+
+    async def preserve_live_record(_request, record):
+        return record
+
+    monkeypatch.setattr(
+        surface_guard,
+        "_authenticate_delegated_client_access_token",
+        fake_authenticate,
+    )
+    monkeypatch.setattr(surface_guard, "_live_grant_record", preserve_live_record)
+
+    surface = ConnectionHubAuthenticationSurface(
+        redis=redis,
+        pg_pool=object(),
+        tenant="demo-tenant",
+        project="demo-project",
+    )
+    surface._delegated_platform_resource_config = lambda _request: object()
+    surface._delegated_connections_config = lambda: {
+        "delegated_credentials": {
+            "authority": {
+                "backend": "postgresql",
+                "generation_id": "authority-v9",
+            }
+        }
+    }
+
+    async def session_factory(context, user_type, user_data):
+        return UserSession(
+            session_id="session-card-a",
+            user_type=user_type,
+            user_id=user_data["user_id"],
+            username=user_data["username"],
+            roles=user_data["roles"],
+            permissions=user_data["permissions"],
+            request_context=context,
+            identity_authority=user_data["identity_authority"],
+            rate_limit_subject=user_data.get("rate_limit_subject"),
+        )
+
+    resolver = RequestAuthResolver(
+        auth_manager=None,
+        session_factory=session_factory,
+    )
+    resolver._connection_hub_surface = surface
+    admission = await admit_delegated_data_bus_bearer(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        gateway_adapter=SimpleNamespace(request_auth_resolver=resolver),
+        tenant="demo-tenant",
+        project="demo-project",
+        bundle_id="problem-board@1-0",
+        resource=resource,
+        bearer_token="postgres-issued-card-bearer",
+        context=RequestContext(client_ip="127.0.0.1", user_agent="data-bus"),
+    )
+    session = admission.session
+
+    assert session is not None
+    assert session.user_id == "card:worker-card-a"
+    assert session.identity_authority["delegated_resource"] == resource
+    assert resolve_calls == [True]
+    assert authority.tokens == ["postgres-issued-card-bearer"]
+    assert redis.get_calls == 0
+    assert admission.scope["access_id"] == "worker-card-a"
+
+
+async def test_data_bus_admission_names_unavailable_postgresql_authority(
+    monkeypatch,
+):
+    resource = (
+        "https://board.example/api/integrations/bundles/demo-tenant/"
+        "demo-project/problem-board@1-0/public/mcp/problem_board"
+    )
+
+    class Provider:
+        async def resolve(self):
+            raise GrantStoreUnavailable(
+                "selected_authority.readiness_unavailable"
+            )
+
+    monkeypatch.setattr(
+        runtime_store.OAuthGrantStoreProvider,
+        "from_config",
+        lambda **_kwargs: Provider(),
+    )
+
+    surface = ConnectionHubAuthenticationSurface(
+        redis=object(),
+        pg_pool=object(),
+        tenant="demo-tenant",
+        project="demo-project",
+    )
+    surface._delegated_platform_resource_config = lambda _request: object()
+    surface._delegated_connections_config = lambda: {
+        "delegated_credentials": {
+            "authority": {
+                "backend": "postgresql",
+                "generation_id": "authority-v9",
+            }
+        }
+    }
+
+    async def session_factory(*_args):
+        raise AssertionError("unavailable authority must not mint a session")
+
+    resolver = RequestAuthResolver(
+        auth_manager=None,
+        session_factory=session_factory,
+    )
+    resolver._connection_hub_surface = surface
+
+    with pytest.raises(GrantStoreUnavailable) as raised:
+        await admit_delegated_data_bus_bearer(
+            app=SimpleNamespace(state=SimpleNamespace()),
+            gateway_adapter=SimpleNamespace(request_auth_resolver=resolver),
+            tenant="demo-tenant",
+            project="demo-project",
+            bundle_id="problem-board@1-0",
+            resource=resource,
+            bearer_token="postgres-issued-card-bearer",
+            context=RequestContext(
+                client_ip="127.0.0.1",
+                user_agent="data-bus",
+            ),
+        )
+
+    assert (
+        raised.value.operation
+        == "selected_authority.readiness_unavailable"
+    )
 
 
 async def test_connection_hub_surface_accepts_admin_delegated_bearer_for_all_resources(monkeypatch):

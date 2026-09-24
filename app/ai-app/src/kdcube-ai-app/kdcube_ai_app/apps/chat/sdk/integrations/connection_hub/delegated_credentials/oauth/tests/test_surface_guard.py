@@ -370,6 +370,7 @@ def _client(
     connections=None,
     catalog_unavailable="",
     cards=None,
+    authority_backend="",
 ):
     async def fake_authenticate(token: str):
         if token != "reader":
@@ -409,6 +410,8 @@ def _client(
     @app.post("/guard")
     @app.post("/second")
     async def guard(request: Request):
+        if authority_backend:
+            request.state.oauth_authority_backend = authority_backend
         body = await request.body()
         denial = await surface_guard.authorize_delegated_mcp_request(
             request=request,
@@ -670,6 +673,86 @@ def test_managed_rest_guard_fails_closed_when_live_lookup_is_unavailable(monkeyp
     assert response.json()["error"] == "temporarily_unavailable"
 
 
+def test_postgresql_selected_live_card_requires_durable_card_reader(monkeypatch):
+    redis = _Redis()
+    _store_live_card(redis, _live_card())
+    client = _client(
+        monkeypatch,
+        grant_record=_pointer_grant(),
+        redis=redis,
+        cards=None,
+        authority_backend="postgresql",
+    )
+
+    response = client.post(
+        "/guard",
+        json=_rpc_tool_call(),
+        headers={"Authorization": "Bearer reader"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["reason"] == (
+        "live_grant_durable_card_store_unavailable"
+    )
+
+
+def test_managed_mcp_guard_uses_bound_postgresql_selected_grant_store(
+    monkeypatch,
+):
+    client = _client(
+        monkeypatch,
+        grant_record={
+            "operations": ["records_export"],
+            "credential": _authority(),
+        },
+        authority_backend="postgresql",
+    )
+
+    response = client.post(
+        "/guard",
+        json=_rpc_tool_call(),
+        headers={"Authorization": "Bearer reader"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+
+def test_managed_mcp_guard_names_unbound_postgresql_session_authority(
+    monkeypatch,
+):
+    client = _client(
+        monkeypatch,
+        grant_record={
+            "operations": ["records_export"],
+            "credential": _authority(),
+        },
+        authority_backend="postgresql",
+    )
+
+    async def unavailable(_token):
+        raise surface_guard.SessionAuthorityUnavailable(
+            "session_authority_postgresql_store_not_bound"
+        )
+
+    monkeypatch.setattr(
+        surface_guard,
+        "_authenticate_delegated_client_access_token",
+        unavailable,
+    )
+
+    response = client.post(
+        "/guard",
+        json=_rpc_tool_call(),
+        headers={"Authorization": "Bearer reader"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["reason"] == (
+        "session_authority_postgresql_store_not_bound"
+    )
+
+
 def test_control_card_tool_denial_names_control_and_has_no_caller_consent(monkeypatch):
     redis = _Redis()
     caller = card_authority_from_record(
@@ -750,8 +833,73 @@ def test_managed_mcp_guard_reports_grant_store_unavailable(monkeypatch, caplog):
     assert response.json() == {
         "error": "temporarily_unavailable",
         "error_description": "Current delegated authorization state is unavailable",
+        "reason": "access_grant.get",
     }
     assert "operation=access_grant.get" in caplog.text
+
+
+def test_managed_mcp_guard_refuses_unavailable_authority_configuration(
+    monkeypatch,
+):
+    from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth import (
+        runtime_store,
+    )
+
+    async def fake_authenticate(token: str):
+        if token != "reader":
+            return None
+        return {
+            "sub": "integration:claude:admin",
+            "roles": ["kdcube:role:delegated-client"],
+            "permissions": ["kdcube:*:records:*;read"],
+        }
+
+    monkeypatch.setattr(
+        surface_guard,
+        "_authenticate_delegated_client_access_token",
+        fake_authenticate,
+    )
+    monkeypatch.setattr(
+        runtime_store,
+        "get_bundle_props_from_authority",
+        lambda **_kwargs: None,
+    )
+
+    redis = _Redis()
+    app = FastAPI()
+    app.state.redis_async = redis
+    app.state.oauth_delegated_config = {"tenant": "home", "project": "demo"}
+    bind_delegated_catalog(app, GUARD_CONNECTIONS)
+
+    @app.post("/guard")
+    async def guard(request: Request):
+        denial = await surface_guard.authorize_delegated_mcp_request(
+            request=request,
+            body=await request.body(),
+            auth={
+                "mode": "managed",
+                "authority_id": "delegated_client",
+                "tools": {
+                    "records_export": {"grants": ["records:read"]},
+                },
+                "selected_tool_grants": True,
+            },
+        )
+        return denial or JSONResponse({"ok": True})
+
+    response = TestClient(app).post(
+        "/guard",
+        json=_rpc_tool_call(),
+        headers={"Authorization": "Bearer reader"},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "error": "temporarily_unavailable",
+        "error_description": "Current delegated authorization state is unavailable",
+        "reason": "selected_authority.configuration_unavailable",
+    }
+    assert redis.read_count == 0
 
 
 def test_managed_rest_guard_reports_grant_store_unavailable(monkeypatch, caplog):
@@ -766,6 +914,7 @@ def test_managed_rest_guard_reports_grant_store_unavailable(monkeypatch, caplog)
     assert response.json() == {
         "error": "temporarily_unavailable",
         "error_description": "Current delegated authorization state is unavailable",
+        "reason": "access_grant.get",
     }
     assert "operation=access_grant.get" in caplog.text
 

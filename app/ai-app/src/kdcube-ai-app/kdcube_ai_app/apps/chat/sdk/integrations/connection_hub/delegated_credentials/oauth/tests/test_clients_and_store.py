@@ -576,12 +576,16 @@ def test_grant_store_refuses_a_bundle_request_without_bound_authority():
         "server": ("runtime.example.test", 443),
         "app": app,
     })
-    request.state.oauth_grant_store_required = True
+    request.state.oauth_authority_backend = "postgresql"
+    request.state.oauth_authority_generation_id = "authority-v9"
 
     with pytest.raises(GrantStoreUnavailable) as raised:
         get_grant_store(request)
 
-    assert raised.value.operation == "initialize.authority_not_bound"
+    assert (
+        raised.value.operation
+        == "selected_authority.postgresql_store_not_bound"
+    )
 
 
 def test_grant_store_reuses_proc_owned_async_redis_client():
@@ -593,6 +597,7 @@ def test_grant_store_reuses_proc_owned_async_redis_client():
         "tenant": "tenant-a",
         "project": "project-a",
     }
+    app.state.oauth_authority_connections = {}
     request = Request({
         "type": "http",
         "http_version": "1.1",
@@ -623,6 +628,7 @@ def test_grant_store_factory_failure_is_normalized(monkeypatch):
         "tenant": "tenant-a",
         "project": "project-a",
     }
+    app.state.oauth_authority_connections = {}
     request = Request({
         "type": "http",
         "http_version": "1.1",
@@ -645,7 +651,10 @@ def test_grant_store_factory_failure_is_normalized(monkeypatch):
     with pytest.raises(GrantStoreUnavailable) as raised:
         get_grant_store(request)
 
-    assert raised.value.operation == "initialize"
+    assert (
+        raised.value.operation
+        == "selected_authority.redis_projection_unavailable"
+    )
 
 
 @pytest.mark.asyncio
