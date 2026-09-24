@@ -2614,21 +2614,204 @@ def _host_path_for_runtime_bundle_path(runtime_path: str, workdir: Path) -> str 
     return str(host_root.joinpath(*rel.split("/")))
 
 
-def _source_summary(entry: dict[str, object] | None) -> dict[str, object]:
+def _resolve_local_git_commit(path: str | None, ref: str | None) -> str | None:
+    if not path or not ref:
+        return None
+    try:
+        proc = subprocess.run(
+            ["git", "-C", path, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+            capture_output=True,
+            text=True,
+            timeout=DOCKER_STATUS_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    value = (proc.stdout or "").strip()
+    return value if proc.returncode == 0 and value else None
+
+
+def _source_summary(
+    entry: dict[str, object] | None,
+    *,
+    host_path: str | None = None,
+) -> dict[str, object]:
     if not entry:
         return {"mode": "missing"}
     if entry.get("repo"):
-        return {
+        source = {
             "mode": "git",
-            "repo": entry.get("repo"),
+            "repository": entry.get("repo"),
             "ref": entry.get("ref"),
             "subdir": entry.get("subdir"),
             "path": entry.get("path"),
         }
+        if entry.get("git_commit"):
+            source["git_commit"] = entry.get("git_commit")
+        return source
+    activation = entry.get("activation")
+    activation_commit = (
+        str(activation.get("commit") or "").strip()
+        if isinstance(activation, dict)
+        else ""
+    )
+    if activation_commit:
+        source = {
+            "mode": "snapshot",
+            "mounted_path": entry.get("path"),
+            "ref": activation_commit,
+        }
+        resolved_commit = _resolve_local_git_commit(host_path, activation_commit)
+        if resolved_commit:
+            source["commit"] = resolved_commit
+        return source
     return {
         "mode": "local-path",
         "path": entry.get("path"),
     }
+
+
+def _attestation_value(value: object) -> object:
+    return value if value not in (None, "") else None
+
+
+def _source_comparison(
+    *,
+    expected_scope: str,
+    expected_field: str,
+    expected: object,
+    actual_scope: str,
+    actual_field: str,
+    actual: object,
+) -> dict[str, object]:
+    expected_value = _attestation_value(expected)
+    actual_value = _attestation_value(actual)
+    if expected_value is None or actual_value is None:
+        status = "UNKNOWN"
+    elif expected_value == actual_value:
+        status = "MATCH"
+    else:
+        status = "MISMATCH"
+    return {
+        "status": status,
+        "expected_scope": expected_scope,
+        "expected_field": expected_field,
+        "expected": expected_value,
+        "actual_scope": actual_scope,
+        "actual_field": actual_field,
+        "actual": actual_value,
+    }
+
+
+def _bundle_source_attestation(
+    descriptor_source: dict[str, object],
+    live: dict[str, object] | None,
+) -> dict[str, object]:
+    comparisons: list[dict[str, object]] = []
+    process = live.get("process") if isinstance(live, dict) else None
+    loaded = process.get("loaded") if isinstance(process, dict) else None
+    server_source = loaded.get("source") if isinstance(loaded, dict) else None
+    if not isinstance(server_source, dict):
+        server_source = live.get("source") if isinstance(live, dict) else None
+    server_source = server_source if isinstance(server_source, dict) else {}
+
+    comparisons.append(
+        _source_comparison(
+            expected_scope="descriptor",
+            expected_field="mode",
+            expected=descriptor_source.get("mode"),
+            actual_scope="chat-proc",
+            actual_field="source.mode",
+            actual=server_source.get("mode"),
+        )
+    )
+    descriptor_fields = {
+        "git": ("repository", "ref", "subdir", "git_commit"),
+        "snapshot": ("mounted_path", "ref", "commit"),
+        "local-path": ("path",),
+    }.get(str(descriptor_source.get("mode") or ""), ())
+    for field in descriptor_fields:
+        expected = descriptor_source.get(field)
+        if expected in (None, ""):
+            continue
+        comparisons.append(
+            _source_comparison(
+                expected_scope="descriptor",
+                expected_field=field,
+                expected=expected,
+                actual_scope="chat-proc",
+                actual_field=f"source.{field}",
+                actual=server_source.get(field),
+            )
+        )
+
+    widget = live.get("widget") if isinstance(live, dict) else None
+    widget_source = widget.get("source") if isinstance(widget, dict) else None
+    if not isinstance(widget_source, dict) or not widget_source:
+        comparisons.append(
+            _source_comparison(
+                expected_scope="chat-proc",
+                expected_field="source",
+                expected=server_source or None,
+                actual_scope="widget",
+                actual_field="source",
+                actual=None,
+            )
+        )
+    else:
+        identity_fields = (
+            "mode",
+            "repository",
+            "subdir",
+            "ref",
+            "commit",
+            "tree",
+            "head",
+            "git_commit",
+            "path",
+            "mounted_path",
+            "dirty",
+            "error",
+        )
+        compared = False
+        for field in identity_fields:
+            if field not in server_source and field not in widget_source:
+                continue
+            compared = True
+            comparisons.append(
+                _source_comparison(
+                    expected_scope="chat-proc",
+                    expected_field=f"source.{field}",
+                    expected=server_source.get(field),
+                    actual_scope="widget",
+                    actual_field=f"source.{field}",
+                    actual=widget_source.get(field),
+                )
+            )
+        if not compared:
+            comparisons.append(
+                _source_comparison(
+                    expected_scope="chat-proc",
+                    expected_field="source",
+                    expected=server_source or None,
+                    actual_scope="widget",
+                    actual_field="source",
+                    actual=widget_source or None,
+                )
+            )
+
+    statuses = {str(item["status"]) for item in comparisons}
+    overall = "MISMATCH" if "MISMATCH" in statuses else ("UNKNOWN" if "UNKNOWN" in statuses else "MATCH")
+    return {
+        "status": overall,
+        "mismatch": overall == "MISMATCH",
+        "comparisons": comparisons,
+    }
+
+
+def _bundle_status_exit_code(status: dict[str, object]) -> int:
+    attestation = status.get("attestation")
+    return 1 if isinstance(attestation, dict) and attestation.get("status") == "MISMATCH" else 0
 
 
 def _runtime_proc_status(ctx: installer_mod.PathsContext, env_main_path: Path) -> dict[str, object]:
@@ -2727,9 +2910,9 @@ def _collect_bundle_status(
 
     bundles_data = installer_mod.load_release_descriptor(bundles_path)
     entry, _default_id = _find_bundle_item(bundles_data, bundle_id)
-    source = _source_summary(entry)
     runtime_path = str((entry or {}).get("path") or "").strip()
     host_path = _host_path_for_runtime_bundle_path(runtime_path, workdir) if runtime_path else None
+    source = _source_summary(entry, host_path=host_path)
     host_path_exists = None
     if host_path:
         host_path_exists = Path(host_path).exists()
@@ -2766,6 +2949,10 @@ def _collect_bundle_status(
             result["runtime"] = _runtime_proc_status(ctx, env_main_path)
             if include_live_manifest:
                 result["live"] = _live_bundle_status(ctx, env_main_path, bundle_id=bundle_id)
+                result["attestation"] = _bundle_source_attestation(
+                    source,
+                    result["live"] if isinstance(result["live"], dict) else None,
+                )
     return result
 
 
@@ -2808,12 +2995,12 @@ def print_bundle_status(console: Console, status: dict[str, object]) -> None:
     live = status.get("live") if isinstance(status.get("live"), dict) else None
     if live is None:
         return
-    console.print("\n[bold]Live Bundle Load[/bold]")
+    console.print("\n[bold]Loaded Bundle Source[/bold]")
     if not live.get("available"):
         console.print(f"[yellow]Live status unavailable:[/yellow] {live.get('reason') or 'unknown'}")
         return
     console.print(f"[dim]Declared in live registry:[/dim] {_format_bool(live.get('declared'))}")
-    console.print(f"[dim]Manifest load:[/dim] {'ok' if live.get('loaded') else 'failed'}")
+    console.print(f"[dim]Prepared in this proc:[/dim] {_format_bool(live.get('loaded'))}")
     console.print(f"[dim]Path exists in proc:[/dim] {_format_bool(live.get('path_exists'))}")
     if live.get("authority"):
         console.print(f"[dim]Authority:[/dim] {live.get('authority')}")
@@ -2825,16 +3012,39 @@ def print_bundle_status(console: Console, status: dict[str, object]) -> None:
                 console.print(f"[dim]Where:[/dim] {err.get('where')}")
         else:
             console.print(f"[red]Last error:[/red] {err}")
-    interface = live.get("interface")
-    if isinstance(interface, dict):
-        widgets = interface.get("widgets") if isinstance(interface.get("widgets"), list) else []
-        apis = interface.get("apis") if isinstance(interface.get("apis"), list) else []
-        mcps = interface.get("mcp_endpoints") if isinstance(interface.get("mcp_endpoints"), list) else []
-        scheduled = interface.get("scheduled_jobs") if isinstance(interface.get("scheduled_jobs"), list) else []
-        console.print(f"[dim]Widgets:[/dim] {', '.join(str(w.get('alias')) for w in widgets if isinstance(w, dict)) or '<none>'}")
-        console.print(f"[dim]APIs:[/dim] {', '.join(str(a.get('alias')) for a in apis if isinstance(a, dict)) or '<none>'}")
-        console.print(f"[dim]MCP endpoints:[/dim] {', '.join(str(m.get('alias')) for m in mcps if isinstance(m, dict)) or '<none>'}")
-        console.print(f"[dim]Scheduled jobs:[/dim] {', '.join(str(j.get('alias')) for j in scheduled if isinstance(j, dict)) or '<none>'}")
+    process = live.get("process") if isinstance(live.get("process"), dict) else {}
+    console.print(
+        f"[dim]Process:[/dim] component={process.get('component') or 'unknown'} "
+        f"instance_id={process.get('instance_id') or 'unknown'} pid={process.get('pid') or 'unknown'}"
+    )
+    loaded = process.get("loaded") if isinstance(process.get("loaded"), dict) else {}
+    server_source = loaded.get("source") if isinstance(loaded.get("source"), dict) else {}
+    for field, value in server_source.items():
+        console.print(f"[dim]chat-proc source.{field}:[/dim] {value}")
+    widget = live.get("widget") if isinstance(live.get("widget"), dict) else None
+    if widget is None:
+        console.print("[dim]Widget publication:[/dim] unavailable")
+    else:
+        console.print(f"[dim]Widget deployment signature:[/dim] {widget.get('deployment_signature') or 'unknown'}")
+        widget_source = widget.get("source") if isinstance(widget.get("source"), dict) else {}
+        for field, value in widget_source.items():
+            console.print(f"[dim]widget source.{field}:[/dim] {value}")
+
+    attestation = status.get("attestation") if isinstance(status.get("attestation"), dict) else None
+    if attestation is not None:
+        state = str(attestation.get("status") or "UNKNOWN")
+        style = "red" if state == "MISMATCH" else ("yellow" if state == "UNKNOWN" else "green")
+        console.print(f"\n[bold]Source Attestation[/bold] [{style}]{state}[/{style}]")
+        for comparison in attestation.get("comparisons") or []:
+            if not isinstance(comparison, dict):
+                continue
+            console.print(
+                f"{comparison.get('status')}: "
+                f"{comparison.get('expected_scope')}.{comparison.get('expected_field')}="
+                f"{json.dumps(comparison.get('expected'), sort_keys=True)}; "
+                f"{comparison.get('actual_scope')}.{comparison.get('actual_field')}="
+                f"{json.dumps(comparison.get('actual'), sort_keys=True)}"
+            )
 
 
 def _bundle_reload_summary_lines(
@@ -5897,6 +6107,9 @@ def main() -> None:
                     _print_json(_status)
                 else:
                     print_bundle_status(console, _status)
+                _status_exit_code = _bundle_status_exit_code(_status)
+                if _status_exit_code:
+                    raise SystemExit(_status_exit_code)
                 return
             if _status_bundle_arg:
                 raise SystemExit(

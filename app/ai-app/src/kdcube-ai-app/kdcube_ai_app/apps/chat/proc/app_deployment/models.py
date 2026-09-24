@@ -31,6 +31,7 @@ class AppStaticSurfaceManifest(BaseModel):
     props_fingerprint: str
     deployment_signature: str
     generated_at: str
+    source: dict[str, Any] = Field(default_factory=dict)
     bundle_enabled: bool = True
     bundle_allowed_roles: list[str] = Field(default_factory=list)
     widgets: dict[str, DeployedWidgetSurface] = Field(default_factory=dict)

@@ -2821,71 +2821,68 @@ async def internal_bundle_status(payload: BundleStatusRequest, request: Request)
         }
 
     entry = reg.bundles.get(bundle_id)
-    if entry is None:
-        return {
-            "status": "ok",
-            "tenant": tenant_id,
-            "project": project_id,
-            "bundle_id": bundle_id,
-            "declared": False,
-            "loaded": False,
-            "preparation": preparation,
-            "authority": describe_authoritative_bundle_store(tenant_id, project_id),
-        }
+    entry_dict = entry.model_dump(mode="json") if entry is not None else None
 
-    entry_dict = entry.model_dump()
-    spec = BundleSpec(
-        id=bundle_id,
-        path=entry.path,
-        module=entry.module,
-        singleton=bool(entry.singleton),
+    # Status is observational. It must not import the authoritative path: that
+    # would only prove what this process can load now and could replace the
+    # very cache whose deployed vintage the operator is trying to inspect.
+    from kdcube_ai_app.infra.plugin.bundle_registry import get_all as get_process_registry
+    from kdcube_ai_app.infra.plugin.bundle_storage import bundle_storage_dir
+
+    process_entry = get_process_registry().get(bundle_id)
+    lifecycle = getattr(request.app.state, "application_lifecycle", None)
+    loaded_source_reader = getattr(lifecycle, "loaded_source_diagnostic", None)
+    loaded_diagnostic = (
+        loaded_source_reader(bundle_id) if callable(loaded_source_reader) else None
     )
+    loaded_path = str(
+        (loaded_diagnostic or {}).get("path")
+        or (process_entry or {}).get("path")
+        or ""
+    ).strip()
     try:
-        path_exists = bool(entry.path and Path(entry.path).exists())
+        path_exists = bool(loaded_path and Path(loaded_path).exists())
     except Exception:
         path_exists = False
 
-    cached_before = get_cached_manifest(spec) is not None
-    try:
-        manifest = load_bundle_manifest(spec, bundle_id=bundle_id)
-        props = _authoritative_bundle_props(tenant=tenant_id, project=project_id, bundle_id=bundle_id)
-        descriptor = _manifest_to_descriptor(manifest, props=props)
-        return {
-            "status": "ok",
-            "tenant": tenant_id,
-            "project": project_id,
-            "bundle_id": bundle_id,
-            "declared": True,
-            "loaded": True,
-            "cached_before": cached_before,
-            "cached_after": get_cached_manifest(spec) is not None,
-            "entry": entry_dict,
-            "path_exists": path_exists,
-            "preparation": preparation,
-            "interface": descriptor,
-            "authority": describe_authoritative_bundle_store(tenant_id, project_id),
+    storage_root = bundle_storage_dir(
+        bundle_id=bundle_id,
+        tenant=tenant_id,
+        project=project_id,
+        ensure=False,
+    )
+    widget_manifest = await load_deployment_manifest(storage_root)
+    widget = None
+    if widget_manifest is not None:
+        widget = {
+            "source": dict(widget_manifest.source or {}),
+            "source_generation": widget_manifest.source_generation,
+            "application_generation": widget_manifest.application_generation,
+            "deployment_signature": widget_manifest.deployment_signature,
+            "widgets": sorted(widget_manifest.widgets),
         }
-    except Exception as exc:
-        return {
-            "status": "ok",
-            "tenant": tenant_id,
-            "project": project_id,
-            "bundle_id": bundle_id,
-            "declared": True,
-            "loaded": False,
-            "cached_before": cached_before,
-            "cached_after": get_cached_manifest(spec) is not None,
-            "entry": entry_dict,
-            "path_exists": path_exists,
-            "preparation": preparation,
-            "last_error": {
-                "type": type(exc).__name__,
-                "message": str(exc),
-                "where": "load_bundle_manifest",
-                "traceback_tail": traceback.format_exc(limit=8),
-            },
-            "authority": describe_authoritative_bundle_store(tenant_id, project_id),
-        }
+
+    return {
+        "status": "ok",
+        "tenant": tenant_id,
+        "project": project_id,
+        "bundle_id": bundle_id,
+        "declared": entry is not None,
+        "loaded": loaded_diagnostic is not None,
+        "entry": entry_dict,
+        "process_entry": process_entry,
+        "source": (loaded_diagnostic or {}).get("source"),
+        "path_exists": path_exists,
+        "preparation": preparation,
+        "process": {
+            "component": "chat-proc",
+            "instance_id": str(getattr(settings, "INSTANCE_ID", "") or ""),
+            "pid": os.getpid(),
+            "loaded": loaded_diagnostic,
+        },
+        "widget": widget,
+        "authority": describe_authoritative_bundle_store(tenant_id, project_id),
+    }
 
 
 @internal_router.post("/internal/bundles/catalog/check", status_code=200)
