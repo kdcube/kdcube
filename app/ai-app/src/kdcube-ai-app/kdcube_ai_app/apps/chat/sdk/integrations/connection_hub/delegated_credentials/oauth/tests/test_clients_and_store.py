@@ -94,6 +94,23 @@ class FakeRedis:
     async def eval(self, script, numkeys, *values):
         keys = list(values[:numkeys])
         args = list(values[numkeys:])
+        if numkeys == 2 and "TTL" in script:
+            old_key, new_key = keys
+            if old_key in self.values:
+                return -1
+            current = self.values.get(new_key)
+            if current is None:
+                return 0
+            if current != args[1]:
+                return -2
+            ttl = self.ttls.get(new_key, -1)
+            if ttl <= 0:
+                return -3
+            self.values.pop(new_key, None)
+            self.ttls.pop(new_key, None)
+            self.values[old_key] = str(args[0])
+            self.ttls[old_key] = ttl
+            return 1
         if numkeys == 2 and "EXISTS" in script:
             old_key, new_key = keys
             current = self.values.get(old_key)
@@ -407,6 +424,37 @@ async def test_refresh_token_allows_only_one_concurrent_rotation(store):
 
 
 @pytest.mark.asyncio
+async def test_failed_refresh_rotation_can_restore_the_presented_token(store):
+    refresh_token = await store.create_refresh_token(
+        client_id="claude",
+        sub="google:admin@example.test",
+        scopes=["records:read"],
+        registry_access_id="aut_card",
+        card_kind="automation",
+    )
+    state = await store.get_refresh_token_state(refresh_token)
+    assert state is not None
+    withheld_replacement = await store.rotate_refresh_token(
+        refresh_token,
+        state=state,
+    )
+    assert withheld_replacement
+
+    restored = await store.rollback_refresh_token_rotation(
+        refresh_token,
+        withheld_replacement,
+        state=state,
+    )
+
+    assert restored is True
+    assert await store.validate_refresh_token(refresh_token) is not None
+    assert await store.validate_refresh_token(withheld_replacement) is None
+    delivered_replacement = await store.rotate_refresh_token(refresh_token)
+    assert delivered_replacement
+    assert delivered_replacement != withheld_replacement
+
+
+@pytest.mark.asyncio
 async def test_consent_csrf_allows_only_one_concurrent_consumer(store):
     csrf = await store.create_csrf_token("user-1", context={"client_id": "claude"})
 
@@ -710,6 +758,17 @@ async def test_real_redis_oauth_transitions_are_atomic() -> None:
         cleanup_keys.extend(
             real_store._key("refresh", token) for token in replacements
         )
+        assert await real_store.rollback_refresh_token_rotation(
+            refresh,
+            replacements[0],
+            state=state,
+        ) is True
+        assert await real_store.validate_refresh_token(refresh) is not None
+        assert await real_store.validate_refresh_token(replacements[0]) is None
+
+        delivered = await real_store.rotate_refresh_token(refresh)
+        assert delivered
+        cleanup_keys.append(real_store._key("refresh", delivered))
     finally:
         if cleanup_keys:
             await redis.delete(*cleanup_keys)

@@ -19,6 +19,9 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentia
     bind_delegated_card_persistence,
     mount_test_oauth_adapter,
 )
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.http import (
+    routes as oauth_routes,
+)
 from connection_hub.delegated_credentials.oauth.authority import (
     DELEGATED_CLIENT_CREDENTIAL_KIND,
 )
@@ -402,6 +405,174 @@ async def test_refresh_token_rotates_and_issues_new_access(ctx):
         "grant_type": "refresh_token", "refresh_token": rt, "client_id": "claude",
     })
     assert again.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_refresh_card_failure_restores_held_token_and_retry_succeeds(
+    ctx,
+    monkeypatch,
+):
+    client, store = ctx
+    code = await _seed_code(store)
+    first = client.post("/oauth/token", data={
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": "http://127.0.0.1:9000/callback",
+        "client_id": "claude",
+        "code_verifier": VERIFIER,
+    }).json()
+    refresh_token = first["refresh_token"]
+    _seed_live_card(store, await store.validate_refresh_token(refresh_token))
+    original_persist = DurableCardPersistence.persist
+    attempts = 0
+
+    async def fail_once(self, *args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise CardCommitFailed("durable_commit_failed")
+        return await original_persist(self, *args, **kwargs)
+
+    monkeypatch.setattr(DurableCardPersistence, "persist", fail_once)
+    request = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": "claude",
+    }
+
+    failed = client.post("/oauth/token", data=request)
+
+    assert failed.status_code == 503
+    assert failed.json()["error"] == "temporarily_unavailable"
+    assert failed.json()["error_description"] == (
+        "token issuance failed; the presented refresh token remains valid, "
+        "retry with it"
+    )
+    assert await store.validate_refresh_token(refresh_token) is not None
+
+    retried = client.post("/oauth/token", data=request)
+
+    assert retried.status_code == 200
+    assert retried.json()["refresh_token"] != refresh_token
+    assert await store.validate_refresh_token(refresh_token) is None
+    assert await store.validate_refresh_token(
+        retried.json()["refresh_token"]
+    ) is not None
+
+
+@pytest.mark.asyncio
+async def test_refresh_issuance_exception_returns_named_503_and_restores_token(
+    ctx,
+    monkeypatch,
+):
+    client, store = ctx
+    code = await _seed_code(store)
+    first = client.post("/oauth/token", data={
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": "http://127.0.0.1:9000/callback",
+        "client_id": "claude",
+        "code_verifier": VERIFIER,
+    }).json()
+    refresh_token = first["refresh_token"]
+    _seed_live_card(store, await store.validate_refresh_token(refresh_token))
+
+    async def raise_issuance(*_args, **_kwargs):
+        raise RuntimeError("issuance failed")
+
+    monkeypatch.setattr(oauth_routes, "_issue_tokens", raise_issuance)
+    response = client.post("/oauth/token", data={
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": "claude",
+    })
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "error": "temporarily_unavailable",
+        "error_description": (
+            "token issuance failed; the presented refresh token remains valid, "
+            "retry with it"
+        ),
+    }
+    assert await store.validate_refresh_token(refresh_token) is not None
+
+
+@pytest.mark.asyncio
+async def test_refresh_issuance_4xx_keeps_rotation_consumed(ctx, monkeypatch):
+    client, store = ctx
+    code = await _seed_code(store)
+    first = client.post("/oauth/token", data={
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": "http://127.0.0.1:9000/callback",
+        "client_id": "claude",
+        "code_verifier": VERIFIER,
+    }).json()
+    refresh_token = first["refresh_token"]
+    _seed_live_card(store, await store.validate_refresh_token(refresh_token))
+
+    async def refuse_issuance(*_args, **_kwargs):
+        return oauth_routes._token_error(
+            "invalid_grant",
+            "the current authority refused token issuance",
+        )
+
+    monkeypatch.setattr(oauth_routes, "_issue_tokens", refuse_issuance)
+    response = client.post("/oauth/token", data={
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": "claude",
+    })
+
+    assert response.status_code == 400
+    assert response.json()["error_description"] == (
+        "the current authority refused token issuance"
+    )
+    assert await store.validate_refresh_token(refresh_token) is None
+
+
+@pytest.mark.asyncio
+async def test_refresh_issuance_names_unrestorable_rotation(ctx, monkeypatch):
+    client, store = ctx
+    code = await _seed_code(store)
+    first = client.post("/oauth/token", data={
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": "http://127.0.0.1:9000/callback",
+        "client_id": "claude",
+        "code_verifier": VERIFIER,
+    }).json()
+    refresh_token = first["refresh_token"]
+    _seed_live_card(store, await store.validate_refresh_token(refresh_token))
+
+    async def fail_issuance(*_args, **_kwargs):
+        return oauth_routes._token_error(
+            "temporarily_unavailable",
+            "the authority store is unavailable",
+            status=503,
+        )
+
+    async def refuse_restore(*_args, **_kwargs):
+        return False
+
+    monkeypatch.setattr(oauth_routes, "_issue_tokens", fail_issuance)
+    monkeypatch.setattr(store, "rollback_refresh_token_rotation", refuse_restore)
+    response = client.post("/oauth/token", data={
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": "claude",
+    })
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "error": "temporarily_unavailable",
+        "error_description": (
+            "token issuance failed; the refresh token could not be restored, "
+            "authorize again"
+        ),
+    }
+    assert await store.validate_refresh_token(refresh_token) is None
 
 
 @pytest.mark.asyncio
