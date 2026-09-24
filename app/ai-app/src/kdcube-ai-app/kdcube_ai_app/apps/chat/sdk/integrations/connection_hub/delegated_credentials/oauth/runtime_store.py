@@ -70,6 +70,10 @@ def _connections(
         project=project,
         bundle_id=bundle_id,
     )
+    if props is None:
+        raise GrantStoreUnavailable(
+            "selected_authority.configuration_unavailable"
+        )
     if not isinstance(props, Mapping):
         return {}
     candidate = props.get("connections")

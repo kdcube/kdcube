@@ -597,6 +597,7 @@ def test_grant_store_reuses_proc_owned_async_redis_client():
         "tenant": "tenant-a",
         "project": "project-a",
     }
+    app.state.oauth_authority_connections = {}
     request = Request({
         "type": "http",
         "http_version": "1.1",
@@ -627,6 +628,7 @@ def test_grant_store_factory_failure_is_normalized(monkeypatch):
         "tenant": "tenant-a",
         "project": "project-a",
     }
+    app.state.oauth_authority_connections = {}
     request = Request({
         "type": "http",
         "http_version": "1.1",
