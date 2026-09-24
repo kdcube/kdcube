@@ -1007,8 +1007,12 @@ def _profile_marker_grants(cfg: OAuthDelegatedClientConfig, scopes: Iterable[str
             tools = tuple(getattr(resource_cfg, "tools", ()) or ())
             selected = tools if "*" in operations else tuple(tool for tool in tools if tool.name in operations)
             bucket = expanded.setdefault(profile.scope, [])
+            # A tool without grants of its own runs under its resource's
+            # grants, exactly as Connection Hub resolves it at issuance.
+            resource_grants = getattr(cfg, "resource_grants", None)
+            inherited = tuple(resource_grants(resource_cfg.resource)) if callable(resource_grants) else ()
             for tool in selected:
-                for grant in tool.grants or ():
+                for grant in tool.grants or inherited:
                     if str(grant).strip() and str(grant) not in bucket:
                         bucket.append(str(grant))
     return {marker: tuple(expanded.get(marker, ())) for marker in markers}

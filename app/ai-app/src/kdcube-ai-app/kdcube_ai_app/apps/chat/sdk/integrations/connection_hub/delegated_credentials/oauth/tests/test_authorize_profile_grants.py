@@ -100,3 +100,32 @@ def test_a_refusal_names_the_real_grant_and_never_the_profile_selector():
     body = denial.body.decode("utf-8")
     assert '"work:relay"' in body
     assert "work:profile:worker" not in body
+
+
+def test_a_tool_without_grants_of_its_own_expands_to_its_resource_grants():
+    """Connection Hub runs such a tool under its resource's grants, so the check must too."""
+    cfg = oauth_delegated_config_from_connections(
+        {
+            "delegated_credentials": {
+                "oauth": {
+                    "enabled": True,
+                    "capabilities": [{"grant": "records:read", "label": "Read"}],
+                    "resources": [
+                        {
+                            "resource": RESOURCE,
+                            "tools": {"records.list": {}},
+                            "authorization_profiles": {
+                                "reader": {
+                                    "scope": "records:profile:reader",
+                                    "label": "Reader",
+                                    "operations": ["records.list"],
+                                }
+                            },
+                        }
+                    ],
+                }
+            }
+        }
+    )
+    assert routes._delegation_grants(cfg, ["records:profile:reader"]) == ["records:read"]
+    assert routes._visible_scopes(cfg, ["records:profile:reader"], _Inventory()) == []
