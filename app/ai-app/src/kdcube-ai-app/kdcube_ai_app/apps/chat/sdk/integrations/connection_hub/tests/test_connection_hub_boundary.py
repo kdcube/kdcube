@@ -5,11 +5,24 @@
 
 from __future__ import annotations
 
+import inspect
 from importlib import import_module
 from typing import Any
 
 import pytest
 
+from connection_hub.delegated_credentials.automation_access import (
+    AutomationAccessService as PortableAutomationAccessService,
+)
+from connection_hub.delegated_credentials.cards.persistence import (
+    DurableCardPersistence as PortableDurableCardPersistence,
+)
+from connection_hub.delegated_credentials.cards.service import (
+    CardServingUnavailable,
+)
+from connection_hub.delegated_credentials.oauth.store import (
+    GrantStoreUnavailable,
+)
 from connection_hub.hub.edges import ConnectionEdgeStore as PortableConnectionEdgeStore
 
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.automation_access import (
@@ -51,6 +64,51 @@ def test_kdcube_ports_are_explicit_host_types():
     assert ConnectionHubProvider.__module__.startswith(
         "kdcube_ai_app.apps.chat.sdk.integrations.connection_hub."
     )
+
+
+@pytest.mark.parametrize(
+    ("host_type", "portable_type"),
+    (
+        (AutomationAccessService, PortableAutomationAccessService),
+        (DurableCardPersistence, PortableDurableCardPersistence),
+    ),
+)
+def test_kdcube_constructor_adapters_accept_every_portable_parameter(
+    host_type: type,
+    portable_type: type,
+) -> None:
+    host_parameters = inspect.signature(host_type).parameters
+    portable_parameters = inspect.signature(portable_type).parameters
+
+    assert set(portable_parameters) - set(host_parameters) == set()
+
+
+def test_kdcube_automation_access_forwards_the_authority_backend() -> None:
+    with pytest.raises(
+        GrantStoreUnavailable,
+        match="selected_authority.automation_grant_store_not_bound",
+    ):
+        AutomationAccessService(
+            redis=object(),
+            tenant="tenant-a",
+            project="project-a",
+            config=object(),
+            authority_backend="postgresql",
+        )
+
+
+def test_kdcube_card_persistence_forwards_the_authority_backend() -> None:
+    with pytest.raises(
+        CardServingUnavailable,
+        match="selected_authority.credential_handles_not_bound",
+    ):
+        DurableCardPersistence(
+            redis=object(),
+            tenant="tenant-a",
+            project="project-a",
+            card_store=object(),
+            authority_backend="postgresql",
+        )
 
 
 class _CapabilityService:
