@@ -39,8 +39,15 @@ from connection_hub.authenticators.models import (
 from connection_hub.authority_projection import (
     authority_has_platform_privilege,
 )
+from connection_hub.delegated_credentials.oauth.store import (
+    GrantStore,
+    GrantStoreUnavailable,
+)
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.config import (
     oauth_delegated_config,
+)
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.runtime_store import (
+    resolve_request_oauth_grant_store,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.surface_guard import (
     authorize_delegated_rest_request,
@@ -57,6 +64,9 @@ from kdcube_ai_app.auth.AuthManager import (
     REGISTERED_ROLE,
 )
 from kdcube_ai_app.auth.sessions import RequestContext, UserSession, UserType
+from kdcube_ai_app.auth.session_authority_runtime import (
+    SessionAuthorityUnavailable,
+)
 from kdcube_ai_app.infra.plugin.bundle_store import (
     _get_bundle_props_from_authority as get_bundle_props_from_authority,
 )
@@ -461,7 +471,7 @@ class ConnectionHubAuthenticationSurface:
         )
         return dict(result or {})
 
-    def _delegated_oauth_raw_config(self, request: Request) -> dict[str, Any]:
+    def _delegated_connections_config(self) -> dict[str, Any]:
         props = get_bundle_props_from_authority(
             tenant=self.tenant,
             project=self.project,
@@ -469,7 +479,10 @@ class ConnectionHubAuthenticationSurface:
         )
         props = props if isinstance(props, Mapping) else {}
         connections = props.get("connections")
-        connections = connections if isinstance(connections, Mapping) else {}
+        return dict(connections) if isinstance(connections, Mapping) else {}
+
+    def _delegated_oauth_raw_config(self, request: Request) -> dict[str, Any]:
+        connections = self._delegated_connections_config()
         delegated = connections.get("delegated_credentials")
         delegated = delegated if isinstance(delegated, Mapping) else {}
         raw = delegated.get("oauth")
@@ -491,6 +504,17 @@ class ConnectionHubAuthenticationSurface:
             except Exception:
                 pass
         return cfg
+
+    async def _bind_delegated_grant_store(self, request: Request) -> GrantStore:
+        return await resolve_request_oauth_grant_store(
+            request,
+            connections=self._delegated_connections_config(),
+            redis=self.redis,
+            pg_pool=self.pg_pool,
+            tenant=self.tenant,
+            project=self.project,
+            bundle_id=self.bundle_id,
+        )
 
     def _bind_delegated_oauth_config(self, request: Request) -> Any:
         cfg = self._delegated_oauth_raw_config(request)
@@ -644,6 +668,8 @@ class ConnectionHubAuthenticationSurface:
             )
         except (AuthenticationError, AuthorizationError):
             return None
+        except (GrantStoreUnavailable, SessionAuthorityUnavailable):
+            raise
         except Exception:
             logger.warning(
                 "[auth.connection_hub.surface] delegated-bearer slice failed; "
@@ -680,6 +706,7 @@ class ConnectionHubAuthenticationSurface:
         )
         if self._delegated_platform_resource_config(request) is None:
             return None
+        await self._bind_delegated_grant_store(request)
         projection = await resolve_delegated_card_session_projection(
             request,
             authority_id=DEFAULT_DELEGATED_AUTHORITY_ID,
@@ -711,6 +738,7 @@ class ConnectionHubAuthenticationSurface:
             return None
         if self._delegated_platform_resource_config(request) is None:
             return None
+        await self._bind_delegated_grant_store(request)
         projection = await resolve_delegated_card_session_projection(
             request,
             authority_id=DEFAULT_DELEGATED_AUTHORITY_ID,
@@ -733,6 +761,9 @@ class ConnectionHubAuthenticationSurface:
         auth_header = str(request.headers.get("authorization") or "").strip()
         if not auth_header.lower().startswith("bearer "):
             return None
+        if self._delegated_platform_resource_config(request) is None:
+            return None
+        await self._bind_delegated_grant_store(request)
         operation = self._delegated_platform_operation(request)
         if operation:
             endpoint_auth = {

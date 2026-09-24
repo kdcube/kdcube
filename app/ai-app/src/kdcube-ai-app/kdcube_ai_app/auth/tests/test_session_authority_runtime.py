@@ -12,6 +12,7 @@ from kdcube_ai_app.auth.session_authority_runtime import (
     KDCUBE_SESSION_AUTHORITY_FAMILIES,
     SessionAuthorityUnavailable,
     activate_session_authority_stores,
+    bundle_session_store_for,
     configure_session_authority,
     prepare_configured_session_authority,
     reset_session_authority_runtime_for_tests,
@@ -142,6 +143,20 @@ async def test_redis_migration_source_remains_an_explicit_compatibility_mode() -
 
     assert snapshot.ready is True
     assert manager.authority_store is None
+
+
+def test_postgresql_process_without_binding_does_not_fall_back_to_redis(
+    monkeypatch,
+) -> None:
+    from kdcube_ai_app.apps.chat.sdk import config as config_module
+
+    monkeypatch.setattr(config_module, "get_settings", _settings)
+
+    with pytest.raises(
+        SessionAuthorityUnavailable,
+        match="session_authority_postgresql_store_not_bound",
+    ):
+        bundle_session_store_for(tenant="tenant-a", project="project-a")
 
 
 class _PreparedStore:

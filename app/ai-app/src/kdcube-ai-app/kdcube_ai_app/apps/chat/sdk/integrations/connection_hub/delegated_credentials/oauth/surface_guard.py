@@ -73,6 +73,12 @@ from connection_hub.delegated_credentials.oauth.store import (
     GrantStore,
     GrantStoreUnavailable,
 )
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.runtime_store import (
+    resolve_request_oauth_grant_store,
+)
+from connection_hub.delegated_credentials.authority_config import (
+    AUTHORITY_BACKEND_POSTGRESQL,
+)
 from connection_hub.delegated_credentials.oauth.metadata import (
     protected_resource_metadata_url,
 )
@@ -95,6 +101,9 @@ from kdcube_ai_app.apps.chat.sdk.application_operations import (
     ApplicationOperationPolicyError,
     application_operation_policy_declared,
     resolve_application_operation_role_policy,
+)
+from kdcube_ai_app.auth.session_authority_runtime import (
+    SessionAuthorityUnavailable,
 )
 
 
@@ -147,10 +156,14 @@ def _json_response(
     description: str,
     *,
     headers: Mapping[str, str] | None = None,
+    reason: str = "",
 ) -> JSONResponse:
+    content = {"error": error, "error_description": description}
+    if reason:
+        content["reason"] = str(reason)
     return JSONResponse(
         status_code=status_code,
-        content={"error": error, "error_description": description},
+        content=content,
         headers=dict(headers or {}),
     )
 
@@ -479,23 +492,7 @@ def _outer_operation_consent_payload(
 
 
 async def _default_grant_store(request: Request) -> GrantStore:
-    override = getattr(request.app.state, "oauth_grant_store", None)
-    if override is not None:
-        return override
-
-    try:
-        redis = getattr(request.app.state, "redis_async", None)
-        if redis is None:
-            from kdcube_ai_app.apps.chat.sdk.config import get_settings
-            from kdcube_ai_app.infra.redis.client import get_async_redis_client
-
-            redis = get_async_redis_client(get_settings().REDIS_URL)
-        tenant, project = oauth_tenant_project(request)
-        return GrantStore(redis, tenant, project)
-    except GrantStoreUnavailable:
-        raise
-    except Exception as exc:
-        raise GrantStoreUnavailable("initialize") from exc
+    return await resolve_request_oauth_grant_store(request)
 
 
 async def _access_grant_record(
@@ -520,6 +517,7 @@ async def _access_grant_record(
             503,
             "temporarily_unavailable",
             "Current delegated authorization state is unavailable",
+            reason=exc.operation,
         )
 
 
@@ -560,6 +558,8 @@ async def _authenticate_delegated_client_access_token(token: str) -> dict[str, A
     )
     try:
         user = await manager.authenticate(token)
+    except SessionAuthorityUnavailable:
+        raise
     except AuthenticationError as exc:
         # Which check refused the bearer decides the remedy: a missing session
         # row (a store restart) heals with one refresh, an invalidated or
@@ -627,6 +627,13 @@ async def _live_grant_record(request: Any, grant_record: Optional[Dict[str, Any]
     # revision restores it. Expired or revoked durable state still denies and
     # is not re-cached.
     resolvers = delegated_serving_resolvers(request)
+    card_store = getattr(resolvers, "cards", None)
+    backend = str(
+        getattr(getattr(request, "state", None), "oauth_authority_backend", "")
+        or ""
+    ).strip()
+    if backend == AUTHORITY_BACKEND_POSTGRESQL and card_store is None:
+        raise LiveGrantCardError("durable_card_store_unavailable")
     composition = await resolve_live_grant_composition(
         store.redis,
         tenant=tenant,
@@ -635,7 +642,7 @@ async def _live_grant_record(request: Any, grant_record: Optional[Dict[str, Any]
         expected_client_id=str(attrs.get("client_id") or ""),
         expected_grantor_subject=str(attrs.get("grantor_subject") or ""),
         expected_delegate_subject=str(credential.get("subject") or ""),
-        card_store=getattr(resolvers, "cards", None),
+        card_store=card_store,
     )
     if composition is None:
         LOGGER.info("[connection-hub.oauth.guard] registry card %s gone — binding treated as revoked", access_id)
@@ -1085,7 +1092,27 @@ async def _authorize_delegated_managed_request(
             {},
         )
 
-    user = await _authenticate_delegated_client_access_token(effective_token)
+    try:
+        user = await _authenticate_delegated_client_access_token(effective_token)
+    except SessionAuthorityUnavailable as exc:
+        reason = str(exc or "").strip() or "session_authority_unavailable"
+        logger.warning(
+            "[connection-hub.oauth.%s_guard] unavailable reason=%s resource=%s",
+            surface_label,
+            reason,
+            effective_resource,
+        )
+        return (
+            _json_response(
+                503,
+                "temporarily_unavailable",
+                "Current delegated session authority is unavailable",
+                reason=reason,
+            ),
+            {},
+            CredentialEnvelope(),
+            {},
+        )
     if user is None:
         logger.info(
             "[connection-hub.oauth.%s_guard] denied reason=invalid_bearer resource=%s",
@@ -1148,6 +1175,7 @@ async def _authorize_delegated_managed_request(
                 503,
                 "temporarily_unavailable",
                 "Current delegated authorization state is unavailable",
+                reason=f"live_grant_{exc.reason}",
             ),
             user,
             CredentialEnvelope(),
@@ -1226,6 +1254,14 @@ async def resolve_delegated_card_session_projection(
         surface_label="gateway_identity",
     )
     if denial is not None:
+        if int(getattr(denial, "status_code", 0) or 0) == 503:
+            reason = "delegated_authority_unavailable"
+            try:
+                body = json.loads(bytes(getattr(denial, "body", b"")).decode("utf-8"))
+                reason = str(body.get("reason") or reason)
+            except Exception:
+                pass
+            raise GrantStoreUnavailable(reason)
         return {}
 
     view = DelegatedCredentialView.from_envelope(envelope, grant_record)
@@ -1655,7 +1691,17 @@ async def authorize_delegated_application_operation_request(
         token = _extract_bearer(request)
         if not token:
             return None
-        if await _authenticate_delegated_client_access_token(token) is None:
+        try:
+            authenticated = await _authenticate_delegated_client_access_token(token)
+        except SessionAuthorityUnavailable as exc:
+            reason = str(exc or "").strip() or "session_authority_unavailable"
+            return _json_response(
+                503,
+                "temporarily_unavailable",
+                "Current delegated session authority is unavailable",
+                reason=reason,
+            )
+        if authenticated is None:
             return None
         denial, _user, _envelope, _grant_record = (
             await _authorize_delegated_managed_request(

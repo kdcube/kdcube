@@ -22,15 +22,14 @@ from fastapi import Request
 
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.config import oauth_delegated_config
-from connection_hub.delegated_credentials.oauth.store import (
-    GrantStore,
-    GrantStoreUnavailable,
-)
 from connection_hub.authority_projection import (
     authority_has_platform_privilege,
 )
 from kdcube_ai_app.apps.middleware.token_extract import resolve_auth_from_headers_and_cookies
 from kdcube_ai_app.auth.AuthManager import ensure_platform_registered_role
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.runtime_store import (
+    resolve_bound_or_migration_source_grant_store,
+)
 
 AuthenticateFn = Callable[[str], Awaitable[Optional[dict]]]
 
@@ -142,36 +141,7 @@ def get_authenticate(request: Request) -> AuthenticateFn:
 
 
 def get_grant_store(request: Request) -> Any:
-    for state in (
-        getattr(request, "state", None),
-        getattr(request.app, "state", None),
-    ):
-        store = getattr(state, "oauth_grant_store", None)
-        if store is not None:
-            return store
-    if bool(
-        getattr(
-            getattr(request, "state", None),
-            "oauth_grant_store_required",
-            False,
-        )
-    ):
-        raise GrantStoreUnavailable("initialize.authority_not_bound")
-
-    from kdcube_ai_app.infra.redis.client import get_async_redis_client
-
-    try:
-        # In proc, reuse the application-owned async pool. The factory fallback
-        # keeps the adapter usable when mounted standalone in SDK tests/apps.
-        redis = getattr(request.app.state, "redis_async", None)
-        if redis is None:
-            redis = get_async_redis_client(get_settings().REDIS_URL)
-        tenant, project = oauth_tenant_project(request)
-    except GrantStoreUnavailable:
-        raise
-    except Exception as exc:
-        raise GrantStoreUnavailable("initialize") from exc
-    return GrantStore(redis, tenant, project)
+    return resolve_bound_or_migration_source_grant_store(request)
 
 
 class AutomationAccessUnavailable(RuntimeError):
