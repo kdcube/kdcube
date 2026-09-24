@@ -5,7 +5,7 @@ summary: "The daily run sheet: lifecycle, the four change loops (platform code, 
 status: active
 tags: ["operations", "cli", "kdcube-cli", "refresh", "reload", "export", "import"]
 keywords: ["operate KDCube runtime", "platform refresh", "maintainer package source", "bundle reload", "runtime export", "runtime verification"]
-updated_at: 2026-09-03
+updated_at: 2026-09-24
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/operations/install-clean-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/operations/install-from-descriptors-README.md
@@ -32,7 +32,7 @@ kdcube defaults --default-tenant "$TENANT" --default-project "$PROJECT" \
 ```shell
 kdcube start                 # start the stack
 kdcube stop                  # stop it (data volumes preserved)
-kdcube info                  # defaults, running services, mounts, URLs
+kdcube info                  # running image IDs, source versions, mounts, URLs
 kdcube stop --remove-volumes # DANGER: wipes local Postgres/Redis data
 ```
 
@@ -74,7 +74,7 @@ tells the running proc to reload the changed apps — no Docker restart.
 
 ```shell
 kdcube reload <app-id>                  # the fast path, no Docker restart
-kdcube bundle status <app-id> --json    # declared vs runtime state
+kdcube bundle status <app-id> --live --json # descriptor vs proc vs widget source
 ```
 
 Single keys without opening an editor:
@@ -110,8 +110,16 @@ This export/align/init triple is the reproduction path:
 
 ## Verification that tells the truth
 
-`kdcube info` reports process and mount state — it does not know whether a
-bundle's UI build failed in the background. The honest check:
+Start with the source-attestation commands documented under
+[bundle status](../../service/cicd/cli-README.md#status) and
+[operational commands](../../service/cicd/cli-README.md#9-operational-commands):
+
+```shell
+kdcube info --workdir "$WORKDIR"
+kdcube bundle status <app-id> --live --workdir "$WORKDIR"
+```
+
+Then verify the user door and inspect preparation/build errors:
 
 ```shell
 curl -s -o /dev/null -w "chat UI -> HTTP %{http_code}\n" http://localhost:5173/platform/chat

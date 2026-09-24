@@ -1904,6 +1904,11 @@ def test_copy_dirty_local_source_copies_tracked_and_untracked_nonignored_files(t
     assert (copied_repo / "app" / "ai-app" / "deployment" / "assembly.yaml").read_text(encoding="utf-8") == "context: {}\n"
     assert (copied_repo / "app" / "ai-app" / "README.md").read_text(encoding="utf-8") == "local change\n"
     assert not (copied_repo / ".git").exists()
+    marker = json.loads(
+        (copied_repo / ".kdcube" / "platform-source.v1.json").read_text(encoding="utf-8")
+    )
+    assert marker["schema"] == "kdcube.platform-source.v1"
+    assert marker["source"]["version"].startswith("git-worktree:")
     assert not (copied_repo / "ignored.txt").exists()
     assert not (copied_repo / "ignored-dir" / "data.txt").exists()
 

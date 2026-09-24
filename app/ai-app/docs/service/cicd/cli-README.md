@@ -1,10 +1,10 @@
 ---
 id: repo:kdcube/app/ai-app/docs/service/cicd/cli-README.md
 title: "Current KDCube CLI"
-summary: "Current implemented CLI surface for local environment bootstrapping, workdir preparation, Docker Compose startup, descriptor validation, serving-catalog checks, exact delegated secret management, host-vault activation, maintainer package-source builds, and deployment selection."
+summary: "Current implemented CLI surface for local environment bootstrapping, workdir preparation, Docker Compose startup, descriptor validation, serving-catalog checks, exact delegated secret management, host-vault activation, deployment source attestation, maintainer package-source builds, and deployment selection."
 tags: ["service", "cicd", "cli", "env", "deployment", "bundle"]
-keywords: ["kdcube cli", "local environment bootstrap", "workdir setup", "docker compose control", "descriptor validation", "app-owned delegated catalog", "catalog drift check", "current cli contract", "local deployment tooling", "multiple local runtime snapshots", "single active local deployment", "tenant project workdir namespace", "bundle config patch", "bundle secret patch", "bundle delete", "managed bundle deletion", "purge-data", "force-retire", "targeted bundle retirement", "host vault stage", "host vault activate", "host vault recover", "kdcube bundle command", "bundle reload internals", "reload-authority", "maintainer local Python package", "unpublished package candidate"]
-updated_at: 2026-09-13
+keywords: ["kdcube cli", "local environment bootstrap", "workdir setup", "docker compose control", "descriptor validation", "app-owned delegated catalog", "catalog drift check", "current cli contract", "local deployment tooling", "deployment source attestation", "running image id", "widget server source comparison", "multiple local runtime snapshots", "single active local deployment", "tenant project workdir namespace", "bundle config patch", "bundle secret patch", "bundle delete", "managed bundle deletion", "purge-data", "force-retire", "targeted bundle retirement", "host vault stage", "host vault activate", "host vault recover", "kdcube bundle command", "bundle reload internals", "reload-authority", "maintainer local Python package", "unpublished package candidate"]
+updated_at: 2026-09-24
 see_also:
   - repo:kdcube/app/ai-app/docs/service/cicd/release-README.md
   - repo:kdcube/app/ai-app/docs/service/cicd/descriptors-README.md
@@ -1151,10 +1151,11 @@ kdcube bundle status <bundle_id> \
 ```
 
 By default the command reports descriptor/source/path diagnostics and whether
-`chat-proc` is running. It does not list other bundles.
+`chat-proc` is running. The report is scoped to the requested bundle.
 
-For local operator diagnostics, add `--live` to ask localhost `chat-proc` to
-load/discover that same explicit bundle id and return the load result:
+For local operator diagnostics, add `--live` to ask localhost `chat-proc` for
+the source identity of that successfully prepared bundle and its published
+static-widget manifest:
 
 ```bash
 kdcube bundle status <bundle_id> \
@@ -1163,9 +1164,17 @@ kdcube bundle status <bundle_id> \
   --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
 ```
 
-The live status path is not a user-facing discovery API. It is intended for
-operators who already have access to the local runtime workdir and Docker
-runtime. It does not emulate an end-user session or frontend visibility rules.
+The live operation reads committed state and leaves application code and
+process state unchanged. It compares the staged descriptor with the source
+that this proc committed after successful preparation, then compares that
+proc source with the source embedded in the widget publication. Each
+comparison names both fields and values, for example `descriptor.commit`,
+`chat-proc.source.commit`, and `widget.source.commit`.
+
+The aggregate result is `MATCH`, `MISMATCH`, or `UNKNOWN`. A mismatch is
+printed before the command exits nonzero; missing evidence is `UNKNOWN` and
+means the comparison is incomplete. This path is an operator diagnostic over
+the explicit bundle ID and local runtime evidence.
 
 #### Apply changes
 
@@ -1610,6 +1619,30 @@ Inspect global CLI state (defaults, running deployment, and runtime info from de
 kdcube info
 ```
 
+`kdcube info` inspects every running Compose container and reports its actual
+Docker image ID, configured image reference, and deployed source version.
+Local builds and release pulls persist an image-ID-keyed receipt under
+`<workdir>/.kdcube/deployment-images.v1.json`; historical image entries let
+each existing container resolve to the source that built it. For clean git
+source the version is the full commit. Dirty
+source adds a digest of the tracked diff and untracked content. Release-mode
+installs use the declared image namespace and platform release tag. External
+service images are identified by image reference and image ID.
+
+Per service, the report compares:
+
+- the configured image reference's current image ID with the running
+  container image ID;
+- the latest recorded build image ID with the running image ID, when KDCube
+  built or pulled that service;
+- the selected platform source version with the source version recorded for
+  the running image.
+
+These are version and symbol comparisons, not timestamp comparisons.
+A platform service whose running image predates the receipt feature is
+`UNKNOWN` until it is rebuilt or pulled by the current CLI; matching a mutable
+image tag alone is not presented as source proof.
+
 Show only the stored CLI defaults:
 
 ```bash
@@ -1828,8 +1861,9 @@ Use `--quiet` to suppress the banner and routine success chatter. The banner is
 also suppressed automatically when stdout is not a TTY and when a command uses
 `--json`.
 
-`kdcube info --json` emits defaults, the running deployment lock, and runtime
-mount details when a workdir is selected.
+`kdcube info --json` emits defaults, the running deployment lock, runtime
+mount details, and the same per-service deployment attestation when a workdir
+is selected.
 
 Apply seed bundle descriptors to an existing runtime:
 

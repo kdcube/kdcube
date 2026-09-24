@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -79,6 +80,13 @@ class FakeInitializer:
 def _write_yaml(path: Path, data) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(data, sort_keys=False))
+
+
+def test_declared_platform_ref_reads_current_assembly(tmp_path: Path) -> None:
+    assembly_path = tmp_path / "assembly.yaml"
+    _write_yaml(assembly_path, {"platform": {"ref": "2026.09.24.1"}})
+
+    assert cli_mod._declared_platform_ref(assembly_path) == "2026.09.24.1"
 
 
 def _make_repo(tmp_path: Path) -> Path:
@@ -691,6 +699,7 @@ def test_default_initializer_runs_prepare_only_without_console_or_prompt(
 def test_cli_start_and_stop_adapters_use_public_local_target(monkeypatch, tmp_path):
     calls = []
     maintenance_phases = []
+    receipt_calls = []
 
     class FakeTarget:
         def __init__(self, reference, **kwargs):
@@ -733,6 +742,19 @@ def test_cli_start_and_stop_adapters_use_public_local_target(monkeypatch, tmp_pa
         "_maintain_docker_build_storage",
         lambda console, *, phase: maintenance_phases.append(phase),
     )
+    monkeypatch.setattr(
+        cli_mod,
+        "_build_paths_for_repo",
+        lambda repo_root, workdir: SimpleNamespace(
+            docker_dir=tmp_path / "docker",
+            config_dir=tmp_path / "runtime" / "config",
+        ),
+    )
+    monkeypatch.setattr(
+        cli_mod,
+        "record_compose_image_receipts",
+        lambda **kwargs: receipt_calls.append(kwargs),
+    )
     console = cli_mod.Console(
         file=cli_mod.io.StringIO(), force_terminal=False, width=500
     )
@@ -755,6 +777,15 @@ def test_cli_start_and_stop_adapters_use_public_local_target(monkeypatch, tmp_pa
     assert isinstance(calls[3][1], LocalStopRequest)
     assert calls[3][1].remove_volumes is True
     assert maintenance_phases == ["before", "after"]
+    assert receipt_calls == [
+        {
+            "workdir": tmp_path / "runtime",
+            "docker_dir": tmp_path / "docker",
+            "env_file": tmp_path / "runtime" / "config" / ".env",
+            "repo_root": tmp_path / "repo",
+            "running_only": True,
+        }
+    ]
     output = console.file.getvalue()
     assert "$ docker compose up -d --build" in output
     assert "Docker compose started." in output
