@@ -4,7 +4,7 @@ title: "Application Startup, Health, And Readiness"
 summary: "Canonical proc architecture for supervised application initialization, process-local and shared lifecycle hooks, aggregate service readiness, per-application admission, retries, and deployment probe mapping."
 tags: [architecture, proc, applications, lifecycle, health, readiness, admission]
 keywords: [application lifecycle supervisor, application preparation, service.readiness, application_not_ready, proc liveness, proc readiness, on_bundle_load, on_app_deploy, queue deferral, app admission]
-updated_at: 2026-08-18
+updated_at: 2026-09-24
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-lifecycle-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/ui-components-lifecycle-README.md
@@ -286,7 +286,10 @@ view. It includes desired and ready generations, attempts, retry timing,
 timestamps, and the bounded preparation error.
 
 The localhost-internal bundle status operation includes the same preparation
-diagnostic for one app.
+diagnostic plus the committed loaded-source and widget-publication receipts
+for one app. Reading status is side-effect free and leaves application code
+and process state unchanged; the CLI contract and field-by-field comparison live in
+[Current KDCube CLI](../../service/cicd/cli-README.md#status).
 
 ## Admission Contract
 

@@ -120,6 +120,12 @@ async def test_deployment_runs_once_and_persists_resolved_policy(monkeypatch, tm
         module="entrypoint",
         singleton=True,
     )
+    source_identity = {
+        "mode": "snapshot",
+        "commit": "commit-1",
+        "path": str(source_root),
+        "mounted_path": "/bundles/app@1-0",
+    }
 
     first = await deploy_loaded_bundle_app_resources(
         workflow=workflow,
@@ -129,6 +135,7 @@ async def test_deployment_runs_once_and_persists_resolved_policy(monkeypatch, tm
         tenant="tenant-a",
         project="project-a",
         application_generation="application-generation-1",
+        source_identity=source_identity,
     )
     second = await deploy_loaded_bundle_app_resources(
         workflow=workflow,
@@ -138,10 +145,12 @@ async def test_deployment_runs_once_and_persists_resolved_policy(monkeypatch, tm
         tenant="tenant-a",
         project="project-a",
         application_generation="application-generation-1",
+        source_identity=source_identity,
     )
 
     assert first is not None and second is not None
     assert first.application_generation == "application-generation-1"
+    assert first.source == source_identity
     assert first.deployment_signature == second.deployment_signature
     assert workflow.deploy_calls == 1
     assert workflow.build_calls == 1
@@ -161,6 +170,7 @@ async def test_deployment_runs_once_and_persists_resolved_policy(monkeypatch, tm
         tenant="tenant-a",
         project="project-a",
         application_generation="application-generation-1",
+        source_identity=source_identity,
     )
     assert third is not None
     assert third.widgets["stats"].roles == ["admin"]
@@ -176,6 +186,7 @@ async def test_deployment_runs_once_and_persists_resolved_policy(monkeypatch, tm
         tenant="tenant-a",
         project="project-a",
         application_generation="application-generation-1",
+        source_identity=source_identity,
     )
     assert fourth is not None
     assert fourth.application_generation == "application-generation-1"

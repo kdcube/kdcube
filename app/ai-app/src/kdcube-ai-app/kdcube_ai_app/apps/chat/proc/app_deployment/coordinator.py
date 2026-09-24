@@ -277,6 +277,7 @@ async def deploy_loaded_bundle_app_resources(
     pg_pool: Any = None,
     redis: Any = None,
     application_generation: str | None = None,
+    source_identity: Mapping[str, Any] | None = None,
     effective_props_transform: Callable[
         [dict[str, Any]], Awaitable[Mapping[str, Any]] | Mapping[str, Any]
     ]
@@ -314,6 +315,7 @@ async def deploy_loaded_bundle_app_resources(
 
     logger = AgentLogger("bundle.on_app_deploy", getattr(getattr(workflow, "config", None), "log_level", "INFO"))
     source_generation = source_generation_for_spec(bundle_spec)
+    stable_source_identity = copy.deepcopy(dict(source_identity or {}))
     descriptor_props_hash = props_fingerprint(descriptor_props)
     source_fingerprint = await app_source_fingerprint(bundle_spec)
     resource_generation = hashlib.sha256(
@@ -324,6 +326,7 @@ async def deploy_loaded_bundle_app_resources(
                 "project": project,
                 "bundle_id": bundle_id,
                 "source_generation": source_generation,
+                "source": stable_source_identity,
                 "app_source_fingerprint": source_fingerprint,
                 "props_fingerprint": descriptor_props_hash,
                 "runtime_generation": static_widget_runtime_generation(),
@@ -409,6 +412,7 @@ async def deploy_loaded_bundle_app_resources(
         storage_root=storage_root,
         logger=logger,
         source_generation=source_generation,
+        source_identity=stable_source_identity,
         application_generation=application_generation,
         source_fingerprint=source_fingerprint,
         descriptor_props_hash=descriptor_props_hash,
@@ -428,6 +432,7 @@ async def _reconcile_static_surfaces(
     storage_root: pathlib.Path,
     logger: AgentLogger,
     source_generation: str,
+    source_identity: dict[str, Any],
     application_generation: str | None,
     source_fingerprint: str,
     descriptor_props_hash: str,
@@ -444,6 +449,7 @@ async def _reconcile_static_surfaces(
         "project": project,
         "bundle_id": bundle_id,
         "source_generation": source_generation,
+        "source": source_identity,
         "application_generation": application_generation,
         "props_fingerprint": descriptor_props_hash,
         "bundle_enabled": bundle_enabled,

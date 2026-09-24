@@ -6113,12 +6113,50 @@ def run_setup(
                 console.print("[red]Docker not found. Please install Docker and rerun.[/red]")
             except subprocess.CalledProcessError:
                 console.print("[red]Docker pull/tag failed. Check the output and retry.[/red]")
+            else:
+                from kdcube_cli.deployment_provenance import (
+                    DeploymentProvenanceError,
+                    record_compose_image_receipts,
+                    release_source_identity,
+                )
+
+                release_services = [
+                    "chat-ingress",
+                    "chat-proc",
+                    "metrics",
+                    "postgres-setup",
+                    "web-ui",
+                    "web-proxy",
+                    "kdcube-secrets",
+                ]
+                if use_proxy_login:
+                    release_services.append(PROXYLOGIN_SERVICE)
+                try:
+                    record_compose_image_receipts(
+                        workdir=ctx.workdir,
+                        docker_dir=ctx.docker_dir,
+                        env_file=config_dir / ".env",
+                        source=release_source_identity(
+                            repository=docker_namespace,
+                            ref=tag,
+                        ),
+                        services=release_services,
+                        profile_args=profile_args,
+                        extra_images={"py-code-exec": "py-code-exec:latest"},
+                    )
+                except DeploymentProvenanceError as exc:
+                    raise SystemExit(
+                        f"Platform images were pulled, but their deployment source receipt failed: {exc}"
+                    ) from exc
     else:
         if ask_confirm(
             console,
             "Build core platform images (includes py-code-exec)?",
             default=True,
         ):
+            compose_build_succeeded = False
+            exec_build_succeeded = False
+            build_services: list[str] = []
             missing = missing_build_keys(env_main)
             if missing:
                 console.print("[yellow]Skipping build — missing required build settings in .env:[/yellow]")
@@ -6154,6 +6192,7 @@ def run_setup(
                         check=True,
                         env=compose_env(config_dir / ".env"),
                     )
+                    compose_build_succeeded = True
                 except FileNotFoundError:
                     console.print("[red]Docker not found. Please install Docker and rerun the build step.[/red]")
                 except subprocess.CalledProcessError:
@@ -6164,10 +6203,31 @@ def run_setup(
                         cwd=ctx.docker_dir,
                         check=True,
                     )
+                    exec_build_succeeded = True
                 except FileNotFoundError:
                     console.print("[red]Docker not found. Please install Docker and rerun the build step.[/red]")
                 except subprocess.CalledProcessError:
                     console.print("[red]Docker build failed. Check the output and retry.[/red]")
+                if compose_build_succeeded and exec_build_succeeded:
+                    from kdcube_cli.deployment_provenance import (
+                        DeploymentProvenanceError,
+                        record_compose_image_receipts,
+                    )
+
+                    try:
+                        record_compose_image_receipts(
+                            workdir=ctx.workdir,
+                            docker_dir=ctx.docker_dir,
+                            env_file=config_dir / ".env",
+                            repo_root=repo_root,
+                            services=build_services,
+                            profile_args=profile_args,
+                            extra_images={"py-code-exec": "py-code-exec:latest"},
+                        )
+                    except DeploymentProvenanceError as exc:
+                        raise SystemExit(
+                            f"Platform images were built, but their deployment source receipt failed: {exc}"
+                        ) from exc
 
     if ask_confirm(console, "Run docker compose now?", default=True):
         runtime_env = None
@@ -6265,6 +6325,25 @@ def run_setup(
                 check=True,
                 env=compose_env(runtime_env),
             )
+            if install_mode != "release":
+                from kdcube_cli.deployment_provenance import (
+                    DeploymentProvenanceError,
+                    record_compose_image_receipts,
+                )
+
+                try:
+                    record_compose_image_receipts(
+                        workdir=ctx.workdir,
+                        docker_dir=ctx.docker_dir,
+                        env_file=config_dir / ".env",
+                        repo_root=repo_root,
+                        profile_args=profile_args,
+                        running_only=True,
+                    )
+                except DeploymentProvenanceError as exc:
+                    raise SystemExit(
+                        f"Docker started the rebuilt stack, but its deployment source receipt failed: {exc}"
+                    ) from exc
             console.print("[green]Docker compose started.[/green]")
             console.print("Open the UI:")
             proxy_http_port = (

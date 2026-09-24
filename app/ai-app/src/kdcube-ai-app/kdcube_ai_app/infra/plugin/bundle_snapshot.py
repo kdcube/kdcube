@@ -27,7 +27,7 @@ import tarfile
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 
 from kdcube_ai_app.infra.plugin.git_bundle import (
     _bundle_lock,
@@ -155,6 +155,59 @@ async def describe_mounted_source(path: pathlib.Path) -> Dict[str, Any]:
         source["error"] = "git_unavailable"
         source["detail"] = str(exc)[:200]
     return source
+
+
+def bundle_source_identity(
+    source: Mapping[str, Any] | None,
+    *,
+    entry: Mapping[str, Any] | Any | None = None,
+) -> Dict[str, Any]:
+    """Return the stable fields that identify bundle code loaded by a process.
+
+    Resolution receipts also contain observation timestamps, changed-path
+    samples, and diagnostics. Those are useful evidence, but they are not a
+    source identity and would make an unchanged widget appear different from
+    its server. ``entry`` fills fields carried by the registry rather than the
+    local-path activation receipt (notably git repo/ref/commit).
+    """
+
+    raw_source = dict(source or {})
+    if entry is None:
+        raw_entry: Dict[str, Any] = {}
+    elif isinstance(entry, Mapping):
+        raw_entry = dict(entry)
+    else:
+        dump = getattr(entry, "model_dump", None)
+        raw_entry = dict(dump(mode="python", exclude_none=True)) if callable(dump) else {}
+
+    mode = str(raw_source.get("mode") or "").strip()
+    if not mode:
+        mode = "git" if raw_entry.get("repo") else "local-path"
+    identity: Dict[str, Any] = {"mode": mode}
+
+    candidates = {
+        "repository": raw_source.get("repository") or raw_entry.get("repo"),
+        "subdir": raw_source.get("subdir") or raw_entry.get("subdir"),
+        "ref": raw_source.get("ref") or raw_entry.get("ref"),
+        "commit": raw_source.get("commit"),
+        "tree": raw_source.get("tree"),
+        "head": raw_source.get("head"),
+        "git_commit": raw_source.get("git_commit") or raw_entry.get("git_commit"),
+        "path": raw_source.get("path") or raw_entry.get("path"),
+        "mounted_path": raw_source.get("mounted_path") or raw_entry.get("mounted_path"),
+        "error": raw_source.get("error"),
+    }
+    for key, value in candidates.items():
+        if value is None:
+            continue
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                continue
+        identity[key] = value
+    if "dirty" in raw_source:
+        identity["dirty"] = bool(raw_source.get("dirty"))
+    return identity
 
 
 async def _expected_blobs(repository: pathlib.Path, commit: str, subdir: str) -> Dict[str, str]:
@@ -394,7 +447,12 @@ async def resolve_activation_entry(entry: Dict[str, Any], *, logger: Optional[Ag
         )
         out["mounted_path"] = mounted
         out["path"] = str(snapshot.path)
-        out["source"] = snapshot.source()
+        source = snapshot.source()
+        source["ref"] = commit
+        source["mounted_path"] = mounted
+        source["origin"] = "descriptor"
+        source["durable"] = True
+        out["source"] = source
         return out
     out["source"] = await describe_mounted_source(pathlib.Path(mounted))
     return out

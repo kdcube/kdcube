@@ -52,6 +52,13 @@ from kdcube_cli.control import (
     resolve_local_workdir,
 )
 from kdcube_cli.descriptor_files import copy_descriptor_file
+from kdcube_cli.deployment_provenance import (
+    DeploymentProvenanceError,
+    collect_running_service_attestation,
+    platform_source_identity,
+    record_compose_image_receipts,
+    write_platform_source_marker,
+)
 from kdcube_cli.docker_storage import build_storage_maintenance_commands
 from kdcube_cli.export_live_bundles import export_live_bundle_descriptors
 from kdcube_cli.host_vault import (
@@ -403,6 +410,21 @@ def start_compose_stack(
     finally:
         if build:
             _maintain_docker_build_storage(console, phase="after")
+    if build:
+        ctx = _build_paths_for_repo(repo_root, workdir)
+        env_file = ctx.config_dir / ".env"
+        try:
+            record_compose_image_receipts(
+                workdir=workdir,
+                docker_dir=ctx.docker_dir,
+                env_file=env_file,
+                repo_root=repo_root,
+                running_only=True,
+            )
+        except DeploymentProvenanceError as exc:
+            raise SystemExit(
+                f"Docker started the rebuilt stack, but its deployment source receipt failed: {exc}"
+            ) from exc
     console.print("[green]Docker compose started.[/green]")
     console.print("Open the UI:")
     console.print(f"  [link={result.url}]{result.url}[/link]")
@@ -739,6 +761,19 @@ def build_compose_images(
             ["docker", "build", "--progress=plain", "-t", "py-code-exec:latest", "-f", "Dockerfile_Exec", "../../.."],
             cwd=ctx.docker_dir,
         )
+        try:
+            record_compose_image_receipts(
+                workdir=workdir,
+                docker_dir=ctx.docker_dir,
+                env_file=env_file,
+                repo_root=repo_root,
+                services=build_services,
+                extra_images={"py-code-exec": "py-code-exec:latest"},
+            )
+        except DeploymentProvenanceError as exc:
+            raise SystemExit(
+                f"Docker images were built, but their deployment source receipt failed: {exc}"
+            ) from exc
     finally:
         _maintain_docker_build_storage(console, phase="after")
     console.print("[green]Docker images built. The stack was not started.[/green]")
@@ -1375,6 +1410,16 @@ def _resolve_live_bundle_export_sources(
     return bundles_path, bundles_secrets_path if bundles_secrets_path.exists() else None
 
 
+def _declared_platform_ref(assembly_path: Path | None) -> str | None:
+    if assembly_path is None or not assembly_path.exists():
+        return None
+    assembly = installer_mod.load_release_descriptor_soft(assembly_path)
+    platform = assembly.get("platform") if isinstance(assembly, dict) else None
+    if not isinstance(platform, dict):
+        return None
+    return str(platform.get("ref") or "").strip() or None
+
+
 def _collect_runtime_info(*, repo_root: Path, workdir: Path) -> dict[str, object]:
     target = LocalDeploymentTarget(
         DeploymentTargetRef.local(workdir),
@@ -1393,6 +1438,26 @@ def _collect_runtime_info(*, repo_root: Path, workdir: Path) -> dict[str, object
         )
         raise SystemExit(diagnostic)
     install_meta = _read_install_meta_raw(paths.workdir) or {}
+    env_file = paths.config_dir / ".env"
+    try:
+        deployment = collect_running_service_attestation(
+            workdir=paths.workdir,
+            docker_dir=paths.docker_dir,
+            env_file=env_file,
+            repo_root=repo_root,
+            install_metadata=install_meta,
+            declared_platform_ref=_declared_platform_ref(paths.assembly_path),
+        ) if env_file.exists() else {
+            "status": "UNKNOWN",
+            "error": f"Compose env file not found: {env_file}",
+            "services": [],
+        }
+    except DeploymentProvenanceError as exc:
+        deployment = {
+            "status": "UNKNOWN",
+            "error": str(exc),
+            "services": [],
+        }
     return {
         "workdir": str(paths.workdir),
         "config_dir": str(paths.config_dir),
@@ -1418,7 +1483,55 @@ def _collect_runtime_info(*, repo_root: Path, workdir: Path) -> dict[str, object
         "compose_mode": paths.compose_mode,
         "tenant": status.reference.tenant,
         "project": status.reference.project,
+        "deployment": deployment,
     }
+
+
+def _print_deployment_attestation(console: Console, deployment: object) -> None:
+    if not isinstance(deployment, dict):
+        return
+    status = str(deployment.get("status") or "UNKNOWN")
+    style = "red" if status == "MISMATCH" else ("yellow" if status == "UNKNOWN" else "green")
+    console.print(f"\n[bold]Running Service Attestation[/bold] [{style}]{status}[/{style}]")
+    selected_source = (
+        deployment.get("selected_source")
+        if isinstance(deployment.get("selected_source"), dict)
+        else {}
+    )
+    if selected_source:
+        console.print(
+            f"[dim]Selected source.version:[/dim] "
+            f"{selected_source.get('version') or 'unknown'}"
+        )
+    if deployment.get("error"):
+        console.print(f"[yellow]Attestation unavailable:[/yellow] {deployment.get('error')}")
+    if deployment.get("source_error"):
+        console.print(f"[yellow]Selected source unavailable:[/yellow] {deployment.get('source_error')}")
+    services = deployment.get("services") if isinstance(deployment.get("services"), list) else []
+    if not services and not deployment.get("error"):
+        console.print("[dim]No running Compose services.[/dim]")
+    for service in services:
+        if not isinstance(service, dict):
+            continue
+        console.print(
+            f"\n[bold]{service.get('service') or 'unknown'}[/bold] "
+            f"{service.get('status') or 'UNKNOWN'}"
+        )
+        console.print(f"[dim]Container:[/dim] {service.get('container') or 'unknown'}")
+        console.print(f"[dim]Image reference:[/dim] {service.get('image') or 'unknown'}")
+        console.print(f"[dim]Running image ID:[/dim] {service.get('image_id') or 'unknown'}")
+        source = service.get("source") if isinstance(service.get("source"), dict) else {}
+        console.print(f"[dim]Deployed source.version:[/dim] {source.get('version') or 'unknown'}")
+        for comparison in service.get("comparisons") or []:
+            if not isinstance(comparison, dict):
+                continue
+            console.print(
+                f"{comparison.get('status')}: "
+                f"{comparison.get('expected_field')}="
+                f"{json.dumps(comparison.get('expected'), sort_keys=True)}; "
+                f"{comparison.get('actual_field')}="
+                f"{json.dumps(comparison.get('actual'), sort_keys=True)}"
+            )
 
 
 def print_runtime_info(console: Console, *, repo_root: Path, workdir: Path) -> None:
@@ -1484,6 +1597,7 @@ def print_runtime_info(console: Console, *, repo_root: Path, workdir: Path) -> N
             f"[dim]Example mapping:[/dim] {host_managed_bundles_path}/repo__bundle.demo__main "
             f"-> {container_managed_bundles_root}/repo__bundle.demo__main"
         )
+    _print_deployment_attestation(console, info.get("deployment"))
 
 
 def print_cli_defaults(console: Console, cli_defaults: dict) -> None:
@@ -1506,7 +1620,7 @@ def _collect_running_deployment_info() -> dict[str, object]:
         return {"recorded": False, "running": False}
     running = _lock_running_services(lock)
     stale = not bool(running)
-    return {
+    result: dict[str, object] = {
         "recorded": True,
         "running": bool(running),
         "stale": stale,
@@ -1515,6 +1629,32 @@ def _collect_running_deployment_info() -> dict[str, object]:
         "workdir": lock.get("workdir"),
         "services": sorted(running),
     }
+    if running:
+        workdir = Path(str(lock.get("workdir") or "")).expanduser().resolve()
+        docker_dir = Path(str(lock.get("docker_dir") or "")).expanduser().resolve()
+        env_file = Path(str(lock.get("env_file") or "")).expanduser().resolve()
+        install_meta = _read_install_meta_raw(workdir) or {}
+        repo_root = Path(
+            str(install_meta.get("repo_root") or (workdir / DEFAULT_REPO_DIRNAME))
+        ).expanduser().resolve()
+        try:
+            result["deployment"] = collect_running_service_attestation(
+                workdir=workdir,
+                docker_dir=docker_dir,
+                env_file=env_file,
+                repo_root=repo_root,
+                install_metadata=install_meta,
+                declared_platform_ref=_declared_platform_ref(
+                    workdir / "config" / "assembly.yaml"
+                ),
+            )
+        except DeploymentProvenanceError as exc:
+            result["deployment"] = {
+                "status": "UNKNOWN",
+                "error": str(exc),
+                "services": [],
+            }
+    return result
 
 
 def print_running_deployment_info(console: Console) -> None:
@@ -1524,10 +1664,12 @@ def print_running_deployment_info(console: Console) -> None:
         return
     running = _lock_running_services(lock)
     if running:
+        info = _collect_running_deployment_info()
         console.print("[bold]Currently Running Deployment[/bold]")
         console.print(f"  [dim]Tenant / project:[/dim] {lock.get('tenant') or '?'} / {lock.get('project') or '?'}")
         console.print(f"  [dim]Workdir:[/dim]          {lock.get('workdir') or '?'}")
         console.print(f"  [dim]Services:[/dim]         {', '.join(sorted(running))}")
+        _print_deployment_attestation(console, info.get("deployment"))
     else:
         console.print("[yellow]Stale lock found (recorded deployment is not running).[/yellow]")
         console.print(f"  Tenant / project: {lock.get('tenant') or '?'} / {lock.get('project') or '?'}")
@@ -2614,21 +2756,204 @@ def _host_path_for_runtime_bundle_path(runtime_path: str, workdir: Path) -> str 
     return str(host_root.joinpath(*rel.split("/")))
 
 
-def _source_summary(entry: dict[str, object] | None) -> dict[str, object]:
+def _resolve_local_git_commit(path: str | None, ref: str | None) -> str | None:
+    if not path or not ref:
+        return None
+    try:
+        proc = subprocess.run(
+            ["git", "-C", path, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+            capture_output=True,
+            text=True,
+            timeout=DOCKER_STATUS_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    value = (proc.stdout or "").strip()
+    return value if proc.returncode == 0 and value else None
+
+
+def _source_summary(
+    entry: dict[str, object] | None,
+    *,
+    host_path: str | None = None,
+) -> dict[str, object]:
     if not entry:
         return {"mode": "missing"}
     if entry.get("repo"):
-        return {
+        source = {
             "mode": "git",
-            "repo": entry.get("repo"),
+            "repository": entry.get("repo"),
             "ref": entry.get("ref"),
             "subdir": entry.get("subdir"),
             "path": entry.get("path"),
         }
+        if entry.get("git_commit"):
+            source["git_commit"] = entry.get("git_commit")
+        return source
+    activation = entry.get("activation")
+    activation_commit = (
+        str(activation.get("commit") or "").strip()
+        if isinstance(activation, dict)
+        else ""
+    )
+    if activation_commit:
+        source = {
+            "mode": "snapshot",
+            "mounted_path": entry.get("path"),
+            "ref": activation_commit,
+        }
+        resolved_commit = _resolve_local_git_commit(host_path, activation_commit)
+        if resolved_commit:
+            source["commit"] = resolved_commit
+        return source
     return {
         "mode": "local-path",
         "path": entry.get("path"),
     }
+
+
+def _attestation_value(value: object) -> object:
+    return value if value not in (None, "") else None
+
+
+def _source_comparison(
+    *,
+    expected_scope: str,
+    expected_field: str,
+    expected: object,
+    actual_scope: str,
+    actual_field: str,
+    actual: object,
+) -> dict[str, object]:
+    expected_value = _attestation_value(expected)
+    actual_value = _attestation_value(actual)
+    if expected_value is None or actual_value is None:
+        status = "UNKNOWN"
+    elif expected_value == actual_value:
+        status = "MATCH"
+    else:
+        status = "MISMATCH"
+    return {
+        "status": status,
+        "expected_scope": expected_scope,
+        "expected_field": expected_field,
+        "expected": expected_value,
+        "actual_scope": actual_scope,
+        "actual_field": actual_field,
+        "actual": actual_value,
+    }
+
+
+def _bundle_source_attestation(
+    descriptor_source: dict[str, object],
+    live: dict[str, object] | None,
+) -> dict[str, object]:
+    comparisons: list[dict[str, object]] = []
+    process = live.get("process") if isinstance(live, dict) else None
+    loaded = process.get("loaded") if isinstance(process, dict) else None
+    server_source = loaded.get("source") if isinstance(loaded, dict) else None
+    if not isinstance(server_source, dict):
+        server_source = live.get("source") if isinstance(live, dict) else None
+    server_source = server_source if isinstance(server_source, dict) else {}
+
+    comparisons.append(
+        _source_comparison(
+            expected_scope="descriptor",
+            expected_field="mode",
+            expected=descriptor_source.get("mode"),
+            actual_scope="chat-proc",
+            actual_field="source.mode",
+            actual=server_source.get("mode"),
+        )
+    )
+    descriptor_fields = {
+        "git": ("repository", "ref", "subdir", "git_commit"),
+        "snapshot": ("mounted_path", "ref", "commit"),
+        "local-path": ("path",),
+    }.get(str(descriptor_source.get("mode") or ""), ())
+    for field in descriptor_fields:
+        expected = descriptor_source.get(field)
+        if expected in (None, ""):
+            continue
+        comparisons.append(
+            _source_comparison(
+                expected_scope="descriptor",
+                expected_field=field,
+                expected=expected,
+                actual_scope="chat-proc",
+                actual_field=f"source.{field}",
+                actual=server_source.get(field),
+            )
+        )
+
+    widget = live.get("widget") if isinstance(live, dict) else None
+    widget_source = widget.get("source") if isinstance(widget, dict) else None
+    if not isinstance(widget_source, dict) or not widget_source:
+        comparisons.append(
+            _source_comparison(
+                expected_scope="chat-proc",
+                expected_field="source",
+                expected=server_source or None,
+                actual_scope="widget",
+                actual_field="source",
+                actual=None,
+            )
+        )
+    else:
+        identity_fields = (
+            "mode",
+            "repository",
+            "subdir",
+            "ref",
+            "commit",
+            "tree",
+            "head",
+            "git_commit",
+            "path",
+            "mounted_path",
+            "dirty",
+            "error",
+        )
+        compared = False
+        for field in identity_fields:
+            if field not in server_source and field not in widget_source:
+                continue
+            compared = True
+            comparisons.append(
+                _source_comparison(
+                    expected_scope="chat-proc",
+                    expected_field=f"source.{field}",
+                    expected=server_source.get(field),
+                    actual_scope="widget",
+                    actual_field=f"source.{field}",
+                    actual=widget_source.get(field),
+                )
+            )
+        if not compared:
+            comparisons.append(
+                _source_comparison(
+                    expected_scope="chat-proc",
+                    expected_field="source",
+                    expected=server_source or None,
+                    actual_scope="widget",
+                    actual_field="source",
+                    actual=widget_source or None,
+                )
+            )
+
+    statuses = {str(item["status"]) for item in comparisons}
+    overall = "MISMATCH" if "MISMATCH" in statuses else ("UNKNOWN" if "UNKNOWN" in statuses else "MATCH")
+    return {
+        "status": overall,
+        "mismatch": overall == "MISMATCH",
+        "comparisons": comparisons,
+    }
+
+
+def _bundle_status_exit_code(status: dict[str, object]) -> int:
+    attestation = status.get("attestation")
+    return 1 if isinstance(attestation, dict) and attestation.get("status") == "MISMATCH" else 0
 
 
 def _runtime_proc_status(ctx: installer_mod.PathsContext, env_main_path: Path) -> dict[str, object]:
@@ -2727,9 +3052,9 @@ def _collect_bundle_status(
 
     bundles_data = installer_mod.load_release_descriptor(bundles_path)
     entry, _default_id = _find_bundle_item(bundles_data, bundle_id)
-    source = _source_summary(entry)
     runtime_path = str((entry or {}).get("path") or "").strip()
     host_path = _host_path_for_runtime_bundle_path(runtime_path, workdir) if runtime_path else None
+    source = _source_summary(entry, host_path=host_path)
     host_path_exists = None
     if host_path:
         host_path_exists = Path(host_path).exists()
@@ -2766,6 +3091,10 @@ def _collect_bundle_status(
             result["runtime"] = _runtime_proc_status(ctx, env_main_path)
             if include_live_manifest:
                 result["live"] = _live_bundle_status(ctx, env_main_path, bundle_id=bundle_id)
+                result["attestation"] = _bundle_source_attestation(
+                    source,
+                    result["live"] if isinstance(result["live"], dict) else None,
+                )
     return result
 
 
@@ -2808,12 +3137,12 @@ def print_bundle_status(console: Console, status: dict[str, object]) -> None:
     live = status.get("live") if isinstance(status.get("live"), dict) else None
     if live is None:
         return
-    console.print("\n[bold]Live Bundle Load[/bold]")
+    console.print("\n[bold]Loaded Bundle Source[/bold]")
     if not live.get("available"):
         console.print(f"[yellow]Live status unavailable:[/yellow] {live.get('reason') or 'unknown'}")
         return
     console.print(f"[dim]Declared in live registry:[/dim] {_format_bool(live.get('declared'))}")
-    console.print(f"[dim]Manifest load:[/dim] {'ok' if live.get('loaded') else 'failed'}")
+    console.print(f"[dim]Prepared in this proc:[/dim] {_format_bool(live.get('loaded'))}")
     console.print(f"[dim]Path exists in proc:[/dim] {_format_bool(live.get('path_exists'))}")
     if live.get("authority"):
         console.print(f"[dim]Authority:[/dim] {live.get('authority')}")
@@ -2825,16 +3154,39 @@ def print_bundle_status(console: Console, status: dict[str, object]) -> None:
                 console.print(f"[dim]Where:[/dim] {err.get('where')}")
         else:
             console.print(f"[red]Last error:[/red] {err}")
-    interface = live.get("interface")
-    if isinstance(interface, dict):
-        widgets = interface.get("widgets") if isinstance(interface.get("widgets"), list) else []
-        apis = interface.get("apis") if isinstance(interface.get("apis"), list) else []
-        mcps = interface.get("mcp_endpoints") if isinstance(interface.get("mcp_endpoints"), list) else []
-        scheduled = interface.get("scheduled_jobs") if isinstance(interface.get("scheduled_jobs"), list) else []
-        console.print(f"[dim]Widgets:[/dim] {', '.join(str(w.get('alias')) for w in widgets if isinstance(w, dict)) or '<none>'}")
-        console.print(f"[dim]APIs:[/dim] {', '.join(str(a.get('alias')) for a in apis if isinstance(a, dict)) or '<none>'}")
-        console.print(f"[dim]MCP endpoints:[/dim] {', '.join(str(m.get('alias')) for m in mcps if isinstance(m, dict)) or '<none>'}")
-        console.print(f"[dim]Scheduled jobs:[/dim] {', '.join(str(j.get('alias')) for j in scheduled if isinstance(j, dict)) or '<none>'}")
+    process = live.get("process") if isinstance(live.get("process"), dict) else {}
+    console.print(
+        f"[dim]Process:[/dim] component={process.get('component') or 'unknown'} "
+        f"instance_id={process.get('instance_id') or 'unknown'} pid={process.get('pid') or 'unknown'}"
+    )
+    loaded = process.get("loaded") if isinstance(process.get("loaded"), dict) else {}
+    server_source = loaded.get("source") if isinstance(loaded.get("source"), dict) else {}
+    for field, value in server_source.items():
+        console.print(f"[dim]chat-proc source.{field}:[/dim] {value}")
+    widget = live.get("widget") if isinstance(live.get("widget"), dict) else None
+    if widget is None:
+        console.print("[dim]Widget publication:[/dim] unavailable")
+    else:
+        console.print(f"[dim]Widget deployment signature:[/dim] {widget.get('deployment_signature') or 'unknown'}")
+        widget_source = widget.get("source") if isinstance(widget.get("source"), dict) else {}
+        for field, value in widget_source.items():
+            console.print(f"[dim]widget source.{field}:[/dim] {value}")
+
+    attestation = status.get("attestation") if isinstance(status.get("attestation"), dict) else None
+    if attestation is not None:
+        state = str(attestation.get("status") or "UNKNOWN")
+        style = "red" if state == "MISMATCH" else ("yellow" if state == "UNKNOWN" else "green")
+        console.print(f"\n[bold]Source Attestation[/bold] [{style}]{state}[/{style}]")
+        for comparison in attestation.get("comparisons") or []:
+            if not isinstance(comparison, dict):
+                continue
+            console.print(
+                f"{comparison.get('status')}: "
+                f"{comparison.get('expected_scope')}.{comparison.get('expected_field')}="
+                f"{json.dumps(comparison.get('expected'), sort_keys=True)}; "
+                f"{comparison.get('actual_scope')}.{comparison.get('actual_field')}="
+                f"{json.dumps(comparison.get('actual'), sort_keys=True)}"
+            )
 
 
 def _bundle_reload_summary_lines(
@@ -4013,6 +4365,11 @@ def _copy_dirty_local_source(console: Console, *, source_repo: Path, workdir: Pa
         console.print(f"[dim]Local platform source already staged:[/dim] {target}")
         return target
 
+    try:
+        source_identity = platform_source_identity(source_repo)
+    except DeploymentProvenanceError as exc:
+        raise SystemExit(f"Could not identify local platform source at {source_repo}: {exc}") from exc
+
     console.print(f"[dim]Copying local platform source:[/dim] {source_repo} -> {target}")
 
     try:
@@ -4073,6 +4430,7 @@ def _copy_dirty_local_source(console: Console, *, source_repo: Path, workdir: Pa
         shutil.rmtree(preserve_root, ignore_errors=True)
 
     _ensure_runtime_repo_build_support_files(console, repo_root=target, workdir=workdir)
+    write_platform_source_marker(target, source_identity)
     console.print(f"[dim]Copied local platform source files:[/dim] {copied}")
     return target
 
@@ -5897,6 +6255,9 @@ def main() -> None:
                     _print_json(_status)
                 else:
                     print_bundle_status(console, _status)
+                _status_exit_code = _bundle_status_exit_code(_status)
+                if _status_exit_code:
+                    raise SystemExit(_status_exit_code)
                 return
             if _status_bundle_arg:
                 raise SystemExit(

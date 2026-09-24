@@ -10,6 +10,7 @@ import pytest
 
 from kdcube_ai_app.apps.chat.proc.app_lifecycle import runtime
 from kdcube_ai_app.apps.chat.proc.app_lifecycle.runtime import ProcApplicationLifecycle
+from kdcube_ai_app.apps.chat.proc.app_lifecycle.supervisor import ApplicationPreparation
 from kdcube_ai_app.infra.plugin.app_readiness import (
     ApplicationLifecycleState,
     ApplicationReadinessMode,
@@ -88,6 +89,49 @@ def _lifecycle(registry: ApplicationReadinessRegistry) -> ProcApplicationLifecyc
         retry_max_seconds=0,
         registry=registry,
     )
+
+
+@pytest.mark.asyncio
+async def test_loaded_source_is_published_only_after_preparation_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "app"
+    source.mkdir()
+    _patch_preparation(monkeypatch)
+    lifecycle = _lifecycle(ApplicationReadinessRegistry())
+    entry = _registry(source).bundles["app@1-0"]
+    preparation = ApplicationPreparation(
+        application_id="app@1-0",
+        generation="generation-1",
+        readiness=ApplicationReadinessMode.INDEPENDENT,
+        payload=entry,
+    )
+
+    await lifecycle._prepare(preparation)
+
+    assert lifecycle.loaded_source_diagnostic("app@1-0") == {
+        "source": {"mode": "local-path", "path": str(source)},
+        "application_generation": "generation-1",
+        "path": str(source),
+    }
+
+    async def _failed_deploy(**kwargs):
+        del kwargs
+        raise RuntimeError("widget publication failed")
+
+    monkeypatch.setattr(runtime, "deploy_loaded_bundle_app_resources", _failed_deploy)
+    failed = ApplicationPreparation(
+        application_id="app@1-0",
+        generation="generation-2",
+        readiness=ApplicationReadinessMode.INDEPENDENT,
+        payload=entry,
+    )
+    with pytest.raises(RuntimeError, match="widget publication failed"):
+        await lifecycle._prepare(failed)
+
+    assert lifecycle.loaded_source_diagnostic("app@1-0")["application_generation"] == "generation-1"
+    await lifecycle.shutdown()
 
 
 @pytest.mark.asyncio

@@ -74,6 +74,8 @@ async def test_activation_at_a_commit_loads_a_snapshot_of_that_commit_not_the_tr
     assert commit == commit_a
     assert source["mode"] == "snapshot"
     assert source["commit"] == commit_a
+    assert source["ref"] == commit_a
+    assert source["mounted_path"] == str(bundle)
     assert source["origin"] == "request"
     assert source["durable"] is False
     loaded = pathlib.Path(source["path"])
@@ -253,6 +255,35 @@ def test_the_descriptor_entry_carries_the_activation_block_and_refuses_a_malform
     with pytest.raises(ValueError) as refusal:
         bundle_store._to_entry(BUNDLE_ID, {"id": BUNDLE_ID, "path": "/bundles/x", "activation": "abc123"})
     assert "'activation' must be a mapping" in str(refusal.value)
+
+
+def test_source_identity_excludes_observation_noise_and_fills_registry_fields():
+    identity = snap.bundle_source_identity(
+        {
+            "mode": "snapshot",
+            "commit": "abc123",
+            "tree": "tree123",
+            "path": "/managed/abc123",
+            "created_at": "2026-09-24T00:00:00Z",
+            "changed_paths": ["not-an-identity-field"],
+        },
+        entry={
+            "path": "/managed/abc123",
+            "mounted_path": "/bundles/demo",
+            "repo": "https://example.test/demo.git",
+            "ref": "main",
+        },
+    )
+
+    assert identity == {
+        "mode": "snapshot",
+        "repository": "https://example.test/demo.git",
+        "ref": "main",
+        "commit": "abc123",
+        "tree": "tree123",
+        "path": "/managed/abc123",
+        "mounted_path": "/bundles/demo",
+    }
 
     # The same carrier serves the service block, which was declared on the
     # model and dropped by the normalizer before this change.

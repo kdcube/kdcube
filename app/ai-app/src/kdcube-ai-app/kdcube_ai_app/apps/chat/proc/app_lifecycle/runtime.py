@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import logging
@@ -56,6 +57,7 @@ from kdcube_ai_app.infra.plugin.bundle_registry import (
     resolve_git_bundle_entry_async,
     upsert_bundles_async,
 )
+from kdcube_ai_app.infra.plugin.bundle_snapshot import bundle_source_identity
 from kdcube_ai_app.infra.plugin.bundle_store import (
     BundleEntry,
     BundlesRegistry,
@@ -197,6 +199,7 @@ class ProcApplicationLifecycle:
         self._last_registry: BundlesRegistry | None = None
         self._catalog_participants: set[str] = set()
         self._catalog_reconcile_error: Exception | None = None
+        self._loaded_sources: dict[str, dict[str, Any]] = {}
         self._ready_callback: Callable[[ApplicationPreparation], Awaitable[None]] | None = None
         self._authority_discovery_lock = asyncio.Lock()
         self._authority_discovery_registry_revision = 0
@@ -288,6 +291,7 @@ class ProcApplicationLifecycle:
                 reason=f"application_retire:{application_id}",
             )
             await self.supervisor.retire(application_id)
+            self._loaded_sources.pop(application_id, None)
 
     async def _reconcile_delegated_catalog(
         self,
@@ -418,6 +422,7 @@ class ProcApplicationLifecycle:
                 )
                 raise
 
+            self._loaded_sources.pop(application_id, None)
             return {**result, "quiesce": quiesce_result}
 
     async def retry(self, application_id: str) -> None:
@@ -428,7 +433,11 @@ class ProcApplicationLifecycle:
             raise KeyError(f"Application {normalized_id!r} is not configured")
         await self.reconcile(self._last_registry, force={normalized_id})
 
-    async def _resolve_entry(self, entry: BundleEntry) -> BundleEntry:
+    def loaded_source_diagnostic(self, application_id: str) -> dict[str, Any] | None:
+        source = self._loaded_sources.get(str(application_id or "").strip())
+        return copy.deepcopy(source) if source is not None else None
+
+    async def _resolve_entry(self, entry: BundleEntry) -> tuple[BundleEntry, dict[str, Any]]:
         resolved = await resolve_git_bundle_entry_async(
             entry.id,
             entry.model_dump(mode="python", exclude_none=True),
@@ -448,13 +457,16 @@ class ProcApplicationLifecycle:
             resolve_git=False,
             source="application.preparation.resolved",
         )
-        return resolved_entry
+        return resolved_entry, bundle_source_identity(
+            resolved.get("source"),
+            entry=registry_entry,
+        )
 
     async def _prepare(self, preparation: ApplicationPreparation) -> None:
         entry = preparation.payload
         if not isinstance(entry, BundleEntry):
             entry = BundleEntry.model_validate(entry)
-        resolved_entry = await self._resolve_entry(entry)
+        resolved_entry, source_identity = await self._resolve_entry(entry)
         if (
             self._catalog_reconcile_error is not None
             and resolved_entry.id in self._catalog_participants
@@ -531,8 +543,14 @@ class ProcApplicationLifecycle:
             pg_pool=self.pg_pool,
             redis=self.redis,
             application_generation=preparation.generation,
+            source_identity=source_identity,
             effective_props_transform=effective_props_transform,
         )
+        self._loaded_sources[resolved_entry.id] = {
+            "source": source_identity,
+            "application_generation": preparation.generation,
+            "path": resolved_entry.path,
+        }
 
     async def wait_for_current(self) -> None:
         await self.supervisor.wait_for_current()
