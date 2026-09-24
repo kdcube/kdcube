@@ -2953,6 +2953,17 @@ async def _restore_failed_refresh_rotation(
     return False
 
 
+def _refresh_issuance_unavailable(*, restored: bool) -> JSONResponse:
+    description = (
+        "token issuance failed; the presented refresh token remains valid, "
+        "retry with it"
+        if restored
+        else "token issuance failed; the refresh token could not be restored, "
+        "authorize again"
+    )
+    return _token_error("temporarily_unavailable", description, status=503)
+
+
 def _minter_accepts_authority_kwargs(minter) -> bool:
     try:
         signature = inspect.signature(minter)
@@ -3578,21 +3589,35 @@ async def token(request: Request) -> Response:
                 client_metadata=rec.get("client_metadata") or {},
             )
         except Exception:
-            await _restore_failed_refresh_rotation(
+            LOGGER.exception(
+                "[connection-hub.oauth] token issuance raised after refresh "
+                "rotation client_id=%s",
+                str(rec.get("client_id") or ""),
+            )
+            restored = await _restore_failed_refresh_rotation(
                 store,
                 refresh_token=str(rt),
                 replacement_token=new_rt,
                 refresh_state=refresh_state,
                 client_id=str(rec.get("client_id") or ""),
             )
-            raise
-        if int(getattr(issued, "status_code", 500)) >= 400:
-            await _restore_failed_refresh_rotation(
+            return _refresh_issuance_unavailable(restored=restored)
+        issuance_status = int(getattr(issued, "status_code", 500))
+        if issuance_status >= 500:
+            restored = await _restore_failed_refresh_rotation(
                 store,
                 refresh_token=str(rt),
                 replacement_token=new_rt,
                 refresh_state=refresh_state,
                 client_id=str(rec.get("client_id") or ""),
+            )
+            return _refresh_issuance_unavailable(restored=restored)
+        if issuance_status >= 400:
+            LOGGER.warning(
+                "[connection-hub.oauth] refresh rotation remains consumed after "
+                "authority refusal status=%s client_id=%s",
+                issuance_status,
+                str(rec.get("client_id") or ""),
             )
         return issued
 
