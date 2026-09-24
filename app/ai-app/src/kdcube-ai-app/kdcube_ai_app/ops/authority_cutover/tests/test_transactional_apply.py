@@ -15,7 +15,9 @@ from connection_hub.delegated_credentials.migration.model import (
 )
 from kdcube_ai_app.ops.authority_cutover.transactional_apply import (
     AuthorityMigrationSecretCompensationFailed,
+    AuthorityMigrationSecretDeletionDeferred,
     AuthorityMigrationTransactionOutcomeUnknown,
+    CompensatingResidentSecretStore,
     TransactionalApplyTarget,
     apply_migration_in_transaction,
 )
@@ -130,6 +132,9 @@ class _Target:
         self.secret_store = secret_store
         self.fail = fail
 
+    async def synchronize(self, source: AuthorityMigrationSnapshot) -> None:
+        self.snapshot_value = source
+
     async def import_record(self, record: AuthorityMigrationRecord) -> bool:
         assert await self.secret_store.create(
             secret_ref="migration-secret",
@@ -148,6 +153,9 @@ class _BlockingTarget:
     def __init__(self, secret_store, started: asyncio.Event) -> None:
         self.secret_store = secret_store
         self.started = started
+
+    async def synchronize(self, source: AuthorityMigrationSnapshot) -> None:
+        return None
 
     async def import_record(self, record: AuthorityMigrationRecord) -> bool:
         assert await self.secret_store.create(
@@ -247,6 +255,22 @@ async def test_apply_commits_import_reconciliation_and_receipt_together() -> Non
     assert connection.transaction_value.committed == 1
     assert connection.transaction_value.rolled_back == 0
     assert secrets.values == {"migration-secret": "value"}
+    assert secrets.deleted == []
+
+
+@pytest.mark.asyncio
+async def test_preexisting_secret_deletion_waits_for_committed_cleanup_claim() -> None:
+    secrets = _ResidentSecrets()
+    secrets.values["existing-secret"] = "existing-value"
+    custody = CompensatingResidentSecretStore(secrets)
+
+    with pytest.raises(
+        AuthorityMigrationSecretDeletionDeferred,
+        match="secret_deletion_deferred",
+    ):
+        await custody.delete(secret_ref="existing-secret")
+
+    assert secrets.values == {"existing-secret": "existing-value"}
     assert secrets.deleted == []
 
 

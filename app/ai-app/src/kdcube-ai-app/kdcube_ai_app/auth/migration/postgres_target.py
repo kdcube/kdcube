@@ -19,11 +19,13 @@ from connection_hub.delegated_credentials.migration.model import (
     AuthorityMigrationRecord,
     AuthorityMigrationSnapshot,
 )
+from kdcube_ai_app.auth.bundle.session_schema import TABLE_SESSIONS, TABLE_USERS
 from kdcube_ai_app.auth.bundle.session_store import PostgresBundleSessionStore
 from kdcube_ai_app.auth.migration.redis_source import (
     KDCUBE_SESSION_MIGRATION_FAMILIES,
 )
 from kdcube_ai_app.auth.platform_session_store import PostgresPlatformSessionStore
+from kdcube_ai_app.auth.platform_session_schema import TABLE_PLATFORM_SESSIONS
 
 
 class KdcubePostgresSessionMigrationTarget:
@@ -44,6 +46,73 @@ class KdcubePostgresSessionMigrationTarget:
             self.project,
         ):
             raise ValueError("KDCube migration targets must share one scope")
+
+    async def synchronize(self, source: AuthorityMigrationSnapshot) -> None:
+        """Remove stale or changed inactive-target rows before exact import."""
+
+        snapshot = source.validated()
+        if (snapshot.tenant, snapshot.project) != (self.tenant, self.project):
+            raise ValueError("KDCube migration target scope mismatch")
+        source_by_key = {
+            (record.record_type, record.identity): record
+            for record in snapshot.records
+            if record.record_type in {
+                "bundle_user_authority",
+                "bundle_session",
+                "platform_session",
+            }
+        }
+        current = await self.snapshot(captured_at_ms=snapshot.captured_at_ms)
+        changed_users: set[str] = set()
+        for target in current.records:
+            if target.record_type != "bundle_user_authority":
+                continue
+            expected = source_by_key.get((target.record_type, target.identity))
+            if expected is None or expected.evidence() != target.evidence():
+                changed_users.add(str(target.payload.get("subject") or ""))
+
+        async with (
+            self.bundle_sessions._pool.acquire() as connection,
+            connection.transaction(),
+        ):
+            for target in current.records:
+                expected = source_by_key.get((target.record_type, target.identity))
+                changed = expected is None or expected.evidence() != target.evidence()
+                if target.record_type == "bundle_session":
+                    subject = str(
+                        dict(target.payload.get("record") or {}).get("sub") or ""
+                    )
+                    if changed or subject in changed_users:
+                        await connection.execute(
+                            f"DELETE FROM {self.bundle_sessions.schema}.{TABLE_SESSIONS} "
+                            "WHERE session_id = $1",
+                            target.identity,
+                        )
+            for target in current.records:
+                if target.record_type != "bundle_user_authority":
+                    continue
+                subject = str(target.payload.get("subject") or "")
+                if subject in changed_users:
+                    await connection.execute(
+                        f"DELETE FROM {self.bundle_sessions.schema}.{TABLE_USERS} "
+                        "WHERE subject = $1",
+                        subject,
+                    )
+
+        async with (
+            self.platform_sessions._pool.acquire() as connection,
+            connection.transaction(),
+        ):
+            for target in current.records:
+                if target.record_type != "platform_session":
+                    continue
+                expected = source_by_key.get((target.record_type, target.identity))
+                if expected is None or expected.evidence() != target.evidence():
+                    await connection.execute(
+                        f"DELETE FROM {self.platform_sessions.schema}."
+                        f"{TABLE_PLATFORM_SESSIONS} WHERE session_id = $1",
+                        target.identity,
+                    )
 
     async def import_record(self, record: AuthorityMigrationRecord) -> bool:
         source = record.validated()

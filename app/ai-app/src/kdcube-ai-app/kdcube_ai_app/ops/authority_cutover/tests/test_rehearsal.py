@@ -93,6 +93,9 @@ class _Target:
         self.secret_store = secret_store
         self.fail = fail
 
+    async def synchronize(self, source: AuthorityMigrationSnapshot) -> None:
+        self.snapshot_value = source
+
     async def import_record(self, record: AuthorityMigrationRecord) -> bool:
         assert await self.secret_store.create(
             secret_ref="rehearsed",

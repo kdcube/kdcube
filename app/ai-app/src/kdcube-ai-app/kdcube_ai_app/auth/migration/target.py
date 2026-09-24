@@ -29,6 +29,8 @@ class ScopedAuthorityMigrationTarget(Protocol):
     tenant: str
     project: str
 
+    async def synchronize(self, source: AuthorityMigrationSnapshot) -> None: ...
+
     async def import_record(self, record: AuthorityMigrationRecord) -> bool: ...
 
     async def snapshot(
@@ -54,6 +56,11 @@ class RuntimeAuthorityMigrationTarget:
             kdcube_sessions.project,
         ):
             raise ValueError("runtime migration targets must share one scope")
+
+    async def synchronize(self, source: AuthorityMigrationSnapshot) -> None:
+        snapshot = source.validated()
+        await self.connection_hub.synchronize(snapshot)
+        await self.kdcube_sessions.synchronize(snapshot)
 
     async def import_record(self, record: AuthorityMigrationRecord) -> bool:
         if record.record_type in KDCUBE_MIGRATION_RECORD_TYPES:

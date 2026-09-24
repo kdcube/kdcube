@@ -97,6 +97,9 @@ class _InterruptingTarget:
         self._fail_after = int(fail_after)
         self.imported = 0
 
+    async def synchronize(self, source):
+        await self._target.synchronize(source)
+
     async def import_record(self, record):
         if self.imported == self._fail_after:
             raise RuntimeError("simulated-interruption")
@@ -558,16 +561,64 @@ async def test_reset_preserves_resident_card_and_discards_reconstructable_state(
             await durable_sessions.validate_token(durable_grant.token)
         ).session_id == durable_grant.session_id
 
+        replacement_preview = await create_migration_preview(
+            source=source,
+            generation_id=f"{generation_id}-replacement",
+            prerequisites=reviewed_reset_prerequisites(),
+        )
+        with pytest.raises(
+            RuntimeError,
+            match="simulated-activation-interruption",
+        ):
+            await apply_migration_in_transaction(
+                pg_pool=pool,
+                resident_secret_store=resident_secret_store,
+                target_factory=activation_failure_target_factory,
+                preview=replacement_preview,
+                source=source,
+                confirmed_preview_sha256=replacement_preview.preview_sha256,
+                source_is_quiesced=True,
+            )
+        assert await receipts.read(generation_id) == receipt
+        assert await receipts.read(replacement_preview.generation_id) is None
+        assert (
+            await durable_sessions.validate_token(durable_grant.token)
+        ).session_id == durable_grant.session_id
+
+        replacement_receipt = await apply_migration_in_transaction(
+            pg_pool=pool,
+            resident_secret_store=resident_secret_store,
+            target_factory=apply_target_factory,
+            preview=replacement_preview,
+            source=source,
+            confirmed_preview_sha256=replacement_preview.preview_sha256,
+            source_is_quiesced=True,
+        )
+        assert await receipts.read(generation_id) is None
+        assert replacement_receipt.generation_id == (
+            f"{generation_id}-replacement"
+        )
+        replaced_target = await target.snapshot(
+            captured_at_ms=replacement_preview.created_at_ms
+        )
+        assert replaced_target.generation == replacement_receipt.target_generation
+        assert replaced_target.counts == replacement_preview.source_counts
+        with pytest.raises(
+            BundleSessionInvalid,
+            match="bundle session is not active",
+        ):
+            await durable_sessions.validate_token(durable_grant.token)
+
         replayed = await apply_migration_in_transaction(
             pg_pool=pool,
             resident_secret_store=resident_secret_store,
             target_factory=apply_target_factory,
-            preview=preview,
+            preview=replacement_preview,
             source=_UnavailableSource(),
-            confirmed_preview_sha256=preview.preview_sha256,
+            confirmed_preview_sha256=replacement_preview.preview_sha256,
             source_is_quiesced=True,
         )
-        assert replayed == receipt
+        assert replayed == replacement_receipt
     finally:
         cleanup_keys = [
             key
