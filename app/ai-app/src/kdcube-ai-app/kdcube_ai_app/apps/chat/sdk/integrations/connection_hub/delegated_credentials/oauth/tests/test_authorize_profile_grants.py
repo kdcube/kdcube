@@ -129,3 +129,47 @@ def test_a_tool_without_grants_of_its_own_expands_to_its_resource_grants():
     )
     assert routes._delegation_grants(cfg, ["records:profile:reader"]) == ["records:read"]
     assert routes._visible_scopes(cfg, ["records:profile:reader"], _Inventory()) == []
+
+
+def test_a_profile_request_reviews_only_the_services_that_declare_it():
+    """2026-09-24: `pb worker authorize --replace-card` names no service, and
+    the consent page offered "All platform and application APIs" beside
+    Problem Board. The operator: "why its here even? it should not be here!!
+    only this matters". A profile request reviews the declaring services."""
+    cfg = oauth_delegated_config_from_connections(
+        {
+            "delegated_credentials": {
+                "oauth": {
+                    "enabled": True,
+                    "capabilities": [{"grant": "work:relay", "label": "Relay"}],
+                    "resources": [
+                        {"resource": "*", "grants": ["platform:use"]},
+                        {"resource": "https://other.example.test/mcp", "grants": ["work:relay"]},
+                        {
+                            "resource": RESOURCE,
+                            "label": "Problem Board",
+                            "tools": {"worker.publish": {"grants": ["work:relay"]}},
+                            "authorization_profiles": {
+                                "worker": {
+                                    "scope": "work:profile:worker",
+                                    "label": "Problem Board worker",
+                                    "operations": ["worker.publish"],
+                                }
+                            },
+                        },
+                    ],
+                }
+            }
+        }
+    )
+    full = {"mode": "full", "resources": []}
+
+    assert routes._profile_catalog_scope(cfg, ["work:profile:worker"], full) == {
+        "mode": "entry",
+        "resources": [RESOURCE],
+    }
+    # A plain grant request keeps the catalog it was seeded with.
+    assert routes._profile_catalog_scope(cfg, ["work:relay"], full) == full
+    # A request through one named door is already bounded by that door.
+    entry = {"mode": "entry", "resources": [RESOURCE]}
+    assert routes._profile_catalog_scope(cfg, ["work:profile:worker"], entry) == entry
