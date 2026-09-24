@@ -986,20 +986,32 @@ async def _platform_grant_inventory(
     )
 
 
-def _profile_marker_grants(cfg: OAuthDelegatedClientConfig, scopes: Iterable[str]) -> dict[str, tuple[str, ...]]:
+def _profile_marker_grants(
+    cfg: OAuthDelegatedClientConfig,
+    scopes: Iterable[str],
+    *,
+    resource: str | None = None,
+) -> dict[str, tuple[str, ...]]:
     """The real grants each requested authorization-profile scope stands for (W272).
 
     A profile scope such as ``work:profile:worker`` is a request-only selector:
     it names a set of catalog operations, never a grant a person holds. The
     delegation check therefore judges the grants those operations require,
     and a whole-card request (no resource) expands the profile on every
-    resource that declares it.
+    resource that declares it. A resource-scoped request expands only the
+    catalog row that serves that resource.
     """
     profile_scopes = getattr(cfg, "authorization_profile_scopes", None)
     requested = _as_set(scopes)
     markers = requested & set(profile_scopes() if callable(profile_scopes) else ())
+    requested_resource = str(resource or "").strip()
+    if requested_resource:
+        matched_resource = cfg.resource_config(requested_resource)
+        resource_rows = (matched_resource,) if matched_resource is not None else ()
+    else:
+        resource_rows = tuple(getattr(cfg, "resources", ()) or ())
     expanded: dict[str, list[str]] = {}
-    for resource_cfg in getattr(cfg, "resources", ()) or ():
+    for resource_cfg in resource_rows:
         for profile in getattr(resource_cfg, "authorization_profiles", ()) or ():
             if profile.scope not in markers:
                 continue
@@ -1018,9 +1030,14 @@ def _profile_marker_grants(cfg: OAuthDelegatedClientConfig, scopes: Iterable[str
     return {marker: tuple(expanded.get(marker, ())) for marker in markers}
 
 
-def _delegation_grants(cfg: OAuthDelegatedClientConfig, scopes: Iterable[str]) -> list[str]:
+def _delegation_grants(
+    cfg: OAuthDelegatedClientConfig,
+    scopes: Iterable[str],
+    *,
+    resource: str | None = None,
+) -> list[str]:
     """Requested scopes with every profile selector replaced by its real grants."""
-    markers = _profile_marker_grants(cfg, scopes)
+    markers = _profile_marker_grants(cfg, scopes, resource=resource)
     out: list[str] = []
     for scope in scopes or ():
         for grant in markers.get(str(scope), (str(scope),)):
@@ -1059,10 +1076,16 @@ def _profile_catalog_scope(
     return {"mode": "entry", "resources": declaring}
 
 
-def _visible_scopes(cfg: OAuthDelegatedClientConfig, scopes: Iterable[str], inventory: AuthorityGrantInventory) -> list[str]:
+def _visible_scopes(
+    cfg: OAuthDelegatedClientConfig,
+    scopes: Iterable[str],
+    inventory: AuthorityGrantInventory,
+    *,
+    resource: str | None = None,
+) -> list[str]:
     """Requested scopes the user may delegate; a profile is visible when all its grants are."""
     available = set(inventory.grant_names())
-    markers = _profile_marker_grants(cfg, scopes)
+    markers = _profile_marker_grants(cfg, scopes, resource=resource)
     visible: list[str] = []
     for scope in scopes or ():
         scope = str(scope)
@@ -1639,10 +1662,19 @@ async def authorize(request: Request) -> Response:
         return _error_response(err, issuer)
     cfg = owner_cfg
 
-    delegation_grants = _delegation_grants(cfg, req.scopes)
+    delegation_grants = _delegation_grants(
+        cfg,
+        req.scopes,
+        resource=req.resource,
+    )
     inventory = await _platform_grant_inventory(user or {}, delegation_grants, cfg=cfg, resource=req.resource)
     _log_inventory(stage="authorize", user=user or {}, scopes=req.scopes, inventory=inventory, resource=req.resource)
-    visible_scopes = _visible_scopes(cfg, req.scopes, inventory)
+    visible_scopes = _visible_scopes(
+        cfg,
+        req.scopes,
+        inventory,
+        resource=req.resource,
+    )
     if not visible_scopes:
         delegation_denied = _delegation_denial(delegation_grants, inventory, resource=req.resource)
         if delegation_denied is not None:
@@ -1657,7 +1689,11 @@ async def authorize(request: Request) -> Response:
         )
     render_req = _request_with_scopes(req, visible_scopes)
 
-    delegation_denied = _delegation_denial(_delegation_grants(cfg, visible_scopes), inventory, resource=req.resource)
+    delegation_denied = _delegation_denial(
+        _delegation_grants(cfg, visible_scopes, resource=req.resource),
+        inventory,
+        resource=req.resource,
+    )
     if delegation_denied is not None:
         return delegation_denied
 
@@ -2158,7 +2194,11 @@ async def authorize_consent_draft(request: Request) -> Response:
     if req is None or cfg is None:
         return _consent_draft_error("invalid")
 
-    delegation_grants = _delegation_grants(cfg, req.scopes)
+    delegation_grants = _delegation_grants(
+        cfg,
+        req.scopes,
+        resource=req.resource,
+    )
     inventory = await _platform_grant_inventory(
         user or {},
         delegation_grants,
@@ -2822,9 +2862,28 @@ async def authorize_consent(request: Request) -> Response:
             },
         )
 
-    inventory = await _platform_grant_inventory(user or {}, _delegation_grants(cfg, req.scopes), cfg=cfg, resource=req.resource)
+    requested_delegation_grants = _delegation_grants(
+        cfg,
+        req.scopes,
+        resource=req.resource,
+    )
+    inventory = await _platform_grant_inventory(
+        user or {},
+        requested_delegation_grants,
+        cfg=cfg,
+        resource=req.resource,
+    )
     _log_inventory(stage="authorize.consent", user=user or {}, scopes=req.scopes, inventory=inventory, resource=req.resource)
-    delegation_denied = _delegation_denial(_delegation_grants(cfg, selected_scopes), inventory, resource=req.resource)
+    selected_delegation_grants = _delegation_grants(
+        cfg,
+        selected_scopes,
+        resource=req.resource,
+    )
+    delegation_denied = _delegation_denial(
+        selected_delegation_grants,
+        inventory,
+        resource=req.resource,
+    )
     if delegation_denied is not None:
         return delegation_denied
 
@@ -2851,7 +2910,7 @@ async def authorize_consent(request: Request) -> Response:
             req.resource,
         )
         resource_grants = {
-            entry_key: list(selected_scopes),
+            entry_key: list(selected_delegation_grants),
             **child_resource_grants,
         }
         resource_operations = {
@@ -2866,7 +2925,7 @@ async def authorize_consent(request: Request) -> Response:
             direct_resource_grants, direct_resource_operations = (
                 _direct_operation_authority(
                     direct_operations,
-                    scopes=selected_scopes,
+                    scopes=selected_delegation_grants,
                     cfg=cfg,
                 )
             )
@@ -2909,7 +2968,11 @@ async def authorize_consent(request: Request) -> Response:
         cfg,
         named_service_operations,
     )
-    grantor_authority = _grantor_authority(user or {}, scopes=selected_scopes, inventory=inventory)
+    grantor_authority = _grantor_authority(
+        user or {},
+        scopes=selected_delegation_grants,
+        inventory=inventory,
+    )
     delegation_edges = list(grantor_authority.get("delegation_edges") or [])
     # Per-account claim picks from the consent screen: checkbox values are
     # "provider|account_id|claim". They become the grant card's account_scope
@@ -2949,7 +3012,7 @@ async def authorize_consent(request: Request) -> Response:
         redirect_uri=req.redirect_uri,
         code_challenge=req.code_challenge,
         sub=subject,
-        scopes=selected_scopes,
+        scopes=selected_delegation_grants,
         operations=selected_operations,
         resource_grants=resource_grants,
         resource_operations=resource_operations,
