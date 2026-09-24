@@ -494,9 +494,38 @@ SHEETS_PRESENTATION = {
             "description": "Delete one tab; spreadsheet-file deletion is not exposed.",
         },
     },
+    # Human titles and user-terms lines, beside the schema rather than from it:
+    # the schema text is the agent's contract and reads as an instruction in a
+    # consent card.
     "actions": {
-        action: {"label": action.replace("_", " ").title(), **dict(meta)}
-        for action, meta in SHEETS_SCHEMA["actions"].items()
+        ACTION_UPDATE_VALUES: {
+            "label": "Update cells",
+            "description": "Replace the values in a range of cells.",
+        },
+        ACTION_APPEND_ROWS: {
+            "label": "Append rows",
+            "description": "Add rows to the end of a table.",
+        },
+        ACTION_CLEAR_VALUES: {
+            "label": "Clear cells",
+            "description": "Empty a range of cells, keeping the rows in place.",
+        },
+        ACTION_ADD_TAB: {
+            "label": "Add a tab",
+            "description": "Add a tab to a spreadsheet.",
+        },
+        ACTION_UPDATE_TAB: {
+            "label": "Rename or resize a tab",
+            "description": "Rename a tab, change its size, or freeze its header rows.",
+        },
+        ACTION_DELETE_TAB: {
+            "label": "Delete a tab",
+            "description": "Delete a tab and everything on it.",
+        },
+        ACTION_FORMAT_RANGE: {
+            "label": "Format cells",
+            "description": "Change how a range of cells looks.",
+        },
     },
 }
 

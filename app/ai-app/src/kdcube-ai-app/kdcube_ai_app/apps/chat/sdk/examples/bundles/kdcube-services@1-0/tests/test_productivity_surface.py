@@ -52,13 +52,24 @@ DOCS_WRITE_TOOLS = {
     "productivity_docs_insert_page_break",
     "productivity_docs_embed_image",
     "productivity_docs_set_cells",
+    "productivity_docs_add_row",
+    "productivity_docs_add_tab",
+    "productivity_docs_update_tab",
+    "productivity_docs_delete_tab",
     "productivity_docs_import",
     # flexible native batch edit (evaluation surface, side by side with typed)
     "productivity_docs_batch_edit",
 }
+# The document as a file: its own claim, because trashing one is not editing
+# its contents.
+DOCS_DELETE_TOOLS = {
+    "productivity_docs_trash",
+    "productivity_docs_restore",
+}
 DOCS_COMMENT_TOOLS = {
     "productivity_docs_create_comment",
     "productivity_docs_reply_comment",
+    "productivity_docs_update_comment",
     "productivity_docs_resolve_comment",
     "productivity_docs_delete_comment",
 }
@@ -114,6 +125,7 @@ ALL_TOOLS = {
     *DOCS_READ_TOOLS,
     *DOCS_WRITE_TOOLS,
     *DOCS_COMMENT_TOOLS,
+    *DOCS_DELETE_TOOLS,
     *DRIVE_READ_TOOLS,
     *DRIVE_WRITE_TOOLS,
     *LINKEDIN_READ_TOOLS,
@@ -158,6 +170,10 @@ def test_every_tool_declares_provider_claims():
         **{
             name: ("google", ["docs:read", "docs:comment"])
             for name in DOCS_COMMENT_TOOLS
+        },
+        **{
+            name: ("google", ["docs:read", "docs:delete"])
+            for name in DOCS_DELETE_TOOLS
         },
         **{name: ("linkedin", ["linkedin:profile"]) for name in LINKEDIN_READ_TOOLS},
         # LinkedIn gates posts and comments on the same w_member_social scope.

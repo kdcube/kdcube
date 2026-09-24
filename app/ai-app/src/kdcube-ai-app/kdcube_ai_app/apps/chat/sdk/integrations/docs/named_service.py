@@ -71,6 +71,9 @@ GOOGLE_PROVIDER_KEY = "google"
 DOCS_READ_CLAIM = "docs:read"
 DOCS_WRITE_CLAIM = "docs:write"
 DOCS_COMMENT_CLAIM = "docs:comment"
+# The document as a file is a different subject from its contents: docs:write
+# edits what is inside one, docs:delete decides whether it stays in Drive.
+DOCS_DELETE_CLAIM = "docs:delete"
 # Drive-as-files claims, mirrored from the productivity surface: raw upload
 # and folder listing need honest Drive scopes because docs:write's drive.file
 # cannot reach pre-existing folders. Folder placement on copy/import widens
@@ -111,12 +114,19 @@ ACTION_APPLY_TEXT_STYLE = "apply_text_style"
 ACTION_INSERT_PAGE_BREAK = "insert_page_break"
 ACTION_EMBED_IMAGE = "embed_image"
 ACTION_SET_CELLS = "set_cells"
+ACTION_ADD_ROW = "add_row"
+ACTION_ADD_TAB = "add_tab"
+ACTION_UPDATE_TAB = "update_tab"
+ACTION_DELETE_TAB = "delete_tab"
+ACTION_TRASH = "trash"
+ACTION_RESTORE = "restore"
 ACTION_EXPORT = "export"
 ACTION_IMPORT = "import"
 ACTION_LIST_COMMENTS = "list_comments"
 ACTION_GET_COMMENT = "get_comment"
 ACTION_CREATE_COMMENT = "create_comment"
 ACTION_REPLY_COMMENT = "reply_comment"
+ACTION_UPDATE_COMMENT = "update_comment"
 ACTION_RESOLVE_COMMENT = "resolve_comment"
 ACTION_DELETE_COMMENT = "delete_comment"
 # Drive files as themselves: an upload keeps its format (a DOCX stays a DOCX,
@@ -143,14 +153,21 @@ DOCS_WRITE_ACTIONS = frozenset(
         ACTION_INSERT_PAGE_BREAK,
         ACTION_EMBED_IMAGE,
         ACTION_SET_CELLS,
+        ACTION_ADD_ROW,
+        ACTION_ADD_TAB,
+        ACTION_UPDATE_TAB,
+        ACTION_DELETE_TAB,
         ACTION_IMPORT,
     }
 )
+# Trashing a document and restoring it act on the file, not on its contents.
+DOCS_FILE_ACTIONS = frozenset({ACTION_TRASH, ACTION_RESTORE})
 # Comment-thread actions gate on docs:read + docs:comment.
 DOCS_COMMENT_ACTIONS = frozenset(
     {
         ACTION_CREATE_COMMENT,
         ACTION_REPLY_COMMENT,
+        ACTION_UPDATE_COMMENT,
         ACTION_RESOLVE_COMMENT,
         ACTION_DELETE_COMMENT,
     }
@@ -169,12 +186,19 @@ DOCS_ACTIONS = (
     ACTION_INSERT_PAGE_BREAK,
     ACTION_EMBED_IMAGE,
     ACTION_SET_CELLS,
+    ACTION_ADD_ROW,
+    ACTION_ADD_TAB,
+    ACTION_UPDATE_TAB,
+    ACTION_DELETE_TAB,
+    ACTION_TRASH,
+    ACTION_RESTORE,
     ACTION_EXPORT,
     ACTION_IMPORT,
     ACTION_LIST_COMMENTS,
     ACTION_GET_COMMENT,
     ACTION_CREATE_COMMENT,
     ACTION_REPLY_COMMENT,
+    ACTION_UPDATE_COMMENT,
     ACTION_RESOLVE_COMMENT,
     ACTION_DELETE_COMMENT,
     ACTION_UPLOAD_FILE,
@@ -189,12 +213,14 @@ DOCS_SINGLE_TAB_ACTIONS = frozenset(
         ACTION_INSERT_PAGE_BREAK,
         ACTION_EMBED_IMAGE,
         ACTION_SET_CELLS,
+        ACTION_ADD_ROW,
     }
 )
 DOCS_COMMENT_REFERENCE_ACTIONS = frozenset(
     {
         ACTION_GET_COMMENT,
         ACTION_REPLY_COMMENT,
+        ACTION_UPDATE_COMMENT,
         ACTION_RESOLVE_COMMENT,
         ACTION_DELETE_COMMENT,
     }
@@ -220,6 +246,8 @@ def _action_claim(action: str) -> str | tuple[str, ...]:
         return DOCS_READ_CLAIM
     if action in DOCS_COMMENT_ACTIONS:
         return (DOCS_READ_CLAIM, DOCS_COMMENT_CLAIM)
+    if action in DOCS_FILE_ACTIONS:
+        return (DOCS_READ_CLAIM, DOCS_DELETE_CLAIM)
     return (DOCS_READ_CLAIM, DOCS_WRITE_CLAIM)
 
 
@@ -285,7 +313,11 @@ DOCS_GRANT_HINTS = {
                     else (
                         [DOCS_COMMENT_CLAIM]
                         if action in DOCS_COMMENT_ACTIONS
-                        else [DOCS_WRITE_CLAIM]
+                        else (
+                            [DOCS_DELETE_CLAIM]
+                            if action in DOCS_FILE_ACTIONS
+                            else [DOCS_WRITE_CLAIM]
+                        )
                     )
                 )
             )
@@ -316,11 +348,17 @@ DOCS_CONNECTED_ACCOUNT_REQUIREMENTS = [
     {
         "provider_id": GOOGLE_PROVIDER_KEY,
         "provider_label": "Google",
-        "claims": [DOCS_READ_CLAIM, DOCS_WRITE_CLAIM, DOCS_COMMENT_CLAIM],
+        "claims": [
+            DOCS_READ_CLAIM,
+            DOCS_WRITE_CLAIM,
+            DOCS_COMMENT_CLAIM,
+            DOCS_DELETE_CLAIM,
+        ],
         "claim_labels": {
             DOCS_READ_CLAIM: "read documents",
             DOCS_WRITE_CLAIM: "edit documents",
             DOCS_COMMENT_CLAIM: "comment on documents",
+            DOCS_DELETE_CLAIM: "move documents to the trash and back",
         },
         "claims_by_operation": _operation_connected_claims(),
     }
@@ -334,6 +372,7 @@ DOCS_PROVIDER_CATALOG = {
             "read": DOCS_READ_CLAIM,
             "write": DOCS_WRITE_CLAIM,
             "comment": DOCS_COMMENT_CLAIM,
+            "delete": DOCS_DELETE_CLAIM,
         },
     },
 }
@@ -493,7 +532,10 @@ DOCS_SCHEMA = {
     "get": {
         "description": (
             "Read an object by ref. A native document returns metadata and "
-            "extracted body text plus tab_count, each tab's id, title, hierarchy, "
+            "extracted body text - a table renders one row per line with a "
+            "caption naming its size and header, cells separated by | , and "
+            "[person], [image], [merged] or [nested table] where a cell holds "
+            "something other than text - plus tab_count, each tab's id, title, hierarchy, "
             "and end index, and whether mutation requires tab selection. A "
             "native document also returns tables: each table's tab, position, "
             "nearest heading above it, size, header row or first row, and a "
@@ -578,10 +620,13 @@ DOCS_SCHEMA = {
         ACTION_INSERT_TEXT: {
             "description": (
                 "Insert text at an index (defaults to the selected tab's end). "
-                "Choose a multi-tab target with tab_id or tab_selector."
+                "Choose a multi-tab target with tab_id or tab_selector. With "
+                "preview: true nothing is written: the answer says what already "
+                "sits at that index, which paragraph or table cell it falls in, "
+                "and the text on either side."
             ),
             "object_ref": "document ref",
-            "payload": ["text", "index", "tab_id", "tab_selector"],
+            "payload": ["text", "index", "preview", "tab_id", "tab_selector"],
             "claim": "docs:write",
         },
         ACTION_APPEND_TEXT: {
@@ -597,11 +642,14 @@ DOCS_SCHEMA = {
             "description": (
                 "Replace matches in selected tab_ids/tab_selectors, or in every "
                 "tab only when all_tabs=true is explicit. Every match changes, "
-                "table cells included; to change one table cell use set_cells."
+                "table cells included; to change one table cell use set_cells. "
+                "With preview: true nothing is written: the answer counts the "
+                "matches of each phrase and shows where they sit."
             ),
             "object_ref": "document ref",
             "payload": [
                 "replacements",
+                "preview",
                 "tab_ids",
                 "tab_selector",
                 "tab_selectors",
@@ -612,10 +660,13 @@ DOCS_SCHEMA = {
         ACTION_APPLY_TEXT_STYLE: {
             "description": (
                 "Apply bounded character styling to a text range in one tab. "
-                "Choose a multi-tab target with tab_id or tab_selector."
+                "Choose a multi-tab target with tab_id or tab_selector. With "
+                "preview: true nothing is written: the answer shows the text "
+                "the range covers."
             ),
             "object_ref": "document ref",
             "payload": [
+                "preview",
                 "start_index",
                 "end_index",
                 "bold",
@@ -649,6 +700,74 @@ DOCS_SCHEMA = {
                 "tab_selector",
             ],
             "claim": "docs:write",
+        },
+        ACTION_ADD_ROW: {
+            "description": (
+                "Add one row to a table and, with cells, fill it in the same "
+                "call. Name the table the way set_cells does, with selector or "
+                "tab_selector plus table. The row goes to the end unless "
+                "after_row names the row to put it below, by 1-based number or "
+                "{where: {column, equals | contains}}. cells takes the shapes "
+                "set_cells takes, so a dated record is one call instead of an "
+                "index. The result names the new row's number, and its cells "
+                "when it filled them."
+            ),
+            "object_ref": "document ref",
+            "payload": [
+                "selector",
+                "table",
+                "after_row",
+                "cells",
+                "header",
+                "revision_id",
+                "tab_id",
+                "tab_selector",
+            ],
+        },
+        ACTION_ADD_TAB: {
+            "description": (
+                "Add a tab to the document. Without title Google names it; "
+                "index places it among its siblings, zero-based, and "
+                "parent_tab_id nests it under an existing tab. The result "
+                "carries the new tab and the document's tabs."
+            ),
+            "object_ref": "document ref",
+            "payload": ["title", "index", "parent_tab_id"],
+        },
+        ACTION_UPDATE_TAB: {
+            "description": (
+                "Rename a tab or move it among its siblings. Name the tab with "
+                "tab_id or tab_selector, and pass title, index, or both."
+            ),
+            "object_ref": "document ref",
+            "payload": ["tab_id", "tab_selector", "title", "index"],
+        },
+        ACTION_DELETE_TAB: {
+            "description": (
+                "Delete one tab and everything in it. Google deletes its child "
+                "tabs with it, and the result lists them. A document keeps at "
+                "least one tab, so deleting the only tab is refused."
+            ),
+            "object_ref": "document ref",
+            "payload": ["tab_id", "tab_selector"],
+        },
+        ACTION_TRASH: {
+            "description": (
+                "Move the document to the Drive trash, where it stays "
+                "recoverable until Drive empties it. The document keeps its id, "
+                "so restore brings it back. This acts on the document itself, "
+                "not on its contents, and needs the docs:delete claim."
+            ),
+            "object_ref": "document ref",
+            "payload": [],
+        },
+        ACTION_RESTORE: {
+            "description": (
+                "Bring a trashed document back out of the Drive trash. The "
+                "counterpart of trash, under the same docs:delete claim."
+            ),
+            "object_ref": "document ref",
+            "payload": [],
         },
         ACTION_SET_CELLS: {
             "description": (
@@ -765,6 +884,16 @@ DOCS_SCHEMA = {
             "payload": ["comment_id", "comment_selector", "content"],
             "claim": "docs:comment",
         },
+        ACTION_UPDATE_COMMENT: {
+            "description": (
+                "Rewrite the text of one document-level comment, named by id or "
+                "selector. With reply_id, rewrite that reply instead of the "
+                "comment. Only the author's own comment can be rewritten."
+            ),
+            "object_ref": "document ref",
+            "payload": ["comment_id", "comment_selector", "reply_id", "content"],
+            "claim": "docs:comment",
+        },
         ACTION_RESOLVE_COMMENT: {
             "description": "Resolve one document-level comment by id or selector.",
             "object_ref": "document ref",
@@ -793,6 +922,7 @@ DOCS_SCHEMA = {
             "read": DOCS_READ_CLAIM,
             "write": DOCS_WRITE_CLAIM,
             "comment": DOCS_COMMENT_CLAIM,
+            "delete": DOCS_DELETE_CLAIM,
         }
     },
 }
@@ -839,6 +969,36 @@ DOCS_SCHEMA_PROJECTION = {
                             f"object.action:{ACTION_INSERT_PAGE_BREAK}",
                             f"object.action:{ACTION_EMBED_IMAGE}",
                             f"object.action:{ACTION_SET_CELLS}",
+                            f"object.action:{ACTION_ADD_ROW}",
+                        ],
+                    },
+                    {
+                        "id": "tabs",
+                        "label": "Tabs",
+                        "description": (
+                            "Add, rename, move, and delete the document's tabs."
+                        ),
+                        "object_kind": DOCS_DOCUMENT_KIND,
+                        "keywords": ["tab", "section", "rename", "reorder"],
+                        "operations": [
+                            f"object.action:{ACTION_ADD_TAB}",
+                            f"object.action:{ACTION_UPDATE_TAB}",
+                            f"object.action:{ACTION_DELETE_TAB}",
+                        ],
+                    },
+                    {
+                        "id": "lifecycle",
+                        "label": "Trash and restore",
+                        "description": (
+                            "Move a document to the Drive trash and bring it "
+                            "back. These act on the document itself, under a "
+                            "claim of their own."
+                        ),
+                        "object_kind": DOCS_DOCUMENT_KIND,
+                        "keywords": ["delete", "remove", "trash", "restore", "cleanup"],
+                        "operations": [
+                            f"object.action:{ACTION_TRASH}",
+                            f"object.action:{ACTION_RESTORE}",
                         ],
                     },
                     {
@@ -881,6 +1041,7 @@ DOCS_SCHEMA_PROJECTION = {
                     f"object.action:{ACTION_GET_COMMENT}",
                     f"object.action:{ACTION_CREATE_COMMENT}",
                     f"object.action:{ACTION_REPLY_COMMENT}",
+                    f"object.action:{ACTION_UPDATE_COMMENT}",
                     f"object.action:{ACTION_RESOLVE_COMMENT}",
                     f"object.action:{ACTION_DELETE_COMMENT}",
                 ],
@@ -911,12 +1072,19 @@ DOCS_SCHEMA_PROJECTION = {
                 ACTION_INSERT_PAGE_BREAK,
                 ACTION_EMBED_IMAGE,
                 ACTION_SET_CELLS,
+                ACTION_ADD_ROW,
+                ACTION_ADD_TAB,
+                ACTION_UPDATE_TAB,
+                ACTION_DELETE_TAB,
+                ACTION_TRASH,
+                ACTION_RESTORE,
                 ACTION_EXPORT,
                 ACTION_IMPORT,
                 ACTION_LIST_COMMENTS,
                 ACTION_GET_COMMENT,
                 ACTION_CREATE_COMMENT,
                 ACTION_REPLY_COMMENT,
+                ACTION_UPDATE_COMMENT,
                 ACTION_RESOLVE_COMMENT,
                 ACTION_DELETE_COMMENT,
                 # The drive-file verbs take no document ref (like import);
@@ -990,9 +1158,110 @@ DOCS_PRESENTATION = {
             "description": "Delete one document comment.",
         },
     },
+    # Human titles and user-terms lines, beside the schema rather than from it:
+    # the schema text is written for the agent and reads as an instruction in a
+    # consent card.
     "actions": {
-        action: {"label": action.replace("_", " ").title(), **dict(meta)}
-        for action, meta in DOCS_SCHEMA["actions"].items()
+        ACTION_COPY: {
+            "label": "Copy document",
+            "description": "Make a copy of a document under a new title.",
+        },
+        ACTION_INSERT_TEXT: {
+            "label": "Insert text",
+            "description": "Insert text at one place in a document.",
+        },
+        ACTION_APPEND_TEXT: {
+            "label": "Append text",
+            "description": "Add text to the end of a document.",
+        },
+        ACTION_REPLACE_TEXT: {
+            "label": "Replace text",
+            "description": "Replace every match of a phrase in a document.",
+        },
+        ACTION_APPLY_TEXT_STYLE: {
+            "label": "Style text",
+            "description": "Make a piece of text bold, italic, or a link.",
+        },
+        ACTION_INSERT_PAGE_BREAK: {
+            "label": "Insert page break",
+            "description": "Start a new page in a document.",
+        },
+        ACTION_EMBED_IMAGE: {
+            "label": "Embed an image",
+            "description": "Place an image from a public URL into a document.",
+        },
+        ACTION_SET_CELLS: {
+            "label": "Write table cells",
+            "description": "Write text into cells of one table row.",
+        },
+        ACTION_ADD_ROW: {
+            "label": "Add a table row",
+            "description": "Add a row to a table and fill it in.",
+        },
+        ACTION_ADD_TAB: {
+            "label": "Add a tab",
+            "description": "Add a tab to a document.",
+        },
+        ACTION_UPDATE_TAB: {
+            "label": "Rename or move a tab",
+            "description": "Rename a tab or change its place in the document.",
+        },
+        ACTION_DELETE_TAB: {
+            "label": "Delete a tab",
+            "description": "Delete a tab and everything in it.",
+        },
+        ACTION_TRASH: {
+            "label": "Trash document",
+            "description": "Move a document to the Drive trash, where it stays recoverable.",
+        },
+        ACTION_RESTORE: {
+            "label": "Restore document",
+            "description": "Bring a document back out of the Drive trash.",
+        },
+        ACTION_EXPORT: {
+            "label": "Export document",
+            "description": "Deliver a document as a file you can download.",
+        },
+        ACTION_IMPORT: {
+            "label": "Import a document",
+            "description": "Turn a file such as DOCX into an editable document.",
+        },
+        ACTION_LIST_COMMENTS: {
+            "label": "List comments",
+            "description": "List the comment threads on a document.",
+        },
+        ACTION_GET_COMMENT: {
+            "label": "Read a comment",
+            "description": "Read one comment thread and its replies.",
+        },
+        ACTION_CREATE_COMMENT: {
+            "label": "Comment on a document",
+            "description": "Leave a comment on a document.",
+        },
+        ACTION_REPLY_COMMENT: {
+            "label": "Reply to a comment",
+            "description": "Reply in an existing comment thread.",
+        },
+        ACTION_UPDATE_COMMENT: {
+            "label": "Edit a comment",
+            "description": "Rewrite a comment you left on a document.",
+        },
+        ACTION_RESOLVE_COMMENT: {
+            "label": "Resolve a comment",
+            "description": "Mark a comment thread as resolved.",
+        },
+        ACTION_DELETE_COMMENT: {
+            "label": "Delete a comment",
+            "description": "Remove one comment from a document.",
+        },
+        ACTION_UPLOAD_FILE: {
+            "label": "Upload a file to Drive",
+            "description": "Put a file in Drive as it is, without converting it.",
+        },
+        ACTION_LIST_FOLDER: {
+            "label": "List a Drive folder",
+            "description": "See what a Drive folder holds.",
+        },
     },
 }
 
@@ -2799,7 +3068,7 @@ class DocsNamedServiceProvider(NamedServiceProvider):
                 parsed=export_parsed,
             )
         payload = dict(request.payload or {})
-        if action == ACTION_SET_CELLS:
+        if action in (ACTION_SET_CELLS, ACTION_ADD_ROW):
             payload = spread_table_selector(payload)
         payload["document_ref"] = parsed["document_id"]
         if request.idempotency_key:
@@ -2901,8 +3170,9 @@ class DocsNamedServiceProvider(NamedServiceProvider):
                 code="docs_document_delete_not_supported",
                 message=(
                     "object.delete removes one document comment. Pass "
-                    "payload.comment_id or comment_selector; manage the document "
-                    "file through its provider."
+                    "payload.comment_id or comment_selector. To remove the "
+                    "document itself, use object.action trash, which moves it to "
+                    "the Drive trash and needs the docs:delete claim."
                 ),
                 status=400,
                 provider=self._provider_identity(),
@@ -2979,10 +3249,18 @@ __all__ = [
     "ACTION_LIST_COMMENTS",
     "ACTION_REPLACE_TEXT",
     "ACTION_REPLY_COMMENT",
+    "ACTION_UPDATE_COMMENT",
     "ACTION_RESOLVE_COMMENT",
     "ACTION_SET_CELLS",
+    "ACTION_ADD_ROW",
+    "ACTION_ADD_TAB",
+    "ACTION_UPDATE_TAB",
+    "ACTION_DELETE_TAB",
+    "ACTION_TRASH",
+    "ACTION_RESTORE",
     "DOCS_ACTIONS",
     "DOCS_COMMENT_CLAIM",
+    "DOCS_DELETE_CLAIM",
     "DOCS_CONNECTED_ACCOUNT_REQUIREMENTS",
     "DOCS_DOCUMENT_KIND",
     "DOCS_EXPORT_FORMATS",

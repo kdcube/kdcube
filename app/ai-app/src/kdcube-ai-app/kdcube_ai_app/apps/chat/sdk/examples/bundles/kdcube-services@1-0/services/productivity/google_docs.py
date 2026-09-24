@@ -58,6 +58,8 @@ DOCS_PROVIDER_ID = "google"
 DOCS_READ_CLAIM = "docs:read"
 DOCS_WRITE_CLAIM = "docs:write"
 DOCS_COMMENT_CLAIM = "docs:comment"
+# The document as a file: trashing and restoring it, not editing its contents.
+DOCS_DELETE_CLAIM = "docs:delete"
 # Drive-as-files claims. Separate from the Docs claims because docs:write's
 # drive.file scope cannot reach pre-existing folders: raw upload and folder
 # listing need the honest Drive scopes, and a claim that says so.
@@ -435,6 +437,7 @@ __all__ = [
     "DOCS_READ_CLAIM",
     "DOCS_WRITE_CLAIM",
     "DOCS_COMMENT_CLAIM",
+    "DOCS_DELETE_CLAIM",
     "DRIVE_READ_CLAIM",
     "DRIVE_WRITE_CLAIM",
     "bind_service",

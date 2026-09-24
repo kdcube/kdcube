@@ -1695,6 +1695,26 @@ async def test_get_passes_table_reads_to_the_provider() -> None:
     assert fake.calls[-1]["payload"]["tables"] == selector
 
 
+def test_every_action_speaks_to_a_person_as_well_as_to_an_agent() -> None:
+    from kdcube_ai_app.apps.chat.sdk.integrations.docs.named_service import (
+        DOCS_ACTIONS,
+        DOCS_PRESENTATION,
+        DOCS_SCHEMA,
+    )
+
+    presentation = DOCS_PRESENTATION["actions"]
+    for action in DOCS_ACTIONS:
+        entry = presentation.get(action)
+        assert entry, f"{action} has no presentation entry"
+        label, described = entry["label"], entry["description"]
+        assert label and not label.endswith("."), f"{action} label reads oddly"
+        # The schema text is the agent's contract; a consent card must not show
+        # it. set_cells alone runs past a thousand characters.
+        schema_text = (DOCS_SCHEMA["actions"].get(action) or {}).get("description")
+        assert described != schema_text, f"{action} shows its schema text to a person"
+        assert len(described) <= 120, f"{action} reads as an instruction, not a line"
+
+
 @pytest.mark.anyio
 async def test_include_tables_reads_every_table() -> None:
     fake = _FakeDocs()
