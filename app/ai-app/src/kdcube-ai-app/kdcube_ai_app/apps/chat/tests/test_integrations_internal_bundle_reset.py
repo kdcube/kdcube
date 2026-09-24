@@ -110,9 +110,11 @@ def test_internal_reload_authority_reapplies_registry(monkeypatch):
     assert published["origin_process_id"] == os.getpid()
 
 
-def test_internal_reload_authority_evicts_requested_bundle_scope(monkeypatch):
+def test_internal_reload_authority_evicts_requested_bundle_scope(monkeypatch, tmp_path):
     app = FastAPI()
     mount_integrations_routers(app)
+    bundle_path = tmp_path / "demo"
+    bundle_path.mkdir()
 
     calls: dict[str, object] = {}
 
@@ -131,7 +133,7 @@ def test_internal_reload_authority_evicts_requested_bundle_scope(monkeypatch):
                 "demo.bundle@1.0.0": _Entry(
                     {
                         "id": "demo.bundle@1.0.0",
-                        "path": "/bundles/demo",
+                        "path": str(bundle_path),
                         "module": "demo.entrypoint",
                         "singleton": True,
                     }
@@ -199,7 +201,7 @@ def test_internal_reload_authority_evicts_requested_bundle_scope(monkeypatch):
     assert response.json()["bundle_id"] == "demo.bundle@1.0.0"
     assert response.json()["eviction"]["sys_modules_deleted"] == 2
     assert calls["evicted"] == {
-        "path": "/bundles/demo",
+        "path": str(bundle_path),
         "module": "demo.entrypoint",
         "singleton": True,
         "drop_sys_modules": True,

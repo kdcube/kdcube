@@ -457,6 +457,16 @@ async def prepare_activation(
             )
         return None, {"mode": "git", "path": mounted, "ref": entry.get("ref"), "git_commit": entry.get("git_commit")}
 
+    mounted_path = pathlib.Path(mounted) if mounted else None
+    if mounted_path is None or not mounted_path.is_dir():
+        raise BundleSnapshotError(
+            "bundle_path_unreachable",
+            f"Bundle '{bundle_id}' mounted path is not a directory in this runtime: "
+            f"{mounted or '<unset>'}. Nothing was evicted.",
+            bundle_id=bundle_id,
+            path=mounted,
+        )
+
     if not effective:
         if bool(block.get("require_commit")):
             raise BundleSnapshotError(
@@ -471,11 +481,11 @@ async def prepare_activation(
                 "expected_commit fences a commit. Name the commit to activate as well.",
                 bundle_id=bundle_id,
             )
-        source = await describe_mounted_source(pathlib.Path(mounted))
+        source = await describe_mounted_source(mounted_path)
         source["origin"] = ""
         return None, source
 
-    pinned = await pin_commit(pathlib.Path(mounted), effective)
+    pinned = await pin_commit(mounted_path, effective)
     if expected and pinned.commit != expected:
         raise BundleSnapshotError(
             "bundle_activation_commit_mismatch",
@@ -488,7 +498,7 @@ async def prepare_activation(
         )
     snapshot = await materialize_snapshot(
         bundle_id=bundle_id,
-        mounted_path=pathlib.Path(mounted),
+        mounted_path=mounted_path,
         commit=pinned.commit,
         managed_root=managed_root,
         logger=logger,

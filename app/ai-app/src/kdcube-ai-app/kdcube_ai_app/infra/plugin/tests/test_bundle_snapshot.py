@@ -157,6 +157,28 @@ async def test_require_commit_refuses_a_commitless_activation_naming_the_flag(re
     assert refusal.value.details == {"bundle_id": BUNDLE_ID}
 
 
+async def test_missing_mounted_path_is_refused_before_activation(tmp_path):
+    missing = tmp_path / "missing"
+
+    with pytest.raises(snap.BundleSnapshotError) as refusal:
+        await snap.prepare_activation(_entry(missing), commit=None, expected_commit=None)
+
+    assert refusal.value.code == "bundle_path_unreachable"
+    assert refusal.value.details == {"bundle_id": BUNDLE_ID, "path": str(missing)}
+    assert "Nothing was evicted" in str(refusal.value)
+
+
+async def test_mounted_path_must_be_a_directory(tmp_path):
+    source_file = tmp_path / "entrypoint.py"
+    source_file.write_text("VERSION = 1\n", encoding="utf-8")
+
+    with pytest.raises(snap.BundleSnapshotError) as refusal:
+        await snap.prepare_activation(_entry(source_file), commit=None, expected_commit=None)
+
+    assert refusal.value.code == "bundle_path_unreachable"
+    assert refusal.value.details["path"] == str(source_file)
+
+
 async def test_expected_commit_without_a_commit_is_refused(repository):
     repo, bundle, commit_a, commit_b = repository
     with pytest.raises(snap.BundleSnapshotError) as refusal:
