@@ -2915,6 +2915,44 @@ def _refresh_refused(reason: str, client_id: str, description: str) -> JSONRespo
     return _token_error("invalid_grant", description)
 
 
+async def _restore_failed_refresh_rotation(
+    store,
+    *,
+    refresh_token: str,
+    replacement_token: str,
+    refresh_state,
+    client_id: str,
+) -> bool:
+    """Keep a client-held token usable when replacement delivery fails."""
+
+    try:
+        restored = await store.rollback_refresh_token_rotation(
+            refresh_token,
+            replacement_token,
+            state=refresh_state,
+        )
+    except Exception:
+        LOGGER.exception(
+            "[connection-hub.oauth] failed to restore refresh rotation after "
+            "token issuance failure client_id=%s",
+            client_id,
+        )
+        return False
+    if restored:
+        LOGGER.warning(
+            "[connection-hub.oauth] refresh rotation restored after token "
+            "issuance failure client_id=%s",
+            client_id,
+        )
+        return True
+    LOGGER.error(
+        "[connection-hub.oauth] refresh rotation was not restorable after "
+        "token issuance failure client_id=%s",
+        client_id,
+    )
+    return False
+
+
 def _minter_accepts_authority_kwargs(minter) -> bool:
     try:
         signature = inspect.signature(minter)
@@ -3521,23 +3559,42 @@ async def token(request: Request) -> Response:
                 str(rec.get("client_id") or ""),
                 "refresh token invalid or expired",
             )
-        return await _issue_tokens(
-            request, store,
-            sub=rec["sub"], scopes=scopes, client_id=rec["client_id"],
-            operations=operations,
-            resource_grants=resource_grants,
-            resource_operations=resource_operations,
-            resource=rec.get("resource"),
-            registry_access_id=card_pointer,
-            card_kind=refresh_card_kind,
-            identity_scope=rec.get("identity_scope") or "",
-            grantor_authority=rec.get("grantor_authority") or {},
-            delegation_edges=rec.get("delegation_edges") or [],
-            named_services=rec.get("named_services") or {},
-            refresh_token=new_rt,
-            account_scope=account_scope,
-            client_metadata=rec.get("client_metadata") or {},
-        )
+        try:
+            issued = await _issue_tokens(
+                request, store,
+                sub=rec["sub"], scopes=scopes, client_id=rec["client_id"],
+                operations=operations,
+                resource_grants=resource_grants,
+                resource_operations=resource_operations,
+                resource=rec.get("resource"),
+                registry_access_id=card_pointer,
+                card_kind=refresh_card_kind,
+                identity_scope=rec.get("identity_scope") or "",
+                grantor_authority=rec.get("grantor_authority") or {},
+                delegation_edges=rec.get("delegation_edges") or [],
+                named_services=rec.get("named_services") or {},
+                refresh_token=new_rt,
+                account_scope=account_scope,
+                client_metadata=rec.get("client_metadata") or {},
+            )
+        except Exception:
+            await _restore_failed_refresh_rotation(
+                store,
+                refresh_token=str(rt),
+                replacement_token=new_rt,
+                refresh_state=refresh_state,
+                client_id=str(rec.get("client_id") or ""),
+            )
+            raise
+        if int(getattr(issued, "status_code", 500)) >= 400:
+            await _restore_failed_refresh_rotation(
+                store,
+                refresh_token=str(rt),
+                replacement_token=new_rt,
+                refresh_state=refresh_state,
+                client_id=str(rec.get("client_id") or ""),
+            )
+        return issued
 
     return _token_error("unsupported_grant_type", f"unsupported grant_type: {grant_type}")
 

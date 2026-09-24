@@ -405,6 +405,55 @@ async def test_refresh_token_rotates_and_issues_new_access(ctx):
 
 
 @pytest.mark.asyncio
+async def test_refresh_card_failure_restores_held_token_and_retry_succeeds(
+    ctx,
+    monkeypatch,
+):
+    client, store = ctx
+    code = await _seed_code(store)
+    first = client.post("/oauth/token", data={
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": "http://127.0.0.1:9000/callback",
+        "client_id": "claude",
+        "code_verifier": VERIFIER,
+    }).json()
+    refresh_token = first["refresh_token"]
+    _seed_live_card(store, await store.validate_refresh_token(refresh_token))
+    original_persist = DurableCardPersistence.persist
+    attempts = 0
+
+    async def fail_once(self, *args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise CardCommitFailed("durable_commit_failed")
+        return await original_persist(self, *args, **kwargs)
+
+    monkeypatch.setattr(DurableCardPersistence, "persist", fail_once)
+    request = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": "claude",
+    }
+
+    failed = client.post("/oauth/token", data=request)
+
+    assert failed.status_code == 503
+    assert failed.json()["error"] == "temporarily_unavailable"
+    assert await store.validate_refresh_token(refresh_token) is not None
+
+    retried = client.post("/oauth/token", data=request)
+
+    assert retried.status_code == 200
+    assert retried.json()["refresh_token"] != refresh_token
+    assert await store.validate_refresh_token(refresh_token) is None
+    assert await store.validate_refresh_token(
+        retried.json()["refresh_token"]
+    ) is not None
+
+
+@pytest.mark.asyncio
 async def test_refresh_rotation_race_reports_family_reuse(ctx, caplog):
     client, store = ctx
     code = await _seed_code(store)
