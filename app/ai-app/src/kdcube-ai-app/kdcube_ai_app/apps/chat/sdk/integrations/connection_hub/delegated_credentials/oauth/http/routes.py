@@ -93,6 +93,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentia
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.http.discovery import resolve_issuer
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.http.device import (
     DEVICE_CONSENT_SCHEMA,
+    device_completion_name,
     device_completion_page,
     device_consent_binding,
     device_oauth_error,
@@ -1571,7 +1572,8 @@ async def verify_device(request: Request) -> Response:
 @router.get("/oauth/device/complete", include_in_schema=False)
 async def device_complete(request: Request) -> Response:
     return device_completion_page(
-        approved=str(request.query_params.get("result") or "") == "approved"
+        approved=str(request.query_params.get("result") or "") == "approved",
+        agent=str(request.query_params.get("agent") or ""),
     )
 
 
@@ -2623,9 +2625,13 @@ async def authorize_consent_decision(request: Request) -> Response:
                     "reason": decision_state,
                 },
             )
+        completion = {"result": "approved"}
+        agent = device_completion_name(authorization["client_metadata"])
+        if agent:
+            completion["agent"] = agent
         return JSONResponse({
             "ok": True,
-            "redirect_url": f"{verification_uri(issuer)}/complete?result=approved",
+            "redirect_url": f"{verification_uri(issuer)}/complete?{urlencode(completion)}",
         })
 
     code = await store.create_auth_code(**authorization)

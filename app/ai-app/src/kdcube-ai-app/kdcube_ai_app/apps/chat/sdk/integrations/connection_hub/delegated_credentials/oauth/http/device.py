@@ -147,13 +147,35 @@ def device_verification_page(
     return HTMLResponse(html, status_code=status, headers=_NO_STORE_HEADERS)
 
 
-def device_completion_page(*, approved: bool) -> HTMLResponse:
-    title = "Device connected" if approved else "Device authorization denied"
-    body = (
-        "Return to the terminal to continue."
-        if approved
-        else "No access was granted. You can close this window."
-    )
+DEVICE_COMPLETION_NAME_LIMIT = 80
+
+
+def device_completion_name(client_metadata: Mapping[str, Any]) -> str:
+    """The name the approval page shows for the device it authorized.
+
+    A KDCube worker registers its alias (``kdcube_worker_alias``), so the
+    person who approved sees which agent they authorized. Any other client
+    shows its registered name.
+    """
+
+    metadata = client_metadata if isinstance(client_metadata, Mapping) else {}
+    asserted = metadata.get("client_metadata")
+    asserted = asserted if isinstance(asserted, Mapping) else {}
+    name = str(
+        asserted.get("kdcube_worker_alias") or metadata.get("client_name") or ""
+    ).strip()
+    return name[:DEVICE_COMPLETION_NAME_LIMIT]
+
+
+def device_completion_page(*, approved: bool, agent: str = "") -> HTMLResponse:
+    name = str(agent or "").strip()[:DEVICE_COMPLETION_NAME_LIMIT]
+    if approved:
+        title = f"Agent authorized: {name}" if name else "Device connected"
+        body = "The terminal continues on its own. You can close this window."
+    else:
+        title = "Device authorization denied"
+        body = "No access was granted. You can close this window."
+    title = escape(title)
     html = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer"><title>{title}</title></head>
 <body><main><h1>{title}</h1><p>{body}</p></main></body></html>"""
@@ -162,6 +184,7 @@ def device_completion_page(*, approved: bool) -> HTMLResponse:
 
 __all__ = [
     "DEVICE_CONSENT_SCHEMA",
+    "device_completion_name",
     "device_completion_page",
     "device_consent_binding",
     "device_oauth_error",
