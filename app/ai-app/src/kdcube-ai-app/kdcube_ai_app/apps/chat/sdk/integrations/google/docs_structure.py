@@ -235,6 +235,65 @@ def body_tables(
     return tables
 
 
+def body_segments(body: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    """Every addressable piece of one tab body, with the range it occupies.
+
+    A caller about to write at an index needs to know what already lives there;
+    the same walk answers that as answers the table reads.
+    """
+
+    segments: list[dict[str, Any]] = []
+    content = body.get("content") if isinstance(body, Mapping) else None
+    position = 0
+    for block in content or []:
+        if not isinstance(block, Mapping):
+            continue
+        paragraph = block.get("paragraph")
+        if isinstance(paragraph, Mapping):
+            heading = _heading(paragraph)
+            segments.append(
+                {
+                    "kind": "heading" if heading else "paragraph",
+                    "start": _int(block.get("startIndex")),
+                    "end": _int(block.get("endIndex")),
+                    "text": paragraph_text(paragraph).rstrip("\n"),
+                }
+            )
+            continue
+        table = block.get("table")
+        if isinstance(table, Mapping):
+            position += 1
+            cells, _rows, _columns = _grid(table)
+            for row_number, row in enumerate(cells, start=1):
+                for column, cell in enumerate(row, start=1):
+                    if cell.get("merged_into"):
+                        continue
+                    segments.append(
+                        {
+                            "kind": "cell",
+                            "start": _int(cell.get("content_start")),
+                            "end": _int(cell.get("content_end")),
+                            "text": str(cell.get("text") or ""),
+                            "table": position,
+                            "row": row_number,
+                            "column": column,
+                        }
+                    )
+    return sorted(segments, key=lambda row: row["start"])
+
+
+def table_grid(table: Mapping[str, Any]) -> dict[str, Any]:
+    """One table's cells, size, and header rows, from the same walk as the rest."""
+
+    cells, rows, columns = _grid(table)
+    return {
+        "cells": cells,
+        "rows": rows,
+        "columns": columns,
+        "header_rows": _header_rows(table),
+    }
+
+
 def public_cell(
     cell: Mapping[str, Any], *, row: int = 0, column: int = 0
 ) -> dict[str, Any]:
@@ -295,5 +354,7 @@ __all__ = [
     "body_tables",
     "paragraph_text",
     "public_cell",
+    "body_segments",
+    "table_grid",
     "public_table",
 ]

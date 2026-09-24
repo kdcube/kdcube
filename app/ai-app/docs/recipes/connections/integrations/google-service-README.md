@@ -580,6 +580,20 @@ span every tab.
 
 ### Read and write document tables
 
+The extracted body text renders each table as one line per row, under a caption
+naming its size and whether it has a header row, with cells separated by `|` and
+a marker where a cell holds something other than text:
+
+```text
+[table · 5 rows × 4 columns · header row]
+Task | Status | Owner | Comment
+Fix login |  | owner-a | 
+Review | Open | [person] | 
+```
+
+A literal `|` inside a cell is escaped. That text is for reading; addressing a
+cell uses the table inventory below.
+
 `get` on a native document lists every table under `tables`: its tab, 1-based
 position in the tab, the nearest heading of any level above it, row and column
 counts, the header row when the document marks one (`header_rows`, `header`),
@@ -655,7 +669,55 @@ also builds table structure: `insertTable`, `insertTableRow`,
 `unmergeTableCells` and `pinTableHeaderRows`. Pin a new table's header row and
 every later read names its columns without `header`.
 
+### Add a row, and take a document out of the way
+
+`object.action add_row` adds one row to a table named the way `set_cells` names
+it, and fills it in the same call when `cells` is given. The row goes to the end
+unless `after_row` names the row to put it below, by number or by
+`where: {column, equals | contains}`. Appending a dated record is one call, with
+no index arithmetic and the same refusals.
+
+`object.action trash` moves the document to the Drive trash, where it stays
+recoverable; `restore` brings it back. Both act on the document itself rather
+than its contents, so they carry their own claim, `docs:delete` - a card granted
+for editing tables does not decide whether a document stays in Drive. The claim
+maps to Drive's `drive.file` scope, which reaches documents this deployment
+created; a document made by hand elsewhere is outside it. On the typed door the
+same verbs are `productivity_docs_add_row`, `productivity_docs_trash` and
+`productivity_docs_restore`.
+
+### Look before an index-based write
+
+`insert_text`, `apply_text_style` and `replace_text` take `preview: true`.
+Nothing is written and the answer says what is already there:
+
+- an insert reports the paragraph or table cell the index falls in, with the
+  text on either side - the guess that once turned a header cell's `Comment`
+  into `Commen…t` shows up here as text landing mid-word;
+- a style reports the text its range covers;
+- a replacement counts each phrase's matches and shows where they sit, which
+  `replaceAllText` reports only after it has changed them.
+
+Table cells need no preview: `set_cells` already answers with `before` and
+`after` per cell, and refuses rather than guess.
+
+### Manage the document's tabs
+
+`object.action add_tab` adds a tab: without a title Google names it, `index`
+places it among its siblings (zero-based) and `parent_tab_id` nests it under an
+existing tab. `addDocumentTab` returns no id of its own, so the operation reads
+the document again and reports the tab the document gained, with the full tab
+list. `update_tab` renames a tab or moves it, sending only the fields the call
+changes. `delete_tab` removes one tab and everything in it: Google deletes its
+child tabs too, and the result lists them as `deleted_child_tab_ids`. A document
+keeps at least one tab, so deleting the only tab is refused with
+`docs_last_tab`. All three ride `docs:write`, and on the typed door they are
+`productivity_docs_add_tab`, `productivity_docs_update_tab` and
+`productivity_docs_delete_tab`.
+
 ### Address document comments naturally
+
+`object.action update_comment` rewrites a comment's text, or one reply's with `reply_id`; Google allows it only for the comment's own author.
 
 The stable Drive comments path manages document-level threads. Named-service
 actions that read, reply to, resolve, or delete one comment accept either an
@@ -703,6 +765,29 @@ short-lived download URL.
 The SDK mechanics (the async REST proxy over the Docs and Drive APIs, and the
 shared credential resolver) are in
 [Google SDK Integration](../../../sdk/integrations/google/google-README.md).
+
+## Declare a new action in two places
+
+A named-service action is declared twice, and both declarations are needed
+before a hosted agent can call it:
+
+1. **The grant catalogue** - a row under
+   `connections.delegated_credentials.oauth.resources[].named_services.<namespace>.tools`
+   with the claims the operation needs. This is what makes the operation
+   delegable at all.
+2. **The calling agent's roster** - the operation's name under
+   `surfaces.as_consumer.agents.<agent>.tools[].namespaces.<namespace>.allowed`
+   in that agent's bundle. This is what the Control Card is derived from.
+
+Only the second changes the descriptor revision the Control Card is keyed on.
+Adding a catalogue row alone leaves the ceiling at its previous generation: the
+operation stays outside it, a consent grant for it is erased by the next
+capability sync, and no action in Connection Hub can repair that. After both
+declarations, reload the agent's bundle and let one agent turn run; the Control
+Card takes a new revision and the operation becomes callable.
+
+The typed door is separate: a tool there needs its own row under the
+productivity resource and, for a caller-held card, that card's grant.
 
 ## Verify
 

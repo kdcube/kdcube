@@ -46,8 +46,10 @@ from kdcube_ai_app.apps.chat.sdk.integrations.docs.tables import (
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.google.docs_structure import (
     body_tables,
+    body_segments,
     public_cell,
     public_table,
+    table_grid,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.provider_errors import (
     ProviderFailure,
@@ -339,6 +341,52 @@ def _extract_paragraph_text(paragraph: Mapping[str, Any]) -> str:
     return "".join(parts)
 
 
+_CELL_MARKERS = {
+    "person": "[person]",
+    "image": "[image]",
+    "date": "[date]",
+    "rich_link": "[link]",
+    "equation": "[equation]",
+    "footnote": "[footnote]",
+    "horizontal_rule": "[rule]",
+    "auto_text": "[auto text]",
+}
+
+
+def _cell_text(cell: Mapping[str, Any]) -> str:
+    """One cell on one line: its text, then what it holds besides text.
+
+    A cell that renders as nothing is the reason a reader concludes a document
+    holds no chips, so anything non-textual is named here.
+    """
+
+    if cell.get("merged_into"):
+        return "[merged]"
+    text = str(cell.get("text") or "").replace("\n", " ").strip()
+    text = text.replace("|", "\\|")
+    parts = [text] if text else []
+    if cell.get("nested_table"):
+        parts.append("[nested table]")
+    seen: list[str] = []
+    for entry in cell.get("objects") or ():
+        kind = str((entry or {}).get("kind") or "").strip()
+        marker = _CELL_MARKERS.get(kind, f"[{kind}]" if kind else "")
+        if marker and marker not in seen:
+            seen.append(marker)
+    return " ".join([*parts, *seen])
+
+
+def _iter_table_text(table: Mapping[str, Any]) -> Iterator[str]:
+    grid = table_grid(table)
+    rows, columns = int(grid["rows"]), int(grid["columns"])
+    header_rows = int(grid["header_rows"])
+    caption = f"[table · {rows} rows × {columns} columns"
+    caption += " · header row]" if header_rows else " · no header row]"
+    yield caption + "\n"
+    for row in grid["cells"]:
+        yield " | ".join(_cell_text(cell) for cell in row) + "\n"
+
+
 def _iter_structural_text(content: Any) -> Iterator[str]:
     """Yield readable text from paragraphs, tables, and table-of-contents blocks."""
 
@@ -351,16 +399,7 @@ def _iter_structural_text(content: Any) -> Iterator[str]:
             continue
         table = block.get("table")
         if isinstance(table, Mapping):
-            yield "[table]\n"
-            for row in table.get("tableRows") or []:
-                if not isinstance(row, Mapping):
-                    continue
-                for index, cell in enumerate(row.get("tableCells") or []):
-                    if index:
-                        yield " | "
-                    if isinstance(cell, Mapping):
-                        yield from _iter_structural_text(cell.get("content"))
-                yield "\n"
+            yield from _iter_table_text(table)
             continue
         table_of_contents = block.get("tableOfContents")
         if isinstance(table_of_contents, Mapping):
@@ -529,6 +568,15 @@ def _body_end_index(document: Mapping[str, Any], *, tab_id: str = "") -> int:
             if record["tab_id"] == tab_id:
                 return _body_end_index_from_body(body)
     return _body_end_index_from_body(entries[0][1])
+
+
+def _tab_body(document: Mapping[str, Any], *, tab_id: str = "") -> Mapping[str, Any]:
+    entries = _document_tab_entries(document)
+    if tab_id:
+        for record, body in entries:
+            if record["tab_id"] == tab_id:
+                return body
+    return entries[0][1] if entries else _default_document_body(document)
 
 
 def _document_tabs(document: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -1211,6 +1259,69 @@ async def _copy(
     }
 
 
+PREVIEW_WINDOW_CHARS = 80
+MAX_PREVIEW_MATCHES = 5
+
+
+def _segment_at(segments: Sequence[Mapping[str, Any]], index: int) -> dict[str, Any]:
+    for segment in segments:
+        if int(segment["start"]) <= index <= int(segment["end"]):
+            return dict(segment)
+    return {}
+
+
+def _where_text(segment: Mapping[str, Any]) -> str:
+    kind = str(segment.get("kind") or "")
+    if kind == "cell":
+        return (
+            f"table {segment.get('table')}, row {segment.get('row')}, "
+            f"column {segment.get('column')}"
+        )
+    return kind or "outside any paragraph or cell"
+
+
+def _range_preview(
+    document: Mapping[str, Any],
+    *,
+    tab_id: str,
+    start: int,
+    end: int | None = None,
+) -> dict[str, Any]:
+    """What already sits where a write is aimed, without writing anything."""
+
+    body = _tab_body(document, tab_id=tab_id)
+    segments = body_segments(body)
+    segment = _segment_at(segments, start)
+    text = str(segment.get("text") or "")
+    offset = max(0, start - int(segment.get("start") or 0)) if segment else 0
+    preview: dict[str, Any] = {
+        "index": start,
+        "tab_id": tab_id,
+        "where": _where_text(segment) if segment else "outside any paragraph or cell",
+        "text_before": text[max(0, offset - PREVIEW_WINDOW_CHARS) : offset],
+        "text_after": text[offset : offset + PREVIEW_WINDOW_CHARS],
+    }
+    if segment:
+        preview["segment"] = {
+            key: segment[key]
+            for key in ("kind", "start", "end", "table", "row", "column")
+            if key in segment
+        }
+    if end is not None:
+        preview["end_index"] = end
+        covered = [
+            {
+                "where": _where_text(row),
+                "text": str(row.get("text") or "")[:PREVIEW_WINDOW_CHARS],
+            }
+            for row in segments
+            if int(row["start"]) < end and int(row["end"]) > start
+        ]
+        preview["covers"] = covered[:MAX_PREVIEW_MATCHES]
+        preview["covers_total"] = len(covered)
+    return preview
+
+
 async def _insert_text(
     client: httpx.AsyncClient, *, access_token: str, payload: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -1230,6 +1341,16 @@ async def _insert_text(
         location = {"index": idx}
     if tab_id:
         location["tabId"] = tab_id
+    if payload.get("preview") is True:
+        return {
+            "document_id": document_id,
+            "web_url": _web_url(document_id),
+            "preview": _range_preview(document, tab_id=tab_id, start=location["index"]),
+            "would_insert_chars": len(text),
+            "tab_id": tab_id,
+            "tab_count": len(tabs),
+            "written": False,
+        }
     await _batch_update(
         client,
         access_token=access_token,
@@ -1277,6 +1398,68 @@ async def _append_text(
     }
 
 
+def _match_preview(
+    document: Mapping[str, Any],
+    *,
+    tab_ids: Sequence[str],
+    replacements: Sequence[Any],
+) -> list[dict[str, Any]]:
+    """Every place a replacement would land, counted before anything changes.
+
+    replaceAllText reports what it changed only after it has changed it, which
+    is exactly the wrong order for a caller who guessed a phrase.
+    """
+
+    entries = _document_tab_entries(document)
+    wanted = {tab_id for tab_id in tab_ids if tab_id}
+    out: list[dict[str, Any]] = []
+    for item in replacements:
+        if not isinstance(item, Mapping):
+            continue
+        find = str(item.get("find") or "")
+        if not find:
+            continue
+        match_case = bool(item.get("match_case"))
+        needle = find if match_case else find.lower()
+        matches: list[dict[str, Any]] = []
+        total = 0
+        for record, body in entries:
+            tab_id = str(record.get("tab_id") or "")
+            if wanted and tab_id not in wanted:
+                continue
+            for segment in body_segments(body):
+                text = str(segment.get("text") or "")
+                hay = text if match_case else text.lower()
+                start = hay.find(needle)
+                while start >= 0:
+                    total += 1
+                    if len(matches) < MAX_PREVIEW_MATCHES:
+                        matches.append(
+                            {
+                                "tab_id": tab_id,
+                                "tab_title": str(record.get("title") or ""),
+                                "where": _where_text(segment),
+                                "context": text[
+                                    max(0, start - PREVIEW_WINDOW_CHARS) : start
+                                    + len(find)
+                                    + PREVIEW_WINDOW_CHARS
+                                ],
+                            }
+                        )
+                    start = hay.find(needle, start + 1)
+        out.append(
+            {
+                "find": find,
+                "replace": str(item.get("replace") or ""),
+                "match_case": match_case,
+                "occurrences": total,
+                "matches": matches,
+                "matches_truncated": total > len(matches),
+            }
+        )
+    return out
+
+
 async def _replace_text(
     client: httpx.AsyncClient, *, access_token: str, payload: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -1316,6 +1499,17 @@ async def _replace_text(
         if selected_ids:
             replacement["tabsCriteria"] = {"tabIds": selected_ids}
         requests.append({"replaceAllText": replacement})
+    if payload.get("preview") is True:
+        return {
+            "document_id": document_id,
+            "web_url": _web_url(document_id),
+            "preview": _match_preview(document, tab_ids=tab_ids, replacements=raw),
+            "replacements": len(requests),
+            "tab_scope": tab_scope,
+            "tab_ids": tab_ids,
+            "tab_count": len(tabs),
+            "written": False,
+        }
     result = await _batch_update(
         client,
         access_token=access_token,
@@ -1381,6 +1575,18 @@ async def _apply_text_style(
     text_range: dict[str, Any] = {"startIndex": start, "endIndex": end}
     if tab_id:
         text_range["tabId"] = tab_id
+    if payload.get("preview") is True:
+        return {
+            "document_id": document_id,
+            "web_url": _web_url(document_id),
+            "preview": _range_preview(
+                document, tab_id=tab_id, start=start, end=end
+            ),
+            "would_style": fields,
+            "tab_id": tab_id,
+            "tab_count": len(tabs),
+            "written": False,
+        }
     await _batch_update(
         client,
         access_token=access_token,
@@ -1652,6 +1858,329 @@ async def _set_cells(
             "attempts": attempts,
             "idempotency_key": _clean(payload.get("idempotency_key")),
         }
+
+
+async def _set_trashed(
+    client: httpx.AsyncClient,
+    *,
+    access_token: str,
+    payload: Mapping[str, Any],
+    trashed: bool,
+) -> dict[str, Any]:
+    document_id = _document_id(payload.get("document_ref"))
+    response = await client.patch(
+        f"{DRIVE_API}/files/{document_id}",
+        headers=_headers(access_token),
+        params={"fields": "id,name,trashed", "supportsAllDrives": "true"},
+        json={"trashed": trashed},
+    )
+    _raise_for_status(
+        response, operation="trash" if trashed else "restore", mutating=True
+    )
+    body = response.json()
+    body = dict(body) if isinstance(body, Mapping) else {}
+    return {
+        "document_id": document_id,
+        "title": _clean(body.get("name")),
+        "web_url": _web_url(document_id),
+        "trashed": bool(body.get("trashed")),
+    }
+
+
+async def _trash(
+    client: httpx.AsyncClient, *, access_token: str, payload: Mapping[str, Any]
+) -> dict[str, Any]:
+    return await _set_trashed(
+        client, access_token=access_token, payload=payload, trashed=True
+    )
+
+
+async def _restore(
+    client: httpx.AsyncClient, *, access_token: str, payload: Mapping[str, Any]
+) -> dict[str, Any]:
+    return await _set_trashed(
+        client, access_token=access_token, payload=payload, trashed=False
+    )
+
+
+async def _add_row(
+    client: httpx.AsyncClient, *, access_token: str, payload: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Add one row to a named table, optionally filling it in the same call."""
+
+    payload = spread_table_selector(payload)
+    document_id = _document_id(payload.get("document_ref"))
+    cells_in = _cells_payload(payload["cells"]) if payload.get("cells") else []
+    for _column, value in cells_in:
+        if value["kind"] == "text" and value["text"]:
+            _bounded_text(value["text"])
+    expected_revision = _clean(payload.get("revision_id"))
+
+    document = await _fetch_document(
+        client, access_token=access_token, document_id=document_id
+    )
+    revision = _clean(document.get("revisionId"))
+    if expected_revision and expected_revision != revision:
+        raise DocsValidationError(
+            "docs_revision_changed",
+            "The document changed after the revision_id you read. Read it "
+            "again, check the table, and retry with the new revision_id.",
+            details={"expected_revision_id": expected_revision, "revision_id": revision},
+        )
+    tables, tabs = _document_tables(document)
+    tab_id = _resolve_tab_id(tabs, payload)
+    table = _resolve_document_table(tables, tabs, payload, tab_id=tab_id)
+    try:
+        header_rows = effective_header_rows(table, payload.get("header"))
+    except DocsSelectorError as exc:
+        raise _selector_failure(exc) from exc
+    after = payload.get("after_row")
+    if after in (None, ""):
+        after_row = int(table["rows"])
+    else:
+        try:
+            after_row = resolve_row(table, after, header_rows=header_rows)
+        except DocsSelectorError as exc:
+            raise _selector_failure(exc) from exc
+    scope = {"tabId": tab_id} if tab_id else {}
+    await _batch_update(
+        client,
+        access_token=access_token,
+        document_id=document_id,
+        requests=[
+            {
+                "insertTableRow": {
+                    "tableCellLocation": {
+                        "tableStartLocation": {
+                            "index": int(table["start_index"]),
+                            **scope,
+                        },
+                        "rowIndex": after_row - 1,
+                        "columnIndex": 0,
+                    },
+                    "insertBelow": True,
+                }
+            }
+        ],
+        operation="add_row",
+        write_control={"requiredRevisionId": revision} if revision else None,
+    )
+    row = after_row + 1
+    result: dict[str, Any] = {
+        "document_id": document_id,
+        "web_url": _web_url(document_id),
+        "tab_id": tab_id,
+        "tab_count": len(tabs),
+        "row": row,
+        "rows": int(table["rows"]) + 1,
+        "columns": int(table["columns"]),
+    }
+    if not cells_in:
+        result["cells"] = []
+        return result
+    # The new row's indices exist only after the insert, so the fill is a
+    # second write on a fresh read.
+    written = await _set_cells(
+        client,
+        access_token=access_token,
+        payload={
+            "document_ref": document_id,
+            "tab_id": tab_id,
+            "table": payload.get("table"),
+            "tab_selector": payload.get("tab_selector"),
+            "row": row,
+            "cells": payload.get("cells"),
+            "header": payload.get("header"),
+        },
+    )
+    result["revision_id"] = written.get("revision_id")
+    result["table"] = written.get("table")
+    result["row_label"] = written.get("row_label")
+    result["cells"] = written.get("cells") or []
+    return result
+
+
+def _tab_after(document: Mapping[str, Any], known: set[str]) -> dict[str, Any]:
+    """The tab a lifecycle call just produced, found by what was not there."""
+
+    for tab in _document_tabs(document):
+        if _clean(tab.get("tab_id")) not in known:
+            return tab
+    return {}
+
+
+async def _add_tab(
+    client: httpx.AsyncClient, *, access_token: str, payload: Mapping[str, Any]
+) -> dict[str, Any]:
+    document_id = _document_id(payload.get("document_ref"))
+    title = _clean(payload.get("title"))
+    if title and len(title) > MAX_TITLE_CHARS:
+        raise DocsValidationError(
+            "invalid_title", f"title must be at most {MAX_TITLE_CHARS} characters."
+        )
+    properties: dict[str, Any] = {}
+    if title:
+        properties["title"] = title
+    index = payload.get("index")
+    if index is not None:
+        position = _int(index, default=-1)
+        if position < 0:
+            raise DocsValidationError(
+                "invalid_tab_index", "index must be a zero-based position."
+            )
+        properties["index"] = position
+    parent_tab_id = _clean(payload.get("parent_tab_id"))
+    if parent_tab_id:
+        properties["parentTabId"] = parent_tab_id
+    before = await _fetch_document(
+        client, access_token=access_token, document_id=document_id
+    )
+    known = {_clean(tab.get("tab_id")) for tab in _document_tabs(before)}
+    await _batch_update(
+        client,
+        access_token=access_token,
+        document_id=document_id,
+        requests=[{"addDocumentTab": {"tabProperties": properties}}],
+        operation="add_tab",
+    )
+    # addDocumentTab answers with no id of its own, so the new tab is the one
+    # the document did not have a moment ago.
+    after = await _fetch_document(
+        client, access_token=access_token, document_id=document_id
+    )
+    tabs = _document_tabs(after)
+    created = _tab_after(after, known)
+    return {
+        "document_id": document_id,
+        "web_url": _web_url(document_id),
+        "tab": created,
+        "tab_id": _clean(created.get("tab_id")),
+        "tabs": tabs,
+        "tab_count": len(tabs),
+        "idempotency_key": _clean(payload.get("idempotency_key")),
+    }
+
+
+async def _update_tab(
+    client: httpx.AsyncClient, *, access_token: str, payload: Mapping[str, Any]
+) -> dict[str, Any]:
+    document_id = _document_id(payload.get("document_ref"))
+    document = await _fetch_document(
+        client, access_token=access_token, document_id=document_id
+    )
+    tabs = _document_tabs(document)
+    tab_id = _resolve_tab_id(tabs, payload)
+    if not tab_id:
+        raise DocsValidationError(
+            "docs_tab_selection_required",
+            "Name the tab with tab_id or tab_selector.",
+            details=_tab_selection_details(tabs),
+        )
+    properties: dict[str, Any] = {"tabId": tab_id}
+    fields: list[str] = []
+    title = payload.get("title")
+    if title is not None:
+        renamed = _clean(title)
+        if not renamed or len(renamed) > MAX_TITLE_CHARS:
+            raise DocsValidationError(
+                "invalid_title",
+                f"title must be one to {MAX_TITLE_CHARS} characters.",
+            )
+        properties["title"] = renamed
+        fields.append("title")
+    index = payload.get("index")
+    if index is not None:
+        position = _int(index, default=-1)
+        if position < 0:
+            raise DocsValidationError(
+                "invalid_tab_index", "index must be a zero-based position."
+            )
+        properties["index"] = position
+        fields.append("index")
+    if not fields:
+        raise DocsValidationError(
+            "tab_update_empty", "Pass title or index to change."
+        )
+    await _batch_update(
+        client,
+        access_token=access_token,
+        document_id=document_id,
+        requests=[
+            {
+                "updateDocumentTabProperties": {
+                    "tabProperties": properties,
+                    "fields": ",".join(fields),
+                }
+            }
+        ],
+        operation="update_tab",
+    )
+    after = await _fetch_document(
+        client, access_token=access_token, document_id=document_id
+    )
+    updated = next(
+        (tab for tab in _document_tabs(after) if _clean(tab.get("tab_id")) == tab_id),
+        {},
+    )
+    return {
+        "document_id": document_id,
+        "web_url": _web_url(document_id),
+        "tab": updated,
+        "tab_id": tab_id,
+        "changed": fields,
+        "idempotency_key": _clean(payload.get("idempotency_key")),
+    }
+
+
+async def _delete_tab(
+    client: httpx.AsyncClient, *, access_token: str, payload: Mapping[str, Any]
+) -> dict[str, Any]:
+    document_id = _document_id(payload.get("document_ref"))
+    document = await _fetch_document(
+        client, access_token=access_token, document_id=document_id
+    )
+    tabs = _document_tabs(document)
+    tab_id = _resolve_tab_id(tabs, payload)
+    if not tab_id:
+        raise DocsValidationError(
+            "docs_tab_selection_required",
+            "Name the tab with tab_id or tab_selector.",
+            details=_tab_selection_details(tabs),
+        )
+    if len(tabs) <= 1:
+        raise DocsValidationError(
+            "docs_last_tab",
+            "This is the document's only tab; a document keeps at least one.",
+            details={"tab_id": tab_id},
+        )
+    children = [
+        _clean(tab.get("tab_id"))
+        for tab in tabs
+        if _clean(tab.get("parent_tab_id")) == tab_id
+    ]
+    await _batch_update(
+        client,
+        access_token=access_token,
+        document_id=document_id,
+        requests=[{"deleteTab": {"tabId": tab_id}}],
+        operation="delete_tab",
+    )
+    after = await _fetch_document(
+        client, access_token=access_token, document_id=document_id
+    )
+    remaining = _document_tabs(after)
+    result = {
+        "document_id": document_id,
+        "web_url": _web_url(document_id),
+        "tab_id": tab_id,
+        "tabs": remaining,
+        "tab_count": len(remaining),
+        "idempotency_key": _clean(payload.get("idempotency_key")),
+    }
+    if children:
+        # Google deletes a tab's children with it; the caller hears which.
+        result["deleted_child_tab_ids"] = children
+    return result
 
 
 async def _insert_page_break(
@@ -2123,6 +2652,44 @@ async def _reply_comment(
     }
 
 
+async def _update_comment(
+    client: httpx.AsyncClient, *, access_token: str, payload: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Rewrite the text of a comment, or of one reply inside it."""
+
+    document_id = _document_id(payload.get("document_ref"))
+    comment_id = _clean(payload.get("comment_id"))
+    if not comment_id:
+        raise DocsValidationError("comment_id_required", "comment_id is required.")
+    reply_id = _clean(payload.get("reply_id"))
+    content = _bounded_comment(payload.get("content"))
+    url = f"{DRIVE_API}/files/{document_id}/comments/{comment_id}"
+    fields = _COMMENT_FIELDS
+    if reply_id:
+        url = f"{url}/replies/{reply_id}"
+        fields = "id,content,action,createdTime,modifiedTime,author(displayName)"
+    response = await client.patch(
+        url,
+        headers=_headers(access_token),
+        params={"fields": fields},
+        json={"content": content},
+    )
+    _raise_for_status(response, operation="update_comment", mutating=True)
+    updated = response.json()
+    updated = dict(updated) if isinstance(updated, Mapping) else {}
+    result: dict[str, Any] = {
+        "document_id": document_id,
+        "web_url": _web_url(document_id),
+        "comment_id": comment_id,
+        "content": _clean(updated.get("content")),
+        "modified_time": _clean(updated.get("modifiedTime")),
+        "idempotency_key": _clean(payload.get("idempotency_key")),
+    }
+    if reply_id:
+        result["reply_id"] = reply_id
+    return result
+
+
 async def _resolve_comment(
     client: httpx.AsyncClient, *, access_token: str, payload: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -2193,6 +2760,10 @@ _OPERATIONS = {
     "insert_page_break": _insert_page_break,
     "embed_image": _embed_image,
     "set_cells": _set_cells,
+    "add_row": _add_row,
+    "add_tab": _add_tab,
+    "update_tab": _update_tab,
+    "delete_tab": _delete_tab,
     "import": _import_document,
     # drive files as themselves (drive:read / drive:write)
     "drive_upload": _drive_upload_file,
@@ -2200,6 +2771,10 @@ _OPERATIONS = {
     # comment (docs:comment)
     "create_comment": _create_comment,
     "reply_comment": _reply_comment,
+    "update_comment": _update_comment,
+    # the document as a file (docs:delete)
+    "trash": _trash,
+    "restore": _restore,
     "resolve_comment": _resolve_comment,
     "delete_comment": _delete_comment,
 }
@@ -2215,10 +2790,17 @@ MUTATING_OPERATIONS = frozenset(
         "insert_page_break",
         "embed_image",
         "set_cells",
+        "add_row",
+        "add_tab",
+        "update_tab",
+        "delete_tab",
         "import",
+        "trash",
+        "restore",
         "drive_upload",
         "create_comment",
         "reply_comment",
+        "update_comment",
         "resolve_comment",
         "delete_comment",
     }

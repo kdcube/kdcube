@@ -248,6 +248,52 @@ def test_reading_all_tables_stops_at_the_table_cap(monkeypatch) -> None:
     assert out["ret"]["tables_truncated"] is True
 
 
+def test_the_flat_text_tells_the_same_story_as_a_cell_read() -> None:
+    body = Body().heading("Tasks").table(
+        [
+            ["Task", "Status", "Owner"],
+            ["Fix login", "", {"text": "", "objects": ({"kind": "person"},)}],
+            ["Rate | tier", "Open", {"text": "", "nested": True}],
+        ],
+        header_rows=1,
+        spans={(2, 0): (1, 2)},
+    )
+    text = docs_proxy._extract_document_text(
+        document(("t.0", "Main", body)), limit=4000
+    )
+    lines = [line for line in text.split("\n") if line]
+
+    assert lines[2] == "[table · 3 rows × 3 columns · header row]"
+    # One row of the table is one line of the text: reading it otherwise is what
+    # made a row's end invisible.
+    assert lines[3] == "Task | Status | Owner"
+    # A chip cell is empty in the text; saying so is what stops a reader
+    # concluding the document holds none.
+    assert lines[4] == "Fix login |  | [person]"
+    # A literal separator in a cell is escaped, a merged-away cell says so, and
+    # a nested table is named rather than silently flattened.
+    assert lines[5] == "Rate \\| tier | [merged] | [nested table]"
+
+
+def test_a_table_without_a_header_says_so() -> None:
+    body = Body().table([["Office", "120"], ["Travel", "300"]])
+    text = docs_proxy._extract_document_text(
+        document(("t.0", "Main", body)), limit=4000
+    )
+
+    assert "[table · 2 rows × 2 columns · no header row]" in text
+    assert "Office | 120" in text
+
+
+def test_a_multi_paragraph_cell_stays_on_its_row() -> None:
+    body = Body().table([[{"text": "", "paragraphs": ["first", "second"]}, "x"]])
+    text = docs_proxy._extract_document_text(
+        document(("t.0", "Main", body)), limit=4000
+    )
+
+    assert "first second | x" in text
+
+
 def test_every_read_cell_carries_its_row_and_column() -> None:
     out = _run(
         docs_proxy,
@@ -595,6 +641,286 @@ def test_set_cells_rejects_bad_mode_and_repeated_columns() -> None:
 # --------------------------------------------------------------------------- #
 # Flexible surface
 # --------------------------------------------------------------------------- #
+
+
+def _add_row(google: _Google, **payload: Any) -> dict[str, Any]:
+    return _run(docs_proxy, "add_row", {"document_ref": "DOC1", **payload}, google)
+
+
+def test_add_row_appends_at_the_end_and_fills_the_new_row() -> None:
+    rows = [["Task", "Status"], ["Fix login", "Done"]]
+    before = document(("t.0", "Main", Body().table(rows, header_rows=1)))
+    # The fill re-reads: the new row exists only after the insert lands.
+    after = document(
+        ("t.0", "Main", Body().table(rows + [["", ""]], header_rows=1))
+    )
+    google = _Google(before, after)
+    out = _add_row(google, table=1, cells={"Task": "Ship v2", "Status": "Open"})
+
+    assert out["ok"] is True, out
+    inserted = google.writes[0]["requests"][0]["insertTableRow"]
+    assert inserted["tableCellLocation"]["rowIndex"] == 1
+    assert inserted["insertBelow"] is True
+    assert (out["ret"]["row"], out["ret"]["rows"]) == (3, 3)
+    assert [cell["after"] for cell in out["ret"]["cells"]] == ["Ship v2", "Open"]
+    assert out["ret"]["row_label"] == "Ship v2"
+
+
+def test_add_row_puts_the_row_below_the_one_named_by_value() -> None:
+    google = _Google(_tasks_doc())
+    out = _add_row(
+        google,
+        table=1,
+        after_row={"where": {"column": "Task", "equals": "Fix login"}},
+    )
+
+    assert out["ok"] is True, out
+    assert google.writes[0]["requests"][0]["insertTableRow"]["tableCellLocation"][
+        "rowIndex"
+    ] == 1
+    assert out["ret"]["row"] == 3
+    # Without cells there is one write and nothing to report.
+    assert len(google.writes) == 1
+    assert out["ret"]["cells"] == []
+
+
+def test_add_row_refuses_a_stale_revision_without_writing() -> None:
+    google = _Google(_tasks_doc())
+    out = _add_row(google, table=1, revision_id="rev-older")
+
+    assert out["error"]["code"] == "docs_revision_changed"
+    assert google.writes == []
+
+
+def test_a_previewed_insert_says_what_sits_at_the_index_and_writes_nothing() -> None:
+    google = _Google(_tasks_doc())
+    cell = _cell(_tasks_doc(), 1, 1, 4 - 1)  # the header cell that was corrupted once
+    out = _run(
+        docs_proxy,
+        "insert_text",
+        {
+            "document_ref": "DOC1",
+            "text": "x",
+            "index": cell["content_start"] + 2,
+            "preview": True,
+        },
+        google,
+    )
+
+    assert out["ok"] is True, out
+    assert google.writes == []
+    preview = out["ret"]["preview"]
+    assert out["ret"]["written"] is False
+    assert preview["where"] == "table 1, row 1, column 3"
+    # Two characters in: the reader sees the word it is about to land inside.
+    assert preview["text_before"] == "Ow"
+    assert preview["text_after"] == "ner"
+
+
+def test_a_previewed_style_shows_the_text_the_range_covers() -> None:
+    google = _Google(_tasks_doc())
+    fix = _cell(_tasks_doc(), 1, 2, 1)
+    out = _run(
+        docs_proxy,
+        "apply_text_style",
+        {
+            "document_ref": "DOC1",
+            "start_index": fix["content_start"],
+            "end_index": fix["content_end"],
+            "bold": True,
+            "preview": True,
+        },
+        google,
+    )
+
+    assert google.writes == []
+    covered = out["ret"]["preview"]["covers"]
+    assert [row["text"] for row in covered] == ["Fix login"]
+    assert out["ret"]["would_style"] == ["bold"]
+
+
+def test_a_previewed_replacement_counts_matches_before_changing_any() -> None:
+    google = _Google(_tasks_doc())
+    out = _run(
+        docs_proxy,
+        "replace_text",
+        {
+            "document_ref": "DOC1",
+            "replacements": [{"find": "Open", "replace": "Done"}],
+            "preview": True,
+        },
+        google,
+    )
+
+    assert google.writes == []
+    entry = out["ret"]["preview"][0]
+    # replaceAllText reports occurrences only after changing them. Three places
+    # hold "Open" here, which is exactly what a caller aiming at one needs to
+    # learn before the write, not after.
+    assert entry["occurrences"] == 3
+    assert sorted(match["where"] for match in entry["matches"]) == [
+        "paragraph",
+        "table 1, row 3, column 2",
+        "table 1, row 4, column 2",
+    ]
+
+
+def test_adding_a_tab_names_the_tab_that_was_not_there_before() -> None:
+    before = document(("t.0", "Main", Body().paragraph("a")))
+    after = document(
+        ("t.0", "Main", Body().paragraph("a")),
+        ("t.7", "Notes", Body().paragraph("b")),
+    )
+    google = _Google(before, after)
+    out = _run(
+        docs_proxy,
+        "add_tab",
+        {"document_ref": "DOC1", "title": "Notes", "index": 1},
+        google,
+    )
+
+    assert out["ok"] is True, out
+    added = google.writes[0]["requests"][0]["addDocumentTab"]
+    assert added["tabProperties"] == {"title": "Notes", "index": 1}
+    # addDocumentTab returns no id, so the new tab is the one the document
+    # gained between the two reads.
+    assert out["ret"]["tab_id"] == "t.7"
+    assert out["ret"]["tab_count"] == 2
+
+
+def test_renaming_a_tab_sends_only_the_field_it_changes() -> None:
+    doc = document(
+        ("t.0", "Main", Body().paragraph("a")),
+        ("t.1", "Notes", Body().paragraph("b")),
+    )
+    google = _Google(doc)
+    out = _run(
+        docs_proxy,
+        "update_tab",
+        {"document_ref": "DOC1", "tab_id": "t.1", "title": "Archive"},
+        google,
+    )
+
+    assert out["ok"] is True, out
+    request = google.writes[0]["requests"][0]["updateDocumentTabProperties"]
+    assert request["tabProperties"] == {"tabId": "t.1", "title": "Archive"}
+    assert request["fields"] == "title"
+    assert out["ret"]["changed"] == ["title"]
+
+    nothing = _run(
+        docs_proxy, "update_tab", {"document_ref": "DOC1", "tab_id": "t.1"}, _Google(doc)
+    )
+    assert nothing["error"]["code"] == "tab_update_empty"
+
+
+def test_deleting_a_tab_reports_the_children_google_takes_with_it() -> None:
+    doc = document(
+        ("t.0", "Main", Body().paragraph("a")),
+        ("t.1", "Notes", Body().paragraph("b")),
+    )
+    doc["tabs"][1]["childTabs"] = [
+        {
+            "tabProperties": {"tabId": "t.2", "title": "Sub", "index": 0},
+            "documentTab": {"body": Body().paragraph("c").as_body()},
+        }
+    ]
+    remaining = document(("t.0", "Main", Body().paragraph("a")))
+    google = _Google(doc, remaining)
+    out = _run(
+        docs_proxy, "delete_tab", {"document_ref": "DOC1", "tab_id": "t.1"}, google
+    )
+
+    assert out["ok"] is True, out
+    assert google.writes[0]["requests"][0]["deleteTab"] == {"tabId": "t.1"}
+    assert out["ret"]["deleted_child_tab_ids"] == ["t.2"]
+    assert out["ret"]["tab_count"] == 1
+
+
+def test_a_document_keeps_its_last_tab() -> None:
+    google = _Google(document(("t.0", "Main", Body().paragraph("a"))))
+    out = _run(
+        docs_proxy, "delete_tab", {"document_ref": "DOC1", "tab_id": "t.0"}, google
+    )
+
+    assert out["error"]["code"] == "docs_last_tab"
+    assert google.writes == []
+
+
+def test_a_comment_and_a_reply_are_rewritten_where_drive_keeps_them() -> None:
+    seen: list[tuple[str, str, dict[str, Any]]] = []
+
+    def drive(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path, json.loads(request.content or b"{}")))
+        return httpx.Response(
+            200,
+            json={"id": "c1", "content": "revised", "modifiedTime": "2026-09-24T10:00:00Z"},
+            request=request,
+        )
+
+    out = _run(
+        docs_proxy,
+        "update_comment",
+        {"document_ref": "DOC1", "comment_id": "c1", "content": "revised"},
+        drive,
+    )
+    assert out["ok"] is True, out
+    method, path, body = seen[-1]
+    assert method == "PATCH" and path.endswith("/comments/c1")
+    assert body == {"content": "revised"}
+    assert out["ret"]["content"] == "revised"
+    assert "reply_id" not in out["ret"]
+
+    out = _run(
+        docs_proxy,
+        "update_comment",
+        {
+            "document_ref": "DOC1",
+            "comment_id": "c1",
+            "reply_id": "r7",
+            "content": "revised",
+        },
+        drive,
+    )
+    # A reply lives under its comment, so rewriting one is a different resource.
+    assert seen[-1][1].endswith("/comments/c1/replies/r7")
+    assert out["ret"]["reply_id"] == "r7"
+
+
+def test_rewriting_a_comment_needs_the_comment_it_rewrites() -> None:
+    out = _run(
+        docs_proxy,
+        "update_comment",
+        {"document_ref": "DOC1", "content": "revised"},
+        _Google(),
+    )
+    assert out["error"]["code"] == "comment_id_required"
+
+
+def test_trash_and_restore_patch_the_drive_file() -> None:
+    seen: list[tuple[str, dict[str, Any]]] = []
+
+    def drive(trashed: bool):
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append((request.method, json.loads(request.content or b"{}")))
+            return httpx.Response(
+                200,
+                json={"id": "DOC1", "name": "Sandbox", "trashed": trashed},
+                request=request,
+            )
+
+        return handler
+
+    out = _run(docs_proxy, "trash", {"document_ref": "DOC1"}, drive(True))
+    assert out["ok"] is True, out
+    # Trashing is a Drive file patch, not a document edit.
+    assert seen[-1] == ("PATCH", {"trashed": True})
+    assert out["ret"]["trashed"] is True
+    assert out["ret"]["document_id"] == "DOC1"
+
+    out = _run(docs_proxy, "restore", {"document_ref": "DOC1"}, drive(False))
+    assert out["ok"] is True, out
+    assert seen[-1] == ("PATCH", {"trashed": False})
+    assert out["ret"]["trashed"] is False
 
 
 def test_get_structure_exposes_cell_indices_for_batch_edit() -> None:
