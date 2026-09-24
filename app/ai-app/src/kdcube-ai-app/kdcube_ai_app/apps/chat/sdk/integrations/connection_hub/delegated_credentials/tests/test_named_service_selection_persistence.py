@@ -74,6 +74,7 @@ async def card_persistence(tmp_path):
     await client.aclose()
 
 RESOURCE = "https://example.test/mcp/named-services"
+PATTERNED_RESOURCE = "*/mcp/named-services"
 GRANTS = ["named_services:use", "slack:read", "slack:write"]
 USER = {"user_id": "platform-user-1", "roles": ["kdcube:role:registered"], "permissions": []}
 
@@ -1035,14 +1036,11 @@ async def test_a_delegate_cannot_change_the_card_that_issued_it(card_persistence
     assert stored is not None and stored.card_revision == 1
 
 
-# -- the selection is read under the key it was written with --------------------
+# -- concrete OAuth identity, canonical authority -------------------------------
 #
-# An OAuth consent records its selection under the CONCRETE request URL, while a
-# catalog row is normally a pattern. Materializing the boundary under the row's
-# selector instead of the card's own key misses, and "resource absent" means
-# "narrowed to nothing" — so every OAuth card silently carried an empty
-# named-service boundary while its stored selection said otherwise. The manual
-# create and save paths already materialize under the card's key.
+# A concrete OAuth request URL remains the Card's identity and entry resource.
+# Its authority maps use the matching catalog selector so one catalog row has
+# one durable key across OAuth consent, manual create, save, and listing.
 
 
 def _patterned_catalog() -> dict:
@@ -1052,7 +1050,7 @@ def _patterned_catalog() -> dict:
     oauth = _copy.deepcopy(NAMED_SERVICES_OAUTH)
     for row in oauth["resources"]:
         if row.get("resource") == RESOURCE:
-            row["resource"] = "*/mcp/named-services"
+            row["resource"] = PATTERNED_RESOURCE
     return oauth
 
 
@@ -1094,7 +1092,7 @@ async def test_an_oauth_consent_materializes_under_a_patterned_row(card_persiste
     card_id = oauth_access_id(USER["user_id"], "claude", RESOURCE)
     selection, namespaces = await _stored(service, card_id)
 
-    assert selection == {RESOURCE: {"slack": ["object.search"]}}
+    assert selection == {PATTERNED_RESOURCE: {"slack": ["object.search"]}}
     assert namespaces == ["slack"]
 
 

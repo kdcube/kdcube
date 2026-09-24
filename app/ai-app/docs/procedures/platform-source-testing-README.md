@@ -3,8 +3,8 @@ id: repo:kdcube-ai-app/app/ai-app/docs/procedures/platform-source-testing-README
 title: "Run Platform Source Tests"
 summary: "Contributor procedure for selecting the correct checkout, Python environment, extracted package sources, bundle fixture, and verification depth when testing KDCube platform code."
 tags: ["procedures", "contributors", "testing", "pytest", "frontend", "pull-requests"]
-keywords: ["platform source tests", "python interpreter", "PYTHONPATH", "app foundation source overlay", "connection hub source overlay", "bundle under test", "bundle path", "regression test", "pull request head"]
-updated_at: 2026-09-03
+keywords: ["platform source tests", "python interpreter", "PYTHONPATH", "app foundation source overlay", "connection hub source overlay", "real Redis", "REDIS_URL", "KDCUBE_TEST_REDIS_URL", "bundle under test", "bundle path", "regression test", "pull request head"]
+updated_at: 2026-09-24
 see_also:
   - repo:kdcube-ai-app/AGENTS.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-test-bundle-README.md
@@ -185,6 +185,39 @@ Then run the complete test file and the nearest owning test directory:
 
 Run known-similar subsystem tests when the changed class or contract has more
 than one construction site, process role, transport, or runtime owner.
+
+### Run Connection Hub integration tests with real Redis
+
+The Connection Hub integration directory includes persistence behavior that is
+skipped when Redis is absent. Give this run an isolated Redis database and set
+both environment variables because fixtures in this directory read both names:
+
+```bash
+export KDCUBE_TEST_REDIS_PORT=56380
+
+docker run --rm --detach \
+  --name kdcube-platform-tests-redis \
+  -p "127.0.0.1:${KDCUBE_TEST_REDIS_PORT}:6379" \
+  redis:7-alpine
+
+export REDIS_URL="redis://127.0.0.1:${KDCUBE_TEST_REDIS_PORT}/15"
+export KDCUBE_TEST_REDIS_URL="$REDIS_URL"
+
+"$PY" -m pytest -q -rs \
+  "$KDCUBE_SRC/kdcube_ai_app/apps/chat/sdk/integrations/connection_hub"
+
+docker stop kdcube-platform-tests-redis
+```
+
+Use an unused port and a unique container name when concurrent runs share a
+host. A complete result for this directory has zero skipped tests. A skip means
+the Redis dependency, URL, or another required integration input is missing;
+repair the environment and rerun before reporting the directory as verified.
+
+If pytest itself crashes while formatting a failure with
+`SystemError: AST constructor recursion depth mismatch`, rerun the exact
+failing command with `--assert=plain` (or `--tb=no`) to expose the product
+failure. Reporter recovery does not replace the ordinary passing run above.
 
 ## 4. Supply the app fixture to shared bundle tests
 

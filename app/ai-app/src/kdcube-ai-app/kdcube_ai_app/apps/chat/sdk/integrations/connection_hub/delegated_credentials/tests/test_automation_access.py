@@ -1499,8 +1499,11 @@ async def test_a_claim_the_card_lacks_is_still_reported_as_missing(card_persiste
 
 @pytest.mark.asyncio
 async def test_a_card_keyed_by_the_request_url_reports_its_claims(card_persistence):
-    """An OAuth card keys `resource_grants` by the concrete request URL. Reading
-    them by the row's selector alone would report every claim missing."""
+    """A concrete request URL is stored under its declared catalog selector.
+
+    Claims and the named-service selection must be canonicalized together or
+    the create path drops the operation before admission evaluates it.
+    """
     service = _named_services_agent_service(card_persistence)
     ns_resource = "*/kdcube-services@1-0/public/mcp/named_services*"
     url = "https://kdcube.example/kdcube-services@1-0/public/mcp/named_services"
@@ -1510,6 +1513,12 @@ async def test_a_card_keyed_by_the_request_url_reports_its_claims(card_persisten
         named_service_operations={url: {"mail": ["object.search"]}},
     )
     assert created["ok"] is True
+    assert created["access"]["resource_grants"] == {
+        ns_resource: ["named_services:use", "mail:read"]
+    }
+    assert created["access"]["named_service_operations"] == {
+        ns_resource: {"mail": ["object.search"]}
+    }
 
     state = await service.agent_namespace_grant_state(
         grantor_subject="platform-user-1", client_id=_AGENT_CLIENT,
@@ -1895,7 +1904,7 @@ async def test_save_prunes_a_withdrawn_operation_instead_of_refusing(card_persis
 
 
 @pytest.mark.asyncio
-async def test_save_revokes_a_card_pruning_leaves_without_authority(card_persistence):
+async def test_save_refuses_when_pruning_leaves_a_card_without_authority(card_persistence):
     service = _named_services_agent_service(card_persistence)
     resolver = service._catalog_resolver
     ns_resource = "*/kdcube-services@1-0/public/mcp/named_services*"
@@ -1904,6 +1913,10 @@ async def test_save_revokes_a_card_pruning_leaves_without_authority(card_persist
         resource_grants={ns_resource: ["named_services:use", "mail:read"]},
     )
     access_id = created["access"]["access_id"]
+    before = await service._load_record(
+        access_id, grantor_subject="platform-user-1"
+    )
+    assert before is not None
 
     emptied = copy.deepcopy(resolver.connections)
     emptied["delegated_credentials"]["oauth"]["resources"] = []
@@ -1914,9 +1927,15 @@ async def test_save_revokes_a_card_pruning_leaves_without_authority(card_persist
         resource_grants={ns_resource: ["named_services:use", "mail:read"]},
     )
 
-    assert saved["ok"] is True and saved["revoked"] is True
+    assert saved["ok"] is False
+    assert saved["error"] == "delegated_access_requires_resource_grants"
     assert saved["pruned"]["resources"] == [ns_resource]
-    assert await service._load_record(access_id, grantor_subject="platform-user-1") is None
+    after = await service._load_record(
+        access_id, grantor_subject="platform-user-1"
+    )
+    assert after is not None
+    assert after.card_revision == before.card_revision
+    assert after.resource_grants == before.resource_grants
 
 
 @pytest.mark.asyncio
@@ -2769,9 +2788,8 @@ async def test_consent_seeds_the_account_binding_from_the_clients_own_card(card_
 
 
 async def test_a_card_keyed_by_a_concrete_url_resolves_to_its_catalog_row(card_persistence):
-    """An OAuth card names the URL the client asked for; the catalog names a
-    pattern. The row is matched, not compared, so the card stays editable and
-    the listing tells a surface which row governs it."""
+    """A concrete OAuth request keeps its identity URL while authority is
+    stored under the matching catalog selector."""
     pattern = "https://example.test/mcp/named-services*"
     concrete = "https://example.test/mcp/named-services/instance-7"
     oauth = copy.deepcopy(NAMED_SERVICES_OAUTH)
@@ -2804,26 +2822,27 @@ async def test_a_card_keyed_by_a_concrete_url_resolves_to_its_catalog_row(card_p
         refresh_token="refresh-1",
     )
     assert record is not None
+    assert record.entry_resource == concrete
+    assert record.resource_grants == {
+        pattern: ("named_services:use", "mail:read")
+    }
 
     listed = await service.list_access(user)
     item = next(row for row in listed["items"] if row["access_id"] == record.access_id)
-    # The surface is told which row governs the card, so it never compares.
-    assert item["catalog_row_by_resource"] == {concrete: pattern}
+    assert item["entry_resource"] == concrete
+    assert item["catalog_row_by_resource"] == {pattern: pattern}
 
-    # And the same key is editable: unknown_resources would mean the save path
-    # judged the card by string equality too.
+    # The editor submits the canonical key returned by the listing.
     updated = await service.update_access(
         user,
         access_id=record.access_id,
-        resource_grants={concrete: ["named_services:use", "mail:read"]},
-        named_service_operations={concrete: {"mail": ["object.search"]}},
+        resource_grants={pattern: ["named_services:use", "mail:read"]},
+        named_service_operations={pattern: {"mail": ["object.search"]}},
     )
     assert updated.get("ok") is True, updated
     assert updated["access"]["named_service_operations"] == {
-        concrete: {"mail": ["object.search"]}
+        pattern: {"mail": ["object.search"]}
     }
-    # The boundary comes from the row's subtree but the grants and the
-    # selection are read under the card's key, so the tree is not empty.
     stored = await only_stored_card(service)
     assert stored["named_services"], stored["named_services"]
 
