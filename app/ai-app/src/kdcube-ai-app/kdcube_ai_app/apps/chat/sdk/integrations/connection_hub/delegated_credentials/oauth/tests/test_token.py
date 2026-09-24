@@ -444,10 +444,12 @@ async def test_refresh_card_failure_restores_held_token_and_retry_succeeds(
 
     assert failed.status_code == 503
     assert failed.json()["error"] == "temporarily_unavailable"
-    assert failed.json()["error_description"] == (
+    assert failed.json()["error_description"].endswith(
         "token issuance failed; the presented refresh token remains valid, "
         "retry with it"
     )
+    assert failed.json()["refresh_token_restored"] is True
+    assert failed.json()["cause"]["status"] == 503
     assert await store.validate_refresh_token(refresh_token) is not None
 
     retried = client.post("/oauth/token", data=request)
@@ -491,9 +493,11 @@ async def test_refresh_issuance_exception_returns_named_503_and_restores_token(
     assert response.json() == {
         "error": "temporarily_unavailable",
         "error_description": (
-            "token issuance failed; the presented refresh token remains valid, "
-            "retry with it"
+            "token_issuance_raised: token issuance failed; the presented "
+            "refresh token remains valid, retry with it"
         ),
+        "refresh_token_restored": True,
+        "cause": {"error": "token_issuance_raised", "status": 0},
     }
     assert await store.validate_refresh_token(refresh_token) is not None
 
@@ -568,11 +572,66 @@ async def test_refresh_issuance_names_unrestorable_rotation(ctx, monkeypatch):
     assert response.json() == {
         "error": "temporarily_unavailable",
         "error_description": (
+            "temporarily_unavailable (the authority store is unavailable): "
             "token issuance failed; the refresh token could not be restored, "
             "authorize again"
         ),
+        "refresh_token_restored": False,
+        "cause": {"error": "temporarily_unavailable", "status": 503},
     }
     assert await store.validate_refresh_token(refresh_token) is None
+
+
+@pytest.mark.asyncio
+async def test_refresh_issuance_5xx_keeps_its_own_reason_and_retry_after(ctx, monkeypatch, caplog):
+    """W291 follow-up: the named 503 used to replace a returned 5xx's own
+    description, so a client read "issuance failed" and never why."""
+
+    client, store = ctx
+    code = await _seed_code(store)
+    first = client.post("/oauth/token", data={
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": "http://127.0.0.1:9000/callback",
+        "client_id": "claude",
+        "code_verifier": VERIFIER,
+    }).json()
+    refresh_token = first["refresh_token"]
+    _seed_live_card(store, await store.validate_refresh_token(refresh_token))
+
+    async def cards_unavailable(*_args, **_kwargs):
+        return oauth_routes._token_error(
+            "delegated_cards_unavailable",
+            "delegated card storage is unavailable",
+            status=503,
+            retry_after_seconds=30,
+        )
+
+    monkeypatch.setattr(oauth_routes, "_issue_tokens", cards_unavailable)
+    with caplog.at_level("WARNING"):
+        response = client.post("/oauth/token", data={
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": "claude",
+        })
+
+    assert response.status_code == 503
+    assert (
+        "refresh issuance failed after rotation reason=delegated_cards_unavailable "
+        "status=503 restored=True client_id=claude"
+    ) in caplog.text
+    assert response.headers["retry-after"] == "30"
+    assert response.headers["cache-control"] == "no-store"
+    body = response.json()
+    assert body["error"] == "temporarily_unavailable"
+    assert body["error_description"] == (
+        "delegated_cards_unavailable (delegated card storage is unavailable): "
+        "token issuance failed; the presented refresh token remains valid, "
+        "retry with it"
+    )
+    assert body["refresh_token_restored"] is True
+    assert body["cause"] == {"error": "delegated_cards_unavailable", "status": 503}
+    assert await store.validate_refresh_token(refresh_token) is not None
 
 
 @pytest.mark.asyncio

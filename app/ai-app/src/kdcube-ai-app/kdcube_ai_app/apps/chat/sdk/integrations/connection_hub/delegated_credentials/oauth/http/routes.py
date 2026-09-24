@@ -2953,15 +2953,71 @@ async def _restore_failed_refresh_rotation(
     return False
 
 
-def _refresh_issuance_unavailable(*, restored: bool) -> JSONResponse:
-    description = (
+def _refresh_issuance_unavailable(
+    *,
+    restored: bool,
+    cause: Response | None = None,
+    cause_error: str = "",
+    client_id: str = "",
+) -> JSONResponse:
+    """The named 503 of a refresh whose issuance failed after rotation.
+
+    It says whether the presented refresh token was restored, so the client
+    knows to retry with it or to authorize again, and it keeps what the
+    failed issuance said (its ``error``, its description and any
+    ``Retry-After``), so the reason a Card could not be issued, for example
+    ``delegated_cards_unavailable``, reaches the client instead of being
+    replaced by a generic line.
+    """
+
+    outcome = (
         "token issuance failed; the presented refresh token remains valid, "
         "retry with it"
         if restored
         else "token issuance failed; the refresh token could not be restored, "
         "authorize again"
     )
-    return _token_error("temporarily_unavailable", description, status=503)
+    original: dict[str, Any] = {}
+    retry_after: int | None = None
+    if cause is not None:
+        try:
+            parsed = json.loads(bytes(getattr(cause, "body", b"") or b"").decode("utf-8"))
+        except Exception:
+            parsed = {}
+        original = parsed if isinstance(parsed, dict) else {}
+        header = str(getattr(cause, "headers", {}).get("retry-after") or "").strip()
+        if header.isdigit():
+            retry_after = int(header)
+    original_error = str(original.get("error") or cause_error or "").strip()
+    original_description = str(original.get("error_description") or "").strip()
+    reason = original_error
+    if original_error and original_description:
+        reason = f"{original_error} ({original_description})"
+    elif original_description:
+        reason = original_description
+    description = f"{reason}: {outcome}" if reason else outcome
+    LOGGER.warning(
+        "[connection-hub.oauth] refresh issuance failed after rotation "
+        "reason=%s status=%s restored=%s client_id=%s",
+        original_error or "-",
+        int(getattr(cause, "status_code", 0) or 0) if cause is not None else 0,
+        bool(restored),
+        client_id or "-",
+    )
+    content: dict[str, Any] = {
+        "error": "temporarily_unavailable",
+        "error_description": description,
+        "refresh_token_restored": bool(restored),
+    }
+    if original_error or cause is not None:
+        content["cause"] = {
+            "error": original_error,
+            "status": int(getattr(cause, "status_code", 0) or 0) if cause is not None else 0,
+        }
+    headers = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+    if retry_after is not None:
+        headers["Retry-After"] = str(max(1, retry_after))
+    return JSONResponse(status_code=503, content=content, headers=headers)
 
 
 def _minter_accepts_authority_kwargs(minter) -> bool:
@@ -3601,7 +3657,11 @@ async def token(request: Request) -> Response:
                 refresh_state=refresh_state,
                 client_id=str(rec.get("client_id") or ""),
             )
-            return _refresh_issuance_unavailable(restored=restored)
+            return _refresh_issuance_unavailable(
+                restored=restored,
+                cause_error="token_issuance_raised",
+                client_id=str(rec.get("client_id") or ""),
+            )
         issuance_status = int(getattr(issued, "status_code", 500))
         if issuance_status >= 500:
             restored = await _restore_failed_refresh_rotation(
@@ -3611,7 +3671,11 @@ async def token(request: Request) -> Response:
                 refresh_state=refresh_state,
                 client_id=str(rec.get("client_id") or ""),
             )
-            return _refresh_issuance_unavailable(restored=restored)
+            return _refresh_issuance_unavailable(
+                restored=restored,
+                cause=issued,
+                client_id=str(rec.get("client_id") or ""),
+            )
         if issuance_status >= 400:
             LOGGER.warning(
                 "[connection-hub.oauth] refresh rotation remains consumed after "
