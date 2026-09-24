@@ -8,6 +8,10 @@ from __future__ import annotations
 from importlib import import_module
 from typing import Any, Mapping
 
+from connection_hub.delegated_credentials.authority_config import (
+    AUTHORITY_BACKEND_REDIS_MIGRATION_SOURCE,
+)
+
 
 _core = import_module("connection_hub.delegated_credentials.automation_access")
 
@@ -45,6 +49,7 @@ class AutomationAccessService(_core.AutomationAccessService):
         project: str,
         config: Any,
         grant_store: Any | None = None,
+        authority_backend: str = AUTHORITY_BACKEND_REDIS_MIGRATION_SOURCE,
         authority: Any | None = None,
         catalog_resolver: Any | None = None,
         card_persistence: Any | None = None,
@@ -62,6 +67,7 @@ class AutomationAccessService(_core.AutomationAccessService):
             project=project,
             config=config,
             grant_store=grant_store,
+            authority_backend=authority_backend,
             authority=authority,
             catalog_resolver=catalog_resolver,
             card_persistence=card_persistence,
