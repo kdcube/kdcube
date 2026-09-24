@@ -859,10 +859,13 @@ def test_managed_mcp_guard_refuses_unavailable_authority_configuration(
         "_authenticate_delegated_client_access_token",
         fake_authenticate,
     )
+    async def unavailable_authority_config(**_kwargs):
+        return None
+
     monkeypatch.setattr(
         runtime_store,
         "get_bundle_props_from_authority",
-        lambda **_kwargs: None,
+        unavailable_authority_config,
     )
 
     redis = _Redis()

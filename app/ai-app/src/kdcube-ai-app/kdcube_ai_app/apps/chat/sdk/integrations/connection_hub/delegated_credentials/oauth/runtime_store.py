@@ -23,10 +23,17 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentia
     oauth_delegated_config,
 )
 from kdcube_ai_app.infra.plugin.bundle_store import (
-    _get_bundle_props_from_authority as get_bundle_props_from_authority,
+    _get_bundle_props_from_authority as get_bundle_props_from_authority_sync,
+    get_bundle_props_from_authority,
 )
 
 DEFAULT_CONNECTION_HUB_BUNDLE_ID = "connection-hub@1-0"
+_AuthoritySelection = tuple[
+    DurableAuthorityConfig,
+    str,
+    str,
+    Mapping[str, Any],
+]
 
 
 def _states(request: Any) -> tuple[Any, ...]:
@@ -51,25 +58,21 @@ def _scope(
     )
 
 
-def _connections(
+def _bound_connections(
     request: Any,
     *,
-    tenant: str,
-    project: str,
-    bundle_id: str,
     connections: Mapping[str, Any] | None,
-) -> Mapping[str, Any]:
+) -> Mapping[str, Any] | None:
     if connections is not None:
         return connections
     for state in _states(request):
         candidate = getattr(state, "oauth_authority_connections", None)
         if isinstance(candidate, Mapping):
             return candidate
-    props = get_bundle_props_from_authority(
-        tenant=tenant,
-        project=project,
-        bundle_id=bundle_id,
-    )
+    return None
+
+
+def _connections_from_props(props: Any) -> Mapping[str, Any]:
     if props is None:
         raise GrantStoreUnavailable(
             "selected_authority.configuration_unavailable"
@@ -78,6 +81,83 @@ def _connections(
         return {}
     candidate = props.get("connections")
     return candidate if isinstance(candidate, Mapping) else {}
+
+
+async def _connections(
+    request: Any,
+    *,
+    tenant: str,
+    project: str,
+    bundle_id: str,
+    connections: Mapping[str, Any] | None,
+) -> Mapping[str, Any]:
+    bound = _bound_connections(request, connections=connections)
+    if bound is not None:
+        return bound
+    props = await get_bundle_props_from_authority(
+        tenant=tenant,
+        project=project,
+        bundle_id=bundle_id,
+    )
+    return _connections_from_props(props)
+
+
+def _connections_sync(
+    request: Any,
+    *,
+    tenant: str,
+    project: str,
+    bundle_id: str,
+    connections: Mapping[str, Any] | None,
+) -> Mapping[str, Any]:
+    bound = _bound_connections(request, connections=connections)
+    if bound is not None:
+        return bound
+    props = get_bundle_props_from_authority_sync(
+        tenant=tenant,
+        project=project,
+        bundle_id=bundle_id,
+    )
+    return _connections_from_props(props)
+
+
+def _state_authority_selection(
+    request: Any,
+    *,
+    tenant: str,
+    project: str,
+) -> _AuthoritySelection | None:
+    for state in _states(request):
+        backend = str(getattr(state, "oauth_authority_backend", "") or "").strip()
+        if not backend:
+            continue
+        config = DurableAuthorityConfig.from_mapping(
+            {
+                "backend": backend,
+                "generation_id": getattr(
+                    state,
+                    "oauth_authority_generation_id",
+                    "",
+                ),
+            },
+            field_path="request.oauth_authority",
+        )
+        return config, tenant, project, {}
+    return None
+
+
+def _selection_from_connections(
+    connections: Mapping[str, Any],
+    *,
+    tenant: str,
+    project: str,
+) -> _AuthoritySelection:
+    return (
+        DurableAuthorityConfig.from_connections(connections),
+        tenant,
+        project,
+        connections,
+    )
 
 
 def selected_oauth_authority_config(
@@ -95,35 +175,60 @@ def selected_oauth_authority_config(
         tenant=tenant,
         project=project,
     )
-    for state in _states(request):
-        backend = str(getattr(state, "oauth_authority_backend", "") or "").strip()
-        if not backend:
-            continue
-        config = DurableAuthorityConfig.from_mapping(
-            {
-                "backend": backend,
-                "generation_id": getattr(
-                    state,
-                    "oauth_authority_generation_id",
-                    "",
-                ),
-            },
-            field_path="request.oauth_authority",
-        )
-        return config, resolved_tenant, resolved_project, {}
+    selected = _state_authority_selection(
+        request,
+        tenant=resolved_tenant,
+        project=resolved_project,
+    )
+    if selected is not None:
+        return selected
 
-    resolved_connections = _connections(
+    resolved_connections = _connections_sync(
         request,
         tenant=resolved_tenant,
         project=resolved_project,
         bundle_id=bundle_id,
         connections=connections,
     )
-    return (
-        DurableAuthorityConfig.from_connections(resolved_connections),
-        resolved_tenant,
-        resolved_project,
+    return _selection_from_connections(
         resolved_connections,
+        tenant=resolved_tenant,
+        project=resolved_project,
+    )
+
+
+async def _selected_oauth_authority_config(
+    request: Any,
+    *,
+    tenant: str | None = None,
+    project: str | None = None,
+    bundle_id: str = DEFAULT_CONNECTION_HUB_BUNDLE_ID,
+    connections: Mapping[str, Any] | None = None,
+) -> _AuthoritySelection:
+    resolved_tenant, resolved_project = _scope(
+        request,
+        tenant=tenant,
+        project=project,
+    )
+    selected = _state_authority_selection(
+        request,
+        tenant=resolved_tenant,
+        project=resolved_project,
+    )
+    if selected is not None:
+        return selected
+
+    resolved_connections = await _connections(
+        request,
+        tenant=resolved_tenant,
+        project=resolved_project,
+        bundle_id=bundle_id,
+        connections=connections,
+    )
+    return _selection_from_connections(
+        resolved_connections,
+        tenant=resolved_tenant,
+        project=resolved_project,
     )
 
 
@@ -186,7 +291,12 @@ async def resolve_request_oauth_grant_store(
     if existing is not None:
         return existing
     try:
-        config, resolved_tenant, resolved_project, _ = selected_oauth_authority_config(
+        (
+            config,
+            resolved_tenant,
+            resolved_project,
+            _,
+        ) = await _selected_oauth_authority_config(
             request,
             tenant=tenant,
             project=project,
