@@ -36,6 +36,10 @@ class AuthorityMigrationSecretCompensationFailed(RuntimeError):
     """A rolled-back migration left one or more inert secrets for cleanup."""
 
 
+class AuthorityMigrationSecretDeletionDeferred(RuntimeError):
+    """A pre-existing secret remains until its SQL cleanup claim commits."""
+
+
 class CompensatingResidentSecretStore:
     """Track migration-created secrets and delete them after SQL rollback."""
 
@@ -81,6 +85,10 @@ class CompensatingResidentSecretStore:
         return await self._delegate.get(secret_ref=secret_ref)
 
     async def delete(self, *, secret_ref: str) -> None:
+        if secret_ref not in self._created_set:
+            raise AuthorityMigrationSecretDeletionDeferred(
+                "authority_migration_secret_deletion_deferred"
+            )
         await self._delegate.delete(secret_ref=secret_ref)
         self._created_set.discard(secret_ref)
 
@@ -186,6 +194,7 @@ async def apply_migration_in_transaction(
 
 __all__ = [
     "AuthorityMigrationSecretCompensationFailed",
+    "AuthorityMigrationSecretDeletionDeferred",
     "AuthorityMigrationTransactionOutcomeUnknown",
     "CompensatingResidentSecretStore",
     "TransactionalApplyTarget",

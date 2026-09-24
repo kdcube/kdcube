@@ -12,6 +12,7 @@ user from the named-service context and reuse the bundle-owned policy hooks that
 
 from __future__ import annotations
 
+import inspect
 import logging
 import time
 from datetime import datetime
@@ -116,6 +117,14 @@ class ConnectionHubProvider(ConnectionsProviderBase):
         # per-agent grant lookup. Injected by the bundle entrypoint, which owns
         # the delegated config sourcing; absent -> agent grants resolve to none.
         self._automation_access_factory = automation_access_factory
+
+    async def _automation_access(self) -> Any | None:
+        if self._automation_access_factory is None:
+            return None
+        service = self._automation_access_factory()
+        if inspect.isawaitable(service):
+            service = await service
+        return service
 
     # ── storage choice: user-scoped ConnectionStore ─────────────────────────
 
@@ -224,7 +233,7 @@ class ConnectionHubProvider(ConnectionsProviderBase):
         user_id = self._user_id(ctx)
         if not user_id:
             return None
-        service = self._automation_access_factory()
+        service = await self._automation_access()
         if service is None:
             return None
         result = await service.agent_access_token(
@@ -253,7 +262,7 @@ class ConnectionHubProvider(ConnectionsProviderBase):
         user_id = self._user_id(ctx)
         if not user_id:
             return None
-        service = self._automation_access_factory()
+        service = await self._automation_access()
         if service is None:
             return None
         result = await service.resident_agent_access_token_for_access_id(
@@ -285,7 +294,7 @@ class ConnectionHubProvider(ConnectionsProviderBase):
         user_id = self._user_id(ctx)
         if not user_id:
             return {"governed": False}
-        service = self._automation_access_factory()
+        service = await self._automation_access()
         if service is None:
             return {"governed": False}
         from connection_hub.delegated_credentials.catalog.resolver import (
@@ -339,7 +348,7 @@ class ConnectionHubProvider(ConnectionsProviderBase):
                 "error": "agent_capability_service_unavailable",
                 "status": 503,
             }
-        service = self._automation_access_factory()
+        service = await self._automation_access()
         if service is None:
             return {
                 "ok": False,
