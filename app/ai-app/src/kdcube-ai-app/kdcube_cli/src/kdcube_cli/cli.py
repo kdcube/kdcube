@@ -1644,6 +1644,52 @@ def _is_container_visible_path(raw_path: str, container_root: str) -> bool:
     return normalized == root or normalized.startswith(root + "/")
 
 
+def _mapped_host_bundle_path(
+    runtime_path: str,
+    *,
+    host_root: Path | None,
+    container_root: str,
+) -> Path | None:
+    if host_root is None or not _is_container_visible_path(runtime_path, container_root):
+        return None
+    normalized = posixpath.normpath(runtime_path.strip().replace("\\", "/"))
+    root = posixpath.normpath(container_root.rstrip("/") or "/")
+    if normalized == root:
+        return host_root
+    return host_root.joinpath(*normalized[len(root):].lstrip("/").split("/"))
+
+
+def _require_mapped_bundle_directory(
+    runtime_path: str,
+    *,
+    host_root: Path | None,
+    container_root: str,
+) -> None:
+    candidate = _mapped_host_bundle_path(
+        runtime_path,
+        host_root=host_root,
+        container_root=container_root,
+    )
+    if candidate is None:
+        raise SystemExit(
+            "Cannot verify the bundle runtime path because the initialized runtime does not "
+            f"define the host directory mounted at {container_root}.\n"
+            f"  runtime path: {runtime_path}"
+        )
+    if not candidate.exists():
+        raise SystemExit(
+            "Bundle runtime path does not exist on the host.\n"
+            f"  runtime path: {runtime_path}\n"
+            f"  host path: {candidate}"
+        )
+    if not candidate.is_dir():
+        raise SystemExit(
+            "Bundle runtime path must map to a host directory.\n"
+            f"  runtime path: {runtime_path}\n"
+            f"  host path: {candidate}"
+        )
+
+
 def _resolve_bundle_local_path_for_runtime(raw_path: str, workdir: Path) -> tuple[str, str]:
     value = str(raw_path or "").strip()
     if not value:
@@ -1652,9 +1698,21 @@ def _resolve_bundle_local_path_for_runtime(raw_path: str, workdir: Path) -> tupl
     host_root, container_root = _bundle_runtime_roots(workdir)
     managed_host_root, managed_container_root = _managed_bundle_runtime_roots(workdir)
     if _is_container_visible_path(value, container_root):
-        return posixpath.normpath(value.replace("\\", "/")), "container"
+        normalized = posixpath.normpath(value.replace("\\", "/"))
+        _require_mapped_bundle_directory(
+            normalized,
+            host_root=host_root,
+            container_root=container_root,
+        )
+        return normalized, "container"
     if _is_container_visible_path(value, managed_container_root):
-        return posixpath.normpath(value.replace("\\", "/")), "managed-container"
+        normalized = posixpath.normpath(value.replace("\\", "/"))
+        _require_mapped_bundle_directory(
+            normalized,
+            host_root=managed_host_root,
+            container_root=managed_container_root,
+        )
+        return normalized, "managed-container"
 
     candidate = Path(value).expanduser().resolve()
     if managed_host_root is not None:
@@ -1663,6 +1721,10 @@ def _resolve_bundle_local_path_for_runtime(raw_path: str, workdir: Path) -> tupl
         except ValueError:
             pass
         else:
+            if not candidate.exists():
+                raise SystemExit(f"Bundle local path does not exist on the host: {candidate}")
+            if not candidate.is_dir():
+                raise SystemExit(f"Bundle local path must be a directory: {candidate}")
             return posixpath.join(managed_container_root, rel.as_posix()), "managed-translated"
     if not candidate.exists():
         raise SystemExit(f"Bundle local path does not exist on the host: {candidate}")

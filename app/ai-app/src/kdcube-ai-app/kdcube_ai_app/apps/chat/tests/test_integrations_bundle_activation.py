@@ -64,10 +64,10 @@ def _mount(monkeypatch, *, registry: BundlesRegistry, previously_loaded: dict | 
     return TestClient(app), calls
 
 
-def _registry(**activation) -> BundlesRegistry:
+def _registry(*, path: str = "/bundles/demo", **activation) -> BundlesRegistry:
     entry = BundleEntry(
         id=BUNDLE_ID,
-        path="/bundles/demo",
+        path=path,
         module="demo.entrypoint",
         singleton=True,
         activation=BundleActivationConfig(**activation) if activation else None,
@@ -75,24 +75,27 @@ def _registry(**activation) -> BundlesRegistry:
     return BundlesRegistry(default_bundle_id=BUNDLE_ID, bundles={BUNDLE_ID: entry})
 
 
-def test_a_plain_reload_receipt_carries_evidence_about_the_mounted_tree(monkeypatch):
+def test_a_plain_reload_receipt_carries_evidence_about_the_mounted_tree(monkeypatch, tmp_path):
+    bundle_path = tmp_path / "demo"
+    bundle_path.mkdir()
+
     async def fake_describe(path):
         return {"mode": "local-path", "path": str(path), "head": COMMIT_B, "dirty": False, "changed_paths": []}
 
     monkeypatch.setattr(bundle_snapshot, "describe_mounted_source", fake_describe)
-    client, calls = _mount(monkeypatch, registry=_registry())
+    client, calls = _mount(monkeypatch, registry=_registry(path=str(bundle_path)))
 
     response = client.post("/internal/bundles/reload-authority", json={"bundle_id": BUNDLE_ID})
 
     assert response.status_code == 200
     receipt = response.json()
     assert receipt["activation"] == {
-        "mode": "local-path", "path": "/bundles/demo", "head": COMMIT_B, "dirty": False, "changed_paths": [], "origin": "",
+        "mode": "local-path", "path": str(bundle_path), "head": COMMIT_B, "dirty": False, "changed_paths": [], "origin": "",
     }
     # Nothing about the entry changed for the loader: the descriptor path is what loads.
     reg, force = calls["lifecycle"]
     assert reg.bundles[BUNDLE_ID].activation is None and force == {BUNDLE_ID}
-    assert calls["evictions"] == [{"path": "/bundles/demo", "module": "demo.entrypoint"}]
+    assert calls["evictions"] == [{"path": str(bundle_path), "module": "demo.entrypoint"}]
 
 
 def test_an_activation_at_a_commit_rewrites_the_entry_the_lifecycle_loads_and_evicts_the_previous_path(monkeypatch):
@@ -157,8 +160,13 @@ def test_a_moved_ref_is_refused_with_409_before_anything_is_evicted(monkeypatch)
     assert calls["evictions"] == [] and "set_registry" not in calls and "lifecycle" not in calls and "publish" not in calls
 
 
-def test_require_commit_refuses_a_commitless_reload_with_400_and_names_the_flag(monkeypatch):
-    client, calls = _mount(monkeypatch, registry=_registry(require_commit=True))
+def test_require_commit_refuses_a_commitless_reload_with_400_and_names_the_flag(monkeypatch, tmp_path):
+    bundle_path = tmp_path / "demo"
+    bundle_path.mkdir()
+    client, calls = _mount(
+        monkeypatch,
+        registry=_registry(path=str(bundle_path), require_commit=True),
+    )
 
     response = client.post("/internal/bundles/reload-authority", json={"bundle_id": BUNDLE_ID})
 
@@ -167,6 +175,46 @@ def test_require_commit_refuses_a_commitless_reload_with_400_and_names_the_flag(
     assert detail["code"] == "bundle_activation_commit_required"
     assert "activation.require_commit" in detail["message"] and detail["bundle_id"] == BUNDLE_ID
     assert calls["evictions"] == [] and "lifecycle" not in calls
+
+
+def test_missing_mounted_path_is_refused_before_runtime_state_changes(monkeypatch, tmp_path):
+    missing = tmp_path / "missing"
+    client, calls = _mount(
+        monkeypatch,
+        registry=_registry(path=str(missing)),
+        previously_loaded={
+            "id": BUNDLE_ID,
+            "path": "/managed/demo/previous",
+            "module": "demo.entrypoint",
+            "singleton": True,
+        },
+    )
+
+    response = client.post(
+        "/internal/bundles/reload-authority",
+        json={"bundle_id": BUNDLE_ID},
+    )
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail == {
+        "code": "bundle_path_unreachable",
+        "message": (
+            f"Bundle '{BUNDLE_ID}' mounted path is not a directory in this runtime: "
+            f"{missing}. Nothing was evicted."
+        ),
+        "bundle_id": BUNDLE_ID,
+        "path": str(missing),
+    }
+    assert calls["evictions"] == []
+    for mutation in (
+        "set_registry",
+        "authority_discovery",
+        "deployed",
+        "lifecycle",
+        "publish",
+    ):
+        assert mutation not in calls
 
 
 def test_a_commit_without_a_bundle_id_is_refused(monkeypatch):

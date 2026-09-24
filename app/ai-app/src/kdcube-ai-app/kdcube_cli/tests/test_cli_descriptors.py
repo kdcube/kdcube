@@ -482,6 +482,8 @@ def test_resolve_bundle_local_path_translates_host_path_under_runtime_root(tmp_p
 
 def test_resolve_bundle_local_path_preserves_container_visible_path(tmp_path: Path):
     workdir = tmp_path / "runtime"
+    bundle_root = tmp_path / "src" / "apps" / "my-bundle"
+    bundle_root.mkdir(parents=True)
     config_dir = workdir / "config"
     config_dir.mkdir(parents=True)
     (config_dir / "assembly.yaml").write_text(
@@ -502,6 +504,8 @@ def test_resolve_bundle_local_path_preserves_container_visible_path(tmp_path: Pa
 
 def test_resolve_bundle_local_path_preserves_managed_container_path(tmp_path: Path):
     workdir = tmp_path / "runtime"
+    managed_bundle = tmp_path / "runtime" / "data" / "managed-bundles" / "demo.bundle__latest__abc"
+    managed_bundle.mkdir(parents=True)
     config_dir = workdir / "config"
     config_dir.mkdir(parents=True)
     (config_dir / "assembly.yaml").write_text(
@@ -532,7 +536,7 @@ def test_resolve_bundle_local_path_preserves_managed_container_path(tmp_path: Pa
     assert mode == "managed-container"
 
 
-def test_resolve_bundle_local_path_translates_stale_managed_host_cache_path(tmp_path: Path):
+def test_resolve_bundle_local_path_rejects_stale_managed_host_cache_path(tmp_path: Path):
     workdir = tmp_path / "runtime"
     managed_root = workdir / "data" / "managed-bundles"
     config_dir = workdir / "config"
@@ -560,10 +564,32 @@ def test_resolve_bundle_local_path_translates_stale_managed_host_cache_path(tmp_
     )
 
     stale_path = managed_root / "demo.bundle__old__missing"
-    resolved, mode = _resolve_bundle_local_path_for_runtime(str(stale_path), workdir)
+    with pytest.raises(SystemExit, match="does not exist on the host"):
+        _resolve_bundle_local_path_for_runtime(str(stale_path), workdir)
 
-    assert resolved == "/managed-bundles/demo.bundle__old__missing"
-    assert mode == "managed-translated"
+
+def test_resolve_bundle_local_path_rejects_missing_container_visible_path(tmp_path: Path):
+    workdir = tmp_path / "runtime"
+    host_root = tmp_path / "src"
+    config_dir = workdir / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "assembly.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "paths": {"host_bundles_path": str(host_root)},
+                "platform": {"services": {"proc": {"bundles": {"bundles_root": "/bundles"}}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit) as refusal:
+        _resolve_bundle_local_path_for_runtime("/bundles/products/missing", workdir)
+
+    message = str(refusal.value)
+    assert "does not exist on the host" in message
+    assert "/bundles/products/missing" in message
+    assert str(host_root / "products" / "missing") in message
 
 
 def test_resolve_bundle_local_path_rejects_escaped_container_path(tmp_path: Path):
@@ -1198,8 +1224,14 @@ def test_bundle_config_apply_removes_deleted_ids_from_runtime(monkeypatch, tmp_p
     workdir = tmp_path / "demo__project"
     config_dir = workdir / "config"
     source_dir = tmp_path / "incoming"
+    host_bundles = tmp_path / "bundles"
+    (host_bundles / "stable").mkdir(parents=True)
     config_dir.mkdir(parents=True)
     source_dir.mkdir()
+    (config_dir / "assembly.yaml").write_text(
+        yaml.safe_dump({"paths": {"host_bundles_path": str(host_bundles)}}),
+        encoding="utf-8",
+    )
     stable = {"id": "stable@1-0", "path": "/bundles/stable", "module": "entrypoint"}
     removed = {"id": "remove@1-0", "path": "/bundles/remove", "module": "entrypoint"}
     (config_dir / "bundles.yaml").write_text(
@@ -1253,6 +1285,76 @@ def test_bundle_config_apply_removes_deleted_ids_from_runtime(monkeypatch, tmp_p
     assert calls == ["remove@1-0"]
     assert result["removed_bundle_ids"] == ["remove@1-0"]
     assert result["removed_from_runtime"][0]["bundle_id"] == "remove@1-0"
+
+
+def test_bundle_config_apply_refuses_unreachable_runtime_path_before_writing(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    workdir = tmp_path / "demo__project"
+    config_dir = workdir / "config"
+    source_dir = tmp_path / "incoming"
+    host_bundles = tmp_path / "bundles"
+    (host_bundles / "stable").mkdir(parents=True)
+    config_dir.mkdir(parents=True)
+    source_dir.mkdir()
+    (config_dir / "assembly.yaml").write_text(
+        yaml.safe_dump({"paths": {"host_bundles_path": str(host_bundles)}}),
+        encoding="utf-8",
+    )
+    bundles_path = config_dir / "bundles.yaml"
+    bundles_path.write_text(
+        yaml.safe_dump(
+            {
+                "bundles": {
+                    "default_bundle_id": "stable@1-0",
+                    "items": [
+                        {
+                            "id": "stable@1-0",
+                            "path": "/bundles/stable",
+                            "module": "entrypoint",
+                        }
+                    ],
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    before = bundles_path.read_text(encoding="utf-8")
+    (source_dir / "bundles.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "bundles": {
+                    "default_bundle_id": "missing@1-0",
+                    "items": [
+                        {
+                            "id": "missing@1-0",
+                            "path": "/bundles/products/missing",
+                            "module": "entrypoint",
+                        }
+                    ],
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        cli_mod,
+        "_canonical_descriptor_dir_from_initialized_workdir",
+        lambda runtime: config_dir,
+    )
+
+    with pytest.raises(SystemExit, match="does not exist on the host"):
+        cli_mod.apply_bundle_config_descriptors(
+            Console(file=None),
+            workdir=workdir,
+            descriptors_location=source_dir,
+            quiet=True,
+        )
+
+    assert bundles_path.read_text(encoding="utf-8") == before
 
 
 def test_cli_quiet_requested_for_json_quiet_env_and_non_tty(monkeypatch):
@@ -4187,6 +4289,7 @@ def _write_initialized_runtime_config(
 ) -> Path:
     config_dir = workdir / "config"
     config_dir.mkdir(parents=True)
+    (workdir / "bundles" / "demo.bundle").mkdir(parents=True)
     (config_dir / "install-meta.json").write_text(
         json.dumps(
             {
