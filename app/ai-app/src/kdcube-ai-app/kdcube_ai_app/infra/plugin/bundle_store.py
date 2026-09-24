@@ -956,6 +956,10 @@ class BundleEntry(BaseModel):
     git_commit: Optional[str] = None
     service: Optional[BundleServiceConfig] = None
     activation: Optional[BundleActivationConfig] = None
+    # The descriptor's path when ``path`` points at a commit snapshot
+    # (bundle_snapshot). Set by the runtime on a resolved entry, never by the
+    # descriptor, so the declared location stays readable after activation.
+    mounted_path: Optional[str] = None
 
 class BundlesRegistry(BaseModel):
     default_bundle_id: Optional[str] = None
@@ -976,6 +980,8 @@ def bundle_entry_to_spec(entry: BundleEntry):
         ref=entry.ref,
         subdir=entry.subdir,
         git_commit=entry.git_commit,
+        mounted_path=entry.mounted_path,
+        activation_commit=(entry.activation.commit if entry.activation else None),
     )
 
 

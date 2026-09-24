@@ -150,7 +150,13 @@ this order:
 2. Require the desired app generation to be ready in this proc.
 3. Read the small generated policy manifest.
 4. Match its source generation and descriptor-props fingerprint to current
-   authority state.
+   authority state. The source generation comes from the app's declared
+   coordinates, so every proc process computes the same value: the declared
+   location and, for an app pinned with `activation.commit`, that commit. A
+   pinned app loads a snapshot in the managed root and is matched by its
+   commit and declared path, never by the snapshot's own path. A commit named
+   only in a reload request is known to the process that prepared it, so a
+   durable pin belongs in the descriptor as the full commit.
 5. Enforce app roles plus widget user type, role, enabled, and authority-grant
    policy.
 6. Serve `index.html` or an asset from the declared prepared directory.

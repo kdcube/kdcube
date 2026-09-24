@@ -52,6 +52,10 @@ class BundleSpec:
     ref: Optional[str] = None
     subdir: Optional[str] = None
     git_commit: Optional[str] = None
+    # The declared location when ``path`` is a commit snapshot, and the
+    # declared ``activation.commit`` (bundle_snapshot).
+    mounted_path: Optional[str] = None
+    activation_commit: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not str(self.id or "").strip():

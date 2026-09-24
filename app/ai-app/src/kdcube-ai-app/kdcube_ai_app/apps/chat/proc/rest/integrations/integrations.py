@@ -4893,6 +4893,21 @@ def _deployed_widget_unavailable(
     )
 
 
+def _serving_source_generation(request: Request, entry: Any) -> str:
+    """The generation this process expects the deployed widget to carry.
+
+    The registry entry's declared coordinates give it in every process
+    (``source_generation_for_spec``). A process whose lifecycle prepared an
+    activation whose commit came only from a reload request holds that
+    activation's generation, which the descriptor cannot give (W202).
+    """
+    lifecycle = getattr(getattr(getattr(request, "app", None), "state", None), "application_lifecycle", None)
+    reader = getattr(lifecycle, "loaded_source_diagnostic", None)
+    loaded = reader(str(getattr(entry, "id", "") or "")) if callable(reader) else None
+    prepared = str((loaded or {}).get("source_generation") or "")
+    return prepared or source_generation_for_spec(entry)
+
+
 async def _try_serve_deployed_static_widget_app(
         *,
         tenant: str,
@@ -4938,7 +4953,7 @@ async def _try_serve_deployed_static_widget_app(
         or manifest.tenant != tenant_id
         or manifest.project != project_id
         or manifest.bundle_id != bundle_id
-        or manifest.source_generation != source_generation_for_spec(entry)
+        or manifest.source_generation != _serving_source_generation(request, entry)
     ):
         if application_generation:
             raise _deployed_widget_unavailable(

@@ -16,6 +16,7 @@ from kdcube_ai_app.apps.chat.proc.app_deployment.coordinator import (
     app_source_fingerprint,
     deploy_loaded_bundle_app_resources,
     props_fingerprint,
+    source_generation_for_spec,
 )
 from kdcube_ai_app.apps.chat.proc.app_deployment.deprovision import (
     deprovision_loaded_bundle_app_resources,
@@ -444,8 +445,9 @@ class ProcApplicationLifecycle:
             source="application.preparation",
         )
         resolved_entry = BundleEntry.model_validate(resolved)
-        # The registry keeps what the model does not carry: the mounted path
-        # behind a snapshot and the `source` block naming what loads, so a
+        # The model carries the mounted path behind a snapshot, so the deploy
+        # side names the app by its declared location (source_generation_for_spec).
+        # The registry also keeps the `source` block naming what loads, so a
         # later reader can say which commit this process imported.
         registry_entry = {
             **resolved_entry.model_dump(mode="python", exclude_none=True),
@@ -548,6 +550,7 @@ class ProcApplicationLifecycle:
         )
         self._loaded_sources[resolved_entry.id] = {
             "source": source_identity,
+            "source_generation": source_generation_for_spec(bundle_spec),
             "application_generation": preparation.generation,
             "path": resolved_entry.path,
         }
