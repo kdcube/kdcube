@@ -120,7 +120,7 @@ from kdcube_ai_app.infra.plugin.bundle_registry import ADMIN_BUNDLE_ID
 from kdcube_ai_app.apps.chat.sdk.solutions.chat import DEFAULT_CHAT_WIDGET_ALIAS
 from kdcube_ai_app.apps.chat.proc.app_deployment.coordinator import (
     props_fingerprint,
-    source_generation_for_spec,
+    source_generation_for_identity,
 )
 from kdcube_ai_app.apps.chat.proc.app_deployment.delegated_catalog import (
     check_authoritative_delegated_catalog,
@@ -4893,6 +4893,20 @@ def _deployed_widget_unavailable(
     )
 
 
+def _serving_source_generation(request: Request, entry: Any) -> str:
+    """The generation this process expects the deployed widget to carry.
+
+    The lifecycle that prepared the app records the source identity it loaded
+    and the deploy side keyed the manifest on it, so the comparison is by
+    activation identity, not by a path (W202). A process without that record
+    falls back to the registry entry's coordinates.
+    """
+    lifecycle = getattr(getattr(getattr(request, "app", None), "state", None), "application_lifecycle", None)
+    reader = getattr(lifecycle, "loaded_source_diagnostic", None)
+    loaded = reader(str(getattr(entry, "id", "") or "")) if callable(reader) else None
+    return source_generation_for_identity(entry, (loaded or {}).get("source"))
+
+
 async def _try_serve_deployed_static_widget_app(
         *,
         tenant: str,
@@ -4938,7 +4952,7 @@ async def _try_serve_deployed_static_widget_app(
         or manifest.tenant != tenant_id
         or manifest.project != project_id
         or manifest.bundle_id != bundle_id
-        or manifest.source_generation != source_generation_for_spec(entry)
+        or manifest.source_generation != _serving_source_generation(request, entry)
     ):
         if application_generation:
             raise _deployed_widget_unavailable(

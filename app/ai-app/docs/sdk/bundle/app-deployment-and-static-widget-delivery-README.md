@@ -150,7 +150,11 @@ this order:
 2. Require the desired app generation to be ready in this proc.
 3. Read the small generated policy manifest.
 4. Match its source generation and descriptor-props fingerprint to current
-   authority state.
+   authority state. The source generation is keyed on the source identity
+   this proc's app lifecycle recorded when it prepared the app: the mode,
+   commit or tree, repository, subdir and declared location. An app pinned
+   with `activation.commit` loads a snapshot in the managed root and is
+   matched by its commit and declared path, never by the snapshot's own path.
 5. Enforce app roles plus widget user type, role, enabled, and authority-grant
    policy.
 6. Serve `index.html` or an asset from the declared prepared directory.
