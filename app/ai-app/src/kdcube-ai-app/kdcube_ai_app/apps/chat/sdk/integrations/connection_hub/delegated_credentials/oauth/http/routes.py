@@ -3214,6 +3214,33 @@ async def _issue_tokens(
     expected_card_revision=None,
     card_conflict_error="invalid_grant",
 ) -> JSONResponse:
+    # A stored selection that is not {resource: [grant or operation]} is a
+    # grant this service cannot honour, not a server fault: answer
+    # invalid_grant naming it and log it, never a 500 at the token step.
+    # (claude-app device authorization, 2026-09-25: the device store turned
+    # an empty choice [] into {} and the token poll raised.)
+    for field_name, value, normalize in (
+        ("resource_grants", resource_grants, normalize_resource_grants),
+        ("resource_operations", resource_operations, normalize_resource_operations),
+    ):
+        if value is None:
+            continue
+        try:
+            normalize(value)
+        except ValueError as exc:
+            LOGGER.warning(
+                "[connection-hub.oauth] token refused: stored %s is malformed "
+                "client=%s access_id=%s error=%s",
+                field_name,
+                str(client_id or ""),
+                str(registry_access_id or ""),
+                exc,
+            )
+            return _token_error(
+                "invalid_grant",
+                f"The approved Card's stored {field_name} is malformed ({exc}); "
+                "authorize again.",
+            )
     tenant, project = oauth_tenant_project(request)
     resolved_access_id = str(registry_access_id or "").strip()
     resolved_card_kind = str(card_kind or "").strip()
@@ -3572,9 +3599,16 @@ async def token(request: Request) -> Response:
                 and issued_payload.get("error") == "device_card_revision_conflict"
             ):
                 return issued
+            cause = (
+                str(issued_payload.get("error_description") or "").strip()
+                if isinstance(issued_payload, Mapping)
+                else ""
+            )
             return _token_error(
                 "device_authorization_restart_required",
-                "Token issuance failed after approval; restart device authorization.",
+                "Token issuance failed after approval"
+                + (f": {cause}" if cause else "")
+                + "; restart device authorization.",
                 status=int(getattr(issued, "status_code", 503)),
             )
         return issued

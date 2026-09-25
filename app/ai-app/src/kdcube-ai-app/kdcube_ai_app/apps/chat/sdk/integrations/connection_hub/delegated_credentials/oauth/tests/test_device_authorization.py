@@ -547,3 +547,62 @@ def test_device_card_binding_is_terminal_and_distinct(
     )
     assert token.status_code == 400
     assert token.json()["error"] == expected_error
+
+
+
+# claude-app device authorization, 2026-09-25 22:04Z: the device store handed
+# back a Card whose empty operation choice had become an object, and the token
+# poll answered HTTP 500. A malformed stored selection is invalid_grant, named
+# and logged, and the device client is told why it must restart.
+MALFORMED_SELECTION = {
+    "https://board.example/mcp/problem_board": ["worker.heartbeat"],
+    "https://hub.example/mcp/connection_hub": {},
+}
+
+
+@pytest.mark.asyncio
+async def test_issue_tokens_answers_invalid_grant_for_a_malformed_stored_selection(caplog):
+    with caplog.at_level("WARNING", logger="kdcube.connection_hub.oauth"):
+        response = await oauth_routes._issue_tokens(
+            None,
+            None,
+            sub="user-1",
+            scopes=[],
+            client_id="claude",
+            operations=[],
+            resource_operations=MALFORMED_SELECTION,
+            registry_access_id="aut_claude_app",
+            card_kind="agent",
+        )
+
+    assert response.status_code == 400
+    body = json.loads(bytes(response.body).decode("utf-8"))
+    assert body["error"] == "invalid_grant"
+    assert "resource_operations is malformed" in body["error_description"]
+    assert "must be a list" in body["error_description"]
+    assert any("stored resource_operations is malformed" in r.getMessage() for r in caplog.records)
+
+
+def test_device_token_for_a_malformed_stored_selection_is_not_a_server_error(device_client):
+    client, device_store = device_client
+    device_store.authorization = {
+        "client_id": "claude",
+        "sub": "user-1",
+        "registry_access_id": "aut_claude_app",
+        "card_kind": "agent",
+        "resource_operations": MALFORMED_SELECTION,
+    }
+
+    response = client.post(
+        "/oauth/token",
+        data={
+            "grant_type": DEVICE_GRANT_TYPE,
+            "device_code": "device-secret-value",
+            "client_id": "claude",
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    body = response.json()
+    assert body["error"] == "device_authorization_restart_required"
+    assert "resource_operations is malformed" in body["error_description"]
