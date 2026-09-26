@@ -3,6 +3,8 @@
 Telegram resends an update until the webhook answers 200, and one app may run
 on several replicas. ``claim_telegram_update_once`` is the one entry point: it
 answers True the first time an ``update_id`` is seen and False afterwards.
+``release_telegram_update`` gives a claim back when handling failed before
+the webhook answered, so Telegram's resend is handled instead of dropped.
 
 The claim lives in a store that implements ``TelegramUpdateClaims``. The
 default is the file-backed ``TelegramUserAdminStorage`` (one node). An app on
@@ -28,6 +30,10 @@ class TelegramUpdateClaims(Protocol):
         """True the first time ``update_id`` is claimed, False afterwards."""
         ...
 
+    async def release_telegram_update(self, update_id: int) -> None:
+        """Forget a claim, so the next delivery of ``update_id`` is claimed again."""
+        ...
+
 
 class FileTelegramUpdateClaims:
     """The default store: the file-backed Telegram user admin storage.
@@ -51,6 +57,9 @@ class FileTelegramUpdateClaims:
             result={"stage": "claimed_once"},
         )
         return True
+
+    async def release_telegram_update(self, update_id: int) -> None:
+        await asyncio.to_thread(self._storage.release_telegram_update, update_id=str(update_id))
 
 
 def _update_id(value: Any) -> int | None:
@@ -84,8 +93,30 @@ async def claim_telegram_update_once(
     return bool(await store.claim_telegram_update(number))
 
 
+async def release_telegram_update(
+    update_id: Any,
+    *,
+    store: TelegramUpdateClaims | None = None,
+    entrypoint: Any = None,
+) -> None:
+    """Give back the claim on an update whose handling failed.
+
+    Call it when the webhook will not answer 200 (an unexpected error), so
+    Telegram's resend is handled rather than dropped as a duplicate.
+    """
+    number = _update_id(update_id)
+    if number is None:
+        return
+    if store is None:
+        from kdcube_ai_app.apps.chat.sdk.integrations.telegram.user_admin import storage
+
+        store = FileTelegramUpdateClaims(storage(entrypoint))
+    await store.release_telegram_update(number)
+
+
 __all__ = [
     "FileTelegramUpdateClaims",
     "TelegramUpdateClaims",
     "claim_telegram_update_once",
+    "release_telegram_update",
 ]

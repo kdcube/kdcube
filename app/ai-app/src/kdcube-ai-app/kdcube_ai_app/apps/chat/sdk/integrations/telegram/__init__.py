@@ -58,6 +58,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.telegram.updates import (
     FileTelegramUpdateClaims,
     TelegramUpdateClaims,
     claim_telegram_update_once,
+    release_telegram_update,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.telegram.user_storage import (
     TelegramUserAdminStorage,
@@ -74,6 +75,7 @@ __all__ = [
     "FileTelegramUpdateClaims",
     "TelegramUpdateClaims",
     "claim_telegram_update_once",
+    "release_telegram_update",
     "INIT_DATA_HEADER",
     "SignedLink",
     "SignedLinkToken",

@@ -764,6 +764,22 @@ class TelegramUserAdminStorage:
             pass
         return out
 
+    def release_telegram_update(self, *, update_id: str) -> Dict[str, Any]:
+        """Forget an update's claim, so its next delivery is claimed again."""
+        update = str(update_id or "").strip()
+        if not update:
+            return {"status": "untracked", "update_id": ""}
+        # A record in state "released" passes the stale-id check in the claim,
+        # which otherwise refuses any id at or below the highest one seen.
+        out = self._write_update_record(update, {"status": "released", "released_at": _utc_now()})
+        try:
+            shutil.rmtree(self._update_lock_dir(update))
+        except FileNotFoundError:
+            pass
+        except Exception:
+            pass
+        return out
+
     def fail_telegram_update(self, *, update_id: str, error: str) -> Dict[str, Any]:
         update = str(update_id or "").strip()
         if not update:

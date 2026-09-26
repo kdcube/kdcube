@@ -554,15 +554,27 @@ topic's root on every message; that root is not reported as a reply.
 An app that handles updates itself, instead of through `handle_webhook(...)`,
 sees each update once with `claim_telegram_update_once`. The claim lives in a
 store the app chooses: the file-backed storage by default (one node), or any
-object with `async claim_telegram_update(update_id) -> bool`, for example a
-table keyed by update id that holds across replicas:
+store of its own, for example a table keyed by update id that holds across
+replicas:
 
 ```python
-from kdcube_ai_app.apps.chat.sdk.integrations.telegram import claim_telegram_update_once
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram import (
+    claim_telegram_update_once,
+    release_telegram_update,
+)
 
 if not await claim_telegram_update_once(summary.get("update_id"), store=my_claims):
     return {"ok": True, "state": "duplicate"}
+try:
+    ...  # handle the update
+except Exception:
+    # The webhook will not answer 200: give the claim back so the resend is handled.
+    await release_telegram_update(summary.get("update_id"), store=my_claims)
+    raise
 ```
+
+A store implements both `claim_telegram_update(update_id) -> bool` and
+`release_telegram_update(update_id)`.
 
 Hydrated file attachments are converted to the common bundle attachment shape:
 

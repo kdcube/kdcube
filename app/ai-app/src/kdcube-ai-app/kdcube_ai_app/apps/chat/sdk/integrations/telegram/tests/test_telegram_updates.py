@@ -6,6 +6,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.telegram.updates import (
     FileTelegramUpdateClaims,
     TelegramUpdateClaims,
     claim_telegram_update_once,
+    release_telegram_update,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.telegram.user_storage import (
     TelegramUserAdminStorage,
@@ -23,6 +24,9 @@ class MemoryClaims:
             return False
         self.seen.add(update_id)
         return True
+
+    async def release_telegram_update(self, update_id: int) -> None:
+        self.seen.discard(update_id)
 
 
 @pytest.mark.asyncio
@@ -75,7 +79,19 @@ async def test_the_file_store_is_the_default_for_an_entrypoint(tmp_path, monkeyp
     assert asked == [entrypoint, entrypoint]
 
 
+@pytest.mark.asyncio
+async def test_a_released_claim_is_claimed_again_by_the_resend(tmp_path) -> None:
+    for store in (MemoryClaims(), FileTelegramUpdateClaims(TelegramUserAdminStorage(tmp_path))):
+        assert await claim_telegram_update_once(50, store=store) is True
+        await claim_telegram_update_once(51, store=store)  # a later id was seen meanwhile
+        await release_telegram_update(50, store=store)
+        assert await claim_telegram_update_once(50, store=store) is True, type(store).__name__
+        assert await claim_telegram_update_once(50, store=store) is False
+        await release_telegram_update(None, store=store)  # nothing to release
+
+
 def test_the_claim_api_is_exported_from_the_package() -> None:
+    assert telegram.release_telegram_update is release_telegram_update
     assert telegram.claim_telegram_update_once is claim_telegram_update_once
     assert telegram.TelegramUpdateClaims is TelegramUpdateClaims
     assert telegram.FileTelegramUpdateClaims is FileTelegramUpdateClaims
