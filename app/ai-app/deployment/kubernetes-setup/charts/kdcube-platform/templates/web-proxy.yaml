@@ -1,0 +1,73 @@
+{{- if .Values.services.webProxy.enabled }}
+{{- $imageTag := include "kdcube-platform.imageTag" (dict "root" . "serviceTag" .Values.services.webProxy.image.tag) -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-proxy
+  labels:
+    app: web-proxy
+spec:
+  replicas: {{ .Values.services.webProxy.replicaCount }}
+  selector:
+    matchLabels:
+      app: web-proxy
+  template:
+    metadata:
+      labels:
+        app: web-proxy
+    spec:
+      containers:
+        - name: web-proxy
+          image: "{{ .Values.services.webProxy.image.repository }}:{{ $imageTag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+          env:
+            - name: INGRESS_HOST
+              value: chat-ingress
+            - name: INGRESS_PORT
+              value: {{ .Values.services.chatIngress.servicePort | quote }}
+            - name: WEB_UI_HOST
+              value: web-ui
+            - name: WEB_UI_PORT
+              value: {{ .Values.services.webUi.servicePort | quote }}
+          volumeMounts:
+            - name: nginx-proxy-conf
+              mountPath: /etc/nginx/conf.d/default.conf
+              subPath: nginx.conf
+              readOnly: true
+      volumes:
+        - name: nginx-proxy-conf
+          configMap:
+            name: {{ .Values.configMaps.nginxProxy }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | indent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+{{ toYaml . | indent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+{{ toYaml . | indent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-proxy
+  labels:
+    app: web-proxy
+spec:
+  type: {{ .Values.services.webProxy.serviceType }}
+  selector:
+    app: web-proxy
+  ports:
+    - name: http
+      port: {{ .Values.services.webProxy.servicePort }}
+      targetPort: http
+      protocol: TCP
+{{- end }}

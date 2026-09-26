@@ -1,0 +1,171 @@
+{{- if .Values.services.chatProc.enabled }}
+{{- $imageTag := include "kdcube-platform.imageTag" (dict "root" . "serviceTag" .Values.services.chatProc.image.tag) -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chat-proc
+  labels:
+    app: chat-proc
+spec:
+  replicas: {{ .Values.services.chatProc.replicaCount }}
+  selector:
+    matchLabels:
+      app: chat-proc
+  template:
+    metadata:
+      labels:
+        app: chat-proc
+    spec:
+      containers:
+        - name: chat-proc
+          image: "{{ .Values.services.chatProc.image.repository }}:{{ $imageTag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.services.chatProc.servicePort }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ .Values.configMaps.backendEnv }}
+            - secretRef:
+                name: {{ .Values.secrets.platform.name }}
+          env:
+            - name: CHAT_PROCESSOR_PORT
+              value: {{ .Values.services.chatProc.servicePort | quote }}
+            - name: UVICORN_TIMEOUT_WORKER_HEALTHCHECK
+              value: {{ .Values.services.chatProc.uvicornWorkerHealthcheckTimeout | quote }}
+            - name: GATEWAY_COMPONENT
+              value: proc
+            - name: POSTGRES_HOST
+              value: {{ .Values.postgres.host | quote }}
+            - name: POSTGRES_PORT
+              value: {{ .Values.postgres.port | quote }}
+            - name: POSTGRES_DATABASE
+              value: {{ .Values.postgres.database | quote }}
+            - name: POSTGRES_SSL
+              value: {{ .Values.postgres.ssl | quote }}
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.postgres.name }}
+                  key: {{ .Values.secrets.postgres.userKey }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.postgres.name }}
+                  key: {{ .Values.secrets.postgres.passwordKey }}
+            - name: REDIS_HOST
+              value: {{ .Values.redis.host | quote }}
+            - name: REDIS_PORT
+              value: {{ .Values.redis.port | quote }}
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.redis.name }}
+                  key: {{ .Values.secrets.redis.passwordKey }}
+            - name: REDIS_URL
+              value: "redis://:$(REDIS_PASSWORD)@{{ .Values.redis.host }}:{{ .Values.redis.port }}/0"
+            - name: SECRETS_URL
+              value: http://kdcube-secrets:7777
+            - name: SECRETS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.platform.name }}
+                  key: SECRETS_TOKEN_PROC
+            - name: AGENTIC_BUNDLES_ROOT
+              value: /bundles
+            - name: BUNDLE_STORAGE_ROOT
+              value: /bundle-storage
+            - name: HOST_EXEC_WORKSPACE_PATH
+              value: /exec-workspace
+            - name: HOST_KDCUBE_STORAGE_PATH
+              value: /kdcube-storage
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+{{ toYaml .Values.services.chatProc.resources | indent 12 }}
+          volumeMounts:
+            - name: kdcube-storage
+              mountPath: /kdcube-storage
+            - name: bundles
+              mountPath: /bundles
+            - name: bundle-storage
+              mountPath: /bundle-storage
+            - name: exec-workspace
+              mountPath: /exec-workspace
+            - name: logs
+              mountPath: /logs
+            - name: descriptors
+              mountPath: /config
+              readOnly: true
+            # docker.sock mount is intentionally disabled for k3d/containerd clusters.
+            # - name: docker-sock
+            #   mountPath: /var/run/docker.sock
+            {{- if .Values.awsCredentials.enabled }}
+            - name: aws-credentials
+              mountPath: /home/appuser/.aws
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: kdcube-storage
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.kdcubeStorage.claimName }}
+        - name: bundles
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.bundles.claimName }}
+        - name: bundle-storage
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.bundleStorage.claimName }}
+        - name: exec-workspace
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.execWorkspace.claimName }}
+        - name: logs
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.logs.claimName }}
+        - name: descriptors
+          configMap:
+            name: {{ .Values.configMaps.descriptors }}
+        {{- if .Values.dockerSocket.enabled }}
+        - name: docker-sock
+          hostPath:
+            path: {{ .Values.dockerSocket.hostPath }}
+            type: Socket
+        {{- end }}
+        {{- if .Values.awsCredentials.enabled }}
+        - name: aws-credentials
+          hostPath:
+            path: {{ .Values.awsCredentials.hostPath }}
+            type: Directory
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | indent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+{{ toYaml . | indent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+{{ toYaml . | indent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chat-proc
+  labels:
+    app: chat-proc
+spec:
+  type: ClusterIP
+  selector:
+    app: chat-proc
+  ports:
+    - name: http
+      port: {{ .Values.services.chatProc.servicePort }}
+      targetPort: http
+      protocol: TCP
+{{- end }}

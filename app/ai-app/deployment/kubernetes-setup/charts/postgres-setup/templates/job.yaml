@@ -1,0 +1,78 @@
+{{- $imageTag := include "postgres-setup.imageTag" (dict "root" . "explicitTag" .Values.image.tag) -}}
+{{- $tenantId := .Values.bootstrap.tenantId | default "TENANT_ID" -}}
+{{- if or (eq $tenantId "") (eq $tenantId "TENANT_ID") -}}
+{{- $tenantId = (.Values.context.tenant | default "TENANT_ID") -}}
+{{- end -}}
+{{- $projectId := .Values.bootstrap.projectId | default "PROJECT_ID" -}}
+{{- if or (eq $projectId "") (eq $projectId "PROJECT_ID") -}}
+{{- $projectId = (.Values.context.project | default "PROJECT_ID") -}}
+{{- end -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "postgres-setup.fullname" . }}
+  labels:
+    app.kubernetes.io/name: {{ include "postgres-setup.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  backoffLimit: {{ .Values.job.backoffLimit }}
+  ttlSecondsAfterFinished: {{ .Values.job.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "postgres-setup.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      enableServiceLinks: false
+      restartPolicy: {{ .Values.job.restartPolicy }}
+      initContainers:
+        - name: wait-for-postgres
+          image: pgvector/pgvector:pg16
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h {{ .Values.postgres.host | quote }} -p {{ .Values.postgres.port | quote }} -U "$POSTGRES_USER" -d "$POSTGRES_DATABASE"; do
+                echo "Waiting for postgres..."
+                sleep 3
+              done
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingPostgresSecret.name }}
+                  key: {{ .Values.existingPostgresSecret.userKey }}
+            - name: POSTGRES_DATABASE
+              value: {{ .Values.postgres.database | quote }}
+      containers:
+        - name: postgres-setup
+          image: "{{ .Values.image.repository }}:{{ $imageTag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: POSTGRES_HOST
+              value: {{ .Values.postgres.host | quote }}
+            - name: POSTGRES_PORT
+              value: {{ .Values.postgres.port | quote }}
+            - name: POSTGRES_DATABASE
+              value: {{ .Values.postgres.database | quote }}
+            - name: POSTGRES_SSL
+              value: {{ .Values.postgres.ssl | quote }}
+            - name: REDIS_PORT
+              value: {{ .Values.redis.port | quote }}
+            - name: TENANT_ID
+              value: {{ $tenantId | quote }}
+            - name: PROJECT_ID
+              value: {{ $projectId | quote }}
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingPostgresSecret.name }}
+                  key: {{ .Values.existingPostgresSecret.userKey }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingPostgresSecret.name }}
+                  key: {{ .Values.existingPostgresSecret.passwordKey }}
+          resources:
+{{ toYaml .Values.resources | indent 12 }}

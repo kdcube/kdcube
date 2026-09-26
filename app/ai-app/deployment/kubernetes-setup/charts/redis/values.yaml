@@ -1,0 +1,40 @@
+nameOverride: ""
+fullnameOverride: redis
+
+image:
+  repository: redis
+  tag: "7"
+  pullPolicy: IfNotPresent
+
+auth:
+  enabled: true
+  password: redispass
+
+infra:
+  redis:
+    password: ""
+
+service:
+  type: ClusterIP
+  port: 6379
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+persistence:
+  enabled: true
+  size: 5Gi
+  storageClassName: ""
+
+redisConfig:
+  appendonly: "yes"
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
