@@ -2216,6 +2216,10 @@ bundles:
                   label: Export Google Doc
                   description: Export a document to a supported format.
                   grants: [docs:read]
+                productivity_docs_read_image:
+                  label: Read Google Doc image
+                  description: Read one inline image of a document as bytes.
+                  grants: [docs:read]
                 productivity_docs_list_comments:
                   label: List Google Doc comments
                   description: List comments and replies on a document.
@@ -2834,6 +2838,9 @@ bundles:
         connection_hub:
           bundle_id: connection-hub@1-0
       integrations:
+        provider_fetch:
+          public_base_url: https://your-public-origin.example
+          token_ttl_seconds: 60
         telegram.kdcube_ref:
           provider: telegram
           where: connection-hub

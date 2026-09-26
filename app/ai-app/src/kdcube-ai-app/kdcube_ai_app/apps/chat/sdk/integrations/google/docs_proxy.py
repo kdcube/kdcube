@@ -45,8 +45,12 @@ from kdcube_ai_app.apps.chat.sdk.integrations.docs.tables import (
     spread_table_selector,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.google.docs_structure import (
+    OBJECT_KINDS,
     body_tables,
     body_segments,
+    inline_image_record,
+    magnitude_pt,
+    object_record,
     public_cell,
     public_table,
     table_grid,
@@ -75,6 +79,13 @@ MAX_SEARCH_RESULTS = 50
 MAX_TEXT_CHARS = 200_000
 MAX_EXPORT_BYTES = 10 * 1024 * 1024  # Drive files.export ceiling
 MAX_IMPORT_BYTES = 10 * 1024 * 1024
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
+# Bounded so a refusal can list what the document holds instead of everything.
+MAX_IMAGE_CANDIDATES = 20
+# Docs places an image at 96 dpi: 624 px wide arrives as 468 pt.
+IMAGE_POINTS_PER_PIXEL = 0.75
+# A table cell's default padding on each side.
+DEFAULT_CELL_PADDING_PT = 5.0
 # Raw uploads ride the resumable lane (one initiate + one PUT), which has no
 # multipart 5MB ceiling; the bound here is ours, sized for report/archive
 # deliverables rather than media libraries.
@@ -171,6 +182,15 @@ def _int(value: Any, *, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return int(default)
+
+
+def _points(value: Any, *, default: float = 0.0) -> float:
+    """A size in points, kept to a tenth: Google reports widths that precise."""
+
+    try:
+        return round(float(value), 1)
+    except (TypeError, ValueError):
+        return default
 
 
 def _document_id(document_ref: Any) -> str:
@@ -299,11 +319,37 @@ async def _drive_file_metadata(
     return dict(value) if isinstance(value, Mapping) else {}
 
 
+def _refuse_unsupported_rich_link(response: httpx.Response) -> None:
+    """Say what a link chip is when Google refuses the address it was given.
+
+    Docs defines a rich link as "a link to a Google resource (such as a file in
+    Drive, a YouTube video, or a Calendar event)" and rejects anything else with
+    a message that does not say so. Which addresses qualify is Google's rule and
+    is not published as a list, so this explains rather than second-guesses it.
+    """
+
+    try:
+        message = str((response.json().get("error") or {}).get("message") or "")
+    except Exception:
+        return
+    if "insertRichLink" not in message:
+        return
+    raise DocsValidationError(
+        "docs_link_unsupported",
+        "Google refused this link chip: a link chip points at a Google "
+        "resource - a Drive file, a Docs or Sheets document, a Calendar event, "
+        "a YouTube video - and other addresses are rejected. Write an ordinary "
+        "address as text instead.",
+        details={"provider_message": message},
+    )
+
+
 def _raise_for_status(
     response: httpx.Response, *, operation: str, mutating: bool
 ) -> None:
     if response.status_code < 400:
         return
+    _refuse_unsupported_rich_link(response)
     body: Mapping[str, Any] | None
     try:
         parsed = response.json()
@@ -341,6 +387,8 @@ def _extract_paragraph_text(paragraph: Mapping[str, Any]) -> str:
     return "".join(parts)
 
 
+MAX_OBJECT_LABEL_CHARS = 40
+
 _CELL_MARKERS = {
     "person": "[person]",
     "image": "[image]",
@@ -351,6 +399,67 @@ _CELL_MARKERS = {
     "horizontal_rule": "[rule]",
     "auto_text": "[auto text]",
 }
+
+
+def _object_label(entry: Mapping[str, Any]) -> str:
+    """One non-text element as the readable text shows it.
+
+    Both renderings - a table cell on its line, a paragraph in the body - come
+    through here, so the same object cannot read two ways. The detail inside
+    the brackets is what a reader would otherwise have to go looking for: a
+    chip's address, a link's title, an image's alt text.
+    """
+
+    kind = str(entry.get("kind") or "").strip()
+    marker = _CELL_MARKERS.get(kind, f"[{kind}]" if kind else "")
+    if not marker:
+        return ""
+    detail = ""
+    if kind == "person":
+        detail = str(entry.get("email") or entry.get("name") or "").strip()
+    elif kind == "rich_link":
+        detail = str(entry.get("title") or entry.get("uri") or "").strip()
+    elif kind == "date":
+        detail = str(entry.get("text") or "").strip()
+    elif kind == "image":
+        detail = str(entry.get("alt") or "").strip()
+    if not detail:
+        return marker
+    detail = detail.replace("|", "\\|").replace("\n", " ")
+    if len(detail) > MAX_OBJECT_LABEL_CHARS:
+        detail = detail[: MAX_OBJECT_LABEL_CHARS - 1].rstrip() + "…"
+    return f"{marker[:-1]}: {detail}]"
+
+
+def _readable_paragraph_text(
+    paragraph: Mapping[str, Any],
+    *,
+    inline_objects: Mapping[str, Any] | None = None,
+) -> str:
+    """A paragraph as a reader sees it, with its non-text elements in place.
+
+    ``_extract_paragraph_text`` stays literal because its text is paired with
+    document indices; this one is for reading, so a chip or a picture appears
+    where it sits rather than vanishing.
+    """
+
+    parts: list[str] = []
+    for element in paragraph.get("elements") or []:
+        if not isinstance(element, Mapping):
+            continue
+        text_run = element.get("textRun")
+        if isinstance(text_run, Mapping):
+            parts.append(str(text_run.get("content") or ""))
+            continue
+        for key, kind in OBJECT_KINDS.items():
+            if key in element:
+                label = _object_label(
+                    object_record(kind, element[key], inline_objects=inline_objects)
+                )
+                if label:
+                    parts.append(label)
+                break
+    return "".join(parts)
 
 
 def _cell_text(cell: Mapping[str, Any]) -> str:
@@ -369,15 +478,18 @@ def _cell_text(cell: Mapping[str, Any]) -> str:
         parts.append("[nested table]")
     seen: list[str] = []
     for entry in cell.get("objects") or ():
-        kind = str((entry or {}).get("kind") or "").strip()
-        marker = _CELL_MARKERS.get(kind, f"[{kind}]" if kind else "")
+        marker = _object_label(entry or {})
         if marker and marker not in seen:
             seen.append(marker)
     return " ".join([*parts, *seen])
 
 
-def _iter_table_text(table: Mapping[str, Any]) -> Iterator[str]:
-    grid = table_grid(table)
+def _iter_table_text(
+    table: Mapping[str, Any],
+    *,
+    inline_objects: Mapping[str, Any] | None = None,
+) -> Iterator[str]:
+    grid = table_grid(table, inline_objects=inline_objects)
     rows, columns = int(grid["rows"]), int(grid["columns"])
     header_rows = int(grid["header_rows"])
     caption = f"[table · {rows} rows × {columns} columns"
@@ -387,7 +499,11 @@ def _iter_table_text(table: Mapping[str, Any]) -> Iterator[str]:
         yield " | ".join(_cell_text(cell) for cell in row) + "\n"
 
 
-def _iter_structural_text(content: Any) -> Iterator[str]:
+def _iter_structural_text(
+    content: Any,
+    *,
+    inline_objects: Mapping[str, Any] | None = None,
+) -> Iterator[str]:
     """Yield readable text from paragraphs, tables, and table-of-contents blocks."""
 
     for block in content or []:
@@ -395,15 +511,17 @@ def _iter_structural_text(content: Any) -> Iterator[str]:
             continue
         paragraph = block.get("paragraph")
         if isinstance(paragraph, Mapping):
-            yield _extract_paragraph_text(paragraph)
+            yield _readable_paragraph_text(paragraph, inline_objects=inline_objects)
             continue
         table = block.get("table")
         if isinstance(table, Mapping):
-            yield from _iter_table_text(table)
+            yield from _iter_table_text(table, inline_objects=inline_objects)
             continue
         table_of_contents = block.get("tableOfContents")
         if isinstance(table_of_contents, Mapping):
-            yield from _iter_structural_text(table_of_contents.get("content"))
+            yield from _iter_structural_text(
+                table_of_contents.get("content"), inline_objects=inline_objects
+            )
 
 
 def _iter_document_text(document: Mapping[str, Any]) -> Iterator[str]:
@@ -425,7 +543,10 @@ def _iter_document_text(document: Mapping[str, Any]) -> Iterator[str]:
         )
         body = document_tab.get("body")
         if isinstance(body, Mapping):
-            yield from _iter_structural_text(body.get("content"))
+            yield from _iter_structural_text(
+                body.get("content"),
+                inline_objects=_objects_map(document_tab.get("inlineObjects")),
+            )
         for child in tab.get("childTabs") or []:
             if isinstance(child, Mapping):
                 yield from _walk_tab(child)
@@ -437,7 +558,10 @@ def _iter_document_text(document: Mapping[str, Any]) -> Iterator[str]:
         return
     body = document.get("body")
     if isinstance(body, Mapping):
-        yield from _iter_structural_text(body.get("content"))
+        yield from _iter_structural_text(
+            body.get("content"),
+            inline_objects=_objects_map(document.get("inlineObjects")),
+        )
 
 
 def _extract_document_text(document: Mapping[str, Any], *, limit: int) -> str:
@@ -461,12 +585,22 @@ def _extract_document_text(document: Mapping[str, Any], *, limit: int) -> str:
     return "".join(chunks)
 
 
-def _default_document_body(document: Mapping[str, Any]) -> Mapping[str, Any]:
+def _objects_map(value: Any) -> Mapping[str, Any]:
+    """A document's or tab's ``inlineObjects`` map, keyed by object id."""
+
+    return value if isinstance(value, Mapping) else {}
+
+
+def _default_document_content(
+    document: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+    """The body of a document served without tabs, with its inline objects."""
+
     body = document.get("body")
     if isinstance(body, Mapping):
-        return body
+        return body, _objects_map(document.get("inlineObjects"))
 
-    def _find(tabs: Any) -> Mapping[str, Any]:
+    def _find(tabs: Any) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
         for tab in tabs or []:
             if not isinstance(tab, Mapping):
                 continue
@@ -474,13 +608,20 @@ def _default_document_body(document: Mapping[str, Any]) -> Mapping[str, Any]:
             if isinstance(document_tab, Mapping) and isinstance(
                 document_tab.get("body"), Mapping
             ):
-                return document_tab["body"]
+                return (
+                    document_tab["body"],
+                    _objects_map(document_tab.get("inlineObjects")),
+                )
             nested = _find(tab.get("childTabs"))
-            if nested:
+            if nested[0]:
                 return nested
-        return {}
+        return {}, {}
 
     return _find(document.get("tabs"))
+
+
+def _default_document_body(document: Mapping[str, Any]) -> Mapping[str, Any]:
+    return _default_document_content(document)[0]
 
 
 def _body_end_index_from_body(body: Mapping[str, Any]) -> int:
@@ -495,8 +636,14 @@ def _body_end_index_from_body(body: Mapping[str, Any]) -> int:
 
 def _document_tab_entries(
     document: Mapping[str, Any],
-) -> list[tuple[dict[str, Any], Mapping[str, Any]]]:
-    entries: list[tuple[dict[str, Any], Mapping[str, Any]]] = []
+) -> list[tuple[dict[str, Any], Mapping[str, Any], Mapping[str, Any]]]:
+    """Each tab as (record, body, inline objects).
+
+    The inline-objects map rides beside the body because an image element in
+    that body carries only an id into it.
+    """
+
+    entries: list[tuple[dict[str, Any], Mapping[str, Any], Mapping[str, Any]]] = []
 
     def _walk(
         tabs: Any,
@@ -534,6 +681,7 @@ def _document_tab_entries(
                         "end_index": _body_end_index_from_body(body),
                     },
                     body,
+                    _objects_map(document_tab.get("inlineObjects")),
                 )
             )
             _walk(
@@ -544,7 +692,7 @@ def _document_tab_entries(
 
     _walk(document.get("tabs"))
     if not entries:
-        body = _default_document_body(document)
+        body, inline_objects = _default_document_content(document)
         entries.append(
             (
                 {
@@ -556,6 +704,7 @@ def _document_tab_entries(
                     "end_index": _body_end_index_from_body(body),
                 },
                 body,
+                inline_objects,
             )
         )
     return entries
@@ -564,7 +713,7 @@ def _document_tab_entries(
 def _body_end_index(document: Mapping[str, Any], *, tab_id: str = "") -> int:
     entries = _document_tab_entries(document)
     if tab_id:
-        for record, body in entries:
+        for record, body, _objects in entries:
             if record["tab_id"] == tab_id:
                 return _body_end_index_from_body(body)
     return _body_end_index_from_body(entries[0][1])
@@ -573,14 +722,14 @@ def _body_end_index(document: Mapping[str, Any], *, tab_id: str = "") -> int:
 def _tab_body(document: Mapping[str, Any], *, tab_id: str = "") -> Mapping[str, Any]:
     entries = _document_tab_entries(document)
     if tab_id:
-        for record, body in entries:
+        for record, body, _objects in entries:
             if record["tab_id"] == tab_id:
                 return body
     return entries[0][1] if entries else _default_document_body(document)
 
 
 def _document_tabs(document: Mapping[str, Any]) -> list[dict[str, Any]]:
-    return [record for record, _body in _document_tab_entries(document)]
+    return [record for record, _body, _objects in _document_tab_entries(document)]
 
 
 def _tab_selection_details(tabs: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -699,10 +848,15 @@ def _document_tables(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     tables: list[dict[str, Any]] = []
     tabs: list[dict[str, Any]] = []
-    for record, body in _document_tab_entries(document):
+    for record, body, inline_objects in _document_tab_entries(document):
         tabs.append(record)
         tables.extend(
-            body_tables(body, tab_id=record["tab_id"], tab_title=record["title"])
+            body_tables(
+                body,
+                tab_id=record["tab_id"],
+                tab_title=record["title"],
+                inline_objects=inline_objects,
+            )
         )
     return tables, tabs
 
@@ -1049,6 +1203,147 @@ async def _export(
     }
 
 
+def _inline_images(document: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Every inline image in the document, with where it sits and how to fetch it.
+
+    Positioned (floating) images live in a different map and are not covered.
+    """
+
+    images: list[dict[str, Any]] = []
+    for record, body, inline_objects in _document_tab_entries(document):
+        if not inline_objects:
+            continue
+        placement: dict[str, dict[str, Any]] = {}
+        for table in body_tables(
+            body,
+            tab_id=record["tab_id"],
+            tab_title=record["title"],
+            inline_objects=inline_objects,
+        ):
+            for row_number, row in enumerate(table["cells"], start=1):
+                for column, cell in enumerate(row, start=1):
+                    for entry in cell.get("objects") or ():
+                        object_id = str(entry.get("object_id") or "")
+                        if entry.get("kind") == "image" and object_id:
+                            placement[object_id] = {
+                                "table": table.get("position"),
+                                "row": row_number,
+                                "column": column,
+                            }
+        for object_id, entry in inline_objects.items():
+            described = inline_image_record(str(object_id), inline_objects)
+            properties = (
+                entry.get("inlineObjectProperties") if isinstance(entry, Mapping) else {}
+            )
+            embedded = (
+                properties.get("embeddedObject")
+                if isinstance(properties, Mapping)
+                else {}
+            )
+            image = (
+                embedded.get("imageProperties") if isinstance(embedded, Mapping) else {}
+            )
+            images.append(
+                {
+                    **described,
+                    "tab_id": record["tab_id"],
+                    "tab_title": record["title"],
+                    **({"cell": placement[str(object_id)]} if str(object_id) in placement else {}),
+                    "content_uri": _clean(
+                        (image or {}).get("contentUri") if isinstance(image, Mapping) else ""
+                    ),
+                }
+            )
+    return images
+
+
+def _image_candidates(images: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """What a refusal names: the images themselves, never their content URLs."""
+
+    return [
+        {key: value for key, value in image.items() if key != "content_uri"}
+        for image in images[:MAX_IMAGE_CANDIDATES]
+    ]
+
+
+async def _read_image(
+    client: httpx.AsyncClient, *, access_token: str, payload: Mapping[str, Any]
+) -> dict[str, Any]:
+    document_id = _document_id(payload.get("document_ref"))
+    wanted = _clean(payload.get("object_id"))
+    document = await _fetch_document(
+        client, access_token=access_token, document_id=document_id
+    )
+    images = _inline_images(document)
+    if not images:
+        raise DocsValidationError(
+            "docs_image_not_found",
+            "This document holds no inline images.",
+            details={"document_id": document_id},
+        )
+    if wanted:
+        matches = [image for image in images if image.get("object_id") == wanted]
+        if not matches:
+            raise DocsValidationError(
+                "docs_image_not_found",
+                f"This document holds no inline image {wanted!r}. A table read "
+                "reports each image's object_id on the cell that holds it.",
+                details={"images": _image_candidates(images)},
+            )
+        image = matches[0]
+    elif len(images) > 1:
+        raise DocsValidationError(
+            "docs_image_selection_required",
+            "This document holds several images. Name the object_id of the one "
+            "to read.",
+            details={"images": _image_candidates(images)},
+        )
+    else:
+        image = images[0]
+
+    content_uri = _clean(image.get("content_uri"))
+    if not content_uri:
+        raise DocsValidationError(
+            "docs_image_bytes_unavailable",
+            "Google reports no fetchable content for this object, which is what "
+            "a drawing or a linked object looks like here.",
+            details={"object_id": image.get("object_id")},
+        )
+    # The URL is its own capability: it needs no credential, so none is sent.
+    response = await client.get(content_uri, follow_redirects=True)
+    if response.status_code != 200:
+        raise DocsValidationError(
+            "docs_image_fetch_failed",
+            f"Fetching the image returned HTTP {response.status_code}. The "
+            "document's image URLs expire; read the document again and retry.",
+            details={"status": response.status_code, "object_id": image.get("object_id")},
+        )
+    mime_type = _clean(response.headers.get("content-type")).split(";")[0].lower()
+    if not mime_type.startswith("image/"):
+        raise DocsValidationError(
+            "docs_image_unexpected_type",
+            f"The image URL returned {mime_type or 'no content type'} instead of "
+            "an image.",
+            details={"object_id": image.get("object_id"), "mime_type": mime_type},
+        )
+    content = response.content or b""
+    if len(content) > MAX_IMAGE_BYTES:
+        raise DocsValidationError(
+            "docs_image_too_large",
+            f"The image is {len(content)} bytes; the limit is {MAX_IMAGE_BYTES}.",
+            details={"object_id": image.get("object_id"), "byte_size": len(content)},
+        )
+    described = {key: value for key, value in image.items() if key != "content_uri"}
+    return {
+        **described,
+        "document_id": document_id,
+        "web_url": _web_url(document_id),
+        "mime_type": mime_type,
+        "byte_size": len(content),
+        "content_base64": base64.b64encode(content).decode("ascii"),
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Write operations (docs:write) — typed batchUpdate, never raw JSON
 # --------------------------------------------------------------------------- #
@@ -1322,11 +1617,286 @@ def _range_preview(
     return preview
 
 
+MAX_PIECES = 20
+
+
+def _pieces_payload(payload: Mapping[str, Any]) -> list[dict[str, Any]] | None:
+    """The pieces one insert writes, or None when it is plain text.
+
+    A chip is its own element rather than styled text, so a sentence that holds
+    one is several requests. Naming them in order here keeps the index
+    arithmetic out of the caller's hands, which is the whole point of this
+    namespace.
+    """
+
+    raw = payload.get("pieces")
+    if raw in (None, "", [], ()):
+        return None
+    if isinstance(raw, Mapping) or not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
+        raise DocsValidationError(
+            "docs_pieces_invalid",
+            'pieces is a list, e.g. [{"text": "Owner "}, {"person": "a@b.com"}].',
+            details={"received_type": type(raw).__name__},
+        )
+    if _clean(payload.get("text")):
+        raise DocsValidationError(
+            "docs_value_ambiguous",
+            "Name either text or pieces - pieces is the form that can hold a chip.",
+        )
+    if len(raw) > MAX_PIECES:
+        raise DocsValidationError(
+            "request_too_large", f"Write at most {MAX_PIECES} pieces per call."
+        )
+    values: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, Mapping):
+            raise DocsValidationError(
+                "docs_pieces_invalid",
+                'Each piece is an object: {"text": "..."}, {"person": "a@b.com"}, '
+                '{"date": "2026-10-02"} or {"link": "https://..."}.',
+            )
+        value = _chip_value(item)
+        if value["kind"] == "text":
+            _bounded_text(value["text"], field="pieces[].text")
+        values.append(value)
+    if not values:
+        raise DocsValidationError(
+            "docs_pieces_invalid", "pieces holds at least one piece."
+        )
+    return values
+
+
+def _pieces_requests(
+    values: Sequence[Mapping[str, Any]], *, location: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    """Requests that leave the pieces in the order they were named.
+
+    All of them go at one index, last one first: each insertion pushes what is
+    already there to the right, so writing backwards lands them forwards.
+    """
+
+    index = int(location["index"])
+    scope = {key: value for key, value in location.items() if key != "index"}
+    requests: list[dict[str, Any]] = []
+    for value in reversed(values):
+        request = _chip_request(value, index=index, scope=scope)
+        if request is not None:
+            requests.append(request)
+    return requests
+
+
+def _pieces_summary(values: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    return {
+        "pieces": [value["kind"] for value in values],
+        "chars": sum(len(value.get("text") or "") for value in values),
+    }
+
+
+MAX_BLOCK_ITEMS = 50
+
+# What a caller names, and what Google calls it.
+NAMED_STYLES = {
+    "title": "TITLE",
+    "subtitle": "SUBTITLE",
+    "normal": "NORMAL_TEXT",
+    **{f"heading_{level}": f"HEADING_{level}" for level in range(1, 7)},
+}
+BULLET_PRESETS = {
+    "bullet": "BULLET_DISC_CIRCLE_SQUARE",
+    "number": "NUMBERED_DECIMAL_ALPHA_ROMAN",
+}
+
+
+def _utf16_len(text: str) -> int:
+    """Length the way Docs counts it.
+
+    Indices are UTF-16 code units, so a rocket is two and a letter is one.
+    A style range computed in Python characters would drift on the first
+    emoji and take the neighbouring paragraph with it.
+    """
+
+    return len(str(text or "").encode("utf-16-le")) // 2
+
+
+def _content_pieces(value: Any, *, field: str) -> list[dict[str, Any]]:
+    """One paragraph's content: a plain string, or the pieces that make it."""
+
+    if isinstance(value, str):
+        return [{"kind": "text", "text": value}]
+    if isinstance(value, Mapping):
+        return [_chip_value(value)]
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        pieces: list[dict[str, Any]] = []
+        for item in value:
+            if isinstance(item, Mapping):
+                pieces.append(_chip_value(item))
+            elif isinstance(item, str):
+                pieces.append({"kind": "text", "text": item})
+            else:
+                raise DocsValidationError(
+                    "docs_pieces_invalid",
+                    f"{field} holds text or pieces like "
+                    '{"text": "..."} and {"person": "a@b.com"}.',
+                )
+        return pieces
+    raise DocsValidationError(
+        "docs_pieces_invalid",
+        f'{field} is text, or a list of pieces such as [{{"text": "Owner "}}, '
+        '{"person": "a@b.com"}].',
+    )
+
+
+def _pieces_length(values: Sequence[Mapping[str, Any]]) -> int:
+    """How many index positions these pieces will occupy: a chip takes one."""
+
+    return sum(
+        _utf16_len(value.get("text")) if value["kind"] == "text" else 1
+        for value in values
+    )
+
+
+def _block_paragraphs(payload: Mapping[str, Any]) -> list[list[dict[str, Any]]] | None:
+    """Paragraphs a call writes as units, or None when it writes one run."""
+
+    items = payload.get("items")
+    if items in (None, "", [], ()):
+        return None
+    if isinstance(items, (str, bytes, Mapping)) or not isinstance(items, Sequence):
+        raise DocsValidationError(
+            "docs_items_invalid",
+            'items is a list, one entry per paragraph, e.g. ["Fix login", '
+            '"Ship docs"].',
+            details={"received_type": type(items).__name__},
+        )
+    if len(items) > MAX_BLOCK_ITEMS:
+        raise DocsValidationError(
+            "request_too_large", f"Write at most {MAX_BLOCK_ITEMS} items per call."
+        )
+    if _clean(payload.get("text")) or payload.get("pieces"):
+        raise DocsValidationError(
+            "docs_value_ambiguous",
+            "Name items, or text/pieces - items writes one paragraph per entry.",
+        )
+    return [
+        _content_pieces(item, field="items[]") for item in items
+    ] or None
+
+
+def _paragraph_style(payload: Mapping[str, Any]) -> tuple[str, str]:
+    """The named style and the bullet preset this call asks for."""
+
+    style = _clean(payload.get("style")).lower()
+    if style and style not in NAMED_STYLES:
+        raise DocsValidationError(
+            "docs_style_unsupported",
+            f"style must be one of: {', '.join(sorted(NAMED_STYLES))}.",
+            details={"style": style},
+        )
+    listing = _clean(payload.get("list")).lower()
+    if listing and listing not in BULLET_PRESETS:
+        raise DocsValidationError(
+            "docs_list_unsupported",
+            f"list must be one of: {', '.join(sorted(BULLET_PRESETS))}.",
+            details={"list": listing},
+        )
+    return NAMED_STYLES.get(style, ""), BULLET_PRESETS.get(listing, "")
+
+
+def _structured_insert(
+    document: Mapping[str, Any],
+    *,
+    tab_id: str,
+    index: int,
+    paragraphs: Sequence[Sequence[Mapping[str, Any]]],
+    named_style: str,
+    bullet_preset: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Requests that add whole paragraphs and give them their role.
+
+    A paragraph style covers every paragraph its range touches, so a heading
+    written into the middle of a sentence would restyle that sentence too.
+    The write therefore starts on a paragraph of its own: at a paragraph's
+    start it begins there, and at the body's end it opens one first.
+    """
+
+    body = _tab_body(document, tab_id=tab_id)
+    segments = [row for row in body_segments(body) if row.get("kind") != "cell"]
+    starts = {int(row["start"]) for row in segments}
+    body_end = _body_end_index(document, tab_id=tab_id)
+    if index in starts:
+        prefix = ""
+    elif index >= body_end:
+        # The end of the body sits inside the last paragraph; open a new one.
+        prefix = "\n"
+    else:
+        where = _segment_at(body_segments(body), index)
+        quoted = str(where.get("text") or "").strip()
+        if len(quoted) > PREVIEW_WINDOW_CHARS:
+            quoted = quoted[: PREVIEW_WINDOW_CHARS - 1].rstrip() + "…"
+        inside = f"{_where_text(where)} {quoted!r}" if quoted else _where_text(where)
+        raise DocsValidationError(
+            "docs_block_needs_its_own_paragraph",
+            "A heading or a list item is a paragraph of its own, and a "
+            f"paragraph style covers everything its range touches. Index {index} "
+            f"falls inside {inside}, so writing here would restyle that text "
+            "too. Use the index a paragraph starts at, or omit index to write "
+            "at the end.",
+            details={
+                "index": index,
+                "where": _where_text(where),
+                "inside_text": quoted,
+                "paragraph_starts": sorted(starts)[:MAX_PREVIEW_MATCHES],
+            },
+        )
+
+    scope = {"tabId": tab_id} if tab_id else {}
+    flat: list[dict[str, Any]] = []
+    if prefix:
+        flat.append({"kind": "text", "text": prefix})
+    for paragraph in paragraphs:
+        flat.extend(paragraph)
+        flat.append({"kind": "text", "text": "\n"})
+
+    requests = _pieces_requests(flat, location={"index": index, **scope})
+    start = index + _utf16_len(prefix)
+    end = index + _pieces_length(flat)
+    span = {"startIndex": start, "endIndex": end, **scope}
+    if named_style:
+        requests.append(
+            {
+                "updateParagraphStyle": {
+                    "range": span,
+                    "paragraphStyle": {"namedStyleType": named_style},
+                    "fields": "namedStyleType",
+                }
+            }
+        )
+    if bullet_preset:
+        requests.append(
+            {"createParagraphBullets": {"range": span, "bulletPreset": bullet_preset}}
+        )
+    summary = {
+        "paragraphs": len(paragraphs),
+        "start_index": start,
+        "end_index": end,
+        **({"style": named_style} if named_style else {}),
+        **({"list": bullet_preset} if bullet_preset else {}),
+    }
+    return requests, summary
+
+
 async def _insert_text(
     client: httpx.AsyncClient, *, access_token: str, payload: Mapping[str, Any]
 ) -> dict[str, Any]:
     document_id = _document_id(payload.get("document_ref"))
-    text = _bounded_text(payload.get("text"))
+    blocks = _block_paragraphs(payload)
+    named_style, bullet_preset = _paragraph_style(payload)
+    pieces = _pieces_payload(payload)
+    text = (
+        ""
+        if pieces is not None or blocks is not None
+        else _bounded_text(payload.get("text"))
+    )
     document = await _fetch_document(
         client, access_token=access_token, document_id=document_id
     )
@@ -1346,22 +1916,42 @@ async def _insert_text(
             "document_id": document_id,
             "web_url": _web_url(document_id),
             "preview": _range_preview(document, tab_id=tab_id, start=location["index"]),
-            "would_insert_chars": len(text),
+            **({"would_insert_chars": len(text)} if not pieces else {}),
+            **({"would_insert": _pieces_summary(pieces)} if pieces else {}),
             "tab_id": tab_id,
             "tab_count": len(tabs),
             "written": False,
         }
+    block_summary: dict[str, Any] = {}
+    if blocks is not None or named_style or bullet_preset:
+        paragraphs = blocks if blocks is not None else [pieces or [{"kind": "text", "text": text}]]
+        requests, block_summary = _structured_insert(
+            document,
+            tab_id=tab_id,
+            index=int(location["index"]),
+            paragraphs=paragraphs,
+            named_style=named_style,
+            bullet_preset=bullet_preset,
+        )
+    else:
+        requests = (
+            _pieces_requests(pieces, location=location)
+            if pieces is not None
+            else [{"insertText": {"location": location, "text": text}}]
+        )
     await _batch_update(
         client,
         access_token=access_token,
         document_id=document_id,
-        requests=[{"insertText": {"location": location, "text": text}}],
+        requests=requests,
         operation="insert_text",
     )
     return {
         "document_id": document_id,
         "web_url": _web_url(document_id),
-        "inserted_chars": len(text),
+        **({"inserted_chars": len(text)} if not (pieces or block_summary) else {}),
+        **({"inserted": _pieces_summary(pieces)} if pieces else {}),
+        **({"wrote": block_summary} if block_summary else {}),
         "index": location["index"],
         "tab_id": tab_id,
         "tab_count": len(tabs),
@@ -1372,7 +1962,14 @@ async def _append_text(
     client: httpx.AsyncClient, *, access_token: str, payload: Mapping[str, Any]
 ) -> dict[str, Any]:
     document_id = _document_id(payload.get("document_ref"))
-    text = _bounded_text(payload.get("text"))
+    blocks = _block_paragraphs(payload)
+    named_style, bullet_preset = _paragraph_style(payload)
+    pieces = _pieces_payload(payload)
+    text = (
+        ""
+        if pieces is not None or blocks is not None
+        else _bounded_text(payload.get("text"))
+    )
     document = await _fetch_document(
         client, access_token=access_token, document_id=document_id
     )
@@ -1381,17 +1978,36 @@ async def _append_text(
     location: dict[str, Any] = {"index": index}
     if tab_id:
         location["tabId"] = tab_id
+    block_summary: dict[str, Any] = {}
+    if blocks is not None or named_style or bullet_preset:
+        paragraphs = blocks if blocks is not None else [pieces or [{"kind": "text", "text": text}]]
+        requests, block_summary = _structured_insert(
+            document,
+            tab_id=tab_id,
+            index=index,
+            paragraphs=paragraphs,
+            named_style=named_style,
+            bullet_preset=bullet_preset,
+        )
+    else:
+        requests = (
+            _pieces_requests(pieces, location=location)
+            if pieces is not None
+            else [{"insertText": {"location": location, "text": text}}]
+        )
     await _batch_update(
         client,
         access_token=access_token,
         document_id=document_id,
-        requests=[{"insertText": {"location": location, "text": text}}],
+        requests=requests,
         operation="append_text",
     )
     return {
         "document_id": document_id,
         "web_url": _web_url(document_id),
-        "appended_chars": len(text),
+        **({"appended_chars": len(text)} if not (pieces or block_summary) else {}),
+        **({"appended": _pieces_summary(pieces)} if pieces else {}),
+        **({"wrote": block_summary} if block_summary else {}),
         "index": index,
         "tab_id": tab_id,
         "tab_count": len(tabs),
@@ -1423,7 +2039,7 @@ def _match_preview(
         needle = find if match_case else find.lower()
         matches: list[dict[str, Any]] = []
         total = 0
-        for record, body in entries:
+        for record, body, _objects in entries:
             tab_id = str(record.get("tab_id") or "")
             if wanted and tab_id not in wanted:
                 continue
@@ -1468,7 +2084,9 @@ async def _replace_text(
     if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
         raise DocsValidationError(
             "replacements_required",
-            "replacements must be a list of {find, replace} objects.",
+            'replacements is a list of objects: [{"find": "text to look for", '
+            '"replace": "text to write"}].',
+            details={"received_type": type(raw).__name__},
         )
     if not raw or len(raw) > MAX_REPLACEMENTS:
         raise DocsValidationError(
@@ -1483,11 +2101,19 @@ async def _replace_text(
     for item in raw:
         if not isinstance(item, Mapping):
             raise DocsValidationError(
-                "invalid_replacement", "Each replacement needs find and replace."
+                "invalid_replacement",
+                'Each replacement is an object {"find": "...", "replace": "..."}, '
+                f"not {type(item).__name__}.",
             )
         find = str(item.get("find") or "")
         if not find:
-            raise DocsValidationError("invalid_replacement", "find must not be empty.")
+            # The caller sent an object of some other shape; name the one that works.
+            raise DocsValidationError(
+                "invalid_replacement",
+                'Each replacement needs a non-empty find: {"find": "text to look '
+                'for", "replace": "text to write"}, with optional match_case.',
+                details={"received_keys": sorted(str(key) for key in item)},
+            )
         replacement: dict[str, Any] = {
             "containsText": {
                 "text": find,
@@ -1612,25 +2238,123 @@ async def _apply_text_style(
     }
 
 
-def _cell_value(item: Mapping[str, Any]) -> dict[str, Any]:
-    """One cell's content: text, or a person chip named by email."""
+CHIP_KINDS = ("person", "date", "link")
 
-    person = item.get("person")
-    if person in (None, ""):
-        return {"kind": "text", "text": "" if item.get("text") is None else str(item["text"])}
-    email = _clean(person.get("email")) if isinstance(person, Mapping) else _clean(person)
-    if "@" not in email:
+
+def _chip_timestamp(value: Any) -> str:
+    """A date a caller wrote as the instant Google stores.
+
+    Docs keeps the point in time and renders it by the document's locale, so a
+    chip can read differently from what was passed - that is the chip doing its
+    job, not a mismatch.
+    """
+
+    from datetime import datetime, timezone
+
+    raw = _clean(value.get("value") if isinstance(value, Mapping) else value)
+    if not raw:
         raise DocsValidationError(
-            "docs_person_email_invalid",
-            'person must be the email address the chip points at, or {"email": ...}.',
+            "docs_date_invalid",
+            'date must be a calendar date or timestamp, e.g. "2026-10-02".',
         )
+    text = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+    try:
+        moment = datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise DocsValidationError(
+            "docs_date_invalid",
+            f'date must be ISO 8601, e.g. "2026-10-02" or '
+            f'"2026-10-02T09:30:00Z"; {raw!r} is not.',
+            details={"error": str(exc)},
+        ) from exc
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _chip_value(item: Mapping[str, Any]) -> dict[str, Any]:
+    """One piece of content: plain text, or one of the chips Docs can insert."""
+
+    named = [kind for kind in CHIP_KINDS if item.get(kind) not in (None, "")]
+    if len(named) > 1:
+        raise DocsValidationError(
+            "docs_value_ambiguous",
+            f"Name one of {', '.join(CHIP_KINDS)} - this names {', '.join(named)}.",
+        )
+    if not named:
+        return {"kind": "text", "text": "" if item.get("text") is None else str(item["text"])}
+    kind = named[0]
     if item.get("text"):
         raise DocsValidationError(
-            "docs_cell_value_ambiguous",
-            "A cell takes text or person, not both. Write the chip, then "
-            "append the text.",
+            "docs_value_ambiguous",
+            f"A piece is text or a {kind} chip, not both. Write the chip, then "
+            "the text beside it.",
         )
-    return {"kind": "person", "email": email}
+    value = item[kind]
+    if kind == "person":
+        email = _clean(value.get("email")) if isinstance(value, Mapping) else _clean(value)
+        if "@" not in email:
+            raise DocsValidationError(
+                "docs_person_email_invalid",
+                'person must be the email address the chip points at, or {"email": ...}.',
+            )
+        return {"kind": "person", "email": email}
+    if kind == "date":
+        chip: dict[str, Any] = {"kind": "date", "timestamp": _chip_timestamp(value)}
+        zone = _clean(value.get("time_zone")) if isinstance(value, Mapping) else ""
+        if zone:
+            chip["time_zone"] = zone
+        return chip
+    uri = _clean(value.get("uri")) if isinstance(value, Mapping) else _clean(value)
+    if not uri.startswith(("http://", "https://")):
+        raise DocsValidationError(
+            "docs_link_invalid",
+            'link must be the http(s) address the chip points at, or {"uri": ...}. '
+            "Google fills in the title and icon itself from the linked resource.",
+        )
+    return {"kind": "link", "uri": uri}
+
+
+def _chip_request(
+    value: Mapping[str, Any], *, index: int, scope: Mapping[str, Any]
+) -> dict[str, Any] | None:
+    """The one request that puts this piece at this index.
+
+    Only the fields Google accepts on write are sent: it fills a person's name,
+    a link's title and a date's display text itself, and refuses a caller that
+    supplies them.
+    """
+
+    location = {"index": index, **dict(scope)}
+    kind = value["kind"]
+    if kind == "person":
+        return {
+            "insertPerson": {
+                "personProperties": {"email": value["email"]},
+                "location": location,
+            }
+        }
+    if kind == "date":
+        properties: dict[str, Any] = {"timestamp": value["timestamp"]}
+        if value.get("time_zone"):
+            properties["timeZoneId"] = value["time_zone"]
+        return {"insertDate": {"dateElementProperties": properties, "location": location}}
+    if kind == "link":
+        return {
+            "insertRichLink": {
+                "richLinkProperties": {"uri": value["uri"]},
+                "location": location,
+            }
+        }
+    if value.get("text"):
+        return {"insertText": {"location": location, "text": value["text"]}}
+    return None
+
+
+def _cell_value(item: Mapping[str, Any]) -> dict[str, Any]:
+    """One cell's content: text, or a chip."""
+
+    return _chip_value(item)
 
 
 def _cells_payload(value: Any) -> list[tuple[Any, dict[str, Any]]]:
@@ -1682,19 +2406,9 @@ def _set_cells_requests(
                 {"deleteContentRange": {"range": {"startIndex": start, "endIndex": end, **scope}}}
             )
         index = end if mode == "append" else start
-        if value["kind"] == "person":
-            requests.append(
-                {
-                    "insertPerson": {
-                        "personProperties": {"email": value["email"]},
-                        "location": {"index": index, **scope},
-                    }
-                }
-            )
-        elif value["text"]:
-            requests.append(
-                {"insertText": {"location": {"index": index, **scope}, "text": value["text"]}}
-            )
+        request = _chip_request(value, index=index, scope=scope)
+        if request is not None:
+            requests.append(request)
     return requests
 
 
@@ -2217,9 +2931,193 @@ async def _insert_page_break(
     }
 
 
+def _tab_document_style(
+    document: Mapping[str, Any], *, tab_id: str = ""
+) -> Mapping[str, Any]:
+    """The page setup that governs one tab, or the document's own."""
+
+    def _walk(tabs: Any) -> Mapping[str, Any] | None:
+        for tab in tabs or []:
+            if not isinstance(tab, Mapping):
+                continue
+            properties = tab.get("tabProperties")
+            current = _clean((properties or {}).get("tabId")) if isinstance(properties, Mapping) else ""
+            document_tab = tab.get("documentTab")
+            if current == tab_id and isinstance(document_tab, Mapping):
+                style = document_tab.get("documentStyle")
+                return style if isinstance(style, Mapping) else {}
+            nested = _walk(tab.get("childTabs"))
+            if nested is not None:
+                return nested
+        return None
+
+    if tab_id:
+        found = _walk(document.get("tabs"))
+        if found is not None:
+            return found
+    style = document.get("documentStyle")
+    return style if isinstance(style, Mapping) else {}
+
+
+def _content_width_pt(document: Mapping[str, Any], *, tab_id: str = "") -> float | None:
+    """Printable width of one tab's page, in points."""
+
+    style = _tab_document_style(document, tab_id=tab_id)
+    page = style.get("pageSize") if isinstance(style.get("pageSize"), Mapping) else {}
+    width = magnitude_pt(page.get("width"))
+    if width is None:
+        return None
+    for margin in ("marginLeft", "marginRight"):
+        value = magnitude_pt(style.get(margin))
+        if value is not None:
+            width -= value
+    return width if width > 0 else None
+
+
+def _cell_content_width_pt(
+    table: Mapping[str, Any],
+    column: int,
+    *,
+    document: Mapping[str, Any],
+    tab_id: str = "",
+) -> float | None:
+    """How wide a picture may be in one cell: the column, less its padding.
+
+    A table that distributes its columns evenly reports no width, so the page's
+    printable width divided by the column count is the best answer available.
+    """
+
+    widths = table.get("column_widths") or []
+    width = widths[column - 1] if 0 < column <= len(widths) else None
+    if width is None:
+        columns = _int(table.get("columns"), default=0)
+        page = _content_width_pt(document, tab_id=tab_id)
+        if page is None or columns <= 0:
+            return None
+        width = page / columns
+    width -= 2 * DEFAULT_CELL_PADDING_PT
+    return width if width > 0 else None
+
+
+async def _natural_size_pt(
+    client: httpx.AsyncClient, image_uri: str
+) -> tuple[float, float] | None:
+    """The image's own size in points, or None when it cannot be measured.
+
+    The URL comes from the caller, so this fetch passes the platform's SSRF
+    guard first: the proxy must not be turned into a probe of the network it
+    runs in. A measurement that fails is not an error - the image is inserted
+    at its natural size, exactly as before.
+    """
+
+    try:
+        from kdcube_ai_app.apps.chat.sdk.tools.backends.web import ssrf_guard
+        from kdcube_ai_app.infra.service_hub.multimodality import validate_image_bytes
+    except Exception:  # pragma: no cover - optional dependency
+        return None
+    _MEASURABLE_GUARD_MISSES = {
+        ssrf_guard.ReasonCode.RESOLUTION_FAILED,
+        ssrf_guard.ReasonCode.INVALID_URL,
+    }
+    try:
+        verdict = await ssrf_guard.check_url(image_uri)
+        if not verdict.allowed:
+            # An address we must not reach is a refusal; a name we merely could
+            # not resolve is not, because this fetch only measures. Google is
+            # the authority on whether the URL works, and it answers in-band.
+            if verdict.reason in _MEASURABLE_GUARD_MISSES:
+                return None
+            raise DocsValidationError(
+                "docs_image_uri_blocked",
+                ssrf_guard.deny_text(verdict),
+                details={"image_uri": image_uri},
+            )
+        response = await client.get(image_uri, follow_redirects=True)
+        if response.status_code != 200:
+            return None
+        content = response.content or b""
+        if not content or len(content) > MAX_IMAGE_BYTES:
+            return None
+        measured = validate_image_bytes(
+            content,
+            media_type=_clean(response.headers.get("content-type")).split(";")[0].lower(),
+        )
+    except DocsValidationError:
+        raise
+    except Exception:
+        return None
+    if not measured.get("valid"):
+        return None
+    width, height = measured.get("width"), measured.get("height")
+    if not width or not height:
+        return None
+    return (
+        float(width) * IMAGE_POINTS_PER_PIXEL,
+        float(height) * IMAGE_POINTS_PER_PIXEL,
+    )
+
+
+def _names_a_table_cell(payload: Mapping[str, Any]) -> bool:
+    return any(
+        payload.get(key) not in (None, "", {}) for key in ("table", "row", "column")
+    )
+
+
+def _image_cell_location(
+    document: Mapping[str, Any], payload: Mapping[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any], float | None]:
+    """Where in a named table cell an image goes, and what to report about it.
+
+    The image lands after what the cell already holds, so a label written first
+    stays first. The cell is named the way set_cells names it, which is what
+    spares a caller the index arithmetic this namespace exists to avoid.
+    """
+
+    tables, tabs = _document_tables(document)
+    tab_id = _resolve_tab_id(tabs, payload)
+    table = _resolve_document_table(tables, tabs, payload, tab_id=tab_id)
+    try:
+        header_rows = effective_header_rows(table, payload.get("header"))
+        row = resolve_row(table, payload.get("row"), header_rows=header_rows)
+        column = resolve_column(table, payload.get("column"), header_rows=header_rows)
+    except DocsSelectorError as exc:
+        raise _selector_failure(exc) from exc
+    cell = table["cells"][row - 1][column - 1]
+    where = {"row": row, "column": column}
+    if cell.get("merged_into"):
+        head_row, head_column = cell["merged_into"]
+        raise DocsValidationError(
+            "docs_table_cell_merged",
+            f"Row {row}, column {column} is merged into row {head_row}, column "
+            f"{head_column}. Name the cell the image belongs in before retrying.",
+            details={**where, "merged_into": cell["merged_into"]},
+        )
+    if cell.get("nested_table"):
+        raise DocsValidationError(
+            "docs_table_nested",
+            f"Row {row}, column {column} holds a nested table, which this action "
+            "does not write into.",
+            details=where,
+        )
+    location: dict[str, Any] = {"index": _int(cell.get("content_end"))}
+    if tab_id:
+        location["tabId"] = tab_id
+    return (
+        location,
+        {
+            "tab_id": tab_id,
+            "tab_count": len(tabs),
+            "table": table.get("position"),
+            "cell": where,
+        },
+        _cell_content_width_pt(table, column, document=document, tab_id=tab_id),
+    )
+
+
 async def _embed_image(
     client: httpx.AsyncClient, *, access_token: str, payload: Mapping[str, Any]
 ) -> dict[str, Any]:
+    payload = spread_table_selector(payload)
     document_id = _document_id(payload.get("document_ref"))
     image_uri = _clean(payload.get("image_uri"))
     if not image_uri.startswith(("http://", "https://")):
@@ -2231,26 +3129,53 @@ async def _embed_image(
     document = await _fetch_document(
         client, access_token=access_token, document_id=document_id
     )
-    tab_id, tabs = _select_single_tab(document, payload)
-    index = payload.get("index")
-    if index is None:
-        location = {"index": _body_end_index(document, tab_id=tab_id)}
+    if _names_a_table_cell(payload):
+        if payload.get("index") is not None:
+            raise DocsValidationError(
+                "docs_image_target_ambiguous",
+                "Name either a table cell (table with row and column) or an "
+                "index, not both.",
+                details={"index": payload.get("index")},
+            )
+        location, target, cell_width_pt = _image_cell_location(document, payload)
     else:
-        idx = _int(index, default=1)
-        if idx < 1:
-            raise DocsValidationError("invalid_index", "index must be >= 1.")
-        location = {"index": idx}
-    if tab_id:
-        location["tabId"] = tab_id
+        cell_width_pt = None
+        tab_id, tabs = _select_single_tab(document, payload)
+        index = payload.get("index")
+        if index is None:
+            location = {"index": _body_end_index(document, tab_id=tab_id)}
+        else:
+            idx = _int(index, default=1)
+            if idx < 1:
+                raise DocsValidationError("invalid_index", "index must be >= 1.")
+            location = {"index": idx}
+        if tab_id:
+            location["tabId"] = tab_id
+        target = {"tab_id": tab_id, "tab_count": len(tabs)}
     insert: dict[str, Any] = {"location": location, "uri": image_uri}
     width = payload.get("width_pt")
     height = payload.get("height_pt")
+    fit: dict[str, Any] | None = None
+    if width is None and height is None and cell_width_pt:
+        # A picture at its natural size stretches a table row across the page.
+        # Measuring is what keeps a small image small: Docs scales to fit the
+        # box it is given, which would also enlarge one that already fits.
+        natural = await _natural_size_pt(client, image_uri)
+        if natural is not None and natural[0] > cell_width_pt:
+            scale = cell_width_pt / natural[0]
+            width = round(cell_width_pt, 1)
+            height = round(natural[1] * scale, 1)
+            fit = {
+                "reason": "cell_width",
+                "cell_width_pt": round(cell_width_pt, 1),
+                "natural_pt": [round(natural[0], 1), round(natural[1], 1)],
+            }
     if width is not None or height is not None:
         object_size: dict[str, Any] = {}
         if width is not None:
-            object_size["width"] = {"magnitude": _int(width), "unit": "PT"}
+            object_size["width"] = {"magnitude": _points(width), "unit": "PT"}
         if height is not None:
-            object_size["height"] = {"magnitude": _int(height), "unit": "PT"}
+            object_size["height"] = {"magnitude": _points(height), "unit": "PT"}
         insert["objectSize"] = object_size
     result = await _batch_update(
         client,
@@ -2271,8 +3196,8 @@ async def _embed_image(
         "web_url": _web_url(document_id),
         "index": location["index"],
         "object_id": object_id,
-        "tab_id": tab_id,
-        "tab_count": len(tabs),
+        **({"fit": fit} if fit else {}),
+        **target,
     }
 
 
@@ -2748,6 +3673,7 @@ _OPERATIONS = {
     "get_source": _get_source,
     "get": _get,
     "export": _export,
+    "read_image": _read_image,
     "list_comments": _list_comments,
     "get_comment": _get_comment,
     # write (docs:write)

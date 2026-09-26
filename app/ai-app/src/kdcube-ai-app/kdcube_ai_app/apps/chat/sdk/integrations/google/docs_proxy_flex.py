@@ -154,9 +154,14 @@ def _table_element(table: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _elements_from_body(body: Any) -> list[dict[str, Any]]:
+def _elements_from_body(
+    body: Any, *, inline_objects: Mapping[str, Any] | None = None
+) -> list[dict[str, Any]]:
     content = body.get("content") if isinstance(body, Mapping) else None
-    tables = {table["start_index"]: table for table in body_tables(body)}
+    tables = {
+        table["start_index"]: table
+        for table in body_tables(body, inline_objects=inline_objects)
+    }
     elements: list[dict[str, Any]] = []
     for block in content or []:
         if not isinstance(block, Mapping):
@@ -191,7 +196,9 @@ def _tab_records(document: Mapping[str, Any], *, with_elements: bool) -> list[di
         }
         if with_elements:
             doc_tab = tab.get("documentTab") if isinstance(tab.get("documentTab"), Mapping) else {}
-            record["elements"] = _elements_from_body(doc_tab.get("body"))
+            record["elements"] = _elements_from_body(
+                doc_tab.get("body"), inline_objects=doc_tab.get("inlineObjects")
+            )
         records.append(record)
         for child in tab.get("childTabs") or []:
             if isinstance(child, Mapping):
@@ -209,7 +216,9 @@ def _tab_records(document: Mapping[str, Any], *, with_elements: bool) -> list[di
             "parent_tab_id": "",
         }
         if with_elements:
-            record["elements"] = _elements_from_body(document.get("body"))
+            record["elements"] = _elements_from_body(
+                document.get("body"), inline_objects=document.get("inlineObjects")
+            )
         records.append(record)
     return records
 

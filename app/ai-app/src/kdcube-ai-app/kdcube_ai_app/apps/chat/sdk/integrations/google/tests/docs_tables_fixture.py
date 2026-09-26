@@ -31,11 +31,18 @@ class Body:
             kind = spec["kind"]
             element: dict[str, Any] = {"startIndex": cursor, "endIndex": cursor + 1}
             properties = {
-                key: value for key, value in spec.items() if key != "kind" and value
+                # Docs answers a date chip with displayText, not text.
+                ("displayText" if key == "text" and kind == "dateElement" else key): value
+                for key, value in spec.items()
+                if key != "kind" and value
             }
-            element[kind] = (
-                {f"{kind}Properties": properties} if properties else {}
-            )
+            if kind == "inlineObjectElement":
+                # An image element points into the document-level inlineObjects map.
+                element[kind] = {"inlineObjectId": spec.get("id") or "img.1"}
+            else:
+                element[kind] = (
+                    {f"{kind}Properties": properties} if properties else {}
+                )
             elements.append(element)
             cursor += 1
         run = text + "\n"
@@ -57,8 +64,14 @@ class Body:
             },
         }
 
-    def paragraph(self, text: str, *, style: str = "NORMAL_TEXT") -> "Body":
-        self.content.append(self._paragraph(text, style=style))
+    def paragraph(
+        self,
+        text: str,
+        *,
+        style: str = "NORMAL_TEXT",
+        objects: tuple[Any, ...] = (),
+    ) -> "Body":
+        self.content.append(self._paragraph(text, style=style, objects=objects))
         return self
 
     def heading(self, text: str, level: int = 2) -> "Body":
@@ -71,6 +84,7 @@ class Body:
         header_rows: int = 0,
         spans: dict[tuple[int, int], tuple[int, int]] | None = None,
         omit_covered: bool = False,
+        column_widths: list[float | None] | None = None,
     ) -> "Body":
         """rows hold cell text, or dicts {text, objects, nested, paragraphs}.
 
@@ -142,6 +156,23 @@ class Body:
                     "rows": len(rows),
                     "columns": max(len(row) for row in rows),
                     "tableRows": table_rows,
+                    **(
+                        {
+                            "tableStyle": {
+                                "tableColumnProperties": [
+                                    {
+                                        "widthType": "FIXED_WIDTH",
+                                        "width": {"magnitude": width, "unit": "PT"},
+                                    }
+                                    if width is not None
+                                    else {"widthType": "EVENLY_DISTRIBUTED"}
+                                    for width in column_widths
+                                ]
+                            }
+                        }
+                        if column_widths
+                        else {}
+                    ),
                 },
             }
         )
@@ -151,12 +182,52 @@ class Body:
         return {"content": self.content}
 
 
+def inline_image(
+    *,
+    alt: str = "",
+    title: str = "",
+    width_pt: float | None = None,
+    height_pt: float | None = None,
+    source_uri: str = "",
+    content_uri: str = "",
+) -> dict[str, Any]:
+    """One ``inlineObjects`` entry, as documents.get reports an inline image."""
+    embedded: dict[str, Any] = {}
+    if title:
+        embedded["title"] = title
+    if alt:
+        embedded["description"] = alt
+    if width_pt is not None or height_pt is not None:
+        embedded["size"] = {
+            "width": {"magnitude": width_pt, "unit": "PT"},
+            "height": {"magnitude": height_pt, "unit": "PT"},
+        }
+    image: dict[str, Any] = {}
+    if content_uri:
+        image["contentUri"] = content_uri
+    if source_uri:
+        image["sourceUri"] = source_uri
+    if image:
+        embedded["imageProperties"] = image
+    return {"inlineObjectProperties": {"embeddedObject": embedded}}
+
+
+DEFAULT_PAGE_WIDTH_PT = 612.0
+DEFAULT_MARGIN_PT = 72.0
+
+
 def document(
     *tabs: tuple[str, str, Body],
     revision: str = "rev-1",
     document_id: str = "DOC1",
+    inline_objects: dict[str, Any] | None = None,
+    page_width_pt: float | None = DEFAULT_PAGE_WIDTH_PT,
+    margin_pt: float = DEFAULT_MARGIN_PT,
 ) -> dict[str, Any]:
-    """A document with one (tab_id, title, body) entry per tab."""
+    """A document with one (tab_id, title, body) entry per tab.
+
+    ``inline_objects`` is served on every tab, which is what a single-tab test needs.
+    """
     return {
         "documentId": document_id,
         "title": "Tables",
@@ -164,7 +235,23 @@ def document(
         "tabs": [
             {
                 "tabProperties": {"tabId": tab_id, "title": title, "index": index},
-                "documentTab": {"body": body.as_body()},
+                "documentTab": {
+                    "body": body.as_body(),
+                    **({"inlineObjects": dict(inline_objects)} if inline_objects else {}),
+                    **(
+                        {
+                            "documentStyle": {
+                                "pageSize": {
+                                    "width": {"magnitude": page_width_pt, "unit": "PT"}
+                                },
+                                "marginLeft": {"magnitude": margin_pt, "unit": "PT"},
+                                "marginRight": {"magnitude": margin_pt, "unit": "PT"},
+                            }
+                        }
+                        if page_width_pt
+                        else {}
+                    ),
+                },
             }
             for index, (tab_id, title, body) in enumerate(tabs)
         ],

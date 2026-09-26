@@ -22,7 +22,7 @@ _HEADING_LEVELS = {
 }
 
 # Paragraph element kinds other than text runs, named as a caller sees them.
-_OBJECT_KINDS = {
+OBJECT_KINDS = {
     "inlineObjectElement": "image",
     "person": "person",
     "richLink": "rich_link",
@@ -34,6 +34,9 @@ _OBJECT_KINDS = {
 }
 
 _INDEX_KEYS = ("start_index", "end_index", "content_start", "content_end")
+
+# The route this deployment serves a staged file from for one provider fetch.
+PROVIDER_FETCH_PATH = "/public/provider_fetch_download"
 
 
 def _int(value: Any, *, default: int = 0) -> int:
@@ -65,11 +68,92 @@ def _heading(paragraph: Mapping[str, Any]) -> dict[str, Any] | None:
     return {"text": text, "level": _HEADING_LEVELS[named]}
 
 
-def _object_record(kind: str, value: Any) -> dict[str, Any]:
+def magnitude_pt(value: Any) -> float | None:
+    """A Docs dimension in points, when points is the unit it came in."""
+
+    if not isinstance(value, Mapping):
+        return None
+    if str(value.get("unit") or "PT").upper() != "PT":
+        return None
+    try:
+        return round(float(value.get("magnitude")), 1)
+    except (TypeError, ValueError):
+        return None
+
+
+def _image_record(
+    value: Mapping[str, Any], inline_objects: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    """An inline image, by what a reader can act on: its id, alt text, and size.
+
+    The properties live in the document-level ``inlineObjects`` map, which the
+    element points into by id. ``contentUri`` is left out: measured
+    2026-09-25, it serves the bytes to anyone who holds it, with no credential
+    at all, until it expires - so passing it on hands out the image.
+    """
+
+    record: dict[str, Any] = {"kind": "image"}
+    object_id = str(value.get("inlineObjectId") or "").strip()
+    if object_id:
+        record["object_id"] = object_id
+    entry = (
+        inline_objects.get(object_id)
+        if object_id and isinstance(inline_objects, Mapping)
+        else None
+    )
+    properties = (
+        entry.get("inlineObjectProperties") if isinstance(entry, Mapping) else None
+    )
+    embedded = (
+        properties.get("embeddedObject") if isinstance(properties, Mapping) else None
+    )
+    if not isinstance(embedded, Mapping):
+        return record
+    for field, key in (("alt", "description"), ("title", "title")):
+        text = str(embedded.get(key) or "").strip()
+        if text:
+            record[field] = text
+    size = embedded.get("size")
+    if isinstance(size, Mapping):
+        for field, key in (("width_pt", "width"), ("height_pt", "height")):
+            magnitude = magnitude_pt(size.get(key))
+            if magnitude is not None:
+                record[field] = magnitude
+    image = embedded.get("imageProperties")
+    if isinstance(image, Mapping):
+        # Empty for an image Docs holds no origin for; present when it was inserted by URL.
+        source = str(image.get("sourceUri") or "").strip()
+        if PROVIDER_FETCH_PATH in source:
+            # Our own one-fetch URL, which the provider recorded when it took
+            # the file. It is dead by the time anyone reads it - the staged
+            # copy is deleted and the token expires - so handing it back would
+            # offer a dead end and carry the token into whatever stores this
+            # read. Saying where the picture came from is the useful part.
+            record["source"] = "kdcube_file"
+        elif source:
+            record["source_uri"] = source
+    return record
+
+
+def inline_image_record(
+    object_id: str, inline_objects: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    """One image by id, described exactly as a cell read describes it."""
+
+    return _image_record({"inlineObjectId": object_id}, inline_objects)
+
+
+def object_record(
+    kind: str,
+    value: Any,
+    *,
+    inline_objects: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """What a non-text element is, and what it takes to write it back."""
 
     record: dict[str, Any] = {"kind": kind}
-    properties = value.get(f"{kind}Properties") if isinstance(value, Mapping) else None
+    if kind == "image" and isinstance(value, Mapping):
+        return _image_record(value, inline_objects)
     if kind == "person" and isinstance(value, Mapping):
         properties = value.get("personProperties")
         if isinstance(properties, Mapping):
@@ -87,13 +171,22 @@ def _object_record(kind: str, value: Any) -> dict[str, Any]:
     elif kind == "date" and isinstance(value, Mapping):
         properties = value.get("dateElementProperties")
         if isinstance(properties, Mapping):
-            text = str(properties.get("text") or "").strip()
+            # Docs answers with displayText - how the chip reads in the
+            # document, by its locale - and with the instant behind it.
+            text = str(properties.get("displayText") or "").strip()
             if text:
                 record["text"] = text
+            timestamp = str(properties.get("timestamp") or "").strip()
+            if timestamp:
+                record["timestamp"] = timestamp
     return record
 
 
-def _cell_record(cell: Mapping[str, Any]) -> dict[str, Any]:
+def _cell_record(
+    cell: Mapping[str, Any],
+    *,
+    inline_objects: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     content = [block for block in cell.get("content") or [] if isinstance(block, Mapping)]
     paragraphs: list[str] = []
     objects: list[dict[str, Any]] = []
@@ -105,9 +198,13 @@ def _cell_record(cell: Mapping[str, Any]) -> dict[str, Any]:
             for element in paragraph.get("elements") or []:
                 if not isinstance(element, Mapping):
                     continue
-                for key, kind in _OBJECT_KINDS.items():
+                for key, kind in OBJECT_KINDS.items():
                     if key in element:
-                        objects.append(_object_record(kind, element[key]))
+                        objects.append(
+                            object_record(
+                                kind, element[key], inline_objects=inline_objects
+                            )
+                        )
         elif isinstance(block.get("table"), Mapping):
             nested = True
     text = "".join(paragraphs)
@@ -139,7 +236,11 @@ def _cell_record(cell: Mapping[str, Any]) -> dict[str, Any]:
     return record
 
 
-def _grid(table: Mapping[str, Any]) -> tuple[list[list[dict[str, Any]]], int, int]:
+def _grid(
+    table: Mapping[str, Any],
+    *,
+    inline_objects: Mapping[str, Any] | None = None,
+) -> tuple[list[list[dict[str, Any]]], int, int]:
     rows_raw = [row for row in table.get("tableRows") or [] if isinstance(row, Mapping)]
     columns = _int(table.get("columns"))
     raw_cells = [
@@ -158,7 +259,7 @@ def _grid(table: Mapping[str, Any]) -> tuple[list[list[dict[str, Any]]], int, in
                     c += 1
             if c >= columns:
                 break
-            record = _cell_record(cell)
+            record = _cell_record(cell, inline_objects=inline_objects)
             if (r, c) in covered:
                 record["merged_into"] = covered[(r, c)]
             grid[r][c] = record
@@ -180,6 +281,20 @@ def _grid(table: Mapping[str, Any]) -> tuple[list[list[dict[str, Any]]], int, in
     return filled, len(filled), columns
 
 
+def column_widths(table: Mapping[str, Any]) -> list[float | None]:
+    """Each column's width in points, or None where the table distributes evenly."""
+
+    style = table.get("tableStyle")
+    properties = (
+        style.get("tableColumnProperties") if isinstance(style, Mapping) else None
+    )
+    widths: list[float | None] = []
+    for entry in properties or []:
+        width = entry.get("width") if isinstance(entry, Mapping) else None
+        widths.append(magnitude_pt(width))
+    return widths
+
+
 def _header_rows(table: Mapping[str, Any]) -> int:
     count = 0
     for row in table.get("tableRows") or []:
@@ -196,8 +311,13 @@ def body_tables(
     *,
     tab_id: str = "",
     tab_title: str = "",
+    inline_objects: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Top-level tables of one tab body, in document order."""
+    """Top-level tables of one tab body, in document order.
+
+    ``inline_objects`` is the map the body's tab carries; without it an image
+    cell reports the kind alone.
+    """
 
     tables: list[dict[str, Any]] = []
     heading: dict[str, Any] | None = None
@@ -212,7 +332,7 @@ def body_tables(
         table = block.get("table")
         if not isinstance(table, Mapping):
             continue
-        cells, rows, columns = _grid(table)
+        cells, rows, columns = _grid(table, inline_objects=inline_objects)
         tables.append(
             {
                 "tab_id": tab_id,
@@ -222,6 +342,7 @@ def body_tables(
                 "rows": rows,
                 "columns": columns,
                 "header_rows": _header_rows(table),
+                "column_widths": column_widths(table),
                 "has_merged_cells": any(
                     "merged_into" in cell or "row_span" in cell or "column_span" in cell
                     for row in cells
@@ -282,10 +403,14 @@ def body_segments(body: Mapping[str, Any] | None) -> list[dict[str, Any]]:
     return sorted(segments, key=lambda row: row["start"])
 
 
-def table_grid(table: Mapping[str, Any]) -> dict[str, Any]:
+def table_grid(
+    table: Mapping[str, Any],
+    *,
+    inline_objects: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """One table's cells, size, and header rows, from the same walk as the rest."""
 
-    cells, rows, columns = _grid(table)
+    cells, rows, columns = _grid(table, inline_objects=inline_objects)
     return {
         "cells": cells,
         "rows": rows,
@@ -352,6 +477,11 @@ def public_table(
 
 __all__ = [
     "body_tables",
+    "column_widths",
+    "magnitude_pt",
+    "OBJECT_KINDS",
+    "object_record",
+    "inline_image_record",
     "paragraph_text",
     "public_cell",
     "body_segments",

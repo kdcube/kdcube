@@ -8,6 +8,7 @@ deleted, where text is inserted, and that nothing is written on a refusal.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 from typing import Any
 
@@ -19,6 +20,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.google.docs_structure import body_
 from kdcube_ai_app.apps.chat.sdk.integrations.google.tests.docs_tables_fixture import (
     Body,
     document,
+    inline_image,
     tasks_body,
 )
 
@@ -26,13 +28,28 @@ from kdcube_ai_app.apps.chat.sdk.integrations.google.tests.docs_tables_fixture i
 class _Google:
     """Serves documents.get from a queue and records batchUpdate bodies."""
 
-    def __init__(self, *documents: dict[str, Any], updates: list[httpx.Response] | None = None):
+    def __init__(
+        self,
+        *documents: dict[str, Any],
+        updates: list[httpx.Response] | None = None,
+        image: httpx.Response | None = None,
+    ):
         self.documents = list(documents)
         self.updates = list(updates or [])
+        self.image = image
         self.writes: list[dict[str, Any]] = []
+        self.image_fetches: list[httpx.Request] = []
         self.reads = 0
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.host != "docs.googleapis.com":
+            # An image's contentUri points at Google's content host, not the API.
+            self.image_fetches.append(request)
+            response = self.image or httpx.Response(
+                200, content=b"\x89PNG bytes", headers={"content-type": "image/png"}
+            )
+            response.request = request
+            return response
         if request.method == "GET":
             doc = self.documents[min(self.reads, len(self.documents) - 1)]
             self.reads += 1
@@ -939,6 +956,27 @@ def test_get_structure_exposes_cell_indices_for_batch_edit() -> None:
     assert tables[0]["cells_truncated"] is False
 
 
+def test_get_structure_describes_an_image_the_way_a_cell_read_does() -> None:
+    body = Body().table([["Chart"], [_image_cell()]])
+    doc = document(
+        ("t.0", "Main", body),
+        inline_objects={"img.1": inline_image(alt="Q3 revenue by region")},
+    )
+
+    out = _run(docs_proxy_flex, "get_structure", {"document_ref": "DOC1"}, _Google(doc))
+
+    # Both doors read the same walk, so the index-oriented structure cannot
+    # describe an image the cell reads describe differently.
+    table = [
+        element
+        for element in out["ret"]["tabs"][0]["elements"]
+        if element["type"] == "table"
+    ][0]
+    assert table["cells"][1][0]["objects"] == [
+        {"kind": "image", "object_id": "img.1", "alt": "Q3 revenue by region"}
+    ]
+
+
 def test_set_cells_accepts_the_selector_returned_by_get() -> None:
     doc = document(
         ("t.0", "Main", Body().paragraph("intro")),
@@ -989,6 +1027,309 @@ def test_a_read_names_who_a_person_chip_points_at() -> None:
     ]
 
 
+def _image_cell(object_id: str = "img.1") -> dict[str, Any]:
+    return {"text": "", "objects": ({"kind": "inlineObjectElement", "id": object_id},)}
+
+
+def test_a_read_names_what_an_image_is_without_its_short_lived_uri() -> None:
+    body = Body().table(
+        [["Chart", "Note"], [_image_cell(), "Q3"]],
+        header_rows=1,
+    )
+    out = _run(
+        docs_proxy,
+        "get",
+        {"document_ref": "DOC1", "tables": "all"},
+        _Google(
+            document(
+                ("t.0", "Main", body),
+                inline_objects={
+                    "img.1": inline_image(
+                        alt="Q3 revenue by region",
+                        title="Revenue",
+                        width_pt=468.00000000000006,
+                        height_pt=263.20000000000005,
+                        source_uri="https://example.invalid/chart.png",
+                        content_uri="https://lh3.example.invalid/expires-in-30-minutes",
+                    )
+                },
+            )
+        ),
+    )
+
+    cell = out["ret"]["table_reads"][0]["cells"][1][0]
+    assert cell["objects"] == [
+        {
+            "kind": "image",
+            "object_id": "img.1",
+            "alt": "Q3 revenue by region",
+            "title": "Revenue",
+            "width_pt": 468.0,
+            "height_pt": 263.2,
+            "source_uri": "https://example.invalid/chart.png",
+        }
+    ]
+    # contentUri is scoped to the account that read the document and expires;
+    # it stays out of what a caller is handed.
+    assert "expires-in-30-minutes" not in json.dumps(out)
+
+
+def test_an_image_read_without_the_objects_map_still_names_the_object() -> None:
+    body = Body().table([["Chart"], [_image_cell("img.9")]])
+
+    tables = body_tables(body.as_body())
+
+    assert tables[0]["cells"][1][0]["objects"] == [
+        {"kind": "image", "object_id": "img.9"}
+    ]
+
+
+def test_the_flat_text_names_an_image_by_its_alt_text() -> None:
+    body = Body().table([["Chart", "Note"], [_image_cell(), "Q3"]], header_rows=1)
+
+    text = docs_proxy._extract_document_text(
+        document(
+            ("t.0", "Main", body),
+            inline_objects={"img.1": inline_image(alt="Revenue | by region")},
+        ),
+        limit=4000,
+    )
+
+    # The overview names what the cell read names, and escapes the separator
+    # inside the label the same way cell text is escaped.
+    assert "[image: Revenue \\| by region] | Q3" in text
+
+
+def test_a_long_alt_text_does_not_swamp_the_row() -> None:
+    alt = "A very long description of the quarterly revenue chart by region and product"
+    body = Body().table([[_image_cell()]])
+
+    text = docs_proxy._extract_document_text(
+        document(
+            ("t.0", "Main", body),
+            inline_objects={"img.1": inline_image(alt=alt)},
+        ),
+        limit=4000,
+    )
+
+    assert "[image: A very long description of the q" in text
+    assert "…]" in text
+    assert alt not in text
+
+
+def test_an_image_with_no_properties_reads_as_an_image() -> None:
+    body = Body().table([[_image_cell()]])
+    doc = document(("t.0", "Main", body), inline_objects={"img.1": inline_image()})
+
+    out = _run(docs_proxy, "get", {"document_ref": "DOC1", "tables": "all"}, _Google(doc))
+
+    assert out["ret"]["table_reads"][0]["cells"][0][0]["objects"] == [
+        {"kind": "image", "object_id": "img.1"}
+    ]
+
+
+def _image_document(**kwargs: Any) -> dict[str, Any]:
+    body = Body().table([["Chart", "Note"], [_image_cell(), "Q3"]], header_rows=1)
+    return document(
+        ("t.0", "Main", body),
+        inline_objects={
+            "img.1": inline_image(
+                alt="Q3 revenue by region",
+                width_pt=240,
+                height_pt=160,
+                source_uri="https://example.invalid/chart.png",
+                content_uri="https://lh7-rt.googleusercontent.com/expiring-capability",
+                **kwargs,
+            )
+        },
+    )
+
+
+def _read_image(google: _Google, **payload: Any) -> dict[str, Any]:
+    return _run(
+        docs_proxy, "read_image", {"document_ref": "DOC1", **payload}, google
+    )
+
+
+def test_reading_an_image_returns_its_bytes_and_where_it_sits() -> None:
+    google = _Google(_image_document())
+
+    out = _read_image(google, object_id="img.1")
+
+    ret = out["ret"]
+    assert ret["mime_type"] == "image/png"
+    assert ret["byte_size"] == len(b"\x89PNG bytes")
+    assert base64.b64decode(ret["content_base64"]) == b"\x89PNG bytes"
+    # The answer describes the image the way a cell read does, and says where it is.
+    assert ret["alt"] == "Q3 revenue by region"
+    assert ret["source_uri"] == "https://example.invalid/chart.png"
+    assert ret["cell"] == {"table": 1, "row": 2, "column": 1}
+    assert ret["tab_id"] == "t.0"
+    # The URL is its own capability, so no credential rides with the fetch.
+    assert "authorization" not in google.image_fetches[0].headers
+    # And it is never handed back.
+    assert "expiring-capability" not in json.dumps(out)
+
+
+def test_reading_an_unknown_image_names_the_ones_the_document_holds() -> None:
+    google = _Google(_image_document())
+
+    out = _read_image(google, object_id="img.9")
+
+    assert out["error"]["code"] == "docs_image_not_found"
+    candidates = out["error"]["details"]["images"]
+    assert [image["object_id"] for image in candidates] == ["img.1"]
+    # A refusal that listed content URLs would hand out the images it refused.
+    assert all("content_uri" not in image for image in candidates)
+
+
+def test_reading_without_an_object_id_takes_the_only_image() -> None:
+    google = _Google(_image_document())
+
+    assert _read_image(google)["ret"]["object_id"] == "img.1"
+
+
+def test_several_images_need_the_one_to_read_named() -> None:
+    body = Body().table([["A"], [_image_cell("img.1")], [_image_cell("img.2")]])
+    google = _Google(
+        document(
+            ("t.0", "Main", body),
+            inline_objects={
+                "img.1": inline_image(content_uri="https://lh7-rt.googleusercontent.com/a"),
+                "img.2": inline_image(content_uri="https://lh7-rt.googleusercontent.com/b"),
+            },
+        )
+    )
+
+    out = _read_image(google)
+
+    assert out["error"]["code"] == "docs_image_selection_required"
+    assert len(out["error"]["details"]["images"]) == 2
+    assert google.image_fetches == []
+
+
+def test_an_expired_image_url_is_reported_as_such() -> None:
+    google = _Google(
+        _image_document(),
+        image=httpx.Response(403, content=b"expired"),
+    )
+
+    out = _read_image(google, object_id="img.1")
+
+    assert out["error"]["code"] == "docs_image_fetch_failed"
+    assert out["error"]["details"]["status"] == 403
+
+
+def test_an_object_with_no_content_is_refused_before_any_fetch() -> None:
+    body = Body().table([["A"], [_image_cell()]])
+    google = _Google(
+        document(("t.0", "Main", body), inline_objects={"img.1": inline_image(alt="a drawing")})
+    )
+
+    out = _read_image(google, object_id="img.1")
+
+    assert out["error"]["code"] == "docs_image_bytes_unavailable"
+    assert google.image_fetches == []
+
+
+def test_a_non_image_response_is_not_passed_off_as_an_image() -> None:
+    google = _Google(
+        _image_document(),
+        image=httpx.Response(
+            200, content=b"<html>sign in</html>", headers={"content-type": "text/html"}
+        ),
+    )
+
+    out = _read_image(google, object_id="img.1")
+
+    assert out["error"]["code"] == "docs_image_unexpected_type"
+    assert out["error"]["details"]["mime_type"] == "text/html"
+
+
+def _embed(google: _Google, **payload: Any) -> dict[str, Any]:
+    return _run(
+        docs_proxy,
+        "embed_image",
+        {
+            "document_ref": "DOC1",
+            "image_uri": "https://example.invalid/chart.png",
+            **payload,
+        },
+        google,
+    )
+
+
+def test_an_image_goes_into_the_cell_a_selector_names() -> None:
+    doc = _tasks_doc()
+    google = _Google(doc)
+
+    out = _embed(google, table=1, row=3, column="Owner")
+
+    # The write lands at the end of that cell's content, so a label already in
+    # the cell keeps its place - and the caller never computed an index.
+    request = google.writes[0]["requests"][0]["insertInlineImage"]
+    assert request["location"] == {
+        "index": _cell(doc, 1, 3, 3)["content_end"],
+        "tabId": "t.0",
+    }
+    assert request["uri"] == "https://example.invalid/chart.png"
+    assert out["ret"]["cell"] == {"row": 3, "column": 3}
+    assert out["ret"]["table"] == 1
+
+
+def test_an_image_takes_the_selector_a_read_handed_back() -> None:
+    doc = _tasks_doc()
+    google = _Google(doc)
+
+    out = _embed(google, selector={"table": {"position": 2}}, row=1, column=1)
+
+    assert out["ok"] is True
+    assert google.writes[0]["requests"][0]["insertInlineImage"]["location"]["index"] == (
+        _cell(doc, 2, 1, 1)["content_end"]
+    )
+
+
+def test_naming_both_a_cell_and_an_index_is_refused() -> None:
+    google = _Google(_tasks_doc())
+
+    out = _embed(google, table=1, row=2, column=1, index=5)
+
+    assert out["error"]["code"] == "docs_image_target_ambiguous"
+    assert google.writes == []
+
+
+def test_an_image_is_refused_for_a_merged_away_cell() -> None:
+    body = Body().table([["A", "B"], ["wide", ""]], spans={(1, 0): (1, 2)})
+    google = _Google(document(("t.0", "Main", body)))
+
+    out = _embed(google, table=1, row=2, column=2)
+
+    assert out["error"]["code"] == "docs_table_cell_merged"
+    assert out["error"]["details"]["merged_into"] == [2, 1]
+    assert google.writes == []
+
+
+def test_an_image_is_refused_for_a_cell_holding_a_nested_table() -> None:
+    body = Body().table([["A"], [{"text": "", "nested": True}]])
+    google = _Google(document(("t.0", "Main", body)))
+
+    out = _embed(google, table=1, row=2, column=1)
+
+    assert out["error"]["code"] == "docs_table_nested"
+    assert google.writes == []
+
+
+def test_an_image_with_no_cell_named_still_lands_in_the_body() -> None:
+    google = _Google(_tasks_doc())
+
+    out = _embed(google, index=3, width_pt=200)
+
+    request = google.writes[0]["requests"][0]["insertInlineImage"]
+    assert request["location"]["index"] == 3
+    assert request["objectSize"]["width"] == {"magnitude": 200, "unit": "PT"}
+    assert "cell" not in out["ret"]
+
+
 def test_a_cell_can_be_written_as_a_person_chip() -> None:
     google = _Google(_tasks_doc())
     out = _set_cells(
@@ -1037,7 +1378,7 @@ def test_a_cell_takes_text_or_a_person_not_both() -> None:
         row=2,
         cells=[{"column": "Owner", "text": "x", "person": "a@b.com"}],
     )
-    assert both["error"]["code"] == "docs_cell_value_ambiguous"
+    assert both["error"]["code"] == "docs_value_ambiguous"
 
     bad = _set_cells(
         _Google(_tasks_doc()),
@@ -1064,3 +1405,705 @@ def test_refusals_ask_the_user_instead_of_naming_a_way_around() -> None:
     # The way around a refusal belongs in the schema, not in the refusal.
     assert "remove_objects" not in objects["error"]["message"]
     assert objects["error"]["details"]["objects"] == [{"kind": "person"}]
+
+
+def test_a_replacement_of_the_wrong_shape_is_told_the_right_one() -> None:
+    google = _Google(_tasks_doc())
+
+    out = _run(
+        docs_proxy,
+        "replace_text",
+        {
+            "document_ref": "DOC1",
+            "all_tabs": True,
+            "replacements": [{"text": "Open", "replace": "Done"}],
+        },
+        google,
+    )
+
+    # A refusal that only says a field is empty leaves the caller guessing;
+    # this one names the shape that works and what actually arrived.
+    assert out["error"]["code"] == "invalid_replacement"
+    assert '{"find"' in out["error"]["message"]
+    assert out["error"]["details"]["received_keys"] == ["replace", "text"]
+    assert google.writes == []
+
+
+def test_replacements_given_as_something_other_than_a_list_say_so() -> None:
+    google = _Google(_tasks_doc())
+
+    out = _run(
+        docs_proxy,
+        "replace_text",
+        {"document_ref": "DOC1", "all_tabs": True, "replacements": {"Open": "Done"}},
+        google,
+    )
+
+    assert out["error"]["code"] == "replacements_required"
+    assert out["error"]["details"]["received_type"] == "dict"
+    assert google.writes == []
+
+
+# --------------------------------------------------------------------------- #
+# An image in a cell is fitted to the column
+# --------------------------------------------------------------------------- #
+
+
+def _png(width: int, height: int) -> bytes:
+    from io import BytesIO
+
+    from PIL import Image
+
+    buffer = BytesIO()
+    Image.new("RGB", (width, height), (10, 120, 200)).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _image_response(width: int, height: int) -> httpx.Response:
+    return httpx.Response(
+        200, content=_png(width, height), headers={"content-type": "image/png"}
+    )
+
+
+@pytest.fixture
+def allow_measurement(monkeypatch):
+    """The measuring fetch passes the SSRF guard; the test URL never resolves."""
+
+    from kdcube_ai_app.apps.chat.sdk.tools.backends.web import ssrf_guard
+
+    async def _allowed(url: str):
+        return ssrf_guard.Verdict(True, ssrf_guard.ReasonCode.ALLOWED, {"url": url})
+
+    monkeypatch.setattr(ssrf_guard, "check_url", _allowed)
+    return ssrf_guard
+
+
+def _sized_doc(**kwargs: Any) -> dict[str, Any]:
+    body = Body().table(
+        [["Task", "Comment"], ["Ship docs", ""]],
+        header_rows=1,
+        **kwargs,
+    )
+    return document(("t.0", "Main", body))
+
+
+def test_an_image_too_wide_for_its_cell_is_fitted_to_the_column(allow_measurement) -> None:
+    # 800 px is 600 pt; the column is 200 pt wide, less 5 pt padding each side.
+    google = _Google(_sized_doc(column_widths=[120.0, 200.0]), image=_image_response(800, 400))
+
+    out = _embed(google, table=1, row=2, column="Comment")
+
+    size = google.writes[0]["requests"][0]["insertInlineImage"]["objectSize"]
+    assert size["width"] == {"magnitude": 190.0, "unit": "PT"}
+    # The height follows the image's own proportions, not the cell's.
+    assert size["height"] == {"magnitude": 95.0, "unit": "PT"}
+    fit = out["ret"]["fit"]
+    assert fit["reason"] == "cell_width"
+    assert fit["cell_width_pt"] == 190.0
+    assert fit["natural_pt"] == [600.0, 300.0]
+
+
+def test_an_image_that_already_fits_is_left_alone(allow_measurement) -> None:
+    # 200 px is 150 pt, well inside the 190 pt the cell offers.
+    google = _Google(_sized_doc(column_widths=[120.0, 200.0]), image=_image_response(200, 100))
+
+    out = _embed(google, table=1, row=2, column="Comment")
+
+    # Docs scales to fit the box it is given, so a box here would enlarge it.
+    assert "objectSize" not in google.writes[0]["requests"][0]["insertInlineImage"]
+    assert "fit" not in out["ret"]
+
+
+def test_a_size_the_caller_gave_is_never_second_guessed(allow_measurement) -> None:
+    google = _Google(_sized_doc(column_widths=[120.0, 200.0]), image=_image_response(800, 400))
+
+    out = _embed(google, table=1, row=2, column="Comment", width_pt=300)
+
+    size = google.writes[0]["requests"][0]["insertInlineImage"]["objectSize"]
+    assert size["width"] == {"magnitude": 300.0, "unit": "PT"}
+    assert "fit" not in out["ret"]
+    # Nothing was measured: the answer was already decided.
+    assert google.image_fetches == []
+
+
+def test_an_evenly_distributed_table_falls_back_to_the_page(allow_measurement) -> None:
+    # 612 pt page less two 72 pt margins is 468 pt for two columns: 234 each.
+    google = _Google(_sized_doc(), image=_image_response(800, 400))
+
+    out = _embed(google, table=1, row=2, column="Comment")
+
+    assert out["ret"]["fit"]["cell_width_pt"] == 224.0
+
+
+def test_an_image_in_the_body_is_not_measured(allow_measurement) -> None:
+    google = _Google(_sized_doc(column_widths=[120.0, 200.0]), image=_image_response(800, 400))
+
+    out = _embed(google, index=3)
+
+    assert "objectSize" not in google.writes[0]["requests"][0]["insertInlineImage"]
+    assert google.image_fetches == []
+    assert "fit" not in out["ret"]
+
+
+def test_a_measurement_that_cannot_run_still_inserts_the_image(monkeypatch) -> None:
+    from kdcube_ai_app.apps.chat.sdk.tools.backends.web import ssrf_guard
+
+    async def _unresolvable(url: str):
+        return ssrf_guard.Verdict(
+            False, ssrf_guard.ReasonCode.RESOLUTION_FAILED, {"hostname": "example.invalid"}
+        )
+
+    monkeypatch.setattr(ssrf_guard, "check_url", _unresolvable)
+    google = _Google(_sized_doc(column_widths=[120.0, 200.0]), image=_image_response(800, 400))
+
+    out = _embed(google, table=1, row=2, column="Comment")
+
+    # A name that does not resolve is Google's verdict to give, not ours.
+    assert out["ok"] is True
+    assert "objectSize" not in google.writes[0]["requests"][0]["insertInlineImage"]
+
+
+def test_an_address_the_guard_refuses_is_not_fetched(monkeypatch) -> None:
+    from kdcube_ai_app.apps.chat.sdk.tools.backends.web import ssrf_guard
+
+    async def _blocked(url: str):
+        return ssrf_guard.Verdict(
+            False, ssrf_guard.ReasonCode.BLOCKED_PRIVATE_IP, {"blocked_ip": "10.0.0.5"}
+        )
+
+    monkeypatch.setattr(ssrf_guard, "check_url", _blocked)
+    google = _Google(_sized_doc(column_widths=[120.0, 200.0]), image=_image_response(800, 400))
+
+    out = _embed(google, table=1, row=2, column="Comment")
+
+    # Measuring must not turn this proxy into a probe of its own network.
+    assert out["error"]["code"] == "docs_image_uri_blocked"
+    assert google.writes == []
+
+
+def test_our_own_one_fetch_url_is_not_handed_back_as_a_source() -> None:
+    body = Body().table([["Chart"], [_image_cell()]])
+    minted = (
+        "https://tunnel.invalid/api/integrations/bundles/t/p/kdcube-services%401-0"
+        "/public/provider_fetch_download?object_ref=staged%3Aabc%3Achart.png"
+        "&download_token=eyJhbGciOiJub25lIn0.sig"
+    )
+    doc = document(
+        ("t.0", "Main", body),
+        inline_objects={"img.1": inline_image(source_uri=minted)},
+    )
+
+    out = _run(docs_proxy, "get", {"document_ref": "DOC1", "tables": "all"}, _Google(doc))
+
+    cell = out["ret"]["table_reads"][0]["cells"][1][0]
+    # The URL is dead by now and carries a token; where it came from is the
+    # part worth reporting.
+    assert cell["objects"][0]["source"] == "kdcube_file"
+    assert "source_uri" not in cell["objects"][0]
+    assert "download_token" not in json.dumps(out)
+
+
+def test_a_public_source_url_is_still_reported() -> None:
+    body = Body().table([["Chart"], [_image_cell()]])
+    doc = document(
+        ("t.0", "Main", body),
+        inline_objects={
+            "img.1": inline_image(source_uri="https://example.invalid/chart.png")
+        },
+    )
+
+    out = _run(docs_proxy, "get", {"document_ref": "DOC1", "tables": "all"}, _Google(doc))
+
+    cell = out["ret"]["table_reads"][0]["cells"][1][0]
+    assert cell["objects"][0]["source_uri"] == "https://example.invalid/chart.png"
+
+
+# --------------------------------------------------------------------------- #
+# Non-text elements in ordinary paragraphs
+# --------------------------------------------------------------------------- #
+
+
+def test_a_paragraph_shows_its_chips_where_they_sit() -> None:
+    body = Body().paragraph(
+        " reviews this by ",
+        objects=(
+            {"kind": "person", "email": "owner-a@example.com", "name": "Owner A"},
+            {"kind": "dateElement", "text": "Oct 2, 2026"},
+        ),
+    )
+
+    text = docs_proxy._extract_document_text(
+        document(("t.0", "Main", body)), limit=4000
+    )
+
+    # Elements keep their place in the sentence, and each says what it is -
+    # a paragraph has no second-level read to look the detail up in.
+    assert "[person: owner-a@example.com][date: Oct 2, 2026] reviews this by" in text
+
+
+def test_a_paragraph_holding_only_a_picture_is_no_longer_blank() -> None:
+    body = Body().paragraph("", objects=({"kind": "inlineObjectElement", "id": "img.1"},))
+
+    text = docs_proxy._extract_document_text(
+        document(
+            ("t.0", "Main", body),
+            inline_objects={"img.1": inline_image(alt="Q3 revenue by region")},
+        ),
+        limit=4000,
+    )
+
+    assert "[image: Q3 revenue by region]" in text
+
+
+def test_a_cell_and_a_paragraph_name_the_same_chip_the_same_way() -> None:
+    chip = {"kind": "person", "email": "owner-b@example.com"}
+    body = (
+        Body()
+        .paragraph("", objects=(chip,))
+        .table([["Owner"], [{"text": "", "objects": (chip,)}]])
+    )
+
+    text = docs_proxy._extract_document_text(
+        document(("t.0", "Main", body)), limit=4000
+    )
+
+    # One vocabulary for both renderings: the rule that keeps the two levels
+    # from drifting applies to the readable text as much as to the records.
+    assert text.count("[person: owner-b@example.com]") == 2
+
+
+def test_the_text_that_carries_indices_stays_literal() -> None:
+    body = Body().paragraph(
+        "Owner ", objects=({"kind": "person", "email": "owner-a@example.com"},)
+    )
+    doc = document(("t.0", "Main", body))
+
+    out = _run(docs_proxy_flex, "get_structure", {"document_ref": "DOC1"}, _Google(doc))
+
+    element = out["ret"]["tabs"][0]["elements"][0]
+    # This text is paired with start_index/end_index for batch_edit, and a
+    # marker occupies no character in the document: putting one here would
+    # move every offset computed from it.
+    assert element["text"] == "Owner \n"
+    assert "[person" not in element["text"]
+
+
+def test_a_heading_with_a_chip_still_matches_its_selector() -> None:
+    body = (
+        Body()
+        .heading("Tasks", 2)
+        .table([["Task"], ["Fix login"]])
+    )
+    doc = document(("t.0", "Main", body))
+
+    out = _run(
+        docs_proxy,
+        "get",
+        {"document_ref": "DOC1", "tables": {"table": {"after_heading": "Tasks"}}},
+        _Google(doc),
+    )
+
+    # Heading text is what after_heading matches on, so it stays literal too.
+    assert out["ok"] is True
+    assert out["ret"]["table_reads"][0]["after_heading"]["text"] == "Tasks"
+
+
+# --------------------------------------------------------------------------- #
+# Writing smart chips
+# --------------------------------------------------------------------------- #
+
+
+def _insert(google: _Google, **payload: Any) -> dict[str, Any]:
+    return _run(docs_proxy, "insert_text", {"document_ref": "DOC1", **payload}, google)
+
+
+def test_a_sentence_with_chips_is_written_as_ordered_pieces() -> None:
+    google = _Google(_tasks_doc())
+
+    out = _insert(
+        google,
+        index=10,
+        tab_id="t.0",
+        pieces=[
+            {"text": "Owner "},
+            {"person": "owner-a@example.com"},
+            {"text": " reviews by "},
+            {"date": "2026-10-02"},
+            {"text": " per "},
+            {"link": "https://example.invalid/plan"},
+        ],
+    )
+
+    requests = google.writes[0]["requests"]
+    # All at one index, written backwards so they land forwards - no offset
+    # arithmetic anywhere, and none asked of the caller.
+    assert {r["insertText"]["location"]["index"] for r in requests if "insertText" in r} == {10}
+    kinds = [next(iter(request)) for request in requests]
+    # Written last piece first, which is what lands them in the named order.
+    assert kinds == [
+        "insertRichLink",
+        "insertText",
+        "insertDate",
+        "insertText",
+        "insertPerson",
+        "insertText",
+    ]
+    assert requests[4]["insertPerson"]["personProperties"] == {
+        "email": "owner-a@example.com"
+    }
+    assert requests[2]["insertDate"]["dateElementProperties"] == {
+        "timestamp": "2026-10-02T00:00:00Z"
+    }
+    # Google fills a link's title and icon itself, so only the uri is sent.
+    assert requests[0]["insertRichLink"]["richLinkProperties"] == {
+        "uri": "https://example.invalid/plan"
+    }
+    assert out["ret"]["inserted"]["pieces"] == [
+        "text", "person", "text", "date", "text", "link"
+    ]
+
+
+def test_a_date_chip_keeps_the_zone_it_was_given() -> None:
+    google = _Google(_tasks_doc())
+
+    _insert(
+        google,
+        index=5,
+        tab_id="t.0",
+        pieces=[{"date": {"value": "2026-10-02T09:30:00", "time_zone": "Europe/Kyiv"}}],
+    )
+
+    properties = google.writes[0]["requests"][0]["insertDate"]["dateElementProperties"]
+    assert properties == {
+        "timestamp": "2026-10-02T09:30:00Z",
+        "timeZoneId": "Europe/Kyiv",
+    }
+
+
+def test_text_and_pieces_together_are_refused() -> None:
+    google = _Google(_tasks_doc())
+
+    out = _insert(google, index=5, tab_id="t.0", text="hello", pieces=[{"text": "hi"}])
+
+    assert out["error"]["code"] == "docs_value_ambiguous"
+    assert google.writes == []
+
+
+def test_a_piece_naming_two_kinds_is_refused() -> None:
+    google = _Google(_tasks_doc())
+
+    out = _insert(
+        google,
+        index=5,
+        tab_id="t.0",
+        pieces=[{"person": "a@b.com", "date": "2026-10-02"}],
+    )
+
+    assert out["error"]["code"] == "docs_value_ambiguous"
+    assert google.writes == []
+
+
+def test_a_date_that_is_not_a_date_says_what_one_looks_like() -> None:
+    google = _Google(_tasks_doc())
+
+    out = _insert(google, index=5, tab_id="t.0", pieces=[{"date": "next tuesday"}])
+
+    assert out["error"]["code"] == "docs_date_invalid"
+    assert "2026-10-02" in out["error"]["message"]
+    assert google.writes == []
+
+
+def test_a_link_that_is_not_a_url_is_refused() -> None:
+    google = _Google(_tasks_doc())
+
+    out = _insert(google, index=5, tab_id="t.0", pieces=[{"link": "the quarterly plan"}])
+
+    assert out["error"]["code"] == "docs_link_invalid"
+    assert google.writes == []
+
+
+def test_a_cell_takes_a_date_chip_the_same_way_it_takes_a_person() -> None:
+    google = _Google(_tasks_doc())
+
+    out = _set_cells(
+        google,
+        table=1,
+        row=2,
+        cells=[{"column": "Status", "date": "2026-10-02"}],
+    )
+
+    assert out["ok"] is True
+    request = [r for r in google.writes[0]["requests"] if "insertDate" in r][0]
+    assert request["insertDate"]["dateElementProperties"]["timestamp"] == (
+        "2026-10-02T00:00:00Z"
+    )
+
+
+def test_a_cell_takes_a_link_chip() -> None:
+    google = _Google(_tasks_doc())
+
+    out = _set_cells(
+        google,
+        table=1,
+        row=2,
+        cells=[{"column": "Status", "link": "https://example.invalid/plan"}],
+    )
+
+    assert out["ok"] is True
+    request = [r for r in google.writes[0]["requests"] if "insertRichLink" in r][0]
+    assert request["insertRichLink"]["richLinkProperties"] == {
+        "uri": "https://example.invalid/plan"
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Headings and lists as units (kdcube#243 item 6)
+# --------------------------------------------------------------------------- #
+
+
+def _paragraph_start(doc: dict[str, Any], number: int = 0) -> int:
+    """Where a paragraph begins - the only place a block may be written."""
+
+    from kdcube_ai_app.apps.chat.sdk.integrations.google.docs_structure import (
+        body_segments,
+    )
+
+    body = doc["tabs"][0]["documentTab"]["body"]
+    paragraphs = [row for row in body_segments(body) if row["kind"] != "cell"]
+    return int(paragraphs[number]["start"])
+
+
+def test_a_heading_is_written_as_one_unit() -> None:
+    doc = _tasks_doc()
+    google = _Google(doc)
+    start = _paragraph_start(doc, 1)
+
+    out = _insert(
+        google, index=start, tab_id="t.0", text="Release notes", style="heading_2"
+    )
+
+    requests = google.writes[0]["requests"]
+    # Written backwards, so the paragraph's own terminating newline goes first
+    # and the text after it. Two inserts and no more: at a paragraph start
+    # nothing has to be opened, unlike an append at the body's end.
+    assert [r["insertText"]["text"] for r in requests if "insertText" in r] == [
+        "\n",
+        "Release notes",
+    ]
+    style = requests[2]["updateParagraphStyle"]
+    assert style["paragraphStyle"] == {"namedStyleType": "HEADING_2"}
+    # The mask is required, and it must name only what the call changes.
+    assert style["fields"] == "namedStyleType"
+    assert style["range"] == {
+        "startIndex": start,
+        "endIndex": start + len("Release notes\n"),
+        "tabId": "t.0",
+    }
+    assert out["ret"]["wrote"]["paragraphs"] == 1
+
+
+def test_a_style_range_counts_the_way_docs_counts() -> None:
+    doc = _tasks_doc()
+    google = _Google(doc)
+    start = _paragraph_start(doc, 1)
+
+    _insert(google, index=start, tab_id="t.0", text="Ship 🚀 now", style="heading_1")
+
+    style = [r for r in google.writes[0]["requests"] if "updateParagraphStyle" in r][0]
+    # A rocket is one Python character and two index positions; counting it as
+    # one would pull the neighbouring paragraph into the heading.
+    assert style["updateParagraphStyle"]["range"]["endIndex"] == start + 12
+
+
+def test_a_list_is_written_as_one_unit() -> None:
+    doc = _tasks_doc()
+    google = _Google(doc)
+    start = _paragraph_start(doc, 1)
+
+    out = _insert(
+        google,
+        index=start,
+        tab_id="t.0",
+        items=["Fix login", "Ship docs", "Review"],
+        list="bullet",
+    )
+
+    requests = google.writes[0]["requests"]
+    bullets = [r for r in requests if "createParagraphBullets" in r][0]
+    assert bullets["createParagraphBullets"]["bulletPreset"] == "BULLET_DISC_CIRCLE_SQUARE"
+    assert bullets["createParagraphBullets"]["range"]["endIndex"] == start + len(
+        "Fix login\nShip docs\nReview\n"
+    )
+    assert out["ret"]["wrote"]["paragraphs"] == 3
+
+
+def test_a_numbered_list_item_can_hold_a_chip() -> None:
+    doc = _tasks_doc()
+    google = _Google(doc)
+    start = _paragraph_start(doc, 1)
+
+    _insert(
+        google,
+        index=start,
+        tab_id="t.0",
+        items=[
+            "Fix login",
+            [{"text": "Review by "}, {"person": "owner-a@example.com"}],
+        ],
+        list="number",
+    )
+
+    requests = google.writes[0]["requests"]
+    assert [r for r in requests if "insertPerson" in r]
+    bullets = [r for r in requests if "createParagraphBullets" in r][0]
+    assert bullets["createParagraphBullets"]["bulletPreset"] == (
+        "NUMBERED_DECIMAL_ALPHA_ROMAN"
+    )
+    # The chip occupies one index position, the same as any other element.
+    assert bullets["createParagraphBullets"]["range"]["endIndex"] == start + len(
+        "Fix login\nReview by \n"
+    ) + 1
+
+
+def test_a_heading_in_the_middle_of_a_sentence_is_refused() -> None:
+    google = _Google(_tasks_doc())
+
+    out = _insert(google, index=5, tab_id="t.0", text="Notes", style="heading_2")
+
+    # A paragraph style covers every paragraph its range touches, so this one
+    # would restyle the sentence it landed in.
+    assert out["error"]["code"] == "docs_block_needs_its_own_paragraph"
+    assert "Report" in out["error"]["details"]["inside_text"]
+    assert google.writes == []
+
+
+def test_an_unknown_style_lists_the_ones_that_work() -> None:
+    google = _Google(_tasks_doc())
+
+    out = _insert(google, index=1, tab_id="t.0", text="Notes", style="header2")
+
+    assert out["error"]["code"] == "docs_style_unsupported"
+    assert "heading_2" in out["error"]["message"]
+    assert google.writes == []
+
+
+def test_items_and_text_together_are_refused() -> None:
+    google = _Google(_tasks_doc())
+
+    out = _insert(google, index=1, tab_id="t.0", text="a", items=["b"], list="bullet")
+
+    assert out["error"]["code"] == "docs_value_ambiguous"
+    assert google.writes == []
+
+
+def test_a_heading_appended_at_the_end_opens_its_own_paragraph() -> None:
+    doc = _tasks_doc()
+    google = _Google(doc)
+
+    out = _run(
+        docs_proxy,
+        "append_text",
+        {"document_ref": "DOC1", "tab_id": "t.0", "text": "Summary", "style": "heading_3"},
+        google,
+    )
+
+    requests = google.writes[0]["requests"]
+    # The body end sits inside the last paragraph, so a break comes first and
+    # the styled range starts after it.
+    assert requests[-1]["updateParagraphStyle"]["range"]["startIndex"] == (
+        out["ret"]["wrote"]["start_index"]
+    )
+    assert out["ret"]["wrote"]["style"] == "HEADING_3"
+
+
+def test_a_date_chip_reads_the_way_the_document_shows_it() -> None:
+    body = Body().paragraph(
+        "Due ",
+        objects=({"kind": "dateElement", "text": "Oct 2, 2026"},),
+    )
+
+    text = docs_proxy._extract_document_text(
+        document(("t.0", "Main", body)), limit=4000
+    )
+
+    # Docs answers with displayText; reading 'text' left every date chip blank,
+    # and the fixture agreed with the mistake until a live document disagreed.
+    assert "[date: Oct 2, 2026]" in text
+
+
+def test_a_link_google_will_not_take_is_explained() -> None:
+    google = _Google(
+        _tasks_doc(),
+        updates=[
+            httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "code": 400,
+                        "status": "INVALID_ARGUMENT",
+                        "message": (
+                            "Invalid requests[0].insertRichLink: The URL is invalid."
+                        ),
+                    }
+                },
+            )
+        ],
+    )
+
+    out = _insert(
+        google,
+        index=1,
+        tab_id="t.0",
+        pieces=[{"link": "https://github.com/kdcube/kdcube/issues/243"}],
+    )
+
+    # A link chip points at a Google resource; the provider's own message does
+    # not say that, so this one does.
+    assert out["error"]["code"] == "docs_link_unsupported"
+    assert "Drive file" in out["error"]["message"]
+    assert "insertRichLink" in out["error"]["details"]["provider_message"]
+
+
+def test_a_pieces_write_does_not_report_a_plain_text_count() -> None:
+    google = _Google(_tasks_doc())
+
+    out = _insert(
+        google,
+        index=1,
+        tab_id="t.0",
+        pieces=[{"text": "Owner "}, {"person": "owner-a@example.com"}],
+    )
+
+    # The plain-text counter belongs to the plain-text path; beside pieces it
+    # would always read zero and contradict the count that is true.
+    assert "inserted_chars" not in out["ret"]
+    assert out["ret"]["inserted"]["chars"] == len("Owner ")
+
+
+def test_a_pieces_preview_counts_only_once() -> None:
+    google = _Google(_tasks_doc())
+
+    out = _insert(
+        google,
+        index=1,
+        tab_id="t.0",
+        preview=True,
+        pieces=[{"text": "Owner "}, {"person": "owner-a@example.com"}],
+    )
+
+    assert "would_insert_chars" not in out["ret"]
+    assert out["ret"]["would_insert"]["chars"] == len("Owner ")
+    assert out["ret"]["written"] is False
+    assert google.writes == []
+
+
+def test_every_object_kind_has_its_own_marker() -> None:
+    # The recipe publishes this vocabulary as closed, and _object_label falls
+    # back to the kind's own name, so a family added to the walk without a
+    # marker would read as [rich_link] instead of [link] and the doc would
+    # quietly stop being true.
+    from kdcube_ai_app.apps.chat.sdk.integrations.google.docs_structure import (
+        OBJECT_KINDS,
+    )
+
+    assert set(OBJECT_KINDS.values()) == set(docs_proxy._CELL_MARKERS)

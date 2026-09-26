@@ -25,7 +25,7 @@ Current declared surface families:
 | Widgets | `bundle_storage`, `app_config`, `agentic_instructions`, `control_plane`, `conversation_browser`, `svc_gateway`, `redis_browser`, `ai_bundles` |
 | Operations | `bundle_storage_widget`, `app_config_widget`, `agentic_instructions_widget`, `agentic_instructions`, `control_plane`, `conversation_browser`, `svc_gateway`, `redis_browser`, `ai_bundles` |
 | MCP | `conversations`, `named_services`, `productivity` |
-| Signed public files | `integration_file_upload`, `integration_file_download`, `conv_file_download` |
+| Signed public files | `integration_file_upload`, `integration_file_download`, `conv_file_download`, `provider_fetch_download` |
 | Data Bus | `kdcube.named_service.relay.v1` |
 
 See [../docs/storage/README.md](../docs/storage/README.md) for the authority and
@@ -427,7 +427,7 @@ account, split into three claims:
 
 | Group | Tools | Connected-account claims |
 | --- | --- | --- |
-| Find and read | `productivity_docs_search`, `productivity_docs_get`, `productivity_docs_export`, `productivity_docs_list_comments`, `productivity_docs_get_comment` | `docs:read` |
+| Find and read | `productivity_docs_search`, `productivity_docs_get`, `productivity_docs_export`, `productivity_docs_read_image`, `productivity_docs_list_comments`, `productivity_docs_get_comment` | `docs:read` |
 | Edit | `productivity_docs_create`, `productivity_docs_copy`, `productivity_docs_insert_text`, `productivity_docs_append_text`, `productivity_docs_replace_text`, `productivity_docs_apply_text_style`, `productivity_docs_insert_page_break`, `productivity_docs_embed_image`, `productivity_docs_set_cells`, `productivity_docs_add_row`, `productivity_docs_add_tab`, `productivity_docs_update_tab`, `productivity_docs_delete_tab`, `productivity_docs_import` | `docs:read`, `docs:write` |
 | Trash | `productivity_docs_trash`, `productivity_docs_restore` | `docs:read`, `docs:delete` |
 | Comment | `productivity_docs_create_comment`, `productivity_docs_reply_comment`, `productivity_docs_update_comment`, `productivity_docs_resolve_comment`, `productivity_docs_delete_comment` | `docs:read`, `docs:comment` |
@@ -490,6 +490,7 @@ model context:
 | Alias | Method | Required query | Result |
 | --- | --- | --- | --- |
 | `integration_file_upload` | POST | `object_ref`, `upload_token` | Raw request bytes become a short-lived, single-use `staged:` ref. |
+| `provider_fetch_download` | GET | `object_ref`, `download_token` | One staged file, served to a provider that fetches it with no identity of its own. The token binds that one staged ref and expires within a minute by default; the action that staged the file deletes it as soon as the provider call returns, after which this answers `fetch_file_gone`. |
 | `integration_file_download` | GET | `object_ref`, `download_token` | Complete Mail message JSON, raw Mail attachment/Slack file bytes, a Sheets/Docs JSON snapshot, or a portable Google Docs export with `Content-Disposition` and `private, no-store`. |
 | `conv_file_download` | GET | `object_ref`, `download_token` | Raw conversation artifact bytes under token-bound user/conversation scope. |
 

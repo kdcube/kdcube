@@ -100,6 +100,11 @@ DOCS_PRODUCTIVITY_TOOLS: dict[str, dict[str, Any]] = {
         "description": "Export a document to PDF, DOCX, or another format.",
         **_requirement(_READ_CLAIMS),
     },
+    "productivity_docs_read_image": {
+        "label": "Read Google Doc image",
+        "description": "Read one inline image of a document as bytes.",
+        **_requirement(_READ_CLAIMS),
+    },
     "productivity_docs_list_comments": {
         "label": "List Google Doc comments",
         "description": "List comments on a document with their replies.",
@@ -186,7 +191,10 @@ DOCS_PRODUCTIVITY_TOOLS: dict[str, dict[str, Any]] = {
     },
     "productivity_docs_embed_image": {
         "label": "Embed Google Doc image",
-        "description": "Embed an inline image from a public URL into a document.",
+        "description": (
+            "Embed an inline image from a public URL into a document or one of "
+            "its table cells."
+        ),
         **_requirement(_WRITE_CLAIMS),
     },
     "productivity_docs_import": {
@@ -424,6 +432,56 @@ def register_google_docs_tools(
         )
 
     @mcp.tool(
+        name="productivity_docs_read_image",
+        title="Read Google Doc image",
+        description=(
+            "Read one inline image of a document as bytes, for a caller that "
+            "will look at it. Name the object_id productivity_docs_get reports "
+            "on the cell that holds the image; omit it only when the document "
+            "holds exactly one image, otherwise the refusal lists the images to "
+            "choose from. Returns base64-encoded bytes with the mime type, plus "
+            "the image's alt text, size in points and the cell it sits in. The "
+            "document's own image URLs are short-lived and readable by anyone "
+            "who holds them, so they are never returned."
+        ),
+        annotations=read_only_annotations(
+            ToolAnnotations, title="Read Google Doc image"
+        ),
+        structured_output=False,
+    )
+    async def _productivity_docs_read_image(
+        document_ref: Annotated[
+            str,
+            Field(description="Document id or full Google Docs URL."),
+        ],
+        object_id: Annotated[
+            str,
+            Field(
+                description=(
+                    "The image's object_id, as a table read reports it. Omit "
+                    "when the document holds exactly one image."
+                )
+            ),
+        ] = "",
+        account_id: Annotated[
+            str,
+            Field(
+                description="Optional connected Google account id when several are available."
+            ),
+        ] = "",
+    ) -> dict[str, Any]:
+        denial = await _enforce("productivity_docs_read_image", "read", account_id)
+        if denial is not None:
+            return denial
+        return await docs.execute(
+            operation="read_image",
+            claim=_READ_CLAIMS,
+            tool_name="productivity_docs_read_image",
+            payload={"document_ref": document_ref, "object_id": object_id},
+            account_id=account_id,
+        )
+
+    @mcp.tool(
         name="productivity_docs_list_comments",
         title="List Google Doc comments",
         description=(
@@ -646,7 +704,17 @@ def register_google_docs_tools(
         description=(
             "Insert text at a body index. Omit index to insert at the end of the "
             "selected tab. Use productivity_docs_get first for tab_id, end_index, or the "
-            "coordinates around the text you want to edit. This changes the "
+            "coordinates around the text you want to edit. To write a sentence "
+            "that holds smart chips, pass pieces instead of text: a list like "
+            '[{"text": "Owner "}, {"person": "a@b.com"}, {"text": " by "}, '
+            '{"date": "2026-10-02"}, {"link": "https://example.com/plan"}], '
+            "named in order and written at one index. Pass text or pieces, "
+            "never both. To write a heading or a list as a unit rather than as "
+            "raw text, pass style (title, subtitle, normal, heading_1 through "
+            "heading_6) and/or list (bullet, number); items writes one "
+            "paragraph per entry, each entry a string or a pieces list. A "
+            "styled paragraph must start its own paragraph, so an index inside "
+            "a sentence is refused. This changes the "
             "document each time it succeeds. tab_id is required for a multi-tab "
             "document."
         ),
@@ -662,8 +730,43 @@ def register_google_docs_tools(
         ],
         text: Annotated[
             str,
-            Field(min_length=1, description="Text to insert."),
-        ],
+            Field(description="Text to insert. Omit it when passing pieces."),
+        ] = "",
+        pieces: Annotated[
+            list[dict[str, Any]] | None,
+            Field(
+                description=(
+                    "Ordered pieces for a sentence that holds smart chips: "
+                    '{"text": "..."}, {"person": "someone@example.com"}, '
+                    '{"date": "2026-10-02"} or {"link": "https://..."}. '
+                    "Google fills a person's name, a link's title and a date's "
+                    "display text itself."
+                )
+            ),
+        ] = None,
+        items: Annotated[
+            list[Any] | None,
+            Field(
+                description=(
+                    "One paragraph per entry, each a string or a list of "
+                    "pieces. Use it with style or list to write a heading or a "
+                    "list as a unit."
+                )
+            ),
+        ] = None,
+        style: Annotated[
+            str,
+            Field(
+                description=(
+                    "Paragraph style for what this call writes: title, "
+                    "subtitle, normal, or heading_1 through heading_6."
+                )
+            ),
+        ] = "",
+        list: Annotated[
+            str,
+            Field(description="Make the written paragraphs a list: bullet or number."),
+        ] = "",
         index: Annotated[
             int | None,
             Field(ge=1, description="Optional 1-based body index; omit to append."),
@@ -702,6 +805,10 @@ def register_google_docs_tools(
             tool_name="productivity_docs_insert_text",
             payload={
                 "preview": preview,
+                "pieces": pieces,
+                "items": items,
+                "style": style,
+                "list": list,
                 "document_ref": document_ref,
                 "text": text,
                 "index": index,
@@ -951,8 +1058,10 @@ def register_google_docs_tools(
             "or a cell is refused (merged away, nested table, or images/chips "
             "under replace). remove_objects replaces them anyway and the "
             "result lists them as before_objects; an answer that removed "
-            "someone's chip or image says so. This changes the document each "
-            "time it succeeds."
+            "someone's chip or image says so. This tool writes text and person "
+            "chips; to put an image in a cell use productivity_docs_embed_image, "
+            "which takes the same selector, row and column. This changes the "
+            "document each time it succeeds."
         ),
         annotations=write_annotations(
             ToolAnnotations, title="Write Google Doc table cells"
@@ -978,8 +1087,11 @@ def register_google_docs_tools(
             Field(
                 description=(
                     "Column name or number mapped to the text to write, or a "
-                    "list of {column, text} - or {column, person: "
-                    '"someone@example.com"} to write a person chip.'
+                    "list of {column, text}. A list entry may carry a smart "
+                    "chip instead of text: person, date or link, as "
+                    '{column, person: "someone@example.com"}, '
+                    '{column, date: "2026-10-02"} or '
+                    '{column, link: "https://example.com/plan"}.'
                 )
             ),
         ],
@@ -1458,10 +1570,15 @@ def register_google_docs_tools(
         name="productivity_docs_embed_image",
         title="Embed Google Doc image",
         description=(
-            "Embed an inline image at a body index. image_uri must be a public "
+            "Embed an inline image in a document. image_uri must be a public "
             "http(s) URL that Google fetches once at insert time (PNG/JPEG/GIF, "
-            "<=25MB, <=2000px per side). Omit index to append at the selected "
-            "tab's end."
+            "<=25MB, <=2000px per side). To place it in a table cell, pass the "
+            "table (or the selector productivity_docs_get returned) with row "
+            "and column, the same way productivity_docs_set_cells names a cell: "
+            "the image lands after what the cell already holds. Pass index "
+            "instead to place it at a body index, or omit both to append at the "
+            "selected tab's end. Naming both a cell and an index is refused, as "
+            "is a merged-away or nested-table cell."
         ),
         annotations=write_annotations(
             ToolAnnotations, title="Embed Google Doc image"
@@ -1477,13 +1594,72 @@ def register_google_docs_tools(
             str,
             Field(description="Public http(s) URL of the image to embed."),
         ],
+        selector: Annotated[
+            dict[str, Any] | None,
+            Field(
+                description=(
+                    "A tables[].selector from productivity_docs_get, passed "
+                    "unchanged; it names the tab and the table."
+                )
+            ),
+        ] = None,
+        table: Annotated[
+            dict[str, Any] | int | None,
+            Field(
+                description=(
+                    "Table selector: {position}, {after_heading}, "
+                    "{header_contains}; a bare number is a position within the "
+                    "tab. Omit when selector is given."
+                )
+            ),
+        ] = None,
+        row: Annotated[
+            dict[str, Any] | int | None,
+            Field(
+                description=(
+                    "1-based row number, or {where: {column, equals | contains}} "
+                    "matching exactly one data row. Required to target a cell."
+                )
+            ),
+        ] = None,
+        column: Annotated[
+            str | int | None,
+            Field(
+                description=(
+                    "Column name from the header, or a 1-based number. Required "
+                    "to target a cell."
+                )
+            ),
+        ] = None,
+        header: Annotated[
+            int | None,
+            Field(
+                ge=0,
+                description=(
+                    "Header row count when the document does not mark the "
+                    "header, e.g. 1 to name columns by the first row."
+                ),
+            ),
+        ] = None,
         index: Annotated[
             int | None,
-            Field(ge=1, description="Optional 1-based body index; omit to append."),
+            Field(
+                ge=1,
+                description=(
+                    "Optional 1-based body index; omit to append. Not allowed "
+                    "together with a cell."
+                ),
+            ),
         ] = None,
         width_pt: Annotated[
             int | None,
-            Field(ge=1, description="Optional display width in points."),
+            Field(
+                ge=1,
+                description=(
+                    "Optional display width in points. Omit it for a cell and "
+                    "the image is fitted to the column when it is wider."
+                ),
+            ),
         ] = None,
         height_pt: Annotated[
             int | None,
@@ -1515,6 +1691,11 @@ def register_google_docs_tools(
             payload={
                 "document_ref": document_ref,
                 "image_uri": image_uri,
+                "selector": selector,
+                "table": table,
+                "row": row,
+                "column": column,
+                "header": header,
                 "index": index,
                 "width_pt": width_pt,
                 "height_pt": height_pt,
