@@ -417,3 +417,53 @@ def test_the_providers_email_verdict_reaches_the_apps_request_session_unchanged(
         assert UserSession(**merged).email_verified is expected
     finally:
         issuer.email_verified = True
+
+
+def test_a_second_sign_in_in_the_same_browser_rebuilds_the_app_session(issuer):
+    """W260 (operator, 2026-09-26: "after relogin the session carries something old").
+
+    Two sign-ins through the real path, into one app session record: the
+    second does not state the email verdict, so the verdict is unknown after
+    it, not the first sign-in's true.
+    """
+    import asyncio
+    from types import SimpleNamespace
+
+    from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.request_auth import PlatformTokenAuthenticator
+    from kdcube_ai_app.auth.platform_session_store import _merge_record
+    from kdcube_ai_app.auth.sessions import UserSession
+
+    harness = Harness(issuer)
+    manager = BundleSessionAuthManager(authority=harness.authority, sliding=harness.policy)
+
+    def sign_in_user_data(claim):
+        issuer.email_verified = claim
+        callback, binding, _state = _walk_to_callback(harness, issuer)
+        harness.client.cookies.set("__Host-kdcube-login", binding)
+        done = harness.client.get(callback, follow_redirects=False)
+        assert done.status_code == 302, done.text
+        token = _cookie_values(done)["__Secure-LATC"]
+        seen: list[dict] = []
+
+        async def session_factory(_context, _user_type, data):
+            seen.append(dict(data))
+            return SimpleNamespace()
+
+        authenticator = PlatformTokenAuthenticator(auth_manager=manager)
+        asyncio.run(authenticator(None, SimpleNamespace(authorization_header=f"Bearer {token}", id_token=None), session_factory))
+        return seen[0]
+
+    context = {"client_ip": "", "user_agent": "", "user_timezone": None, "user_utc_offset_min": None}
+    try:
+        first = sign_in_user_data(True)
+        record = _merge_record({"session_id": "app-1", "roles": [], "permissions": []}, user_data=first, request_context=context, user_type="registered")
+        assert record["email_verified"] is True
+
+        second = sign_in_user_data(ABSENT)
+        assert second["platform_session_id"] != first["platform_session_id"], "each sign-in is its own platform session"
+        rebuilt = _merge_record(record, user_data=second, request_context=context, user_type="registered")
+        assert rebuilt["session_id"] == "app-1"
+        assert rebuilt["email_verified"] is None, "the second sign-in did not state it: unknown, not the first one's true"
+        assert UserSession(**rebuilt).platform_session_id == second["platform_session_id"]
+    finally:
+        issuer.email_verified = True

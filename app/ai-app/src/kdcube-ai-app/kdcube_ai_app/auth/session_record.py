@@ -56,4 +56,5 @@ def user_session_storage_record(session: Any) -> dict[str, Any]:
             getattr(session, "identity_authority", None)
         ),
         "rate_limit_subject": getattr(session, "rate_limit_subject", None),
+        "platform_session_id": getattr(session, "platform_session_id", None),
     }

@@ -22,6 +22,7 @@ _USER_UPDATE_FIELDS = (
     "email_verified",
     "identity_authority",
     "rate_limit_subject",
+    "platform_session_id",
 )
 
 
@@ -52,6 +53,13 @@ def _merge_record(
 ) -> dict[str, Any]:
     merged = dict(existing)
     merged["user_type"] = str(user_type)
+    incoming_sign_in = user_data.get("platform_session_id")
+    if incoming_sign_in and incoming_sign_in != existing.get("platform_session_id"):
+        # A new sign-in rebuilds the facts: a field it does not state is
+        # unknown, not whatever an earlier sign-in left there (W260).
+        for field in _USER_UPDATE_FIELDS:
+            merged[field] = None
+        existing = {**existing, **{field: None for field in _USER_UPDATE_FIELDS}}
     if (
         "email" in user_data
         and user_data.get("email") != existing.get("email")
