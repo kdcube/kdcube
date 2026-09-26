@@ -54,6 +54,12 @@ from kdcube_ai_app.apps.chat.sdk.integrations.telegram.topics import (
     normalize_message_thread_id,
     telegram_topic_conversation_id,
 )
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram.updates import (
+    FileTelegramUpdateClaims,
+    TelegramUpdateClaims,
+    claim_telegram_update_once,
+    release_telegram_update,
+)
 from kdcube_ai_app.apps.chat.sdk.integrations.telegram.user_storage import (
     TelegramUserAdminStorage,
 )
@@ -66,6 +72,10 @@ from kdcube_ai_app.apps.chat.sdk.integrations.telegram.webapp_auth import (
 )
 
 __all__ = [
+    "FileTelegramUpdateClaims",
+    "TelegramUpdateClaims",
+    "claim_telegram_update_once",
+    "release_telegram_update",
     "INIT_DATA_HEADER",
     "SignedLink",
     "SignedLinkToken",

@@ -450,3 +450,35 @@ def test_ingress_config_retains_message_thread_id() -> None:
     )
 
     assert ingress.metadata["message_thread_id"] == 73
+
+
+def test_summary_reports_a_reply_but_not_a_topic_root_as_a_reply():
+    """W318: a reply to a bot post routes to its sender; the topic's own root does not count.
+
+    Inside a topic Telegram sets reply_to_message on every message to the
+    topic's creation message, so only a reply to another message is a reply.
+    """
+
+    def update(reply_to):
+        message = {
+            "message_id": 50,
+            "chat": {"id": 42, "type": "private"},
+            "from": {"id": 42},
+            "message_thread_id": 7,
+            "is_topic_message": True,
+            "text": "yes",
+        }
+        if reply_to is not None:
+            message["reply_to_message"] = reply_to
+        return {"update_id": 9, "message": message}
+
+    assert summarize_telegram_update(update({"message_id": 33, "text": "a post"}))["reply_to_message_id"] == 33
+    # The topic root: identified by its service field, or by being the thread's own id.
+    assert summarize_telegram_update(update({"message_id": 7, "forum_topic_created": {"name": "Project"}}))["reply_to_message_id"] is None
+    assert summarize_telegram_update(update({"message_id": 7}))["reply_to_message_id"] is None
+    assert summarize_telegram_update(update(None))["reply_to_message_id"] is None
+    plain = {"update_id": 10, "message": {"message_id": 5, "chat": {"id": 1, "type": "private"},
+                                           "reply_to_message": {"message_id": 4}, "text": "x"}}
+    assert summarize_telegram_update(plain)["reply_to_message_id"] == 4
+    assert summarize_telegram_update({"update_id": 11, "message": {"message_id": 6, "chat": {"id": 1},
+                                                                    "reply_to_message": {"message_id": "x"}}})["reply_to_message_id"] is None
