@@ -51,6 +51,7 @@ from kdcube_cli.control import (
     discover_local_targets,
     resolve_local_workdir,
 )
+from kdcube_cli.compose_profiles import PROXYLOGIN_PROFILE
 from kdcube_cli.descriptor_files import copy_descriptor_file
 from kdcube_cli.deployment_provenance import (
     DeploymentProvenanceError,
@@ -709,6 +710,59 @@ def _maintain_docker_build_storage(console: Console, *, phase: str) -> None:
             )
 
 
+class ImageReceiptError(SystemExit):
+    """The images were built; only their deployment source receipt failed.
+
+    A refresh that stopped the stack still starts it on those images, then
+    reports this (operator, 2026-09-26: a receipt check must never leave the
+    runtime down).
+    """
+
+
+def _build_and_restart(
+    console: Console,
+    *,
+    build: Callable[[], None] | None,
+    start: Callable[[], None] | None,
+    workdir: Path,
+) -> None:
+    """The tail of ``kdcube refresh``: build (optional), then start the stack.
+
+    The stack was already stopped. A receipt failure after a successful build
+    never leaves it down: the stack starts on the images just built, and the
+    receipt failure is raised after that (operator, 2026-09-26: a refresh left
+    the whole stack down on a proxylogin receipt).
+    """
+
+    receipt_failure: ImageReceiptError | None = None
+    if build is not None:
+        try:
+            build()
+        except ImageReceiptError as exc:
+            receipt_failure = exc
+            console.print(f"[yellow]{exc}[/yellow]")
+    if start is not None:
+        if receipt_failure is not None:
+            console.print("[yellow]Refresh: starting the stack on the images just built.[/yellow]")
+        try:
+            start()
+        except SystemExit as exc:
+            if receipt_failure is None:
+                raise
+            # Name both: the start failed after the receipt had failed.
+            raise SystemExit(f"{receipt_failure} Starting the stack then failed too: {exc}") from exc
+    else:
+        console.print(
+            "[dim]Refresh: --no-restart set; not starting the stack. "
+            f"Run `kdcube start --workdir {workdir}` when ready.[/dim]"
+        )
+    if receipt_failure is not None:
+        raise SystemExit(
+            f"{receipt_failure} "
+            + ("The stack was started on the new images." if start is not None else "The stack was not started (--no-restart).")
+        )
+
+
 def build_compose_images(
     console: Console,
     *,
@@ -769,9 +823,15 @@ def build_compose_images(
                 repo_root=repo_root,
                 services=build_services,
                 extra_images={"py-code-exec": "py-code-exec:latest"},
+                # proxylogin sits behind its compose profile: without it,
+                # `compose config` leaves the service out and the receipt
+                # finds no image reference for a service it just built.
+                profile_args=(
+                    ("--profile", PROXYLOGIN_PROFILE) if "proxylogin" in build_services else ()
+                ),
             )
         except DeploymentProvenanceError as exc:
-            raise SystemExit(
+            raise ImageReceiptError(
                 f"Docker images were built, but their deployment source receipt failed: {exc}"
             ) from exc
     finally:
@@ -7090,7 +7150,7 @@ def main() -> None:
                     f"[yellow]Refresh: stop_compose_stack reported {_stop_exc}; "
                     "continuing anyway.[/yellow]"
                 )
-            if args.build:
+            def _refresh_build() -> None:
                 try:
                     if _refresh_local_python_packages:
                         stage_local_python_package_sources(
@@ -7106,14 +7166,17 @@ def main() -> None:
                 finally:
                     if _refresh_local_python_packages:
                         clear_local_python_package_sources(_repo)
-            if not args.no_restart:
+
+            def _refresh_start() -> None:
                 _check_before_start(console, tenant=_t, project=_p, workdir=_resolved)
                 start_compose_stack(console, repo_root=_repo, workdir=_resolved, build=False)
-            else:
-                console.print(
-                    "[dim]Refresh: --no-restart set; not starting the stack. "
-                    f"Run `kdcube start --workdir {_resolved}` when ready.[/dim]"
-                )
+
+            _build_and_restart(
+                console,
+                build=_refresh_build if args.build else None,
+                start=None if args.no_restart else _refresh_start,
+                workdir=_resolved,
+            )
             return
         if args.command == "init":
             _init_path_provided = bool(_arg_provided("--path"))
