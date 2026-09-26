@@ -36,6 +36,7 @@ DOCS_READ_TOOLS = {
     "productivity_docs_search",
     "productivity_docs_get",
     "productivity_docs_export",
+    "productivity_docs_read_image",
     "productivity_docs_list_comments",
     "productivity_docs_get_comment",
     # flexible / tab-aware read (evaluation surface, side by side with typed)
@@ -149,6 +150,47 @@ def _docs_service_module():
     return module
 
 
+def test_entrypoint_imports_resolve_against_the_service_package():
+    """Every name the entrypoint imports from a services package is exported there.
+
+    A name that exists in a module but not in its package __init__ imports fine
+    in a test that loads the module directly, and fails only when the runtime
+    loads the bundle - which is the wrong place to find out.
+    """
+
+    import ast
+
+    entrypoint = (BUNDLE_ROOT / "entrypoint.py").read_text()
+    tree = ast.parse(entrypoint)
+    wanted: dict[str, set[str]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom) or node.level == 0:
+            continue
+        module = node.module or ""
+        if not module.startswith("services."):
+            continue
+        wanted.setdefault(module, set()).update(alias.name for alias in node.names)
+
+    assert wanted, "the entrypoint imports nothing from services packages"
+    for module, names in wanted.items():
+        package_init = BUNDLE_ROOT.joinpath(*module.split(".")) / "__init__.py"
+        if not package_init.is_file():
+            continue
+        exported = set(ast.literal_eval(
+            next(
+                ast.unparse(node.value)
+                for node in ast.walk(ast.parse(package_init.read_text()))
+                if isinstance(node, ast.Assign)
+                and any(
+                    isinstance(target, ast.Name) and target.id == "__all__"
+                    for target in node.targets
+                )
+            )
+        ))
+        missing = sorted(names - exported)
+        assert not missing, f"{module}/__init__.py does not export: {missing}"
+
+
 def test_every_tool_declares_provider_claims():
     module = _surface_module()
     declared = {name: config for name, config in module.PRODUCTIVITY_TOOLS.items()}
@@ -256,6 +298,80 @@ async def test_signed_docs_export_download_reauthorizes_and_returns_file_bytes(
     assert token_calls[0]["claim"] == "docs:read"
     assert [call["operation"] for call in service.calls] == ["get", "export"]
     assert all(call["access_token"] == "provider-token" for call in service.calls)
+
+
+@pytest.mark.asyncio
+async def test_signed_docs_image_download_reauthorizes_and_returns_image_bytes(
+    monkeypatch,
+):
+    """The image ref the reference response advertises is one this route serves.
+
+    A download capability that mints a URL the route cannot resolve is a dead
+    link, so this test crosses the same boundary the route does.
+    """
+
+    module = _docs_service_module()
+    token_calls = []
+
+    async def resolve_token(_entrypoint, **kwargs):
+        token_calls.append(kwargs)
+        return "provider-token", None
+
+    class FakeDocsService:
+        def __init__(self):
+            self.calls = []
+
+        async def _execute_with_access_token(self, **kwargs):
+            self.calls.append(kwargs)
+            return {
+                "ok": True,
+                "ret": {
+                    "document_id": "doc-1",
+                    "object_id": "kix.a1",
+                    "mime_type": "image/png",
+                    "content_base64": "cG5nLWJ5dGVz",
+                },
+            }
+
+    service = FakeDocsService()
+    monkeypatch.setattr(module, "resolve_connected_account_access_token", resolve_token)
+    monkeypatch.setattr(module, "GoogleDocsService", lambda: service)
+
+    result = await module.fetch_google_docs_image(
+        object(),
+        user_id="user-1",
+        tenant="demo",
+        project="project",
+        object_ref="docs:google:account-1:image:kix.a1:doc-1",
+    )
+
+    assert result == {
+        "ok": True,
+        "data": b"png-bytes",
+        "filename": "doc-1-kix.a1.png",
+        "mime_type": "image/png",
+        "status": 200,
+    }
+    assert token_calls[0]["account_id"] == "account-1"
+    assert token_calls[0]["claim"] == "docs:read"
+    assert [call["operation"] for call in service.calls] == ["read_image"]
+    assert service.calls[0]["payload"]["object_id"] == "kix.a1"
+
+
+@pytest.mark.asyncio
+async def test_a_docs_image_ref_is_not_mistaken_for_another_kind() -> None:
+    module = _docs_service_module()
+
+    result = await module.fetch_google_docs_image(
+        object(),
+        user_id="user-1",
+        tenant="demo",
+        project="project",
+        object_ref="docs:google:account-1:export:docx:doc-1",
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_docs_image_ref"
 
 
 @pytest.mark.asyncio

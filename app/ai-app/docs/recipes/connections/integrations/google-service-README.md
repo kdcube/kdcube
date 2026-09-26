@@ -585,14 +585,43 @@ naming its size and whether it has a header row, with cells separated by `|` and
 a marker where a cell holds something other than text:
 
 ```text
+Assigned to [person: owner-a@example.com] for review by [date: Oct 2, 2026]
+
 [table · 5 rows × 4 columns · header row]
 Task | Status | Owner | Comment
 Fix login |  | owner-a | 
-Review | Open | [person] | 
+Review | Open | [person: owner-b@example.com] | [image: Q3 revenue by region]
 ```
 
-A literal `|` inside a cell is escaped. That text is for reading; addressing a
-cell uses the table inventory below.
+A chip or a picture is its own element rather than text, so the extracted body
+text renders it where it sits: in a paragraph inline, in a cell after that
+cell's text. Both go through one vocabulary, so the same object cannot read two
+ways. The text that carries indices does not: `get_structure` on the typed door
+and the heading text a table selector matches on stay literal, because a marker
+occupies no position in the document.
+
+The vocabulary is closed, and each marker carries the detail a reader would
+otherwise go looking for:
+
+| Marker | Detail it carries |
+| --- | --- |
+| `[image: …]` | the alt text |
+| `[person: …]` | the address, or the name when the chip has no address |
+| `[link: …]` | the title, or the uri when the chip has no title |
+| `[date: …]` | how the chip reads in the document, in its locale |
+| `[equation]`, `[footnote]`, `[rule]`, `[auto text]` | the kind alone |
+
+A detail is cut at 40 characters, a literal `|` is escaped and a newline becomes
+a space, in cell text and in a label alike. An element whose detail is empty
+reads as the bare marker: an image with no alt text is `[image]`.
+
+Three markers name a position rather than an element: `[tab: …]` opens a named
+tab, `[merged]` stands for a cell merged into another, and `[nested table]`
+follows the text of a cell that holds a table. A cell lists each distinct
+marker once, because the cell is one line saying what it holds besides text; a
+paragraph keeps every element where it sits.
+
+That text is for reading; addressing a cell uses the table inventory below.
 
 `get` on a native document lists every table under `tables`: its tab, 1-based
 position in the tab, the nearest heading of any level above it, row and column
@@ -613,7 +642,38 @@ longer fits returns `skipped: "cell_limit"`, and `tables_truncated` says the
 document holds more than five tables. Every cell carries its own `row` and
 `column`, so no reader counts rows itself, and names what it holds besides text -
 a person chip reads as `objects: [{"kind": "person", "email": ...}]` where the
-flat body text shows nothing. The complete JSON snapshot carries every table with all of its cells.
+flat body text shows nothing. An image reads the same way, by what a caller can
+act on:
+
+```json
+{"kind": "image", "object_id": "kix.abc123", "alt": "Q3 revenue by region",
+ "title": "Revenue", "width_pt": 468.0, "height_pt": 263.2,
+ "source_uri": "https://example.invalid/chart.png"}
+```
+
+`alt` is the image's description as the document holds it - empty unless someone
+set it, since `insertInlineImage` takes no description - and `source_uri` is the
+URL it was inserted from, which Google leaves empty for an image it has no origin
+for. The image's own `contentUri` is deliberately absent: measured on
+2026-09-25, that URL serves the image bytes to anyone who holds it, with no
+credential at all, until it expires. Handing it to a model or storing it in a
+transcript gives away the image, so the read reports `object_id` instead - and,
+beside it, a `ref` that resolves to the bytes through this namespace:
+
+```json
+{"kind": "image", "object_id": "kix.abc123",
+ "ref": "docs:google:<account_id>:image:kix.abc123:<document_id>"}
+```
+
+Resolving that ref with a streaming `object.get` returns the image itself, with
+`materialization` naming its media type, filename and size - the same delivery
+an export ref uses, so a client that can take an export can take an image. A
+non-streaming `object.get` on it answers with the record alone: alt text, size,
+the cell it sits in, and a download capability when the bundle offers one. The
+bytes are fetched server-side; the expiring URL never leaves the provider. On
+the typed door the same read is `productivity_docs_read_image`, which returns
+base64 bytes for a caller that will look at the image. The complete JSON
+snapshot carries every table with all of its cells.
 
 `object.action set_cells` writes text into cells of one row:
 
@@ -638,9 +698,18 @@ flat body text shows nothing. The complete JSON snapshot carries every table wit
   document does not mark one, pass `header: 1` to use the first row.
 - **Mode:** `replace` (default; an empty text clears the cell), `append`, or
   `prepend`.
-- **Person chip:** a list entry may carry `person` instead of `text`, for
-  example `[{"column": "Owner", "person": "owner-a@example.com"}]`. A cell takes
-  text or a person, not both.
+- **Smart chip:** a list entry may carry `person`, `date` or `link` instead of
+  `text` - `[{"column": "Owner", "person": "owner-a@example.com"}]`,
+  `{"column": "Due", "date": "2026-10-02"}`,
+  `{"column": "Plan", "link": "https://docs.google.com/document/d/..."}`. A cell
+  takes text or one chip, not both. Only the address, the uri and the instant
+  are sent: Google fills in a person's name, a link's title and icon, and a
+  date's display text, and refuses a caller that supplies them - so a date chip
+  may read differently from what was passed, by the document's locale. A link
+  chip is, in the API's own words, "a link to a Google resource (such as a file
+  in Drive, a YouTube video, or a Calendar event)": Docs rejects any other
+  address, and the refusal says so rather than passing on the provider's
+  "The URL is invalid".
 
 Nothing is written when a selector matches zero or several targets
 (`docs_table_not_found`, `docs_table_ambiguous`, `docs_table_row_not_found`,
@@ -658,6 +727,60 @@ resolves the selectors once more, so a `where` row survives a row inserted
 above it. A caller that reasoned over an earlier read can pass its
 `revision_id`; the write is then refused with `docs_revision_changed` when the
 document has changed since.
+
+Outside a table, a sentence that holds chips is written with `pieces` on
+`insert_text` or `append_text`:
+
+```json
+{"index": 42, "pieces": [
+  {"text": "Owner "},
+  {"person": "owner-a@example.com"},
+  {"text": " reviews by "},
+  {"date": "2026-10-02"}
+]}
+```
+
+The pieces land in the order they are named, all at one index - the provider
+writes them backwards so they read forwards - so no caller computes an offset.
+`text` and `pieces` are alternatives; naming both is refused.
+
+A heading or a list is written as a unit rather than as raw text plus a second
+call: `style` takes `title`, `subtitle`, `normal` or `heading_1`…`heading_6`,
+`list` takes `bullet` or `number`, and `items` writes one paragraph per entry -
+each entry a string or its own pieces, so a list item can hold a chip:
+
+```json
+{"index": 42, "list": "number", "items": [
+  "Fix login",
+  [{"text": "Review by "}, {"person": "owner-a@example.com"}]
+]}
+```
+
+A paragraph style covers every paragraph its range touches, so a styled write
+starts a paragraph of its own: at a paragraph's start it begins there, at the
+body's end it opens one first, and an index inside a sentence is refused with
+`docs_block_needs_its_own_paragraph` naming the text it would have restyled.
+Ranges are counted in UTF-16 units, the way Docs counts them, so a heading with
+an emoji still ends where the heading ends.
+
+`object.action embed_image` places an image in a cell with the same selectors:
+pass `selector` or `table` with `row` and `column`, and the image lands after
+what the cell already holds, so a label written first keeps its place. Without
+`width_pt` the image is fitted to the column - it is measured first, so one that
+already fits keeps its own size rather than being blown up to fill the cell, and
+the answer reports the fit it applied. A column the table distributes evenly
+reports no width, so the page's printable width divided by the column count is
+used instead. The measuring fetch passes the platform's SSRF guard: an address
+the guard refuses is a refusal, while a name that merely does not resolve skips
+the measurement and lets Google answer. The
+refusals are the cell refusals - a merged-away cell and a nested table are
+refused before any write - plus `docs_image_target_ambiguous` when a call names
+both a cell and an `index`. Without a cell the action still takes an `index`, or
+appends at the tab's end. `image_uri` must be a public `http(s)` URL that Google
+fetches once at insert time (PNG/JPEG/GIF, at most 25 MB and 2000 px per side);
+Google stores its own copy, so the URL is read once and never again. A file this
+deployment holds therefore needs a publicly fetchable URL of its own before it
+can be embedded, the way `sendPhoto` needs one for Telegram to fetch.
 
 On the typed productivity door the same reads use `all_tables` or `table_reads`
 on `productivity_docs_get`, and writes use `productivity_docs_set_cells`.

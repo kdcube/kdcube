@@ -35,8 +35,10 @@ _FLEX_OPERATIONS = frozenset({"get_structure", "list_tabs", "batch_edit"})
 from kdcube_ai_app.apps.chat.sdk.integrations.docs.named_service import (
     DOCS_NAMESPACE,
     document_export_filename,
+    document_image_filename,
     make_docs_named_service_provider,
     parse_docs_export_ref,
+    parse_docs_image_ref,
     parse_docs_ref,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.connector_app_resolution import (
@@ -431,6 +433,92 @@ async def fetch_google_docs_export(
     }
 
 
+async def fetch_google_docs_image(
+    entrypoint: Any,
+    *,
+    user_id: str,
+    tenant: str,
+    project: str,
+    object_ref: str,
+) -> dict[str, Any]:
+    """Resolve one signed Docs image ref into provider bytes.
+
+    Same shape as the export fetch: the signed download route calls this after
+    token verification, and the Google credential is resolved again for the
+    token-bound user. The document's own image URL stays inside the provider.
+    """
+
+    try:
+        parsed = parse_docs_image_ref(object_ref)
+    except ValueError as exc:
+        return {
+            "ok": False,
+            "status": 400,
+            "error": {"code": "invalid_docs_image_ref", "message": str(exc)},
+        }
+    access_token, failure = await resolve_connected_account_access_token(
+        entrypoint,
+        user_id=str(user_id or "").strip(),
+        tenant=str(tenant or "").strip(),
+        project=str(project or "").strip(),
+        provider_id=DOCS_PROVIDER_ID,
+        connector_app_id=resolve_connector_app_id(DOCS_PROVIDER_ID),
+        claim=DOCS_READ_CLAIM,
+        account_id=str(parsed.get("account_id") or "").strip(),
+    )
+    if failure is not None:
+        return dict(failure)
+
+    service = GoogleDocsService()
+    read = await service._execute_with_access_token(
+        operation="read_image",
+        access_token=access_token,
+        payload={
+            "document_ref": parsed["document_id"],
+            "object_id": parsed["object_id"],
+        },
+        account_id=parsed["account_id"],
+        where="google_docs.read_image",
+        credential=None,
+    )
+    if not read.get("ok"):
+        return read
+    ret = read.get("ret") if isinstance(read.get("ret"), Mapping) else {}
+    encoded = str((ret or {}).get("content_base64") or "").strip()
+    try:
+        data = base64.b64decode(encoded, validate=True) if encoded else b""
+    except (TypeError, ValueError) as exc:
+        return {
+            "ok": False,
+            "status": 502,
+            "error": {
+                "code": "docs_image_payload_invalid",
+                "message": "The document provider returned invalid image bytes.",
+                "details": {"error": str(exc)},
+            },
+        }
+    if not data:
+        return {
+            "ok": False,
+            "status": 502,
+            "error": {
+                "code": "docs_image_payload_missing",
+                "message": "The document provider returned no image bytes.",
+            },
+        }
+    mime_type = str((ret or {}).get("mime_type") or "application/octet-stream")
+    return {
+        "ok": True,
+        "data": data,
+        "filename": document_image_filename(
+            document_id=parsed["document_id"],
+            object_id=parsed["object_id"],
+            mime_type=mime_type,
+        ),
+        "mime_type": mime_type,
+        "status": 200,
+    }
+
 __all__ = [
     "GoogleDocsService",
     "DOCS_PROVIDER_ID",
@@ -442,5 +530,6 @@ __all__ = [
     "DRIVE_WRITE_CLAIM",
     "bind_service",
     "fetch_google_docs_export",
+    "fetch_google_docs_image",
     "fetch_google_docs_snapshot",
 ]

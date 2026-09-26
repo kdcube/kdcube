@@ -16,8 +16,16 @@ import asyncio
 import base64
 import json
 import logging
+import pathlib
 import re
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Mapping,
+    MutableMapping,
+    Sequence,
+)
 from typing import Any
 
 from kdcube_ai_app.apps.chat.sdk.integrations.docs.selectors import (
@@ -84,6 +92,7 @@ DRIVE_WRITE_CLAIM = "drive:write"
 DOCS_DOCUMENT_KIND = "docs.document"
 DOCS_IMPORT_SOURCE_KIND = "docs.import_source"
 DOCS_EXPORT_KIND = "docs.export"
+DOCS_IMAGE_KIND = "docs.image"
 DOCS_TRANSPORTS = (TRANSPORT_LOCAL, TRANSPORT_API)
 DOCS_SNAPSHOT_SCHEMA = "kdcube.docs.snapshot.v1"
 DOCS_SNAPSHOT_MEDIA_TYPE = "application/vnd.kdcube.docs.snapshot+json"
@@ -383,6 +392,7 @@ DOCS_SCHEMA = {
         "document": "docs:<provider>:<account_id>:document:<document_id>",
         "import_source": "docs:<provider>:<account_id>:source:<file_id>",
         "export": ("docs:<provider>:<account_id>:export:<format>:<document_id>"),
+        "image": ("docs:<provider>:<account_id>:image:<object_id>:<document_id>"),
     },
     "object_kinds": {
         DOCS_DOCUMENT_KIND: {
@@ -423,6 +433,28 @@ DOCS_SCHEMA = {
                 "copyable",
                 "conversion_required",
                 "next_action",
+            ],
+        },
+        DOCS_IMAGE_KIND: {
+            "description": (
+                "One inline image of a document, by the object_id a table read "
+                "reports. Resolve the ref to stream the image bytes; the "
+                "reference itself carries what the document knows about it."
+            ),
+            "fields": [
+                "ref",
+                "provider",
+                "account_id",
+                "document_id",
+                "object_id",
+                "alt",
+                "title",
+                "width_pt",
+                "height_pt",
+                "source_uri",
+                "mime_type",
+                "filename",
+                "download",
             ],
         },
         DOCS_EXPORT_KIND: {
@@ -547,7 +579,8 @@ DOCS_SCHEMA = {
             "cells per call, and tables_truncated when the document holds more "
             "than 5 tables. Each cell carries its own row and column and names "
             "what it holds besides text: a person chip names its email, a "
-            "rich link its uri; rows count "
+            "rich link its uri, an image its alt text, size in points, and the "
+            "object_id that identifies it; rows count "
             "header rows. Write cells with object.action set_cells, passing "
             "the same selector as its selector field. An "
             "import source returns file metadata and "
@@ -623,19 +656,51 @@ DOCS_SCHEMA = {
                 "Choose a multi-tab target with tab_id or tab_selector. With "
                 "preview: true nothing is written: the answer says what already "
                 "sits at that index, which paragraph or table cell it falls in, "
-                "and the text on either side."
+                "and the text on either side. A smart chip is its own element "
+                "rather than styled text, so write a sentence holding one as "
+                'pieces: [{"text": "Owner "}, {"person": "a@b.com"}, '
+                '{"text": " reviews by "}, {"date": "2026-10-02"}, '
+                '{"link": "https://docs.google.com/document/d/..."}] - named in order and '
+                "written at one index, with no offsets for the caller to "
+                "compute. Name text or pieces, never both. A heading or a list "
+                "is written as a unit rather than as raw text: style takes "
+                "title, subtitle, normal or heading_1..heading_6, list takes "
+                "bullet or number, and items writes one paragraph per entry, "
+                "each entry text or pieces. A styled paragraph starts its own "
+                "paragraph, so an index inside a sentence is refused with the "
+                "text it would have restyled."
             ),
             "object_ref": "document ref",
-            "payload": ["text", "index", "preview", "tab_id", "tab_selector"],
+            "payload": [
+                "text",
+                "pieces",
+                "items",
+                "style",
+                "list",
+                "index",
+                "preview",
+                "tab_id",
+                "tab_selector",
+            ],
             "claim": "docs:write",
         },
         ACTION_APPEND_TEXT: {
             "description": (
-                "Append text at the selected tab's body end. Choose a multi-tab "
-                "target with tab_id or tab_selector."
+                "Append text at the selected tab's body end, or pieces, items, "
+                "style and list to append whole paragraphs, in the shapes "
+                "insert_text takes. Choose a multi-tab target with tab_id or "
+                "tab_selector."
             ),
             "object_ref": "document ref",
-            "payload": ["text", "tab_id", "tab_selector"],
+            "payload": [
+                "text",
+                "pieces",
+                "items",
+                "style",
+                "list",
+                "tab_id",
+                "tab_selector",
+            ],
             "claim": "docs:write",
         },
         ACTION_REPLACE_TEXT: {
@@ -689,10 +754,37 @@ DOCS_SCHEMA = {
             "claim": "docs:write",
         },
         ACTION_EMBED_IMAGE: {
-            "description": "Embed a public image URL inline in the document.",
+            "description": (
+                "Embed an image from a public http(s) URL that Google fetches "
+                "once at insert time (PNG/JPEG/GIF, <=25MB, <=2000px per side). "
+                "For a file this deployment already holds, pass file_ref "
+                "instead - a staged ref from request_upload, or a conv:fi: ref "
+                "for an artifact of this conversation - and it is served to "
+                "Google for that one fetch and removed straight after. Name "
+                "one of image_uri or file_ref, never both. "
+                "Name a table cell the way set_cells does - selector or "
+                "tab_selector plus table, with row and column - and the image "
+                "lands after what that cell already holds; name an index "
+                "instead to place it in the body, or neither to append at the "
+                "end. Naming both a cell and an index is refused. A merged-away "
+                "or nested-table cell is refused before any write. The result "
+                "names the object_id of the image, and the cell it went into. "
+                "An image placed in a cell without width_pt is fitted to the "
+                "column when it is wider, keeping its proportions, and the "
+                "answer reports that as fit; one that already fits is left at "
+                "its own size. The Docs API carries no field for an image's alt "
+                "text on any request, so an image placed here reads back "
+                "without one."
+            ),
             "object_ref": "document ref",
             "payload": [
                 "image_uri",
+                "file_ref",
+                "selector",
+                "table",
+                "row",
+                "column",
+                "header",
                 "index",
                 "width_pt",
                 "height_pt",
@@ -780,9 +872,17 @@ DOCS_SCHEMA = {
                 "not have to be counted. Pass cells as "
                 "{column: text}: a key naming a header is that column, otherwise "
                 "a digit key is a 1-based number; for an explicit number pass a "
-                "list of {column: <number>, text}. A list entry may carry "
-                'person: "someone@example.com" instead of text, which writes a '
-                "person chip. Rows count header rows; a "
+                "list of {column: <number>, text}. A list entry may carry a "
+                "smart chip instead of text: "
+                'person: "someone@example.com", date: "2026-10-02", or '
+                'link: "https://docs.google.com/...". A link chip points at a Google '
+                "resource - a Drive file, a Docs or Sheets document, a Calendar "
+                "event, a YouTube video - and Google refuses any other address. "
+                "Google fills a person's "
+                "name, a link's title and a date's display text itself, so only "
+                "the address, the uri and the instant are sent - a date chip "
+                "may therefore read differently from what was passed, by the "
+                "document's locale. Rows count header rows; a "
                 "where predicate never matches them. Column names need a "
                 "header row: the document's own, or header: 1. mode is replace "
                 "(default), append, or prepend; an empty replace clears the "
@@ -794,7 +894,9 @@ DOCS_SCHEMA = {
                 "tables are refused. An optional revision_id from object.get "
                 "refuses the write if the document changed since. Nothing is "
                 "written when any cell is refused or a selector is ambiguous. "
-                "The result names the row it wrote as row and row_label."
+                "The result names the row it wrote as row and row_label. This "
+                "action writes text and smart chips; an image goes into a cell "
+                "with embed_image, which takes these same selectors."
             ),
             "object_ref": "document ref",
             "payload": [
@@ -1012,6 +1114,7 @@ DOCS_SCHEMA_PROJECTION = {
                             {"object_kind": DOCS_IMPORT_SOURCE_KIND, "schema_operation": "object.get"},
                             {"object_kind": DOCS_IMPORT_SOURCE_KIND, "schema_operation": f"object.action:{ACTION_COPY}"},
                             {"object_kind": DOCS_EXPORT_KIND, "schema_operation": "object.get"},
+                            {"object_kind": DOCS_IMAGE_KIND, "schema_operation": "object.get"},
                         ],
                     },
                     {
@@ -1111,6 +1214,13 @@ DOCS_SCHEMA_PROJECTION = {
                 "object.get": {"sections": ["materialization"]},
             },
         },
+        DOCS_IMAGE_KIND: {
+            "refs": ["image"],
+            "related_kinds": [DOCS_DOCUMENT_KIND],
+            "operations": {
+                "object.get": {"sections": ["materialization"]},
+            },
+        },
     },
 }
 
@@ -1188,7 +1298,7 @@ DOCS_PRESENTATION = {
         },
         ACTION_EMBED_IMAGE: {
             "label": "Embed an image",
-            "description": "Place an image from a public URL into a document.",
+            "description": "Place an image from a public URL into a document or one of its table cells.",
         },
         ACTION_SET_CELLS: {
             "label": "Write table cells",
@@ -1410,6 +1520,39 @@ def parse_docs_export_ref(value: Any) -> dict[str, Any]:
     }
 
 
+def document_image_ref(account_id: Any, document_id: Any, object_id: Any) -> str:
+    account = _text(account_id)
+    document = _text(document_id)
+    object_key = _text(object_id)
+    if not account or not document or not object_key:
+        raise ValueError(
+            "Document image refs require account_id, document_id and object_id."
+        )
+    if ":" in object_key:
+        raise ValueError("A document image object_id cannot contain :.")
+    return (
+        f"{DOCS_NAMESPACE}:{GOOGLE_PROVIDER_KEY}:"
+        f"{account}:image:{object_key}:{document}"
+    )
+
+
+def parse_docs_image_ref(value: Any) -> dict[str, Any]:
+    ref = _text(value)
+    parts = ref.split(":")
+    if len(parts) != 6 or parts[0].lower() != DOCS_NAMESPACE:
+        raise ValueError("Invalid docs image ref.")
+    if parts[3] != "image" or not all(parts[index] for index in (1, 2, 4, 5)):
+        raise ValueError("Invalid docs image ref.")
+    return {
+        "ref": ref,
+        "provider": parts[1].lower(),
+        "account_id": parts[2],
+        "object_id": parts[4],
+        "document_id": parts[5],
+        "object_kind": DOCS_IMAGE_KIND,
+    }
+
+
 def parse_docs_ref(value: Any) -> dict[str, Any]:
     ref = _text(value)
     parts = ref.split(":")
@@ -1465,6 +1608,99 @@ def _export_object(
     return obj
 
 
+_IMAGE_EXTENSIONS = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/gif": "gif",
+    "image/webp": "webp",
+    "image/bmp": "bmp",
+}
+
+
+def document_image_filename(
+    *, document_id: Any, object_id: Any, mime_type: Any
+) -> str:
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", f"{_text(document_id)}-{_text(object_id)}")
+    extension = _IMAGE_EXTENSIONS.get(_text(mime_type).lower(), "bin")
+    return f"{stem.strip('._-') or 'image'}.{extension}"
+
+
+def _image_object(
+    parsed: Mapping[str, Any],
+    *,
+    described: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """The image as an object: its ref plus what the document knows about it."""
+
+    row = dict(described or {})
+    row.pop("content_base64", None)
+    obj: dict[str, Any] = {
+        "ref": _text(parsed.get("ref")),
+        "object_ref": _text(parsed.get("ref")),
+        "object_kind": DOCS_IMAGE_KIND,
+        "provider": _text(parsed.get("provider")) or GOOGLE_PROVIDER_KEY,
+        "account_id": _text(parsed.get("account_id")),
+        "document_id": _text(parsed.get("document_id")),
+        "object_id": _text(parsed.get("object_id")),
+    }
+    for field in (
+        "alt",
+        "title",
+        "width_pt",
+        "height_pt",
+        "source_uri",
+        "tab_id",
+        "tab_title",
+        "cell",
+        "mime_type",
+        "byte_size",
+        "web_url",
+    ):
+        if row.get(field) not in (None, "", {}):
+            obj[field] = row[field]
+    if obj.get("mime_type"):
+        obj["filename"] = document_image_filename(
+            document_id=obj["document_id"],
+            object_id=obj["object_id"],
+            mime_type=obj["mime_type"],
+        )
+    return obj
+
+
+def _with_image_refs(
+    row: MutableMapping[str, Any], *, account_id: str, document_id: str
+) -> None:
+    """Give every image a table read reports a ref that resolves to its bytes.
+
+    A read hands back a ready ref for the same reason it hands back a ready
+    table selector: nothing downstream should assemble one by hand.
+    """
+
+    if not account_id or not document_id:
+        return
+    for table in row.get("table_reads") or ():
+        if not isinstance(table, Mapping):
+            continue
+        for cells in table.get("cells") or ():
+            for cell in cells or ():
+                if not isinstance(cell, MutableMapping):
+                    continue
+                for entry in cell.get("objects") or ():
+                    if not isinstance(entry, MutableMapping):
+                        continue
+                    if _text(entry.get("kind")) != "image":
+                        continue
+                    object_id = _text(entry.get("object_id"))
+                    if not object_id:
+                        continue
+                    try:
+                        entry["ref"] = document_image_ref(
+                            account_id, document_id, object_id
+                        )
+                    except ValueError:
+                        continue
+
+
 _INCLUDE_TABLE_CELLS = frozenset({"tables", "cells", "table_cells"})
 
 
@@ -1503,6 +1739,7 @@ def _document_object(
         if import_source
         else document_ref(account_id, document_id)
     )
+    _with_image_refs(row, account_id=account_id, document_id=document_id)
     return {
         **row,
         "ref": ref,
@@ -1511,6 +1748,98 @@ def _document_object(
         "account_id": account_id,
         "document_id": document_id,
     }
+
+
+# Google fetches an inserted image itself and accepts only these.
+DOCS_IMAGE_MEDIA_TYPES = {"image/png", "image/jpeg", "image/gif"}
+MAX_DOCS_IMAGE_BYTES = 25 * 1024 * 1024
+MAX_DOCS_IMAGE_PIXELS = 2000
+
+
+_IMAGE_MEDIA_TYPE_BY_FORMAT = {
+    "PNG": "image/png",
+    "JPEG": "image/jpeg",
+    "GIF": "image/gif",
+    "WEBP": "image/webp",
+    "BMP": "image/bmp",
+}
+
+
+def _mime_for_image(measured: Mapping[str, Any]) -> str:
+    """The media type of bytes that arrived without one declared."""
+
+    return _IMAGE_MEDIA_TYPE_BY_FORMAT.get(
+        _text(measured.get("format")).upper(), ""
+    )
+
+
+def origin_unreachable_refusal(
+    detail: str,
+) -> Callable[[NamedServiceRequest], NamedServiceResponse]:
+    """The public origin did not answer at all."""
+
+    def _refuse(request: NamedServiceRequest) -> NamedServiceResponse:
+        return _image_refusal(
+            request,
+            code="docs_image_origin_unreachable",
+            message=(
+                "This deployment's public origin did not answer a fetch of the "
+                "staged file, so the document provider will not reach it "
+                "either. Nothing was written."
+            ),
+            status=502,
+            details={"error": detail},
+        )
+
+    return _refuse
+
+
+def origin_answer_refusal(
+    status: int, media_type: str
+) -> Callable[[NamedServiceRequest], NamedServiceResponse]:
+    """The public origin answered with something other than the file."""
+
+    def _refuse(request: NamedServiceRequest) -> NamedServiceResponse:
+        return _image_refusal(
+            request,
+            code="docs_image_origin_not_public",
+            message=(
+                "This deployment's public origin answered an anonymous "
+                f"browser-like fetch with {media_type or 'no content type'} "
+                f"(HTTP {status}) instead of the image. Something in front of "
+                "the deployment - a tunnel's warning page, a proxy, a login "
+                "screen - answers before the file is reached, so the document "
+                "provider would receive that page rather than the picture. "
+                "This is a deployment setting rather than a problem with the "
+                "file: the origin must serve it to an anonymous caller. Pass "
+                "image_uri with an already public URL to insert an image "
+                "meanwhile."
+            ),
+            status=502,
+            details={"origin_status": status, "origin_media_type": media_type},
+        )
+
+    return _refuse
+
+
+def _image_refusal(
+    request: NamedServiceRequest,
+    *,
+    code: str,
+    message: str,
+    status: int = 400,
+    details: Mapping[str, Any] | None = None,
+) -> NamedServiceResponse:
+    return NamedServiceResponse.error_response(
+        code=code,
+        message=message,
+        status=status,
+        details=dict(details) if details else None,
+        provider={"provider_id": PROVIDER_ID},
+        namespace=request.namespace or DOCS_NAMESPACE,
+        object_ref=request.object_ref,
+    )
+
 
 
 def _snapshot_filename(document_id: str) -> str:
@@ -1690,7 +2019,7 @@ async def _bytes_chunks(
     provider_id=PROVIDER_ID,
     namespace=DOCS_NAMESPACE,
     refs=("docs:*",),
-    object_kinds=(DOCS_DOCUMENT_KIND, DOCS_EXPORT_KIND),
+    object_kinds=(DOCS_DOCUMENT_KIND, DOCS_EXPORT_KIND, DOCS_IMAGE_KIND),
     search_scopes=DOCS_SEARCH_SCOPES,
     operations=_operations(),
     label="Documents",
@@ -1707,16 +2036,20 @@ class DocsNamedServiceProvider(NamedServiceProvider):
         execute_operation: ExecuteDocsOperation,
         bundle_id: str | None = None,
         file_url_factory: Any = None,
+        staging_root_factory: Any = None,
+        provider_fetch_url_factory: Any = None,
     ) -> None:
         super().__init__(docs_named_service_spec(bundle_id=bundle_id))
         self._execute_operation = execute_operation
         self._file_url_factory = file_url_factory
+        self._staging_root_factory = staging_root_factory
+        self._provider_fetch_url_factory = provider_fetch_url_factory
 
     def _provider_identity(self) -> dict[str, Any]:
         return {"provider_id": PROVIDER_ID, "bundle_id": self.spec.bundle_id}
 
     def schema_object_kind_from_ref(self, object_ref: str) -> str | None:
-        for parser in (parse_docs_ref, parse_docs_export_ref):
+        for parser in (parse_docs_ref, parse_docs_export_ref, parse_docs_image_ref):
             try:
                 return _text(parser(object_ref).get("object_kind")) or None
             except ValueError:
@@ -2090,6 +2423,332 @@ class DocsNamedServiceProvider(NamedServiceProvider):
             object_ref=obj["ref"],
             object=obj,
             extra={"action": ACTION_EXPORT, "source_document_ref": request.object_ref},
+        )
+
+    async def _image_uri_for_file_ref(
+        self,
+        ctx: NamedServiceContext,
+        request: NamedServiceRequest,
+        payload: MutableMapping[str, Any],
+    ) -> tuple[Callable[[], None] | None, NamedServiceResponse | None]:
+        """Turn a file_ref into an image_uri Google can fetch once.
+
+        Returns a cleanup to run after the write, and a refusal when the file
+        cannot become one. The URL is never put in the answer: it is a
+        capability, and it stops existing when the cleanup runs.
+        """
+
+        from kdcube_ai_app.apps.chat.sdk.integrations.file_staging import (
+            STAGED_REF_PREFIX,
+            delete_staged,
+            load_staged,
+            new_staged_ref,
+            save_staged,
+        )
+        from kdcube_ai_app.infra.service_hub.multimodality import validate_image_bytes
+
+        file_ref = _text(payload.pop("file_ref", ""))
+        if not file_ref:
+            return None, None
+        if _text(payload.get("image_uri")):
+            return None, _image_refusal(
+                request,
+                code="docs_image_source_ambiguous",
+                message=(
+                    "Name either file_ref, for a file this deployment holds, or "
+                    "image_uri, for a public URL - not both."
+                ),
+            )
+        if self._staging_root_factory is None or self._provider_fetch_url_factory is None:
+            return None, _image_refusal(
+                request,
+                code="docs_image_hosting_unavailable",
+                message=(
+                    "This deployment cannot hand Google a file of its own: it "
+                    "serves no public origin for one. Pass image_uri with a "
+                    "public URL instead."
+                ),
+                status=409,
+            )
+        try:
+            root = self._staging_root_factory()
+        except Exception:
+            root = None
+        if root is None:
+            return None, _image_refusal(
+                request,
+                code="docs_image_hosting_unavailable",
+                message="This deployment has no staging area configured.",
+                status=409,
+            )
+
+        owned = False
+        if file_ref.startswith(STAGED_REF_PREFIX):
+            staged_ref = file_ref
+            try:
+                filename, data = load_staged(root, staged_ref)
+            except (FileNotFoundError, ValueError) as exc:
+                return None, _image_refusal(
+                    request,
+                    code="docs_image_file_missing",
+                    message=str(exc),
+                    status=404,
+                    details={"file_ref": file_ref},
+                )
+        else:
+            resolved, error = await self._conversation_file_bytes(ctx, request, file_ref)
+            if error is not None:
+                return None, error
+            filename, data = resolved
+            staged_ref = new_staged_ref(filename)
+            owned = True
+
+        measured = validate_image_bytes(data)
+        media_type = _text(measured.get("media_type")) or _mime_for_image(measured)
+        if not measured.get("valid") or media_type not in DOCS_IMAGE_MEDIA_TYPES:
+            return None, _image_refusal(
+                request,
+                code="docs_image_unsupported",
+                message=(
+                    "Google embeds PNG, JPEG and GIF. This file reads as "
+                    f"{media_type or 'something else'}."
+                ),
+                details={"file_ref": file_ref, "media_type": media_type},
+            )
+        if len(data) > MAX_DOCS_IMAGE_BYTES:
+            return None, _image_refusal(
+                request,
+                code="docs_image_too_large",
+                message=(
+                    f"The image is {len(data)} bytes; Google accepts at most "
+                    f"{MAX_DOCS_IMAGE_BYTES}."
+                ),
+                details={"file_ref": file_ref, "byte_size": len(data)},
+            )
+        width, height = measured.get("width") or 0, measured.get("height") or 0
+        if max(width, height) > MAX_DOCS_IMAGE_PIXELS:
+            return None, _image_refusal(
+                request,
+                code="docs_image_too_large",
+                message=(
+                    f"The image is {width}x{height} pixels; Google accepts at "
+                    f"most {MAX_DOCS_IMAGE_PIXELS} per side."
+                ),
+                details={"file_ref": file_ref, "width": width, "height": height},
+            )
+
+        if owned:
+            try:
+                save_staged(root, staged_ref, data)
+            except ValueError as exc:
+                return None, _image_refusal(
+                    request,
+                    code="docs_image_too_large",
+                    message=str(exc),
+                    details={"file_ref": file_ref},
+                )
+
+        def _cleanup() -> None:
+            try:
+                delete_staged(root, staged_ref)
+            except Exception:
+                LOGGER.warning("docs staged image not removed: %s", staged_ref)
+
+        try:
+            minted = self._provider_fetch_url_factory(
+                ctx, {"staged_ref": staged_ref, "filename": filename}
+            )
+            if hasattr(minted, "__await__"):
+                minted = await minted
+        except Exception:
+            LOGGER.exception("docs provider fetch url factory failed")
+            minted = None
+        url = _text((minted or {}).get("url")) if isinstance(minted, Mapping) else ""
+        if not url.startswith("https://"):
+            _cleanup()
+            return None, _image_refusal(
+                request,
+                code="docs_image_hosting_unavailable",
+                message=(
+                    "This deployment has no public https origin Google could "
+                    "fetch the file from. Pass image_uri with a public URL "
+                    "instead."
+                ),
+                status=409,
+            )
+        reachable = await self._origin_serves_the_file(url)
+        if reachable is not None:
+            _cleanup()
+            return None, reachable(request)
+        payload["image_uri"] = url
+        return _cleanup, None
+
+    async def _origin_serves_the_file(
+        self, url: str
+    ) -> Callable[[NamedServiceRequest], NamedServiceResponse] | None:
+        """Check that the minted URL answers an anonymous fetch with the file.
+
+        A provider fetches with no credential and a browser-like agent, and a
+        tunnel or proxy in front of this deployment may answer such a request
+        with a page of its own - a warning interstitial, a login screen - which
+        the provider then reports as a broken image. Asking the same way the
+        provider will turns that into a diagnosis of the deployment, which is
+        what it actually is.
+
+        Returns None when the origin serves the file, or a refusal builder.
+        """
+
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.get(
+                    url,
+                    follow_redirects=True,
+                    headers={
+                        "User-Agent": (
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140 Safari/537.36"
+                        )
+                    },
+                )
+        except Exception as exc:
+            return origin_unreachable_refusal(f"{type(exc).__name__}: {exc}")
+
+        media_type = _text(response.headers.get("content-type")).split(";")[0].lower()
+        if response.status_code == 200 and media_type.startswith("image/"):
+            return None
+        return origin_answer_refusal(response.status_code, media_type)
+
+    async def _conversation_file_bytes(
+        self,
+        ctx: NamedServiceContext,
+        request: NamedServiceRequest,
+        file_ref: str,
+    ) -> tuple[tuple[str, bytes], None] | tuple[None, NamedServiceResponse]:
+        """Bytes of a conversation artifact, or a refusal that says why not."""
+
+        from kdcube_ai_app.apps.chat.sdk.integrations.inline_files import (
+            InlineFileError,
+            materialized_conversation_file_ref,
+        )
+
+        try:
+            async with materialized_conversation_file_ref(
+                file_ref,
+                tenant=_text(getattr(ctx, "tenant", "")),
+                project=_text(getattr(ctx, "project", "")),
+                user_id=_text(getattr(ctx, "user_id", "")),
+                conversation_id=_text(getattr(ctx, "conversation_id", "")),
+            ) as report:
+                path = pathlib.Path(_text(report.get("path")))
+                return (path.name, path.read_bytes()), None
+        except InlineFileError as exc:
+            return None, _image_refusal(
+                request,
+                code="docs_image_file_missing",
+                message=(
+                    f"{exc} A file made in this turn becomes a conversation "
+                    "artifact only once it is delivered; stage it and pass the "
+                    "staged ref instead."
+                ),
+                status=404,
+                details={"file_ref": file_ref},
+            )
+        except Exception as exc:
+            return None, _image_refusal(
+                request,
+                code="docs_image_file_missing",
+                message=f"This file could not be read: {exc}",
+                status=404,
+                details={"file_ref": file_ref},
+            )
+
+
+    async def _image_response(
+        self,
+        ctx: NamedServiceContext,
+        request: NamedServiceRequest,
+        *,
+        parsed: Mapping[str, Any],
+        materialize: bool,
+    ) -> NamedServiceResponse | NamedServiceStreamResult:
+        """An image ref: its bytes when a client can take them, its record otherwise."""
+
+        ret, error = await self._execute(
+            request=request,
+            operation="read_image",
+            claim=DOCS_READ_CLAIM,
+            payload={
+                "document_ref": _text(parsed.get("document_id")),
+                "object_id": _text(parsed.get("object_id")),
+            },
+            account_id=_text(parsed.get("account_id")),
+        )
+        if error is not None:
+            return error
+        ret = ret or {}
+        obj = _image_object(parsed, described=ret)
+        if not materialize:
+            url_info = await self._download_url(ctx, ref=obj["ref"])
+            if url_info is not None:
+                obj["download"] = {"encoding": "url", **url_info}
+            else:
+                obj["delivery"] = {
+                    "response_mode": "stream",
+                    "note": (
+                        "Resolve this image ref with a streaming object.get to "
+                        "receive the image bytes."
+                    ),
+                }
+            return NamedServiceResponse.ok_response(
+                provider=self._provider_identity(),
+                namespace=request.namespace or DOCS_NAMESPACE,
+                object_ref=obj["ref"],
+                object=obj,
+                extra={"object_kind": DOCS_IMAGE_KIND},
+            )
+        encoded = _text(ret.get("content_base64"))
+        try:
+            data = base64.b64decode(encoded, validate=True) if encoded else b""
+        except (ValueError, TypeError) as exc:
+            return NamedServiceResponse.error_response(
+                code="docs_image_payload_invalid",
+                message="The document provider returned invalid image bytes.",
+                status=502,
+                details={"error": str(exc)},
+                provider=self._provider_identity(),
+                namespace=request.namespace or DOCS_NAMESPACE,
+                object_ref=request.object_ref,
+            )
+        if not data:
+            return NamedServiceResponse.error_response(
+                code="docs_image_payload_missing",
+                message="The document provider returned no image bytes.",
+                status=502,
+                provider=self._provider_identity(),
+                namespace=request.namespace or DOCS_NAMESPACE,
+                object_ref=request.object_ref,
+            )
+        response = NamedServiceResponse.ok_response(
+            provider=self._provider_identity(),
+            namespace=request.namespace or DOCS_NAMESPACE,
+            object_ref=obj["ref"],
+            object=obj,
+            attrs={
+                "materialization": {
+                    "media_type": obj.get("mime_type"),
+                    "filename": obj.get("filename"),
+                    "size_bytes": len(data),
+                    "complete": True,
+                }
+            },
+        )
+        return NamedServiceStreamResult(
+            response=response,
+            chunks=_bytes_chunks(data),
+            filename=_text(obj.get("filename")),
+            media_type=_text(obj.get("mime_type")),
         )
 
     async def _materialize_export(
@@ -2516,6 +3175,20 @@ class DocsNamedServiceProvider(NamedServiceProvider):
     async def object_get(
         self, ctx: NamedServiceContext, request: NamedServiceRequest
     ) -> NamedServiceResponse | NamedServiceStreamResult:
+        try:
+            image_parsed = parse_docs_image_ref(request.object_ref)
+        except ValueError:
+            image_parsed = None
+        if image_parsed is not None:
+            unsupported = self._provider_not_supported(request, image_parsed)
+            if unsupported is not None:
+                return unsupported
+            return await self._image_response(
+                ctx,
+                request,
+                parsed=image_parsed,
+                materialize=_is_materialization_request(request),
+            )
         try:
             export_parsed = parse_docs_export_ref(request.object_ref)
         except ValueError:
@@ -3112,13 +3785,27 @@ class DocsNamedServiceProvider(NamedServiceProvider):
             if selector_error is not None:
                 return selector_error
         assert payload is not None
-        ret, error = await self._execute(
-            request=request,
-            operation=action,
-            claim=_placement_claim(action, payload),
-            payload=payload,
-            account_id=parsed["account_id"],
-        )
+        staged_cleanup: Callable[[], None] | None = None
+        if action == ACTION_EMBED_IMAGE:
+            staged_cleanup, staging_error = await self._image_uri_for_file_ref(
+                ctx, request, payload
+            )
+            if staging_error is not None:
+                return staging_error
+        try:
+            ret, error = await self._execute(
+                request=request,
+                operation=action,
+                claim=_placement_claim(action, payload),
+                payload=payload,
+                account_id=parsed["account_id"],
+            )
+        finally:
+            # Google fetches the image inside the call it was given, so the
+            # staged copy has no reason to outlive the call - on success or on
+            # failure.
+            if staged_cleanup is not None:
+                staged_cleanup()
         if error is not None:
             return error
         return self._mutation_response(
@@ -3226,11 +3913,15 @@ def make_docs_named_service_provider(
     execute_operation: ExecuteDocsOperation,
     bundle_id: str | None = None,
     file_url_factory: Any = None,
+    staging_root_factory: Any = None,
+    provider_fetch_url_factory: Any = None,
 ) -> DocsNamedServiceProvider:
     return DocsNamedServiceProvider(
         execute_operation=execute_operation,
         bundle_id=bundle_id,
         file_url_factory=file_url_factory,
+        staging_root_factory=staging_root_factory,
+        provider_fetch_url_factory=provider_fetch_url_factory,
     )
 
 
@@ -3265,6 +3956,7 @@ __all__ = [
     "DOCS_DOCUMENT_KIND",
     "DOCS_EXPORT_FORMATS",
     "DOCS_EXPORT_KIND",
+    "DOCS_IMAGE_KIND",
     "DOCS_GRANT_HINTS",
     "DOCS_IMPORT_SOURCE_KIND",
     "DOCS_NAMESPACE",
@@ -3281,6 +3973,9 @@ __all__ = [
     "document_source_ref",
     "docs_named_service_spec",
     "make_docs_named_service_provider",
+    "document_image_filename",
+    "document_image_ref",
     "parse_docs_export_ref",
+    "parse_docs_image_ref",
     "parse_docs_ref",
 ]

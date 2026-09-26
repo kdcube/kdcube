@@ -7,6 +7,9 @@ import pytest
 
 import kdcube_ai_app.apps.chat.sdk.integrations.docs.named_service as docs_named_service
 from kdcube_ai_app.apps.chat.sdk.integrations.docs.named_service import (
+    DOCS_IMAGE_KIND,
+    document_image_ref,
+    parse_docs_image_ref,
     ACTION_COPY,
     ACTION_CREATE_COMMENT,
     ACTION_DELETE_COMMENT,
@@ -32,6 +35,8 @@ from kdcube_ai_app.apps.chat.sdk.integrations.docs.named_service import (
     DOCS_SNAPSHOT_SCHEMA,
     DOCS_WRITE_CLAIM,
     DocsNamedServiceProvider,
+    origin_answer_refusal,
+    origin_unreachable_refusal,
     document_export_ref,
     document_ref,
     document_source_ref,
@@ -80,6 +85,7 @@ class _FakeDocs:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
         self.error: dict[str, Any] | None = None
+        self.table_reads: list[dict[str, Any]] = []
         self.tabs: list[dict[str, Any]] = [
             {
                 "tab_id": "tab-main",
@@ -184,6 +190,11 @@ class _FakeDocs:
                     "tab_count": len(self.tabs),
                     "tabs": list(self.tabs),
                     "end_index": 41,
+                    **(
+                        {"table_reads": [dict(row) for row in self.table_reads]}
+                        if self.table_reads
+                        else {}
+                    ),
                 },
             }
         if operation == "list_comments":
@@ -218,6 +229,33 @@ class _FakeDocs:
                     "title": kwargs["payload"]["title"],
                     "web_url": ("https://docs.google.com/document/d/copied-1/edit"),
                     "copied": True,
+                },
+            }
+        if operation == "read_image":
+            if kwargs["payload"].get("object_id") == "img.404":
+                return {
+                    "ok": False,
+                    "error": {
+                        "code": "docs_image_not_found",
+                        "message": "no such image",
+                        "status": 404,
+                    },
+                }
+            return {
+                "ok": True,
+                "ret": {
+                    "account_id": account_id,
+                    "document_id": "doc-1",
+                    "object_id": kwargs["payload"].get("object_id") or "img.1",
+                    "alt": "Q3 revenue by region",
+                    "width_pt": 239.1,
+                    "height_pt": 160.0,
+                    "source_uri": "https://example.invalid/chart.png",
+                    "tab_id": "tab-main",
+                    "cell": {"table": 1, "row": 2, "column": 1},
+                    "mime_type": "image/png",
+                    "byte_size": 10,
+                    "content_base64": "iVBORw0KAA==",
                 },
             }
         if operation == "export":
@@ -1842,3 +1880,335 @@ def test_schema_declares_set_cells_and_table_selectors() -> None:
     assert docs_named_service.DOCS_GRANT_HINTS[f"object.action.{ACTION_SET_CELLS}"] == [
         DOCS_WRITE_CLAIM
     ]
+
+
+def test_image_refs_name_the_object_inside_a_document() -> None:
+    ref = document_image_ref("account-1", "doc-1", "kix.abc123")
+    assert ref == "docs:google:account-1:image:kix.abc123:doc-1"
+    assert parse_docs_image_ref(ref) == {
+        "ref": ref,
+        "provider": "google",
+        "account_id": "account-1",
+        "object_id": "kix.abc123",
+        "document_id": "doc-1",
+        "object_kind": DOCS_IMAGE_KIND,
+    }
+    with pytest.raises(ValueError):
+        parse_docs_image_ref("docs:google:account-1:export:pdf:doc-1")
+
+
+@pytest.mark.anyio
+async def test_a_table_read_hands_back_a_ready_ref_for_every_image() -> None:
+    fake = _FakeDocs()
+    fake.table_reads = [
+        {
+            "cells": [
+                [{"row": 1, "column": 1, "text": "Chart"}],
+                [
+                    {
+                        "row": 2,
+                        "column": 1,
+                        "text": "",
+                        "objects": [{"kind": "image", "object_id": "img.1"}],
+                    }
+                ],
+            ]
+        }
+    ]
+
+    response = await _provider(fake).dispatch(
+        _ctx(),
+        NamedServiceRequest(
+            operation=OBJECT_GET,
+            namespace="docs",
+            object_ref=document_ref("account-1", "doc-1"),
+            include=["tables"],
+        ),
+    )
+
+    cell = response.object["table_reads"][0]["cells"][1][0]
+    # Nothing downstream assembles a ref by hand, the same way nothing
+    # assembles a table selector by hand.
+    assert cell["objects"][0]["ref"] == "docs:google:account-1:image:img.1:doc-1"
+
+
+@pytest.mark.anyio
+async def test_an_image_ref_reads_as_a_record_without_the_bytes() -> None:
+    fake = _FakeDocs()
+    ref = document_image_ref("account-1", "doc-1", "img.1")
+
+    response = await _provider(fake).dispatch(
+        _ctx(),
+        NamedServiceRequest(operation=OBJECT_GET, namespace="docs", object_ref=ref),
+    )
+
+    assert response.ok is True
+    assert response.object["object_kind"] == DOCS_IMAGE_KIND
+    assert response.object["alt"] == "Q3 revenue by region"
+    assert response.object["cell"] == {"table": 1, "row": 2, "column": 1}
+    assert response.object["filename"] == "doc-1-img.1.png"
+    assert "content_base64" not in json.dumps(response.object)
+    assert response.object["delivery"]["response_mode"] == "stream"
+    assert fake.calls[0]["operation"] == "read_image"
+    assert fake.calls[0]["claim"] == DOCS_READ_CLAIM
+
+
+@pytest.mark.anyio
+async def test_an_image_ref_streams_its_bytes_when_asked_to_materialize() -> None:
+    fake = _FakeDocs()
+    ref = document_image_ref("account-1", "doc-1", "img.1")
+
+    result = await _provider(fake).dispatch(
+        _ctx(),
+        NamedServiceRequest(
+            operation=OBJECT_GET,
+            namespace="docs",
+            object_ref=ref,
+            response_mode="stream",
+            context={"source": "react.pull", "materialize": True},
+        ),
+    )
+
+    assert isinstance(result, NamedServiceStreamResult)
+    assert result.media_type == "image/png"
+    assert result.filename == "doc-1-img.1.png"
+    data = b"".join([chunk async for chunk in result.chunks])
+    assert data.startswith(b"\x89PNG")
+    materialization = result.response.attrs["materialization"]
+    assert materialization["size_bytes"] == len(data)
+    assert materialization["complete"] is True
+
+
+@pytest.mark.anyio
+async def test_an_image_ref_carries_a_download_url_when_the_bundle_offers_one() -> None:
+    fake = _FakeDocs()
+    ref = document_image_ref("account-1", "doc-1", "img.1")
+
+    def _file_url(ctx: Any, info: Any) -> dict[str, Any]:
+        return {"url": f"https://example.invalid/d/{info['ref']}", "expires_at": 1}
+
+    response = await _provider(fake, file_url_factory=_file_url).dispatch(
+        _ctx(),
+        NamedServiceRequest(operation=OBJECT_GET, namespace="docs", object_ref=ref),
+    )
+
+    assert response.object["download"]["encoding"] == "url"
+    assert response.object["download"]["url"].endswith(ref)
+
+
+@pytest.mark.anyio
+async def test_a_missing_image_is_reported_by_the_provider() -> None:
+    fake = _FakeDocs()
+    ref = document_image_ref("account-1", "doc-1", "img.404")
+
+    response = await _provider(fake).dispatch(
+        _ctx(),
+        NamedServiceRequest(operation=OBJECT_GET, namespace="docs", object_ref=ref),
+    )
+
+    assert response.ok is False
+    assert response.error.code == "docs_image_not_found"
+
+
+# --------------------------------------------------------------------------- #
+# A file this deployment holds, embedded into a document
+# --------------------------------------------------------------------------- #
+
+
+def _png_bytes(width: int = 40, height: int = 20) -> bytes:
+    from io import BytesIO
+
+    from PIL import Image
+
+    buffer = BytesIO()
+    Image.new("RGB", (width, height), (10, 120, 200)).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _staged(tmp_path, data: bytes, filename: str = "chart.png") -> tuple[Any, str]:
+    from kdcube_ai_app.apps.chat.sdk.integrations.file_staging import (
+        new_staged_ref,
+        save_staged,
+    )
+
+    ref = new_staged_ref(filename)
+    save_staged(tmp_path, ref, data)
+    return tmp_path, ref
+
+
+def _hosting_provider(
+    fake,
+    root,
+    *,
+    url: str = "https://example.invalid/d/x",
+    origin: str = "serves_the_file",
+):
+    """A provider whose minted URL is answered the way ``origin`` says.
+
+    The preflight really fetches the minted URL, because that is the point of
+    it; the test decides what the origin answers.
+    """
+
+    minted: list[dict[str, Any]] = []
+
+    def _mint(ctx: Any, info: Any) -> dict[str, Any]:
+        minted.append(dict(info))
+        return {"url": url, "expires_at": 1}
+
+    provider = DocsNamedServiceProvider(
+        execute_operation=fake.execute,
+        bundle_id="kdcube-services@1-0",
+        staging_root_factory=lambda: root,
+        provider_fetch_url_factory=_mint,
+    )
+
+    if origin == "serves_the_file":
+        async def _preflight(_url: str):
+            return None
+    else:
+        verdict = (
+            origin_answer_refusal(200, "text/html")
+            if origin == "interstitial"
+            else origin_unreachable_refusal("ConnectError: no route")
+        )
+
+        async def _preflight(_url: str):
+            return verdict
+
+    provider._origin_serves_the_file = _preflight  # type: ignore[assignment]
+    return provider, minted
+
+
+def _embed_request(**payload: Any) -> NamedServiceRequest:
+    return NamedServiceRequest(
+        operation=OBJECT_ACTION,
+        namespace="docs",
+        object_ref=document_ref("account-1", "doc-1"),
+        action="embed_image",
+        payload={"table": 1, "row": 2, "column": 1, **payload},
+    )
+
+
+@pytest.mark.anyio
+async def test_a_staged_file_is_served_to_google_and_then_removed(tmp_path) -> None:
+    from kdcube_ai_app.apps.chat.sdk.integrations.file_staging import parse_staged_ref
+
+    fake = _FakeDocs()
+    root, staged_ref = _staged(tmp_path, _png_bytes())
+    provider, minted = _hosting_provider(fake, root)
+
+    response = await provider.dispatch(_ctx(), _embed_request(file_ref=staged_ref))
+
+    assert response.ok is True
+    # The proxy is handed a URL, never the ref.
+    call = [row for row in fake.calls if row["operation"] == "embed_image"][0]
+    assert call["payload"]["image_uri"] == "https://example.invalid/d/x"
+    assert "file_ref" not in call["payload"]
+    assert minted[0]["staged_ref"] == staged_ref
+    # Google fetched it inside that call, so the copy is gone.
+    staged_id, filename = parse_staged_ref(staged_ref)
+    assert not (root / staged_id / filename).exists()
+
+
+@pytest.mark.anyio
+async def test_the_staged_copy_goes_even_when_the_write_fails(tmp_path) -> None:
+    from kdcube_ai_app.apps.chat.sdk.integrations.file_staging import parse_staged_ref
+
+    fake = _FakeDocs()
+    fake.error = {"ok": False, "error": {"code": "google_docs_provider_error", "message": "nope", "status": 400}}
+    root, staged_ref = _staged(tmp_path, _png_bytes())
+    provider, _minted = _hosting_provider(fake, root)
+
+    response = await provider.dispatch(_ctx(), _embed_request(file_ref=staged_ref))
+
+    assert response.ok is False
+    staged_id, filename = parse_staged_ref(staged_ref)
+    assert not (root / staged_id / filename).exists()
+
+
+@pytest.mark.anyio
+async def test_naming_both_a_file_and_a_url_is_refused(tmp_path) -> None:
+    fake = _FakeDocs()
+    root, staged_ref = _staged(tmp_path, _png_bytes())
+    provider, _minted = _hosting_provider(fake, root)
+
+    response = await provider.dispatch(
+        _ctx(),
+        _embed_request(file_ref=staged_ref, image_uri="https://example.invalid/a.png"),
+    )
+
+    assert response.ok is False
+    assert response.error.code == "docs_image_source_ambiguous"
+    assert not [row for row in fake.calls if row["operation"] == "embed_image"]
+
+
+@pytest.mark.anyio
+async def test_a_file_google_will_not_take_is_refused_before_the_write(tmp_path) -> None:
+    fake = _FakeDocs()
+    root, staged_ref = _staged(tmp_path, b"not an image at all", filename="notes.txt")
+    provider, _minted = _hosting_provider(fake, root)
+
+    response = await provider.dispatch(_ctx(), _embed_request(file_ref=staged_ref))
+
+    assert response.ok is False
+    assert response.error.code == "docs_image_unsupported"
+    assert not [row for row in fake.calls if row["operation"] == "embed_image"]
+
+
+@pytest.mark.anyio
+async def test_an_image_larger_than_google_takes_is_refused(tmp_path) -> None:
+    fake = _FakeDocs()
+    root, staged_ref = _staged(tmp_path, _png_bytes(2400, 100))
+    provider, _minted = _hosting_provider(fake, root)
+
+    response = await provider.dispatch(_ctx(), _embed_request(file_ref=staged_ref))
+
+    assert response.ok is False
+    assert response.error.code == "docs_image_too_large"
+    assert response.error.details["width"] == 2400
+
+
+@pytest.mark.anyio
+async def test_a_deployment_with_no_public_origin_says_so(tmp_path) -> None:
+    fake = _FakeDocs()
+    root, staged_ref = _staged(tmp_path, _png_bytes())
+    provider, _minted = _hosting_provider(fake, root, url="http://inside.invalid/d/x")
+
+    response = await provider.dispatch(_ctx(), _embed_request(file_ref=staged_ref))
+
+    # A plain-http origin is not one Google will fetch from; say it rather than
+    # letting the provider answer with something less clear.
+    assert response.ok is False
+    assert response.error.code == "docs_image_hosting_unavailable"
+
+
+@pytest.mark.anyio
+async def test_without_the_hosting_injections_a_file_ref_is_refused() -> None:
+    fake = _FakeDocs()
+
+    response = await _provider(fake).dispatch(
+        _ctx(), _embed_request(file_ref="staged:abc:chart.png")
+    )
+
+    assert response.ok is False
+    assert response.error.code == "docs_image_hosting_unavailable"
+
+
+@pytest.mark.anyio
+async def test_an_origin_that_answers_with_a_page_is_named_as_the_cause(tmp_path) -> None:
+    from kdcube_ai_app.apps.chat.sdk.integrations.file_staging import parse_staged_ref
+
+    fake = _FakeDocs()
+    root, staged_ref = _staged(tmp_path, _png_bytes())
+    provider, _minted = _hosting_provider(fake, root, origin="interstitial")
+
+    response = await provider.dispatch(_ctx(), _embed_request(file_ref=staged_ref))
+
+    # A tunnel's warning page reaches the provider as a broken image; saying so
+    # here is the difference between a deployment fix and a guessing game.
+    assert response.ok is False
+    assert response.error.code == "docs_image_origin_not_public"
+    assert "text/html" in response.error.details["origin_media_type"]
+    assert not [row for row in fake.calls if row["operation"] == "embed_image"]
+    staged_id, filename = parse_staged_ref(staged_ref)
+    assert not (root / staged_id / filename).exists()
