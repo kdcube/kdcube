@@ -515,6 +515,14 @@ selector, refresh checks out that selected ref and then uses the staged
 If a deployment is currently recorded as running (`~/.kdcube/cli-lock.json`),
 `kdcube refresh --build` with no flags targets it automatically.
 
+Refresh stops the stack, builds, then starts it again. After a successful
+build it records a deployment source receipt for the built images, reading the
+Compose config with the `proxylogin` profile when that image was built. If only
+that receipt fails, refresh still starts the stack on the images it just built
+and then exits non-zero, naming the receipt failure; with `--no-restart` it
+says the stack was not started. A failed build stops there, as before: check
+`docker compose ps` and run `kdcube start` once the build is fixed.
+
 #### Building a distribution from a local checkout
 
 The platform imports packages that are released separately, such as
