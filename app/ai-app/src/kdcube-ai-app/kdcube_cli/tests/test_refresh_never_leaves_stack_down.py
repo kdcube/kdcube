@@ -114,3 +114,17 @@ def test_a_clean_refresh_builds_then_starts(tmp_path: Path) -> None:
         workdir=tmp_path,
     )
     assert steps == ["build", "start"]
+
+
+def test_a_failed_start_after_a_receipt_failure_names_both(tmp_path: Path) -> None:
+    def build() -> None:
+        raise cli.ImageReceiptError("receipt failed: boom")
+
+    def start() -> None:
+        raise SystemExit("compose up failed")
+
+    with pytest.raises(SystemExit) as raised:
+        cli._build_and_restart(Console(quiet=True), build=build, start=start, workdir=tmp_path)
+
+    assert "receipt failed: boom" in str(raised.value)
+    assert "compose up failed" in str(raised.value)

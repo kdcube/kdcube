@@ -744,7 +744,13 @@ def _build_and_restart(
     if start is not None:
         if receipt_failure is not None:
             console.print("[yellow]Refresh: starting the stack on the images just built.[/yellow]")
-        start()
+        try:
+            start()
+        except SystemExit as exc:
+            if receipt_failure is None:
+                raise
+            # Name both: the start failed after the receipt had failed.
+            raise SystemExit(f"{receipt_failure} Starting the stack then failed too: {exc}") from exc
     else:
         console.print(
             "[dim]Refresh: --no-restart set; not starting the stack. "
