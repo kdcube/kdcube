@@ -165,8 +165,15 @@ class PlatformSessionBackend:
                 "role_binding_source": binding_source,
                 "principal_resolution_source": principal.source,
                 "principal_edge_id": principal.edge_id,
-                "email_verified": bool(identity.email_verified),
                 **{k: v for k, v in dict(metadata or {}).items() if isinstance(v, (str, int, float, bool))},
+                # The provider's verdict on the email, recorded only when it
+                # gave one: an absent claim stays absent, so the session
+                # reads it as unknown rather than as "not verified" (W260).
+                **(
+                    {"email_verified": identity.email_verified}
+                    if isinstance(getattr(identity, "email_verified", None), bool)
+                    else {}
+                ),
             },
             ttl_seconds=self._policy.max_ttl_seconds,
             idle_ttl_seconds=max(1, int(expires_at) - now),

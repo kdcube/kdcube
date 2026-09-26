@@ -12,7 +12,8 @@ import {
     selectTenant,
     selectUseAuthCookies
 } from "../chat/chatSettingsSlice.ts";
-import {AuthAction, finishLoading, setCredentials, setLoggedOut, startLoading} from "./authSlice.ts";
+import {AuthAction, finishLoading, setCredentials, setLoggedOut, setSignedOut, startLoading} from "./authSlice.ts";
+import {runBundleLogout} from "./bundleLogout.ts";
 import {BundleSessionAuthConfig, SimpleAuthConfig} from "./authTypes.ts";
 import {removeCookie, setCookie} from "../../utils/cookies.ts";
 import {chatAPIBasePath} from "../../BuildConfig.ts";
@@ -191,26 +192,24 @@ export const authMiddleware = (): Middleware => {
             const cfg = selectAuthConfig(store.getState()) as BundleSessionAuthConfig;
             const logoutUrl = new URL(String(cfg.logoutUrl || "").trim() || "/api/platform/logout", window.location.origin);
             logoutUrl.searchParams.set("next", selectChatPath(store.getState()) || "/");
-            let upstreamLogoutUrl = "";
-            try {
-                const response = await fetch(logoutUrl.toString(), {
-                    method: "POST",
-                    credentials: "include",
-                    cache: "no-store",
-                    headers: {Accept: "application/json"},
-                });
-                if (response.ok) {
+            await runBundleLogout({
+                postLogout: async () => {
+                    const response = await fetch(logoutUrl.toString(), {
+                        method: "POST",
+                        credentials: "include",
+                        cache: "no-store",
+                        headers: {Accept: "application/json"},
+                    });
+                    if (!response.ok) {
+                        return "";
+                    }
                     const body = await response.json().catch(() => null);
-                    upstreamLogoutUrl = String(body?.upstreamLogoutUrl || "").trim();
-                }
-            } catch (error) {
-                console.warn("Platform logout request failed", error);
-            }
-            removeCookies();
-            store.dispatch(setLoggedOut());
-            if (upstreamLogoutUrl) {
-                window.location.assign(upstreamLogoutUrl);
-            }
+                    return String(body?.upstreamLogoutUrl || "");
+                },
+                removeCookies,
+                navigate: (url) => window.location.assign(url),
+                markSignedOut: () => store.dispatch(setSignedOut()),
+            });
         }
 
         const verifyBundleSession = async () => {

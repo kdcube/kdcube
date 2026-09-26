@@ -168,3 +168,22 @@ async def test_protected_widget_handlers_redirect_before_serving_app_content(
     assert parse_qs(urlsplit(response.headers["location"]).query)["next"][0].startswith(
         request_path
     )
+
+
+def test_a_navigation_just_after_sign_out_shows_signed_out_instead_of_signing_in_again() -> None:
+    """W260: the signed-out route returns with signed_out=1. Bouncing that load to
+    sign-in would let a provider still signed in upstream sign the person back in."""
+
+    request = _request(query="tab=people&signed_out=1")
+    response = enforce_protected_widget_user(request, _session(UserType.ANONYMOUS))
+
+    assert not isinstance(response, RedirectResponse)
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    body = response.body.decode("utf-8")
+    assert "You are signed out." in body
+    # The Sign in link returns to the page without the marker.
+    link = body.split('href="', 1)[1].split('"', 1)[0].replace("&amp;", "&")
+    target = urlsplit(link)
+    assert target.path == "/signin/"
+    assert parse_qs(target.query) == {"next": [f"{_WIDGET_PATH}?tab=people"]}

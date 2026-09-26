@@ -168,3 +168,92 @@ async def test_the_redis_session_merge_keeps_a_verified_email_across_logins_with
             f"{manager.SESSION_PREFIX}:registered:{user_id}",
             f"{manager.SESSION_INDEX_PREFIX}:{first.session_id}",
         )
+
+
+def test_a_new_sign_in_rebuilds_the_postgres_session_facts_instead_of_merging():
+    """W260 (operator, 2026-09-26: "after relogin the session carries something old, this is a bug").
+
+    One app session survived four sign-ins and was only merged onto, so a
+    field the newest sign-in did not state kept an earlier sign-in's value.
+    """
+
+    context = {"client_ip": "", "user_agent": "", "user_timezone": None, "user_utc_offset_min": None}
+    first = _merge_record(
+        {"session_id": "s", "roles": [], "permissions": []},
+        user_data={
+            "user_id": "u", "username": "alice", "email": "alice@example.test", "email_verified": True,
+            "roles": ["kdcube:role:registered", "staff"], "rate_limit_subject": "rl-1", "platform_session_id": "bsn_first",
+        },
+        request_context=context, user_type="registered",
+    )
+    assert first["email_verified"] is True and first["platform_session_id"] == "bsn_first"
+
+    # The same sign-in, a later request without the verdict: presence-based merge keeps it.
+    same = _merge_record(first, user_data={"user_id": "u", "platform_session_id": "bsn_first"}, request_context=context, user_type="registered")
+    assert same["email_verified"] is True and same["roles"] == ["kdcube:role:registered", "staff"]
+
+    # A second sign-in that does not state the verdict or the rate-limit subject: rebuilt, so both are unknown.
+    second = _merge_record(
+        first,
+        user_data={"user_id": "u", "username": "alice", "email": "alice@example.test", "roles": ["kdcube:role:registered"], "platform_session_id": "bsn_second"},
+        request_context=context, user_type="registered",
+    )
+    assert second["session_id"] == "s", "the app session keeps its identity"
+    assert second["platform_session_id"] == "bsn_second"
+    assert second["email_verified"] is None
+    assert second["rate_limit_subject"] is None
+    assert second["roles"] == ["kdcube:role:registered"]
+    assert UserSession(**second).email_verified is None
+
+
+def test_session_user_data_names_the_sign_in_a_bundle_session_user_came_from():
+    user = BundleSessionAuthUser(username="alice", email="alice@example.test", email_verified=True, sub="u", session_id="bsn_1")
+    assert session_user_data(user)["platform_session_id"] == "bsn_1"
+    assert "platform_session_id" not in session_user_data(User(username="token-user"))
+
+
+@pytest.mark.skipif(not os.getenv("KDCUBE_TEST_REDIS_URL"), reason="requires a disposable Redis")
+@pytest.mark.asyncio
+async def test_a_new_sign_in_rebuilds_the_redis_session_facts_instead_of_merging():
+    # Another database index than the test above: the process caches one
+    # client per URL, bound to the event loop that created it.
+    from urllib.parse import urlsplit, urlunsplit
+
+    parts = urlsplit(os.environ["KDCUBE_TEST_REDIS_URL"])
+    manager = SessionManager(
+        redis_url=urlunsplit((parts.scheme, parts.netloc, "/7", parts.query, parts.fragment)),
+        tenant=f"t-{uuid.uuid4().hex[:8]}",
+        project=f"p-{uuid.uuid4().hex[:8]}",
+    )
+    context = RequestContext(client_ip="192.0.2.10", user_agent="browser-agent")
+    user_id = f"user-{uuid.uuid4().hex[:8]}"
+    try:
+        first = await manager.get_or_create_session(
+            context, UserType.REGISTERED,
+            {"user_id": user_id, "username": "alice", "email": "alice@example.test", "email_verified": True,
+             "roles": ["kdcube:role:registered", "staff"], "rate_limit_subject": "rl-1", "platform_session_id": "bsn_first"},
+        )
+        assert first.email_verified is True and first.platform_session_id == "bsn_first"
+
+        same = await manager.get_or_create_session(
+            context, UserType.REGISTERED, {"user_id": user_id, "platform_session_id": "bsn_first"},
+        )
+        assert same.session_id == first.session_id and same.email_verified is True
+
+        second = await manager.get_or_create_session(
+            context, UserType.REGISTERED,
+            {"user_id": user_id, "username": "alice", "email": "alice@example.test", "roles": ["kdcube:role:registered"], "platform_session_id": "bsn_second"},
+        )
+        assert second.session_id == first.session_id
+        assert second.platform_session_id == "bsn_second"
+        assert second.email_verified is None
+        assert second.rate_limit_subject is None
+        assert second.roles == ["kdcube:role:registered"]
+        stored = await manager.get_session_by_id(first.session_id)
+        assert stored.email_verified is None and stored.platform_session_id == "bsn_second"
+    finally:
+        await manager.init_redis()
+        await manager.redis.delete(
+            f"{manager.SESSION_PREFIX}:registered:{user_id}",
+            f"{manager.SESSION_INDEX_PREFIX}:{first.session_id}",
+        )

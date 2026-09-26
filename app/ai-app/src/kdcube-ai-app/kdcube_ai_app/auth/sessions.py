@@ -134,6 +134,23 @@ end
 local function merge_user_data(existing_obj, user_obj)
     if not existing_obj or not user_obj then return end
 
+    -- A new sign-in (another platform session than the one this app session
+    -- was built from) rebuilds the facts: nothing an earlier sign-in left may
+    -- stand for a field the new one does not state (W260).
+    local incoming_sign_in = user_obj["platform_session_id"]
+    if incoming_sign_in ~= nil and incoming_sign_in ~= cjson.null
+        and existing_obj["platform_session_id"] ~= incoming_sign_in then
+        existing_obj["roles"] = {}
+        existing_obj["permissions"] = {}
+        existing_obj["user_id"] = nil
+        existing_obj["username"] = nil
+        existing_obj["email"] = nil
+        existing_obj["email_verified"] = nil
+        existing_obj["identity_authority"] = nil
+        existing_obj["rate_limit_subject"] = nil
+        existing_obj["platform_session_id"] = incoming_sign_in
+    end
+
     -- Presence-based semantics
     if user_obj["roles"] ~= nil then
         existing_obj["roles"] = user_obj["roles"]
@@ -384,6 +401,9 @@ class UserSession:
     request_context: Optional[RequestContext] = None
     identity_authority: Optional[Dict[str, Any]] = None
     rate_limit_subject: Optional[str] = None
+    # The platform sign-in (bundle session id) this app session's facts come
+    # from. A request from another sign-in rebuilds them (W260).
+    platform_session_id: Optional[str] = None
 
     def __post_init__(self):
         if isinstance(self.user_type, str):
@@ -465,6 +485,11 @@ def session_user_data(
     verified = getattr(user, "email_verified", None)
     if isinstance(verified, bool):
         data["email_verified"] = verified
+    # The sign-in this login belongs to, when the authenticator knows it: a
+    # different one rebuilds the session's facts instead of merging (W260).
+    platform_session_id = getattr(user, "session_id", None)
+    if isinstance(platform_session_id, str) and platform_session_id.strip():
+        data["platform_session_id"] = platform_session_id.strip()
     return data
 
 
@@ -541,6 +566,7 @@ class SessionManager:
             timezone=context.user_timezone,
             identity_authority=user_data.get("identity_authority") if user_data else None,
             rate_limit_subject=user_data.get("rate_limit_subject") if user_data else None,
+            platform_session_id=user_data.get("platform_session_id") if user_data else None,
         )
         if _auth_debug_enabled():
             logger.info(

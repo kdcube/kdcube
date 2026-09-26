@@ -113,6 +113,8 @@ class BundleSessionVerification:
 
 class BundleSessionAuthUser(User):
     sub: str | None = None
+    # The bundle session (the platform sign-in) this request authenticated with.
+    session_id: str | None = None
 
 
 def _optional_str(value: Any) -> str | None:
@@ -1072,6 +1074,7 @@ class BundleSessionAuthManager(AuthManager):
             roles=list(user.roles or []),
             permissions=list(user.permissions or []),
             sub=user.sub,
+            session_id=str(verification.session_id or "") or None,
         )
 
     async def get_service_token(self) -> str:

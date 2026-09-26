@@ -60,6 +60,32 @@ def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
 
 
+ABSENT = object()
+
+
+class _MemorySecretStore:
+    """The host's one-time secret custody, in memory for the test."""
+
+    def __init__(self) -> None:
+        self.records: dict[str, tuple[str, int]] = {}
+
+    async def set(self, *, secret_ref: str, value: str, expires_at: int) -> None:
+        self.records[secret_ref] = (value, int(expires_at))
+
+    async def get(self, *, secret_ref: str) -> str | None:
+        record = self.records.get(secret_ref)
+        return record[0] if record and record[1] > int(time.time()) else None
+
+    async def delete(self, *, secret_ref: str) -> None:
+        self.records.pop(secret_ref, None)
+
+    async def purge_expired(self, *, now: int, limit: int) -> int:
+        expired = [key for key, (_value, at) in self.records.items() if at <= now][:limit]
+        for key in expired:
+            self.records.pop(key, None)
+        return len(expired)
+
+
 class MockIssuer:
     """An OIDC issuer: discovery, authorize, token, JWKS, end-session."""
 
@@ -73,6 +99,8 @@ class MockIssuer:
         self.email = "Person@Example.com"
         self.groups = ["staff"]
         self.wrong_nonce = False
+        # The id token's email_verified claim; ABSENT leaves it out (W260).
+        self.email_verified: object = True
         self.app = self._build()
         self.issuer = ""
 
@@ -94,7 +122,7 @@ class MockIssuer:
             "aud": CLIENT_ID,
             "sub": self.subject,
             "email": self.email,
-            "email_verified": True,
+            **({} if self.email_verified is ABSENT else {"email_verified": self.email_verified}),
             "name": "Person Example",
             "cognito:groups": list(self.groups),
             "nonce": "not-the-attempt" if self.wrong_nonce else nonce,
@@ -214,7 +242,7 @@ class Harness:
         self.upstream = OidcCodeFlow(client, verifier=PyJwtVerifier(f"{mock.issuer}/jwks"))
         self.flow = BrowserSessionFlow(
             backend=PlatformSessionBackend(self.authority, grants=grants, policy=self.policy),
-            attempts=RedisLoginAttemptStore(self.authority),
+            attempts=RedisLoginAttemptStore(self.authority, secret_store=_MemorySecretStore()),
             upstream=self.upstream,
             cookies=StandardCookiePolicy(session_name="__Secure-LATC", secure=True),
             policy=self.policy,
@@ -324,3 +352,118 @@ def test_id_token_for_another_attempt_is_refused(issuer):
     assert refused.status_code == 400 and "nonce_mismatch" in refused.text
     assert "__Secure-LATC" not in _cookie_values(refused)
     assert harness.seen == [], "no platform user was written"
+
+
+@pytest.mark.parametrize(
+    ("claim", "expected"),
+    [(True, True), (False, False), ("false", False), (ABSENT, None)],
+    ids=["true", "false", "false-string", "absent"],
+)
+def test_the_providers_email_verdict_reaches_the_apps_request_session_unchanged(issuer, claim, expected):
+    """W260: sign-in, then the gateway's user, then the app's UserSession.
+
+    On 2026-09-26 an invited LinkedIn user's board session read None where the
+    provider had an answer. A true stays true, a false stays false, and an
+    absent claim stays unknown (None), never "not verified".
+    """
+    import asyncio
+
+    from kdcube_ai_app.auth.platform_session_store import _merge_record
+    from kdcube_ai_app.auth.session_record import user_session_storage_record
+    from kdcube_ai_app.auth.sessions import UserSession, session_user_data
+
+    issuer.email_verified = claim
+    try:
+        harness = Harness(issuer)
+        callback, binding, _state = _walk_to_callback(harness, issuer)
+        harness.client.cookies.set("__Host-kdcube-login", binding)
+        done = harness.client.get(callback, follow_redirects=False)
+        assert done.status_code == 302, done.text
+        token = _cookie_values(done)["__Secure-LATC"]
+
+        manager = BundleSessionAuthManager(authority=harness.authority, sliding=harness.policy)
+        user = asyncio.run(manager.authenticate(token))
+        assert user.email_verified is expected
+
+        # The request path the board's calls take: the platform token
+        # authenticator builds the session's user_data from this user.
+        from types import SimpleNamespace
+
+        from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.request_auth import (
+            PlatformTokenAuthenticator,
+        )
+
+        seen: list[dict] = []
+
+        async def session_factory(_context, _user_type, data):
+            seen.append(dict(data))
+            return SimpleNamespace()
+
+        authenticator = PlatformTokenAuthenticator(auth_manager=manager)
+        context = SimpleNamespace(authorization_header=f"Bearer {token}", id_token=None)
+        assert asyncio.run(authenticator(None, context, session_factory)) is not None
+        [user_data] = seen
+        assert ("email_verified" in user_data) is (expected is not None)
+        assert user_data.get("email_verified") is expected
+        # The gateway's own helper follows the same rule.
+        assert session_user_data(user).get("email_verified") is expected
+        # A new session, and a stored one merged with this login, as both stores do.
+        fresh = UserSession(session_id="s-1", user_type="registered", **{
+            key: user_data.get(key) for key in ("user_id", "username", "email", "email_verified")
+        })
+        assert fresh.email_verified is expected
+        stored = user_session_storage_record(fresh)
+        merged = _merge_record(stored, user_data=user_data, request_context={}, user_type="registered")
+        assert UserSession(**merged).email_verified is expected
+    finally:
+        issuer.email_verified = True
+
+
+def test_a_second_sign_in_in_the_same_browser_rebuilds_the_app_session(issuer):
+    """W260 (operator, 2026-09-26: "after relogin the session carries something old").
+
+    Two sign-ins through the real path, into one app session record: the
+    second does not state the email verdict, so the verdict is unknown after
+    it, not the first sign-in's true.
+    """
+    import asyncio
+    from types import SimpleNamespace
+
+    from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.request_auth import PlatformTokenAuthenticator
+    from kdcube_ai_app.auth.platform_session_store import _merge_record
+    from kdcube_ai_app.auth.sessions import UserSession
+
+    harness = Harness(issuer)
+    manager = BundleSessionAuthManager(authority=harness.authority, sliding=harness.policy)
+
+    def sign_in_user_data(claim):
+        issuer.email_verified = claim
+        callback, binding, _state = _walk_to_callback(harness, issuer)
+        harness.client.cookies.set("__Host-kdcube-login", binding)
+        done = harness.client.get(callback, follow_redirects=False)
+        assert done.status_code == 302, done.text
+        token = _cookie_values(done)["__Secure-LATC"]
+        seen: list[dict] = []
+
+        async def session_factory(_context, _user_type, data):
+            seen.append(dict(data))
+            return SimpleNamespace()
+
+        authenticator = PlatformTokenAuthenticator(auth_manager=manager)
+        asyncio.run(authenticator(None, SimpleNamespace(authorization_header=f"Bearer {token}", id_token=None), session_factory))
+        return seen[0]
+
+    context = {"client_ip": "", "user_agent": "", "user_timezone": None, "user_utc_offset_min": None}
+    try:
+        first = sign_in_user_data(True)
+        record = _merge_record({"session_id": "app-1", "roles": [], "permissions": []}, user_data=first, request_context=context, user_type="registered")
+        assert record["email_verified"] is True
+
+        second = sign_in_user_data(ABSENT)
+        assert second["platform_session_id"] != first["platform_session_id"], "each sign-in is its own platform session"
+        rebuilt = _merge_record(record, user_data=second, request_context=context, user_type="registered")
+        assert rebuilt["session_id"] == "app-1"
+        assert rebuilt["email_verified"] is None, "the second sign-in did not state it: unknown, not the first one's true"
+        assert UserSession(**rebuilt).platform_session_id == second["platform_session_id"]
+    finally:
+        issuer.email_verified = True
