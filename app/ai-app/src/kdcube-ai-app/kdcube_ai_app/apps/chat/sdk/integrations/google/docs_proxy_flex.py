@@ -38,6 +38,8 @@ import httpx
 from kdcube_ai_app.apps.chat.sdk.integrations.provider_errors import (
     provider_failure_from_exception,
 )
+from kdcube_ai_app.apps.chat.sdk.integrations.docs.tables import DEFAULT_TABLE_ROWS
+from kdcube_ai_app.apps.chat.sdk.integrations.google.docs_structure import body_tables
 from kdcube_ai_app.apps.chat.sdk.integrations.google.docs_proxy import (
     DOCS_API,
     DocsValidationError,
@@ -85,6 +87,7 @@ _ALLOWED_REQUEST_KINDS = frozenset({
     "mergeTableCells",
     "unmergeTableCells",
     "updateTableCellStyle",
+    "pinTableHeaderRows",
     "createNamedRange",
     "deleteNamedRange",
 })
@@ -126,15 +129,6 @@ def _structural_element(block: Mapping[str, Any]) -> dict[str, Any] | None:
             "bulleted": "bullet" in paragraph,
             "text": text,
         }
-    table = block.get("table")
-    if isinstance(table, Mapping):
-        return {
-            "type": "table",
-            "start_index": start,
-            "end_index": end,
-            "rows": _int(table.get("rows")),
-            "columns": _int(table.get("columns")),
-        }
     if isinstance(block.get("sectionBreak"), Mapping):
         return {"type": "section_break", "start_index": start, "end_index": end}
     if isinstance(block.get("tableOfContents"), Mapping):
@@ -142,14 +136,44 @@ def _structural_element(block: Mapping[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def _elements_from_body(body: Any) -> list[dict[str, Any]]:
+def _table_element(table: Mapping[str, Any]) -> dict[str, Any]:
+    """A table with per-cell indices; content_start/content_end bound the
+    editable text (the cell's final newline is excluded)."""
+    rows = table["cells"][:DEFAULT_TABLE_ROWS]
+    return {
+        "type": "table",
+        "start_index": table["start_index"],
+        "end_index": table["end_index"],
+        "position": table["position"],
+        "after_heading": table["after_heading"],
+        "rows": table["rows"],
+        "columns": table["columns"],
+        "header_rows": table["header_rows"],
+        "cells": [[dict(cell) for cell in row] for row in rows],
+        "cells_truncated": len(table["cells"]) > len(rows),
+    }
+
+
+def _elements_from_body(
+    body: Any, *, inline_objects: Mapping[str, Any] | None = None
+) -> list[dict[str, Any]]:
     content = body.get("content") if isinstance(body, Mapping) else None
+    tables = {
+        table["start_index"]: table
+        for table in body_tables(body, inline_objects=inline_objects)
+    }
     elements: list[dict[str, Any]] = []
     for block in content or []:
-        if isinstance(block, Mapping):
-            element = _structural_element(block)
-            if element is not None:
-                elements.append(element)
+        if not isinstance(block, Mapping):
+            continue
+        if isinstance(block.get("table"), Mapping):
+            table = tables.get(_int(block.get("startIndex")))
+            if table is not None:
+                elements.append(_table_element(table))
+            continue
+        element = _structural_element(block)
+        if element is not None:
+            elements.append(element)
     return elements
 
 
@@ -172,7 +196,9 @@ def _tab_records(document: Mapping[str, Any], *, with_elements: bool) -> list[di
         }
         if with_elements:
             doc_tab = tab.get("documentTab") if isinstance(tab.get("documentTab"), Mapping) else {}
-            record["elements"] = _elements_from_body(doc_tab.get("body"))
+            record["elements"] = _elements_from_body(
+                doc_tab.get("body"), inline_objects=doc_tab.get("inlineObjects")
+            )
         records.append(record)
         for child in tab.get("childTabs") or []:
             if isinstance(child, Mapping):
@@ -190,7 +216,9 @@ def _tab_records(document: Mapping[str, Any], *, with_elements: bool) -> list[di
             "parent_tab_id": "",
         }
         if with_elements:
-            record["elements"] = _elements_from_body(document.get("body"))
+            record["elements"] = _elements_from_body(
+                document.get("body"), inline_objects=document.get("inlineObjects")
+            )
         records.append(record)
     return records
 

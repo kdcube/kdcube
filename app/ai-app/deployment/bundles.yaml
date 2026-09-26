@@ -370,6 +370,16 @@ bundles:
               - kdcube:role:super-admin
               delegable_permissions:
               - docs:comment
+            - grant: docs:delete
+              label: Trash Google Docs
+              description: Move Google documents to the Drive trash and restore them, through a connected Google account.
+              delegable_roles:
+              - kdcube:role:registered
+              - kdcube:role:paid
+              - kdcube:role:privileged
+              - kdcube:role:super-admin
+              delegable_permissions:
+              - docs:delete
             - grant: drive:read
               label: Read Google Drive folders
               description: List Drive folder contents through a connected Google account.
@@ -1363,6 +1373,48 @@ bundles:
                             grants:
                             - named_services:use
                             - docs:write
+                          object.action.set_cells:
+                            label: Write document table cells
+                            description: Write text into cells of one table row, addressed by table, row, and column.
+                            grants:
+                            - named_services:use
+                            - docs:write
+                          object.action.add_row:
+                            label: Add document table row
+                            description: Add one row to a table and optionally fill it in the same call.
+                            grants:
+                            - named_services:use
+                            - docs:write
+                          object.action.add_tab:
+                            label: Add document tab
+                            description: Add a tab to the document.
+                            grants:
+                            - named_services:use
+                            - docs:write
+                          object.action.update_tab:
+                            label: Rename or move document tab
+                            description: Rename a tab or change its place in the document.
+                            grants:
+                            - named_services:use
+                            - docs:write
+                          object.action.delete_tab:
+                            label: Delete document tab
+                            description: Delete a tab and everything in it.
+                            grants:
+                            - named_services:use
+                            - docs:write
+                          object.action.trash:
+                            label: Trash document
+                            description: Move the document to the Drive trash, where restore brings it back.
+                            grants:
+                            - named_services:use
+                            - docs:delete
+                          object.action.restore:
+                            label: Restore document
+                            description: Bring a trashed document back out of the Drive trash.
+                            grants:
+                            - named_services:use
+                            - docs:delete
                           object.action.export:
                             label: Export document
                             description: Deliver a portable document file without placing file bytes in model context.
@@ -1402,6 +1454,12 @@ bundles:
                           object.action.create_comment:
                             label: Create document comment
                             description: Add a comment to a document.
+                            grants:
+                            - named_services:use
+                            - docs:comment
+                          object.action.update_comment:
+                            label: Edit document comment
+                            description: Rewrite the text of a comment or one of its replies.
                             grants:
                             - named_services:use
                             - docs:comment
@@ -1515,6 +1573,48 @@ bundles:
                             grants:
                             - named_services:use
                             - docs:write
+                          object.action.set_cells:
+                            label: Write document table cells
+                            description: Write text into cells of one table row, addressed by table, row, and column.
+                            grants:
+                            - named_services:use
+                            - docs:write
+                          object.action.add_row:
+                            label: Add document table row
+                            description: Add one row to a table and optionally fill it in the same call.
+                            grants:
+                            - named_services:use
+                            - docs:write
+                          object.action.add_tab:
+                            label: Add document tab
+                            description: Add a tab to the document.
+                            grants:
+                            - named_services:use
+                            - docs:write
+                          object.action.update_tab:
+                            label: Rename or move document tab
+                            description: Rename a tab or change its place in the document.
+                            grants:
+                            - named_services:use
+                            - docs:write
+                          object.action.delete_tab:
+                            label: Delete document tab
+                            description: Delete a tab and everything in it.
+                            grants:
+                            - named_services:use
+                            - docs:write
+                          object.action.trash:
+                            label: Trash document
+                            description: Move the document to the Drive trash, where restore brings it back.
+                            grants:
+                            - named_services:use
+                            - docs:delete
+                          object.action.restore:
+                            label: Restore document
+                            description: Bring a trashed document back out of the Drive trash.
+                            grants:
+                            - named_services:use
+                            - docs:delete
                           object.action.export:
                             label: Export document
                             description: Deliver a portable document file without placing file bytes in model context.
@@ -1554,6 +1654,12 @@ bundles:
                           object.action.create_comment:
                             label: Create document comment
                             description: Add a comment to a document.
+                            grants:
+                            - named_services:use
+                            - docs:comment
+                          object.action.update_comment:
+                            label: Edit document comment
+                            description: Rewrite the text of a comment or one of its replies.
                             grants:
                             - named_services:use
                             - docs:comment
@@ -2110,6 +2216,10 @@ bundles:
                   label: Export Google Doc
                   description: Export a document to a supported format.
                   grants: [docs:read]
+                productivity_docs_read_image:
+                  label: Read Google Doc image
+                  description: Read one inline image of a document as bytes.
+                  grants: [docs:read]
                 productivity_docs_list_comments:
                   label: List Google Doc comments
                   description: List comments and replies on a document.
@@ -2150,6 +2260,34 @@ bundles:
                   label: Embed Google Doc image
                   description: Embed an image at an explicit document location.
                   grants: [docs:write]
+                productivity_docs_set_cells:
+                  label: Write Google Doc table cells
+                  description: Write text into cells of one table row, addressed by table, row, and column.
+                  grants: [docs:write]
+                productivity_docs_add_row:
+                  label: Add Google Doc table row
+                  description: Add one row to a table and optionally fill it in the same call.
+                  grants: [docs:write]
+                productivity_docs_add_tab:
+                  label: Add Google Doc tab
+                  description: Add a tab to the document.
+                  grants: [docs:write]
+                productivity_docs_update_tab:
+                  label: Rename or move Google Doc tab
+                  description: Rename a tab or change its place in the document.
+                  grants: [docs:write]
+                productivity_docs_delete_tab:
+                  label: Delete Google Doc tab
+                  description: Delete a tab and everything in it.
+                  grants: [docs:write]
+                productivity_docs_trash:
+                  label: Trash Google Doc
+                  description: Move the document to the Drive trash, recoverable until Drive empties it.
+                  grants: [docs:delete]
+                productivity_docs_restore:
+                  label: Restore Google Doc
+                  description: Bring a trashed document back out of the Drive trash.
+                  grants: [docs:delete]
                 productivity_docs_import:
                   label: Import Google Doc
                   description: Import external content into a Google document.
@@ -2165,6 +2303,10 @@ bundles:
                 productivity_docs_create_comment:
                   label: Comment on Google Doc
                   description: Create a comment on a document.
+                  grants: [docs:comment]
+                productivity_docs_update_comment:
+                  label: Edit Google Doc comment
+                  description: Rewrite a comment or one of its replies.
                   grants: [docs:comment]
                 productivity_docs_reply_comment:
                   label: Reply to Google Doc comment
@@ -2246,6 +2388,7 @@ bundles:
                   - docs:read
                   - docs:write
                   - docs:comment
+                  - docs:delete
                   - drive:read
                   - drive:write
               claims:
@@ -2313,6 +2456,14 @@ bundles:
                   - email
                   - profile
                   - https://www.googleapis.com/auth/documents
+                  - https://www.googleapis.com/auth/drive.file
+                docs:delete:
+                  label: Trash Google Docs
+                  description: Move documents this deployment created to the Drive trash, and restore them.
+                  provider_scopes:
+                  - openid
+                  - email
+                  - profile
                   - https://www.googleapis.com/auth/drive.file
                 docs:comment:
                   label: Comment on Google Docs
@@ -2687,6 +2838,9 @@ bundles:
         connection_hub:
           bundle_id: connection-hub@1-0
       integrations:
+        provider_fetch:
+          public_base_url: https://your-public-origin.example
+          token_ttl_seconds: 60
         telegram.kdcube_ref:
           provider: telegram
           where: connection-hub

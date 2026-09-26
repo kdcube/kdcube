@@ -4,8 +4,8 @@ title: "Google Services Through KDCube (Gmail, Sheets, Docs)"
 summary: "One recipe for connecting Google services to KDCube: one Google OAuth client, one google provider, one gmail connector app serving Gmail, Sheets, and Docs (extensible to Drive/Calendar). Configure provider claims, wire each service's tools and named services, connect, grant, and verify."
 status: active
 tags: ["recipes", "connections", "connection-hub", "google", "gmail", "sheets", "docs", "oauth", "connected-accounts", "delegated-to-kdcube", "mcp"]
-keywords: ["google connected account", "google docs named service", "google sheets tools", "google oauth scopes", "document tab selector", "document comment selector"]
-updated_at: 2026-08-01
+keywords: ["google connected account", "google docs named service", "google sheets tools", "google oauth scopes", "document tab selector", "document comment selector", "document table cells", "set_cells"]
+updated_at: 2026-09-21
 see_also:
   - https://github.com/elenaviter/app-ecosystem/blob/main/docs/connection-hub/frontend/application/integrations/google.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/google/google-README.md
@@ -408,6 +408,7 @@ resources:
       productivity_docs_apply_text_style: {grants: [docs:write]}
       productivity_docs_insert_page_break:{grants: [docs:write]}
       productivity_docs_embed_image:      {grants: [docs:write]}
+      productivity_docs_set_cells:        {grants: [docs:write]}
       productivity_docs_import:           {grants: [docs:write]}
       productivity_docs_create_comment:   {grants: [docs:comment]}
       productivity_docs_reply_comment:    {grants: [docs:comment]}
@@ -447,6 +448,7 @@ comment mutations key on `docs:comment` rather than `docs:write`:
               object.action.apply_text_style:  {grants: [named_services:use, docs:write]}
               object.action.insert_page_break: {grants: [named_services:use, docs:write]}
               object.action.embed_image:       {grants: [named_services:use, docs:write]}
+              object.action.set_cells:         {grants: [named_services:use, docs:write]}
               object.action.export:            {grants: [named_services:use, docs:read]}
               object.action.import:            {grants: [named_services:use, docs:write]}
               object.action.list_comments:     {grants: [named_services:use, docs:read]}
@@ -487,6 +489,7 @@ the current `docs` provider:
 | "Append this approval note to the tab whose title contains `July`." | Read the document structure, resolve the literal title fragment to one tab, translate it to Google's `tabId`, and append only there. |
 | "Replace `Draft` with `Final` in the second tab." | Resolve the 1-based tab position from Google's current document structure and scope the replacement to that tab. A nested tab can instead be selected by its full root-to-tab hierarchy. |
 | "Replace the old company name everywhere in this document." | Use `all_tabs=true` only because the user explicitly requested every tab. An omitted tab scope never silently becomes an all-tab edit. |
+| "In the Tasks table, mark `Fix login` as Done and assign it to the reviewer." | Read the document's table list, pick the table under the `Tasks` heading, find the one row whose `Task` cell is `Fix login`, and write the `Status` and `Owner` cells of that row in one call. No provider index is computed by the agent. |
 | "Reply `Approved` to my unresolved comment about payment terms." | Read bounded document-level comment pages, match literal text, connected-user authorship, and unresolved state, translate the one match to Google's `commentId`, then reply. The same selectors support reading, resolving, and deleting a thread. |
 | "Create a report with a styled heading, a page break, this image, and give me a DOCX." | Create a native document, insert and style text, insert the page break and image, verify the document, export it, and return the portable file. |
 | "Use my work Google account for this document." | Select the requested connected account when several accounts are eligible. Without a clear selection, return `account_required` with the available choices instead of guessing. |
@@ -508,13 +511,18 @@ workflow:
 - stable Google Drive comments are document-level. The agent can select a
   thread naturally by literal text, quoted text, author, and resolved state,
   but it cannot claim that the thread belongs to a particular tab;
-- several matching tabs or comments produce bounded candidates and no write.
+- tables are addressed by tab, table, row, and column; a cell holding a nested
+  table, a cell merged into another, and (for a replacement) a cell holding an
+  image or chip are refused rather than edited partially;
+- several matching tabs, tables, rows, or comments produce bounded candidates
+  and no write.
   The agent can use the user's wording to narrow the selector or ask one short
   disambiguating question.
 
 Search returns at most 50 results. Operations are bounded: text reads and
 replacements are capped at 200,000 characters, at most 50 replacements per
-`replace_text`, comment bodies at 20,000 characters, at most 100 comments listed,
+`replace_text`, table reads at 5 tables and 2,000 cells per call (50 rows per
+table by default), comment bodies at 20,000 characters, at most 100 comments listed,
 titles at 300 characters, and export/import at 10 MiB. A natural comment
 selector may inspect up to five such comment pages; it reports an incomplete
 bounded scan when more provider pages remain.
@@ -570,7 +578,269 @@ edit when the request is ambiguous. This avoids relying on Google API defaults:
 some omitted tab ids target the first tab, while an unscoped replacement can
 span every tab.
 
+### Read and write document tables
+
+The extracted body text renders each table as one line per row, under a caption
+naming its size and whether it has a header row, with cells separated by `|` and
+a marker where a cell holds something other than text:
+
+```text
+Assigned to [person: owner-a@example.com] for review by [date: Oct 2, 2026]
+
+[table · 5 rows × 4 columns · header row]
+Task | Status | Owner | Comment
+Fix login |  | owner-a | 
+Review | Open | [person: owner-b@example.com] | [image: Q3 revenue by region]
+```
+
+A chip or a picture is its own element rather than text, so the extracted body
+text renders it where it sits: in a paragraph inline, in a cell after that
+cell's text. Both go through one vocabulary, so the same object cannot read two
+ways. The text that carries indices does not: `get_structure` on the typed door
+and the heading text a table selector matches on stay literal, because a marker
+occupies no position in the document.
+
+The vocabulary is closed, and each marker carries the detail a reader would
+otherwise go looking for:
+
+| Marker | Detail it carries |
+| --- | --- |
+| `[image: …]` | the alt text |
+| `[person: …]` | the address, or the name when the chip has no address |
+| `[link: …]` | the title, or the uri when the chip has no title |
+| `[date: …]` | how the chip reads in the document, in its locale |
+| `[equation]`, `[footnote]`, `[rule]`, `[auto text]` | the kind alone |
+
+A detail is cut at 40 characters, a literal `|` is escaped and a newline becomes
+a space, in cell text and in a label alike. An element whose detail is empty
+reads as the bare marker: an image with no alt text is `[image]`.
+
+Three markers name a position rather than an element: `[tab: …]` opens a named
+tab, `[merged]` stands for a cell merged into another, and `[nested table]`
+follows the text of a cell that holds a table. A cell lists each distinct
+marker once, because the cell is one line saying what it holds besides text; a
+paragraph keeps every element where it sits.
+
+That text is for reading; addressing a cell uses the table inventory below.
+
+`get` on a native document lists every table under `tables`: its tab, 1-based
+position in the tab, the nearest heading of any level above it, row and column
+counts, the header row when the document marks one (`header_rows`, `header`),
+otherwise the `first_row`, and a ready `selector`. It carries no cell text and no
+provider index.
+
+To read the cells of every table, pass `include: ["tables"]`. To read named
+tables, pass `filters.tables` with one selector, or a list of up to five:
+
+```json
+{"table": {"after_heading": "Tasks"}, "rows": "1-50", "header": 1}
+```
+
+Each table returns up to 50 rows by default; `truncated` and `next_rows` say how
+to continue. All tables in one call share a 2,000-cell budget; a table that no
+longer fits returns `skipped: "cell_limit"`, and `tables_truncated` says the
+document holds more than five tables. Every cell carries its own `row` and
+`column`, so no reader counts rows itself, and names what it holds besides text -
+a person chip reads as `objects: [{"kind": "person", "email": ...}]` where the
+flat body text shows nothing. An image reads the same way, by what a caller can
+act on:
+
+```json
+{"kind": "image", "object_id": "kix.abc123", "alt": "Q3 revenue by region",
+ "title": "Revenue", "width_pt": 468.0, "height_pt": 263.2,
+ "source_uri": "https://example.invalid/chart.png"}
+```
+
+`alt` is the image's description as the document holds it - empty unless someone
+set it, since `insertInlineImage` takes no description - and `source_uri` is the
+URL it was inserted from, which Google leaves empty for an image it has no origin
+for. The image's own `contentUri` is deliberately absent: measured on
+2026-09-25, that URL serves the image bytes to anyone who holds it, with no
+credential at all, until it expires. Handing it to a model or storing it in a
+transcript gives away the image, so the read reports `object_id` instead - and,
+beside it, a `ref` that resolves to the bytes through this namespace:
+
+```json
+{"kind": "image", "object_id": "kix.abc123",
+ "ref": "docs:google:<account_id>:image:kix.abc123:<document_id>"}
+```
+
+Resolving that ref with a streaming `object.get` returns the image itself, with
+`materialization` naming its media type, filename and size - the same delivery
+an export ref uses, so a client that can take an export can take an image. A
+non-streaming `object.get` on it answers with the record alone: alt text, size,
+the cell it sits in, and a download capability when the bundle offers one. The
+bytes are fetched server-side; the expiring URL never leaves the provider. On
+the typed door the same read is `productivity_docs_read_image`, which returns
+base64 bytes for a caller that will look at the image. The complete JSON
+snapshot carries every table with all of its cells.
+
+`object.action set_cells` writes text into cells of one row:
+
+```json
+{
+  "tab_selector": {"title": "Main"},
+  "table": {"after_heading": "Tasks"},
+  "row": {"where": {"column": "Task", "equals": "Fix login"}},
+  "cells": {"Status": "Done", "Owner": "reviewer"},
+  "mode": "replace"
+}
+```
+
+- **Table:** `position`, `after_heading` (exact heading text), or
+  `header_contains` (a header cell fragment, or a first-row fragment without a
+  header). Combined with another field, `position` counts that field's matches;
+  a bare number is a position.
+- **Row:** a physical 1-based number (header rows count), or
+  `where: {column, equals | contains}` matching exactly one data row. Header
+  rows never match a `where`.
+- **Column:** a number always works; a name needs a header row. When the
+  document does not mark one, pass `header: 1` to use the first row.
+- **Mode:** `replace` (default; an empty text clears the cell), `append`, or
+  `prepend`.
+- **Smart chip:** a list entry may carry `person`, `date` or `link` instead of
+  `text` - `[{"column": "Owner", "person": "owner-a@example.com"}]`,
+  `{"column": "Due", "date": "2026-10-02"}`,
+  `{"column": "Plan", "link": "https://docs.google.com/document/d/..."}`. A cell
+  takes text or one chip, not both. Only the address, the uri and the instant
+  are sent: Google fills in a person's name, a link's title and icon, and a
+  date's display text, and refuses a caller that supplies them - so a date chip
+  may read differently from what was passed, by the document's locale. A link
+  chip is, in the API's own words, "a link to a Google resource (such as a file
+  in Drive, a YouTube video, or a Calendar event)": Docs rejects any other
+  address, and the refusal says so rather than passing on the provider's
+  "The URL is invalid".
+
+Nothing is written when a selector matches zero or several targets
+(`docs_table_not_found`, `docs_table_ambiguous`, `docs_table_row_not_found`,
+`docs_table_row_ambiguous`, `docs_table_column_not_found`,
+`docs_table_no_header`) or when a cell is refused: `docs_table_cell_merged`
+names the cell it is merged into, `docs_table_nested` marks a nested table, and
+`docs_table_cell_has_objects` lists images or chips a replacement would remove -
+that decision belongs to the person whose document it is. A write that does
+replace them reports them as `before_objects`, so a chip removed by mistake can
+be written back.
+
+The provider resolves the selectors on a fresh read and writes with that
+revision required. If the document changes in between, it reads again and
+resolves the selectors once more, so a `where` row survives a row inserted
+above it. A caller that reasoned over an earlier read can pass its
+`revision_id`; the write is then refused with `docs_revision_changed` when the
+document has changed since.
+
+Outside a table, a sentence that holds chips is written with `pieces` on
+`insert_text` or `append_text`:
+
+```json
+{"index": 42, "pieces": [
+  {"text": "Owner "},
+  {"person": "owner-a@example.com"},
+  {"text": " reviews by "},
+  {"date": "2026-10-02"}
+]}
+```
+
+The pieces land in the order they are named, all at one index - the provider
+writes them backwards so they read forwards - so no caller computes an offset.
+`text` and `pieces` are alternatives; naming both is refused.
+
+A heading or a list is written as a unit rather than as raw text plus a second
+call: `style` takes `title`, `subtitle`, `normal` or `heading_1`…`heading_6`,
+`list` takes `bullet` or `number`, and `items` writes one paragraph per entry -
+each entry a string or its own pieces, so a list item can hold a chip:
+
+```json
+{"index": 42, "list": "number", "items": [
+  "Fix login",
+  [{"text": "Review by "}, {"person": "owner-a@example.com"}]
+]}
+```
+
+A paragraph style covers every paragraph its range touches, so a styled write
+starts a paragraph of its own: at a paragraph's start it begins there, at the
+body's end it opens one first, and an index inside a sentence is refused with
+`docs_block_needs_its_own_paragraph` naming the text it would have restyled.
+Ranges are counted in UTF-16 units, the way Docs counts them, so a heading with
+an emoji still ends where the heading ends.
+
+`object.action embed_image` places an image in a cell with the same selectors:
+pass `selector` or `table` with `row` and `column`, and the image lands after
+what the cell already holds, so a label written first keeps its place. Without
+`width_pt` the image is fitted to the column - it is measured first, so one that
+already fits keeps its own size rather than being blown up to fill the cell, and
+the answer reports the fit it applied. A column the table distributes evenly
+reports no width, so the page's printable width divided by the column count is
+used instead. The measuring fetch passes the platform's SSRF guard: an address
+the guard refuses is a refusal, while a name that merely does not resolve skips
+the measurement and lets Google answer. The
+refusals are the cell refusals - a merged-away cell and a nested table are
+refused before any write - plus `docs_image_target_ambiguous` when a call names
+both a cell and an `index`. Without a cell the action still takes an `index`, or
+appends at the tab's end. `image_uri` must be a public `http(s)` URL that Google
+fetches once at insert time (PNG/JPEG/GIF, at most 25 MB and 2000 px per side);
+Google stores its own copy, so the URL is read once and never again. A file this
+deployment holds therefore needs a publicly fetchable URL of its own before it
+can be embedded, the way `sendPhoto` needs one for Telegram to fetch.
+
+On the typed productivity door the same reads use `all_tables` or `table_reads`
+on `productivity_docs_get`, and writes use `productivity_docs_set_cells`.
+`productivity_docs_get_structure` additionally lists each table's cells with
+`start_index`/`end_index` and `content_start`/`content_end` (the editable text
+range) for callers composing `productivity_docs_batch_edit` requests. That door
+also builds table structure: `insertTable`, `insertTableRow`,
+`insertTableColumn`, `deleteTableRow`, `deleteTableColumn`, `mergeTableCells`,
+`unmergeTableCells` and `pinTableHeaderRows`. Pin a new table's header row and
+every later read names its columns without `header`.
+
+### Add a row, and take a document out of the way
+
+`object.action add_row` adds one row to a table named the way `set_cells` names
+it, and fills it in the same call when `cells` is given. The row goes to the end
+unless `after_row` names the row to put it below, by number or by
+`where: {column, equals | contains}`. Appending a dated record is one call, with
+no index arithmetic and the same refusals.
+
+`object.action trash` moves the document to the Drive trash, where it stays
+recoverable; `restore` brings it back. Both act on the document itself rather
+than its contents, so they carry their own claim, `docs:delete` - a card granted
+for editing tables does not decide whether a document stays in Drive. The claim
+maps to Drive's `drive.file` scope, which reaches documents this deployment
+created; a document made by hand elsewhere is outside it. On the typed door the
+same verbs are `productivity_docs_add_row`, `productivity_docs_trash` and
+`productivity_docs_restore`.
+
+### Look before an index-based write
+
+`insert_text`, `apply_text_style` and `replace_text` take `preview: true`.
+Nothing is written and the answer says what is already there:
+
+- an insert reports the paragraph or table cell the index falls in, with the
+  text on either side - the guess that once turned a header cell's `Comment`
+  into `Commen…t` shows up here as text landing mid-word;
+- a style reports the text its range covers;
+- a replacement counts each phrase's matches and shows where they sit, which
+  `replaceAllText` reports only after it has changed them.
+
+Table cells need no preview: `set_cells` already answers with `before` and
+`after` per cell, and refuses rather than guess.
+
+### Manage the document's tabs
+
+`object.action add_tab` adds a tab: without a title Google names it, `index`
+places it among its siblings (zero-based) and `parent_tab_id` nests it under an
+existing tab. `addDocumentTab` returns no id of its own, so the operation reads
+the document again and reports the tab the document gained, with the full tab
+list. `update_tab` renames a tab or moves it, sending only the fields the call
+changes. `delete_tab` removes one tab and everything in it: Google deletes its
+child tabs too, and the result lists them as `deleted_child_tab_ids`. A document
+keeps at least one tab, so deleting the only tab is refused with
+`docs_last_tab`. All three ride `docs:write`, and on the typed door they are
+`productivity_docs_add_tab`, `productivity_docs_update_tab` and
+`productivity_docs_delete_tab`.
+
 ### Address document comments naturally
+
+`object.action update_comment` rewrites a comment's text, or one reply's with `reply_id`; Google allows it only for the comment's own author.
 
 The stable Drive comments path manages document-level threads. Named-service
 actions that read, reply to, resolve, or delete one comment accept either an
@@ -590,7 +860,7 @@ broader document comment silently.
 For a ReAct agent, declare `docs` as both a named-service namespace and an event
 source. The namespace tools discover document and import-source refs. A native
 document resolves through `react.pull` into a complete JSON snapshot with tab
-metadata, paragraph text, table-cell text, and open comments. An import source
+metadata, paragraph text, every table with its cells, and open comments. An import source
 resolves to file metadata and conversion guidance; after `object.action.copy`,
 the returned native document ref can be pulled and inspected before bounded
 replacement edits:
@@ -618,6 +888,29 @@ short-lived download URL.
 The SDK mechanics (the async REST proxy over the Docs and Drive APIs, and the
 shared credential resolver) are in
 [Google SDK Integration](../../../sdk/integrations/google/google-README.md).
+
+## Declare a new action in two places
+
+A named-service action is declared twice, and both declarations are needed
+before a hosted agent can call it:
+
+1. **The grant catalogue** - a row under
+   `connections.delegated_credentials.oauth.resources[].named_services.<namespace>.tools`
+   with the claims the operation needs. This is what makes the operation
+   delegable at all.
+2. **The calling agent's roster** - the operation's name under
+   `surfaces.as_consumer.agents.<agent>.tools[].namespaces.<namespace>.allowed`
+   in that agent's bundle. This is what the Control Card is derived from.
+
+Only the second changes the descriptor revision the Control Card is keyed on.
+Adding a catalogue row alone leaves the ceiling at its previous generation: the
+operation stays outside it, a consent grant for it is erased by the next
+capability sync, and no action in Connection Hub can repair that. After both
+declarations, reload the agent's bundle and let one agent turn run; the Control
+Card takes a new revision and the operation becomes callable.
+
+The typed door is separate: a tool there needs its own row under the
+productivity resource and, for a caller-held card, that card's grant.
 
 ## Verify
 
@@ -660,8 +953,8 @@ disposable data:
    table-cell text and all tab titles.
 3. A write tool (`insert_text`, `copy`, `create`, ...) is denied until both the
    selected-tool grant and the `docs:write` connected-account claim exist.
-4. Copy the old document to a new title, update table values with explicit
-   replacements, and re-read the new document to verify the source is unchanged.
+4. Copy the old document to a new title, update table values with `set_cells`,
+   and re-read the new document to verify the source is unchanged.
 5. Create a document, append/insert/replace text, apply a style, insert a page
    break, embed an image, and import a source document.
 6. A comment tool (`create_comment`, `resolve_comment`, ...) is denied until the
@@ -689,6 +982,13 @@ disposable data:
     text and verify the ambiguous response performs no mutation. Add a tab
     selector to a comment request and verify
     `tab_anchored_comments_unavailable`.
+13. Under a heading, add a table with a marked header row (`Task | Status |
+    Owner`), a second table without a header, and a merged cell. Verify `get`
+    lists both tables with selectors, `filters.tables` returns cell text, and
+    `set_cells` writes one row found by `where` without touching the header.
+    Verify two rows with the same value, a merged-away cell, and a column name
+    on the headerless table each return their refusal with no write, and that
+    `header: 1` makes the name resolve.
 
 ## Add another Google service, the same way
 

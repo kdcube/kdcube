@@ -25,6 +25,7 @@ from connection_hub.mcp_metadata import (
 
 from ...services.productivity.google_docs import (
     DOCS_COMMENT_CLAIM,
+    DOCS_DELETE_CLAIM,
     DOCS_READ_CLAIM,
     DOCS_WRITE_CLAIM,
     DRIVE_READ_CLAIM,
@@ -42,6 +43,8 @@ EnforceTool = Callable[[str, str, str], Awaitable[dict[str, Any] | None]]
 _READ_CLAIMS = [DOCS_READ_CLAIM]
 _WRITE_CLAIMS = [DOCS_READ_CLAIM, DOCS_WRITE_CLAIM]
 _COMMENT_CLAIMS = [DOCS_READ_CLAIM, DOCS_COMMENT_CLAIM]
+# Trashing a document is not editing one: the file's fate is its own claim.
+_DELETE_CLAIMS = [DOCS_READ_CLAIM, DOCS_DELETE_CLAIM]
 # Drive-as-files claims: raw upload and folder listing live outside the Docs
 # scopes because docs:write's drive.file cannot reach pre-existing folders.
 _DRIVE_READ_CLAIMS = [DRIVE_READ_CLAIM]
@@ -65,7 +68,7 @@ DOCS_PRODUCTIVITY_TOOLS: dict[str, dict[str, Any]] = {
     #    narrow typed tools; graph-faithful read + bounded native batch edit) ──
     "productivity_docs_get_structure": {
         "label": "Read Google Doc structure",
-        "description": "Read the document's structural graph and tabs with element indices.",
+        "description": "Read the document's structural graph and tabs with element and table-cell indices.",
         **_requirement(_READ_CLAIMS),
     },
     "productivity_docs_list_tabs": {
@@ -95,6 +98,11 @@ DOCS_PRODUCTIVITY_TOOLS: dict[str, dict[str, Any]] = {
     "productivity_docs_export": {
         "label": "Export Google Doc",
         "description": "Export a document to PDF, DOCX, or another format.",
+        **_requirement(_READ_CLAIMS),
+    },
+    "productivity_docs_read_image": {
+        "label": "Read Google Doc image",
+        "description": "Read one inline image of a document as bytes.",
         **_requirement(_READ_CLAIMS),
     },
     "productivity_docs_list_comments": {
@@ -146,9 +154,47 @@ DOCS_PRODUCTIVITY_TOOLS: dict[str, dict[str, Any]] = {
         "description": "Insert a page break at an index in a document.",
         **_requirement(_WRITE_CLAIMS),
     },
+    "productivity_docs_set_cells": {
+        "label": "Write Google Doc table cells",
+        "description": "Write text into cells of one table row, named by column.",
+        **_requirement(_WRITE_CLAIMS),
+    },
+    "productivity_docs_add_row": {
+        "label": "Add a Google Doc table row",
+        "description": "Add one row to a named table and optionally fill it.",
+        **_requirement(_WRITE_CLAIMS),
+    },
+    "productivity_docs_add_tab": {
+        "label": "Add a Google Doc tab",
+        "description": "Add a tab to a document.",
+        **_requirement(_WRITE_CLAIMS),
+    },
+    "productivity_docs_update_tab": {
+        "label": "Rename or move a Google Doc tab",
+        "description": "Rename a tab or change its place in the document.",
+        **_requirement(_WRITE_CLAIMS),
+    },
+    "productivity_docs_delete_tab": {
+        "label": "Delete a Google Doc tab",
+        "description": "Delete a tab and everything in it.",
+        **_requirement(_WRITE_CLAIMS),
+    },
+    "productivity_docs_trash": {
+        "label": "Trash Google Doc",
+        "description": "Move a document to the Drive trash, recoverable until Drive empties it.",
+        **_requirement(_DELETE_CLAIMS),
+    },
+    "productivity_docs_restore": {
+        "label": "Restore Google Doc",
+        "description": "Bring a trashed document back out of the Drive trash.",
+        **_requirement(_DELETE_CLAIMS),
+    },
     "productivity_docs_embed_image": {
         "label": "Embed Google Doc image",
-        "description": "Embed an inline image from a public URL into a document.",
+        "description": (
+            "Embed an inline image from a public URL into a document or one of "
+            "its table cells."
+        ),
         **_requirement(_WRITE_CLAIMS),
     },
     "productivity_docs_import": {
@@ -174,6 +220,11 @@ DOCS_PRODUCTIVITY_TOOLS: dict[str, dict[str, Any]] = {
     "productivity_docs_create_comment": {
         "label": "Comment on Google Doc",
         "description": "Create a comment on a document.",
+        **_requirement(_COMMENT_CLAIMS),
+    },
+    "productivity_docs_update_comment": {
+        "label": "Edit Google Doc comment",
+        "description": "Rewrite a comment or one of its replies.",
         **_requirement(_COMMENT_CLAIMS),
     },
     "productivity_docs_reply_comment": {
@@ -272,7 +323,11 @@ def register_google_docs_tools(
             "the id is unknown. Returns extracted text with tab markers, tab_count, "
             "and each tab's tab_id, title, hierarchy, and end_index. Read all tabs "
             "when useful. Before editing a multi-tab document, choose the intended "
-            "tab; ambiguous writes are rejected with the available tabs."
+            "tab; ambiguous writes are rejected with the available tabs. tables "
+            "lists every table with its tab, position, nearest heading, size, "
+            "header or first row, and a ready selector; pass all_tables or "
+            "table_reads to read cell text, then write cells with "
+            "productivity_docs_set_cells."
         ),
         annotations=read_only_annotations(ToolAnnotations, title="Read Google Doc"),
         structured_output=False,
@@ -286,6 +341,27 @@ def register_google_docs_tools(
             bool,
             Field(description="Include the extracted plain-text body in the result."),
         ] = True,
+        table_reads: Annotated[
+            list[dict[str, Any]] | None,
+            Field(
+                description=(
+                    "Optional tables to read cell text from, 1-5 selectors as "
+                    "returned in tables[].selector, each optionally with rows "
+                    "(\"1-50\") and header (header row count). Each table "
+                    "returns up to 50 rows by default and next_rows when more "
+                    "remain, within 2,000 cells per call."
+                )
+            ),
+        ] = None,
+        all_tables: Annotated[
+            bool,
+            Field(
+                description=(
+                    "Read cell text of every table, up to 5 tables and 2,000 "
+                    "cells; tables_truncated says the document holds more."
+                )
+            ),
+        ] = False,
         account_id: Annotated[
             str,
             Field(
@@ -296,11 +372,19 @@ def register_google_docs_tools(
         denial = await _enforce("productivity_docs_get", "get", account_id)
         if denial is not None:
             return denial
+        payload: dict[str, Any] = {
+            "document_ref": document_ref,
+            "include_text": include_text,
+        }
+        if table_reads:
+            payload["tables"] = table_reads
+        elif all_tables:
+            payload["tables"] = "all"
         return await docs.execute(
             operation="get",
             claim=_READ_CLAIMS,
             tool_name="productivity_docs_get",
-            payload={"document_ref": document_ref, "include_text": include_text},
+            payload=payload,
             account_id=account_id,
         )
 
@@ -344,6 +428,56 @@ def register_google_docs_tools(
             claim=_READ_CLAIMS,
             tool_name="productivity_docs_export",
             payload={"document_ref": document_ref, "format": format},
+            account_id=account_id,
+        )
+
+    @mcp.tool(
+        name="productivity_docs_read_image",
+        title="Read Google Doc image",
+        description=(
+            "Read one inline image of a document as bytes, for a caller that "
+            "will look at it. Name the object_id productivity_docs_get reports "
+            "on the cell that holds the image; omit it only when the document "
+            "holds exactly one image, otherwise the refusal lists the images to "
+            "choose from. Returns base64-encoded bytes with the mime type, plus "
+            "the image's alt text, size in points and the cell it sits in. The "
+            "document's own image URLs are short-lived and readable by anyone "
+            "who holds them, so they are never returned."
+        ),
+        annotations=read_only_annotations(
+            ToolAnnotations, title="Read Google Doc image"
+        ),
+        structured_output=False,
+    )
+    async def _productivity_docs_read_image(
+        document_ref: Annotated[
+            str,
+            Field(description="Document id or full Google Docs URL."),
+        ],
+        object_id: Annotated[
+            str,
+            Field(
+                description=(
+                    "The image's object_id, as a table read reports it. Omit "
+                    "when the document holds exactly one image."
+                )
+            ),
+        ] = "",
+        account_id: Annotated[
+            str,
+            Field(
+                description="Optional connected Google account id when several are available."
+            ),
+        ] = "",
+    ) -> dict[str, Any]:
+        denial = await _enforce("productivity_docs_read_image", "read", account_id)
+        if denial is not None:
+            return denial
+        return await docs.execute(
+            operation="read_image",
+            claim=_READ_CLAIMS,
+            tool_name="productivity_docs_read_image",
+            payload={"document_ref": document_ref, "object_id": object_id},
             account_id=account_id,
         )
 
@@ -570,7 +704,17 @@ def register_google_docs_tools(
         description=(
             "Insert text at a body index. Omit index to insert at the end of the "
             "selected tab. Use productivity_docs_get first for tab_id, end_index, or the "
-            "coordinates around the text you want to edit. This changes the "
+            "coordinates around the text you want to edit. To write a sentence "
+            "that holds smart chips, pass pieces instead of text: a list like "
+            '[{"text": "Owner "}, {"person": "a@b.com"}, {"text": " by "}, '
+            '{"date": "2026-10-02"}, {"link": "https://example.com/plan"}], '
+            "named in order and written at one index. Pass text or pieces, "
+            "never both. To write a heading or a list as a unit rather than as "
+            "raw text, pass style (title, subtitle, normal, heading_1 through "
+            "heading_6) and/or list (bullet, number); items writes one "
+            "paragraph per entry, each entry a string or a pieces list. A "
+            "styled paragraph must start its own paragraph, so an index inside "
+            "a sentence is refused. This changes the "
             "document each time it succeeds. tab_id is required for a multi-tab "
             "document."
         ),
@@ -586,8 +730,43 @@ def register_google_docs_tools(
         ],
         text: Annotated[
             str,
-            Field(min_length=1, description="Text to insert."),
-        ],
+            Field(description="Text to insert. Omit it when passing pieces."),
+        ] = "",
+        pieces: Annotated[
+            list[dict[str, Any]] | None,
+            Field(
+                description=(
+                    "Ordered pieces for a sentence that holds smart chips: "
+                    '{"text": "..."}, {"person": "someone@example.com"}, '
+                    '{"date": "2026-10-02"} or {"link": "https://..."}. '
+                    "Google fills a person's name, a link's title and a date's "
+                    "display text itself."
+                )
+            ),
+        ] = None,
+        items: Annotated[
+            list[Any] | None,
+            Field(
+                description=(
+                    "One paragraph per entry, each a string or a list of "
+                    "pieces. Use it with style or list to write a heading or a "
+                    "list as a unit."
+                )
+            ),
+        ] = None,
+        style: Annotated[
+            str,
+            Field(
+                description=(
+                    "Paragraph style for what this call writes: title, "
+                    "subtitle, normal, or heading_1 through heading_6."
+                )
+            ),
+        ] = "",
+        list: Annotated[
+            str,
+            Field(description="Make the written paragraphs a list: bullet or number."),
+        ] = "",
         index: Annotated[
             int | None,
             Field(ge=1, description="Optional 1-based body index; omit to append."),
@@ -601,6 +780,15 @@ def register_google_docs_tools(
                 )
             ),
         ] = "",
+        preview: Annotated[
+            bool,
+            Field(
+                description=(
+                    "Write nothing and answer with what already sits at the "
+                    "target, so a mis-aimed write is caught before it lands."
+                )
+            ),
+        ] = False,
         account_id: Annotated[
             str,
             Field(
@@ -616,6 +804,11 @@ def register_google_docs_tools(
             claim=_WRITE_CLAIMS,
             tool_name="productivity_docs_insert_text",
             payload={
+                "preview": preview,
+                "pieces": pieces,
+                "items": items,
+                "style": style,
+                "list": list,
                 "document_ref": document_ref,
                 "text": text,
                 "index": index,
@@ -725,6 +918,15 @@ def register_google_docs_tools(
                 )
             ),
         ] = False,
+        preview: Annotated[
+            bool,
+            Field(
+                description=(
+                    "Write nothing and answer with what already sits at the "
+                    "target, so a mis-aimed write is caught before it lands."
+                )
+            ),
+        ] = False,
         account_id: Annotated[
             str,
             Field(
@@ -740,6 +942,7 @@ def register_google_docs_tools(
             claim=_WRITE_CLAIMS,
             tool_name="productivity_docs_replace_text",
             payload={
+                "preview": preview,
                 "document_ref": document_ref,
                 "replacements": replacements,
                 "tab_ids": tab_ids,
@@ -801,6 +1004,15 @@ def register_google_docs_tools(
                 )
             ),
         ] = "",
+        preview: Annotated[
+            bool,
+            Field(
+                description=(
+                    "Write nothing and answer with what already sits at the "
+                    "target, so a mis-aimed write is caught before it lands."
+                )
+            ),
+        ] = False,
         account_id: Annotated[
             str,
             Field(
@@ -816,6 +1028,7 @@ def register_google_docs_tools(
             claim=_WRITE_CLAIMS,
             tool_name="productivity_docs_apply_text_style",
             payload={
+                "preview": preview,
                 "document_ref": document_ref,
                 "start_index": start_index,
                 "end_index": end_index,
@@ -827,6 +1040,474 @@ def register_google_docs_tools(
                 "link_url": link_url,
                 "tab_id": tab_id,
             },
+            account_id=account_id,
+        )
+
+    @mcp.tool(
+        name="productivity_docs_set_cells",
+        title="Write Google Doc table cells",
+        description=(
+            "Write text into cells of one table row without indices. Read the "
+            "document with productivity_docs_get first: its tables list gives "
+            "each table's selector and header; pass that selector unchanged. "
+            "Name the row by 1-based number (header rows count) or by "
+            "{where: {column, equals | contains}}, and cells as {column: text}: "
+            "a key naming a header is that column, otherwise a digit key is a "
+            "number. mode replace (default) overwrites, append and prepend keep "
+            "the existing text. Nothing is written when a selector is ambiguous "
+            "or a cell is refused (merged away, nested table, or images/chips "
+            "under replace). remove_objects replaces them anyway and the "
+            "result lists them as before_objects; an answer that removed "
+            "someone's chip or image says so. This tool writes text and person "
+            "chips; to put an image in a cell use productivity_docs_embed_image, "
+            "which takes the same selector, row and column. This changes the "
+            "document each time it succeeds."
+        ),
+        annotations=write_annotations(
+            ToolAnnotations, title="Write Google Doc table cells"
+        ),
+        structured_output=False,
+    )
+    async def _productivity_docs_set_cells(
+        document_ref: Annotated[
+            str,
+            Field(description="Document id or full Google Docs URL."),
+        ],
+        row: Annotated[
+            dict[str, Any] | int,
+            Field(
+                description=(
+                    "1-based row number, or {where: {column, equals | contains}} "
+                    "matching exactly one data row."
+                )
+            ),
+        ],
+        cells: Annotated[
+            dict[str, str] | list[dict[str, Any]],
+            Field(
+                description=(
+                    "Column name or number mapped to the text to write, or a "
+                    "list of {column, text}. A list entry may carry a smart "
+                    "chip instead of text: person, date or link, as "
+                    '{column, person: "someone@example.com"}, '
+                    '{column, date: "2026-10-02"} or '
+                    '{column, link: "https://example.com/plan"}.'
+                )
+            ),
+        ],
+        table: Annotated[
+            dict[str, Any] | int | None,
+            Field(
+                description=(
+                    "Table selector: {position}, {after_heading}, "
+                    "{header_contains}, optionally combined with position; a "
+                    "bare number is a position within the tab. Omit when "
+                    "selector is given."
+                )
+            ),
+        ] = None,
+        selector: Annotated[
+            dict[str, Any] | None,
+            Field(
+                description=(
+                    "A tables[].selector from productivity_docs_get, passed "
+                    "unchanged; it names the tab and the table."
+                )
+            ),
+        ] = None,
+        mode: Annotated[
+            str,
+            Field(description="replace (default), append, or prepend."),
+        ] = "replace",
+        header: Annotated[
+            int | None,
+            Field(
+                ge=0,
+                description=(
+                    "Header row count when the document does not mark the "
+                    "header, e.g. 1 to name columns by the first row."
+                ),
+            ),
+        ] = None,
+        remove_objects: Annotated[
+            bool,
+            Field(
+                description=(
+                    "Let replace remove images or chips a cell holds. The "
+                    "result lists what was removed as before_objects."
+                )
+            ),
+        ] = False,
+        revision_id: Annotated[
+            str,
+            Field(
+                description=(
+                    "Optional revision_id from productivity_docs_get; the write "
+                    "is refused if the document changed since."
+                )
+            ),
+        ] = "",
+        tab_id: Annotated[
+            str,
+            Field(
+                description=(
+                    "Target tab_id returned by productivity_docs_get. Required "
+                    "when the document has multiple tabs."
+                )
+            ),
+        ] = "",
+        account_id: Annotated[
+            str,
+            Field(
+                description="Optional connected Google account id when several are available."
+            ),
+        ] = "",
+    ) -> dict[str, Any]:
+        denial = await _enforce("productivity_docs_set_cells", "set_cells", account_id)
+        if denial is not None:
+            return denial
+        return await docs.execute(
+            operation="set_cells",
+            claim=_WRITE_CLAIMS,
+            tool_name="productivity_docs_set_cells",
+            payload={
+                "document_ref": document_ref,
+                "selector": selector,
+                "table": table,
+                "row": row,
+                "cells": cells,
+                "mode": mode,
+                "header": header,
+                "remove_objects": remove_objects,
+                "revision_id": revision_id,
+                "tab_id": tab_id,
+            },
+            account_id=account_id,
+        )
+
+    @mcp.tool(
+        name="productivity_docs_add_row",
+        title="Add a Google Doc table row",
+        description=(
+            "Add one row to a table and, with cells, fill it in the same call. "
+            "Name the table the way productivity_docs_set_cells does. The row "
+            "goes to the end unless after_row names the row to put it below, by "
+            "1-based number or {where: {column, equals | contains}}. cells takes "
+            "the shapes set_cells takes, so appending a dated record is one call "
+            "instead of index arithmetic. This changes the document each time it "
+            "succeeds."
+        ),
+        annotations=write_annotations(ToolAnnotations, title="Add Google Doc table row"),
+        structured_output=False,
+    )
+    async def _productivity_docs_add_row(
+        document_ref: Annotated[
+            str,
+            Field(description="Document id or full Google Docs URL."),
+        ],
+        cells: Annotated[
+            dict[str, str] | list[dict[str, Any]] | None,
+            Field(
+                description=(
+                    "Optional cells for the new row, in the shapes "
+                    "productivity_docs_set_cells takes."
+                )
+            ),
+        ] = None,
+        after_row: Annotated[
+            dict[str, Any] | int | None,
+            Field(
+                description=(
+                    "Put the new row below this one: a 1-based number (header "
+                    "rows count) or {where: {column, equals | contains}}. Omit "
+                    "to add the row at the end."
+                )
+            ),
+        ] = None,
+        table: Annotated[
+            dict[str, Any] | int | None,
+            Field(
+                description=(
+                    "Table selector: {position}, {after_heading}, "
+                    "{header_contains}; a bare number is a position within the "
+                    "tab. Omit when selector is given."
+                )
+            ),
+        ] = None,
+        selector: Annotated[
+            dict[str, Any] | None,
+            Field(
+                description=(
+                    "A tables[].selector from productivity_docs_get, passed "
+                    "unchanged; it names the tab and the table."
+                )
+            ),
+        ] = None,
+        header: Annotated[
+            int | None,
+            Field(
+                ge=0,
+                description=(
+                    "Header row count when the document does not mark the "
+                    "header, e.g. 1 to name columns by the first row."
+                ),
+            ),
+        ] = None,
+        revision_id: Annotated[
+            str,
+            Field(
+                description=(
+                    "Optional revision_id from productivity_docs_get; the write "
+                    "is refused if the document changed since."
+                )
+            ),
+        ] = "",
+        tab_id: Annotated[
+            str,
+            Field(
+                description=(
+                    "Target tab_id returned by productivity_docs_get. Required "
+                    "when the document has multiple tabs."
+                )
+            ),
+        ] = "",
+        account_id: Annotated[
+            str,
+            Field(
+                description="Optional connected Google account id when several are available."
+            ),
+        ] = "",
+    ) -> dict[str, Any]:
+        denial = await _enforce("productivity_docs_add_row", "add_row", account_id)
+        if denial is not None:
+            return denial
+        return await docs.execute(
+            operation="add_row",
+            claim=_WRITE_CLAIMS,
+            tool_name="productivity_docs_add_row",
+            payload={
+                "document_ref": document_ref,
+                "selector": selector,
+                "table": table,
+                "after_row": after_row,
+                "cells": cells,
+                "header": header,
+                "revision_id": revision_id,
+                "tab_id": tab_id,
+            },
+            account_id=account_id,
+        )
+
+    @mcp.tool(
+        name="productivity_docs_add_tab",
+        title="Add a Google Doc tab",
+        description=(
+            "Add a tab to a document. Without a title Google names it; index "
+            "places it among its siblings, zero-based, and parent_tab_id nests "
+            "it under an existing tab. The result carries the new tab_id and the "
+            "document's tabs. This changes the document each time it succeeds."
+        ),
+        annotations=write_annotations(ToolAnnotations, title="Add Google Doc tab"),
+        structured_output=False,
+    )
+    async def _productivity_docs_add_tab(
+        document_ref: Annotated[
+            str,
+            Field(description="Document id or full Google Docs URL."),
+        ],
+        title: Annotated[
+            str,
+            Field(description="Optional tab name."),
+        ] = "",
+        index: Annotated[
+            int | None,
+            Field(ge=0, description="Optional zero-based place among its siblings."),
+        ] = None,
+        parent_tab_id: Annotated[
+            str,
+            Field(description="Optional parent tab id; nests the new tab under it."),
+        ] = "",
+        account_id: Annotated[
+            str,
+            Field(
+                description="Optional connected Google account id when several are available."
+            ),
+        ] = "",
+    ) -> dict[str, Any]:
+        denial = await _enforce("productivity_docs_add_tab", "add_tab", account_id)
+        if denial is not None:
+            return denial
+        return await docs.execute(
+            operation="add_tab",
+            claim=_WRITE_CLAIMS,
+            tool_name="productivity_docs_add_tab",
+            payload={
+                "document_ref": document_ref,
+                "title": title,
+                "index": index,
+                "parent_tab_id": parent_tab_id,
+            },
+            account_id=account_id,
+        )
+
+    @mcp.tool(
+        name="productivity_docs_update_tab",
+        title="Rename or move a Google Doc tab",
+        description=(
+            "Rename a tab or move it among its siblings. Name the tab with "
+            "tab_id from productivity_docs_list_tabs, and pass title, index, or "
+            "both. This changes the document each time it succeeds."
+        ),
+        annotations=write_annotations(
+            ToolAnnotations, title="Rename or move Google Doc tab"
+        ),
+        structured_output=False,
+    )
+    async def _productivity_docs_update_tab(
+        document_ref: Annotated[
+            str,
+            Field(description="Document id or full Google Docs URL."),
+        ],
+        tab_id: Annotated[
+            str,
+            Field(description="Tab id from productivity_docs_list_tabs."),
+        ],
+        title: Annotated[
+            str,
+            Field(description="Optional new tab name."),
+        ] = "",
+        index: Annotated[
+            int | None,
+            Field(ge=0, description="Optional new zero-based place among its siblings."),
+        ] = None,
+        account_id: Annotated[
+            str,
+            Field(
+                description="Optional connected Google account id when several are available."
+            ),
+        ] = "",
+    ) -> dict[str, Any]:
+        denial = await _enforce("productivity_docs_update_tab", "update_tab", account_id)
+        if denial is not None:
+            return denial
+        payload: dict[str, Any] = {"document_ref": document_ref, "tab_id": tab_id}
+        if title:
+            payload["title"] = title
+        if index is not None:
+            payload["index"] = index
+        return await docs.execute(
+            operation="update_tab",
+            claim=_WRITE_CLAIMS,
+            tool_name="productivity_docs_update_tab",
+            payload=payload,
+            account_id=account_id,
+        )
+
+    @mcp.tool(
+        name="productivity_docs_delete_tab",
+        title="Delete a Google Doc tab",
+        description=(
+            "Delete one tab and everything in it. Google deletes its child tabs "
+            "with it and the result lists them; a document keeps at least one "
+            "tab, so deleting the only tab is refused. This changes the document "
+            "each time it succeeds."
+        ),
+        annotations=write_annotations(ToolAnnotations, title="Delete Google Doc tab"),
+        structured_output=False,
+    )
+    async def _productivity_docs_delete_tab(
+        document_ref: Annotated[
+            str,
+            Field(description="Document id or full Google Docs URL."),
+        ],
+        tab_id: Annotated[
+            str,
+            Field(description="Tab id from productivity_docs_list_tabs."),
+        ],
+        account_id: Annotated[
+            str,
+            Field(
+                description="Optional connected Google account id when several are available."
+            ),
+        ] = "",
+    ) -> dict[str, Any]:
+        denial = await _enforce("productivity_docs_delete_tab", "delete_tab", account_id)
+        if denial is not None:
+            return denial
+        return await docs.execute(
+            operation="delete_tab",
+            claim=_WRITE_CLAIMS,
+            tool_name="productivity_docs_delete_tab",
+            payload={"document_ref": document_ref, "tab_id": tab_id},
+            account_id=account_id,
+        )
+
+    @mcp.tool(
+        name="productivity_docs_trash",
+        title="Trash Google Doc",
+        description=(
+            "Move a document to the Drive trash. It keeps its id and stays "
+            "recoverable with productivity_docs_restore until Drive empties the "
+            "trash. This acts on the document itself, not its contents, and "
+            "needs the docs:delete claim. A document this deployment did not "
+            "create may be outside the granted Drive scope."
+        ),
+        annotations=write_annotations(ToolAnnotations, title="Trash Google Doc"),
+        structured_output=False,
+    )
+    async def _productivity_docs_trash(
+        document_ref: Annotated[
+            str,
+            Field(description="Document id or full Google Docs URL."),
+        ],
+        account_id: Annotated[
+            str,
+            Field(
+                description="Optional connected Google account id when several are available."
+            ),
+        ] = "",
+    ) -> dict[str, Any]:
+        denial = await _enforce("productivity_docs_trash", "trash", account_id)
+        if denial is not None:
+            return denial
+        return await docs.execute(
+            operation="trash",
+            claim=_DELETE_CLAIMS,
+            tool_name="productivity_docs_trash",
+            payload={"document_ref": document_ref},
+            account_id=account_id,
+        )
+
+    @mcp.tool(
+        name="productivity_docs_restore",
+        title="Restore Google Doc",
+        description=(
+            "Bring a trashed document back out of the Drive trash, the "
+            "counterpart of productivity_docs_trash under the same claim."
+        ),
+        annotations=write_annotations(ToolAnnotations, title="Restore Google Doc"),
+        structured_output=False,
+    )
+    async def _productivity_docs_restore(
+        document_ref: Annotated[
+            str,
+            Field(description="Document id or full Google Docs URL."),
+        ],
+        account_id: Annotated[
+            str,
+            Field(
+                description="Optional connected Google account id when several are available."
+            ),
+        ] = "",
+    ) -> dict[str, Any]:
+        denial = await _enforce("productivity_docs_restore", "restore", account_id)
+        if denial is not None:
+            return denial
+        return await docs.execute(
+            operation="restore",
+            claim=_DELETE_CLAIMS,
+            tool_name="productivity_docs_restore",
+            payload={"document_ref": document_ref},
             account_id=account_id,
         )
 
@@ -889,10 +1570,15 @@ def register_google_docs_tools(
         name="productivity_docs_embed_image",
         title="Embed Google Doc image",
         description=(
-            "Embed an inline image at a body index. image_uri must be a public "
+            "Embed an inline image in a document. image_uri must be a public "
             "http(s) URL that Google fetches once at insert time (PNG/JPEG/GIF, "
-            "<=25MB, <=2000px per side). Omit index to append at the selected "
-            "tab's end."
+            "<=25MB, <=2000px per side). To place it in a table cell, pass the "
+            "table (or the selector productivity_docs_get returned) with row "
+            "and column, the same way productivity_docs_set_cells names a cell: "
+            "the image lands after what the cell already holds. Pass index "
+            "instead to place it at a body index, or omit both to append at the "
+            "selected tab's end. Naming both a cell and an index is refused, as "
+            "is a merged-away or nested-table cell."
         ),
         annotations=write_annotations(
             ToolAnnotations, title="Embed Google Doc image"
@@ -908,13 +1594,72 @@ def register_google_docs_tools(
             str,
             Field(description="Public http(s) URL of the image to embed."),
         ],
+        selector: Annotated[
+            dict[str, Any] | None,
+            Field(
+                description=(
+                    "A tables[].selector from productivity_docs_get, passed "
+                    "unchanged; it names the tab and the table."
+                )
+            ),
+        ] = None,
+        table: Annotated[
+            dict[str, Any] | int | None,
+            Field(
+                description=(
+                    "Table selector: {position}, {after_heading}, "
+                    "{header_contains}; a bare number is a position within the "
+                    "tab. Omit when selector is given."
+                )
+            ),
+        ] = None,
+        row: Annotated[
+            dict[str, Any] | int | None,
+            Field(
+                description=(
+                    "1-based row number, or {where: {column, equals | contains}} "
+                    "matching exactly one data row. Required to target a cell."
+                )
+            ),
+        ] = None,
+        column: Annotated[
+            str | int | None,
+            Field(
+                description=(
+                    "Column name from the header, or a 1-based number. Required "
+                    "to target a cell."
+                )
+            ),
+        ] = None,
+        header: Annotated[
+            int | None,
+            Field(
+                ge=0,
+                description=(
+                    "Header row count when the document does not mark the "
+                    "header, e.g. 1 to name columns by the first row."
+                ),
+            ),
+        ] = None,
         index: Annotated[
             int | None,
-            Field(ge=1, description="Optional 1-based body index; omit to append."),
+            Field(
+                ge=1,
+                description=(
+                    "Optional 1-based body index; omit to append. Not allowed "
+                    "together with a cell."
+                ),
+            ),
         ] = None,
         width_pt: Annotated[
             int | None,
-            Field(ge=1, description="Optional display width in points."),
+            Field(
+                ge=1,
+                description=(
+                    "Optional display width in points. Omit it for a cell and "
+                    "the image is fitted to the column when it is wider."
+                ),
+            ),
         ] = None,
         height_pt: Annotated[
             int | None,
@@ -946,6 +1691,11 @@ def register_google_docs_tools(
             payload={
                 "document_ref": document_ref,
                 "image_uri": image_uri,
+                "selector": selector,
+                "table": table,
+                "row": row,
+                "column": column,
+                "header": header,
                 "index": index,
                 "width_pt": width_pt,
                 "height_pt": height_pt,
@@ -1268,6 +2018,67 @@ def register_google_docs_tools(
         )
 
     @mcp.tool(
+        name="productivity_docs_update_comment",
+        title="Edit Google Doc comment",
+        description=(
+            "Rewrite the text of a comment. Use productivity_docs_list_comments "
+            "first to get the comment_id; pass reply_id to rewrite one reply "
+            "instead of the comment. Google only lets the author rewrite their "
+            "own comment. This changes the document each time it succeeds."
+        ),
+        annotations=write_annotations(
+            ToolAnnotations, title="Edit Google Doc comment"
+        ),
+        structured_output=False,
+    )
+    async def _productivity_docs_update_comment(
+        document_ref: Annotated[
+            str,
+            Field(description="Document id or full Google Docs URL."),
+        ],
+        comment_id: Annotated[
+            str,
+            Field(
+                description="Comment id returned by productivity_docs_list_comments."
+            ),
+        ],
+        content: Annotated[
+            str,
+            Field(description="The comment's new text."),
+        ],
+        reply_id: Annotated[
+            str,
+            Field(
+                description=(
+                    "Optional reply id inside that comment; rewrites the reply "
+                    "instead of the comment itself."
+                )
+            ),
+        ] = "",
+        account_id: Annotated[
+            str,
+            Field(
+                description="Optional connected Google account id when several are available."
+            ),
+        ] = "",
+    ) -> dict[str, Any]:
+        denial = await _enforce("productivity_docs_update_comment", "comment", account_id)
+        if denial is not None:
+            return denial
+        return await docs.execute(
+            operation="update_comment",
+            claim=_COMMENT_CLAIMS,
+            tool_name="productivity_docs_update_comment",
+            payload={
+                "document_ref": document_ref,
+                "comment_id": comment_id,
+                "reply_id": reply_id,
+                "content": content,
+            },
+            account_id=account_id,
+        )
+
+    @mcp.tool(
         name="productivity_docs_resolve_comment",
         title="Resolve Google Doc comment",
         description=(
@@ -1370,10 +2181,14 @@ def register_google_docs_tools(
         description=(
             "Read a document's structural graph: every tab (with its tab_id and "
             "hierarchy) and, per tab, the ordered elements (headings, paragraphs, "
-            "tables) with their start_index/end_index and style. Use this to "
-            "reason about structure or to find exact indices/tab_id to target "
-            "with productivity_docs_batch_edit. Prefer productivity_docs_get for "
-            "plain reading; use this when structure or tabs matter."
+            "tables) with their start_index/end_index and style. Each table "
+            "lists up to 50 rows of cells with start_index/end_index and "
+            "content_start/content_end, the editable text range excluding the "
+            "cell's final newline. Use this to reason about structure or to find "
+            "exact indices/tab_id to target with productivity_docs_batch_edit. "
+            "To write cells without indices, use productivity_docs_set_cells. "
+            "Prefer productivity_docs_get for plain reading; use this when "
+            "structure or tabs matter."
         ),
         annotations=read_only_annotations(ToolAnnotations, title="Read Google Doc structure"),
         structured_output=False,
@@ -1437,8 +2252,10 @@ def register_google_docs_tools(
             "single-key object of an allowlisted kind (insertText, "
             "deleteContentRange, replaceAllText, updateTextStyle, "
             "updateParagraphStyle, createParagraphBullets, insertTable, "
-            "insertTableRow/Column, insertInlineImage, insertPageBreak, "
-            "createNamedRange, ...). Get indices/tab_id from "
+            "insertTableRow/Column, mergeTableCells, pinTableHeaderRows, "
+            "insertInlineImage, insertPageBreak, "
+            "createNamedRange, ...). Pin a new table's header row to name its "
+            "columns on later reads. Get indices/tab_id from "
             "productivity_docs_get_structure first. This is the flexible "
             "alternative to the single-purpose edit tools; unknown request kinds "
             "are rejected."
