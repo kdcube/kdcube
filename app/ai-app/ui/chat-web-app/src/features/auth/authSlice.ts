@@ -5,6 +5,9 @@ import {RootState} from "../../app/store.ts";
 interface AuthState {
     authType: AuthType;
     loggedIn: boolean;
+    // The person signed out on purpose: show the signed-out page and wait for
+    // them to press Sign in, instead of starting a login by itself.
+    signedOut: boolean;
     loading: boolean;
     navigateTo: string | URL | null;
     user?: AppUser | null;
@@ -24,6 +27,7 @@ const authSlice = createSlice({
     initialState: () => {
         return {
             loggedIn: false,
+            signedOut: false,
             loading: false,
             navigateTo: null,
             authToken: null,
@@ -37,6 +41,9 @@ const authSlice = createSlice({
             state.idToken = action.payload.idToken;
             if (action.payload.loggedIn !== undefined && action.payload.loggedIn !== null) {
                 state.loggedIn = action.payload.loggedIn;
+                if (action.payload.loggedIn) {
+                    state.signedOut = false;
+                }
             }
         },
         setLoggedOut(state) {
@@ -44,6 +51,13 @@ const authSlice = createSlice({
             state.authToken = null;
             state.idToken = null;
             state.loggedIn = false;
+        },
+        setSignedOut(state) {
+            state.user = null;
+            state.authToken = null;
+            state.idToken = null;
+            state.loggedIn = false;
+            state.signedOut = true;
         },
         startLoading(state) {
             state.loading = true;
@@ -57,9 +71,10 @@ const authSlice = createSlice({
     }
 })
 
-export const {setCredentials, setLoggedOut, startLoading, finishLoading} = authSlice.actions
+export const {setCredentials, setLoggedOut, setSignedOut, startLoading, finishLoading} = authSlice.actions
 export const selectIsLoggedIn = (state: RootState) => state.auth.loggedIn
 export const selectAuthIsLoading = (state: RootState) => state.auth.loading
+export const selectIsSignedOut = (state: RootState) => state.auth.signedOut
 export const selectNavigateTo = (state: RootState) => state.auth.navigateTo
 export const selectAppUser = (state: RootState) => state.auth.user
 export const selectRoles = (state: RootState) => state.auth.user?.roles
