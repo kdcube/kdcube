@@ -78,6 +78,7 @@ def summarize_telegram_update(update: Mapping[str, Any]) -> dict[str, Any]:
         "user_id": sender.get("id") if isinstance(sender, Mapping) else None,
         "username": sender.get("username") if isinstance(sender, Mapping) else None,
         **topic,
+        "reply_to_message_id": _reply_to_message_id(message, topic),
         "text": _message_text(message),
         "attachments": _message_attachments(message),
     }
@@ -139,6 +140,31 @@ def _message_topic(message: Mapping[str, Any]) -> dict[str, Any]:
         "topic_event": event_name,
         "topic_name": topic_name,
     }
+
+
+def _reply_to_message_id(message: Mapping[str, Any], topic: Mapping[str, Any]) -> int | None:
+    """The message the user replied to, or None when the message is not a reply.
+
+    Inside a forum topic (a private-chat topic or a supergroup topic) Telegram
+    sets ``reply_to_message`` on every message to the topic's root service
+    message, the one that created the topic. That is not a reply the user
+    made, so it is not reported: only a reply to another message is.
+    """
+    if not isinstance(message, Mapping):
+        return None
+    replied = message.get("reply_to_message")
+    if not isinstance(replied, Mapping):
+        return None
+    try:
+        replied_id = int(replied.get("message_id"))
+    except (TypeError, ValueError):
+        return None
+    if replied.get("forum_topic_created") is not None:
+        return None
+    thread_id = normalize_message_thread_id(topic.get("message_thread_id")) if isinstance(topic, Mapping) else ""
+    if thread_id and str(replied_id) == thread_id:
+        return None
+    return replied_id
 
 
 def _message_attachments(message: Mapping[str, Any]) -> list[dict[str, Any]]:
