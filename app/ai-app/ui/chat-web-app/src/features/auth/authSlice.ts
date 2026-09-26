@@ -1,6 +1,7 @@
 import {createSlice, PayloadAction} from "@reduxjs/toolkit";
 import {AppUser, AuthType} from "./authTypes.ts";
 import {RootState} from "../../app/store.ts";
+import {takeSignedOutMarker} from "./signedOutMarker.ts";
 
 interface AuthState {
     authType: AuthType;
@@ -27,7 +28,10 @@ const authSlice = createSlice({
     initialState: () => {
         return {
             loggedIn: false,
-            signedOut: false,
+            // Returning from the provider's sign-out: start signed out.
+            signedOut: typeof window !== "undefined"
+                ? takeSignedOutMarker(window.location, window.history)
+                : false,
             loading: false,
             navigateTo: null,
             authToken: null,

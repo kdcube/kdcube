@@ -66,3 +66,29 @@ test("an explicit sign-out waits for Sign in instead of starting a login", () =>
     assert.match(gate, /if \(!loggedIn && !loading && !signedOut\)/);
     assert.match(gate, /You are signed out\./);
 });
+
+const {takeSignedOutMarker} = await load("../src/features/auth/signedOutMarker.ts");
+
+test("a load that returns from the provider's sign-out starts signed out and drops the marker", () => {
+    const replaced = [];
+    const history = {state: {k: 1}, replaceState: (state, _unused, url) => replaced.push([state, url])};
+    assert.equal(takeSignedOutMarker({pathname: "/chat", search: "?tab=2&signed_out=1", hash: "#x"}, history), true);
+    assert.deepEqual(replaced, [[{k: 1}, "/chat?tab=2#x"]]);
+    assert.equal(takeSignedOutMarker({pathname: "/", search: "?signed_out=1", hash: ""}, history), true);
+    assert.equal(replaced.at(-1)[1], "/");
+});
+
+test("a normal load is not signed out and leaves the URL alone", () => {
+    const replaced = [];
+    const history = {state: null, replaceState: () => replaced.push(1)};
+    for (const search of ["", "?tab=2", "?signed_out=0"]) {
+        assert.equal(takeSignedOutMarker({pathname: "/", search, hash: ""}, history), false);
+    }
+    assert.equal(takeSignedOutMarker(undefined, history), false);
+    assert.equal(replaced.length, 0);
+});
+
+test("the store starts signed out from the marker, which keeps WithAuthRequired from dispatching logIn", () => {
+    const slice = fs.readFileSync(path.resolve(testRoot, "../src/features/auth/authSlice.ts"), "utf8");
+    assert.match(slice, /signedOut: typeof window !== "undefined"\s*\?\s*takeSignedOutMarker\(window\.location, window\.history\)/);
+});

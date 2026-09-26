@@ -211,13 +211,14 @@ def test_signed_out_continues_to_the_destination_from_the_return_cookie(harness)
     client, _, state = harness
     client.cookies.set("__Host-kdcube-return", "/chat?tab=2")
     response = client.get("/api/platform/session/signed-out", follow_redirects=False)
-    assert response.status_code == 302 and response.headers["location"] == "/chat?tab=2"
+    # The landing page learns the person signed out, so it does not start a login by itself.
+    assert response.status_code == 302 and response.headers["location"] == "/chat?tab=2&signed_out=1"
     assert _cookies(response)["__Host-kdcube-return"].value == "", "the return cookie is cleared"
 
     client.cookies.set("__Host-kdcube-return", "https://evil.example/x")
-    assert client.get("/api/platform/session/signed-out", follow_redirects=False).headers["location"] == "/"
+    assert client.get("/api/platform/session/signed-out", follow_redirects=False).headers["location"] == "/?signed_out=1"
     client.cookies.clear()
-    assert client.get("/api/platform/session/signed-out", follow_redirects=False).headers["location"] == "/"
+    assert client.get("/api/platform/session/signed-out", follow_redirects=False).headers["location"] == "/?signed_out=1"
     assert client.get("/api/platform/session/status").json()["signedOutUrl"] == "/api/platform/session/signed-out"
 
     state["flow"] = None
@@ -235,4 +236,4 @@ def test_sign_in_and_signed_out_return_to_a_listed_website_origin(harness):
     client.cookies.set("__Host-kdcube-return", "https://www.kdcube.example/pricing")
     assert client.get("/api/platform/session/signed-out", follow_redirects=False).headers["location"] == "https://www.kdcube.example/pricing"
     client.cookies.set("__Host-kdcube-return", "https://evil.example/pricing")
-    assert client.get("/api/platform/session/signed-out", follow_redirects=False).headers["location"] == "/"
+    assert client.get("/api/platform/session/signed-out", follow_redirects=False).headers["location"] == "/?signed_out=1"

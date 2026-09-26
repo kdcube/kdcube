@@ -60,6 +60,26 @@ REQUIRE_SESSION_ROUTE = "/api/platform/require-session"
 LOGIN_LOCATION_HEADER = "X-KDCube-Login-Location"
 
 
+
+SIGNED_OUT_MARKER = "signed_out"
+
+
+def with_signed_out_marker(destination: str) -> str:
+    """The destination with ``signed_out=1`` in its query, so the page that loads shows it is signed out.
+
+    Only a path on this origin carries it: another listed website (a return
+    origin) is not this platform's app and keeps its URL as given.
+    """
+
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+    parts = urlsplit(destination or "/")
+    if parts.scheme or parts.netloc:
+        return destination
+    query = [(key, value) for key, value in parse_qsl(parts.query, keep_blank_values=True) if key != SIGNED_OUT_MARKER]
+    query.append((SIGNED_OUT_MARKER, "1"))
+    return urlunsplit((parts.scheme, parts.netloc, parts.path or "/", urlencode(query), parts.fragment))
+
 def _has_platform_user(request: Request) -> bool:
     session = getattr(request.state, STATE_SESSION, None)
     if session is None:
@@ -194,7 +214,13 @@ def create_platform_session_router(*, flow_provider: FlowProvider | None = None)
             request.cookies.get(cookie_name) if cookie_name else None,
             allowed_origins=flow.policy.return_origins if flow is not None else (),
         )
-        response = RedirectResponse(destination, status_code=302, headers=NO_STORE)
+        # The page the browser lands on must know the person just signed out:
+        # a fresh load would otherwise start a login, and a provider still
+        # signed in upstream (a federated one) signs the browser straight
+        # back in (W260, review on kdcube#302).
+        response = RedirectResponse(
+            with_signed_out_marker(destination), status_code=302, headers=NO_STORE
+        )
         if flow is not None:
             apply_cookie(response, flow.cookies.clear_return_cookie())
         return response
