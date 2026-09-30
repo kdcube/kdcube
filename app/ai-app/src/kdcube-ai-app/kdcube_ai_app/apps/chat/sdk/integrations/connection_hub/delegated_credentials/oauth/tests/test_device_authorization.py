@@ -528,6 +528,129 @@ def test_the_infra_shape_re_authorizes_its_card_before_any_stored_migration(devi
     assert prompt.status_code == 200, prompt.text
     assert device_store.request["client_id"] == client_id
     assert device_store.request["requested_access_id"] == ACCESS_ID
+    assert device_store.request["context"]["continuity_proven_access_id"] == ACCESS_ID
+
+
+def _start_without_card(client: TestClient):
+    response = client.post(
+        "/oauth/device_authorization",
+        data={"client_id": "claude", "scope": "records:read", "resource": RESOURCE},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _poll(client: TestClient, prompt: Mapping[str, Any]):
+    return client.post(
+        "/oauth/token",
+        data={
+            "grant_type": DEVICE_GRANT_TYPE,
+            "device_code": prompt["device_code"],
+            "client_id": "claude",
+        },
+    )
+
+
+# Review return 2026-09-30: leaving out access_id skipped the continuity check,
+# and consent then resolved the approver's EXISTING Card for that client, so a
+# phished approval of an attacker-started code re-authorized the owner's Card.
+# A request without proven continuity may create a new Card, never reach one.
+def test_a_request_without_proof_never_reaches_an_existing_card(device_client, monkeypatch):
+    client, device_store = device_client
+    issued = []
+
+    async def _issue(*_args, **_kwargs):
+        issued.append(True)
+        return JSONResponse({"access_token": "must-not-issue"})
+
+    monkeypatch.setattr(oauth_routes, "_issue_tokens", _issue)
+    prompt = _start_without_card(client)
+    assert device_store.request["context"]["continuity_proven_access_id"] == ""
+
+    draft_id = _open_draft(client, prompt)
+    draft = client.get(
+        "/oauth/authorize/consent/draft",
+        params={"draft_id": draft_id},
+        headers={"Authorization": "Bearer admin-tok"},
+    )
+    assert draft.status_code == 409
+    assert draft.json()["error"] == "card_continuity_required"
+    assert device_store.terminal_error == "card_continuity_required"
+
+    token = _poll(client, prompt)
+    assert token.status_code == 400
+    assert token.json()["error"] == "card_continuity_required"
+    assert issued == []
+
+
+def test_the_owner_s_decision_cannot_reach_an_existing_card_without_proof(device_client):
+    client, device_store = device_client
+
+    async def must_not_resolve(*_args, **_kwargs):
+        raise AssertionError("nothing may be resolved or saved for an unproven Card")
+
+    access = DeviceConsentAccess(client.app)
+    access.resolve_oauth_consent_authority = must_not_resolve
+    client.app.state.automation_access_factory = lambda: access
+    prompt = _start_without_card(client)
+    draft_id = _open_draft(client, prompt)
+
+    decided = client.post(
+        "/oauth/authorize/consent/decision",
+        json={
+            "draft_id": draft_id,
+            "decision": "approve",
+            "label": "Headless worker",
+            "resource_grants": {},
+            "resource_operations": {},
+            "invocation_policies": {},
+            "account_scope": {},
+            "expected_card_revision": 3,
+            "expected_catalog_version": "v1",
+        },
+        headers={"Authorization": "Bearer admin-tok"},
+    )
+    assert decided.status_code == 409, decided.text
+    assert decided.json()["error"] == "card_continuity_required"
+    assert device_store.terminal_error == "card_continuity_required"
+    assert device_store.authorization is None
+
+
+def test_a_genuinely_new_card_still_enrolls_by_device_login(device_client, monkeypatch):
+    client, device_store = device_client
+    client.app.state.automation_access_factory = lambda: DeviceConsentAccess(client.app, revision=0)
+    captured: dict[str, Any] = {}
+
+    async def _issue(_request, _store, **authority):
+        captured.update(authority)
+        return JSONResponse({"access_token": "new-card-token", "token_type": "Bearer", "expires_in": 3600})
+
+    monkeypatch.setattr(oauth_routes, "_issue_tokens", _issue)
+    prompt = _start_without_card(client)
+    draft_id = _open_draft(client, prompt)
+    draft = client.get(
+        "/oauth/authorize/consent/draft",
+        params={"draft_id": draft_id},
+        headers={"Authorization": "Bearer admin-tok"},
+    )
+    assert draft.status_code == 200, draft.text
+    body = draft.json()
+    approved = client.post(
+        "/oauth/authorize/consent/decision",
+        json={
+            "draft_id": draft_id,
+            "decision": "approve",
+            "label": "New worker",
+            **body["selection"],
+            "expected_card_revision": body["card_revision"],
+            "expected_catalog_version": body["catalog_version"],
+        },
+        headers={"Authorization": "Bearer admin-tok"},
+    )
+    assert approved.status_code == 200, approved.text
+    token = _poll(client, prompt)
+    assert token.status_code == 200, token.text
+    assert captured["registry_access_id"] == ACCESS_ID
 
 
 def test_a_web_dynamic_client_gets_no_built_in_device_grant(device_client):
