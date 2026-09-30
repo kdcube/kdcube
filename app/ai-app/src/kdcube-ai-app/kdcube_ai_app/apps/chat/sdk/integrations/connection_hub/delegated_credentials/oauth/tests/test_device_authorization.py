@@ -379,10 +379,28 @@ def test_discovery_and_dynamic_registration_enable_device_requests(device_client
             "client_id": ordinary_registration.json()["client_id"],
             "scope": "records:read",
             "resource": RESOURCE,
+            "access_id": ACCESS_ID,
         },
     )
     assert refused.status_code == 400
     assert refused.json()["error"] == "unauthorized_client"
+    assert refused.json()["error_description"] == (
+        "client_id is not registered for device authorization"
+    )
+    assert device_store.request is None
+
+    unknown = client.post(
+        "/oauth/device_authorization",
+        data={
+            "client_id": "unrelated-client",
+            "scope": "records:read",
+            "resource": RESOURCE,
+            "access_id": ACCESS_ID,
+        },
+    )
+    assert unknown.status_code == 400
+    assert unknown.json()["error"] == "invalid_client"
+    assert device_store.request is None
 
     registration = client.post(
         "/oauth/register",
