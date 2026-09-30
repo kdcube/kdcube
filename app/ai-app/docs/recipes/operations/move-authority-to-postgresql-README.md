@@ -5,7 +5,7 @@ summary: "Dry-run, review, quiesce, activate, and verify a PostgreSQL authority 
 status: active
 tags: ["operations", "authentication", "connection-hub", "postgresql", "redis", "migration"]
 keywords: ["authority cutover", "authority generation", "kdcube authority preview", "kdcube authority apply", "PostgreSQL sessions", "Redis session projection", "Card credential chain"]
-updated_at: 2026-09-23
+updated_at: 2026-09-30
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/operations/operate-runtime-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/assembly-descriptor-README.md
@@ -233,3 +233,30 @@ The preview's operator-facing survival matrix is:
 After activation, Redis is not a rollback authority. Do not point the runtime
 back at the retired Redis source after new PostgreSQL authority has been
 created.
+
+## Release step: the device grant for existing public native clients
+
+Device login is built in for public native dynamic clients (application type
+`native`, token endpoint authentication `none`). New registrations store the
+device grant. The device endpoint that checks Card continuity grants it to an
+older client itself, so an existing profile reconnects with the same client and
+Card as soon as that endpoint serves.
+
+The stored registrations of existing clients change only through this explicit
+step, never through schema setup. A device endpoint older than the continuity
+check would let a migrated client request any existing Card without proof, so
+run the step only after **every** `chat-ingress` and `chat-proc` process serves
+the checked endpoint:
+
+```shell
+docker compose run --rm --no-deps chat-proc \
+  python -m kdcube_ai_app.ops.authority_cutover.cli \
+  grant-device-to-public-native-clients --every-process-checks-card-continuity
+```
+
+It adds only `urn:ietf:params:oauth:grant-type:device_code` to stored public
+native dynamic clients that lack it, and changes no other field. It is
+idempotent: a second run reports `clients_updated: 0`. Without the flag it
+contacts nothing and exits `2` with `device_grant_migration_requires_checked_rollout`.
+It applies to the PostgreSQL authority. The Redis migration source has no
+continuity records, so it never re-authorizes an existing Card by device login.

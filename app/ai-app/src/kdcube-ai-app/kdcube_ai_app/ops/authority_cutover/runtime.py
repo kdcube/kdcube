@@ -92,6 +92,30 @@ class ResetTargetRuntime:
         await self.pool.close()
 
 
+@dataclass
+class OAuthAuthorityRuntime:
+    authority: PostgresOAuthAuthorityStore
+    pool: Any
+
+    async def close(self) -> None:
+        await self.pool.close()
+
+
+async def open_oauth_authority(settings: Any) -> OAuthAuthorityRuntime:
+    """The deployment's durable OAuth authority, for release steps on it."""
+
+    tenant, project = _scope(settings)
+    pool = await _open_postgres_pool(settings)
+    return OAuthAuthorityRuntime(
+        authority=PostgresOAuthAuthorityStore(
+            pg_pool=pool,
+            tenant=tenant,
+            project=project,
+        ),
+        pool=pool,
+    )
+
+
 def _scope(settings: Any) -> tuple[str, str]:
     tenant = str(getattr(settings, "TENANT", "") or "").strip() or "default"
     project = (
@@ -351,9 +375,11 @@ async def apply_reset_target(
 
 __all__ = [
     "CONNECTION_HUB_BUNDLE_ID",
+    "OAuthAuthorityRuntime",
     "ResetSourceRuntime",
     "ResetTargetRuntime",
     "apply_reset_target",
+    "open_oauth_authority",
     "open_reset_source",
     "open_reset_target",
     "rehearse_reset_target",

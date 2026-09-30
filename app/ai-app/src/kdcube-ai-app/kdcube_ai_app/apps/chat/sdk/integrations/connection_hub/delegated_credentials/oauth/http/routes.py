@@ -27,6 +27,7 @@ from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from connection_hub.delegated_credentials.oauth.clients import (
     CLIENT_REGISTRATION_PRE_REGISTERED,
     client_from_record,
+    client_holds_device_grant,
     dcr_redirect_allowed,
     get_client,
     normalize_public_client_metadata,
@@ -1344,7 +1345,9 @@ async def register_client(request: Request) -> Response:
         "redirect_uris": record["redirect_uris"],
         "token_endpoint_auth_method": "none",
         "application_type": application_type,
-        "grant_types": list(dict.fromkeys(requested_grant_types)),
+        # The stored grants: a public native client always holds the device
+        # grant (W414), whatever it asked for.
+        "grant_types": list(record.get("grant_types") or dict.fromkeys(requested_grant_types)),
         "response_types": ["code"],
         "client_name": body.get("client_name"),
     })
@@ -1403,11 +1406,32 @@ async def device_authorization(request: Request) -> Response:
         client = resolver(client_id)
     if client is None or not client.redirect_uris:
         return device_oauth_error("invalid_client", "unknown client_id")
-    if DEVICE_GRANT_TYPE not in client.grant_types:
+    # Device login is built in for public native dynamic clients (W414): this
+    # handler derives the grant for one registered before it, because it checks
+    # Card continuity below. Stored rows gain it only through the release step
+    # run after every process serves this handler.
+    if not client_holds_device_grant(client):
         return device_oauth_error(
             "unauthorized_client",
             "client_id is not registered for device authorization",
         )
+    if requested_access_id:
+        # W414 (operator, 2026-09-30): device login re-authorizes an existing
+        # Card only with continuity proof from the requesting machine, the
+        # Card's last refresh token, checked against the Card's own credential
+        # family for this client. Without it, a tricked approval yields nothing.
+        continuity = str(form.get("continuity_refresh_token") or "")
+        proven = bool(continuity) and await get_grant_store(request).card_continuity_proven(
+            refresh_token=continuity,
+            client_id=client_id,
+            access_id=requested_access_id,
+        )
+        if not proven:
+            return device_oauth_error(
+                "card_continuity_required",
+                "an existing Card is re-authorized by device login only with its "
+                "continuity proof from the requesting machine",
+            )
     authorize_params = {
         "client_id": client_id,
         # Device authorization never redirects here. Keeping the registered
