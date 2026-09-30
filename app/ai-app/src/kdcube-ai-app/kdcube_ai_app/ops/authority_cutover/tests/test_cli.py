@@ -230,3 +230,56 @@ def test_apply_uses_transactional_runtime_and_closes_dependencies(
         "source_generation": "a" * 64,
         "target_generation": "a" * 64,
     }
+
+
+# W414: the device grant release step runs only after every process serves the
+# Card continuity check, which the operator states with the flag.
+def test_device_grant_step_refuses_without_the_rollout_statement(monkeypatch, capsys) -> None:
+    async def must_not_open(_settings):
+        raise AssertionError("the authority must not be contacted")
+
+    monkeypatch.setattr(cli, "open_oauth_authority", must_not_open)
+    monkeypatch.setattr(cli, "get_settings", lambda: object())
+
+    code = asyncio.run(cli.async_main(["grant-device-to-public-native-clients"]))
+
+    assert code == 2
+    assert json.loads(capsys.readouterr().out)["error"] == (
+        "device_grant_migration_requires_checked_rollout"
+    )
+
+
+def test_device_grant_step_reports_the_count_and_closes(monkeypatch, capsys) -> None:
+    settings = object()
+    closed = []
+
+    class Authority:
+        schema = "demo_schema"
+
+        async def grant_device_to_public_native_clients(self):
+            return 3
+
+    async def open_authority(actual_settings):
+        assert actual_settings is settings
+
+        async def close() -> None:
+            closed.append(True)
+
+        return SimpleNamespace(authority=Authority(), close=close)
+
+    monkeypatch.setattr(cli, "open_oauth_authority", open_authority)
+    monkeypatch.setattr(cli, "get_settings", lambda: settings)
+
+    code = asyncio.run(
+        cli.async_main(
+            ["grant-device-to-public-native-clients", "--every-process-checks-card-continuity"]
+        )
+    )
+
+    assert code == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "ok": True,
+        "schema": "demo_schema",
+        "clients_updated": 3,
+    }
+    assert closed == [True]

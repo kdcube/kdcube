@@ -27,6 +27,7 @@ from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from connection_hub.delegated_credentials.oauth.clients import (
     CLIENT_REGISTRATION_PRE_REGISTERED,
     client_from_record,
+    client_holds_device_grant,
     dcr_redirect_allowed,
     get_client,
     normalize_public_client_metadata,
@@ -1206,6 +1207,35 @@ def _client_metadata_error_response(error: ClientMetadataError) -> JSONResponse:
     )
 
 
+_DEVICE_CONTINUITY_REFUSAL = (
+    "This device request did not prove it holds this existing Card; "
+    "only the machine that holds it can re-authorize it."
+)
+
+
+def _device_reaches_unproven_card(
+    device_binding: Mapping[str, Any],
+    *,
+    access_id: str,
+    card_exists: bool,
+) -> bool:
+    """Whether a device consent would reach an existing Card without proof (W414).
+
+    Device login re-authorizes an existing Card only for the one Card whose
+    continuity the request proved. A request without proof (no ``access_id``,
+    or a client registered before the device grant) may create a new Card and
+    nothing else, so a phished approval never hands an existing Card's tokens
+    to whoever started the request.
+    """
+
+    if not card_exists:
+        return False
+    proven = str(device_binding.get("continuity_proven_access_id") or "").strip()
+    if not proven:
+        return True
+    return bool(access_id) and access_id.strip() != proven
+
+
 @router.post("/oauth/register", include_in_schema=False)
 @_normalize_grant_store_unavailable
 async def register_client(request: Request) -> Response:
@@ -1344,7 +1374,9 @@ async def register_client(request: Request) -> Response:
         "redirect_uris": record["redirect_uris"],
         "token_endpoint_auth_method": "none",
         "application_type": application_type,
-        "grant_types": list(dict.fromkeys(requested_grant_types)),
+        # The stored grants: a public native client always holds the device
+        # grant (W414), whatever it asked for.
+        "grant_types": list(record.get("grant_types") or dict.fromkeys(requested_grant_types)),
         "response_types": ["code"],
         "client_name": body.get("client_name"),
     })
@@ -1403,11 +1435,34 @@ async def device_authorization(request: Request) -> Response:
         client = resolver(client_id)
     if client is None or not client.redirect_uris:
         return device_oauth_error("invalid_client", "unknown client_id")
-    if DEVICE_GRANT_TYPE not in client.grant_types:
+    # Device login is built in for public native dynamic clients (W414): this
+    # handler derives the grant for one registered before it, because it checks
+    # Card continuity below. Stored rows gain it only through the release step
+    # run after every process serves this handler.
+    if not client_holds_device_grant(client):
         return device_oauth_error(
             "unauthorized_client",
             "client_id is not registered for device authorization",
         )
+    continuity_proven_access_id = ""
+    if requested_access_id:
+        # W414 (operator, 2026-09-30): device login re-authorizes an existing
+        # Card only with continuity proof from the requesting machine, the
+        # Card's last refresh token, checked against the Card's own credential
+        # family for this client. Without it, a tricked approval yields nothing.
+        continuity = str(form.get("continuity_refresh_token") or "")
+        proven = bool(continuity) and await get_grant_store(request).card_continuity_proven(
+            refresh_token=continuity,
+            client_id=client_id,
+            access_id=requested_access_id,
+        )
+        if not proven:
+            return device_oauth_error(
+                "card_continuity_required",
+                "an existing Card is re-authorized by device login only with its "
+                "continuity proof from the requesting machine",
+            )
+        continuity_proven_access_id = requested_access_id
     authorize_params = {
         "client_id": client_id,
         # Device authorization never redirects here. Keeping the registered
@@ -1454,6 +1509,10 @@ async def device_authorization(request: Request) -> Response:
                 parsed.client.snapshot_digest() if parsed.client is not None else ""
             ),
             "catalog_version": catalog_version,
+            # The only existing Card this request may reach (W414). A request
+            # without proven continuity may create a new Card, never resolve
+            # to an existing one; consent enforces it.
+            "continuity_proven_access_id": continuity_proven_access_id,
         },
     )
     return JSONResponse(
@@ -1553,6 +1612,9 @@ async def verify_device(request: Request) -> Response:
                 ),
                 "expected_card_revision": device_request.get(
                     "expected_card_revision"
+                ),
+                "continuity_proven_access_id": str(
+                    context.get("continuity_proven_access_id") or ""
                 ),
             },
         },
@@ -2206,6 +2268,12 @@ async def authorize_consent_draft(request: Request) -> Response:
             terminal_error = "device_card_mismatch"
         elif expected_revision is not None and int(expected_revision) != seeded_revision:
             terminal_error = "device_card_revision_conflict"
+        elif _device_reaches_unproven_card(
+            device_binding,
+            access_id=seeded_access_id,
+            card_exists=seeded_revision > 0 or isinstance(seed.get("access"), Mapping),
+        ):
+            terminal_error = "card_continuity_required"
         if terminal_error:
             await get_device_grant_store(request).deny(
                 device_digest=str(device_binding["device_digest"]),
@@ -2221,7 +2289,11 @@ async def authorize_consent_draft(request: Request) -> Response:
                 status_code=409,
                 content={
                     "error": terminal_error,
-                    "error_description": "The requested Card changed; restart device authorization.",
+                    "error_description": (
+                        _DEVICE_CONTINUITY_REFUSAL
+                        if terminal_error == "card_continuity_required"
+                        else "The requested Card changed; restart device authorization."
+                    ),
                 },
                 headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
             )
@@ -2462,6 +2534,29 @@ async def authorize_consent_decision(request: Request) -> Response:
         return JSONResponse(
             status_code=400,
             content={"error": "oauth_consent_selection_invalid"},
+        )
+
+    if device_binding is not None and _device_reaches_unproven_card(
+        device_binding,
+        access_id="",
+        card_exists=int(payload.get("expected_card_revision") or 0) > 0,
+    ):
+        # An existing Card (a committed revision) that this device request
+        # did not prove it holds. Checked before anything is resolved or saved.
+        await get_device_grant_store(request).deny(
+            device_digest=str(device_binding["device_digest"]),
+            user_digest=str(device_binding["user_digest"]),
+            approving_subject=subject,
+            error="card_continuity_required",
+        )
+        await store.consume_consent_draft_context(draft_id, subject)
+        return JSONResponse(
+            status_code=409,
+            content={
+                "error": "card_continuity_required",
+                "error_description": _DEVICE_CONTINUITY_REFUSAL,
+            },
+            headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
         )
 
     service = get_automation_access(request)
@@ -3530,6 +3625,7 @@ async def token(request: Request) -> Response:
                 "device_client_mismatch": "The device code belongs to another client.",
                 "device_card_mismatch": "The requested Card does not match the approved Card.",
                 "device_card_revision_conflict": "The requested Card changed during authorization.",
+                "card_continuity_required": _DEVICE_CONTINUITY_REFUSAL,
             }
             return _token_error(
                 polled.status,

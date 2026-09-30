@@ -72,6 +72,10 @@ def device_consent_binding(context: Mapping[str, Any]) -> dict[str, Any] | None:
         "user_code": f"{normalized_user_code[:4]}-{normalized_user_code[4:]}",
         "requested_access_id": str(value.get("requested_access_id") or "").strip(),
         "expected_card_revision": expected_revision,
+        # W414: the one existing Card this request proved it holds, or "".
+        "continuity_proven_access_id": str(
+            value.get("continuity_proven_access_id") or ""
+        ).strip(),
     }
 
 

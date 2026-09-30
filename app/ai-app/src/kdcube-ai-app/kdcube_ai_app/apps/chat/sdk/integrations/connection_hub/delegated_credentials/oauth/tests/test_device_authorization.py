@@ -48,6 +48,24 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentia
 ISSUER = "https://connector.example.test"
 RESOURCE = "https://connector.example.test/public/mcp/records"
 ACCESS_ID = "con_device_card_1"
+CARD_PROOF = "claude-card-last-refresh-token"
+
+
+class CardContinuity:
+    """Route seam for the Card's credential families (the Postgres lookup is
+    covered by the Connection Hub package): which (last refresh token, client,
+    Card) triples a machine can prove it held."""
+
+    def __init__(self) -> None:
+        self.held: set[tuple[str, str, str]] = set()
+        self.asked: list[tuple[str, str, str]] = []
+
+    def hold(self, refresh_token: str, client_id: str, access_id: str) -> None:
+        self.held.add((refresh_token, client_id, access_id))
+
+    async def proven(self, *, refresh_token: str, client_id: str, access_id: str) -> bool:
+        self.asked.append((refresh_token, client_id, access_id))
+        return (refresh_token, client_id, access_id) in self.held
 
 
 def test_device_verification_uri_accepts_origin_or_mounted_oauth_issuer():
@@ -219,6 +237,10 @@ def device_client(monkeypatch):
     app.state.oauth_grant_store = GrantStore(
         FakeRedis(), tenant="home", project="demo"
     )
+    continuity = CardContinuity()
+    continuity.hold(CARD_PROOF, "claude", ACCESS_ID)
+    app.state.card_continuity = continuity
+    app.state.oauth_grant_store.card_continuity_proven = continuity.proven
     device_store = MemoryDeviceStore()
     app.state.oauth_device_grant_store = device_store
     app.state.automation_access_factory = lambda: DeviceConsentAccess(app)
@@ -244,6 +266,7 @@ def _start(
             "resource": RESOURCE,
             "access_id": access_id,
             "expected_card_revision": str(expected_revision),
+            "continuity_refresh_token": CARD_PROOF,
         },
     )
     assert response.status_code == 200, response.text
@@ -361,7 +384,10 @@ def test_discovery_and_dynamic_registration_enable_device_requests(device_client
     )
     assert DEVICE_GRANT_TYPE in metadata["grant_types_supported"]
 
-    ordinary_registration = client.post(
+    # W414: a public native client asking only for the browser grants is
+    # registered with the device grant too, and the response reports what was
+    # stored, so its device login needs no second registration.
+    browser_first = client.post(
         "/oauth/register",
         json={
             "client_name": "Browser client",
@@ -372,17 +398,59 @@ def test_discovery_and_dynamic_registration_enable_device_requests(device_client
             "response_types": ["code"],
         },
     )
-    assert ordinary_registration.status_code == 201, ordinary_registration.text
-    refused = client.post(
+    assert browser_first.status_code == 201, browser_first.text
+    assert browser_first.json()["grant_types"] == [
+        "authorization_code", "refresh_token", DEVICE_GRANT_TYPE,
+    ]
+    prompt = client.post(
         "/oauth/device_authorization",
         data={
-            "client_id": ordinary_registration.json()["client_id"],
+            "client_id": browser_first.json()["client_id"],
             "scope": "records:read",
             "resource": RESOURCE,
         },
     )
+    assert prompt.status_code == 200, prompt.text
+    assert device_store.request["client_id"] == browser_first.json()["client_id"]
+    device_store.request = None
+
+    # The grant gate itself is unchanged: a client that does not hold the
+    # device grant is refused before any device request exists.
+    client.app.state.oauth_delegated_config["public_clients"].append(
+        {
+            "client_id": "browser-only-provisioned",
+            "redirect_uris": ["http://localhost/callback"],
+            "grant_types": ["authorization_code", "refresh_token"],
+        }
+    )
+    refused = client.post(
+        "/oauth/device_authorization",
+        data={
+            "client_id": "browser-only-provisioned",
+            "scope": "records:read",
+            "resource": RESOURCE,
+            "access_id": ACCESS_ID,
+        },
+    )
     assert refused.status_code == 400
     assert refused.json()["error"] == "unauthorized_client"
+    assert refused.json()["error_description"] == (
+        "client_id is not registered for device authorization"
+    )
+    assert device_store.request is None
+
+    unknown = client.post(
+        "/oauth/device_authorization",
+        data={
+            "client_id": "unrelated-client",
+            "scope": "records:read",
+            "resource": RESOURCE,
+            "access_id": ACCESS_ID,
+        },
+    )
+    assert unknown.status_code == 400
+    assert unknown.json()["error"] == "invalid_client"
+    assert device_store.request is None
 
     registration = client.post(
         "/oauth/register",
@@ -399,16 +467,293 @@ def test_discovery_and_dynamic_registration_enable_device_requests(device_client
     registered = registration.json()
     assert registered["grant_types"] == [DEVICE_GRANT_TYPE, "refresh_token"]
 
-    prompt = client.post(
-        "/oauth/device_authorization",
-        data={
-            "client_id": registered["client_id"],
-            "scope": "records:read",
-            "resource": RESOURCE,
+
+def _browser_first_dcr_client(client: TestClient, *, application_type: str = "native") -> str:
+    """A dynamic client stored before W414: browser grants only (the Infra shape)."""
+
+    registered = client.post(
+        "/oauth/register",
+        json={
+            "client_name": "Browser client",
+            "redirect_uris": (
+                ["http://127.0.0.1/callback"]
+                if application_type == "native"
+                else ["https://claude.ai/api/mcp/auth_callback"]
+            ),
+            "application_type": application_type,
+            "token_endpoint_auth_method": "none",
+            "grant_types": ["authorization_code", "refresh_token"],
         },
     )
+    assert registered.status_code == 201, registered.text
+    client_id = registered.json()["client_id"]
+    store = client.app.state.oauth_grant_store
+    stored_read = store.get_client_record
+
+    async def pre_w414_record(requested: str):
+        record = await stored_read(requested)
+        if record is not None and requested == client_id:
+            record = {**record, "grant_types": ["authorization_code", "refresh_token"]}
+        return record
+
+    store.get_client_record = pre_w414_record
+    return client_id
+
+
+def test_the_infra_shape_re_authorizes_its_card_before_any_stored_migration(device_client):
+    """W414: an existing browser-first public native client (stored grants
+    unchanged) re-authorizes its Card by device login with its continuity
+    proof, with the same client_id; the checked handler derives the grant."""
+
+    client, device_store = device_client
+    client_id = _browser_first_dcr_client(client)
+    client.app.state.card_continuity.hold("infra-last-refresh-token", client_id, ACCESS_ID)
+    form = {
+        "client_id": client_id,
+        "scope": "records:read",
+        "resource": RESOURCE,
+        "access_id": ACCESS_ID,
+        "expected_card_revision": "3",
+    }
+
+    refused = client.post("/oauth/device_authorization", data=form)
+    assert refused.status_code == 400
+    assert refused.json()["error"] == "card_continuity_required"
+    assert device_store.request is None
+
+    prompt = client.post(
+        "/oauth/device_authorization",
+        data={**form, "continuity_refresh_token": "infra-last-refresh-token"},
+    )
     assert prompt.status_code == 200, prompt.text
-    assert device_store.request["client_id"] == registered["client_id"]
+    assert device_store.request["client_id"] == client_id
+    assert device_store.request["requested_access_id"] == ACCESS_ID
+    assert device_store.request["context"]["continuity_proven_access_id"] == ACCESS_ID
+
+
+def _start_without_card(client: TestClient):
+    response = client.post(
+        "/oauth/device_authorization",
+        data={"client_id": "claude", "scope": "records:read", "resource": RESOURCE},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _poll(client: TestClient, prompt: Mapping[str, Any]):
+    return client.post(
+        "/oauth/token",
+        data={
+            "grant_type": DEVICE_GRANT_TYPE,
+            "device_code": prompt["device_code"],
+            "client_id": "claude",
+        },
+    )
+
+
+# Review return 2026-09-30: leaving out access_id skipped the continuity check,
+# and consent then resolved the approver's EXISTING Card for that client, so a
+# phished approval of an attacker-started code re-authorized the owner's Card.
+# A request without proven continuity may create a new Card, never reach one.
+def test_a_request_without_proof_never_reaches_an_existing_card(device_client, monkeypatch):
+    client, device_store = device_client
+    issued = []
+
+    async def _issue(*_args, **_kwargs):
+        issued.append(True)
+        return JSONResponse({"access_token": "must-not-issue"})
+
+    monkeypatch.setattr(oauth_routes, "_issue_tokens", _issue)
+    prompt = _start_without_card(client)
+    assert device_store.request["context"]["continuity_proven_access_id"] == ""
+
+    draft_id = _open_draft(client, prompt)
+    draft = client.get(
+        "/oauth/authorize/consent/draft",
+        params={"draft_id": draft_id},
+        headers={"Authorization": "Bearer admin-tok"},
+    )
+    assert draft.status_code == 409
+    assert draft.json()["error"] == "card_continuity_required"
+    assert device_store.terminal_error == "card_continuity_required"
+
+    token = _poll(client, prompt)
+    assert token.status_code == 400
+    assert token.json()["error"] == "card_continuity_required"
+    assert issued == []
+
+
+def test_the_owner_s_decision_cannot_reach_an_existing_card_without_proof(device_client):
+    client, device_store = device_client
+
+    async def must_not_resolve(*_args, **_kwargs):
+        raise AssertionError("nothing may be resolved or saved for an unproven Card")
+
+    access = DeviceConsentAccess(client.app)
+    access.resolve_oauth_consent_authority = must_not_resolve
+    client.app.state.automation_access_factory = lambda: access
+    prompt = _start_without_card(client)
+    draft_id = _open_draft(client, prompt)
+
+    decided = client.post(
+        "/oauth/authorize/consent/decision",
+        json={
+            "draft_id": draft_id,
+            "decision": "approve",
+            "label": "Headless worker",
+            "resource_grants": {},
+            "resource_operations": {},
+            "invocation_policies": {},
+            "account_scope": {},
+            "expected_card_revision": 3,
+            "expected_catalog_version": "v1",
+        },
+        headers={"Authorization": "Bearer admin-tok"},
+    )
+    assert decided.status_code == 409, decided.text
+    assert decided.json()["error"] == "card_continuity_required"
+    assert device_store.terminal_error == "card_continuity_required"
+    assert device_store.authorization is None
+
+
+def test_a_genuinely_new_card_still_enrolls_by_device_login(device_client, monkeypatch):
+    client, device_store = device_client
+    client.app.state.automation_access_factory = lambda: DeviceConsentAccess(client.app, revision=0)
+    captured: dict[str, Any] = {}
+
+    async def _issue(_request, _store, **authority):
+        captured.update(authority)
+        return JSONResponse({"access_token": "new-card-token", "token_type": "Bearer", "expires_in": 3600})
+
+    monkeypatch.setattr(oauth_routes, "_issue_tokens", _issue)
+    prompt = _start_without_card(client)
+    draft_id = _open_draft(client, prompt)
+    draft = client.get(
+        "/oauth/authorize/consent/draft",
+        params={"draft_id": draft_id},
+        headers={"Authorization": "Bearer admin-tok"},
+    )
+    assert draft.status_code == 200, draft.text
+    body = draft.json()
+    approved = client.post(
+        "/oauth/authorize/consent/decision",
+        json={
+            "draft_id": draft_id,
+            "decision": "approve",
+            "label": "New worker",
+            **body["selection"],
+            "expected_card_revision": body["card_revision"],
+            "expected_catalog_version": body["catalog_version"],
+        },
+        headers={"Authorization": "Bearer admin-tok"},
+    )
+    assert approved.status_code == 200, approved.text
+    token = _poll(client, prompt)
+    assert token.status_code == 200, token.text
+    assert captured["registry_access_id"] == ACCESS_ID
+
+
+def test_a_web_dynamic_client_gets_no_built_in_device_grant(device_client):
+    client, device_store = device_client
+    client_id = _browser_first_dcr_client(client, application_type="web")
+    refused = client.post(
+        "/oauth/device_authorization",
+        data={"client_id": client_id, "scope": "records:read", "resource": RESOURCE},
+    )
+    assert refused.status_code == 400
+    assert refused.json()["error"] == "unauthorized_client"
+    assert device_store.request is None
+
+
+# W414, operator ruling 2026-09-30: device login re-authorizes an existing Card
+# only with continuity proof from the requesting machine, the Card's last
+# refresh token, checked against that Card's credential families for the same
+# client. A link and code alone never re-authorize a Card, so an approval an
+# owner is tricked into gives the requester nothing.
+@pytest.mark.parametrize(
+    ("proof", "client_id", "why"),
+    [
+        (None, "claude", "no proof"),
+        ("", "claude", "empty proof"),
+        ("a-guessed-refresh-token", "claude", "wrong proof"),
+        ("another-card-last-refresh-token", "claude", "another Card's family"),
+        (CARD_PROOF, "stranger", "a stranger's client presenting the Card's proof"),
+    ],
+)
+def test_an_existing_card_needs_its_continuity_proof(device_client, proof, client_id, why):
+    client, device_store = device_client
+    client.app.state.oauth_delegated_config["public_clients"].append(
+        {
+            "client_id": "stranger",
+            "redirect_uris": ["http://localhost/callback"],
+            "grant_types": [DEVICE_GRANT_TYPE, "refresh_token"],
+        }
+    )
+    client.app.state.card_continuity.hold(
+        "another-card-last-refresh-token", "claude", "con_another_card"
+    )
+    client.app.state.card_continuity.hold(
+        "stranger-own-refresh-token", "stranger", "con_stranger_card"
+    )
+    data = {
+        "client_id": client_id,
+        "scope": "records:read",
+        "resource": RESOURCE,
+        "access_id": ACCESS_ID,
+        "expected_card_revision": "3",
+    }
+    if proof is not None:
+        data["continuity_refresh_token"] = proof
+
+    refused = client.post("/oauth/device_authorization", data=data)
+
+    assert refused.status_code == 400, why
+    assert refused.json()["error"] == "card_continuity_required", why
+    assert "device_code" not in refused.json()
+    assert device_store.request is None, why
+
+
+def test_a_stranger_cannot_open_another_s_card_with_its_own_proof(device_client):
+    client, device_store = device_client
+    client.app.state.oauth_delegated_config["public_clients"].append(
+        {
+            "client_id": "stranger",
+            "redirect_uris": ["http://localhost/callback"],
+            "grant_types": [DEVICE_GRANT_TYPE, "refresh_token"],
+        }
+    )
+    client.app.state.card_continuity.hold(
+        "stranger-own-refresh-token", "stranger", "con_stranger_card"
+    )
+    refused = client.post(
+        "/oauth/device_authorization",
+        data={
+            "client_id": "stranger",
+            "scope": "records:read",
+            "resource": RESOURCE,
+            "access_id": ACCESS_ID,
+            "continuity_refresh_token": "stranger-own-refresh-token",
+        },
+    )
+    assert refused.status_code == 400
+    assert refused.json()["error"] == "card_continuity_required"
+    assert device_store.request is None
+    # The check asked about exactly the requested Card and client.
+    assert client.app.state.card_continuity.asked[-1] == (
+        "stranger-own-refresh-token", "stranger", ACCESS_ID,
+    )
+
+
+def test_the_machine_that_held_the_card_re_authorizes_it_with_the_same_client(device_client):
+    client, device_store = device_client
+    prompt = _start(client).json()
+
+    assert prompt["user_code"] == "BCDF-GHJK"
+    assert device_store.request["client_id"] == "claude"
+    assert device_store.request["requested_access_id"] == ACCESS_ID
+    assert client.app.state.card_continuity.asked == [(CARD_PROOF, "claude", ACCESS_ID)]
+    # The proof is checked, never stored with the device request.
+    assert CARD_PROOF not in json.dumps(device_store.request)
 
 
 def test_failed_issuance_after_device_consumption_requires_restart(
@@ -522,6 +867,7 @@ def test_device_card_binding_is_terminal_and_distinct(
     device_client, access_id, revision, expected_error
 ):
     client, device_store = device_client
+    client.app.state.card_continuity.hold(CARD_PROOF, "claude", access_id)
     prompt = _start(
         client,
         access_id=access_id,

@@ -84,6 +84,7 @@ def test_approving_a_worker_s_device_names_it_on_the_page(device_client):
             "kdcube_worker_alias": "claude-ops",
         },
     ).json()
+    client.app.state.card_continuity.hold("worker-card-proof", registered["client_id"], ACCESS_ID)
     prompt = client.post(
         "/oauth/device_authorization",
         data={
@@ -92,6 +93,7 @@ def test_approving_a_worker_s_device_names_it_on_the_page(device_client):
             "resource": RESOURCE,
             "access_id": ACCESS_ID,
             "expected_card_revision": "3",
+            "continuity_refresh_token": "worker-card-proof",
         },
     ).json()
     draft_id = _open_draft(client, prompt)

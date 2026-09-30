@@ -1,7 +1,11 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Elena Viter
 
-"""Dry-run-first command for a reset into durable authority storage."""
+"""Dry-run-first command for a reset into durable authority storage.
+
+It also runs the W414 release step that gives existing public native clients
+the device grant (``grant-device-to-public-native-clients``).
+"""
 
 from __future__ import annotations
 
@@ -27,6 +31,7 @@ from kdcube_ai_app.ops.authority_cutover.evidence import (
 )
 from kdcube_ai_app.ops.authority_cutover.runtime import (
     apply_reset_target,
+    open_oauth_authority,
     open_reset_source,
     open_reset_target,
     rehearse_reset_target,
@@ -49,6 +54,11 @@ def _parser() -> argparse.ArgumentParser:
     apply.add_argument("--preview-file", required=True)
     apply.add_argument("--confirm-preview-sha256", required=True)
     apply.add_argument("--source-quiesced", action="store_true")
+
+    device_grant = commands.add_parser("grant-device-to-public-native-clients")
+    device_grant.add_argument(
+        "--every-process-checks-card-continuity", action="store_true"
+    )
     return parser
 
 
@@ -150,8 +160,53 @@ async def _preflight_target(args: argparse.Namespace) -> int:
             await source.close()
 
 
+async def _grant_device_to_public_native_clients(args: argparse.Namespace) -> int:
+    """W414 release step: give existing public native clients the device grant.
+
+    A handler older than the Card continuity check would let a migrated client
+    re-authorize any Card by device login without proof. The operator runs
+    this only after every process serves the checked handler and says so with
+    the flag; without it nothing is contacted or changed.
+    """
+
+    if not args.every_process_checks_card_continuity:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": "device_grant_migration_requires_checked_rollout",
+                    "detail": (
+                        "Run this only after every process serves the W414 "
+                        "Card continuity check, with "
+                        "--every-process-checks-card-continuity."
+                    ),
+                },
+                sort_keys=True,
+            )
+        )
+        return 2
+    runtime = await open_oauth_authority(get_settings())
+    try:
+        changed = await runtime.authority.grant_device_to_public_native_clients()
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "schema": runtime.authority.schema,
+                    "clients_updated": changed,
+                },
+                sort_keys=True,
+            )
+        )
+        return 0
+    finally:
+        await runtime.close()
+
+
 async def async_main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "grant-device-to-public-native-clients":
+        return await _grant_device_to_public_native_clients(args)
     if args.command == "preview":
         return await _preview(args)
     if args.command == "preflight-target":
