@@ -117,6 +117,7 @@ from connection_hub.delegated_credentials.oauth.flow import (
 from connection_hub.delegated_credentials.oauth.pkce import verify_s256
 from connection_hub.delegated_credentials.oauth.authority_store import (
     RefreshTokenReuseDetected,
+    refresh_request_fingerprint,
 )
 from connection_hub.delegated_credentials.oauth.store import (
     GrantStoreUnavailable,
@@ -3660,8 +3661,25 @@ async def token(request: Request) -> Response:
         client_id = form.get("client_id")
         if not rt:
             return _token_error("invalid_request", "missing refresh_token")
+        # W408: a client that lost a refresh response retries it with the same
+        # attempt id. The fingerprint binds that retry to this client,
+        # resource and scope. It is never logged, and without an attempt id
+        # the refresh is judged exactly as before.
+        retry_fingerprint = refresh_request_fingerprint(
+            refresh_attempt=str(form.get("refresh_attempt") or ""),
+            client_id=str(client_id or ""),
+            resource=str(form.get("resource") or ""),
+            scope=str(form.get("scope") or ""),
+        )
         try:
-            refresh_state = await store.get_refresh_token_state(rt)
+            refresh_state = await store.get_refresh_token_state(
+                rt,
+                **(
+                    {"refresh_request_fingerprint": retry_fingerprint}
+                    if retry_fingerprint
+                    else {}
+                ),
+            )
         except RefreshTokenReuseDetected:
             return _refresh_refused(
                 "refresh_token_reuse_detected",
@@ -3777,6 +3795,11 @@ async def token(request: Request) -> Response:
                 ),
                 card_kind=refresh_card_kind or None,
                 state=refresh_state,
+                **(
+                    {"refresh_request_fingerprint": retry_fingerprint}
+                    if retry_fingerprint
+                    else {}
+                ),
             )
         except RefreshTokenReuseDetected:
             return _refresh_refused(
