@@ -970,3 +970,63 @@ async def test_a_reconciling_card_is_a_retryable_503_that_keeps_the_token(ctx, m
     assert response.json()["error"] == "temporarily_unavailable"
     assert int(response.headers["Retry-After"]) > 0
     assert await store.validate_refresh_token(refresh_token) is not None
+
+
+@pytest.mark.asyncio
+async def test_refresh_passes_a_retry_fingerprint_only_when_the_client_sends_an_attempt(ctx, caplog):
+    """W408: the attempt id reaches the store as a fingerprint of this client, resource and scope."""
+
+    from connection_hub.delegated_credentials.oauth.authority_store import (
+        refresh_request_fingerprint,
+    )
+
+    client, store = ctx
+    code = await _seed_code(store)
+    first = client.post("/oauth/token", data={
+        "grant_type": "authorization_code", "code": code,
+        "redirect_uri": "http://127.0.0.1:9000/callback", "client_id": "claude",
+        "code_verifier": VERIFIER,
+    }).json()
+    refresh_token = first["refresh_token"]
+    _seed_live_card(store, await store.validate_refresh_token(refresh_token))
+
+    seen: list[tuple[str, dict]] = []
+    original_state = store.get_refresh_token_state
+    original_rotate = store.rotate_refresh_token
+
+    async def recording_state(token, **kwargs):
+        seen.append(("state", dict(kwargs)))
+        return await original_state(token)
+
+    async def recording_rotate(token, **kwargs):
+        seen.append(("rotate", {k: v for k, v in kwargs.items() if k == "refresh_request_fingerprint"}))
+        kwargs.pop("refresh_request_fingerprint", None)
+        return await original_rotate(token, **kwargs)
+
+    store.get_refresh_token_state = recording_state
+    store.rotate_refresh_token = recording_rotate
+    attempt = "attempt-" + "e" * 40
+    with caplog.at_level("DEBUG"):
+        response = client.post("/oauth/token", data={
+            "grant_type": "refresh_token", "refresh_token": refresh_token,
+            "client_id": "claude", "refresh_attempt": attempt,
+        })
+    assert response.status_code == 200
+    expected = refresh_request_fingerprint(
+        refresh_attempt=attempt, client_id="claude", resource="", scope="",
+    )
+    assert seen == [
+        ("state", {"refresh_request_fingerprint": expected}),
+        ("rotate", {"refresh_request_fingerprint": expected}),
+    ]
+    assert attempt not in caplog.text
+
+    # A client that sends no attempt calls the store exactly as before.
+    renewed = response.json()["refresh_token"]
+    _seed_live_card(store, await store.validate_refresh_token(renewed))
+    seen.clear()
+    again = client.post("/oauth/token", data={
+        "grant_type": "refresh_token", "refresh_token": renewed, "client_id": "claude",
+    })
+    assert again.status_code == 200
+    assert seen == [("state", {}), ("rotate", {})]
