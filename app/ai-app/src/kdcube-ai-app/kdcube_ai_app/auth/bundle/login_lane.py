@@ -313,6 +313,7 @@ class BundleLoginConfig:
     cookie_same_site: str
     cookie_domain: str
     session_cookie_name: str
+    select_account: bool = False
 
     @property
     def authenticator_kind(self) -> str:
@@ -374,6 +375,9 @@ def bundle_login_config(settings: Any | None = None) -> BundleLoginConfig | None
         )
         return None
     input_cfg = _dict(provider.get("input"))
+    select_account = input_cfg.get("select_account", False)
+    if not isinstance(select_account, bool):
+        raise ValueError("input.select_account must be a boolean")
     issuer_cfg = _dict(provider.get("issuer"))
     cookie_cfg = _dict(issuer_cfg.get("cookie"))
     scopes = tuple(_str(s) for s in (input_cfg.get("scopes") or ("openid", "email", "profile")) if _str(s))
@@ -406,6 +410,7 @@ def bundle_login_config(settings: Any | None = None) -> BundleLoginConfig | None
         cookie_same_site=_str(cookie_cfg.get("same_site") or cookie_cfg.get("samesite") or "lax").lower(),
         cookie_domain=_str(cookie_cfg.get("domain")),
         session_cookie_name=_str(getattr(auth_cfg, "AUTH_TOKEN_COOKIE_NAME", "")) or "__Secure-LATC",
+        select_account=select_account,
     )
 
 
@@ -534,6 +539,7 @@ async def _upstream(config: BundleLoginConfig, *, redirect_uri: str) -> Upstream
     client_secret = ""
     if config.client_secret_ref:
         client_secret = _str(await get_secret(config.client_secret_ref, default=None))
+    extra_authorize_params = {"prompt": "select_account"} if config.select_account else {}
     if config.authenticator_kind == "cognito":
         client = OidcClientConfig.cognito(
             issuer=config.issuer_url,
@@ -542,6 +548,7 @@ async def _upstream(config: BundleLoginConfig, *, redirect_uri: str) -> Upstream
             redirect_uri=redirect_uri,
             hosted_ui_domain=config.hosted_ui_domain,
             scopes=config.scopes,
+            extra_authorize_params=extra_authorize_params,
         )
     else:
         client = OidcClientConfig(
@@ -551,6 +558,7 @@ async def _upstream(config: BundleLoginConfig, *, redirect_uri: str) -> Upstream
             redirect_uri=redirect_uri,
             scopes=config.scopes,
             provider=config.identity_provider,
+            extra_authorize_params=extra_authorize_params,
         )
     flow = OidcCodeFlow(client, verifier=_verifier_for(config), discover=None)
     cached = _ENDPOINTS.get(config.issuer_url)
