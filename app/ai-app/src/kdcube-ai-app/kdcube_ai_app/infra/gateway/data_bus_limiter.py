@@ -26,6 +26,34 @@ class DataBusPublishLimitResult:
     stats: dict[str, int] = field(default_factory=dict)
 
 
+# Admits one publish package atomically (W435): KEYS are the counters, ARGV
+# the TTL, then one increment and one limit per key (-1 is unlimited). Returns
+# {admitted, observed...}, the counts including this package. Nothing is
+# written when any counter would exceed its limit.
+DATA_BUS_ADMIT_SCRIPT = """
+local n = #KEYS
+local ttl = tonumber(ARGV[1])
+local observed = {}
+local admitted = 1
+for i = 1, n do
+  local inc = tonumber(ARGV[1 + i])
+  local lim = tonumber(ARGV[1 + n + i])
+  local value = tonumber(redis.call('GET', KEYS[i]) or '0') + inc
+  observed[i] = value
+  if lim ~= -1 and value > lim then admitted = 0 end
+end
+if admitted == 1 then
+  for i = 1, n do
+    redis.call('INCRBY', KEYS[i], tonumber(ARGV[1 + i]))
+    redis.call('EXPIRE', KEYS[i], ttl)
+  end
+end
+local out = {admitted}
+for i = 1, n do out[i + 1] = observed[i] end
+return out
+"""
+
+
 def _user_type(session: UserSession) -> str:
     value = getattr(getattr(session, "user_type", None), "value", None)
     return str(value or getattr(session, "user_type", "") or "registered").strip().lower()
@@ -133,21 +161,19 @@ async def check_data_bus_publish_limits(
     }
     ttl_seconds = max(window_seconds * 2, window_seconds + 10)
 
-    pipe = redis.pipeline()
-    for field_name, key in keys.items():
-        amount = increments[field_name]
-        if amount == 1:
-            pipe.incr(key)
-        else:
-            pipe.incrby(key, amount)
-        pipe.expire(key, ttl_seconds)
-    result = await pipe.execute()
-
-    stats = {
-        "packages_per_minute": int(result[0] or 0),
-        "messages_per_minute": int(result[2] or 0),
-        "bytes_per_minute": int(result[4] or 0),
-    }
+    # One atomic step (W435): a package is counted only when every counter
+    # admits it, so rejected publishes never spend the window.
+    fields = list(keys)
+    limits = [int(getattr(limit, field_name)) for field_name in fields]
+    result = await redis.eval(
+        DATA_BUS_ADMIT_SCRIPT,
+        len(fields),
+        *[keys[field_name] for field_name in fields],
+        ttl_seconds,
+        *[increments[field_name] for field_name in fields],
+        *limits,
+    )
+    stats = {field_name: int(result[1 + index] or 0) for index, field_name in enumerate(fields)}
     for field_name, observed in stats.items():
         configured = int(getattr(limit, field_name))
         if configured != -1 and observed > configured:

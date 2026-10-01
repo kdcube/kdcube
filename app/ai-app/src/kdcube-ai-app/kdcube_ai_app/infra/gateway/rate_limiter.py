@@ -3,7 +3,9 @@
 
 # infra/gateway/rate_limiter.py
 
+import hashlib
 import time
+import uuid
 import logging
 from dataclasses import dataclass
 
@@ -17,11 +19,44 @@ from kdcube_ai_app.infra.redis.client import get_async_redis_client
 logger = logging.getLogger(__name__)
 
 
+# Counts and records one request atomically (W435). Returns
+# {admitted, burst_count, hour_count}, where the counts include this request
+# when admitted and are the counts that refused it otherwise. A limit of -1 is
+# unlimited. Nothing is written for a refused request.
+_ADMIT_SCRIPT = """
+local burst_key = KEYS[1]
+local hour_key = KEYS[2]
+local now = tonumber(ARGV[1])
+local window = tonumber(ARGV[2])
+local burst_limit = tonumber(ARGV[3])
+local hour_limit = tonumber(ARGV[4])
+local hour_ttl = tonumber(ARGV[5])
+local member = ARGV[6]
+redis.call('ZREMRANGEBYSCORE', burst_key, 0, now - window)
+local burst = redis.call('ZCARD', burst_key) + 1
+local hour = tonumber(redis.call('GET', hour_key) or '0') + 1
+if (burst_limit ~= -1 and burst > burst_limit) or (hour_limit ~= -1 and hour > hour_limit) then
+  return {0, burst, hour}
+end
+redis.call('ZADD', burst_key, now, member)
+redis.call('EXPIRE', burst_key, window)
+redis.call('INCR', hour_key)
+redis.call('EXPIRE', hour_key, hour_ttl)
+return {1, burst, hour}
+"""
+
+
 def rate_limit_subject(session: UserSession) -> str:
     """Return the stable subject that owns this request budget."""
 
     subject = str(getattr(session, "rate_limit_subject", None) or "").strip()
     return subject or str(session.session_id)
+
+
+def _subject_digest(subject: str) -> str:
+    """A short, stable digest of a budget subject for logs, never the raw id."""
+
+    return hashlib.sha256(str(subject).encode("utf-8")).hexdigest()[:12]
 
 
 class RateLimitError(GatewayError):
@@ -93,25 +128,41 @@ class RateLimiter:
         rate_key = f"{self.RATE_LIMIT_PREFIX}:{rate_limit_subject(session)}"
         current_time = time.time()
 
-        # Use Redis pipeline for atomic operations (your existing code)
-        pipe = self.redis.pipeline()
-
-        # Check burst limit (sliding window)
+        # One atomic step (W435): prune the burst window, count it and the
+        # hourly bucket, and record this request only when both limits admit
+        # it. A refused request is never written, so a client retrying on 429
+        # does not keep its own window full; members are unique, so two
+        # requests in the same instant are both counted.
         burst_key = f"{rate_key}:burst"
-        pipe.zremrangebyscore(burst_key, 0, current_time - config.burst_window)
-        pipe.zcard(burst_key)
-        pipe.zadd(burst_key, {str(current_time): current_time})
-        pipe.expire(burst_key, config.burst_window)
-
-        # Check hourly limit
         hour_key = f"{rate_key}:hour:{int(current_time // 3600)}"
-        pipe.incr(hour_key)
-        pipe.expire(hour_key, self.gateway_config.redis.rate_limit_key_ttl)
-
-        results = await pipe.execute()
-
-        burst_count = results[1]
-        hour_count = results[4]
+        member = f"{current_time:.6f}:{uuid.uuid4().hex}"
+        admitted, burst_count, hour_count = await self.redis.eval(
+            _ADMIT_SCRIPT,
+            2,
+            burst_key,
+            hour_key,
+            current_time,
+            config.burst_window,
+            config.burst_limit,
+            config.requests_per_hour,
+            self.gateway_config.redis.rate_limit_key_ttl,
+            member,
+        )
+        burst_count = int(burst_count)
+        hour_count = int(hour_count)
+        if not int(admitted):
+            # W435: one line per refusal, so a burst can be traced to its
+            # session and path without reading tokens, cookies or bodies.
+            logger.warning(
+                "rate limit refused subject=%s user_type=%s endpoint=%s burst=%s/%s hour=%s/%s",
+                _subject_digest(rate_limit_subject(session)),
+                session.user_type.value,
+                endpoint,
+                burst_count,
+                config.burst_limit,
+                hour_count,
+                config.requests_per_hour,
+            )
 
         # Check limits (your existing logic with monitoring)
         if config.burst_limit != -1 and burst_count > config.burst_limit:
