@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import time
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -311,6 +312,47 @@ def test_config_resolves_cognito_authenticator_from_the_registry():
     assert config.session_cookie_name == "__Secure-LATC"
     assert config.groups_claim == "cognito:groups"
     assert LOGIN_ROUTE == "/api/platform/session/login"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("authenticator_type", ["multi_cognito", "oidc"])
+@pytest.mark.parametrize("input_policy", [{}, {"select_account": False}, {"select_account": True}])
+async def test_interactive_account_selection_policy_reaches_the_hosted_authorize_url(
+    monkeypatch, authenticator_type, input_policy,
+):
+    from connection_hub.server_side_login.oidc import OidcEndpoints, pkce_challenge
+    from kdcube_ai_app.auth.bundle import login_lane
+
+    platform_auth = _platform_auth(authenticator_type=authenticator_type, input=input_policy)
+    if authenticator_type == "oidc":
+        platform_auth["login_authenticator"]["provider"]["authenticator"]["issuer"] = "https://idp.example.test"
+    config = bundle_login_config(_settings(platform_auth))
+    expected_selection = input_policy.get("select_account", False)
+    assert config.select_account is expected_selection
+    monkeypatch.setattr(login_lane, "_ENDPOINTS", {config.issuer_url: OidcEndpoints(
+        authorization_endpoint="https://auth.example.test/oauth2/authorize",
+        token_endpoint="https://auth.example.test/oauth2/token", issuer=config.issuer_url,
+    )})
+    flow = await login_lane._upstream(config, redirect_uri="https://app.test/api/platform/session/callback")
+    attempt = LoginAttempt(state="st", binding="b", nonce="n", code_verifier="v" * 43,
+                           next_path="/", created_at=0, expires_at=999)
+    query = parse_qs(urlsplit(await flow.begin(attempt)).query)
+    if expected_selection:
+        assert query["prompt"] == ["select_account"]
+    else:
+        assert "prompt" not in query
+    assert "identity_provider" not in query and "login_hint" not in query
+    assert query["state"] == ["st"] and query["nonce"] == ["n"]
+    assert query["client_id"] == [config.client_id]
+    assert query["redirect_uri"] == ["https://app.test/api/platform/session/callback"]
+    assert query["code_challenge"] == [pkce_challenge(attempt.code_verifier)]
+    assert query["code_challenge_method"] == ["S256"]
+
+
+@pytest.mark.parametrize("value", ["true", "false", 1, 0, None])
+def test_interactive_account_selection_policy_requires_a_boolean(value):
+    with pytest.raises(ValueError, match="input.select_account must be a boolean"):
+        bundle_login_config(_settings(_platform_auth(input={"select_account": value})))
 
 
 def test_grants_lookup_uses_the_same_subject_as_direct_cognito(monkeypatch):

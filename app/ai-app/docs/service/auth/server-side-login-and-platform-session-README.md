@@ -264,6 +264,7 @@ authority_registry:
               provider_id: cognito_demo
             scopes: [openid, email, profile]
             groups_claim: cognito:groups      # optional: authenticator groups become roles
+            select_account: true             # optional: interactive account chooser; default false
             # accept_authenticator_tokens: false   # default true: the host may also accept tokens from these pools
             # client_secret_ref: ...           # only for a confidential app client
             # redirect_uri: https://...        # only when it differs from <origin>/api/platform/session/callback
@@ -287,6 +288,24 @@ authority_registry:
               roles: [kdcube:role:registered, kdcube:role:super-admin]
               permissions: ["kdcube:*:*:*"]
 ```
+
+`input.select_account` is a boolean, defaulting to `false`. When enabled,
+the interactive login sends `prompt=select_account` to the configured OIDC
+authorization endpoint. The normal Cognito hosted sign-in page remains the
+entry point: no identity provider or email is forced. Cognito managed login
+forwards the prompt when the user selects an external provider such as Google;
+classic hosted UI does not support this prompt. See the
+[Cognito authorization endpoint](https://docs.aws.amazon.com/cognito/latest/developerguide/authorization-endpoint.html)
+and [Google OIDC parameters](https://developers.google.com/identity/openid-connect/openid-connect#authenticationuriparameters).
+This policy requests account selection, not renewed consent. It does not add a
+`login_hint`, change verified identity/grants, or affect sliding session renewal
+or token exchange. State, nonce, redirect/client binding and S256 PKCE remain
+owned by the login attempt. Invalid non-boolean values fail configuration.
+
+Activation requires deploying compatible platform and Connection Hub package
+source, then enabling this field on the selected `server_login` descriptor.
+Verify the normal hosted Google button with one cached account in the target
+browser; an authorization URL alone does not prove the visible chooser.
 
 Register exactly two URLs per public origin on the app client:
 

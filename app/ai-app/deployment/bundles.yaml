@@ -2574,6 +2574,7 @@ bundles:
               #     - email
               #     - profile
               #     groups_claim: cognito:groups
+              #     select_account: true  # interactive chooser; omitted/false keeps provider defaults
               #   issuer:
               #     type: kdcube_session_token
               #     ttl_seconds: 43200
