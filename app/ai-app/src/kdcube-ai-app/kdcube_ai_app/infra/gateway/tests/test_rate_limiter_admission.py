@@ -120,3 +120,35 @@ def test_sessions_keep_separate_budgets():
         await limiter.redis.aclose()
 
     asyncio.run(run())
+
+
+def test_an_hourly_refusal_admits_nothing_and_keeps_the_counter_ttls():
+    async def run():
+        limiter, _ = _limiter(burst=10, hourly=3)
+        session = _session()
+        assert [await _attempt(limiter, session) for _ in range(6)] == [True, True, True, False, False, False]
+        burst_key = f"{limiter.RATE_LIMIT_PREFIX}:{session.session_id}:burst"
+        # The hourly refusals left no burst entry behind.
+        assert await limiter.redis.zcard(burst_key) == 3
+        hour_keys = [k async for k in limiter.redis.scan_iter(f"{limiter.RATE_LIMIT_PREFIX}:*:hour:*")]
+        assert int(await limiter.redis.get(hour_keys[0])) == 3
+        assert 0 < await limiter.redis.ttl(burst_key) <= 60
+        assert 3500 < await limiter.redis.ttl(hour_keys[0]) <= 3600
+        await limiter.redis.aclose()
+
+    asyncio.run(run())
+
+
+def test_the_refusal_log_names_a_digest_never_the_raw_session(caplog):
+    async def run():
+        limiter, _ = _limiter(burst=1, hourly=100)
+        session = _session()
+        with caplog.at_level("WARNING", logger="kdcube_ai_app.infra.gateway.rate_limiter"):
+            assert [await _attempt(limiter, session) for _ in range(2)] == [True, False]
+        refusals = [r.getMessage() for r in caplog.records if "rate limit refused" in r.getMessage()]
+        assert len(refusals) == 1
+        assert session.session_id not in refusals[0]
+        assert "burst=2/1" in refusals[0]
+        await limiter.redis.aclose()
+
+    asyncio.run(run())
