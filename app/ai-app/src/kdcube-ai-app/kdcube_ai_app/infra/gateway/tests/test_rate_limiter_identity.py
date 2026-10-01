@@ -52,6 +52,13 @@ class _Redis:
         self.last_pipeline = _Pipeline()
         return self.last_pipeline
 
+    async def eval(self, _script, key_count, *args):
+        # W435: the limiter admits and records in one script; record its keys.
+        self.last_pipeline = _Pipeline()
+        for key in args[:key_count]:
+            self.last_pipeline._record(key)
+        return [1, 1, 1]
+
 
 class _SessionRedis:
     def __init__(self) -> None:

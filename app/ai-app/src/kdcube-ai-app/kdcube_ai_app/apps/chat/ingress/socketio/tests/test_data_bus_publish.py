@@ -46,6 +46,20 @@ class FakeRedis:
     def pipeline(self):
         return FakePipeline(self)
 
+    async def eval(self, _script, key_count, *args):
+        # W435: the Data Bus admission script, emulated: count each key with
+        # its increment; write only when every limit admits the package.
+        keys = list(args[:key_count])
+        rest = list(args[key_count:])
+        increments = [int(value) for value in rest[1:1 + key_count]]
+        limits = [int(value) for value in rest[1 + key_count:1 + 2 * key_count]]
+        observed = [int(self.values.get(key) or 0) + inc for key, inc in zip(keys, increments)]
+        admitted = all(lim == -1 or value <= lim for value, lim in zip(observed, limits))
+        if admitted:
+            for key, value in zip(keys, observed):
+                self.values[key] = value
+        return [1 if admitted else 0, *observed]
+
     async def incr(self, key):
         self.values[key] = int(self.values.get(key) or 0) + 1
         return self.values[key]
@@ -1413,3 +1427,39 @@ async def test_publish_card_lookup_reads_through_the_durable_store(monkeypatch):
     assert card is None and error is not None
     assert seen["card_store"] is store
     assert seen["expected_grantor_subject"] == "grantor-a"
+
+
+@pytest.mark.asyncio
+async def test_rejected_data_bus_publishes_do_not_spend_the_window(monkeypatch):
+    """W435: a rejected package is not counted, so retries cannot keep the window full."""
+
+    redis = FakeRedis()
+    app = _app(
+        redis,
+        data_bus=DataBusSettings(publish_limits={
+            "registered": DataBusPublishLimit(packages_per_minute=1, messages_per_minute=-1, bytes_per_minute=-1),
+        }),
+    )
+    _patch_registered_bundle(monkeypatch)
+    ingress = DataBusSocketIOIngress(app=app)
+
+    def payload(message_id):
+        return {
+            "schema": "kdcube.data_bus.ingress.v1",
+            "bundle_id": "task-tracker@1-0",
+            "messages": [{
+                "message_id": message_id, "subject": "task_tracker.canvas.patch",
+                "object_ref": "canvas:main", "idempotency_key": message_id,
+                "payload": {"base_revision": 1, "operations": []},
+            }],
+        }
+
+    assert (await ingress.handle_publish(sid="socket-1", socket_session=_socket_session(), data=payload("m1")))["status"] == "accepted"
+    for index in range(5):
+        ack = await ingress.handle_publish(sid="socket-1", socket_session=_socket_session(), data=payload(f"retry-{index}"))
+        assert ack["status"] == "rejected"
+        # Each retry observes 2 (the admitted package plus itself), never more.
+        assert ack["rejected"][0]["observed"] == 2
+    counters = [int(value) for key, value in redis.values.items() if key.endswith(":packages")]
+    assert counters == [1]
+
