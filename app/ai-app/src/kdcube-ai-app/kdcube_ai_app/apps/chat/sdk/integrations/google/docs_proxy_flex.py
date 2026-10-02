@@ -38,6 +38,8 @@ import httpx
 from kdcube_ai_app.apps.chat.sdk.integrations.provider_errors import (
     provider_failure_from_exception,
 )
+from kdcube_ai_app.apps.chat.sdk.integrations.docs.tables import DEFAULT_TABLE_ROWS
+from kdcube_ai_app.apps.chat.sdk.integrations.google.docs_structure import body_tables
 from kdcube_ai_app.apps.chat.sdk.integrations.google.docs_proxy import (
     DOCS_API,
     DocsValidationError,
@@ -85,9 +87,14 @@ _ALLOWED_REQUEST_KINDS = frozenset({
     "mergeTableCells",
     "unmergeTableCells",
     "updateTableCellStyle",
+    "pinTableHeaderRows",
     "createNamedRange",
     "deleteNamedRange",
+    "insertComment",
 })
+
+# Docs insertComment: content "must not exceed 2048 UTF-8 code units".
+MAX_COMMENT_UTF8 = 2048
 
 # Request kinds whose text payload we bound.
 _TEXT_KINDS = {"insertText", "replaceAllText"}
@@ -126,15 +133,6 @@ def _structural_element(block: Mapping[str, Any]) -> dict[str, Any] | None:
             "bulleted": "bullet" in paragraph,
             "text": text,
         }
-    table = block.get("table")
-    if isinstance(table, Mapping):
-        return {
-            "type": "table",
-            "start_index": start,
-            "end_index": end,
-            "rows": _int(table.get("rows")),
-            "columns": _int(table.get("columns")),
-        }
     if isinstance(block.get("sectionBreak"), Mapping):
         return {"type": "section_break", "start_index": start, "end_index": end}
     if isinstance(block.get("tableOfContents"), Mapping):
@@ -142,14 +140,44 @@ def _structural_element(block: Mapping[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def _elements_from_body(body: Any) -> list[dict[str, Any]]:
+def _table_element(table: Mapping[str, Any]) -> dict[str, Any]:
+    """A table with per-cell indices; content_start/content_end bound the
+    editable text (the cell's final newline is excluded)."""
+    rows = table["cells"][:DEFAULT_TABLE_ROWS]
+    return {
+        "type": "table",
+        "start_index": table["start_index"],
+        "end_index": table["end_index"],
+        "position": table["position"],
+        "after_heading": table["after_heading"],
+        "rows": table["rows"],
+        "columns": table["columns"],
+        "header_rows": table["header_rows"],
+        "cells": [[dict(cell) for cell in row] for row in rows],
+        "cells_truncated": len(table["cells"]) > len(rows),
+    }
+
+
+def _elements_from_body(
+    body: Any, *, inline_objects: Mapping[str, Any] | None = None
+) -> list[dict[str, Any]]:
     content = body.get("content") if isinstance(body, Mapping) else None
+    tables = {
+        table["start_index"]: table
+        for table in body_tables(body, inline_objects=inline_objects)
+    }
     elements: list[dict[str, Any]] = []
     for block in content or []:
-        if isinstance(block, Mapping):
-            element = _structural_element(block)
-            if element is not None:
-                elements.append(element)
+        if not isinstance(block, Mapping):
+            continue
+        if isinstance(block.get("table"), Mapping):
+            table = tables.get(_int(block.get("startIndex")))
+            if table is not None:
+                elements.append(_table_element(table))
+            continue
+        element = _structural_element(block)
+        if element is not None:
+            elements.append(element)
     return elements
 
 
@@ -172,7 +200,9 @@ def _tab_records(document: Mapping[str, Any], *, with_elements: bool) -> list[di
         }
         if with_elements:
             doc_tab = tab.get("documentTab") if isinstance(tab.get("documentTab"), Mapping) else {}
-            record["elements"] = _elements_from_body(doc_tab.get("body"))
+            record["elements"] = _elements_from_body(
+                doc_tab.get("body"), inline_objects=doc_tab.get("inlineObjects")
+            )
         records.append(record)
         for child in tab.get("childTabs") or []:
             if isinstance(child, Mapping):
@@ -190,7 +220,9 @@ def _tab_records(document: Mapping[str, Any], *, with_elements: bool) -> list[di
             "parent_tab_id": "",
         }
         if with_elements:
-            record["elements"] = _elements_from_body(document.get("body"))
+            record["elements"] = _elements_from_body(
+                document.get("body"), inline_objects=document.get("inlineObjects")
+            )
         records.append(record)
     return records
 
@@ -279,6 +311,30 @@ def _stamp_tab_id(request: dict[str, Any], tab_id: str) -> None:
     _walk(request)
 
 
+def _validate_insert_comment(spec: Mapping[str, Any]) -> None:
+    content = str(spec.get("content") or "")
+    if not content.strip():
+        raise DocsValidationError("content_required", "insertComment needs content.")
+    if len(content.encode("utf-8")) > MAX_COMMENT_UTF8:
+        raise DocsValidationError(
+            "content_too_large",
+            f"insertComment content holds at most {MAX_COMMENT_UTF8} UTF-8 bytes.",
+        )
+    if spec.get("assigneeEmailAddress"):
+        raise DocsValidationError(
+            "comment_assignee_not_allowed",
+            "insertComment through batch_edit does not assign comments to people.",
+        )
+    text_range = spec.get("range")
+    start = text_range.get("startIndex") if isinstance(text_range, Mapping) else None
+    end = text_range.get("endIndex") if isinstance(text_range, Mapping) else None
+    if not (isinstance(start, int) and isinstance(end, int) and 1 <= start < end):
+        raise DocsValidationError(
+            "invalid_range",
+            "insertComment needs range.startIndex >= 1 and endIndex greater than it.",
+        )
+
+
 def _validate_request(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, Mapping) or len(raw) != 1:
         raise DocsValidationError(
@@ -297,6 +353,8 @@ def _validate_request(raw: Any) -> dict[str, Any]:
         raise DocsValidationError(
             "invalid_request", f"Request '{kind}' body must be an object."
         )
+    if kind == "insertComment":
+        _validate_insert_comment(spec)
     if kind in _TEXT_KINDS:
         text = str((spec.get("text") if kind == "insertText" else spec.get("replaceText")) or "")
         if len(text) > MAX_TEXT_CHARS:
@@ -393,6 +451,22 @@ async def _batch_edit(
     body = response.json()
     body = dict(body) if isinstance(body, Mapping) else {}
     replies = body.get("replies") if isinstance(body.get("replies"), list) else []
+    comments: dict[str, Any] = {}
+    if "insertComment" in kinds:
+        comments = {
+            "comment_update_state": _clean(body.get("commentUpdateState")),
+            "comments": [
+                {
+                    "comment_id": _clean(thread.get("commentId")),
+                    "anchor": _clean(thread.get("anchorId")),
+                    "quoted_text": _clean(thread.get("plainTextQuote")),
+                }
+                for reply in replies
+                if isinstance(reply, Mapping)
+                for thread in [((reply.get("insertComment") or {}).get("commentThread"))]
+                if isinstance(thread, Mapping)
+            ],
+        }
     return {
         "document_id": document_id,
         "web_url": _web_url(document_id),
@@ -403,6 +477,7 @@ async def _batch_edit(
         "applied_requests": len(requests),
         "request_kinds": kinds,
         "reply_count": len(replies),
+        **comments,
     }
 
 

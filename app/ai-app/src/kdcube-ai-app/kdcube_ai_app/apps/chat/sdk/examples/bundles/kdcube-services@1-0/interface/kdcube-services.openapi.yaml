@@ -475,6 +475,24 @@ paths:
         "403": { $ref: "#/components/responses/JsonError" }
         "404": { $ref: "#/components/responses/JsonError" }
 
+  /bundles/{tenant}/{project}/{bundle_id}/public/provider_fetch_download:
+    get:
+      tags: [Signed Files]
+      summary: Serve one staged file to a provider that fetches it anonymously, for the one call it was staged for.
+      operationId: provider_fetch_download
+      security:
+        - SignedDownloadToken: []
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/BundleId"
+        - $ref: "#/components/parameters/ObjectRef"
+      responses:
+        "200": { $ref: "#/components/responses/BinaryDownload" }
+        "400": { $ref: "#/components/responses/JsonError" }
+        "403": { $ref: "#/components/responses/JsonError" }
+        "404": { $ref: "#/components/responses/JsonError" }
+
   /bundles/{tenant}/{project}/{bundle_id}/public/conv_file_download:
     get:
       tags: [Signed Files]

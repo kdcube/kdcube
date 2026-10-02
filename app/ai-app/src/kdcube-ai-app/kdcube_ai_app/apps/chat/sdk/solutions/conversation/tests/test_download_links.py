@@ -61,3 +61,42 @@ def test_ttl_is_clamped():
     _, high = mint_file_download_token("s", fi_ref="conv:fi:a", user_id="u", ttl_seconds=10**9, now=0)
     assert low == 60
     assert high == 86400
+
+
+def test_a_token_for_a_third_party_carries_no_identity() -> None:
+    import base64
+    import json as _json
+
+    from kdcube_ai_app.apps.chat.sdk.solutions.conversation.download_links import (
+        mint_file_download_token,
+        verify_file_download_token,
+    )
+
+    token, _expires = mint_file_download_token(
+        "secret",
+        fi_ref="staged:abc:chart.png",
+        user_id="user-1",
+        tenant="demo",
+        project="project",
+        conversation_id="c-1",
+        include_identity=False,
+    )
+
+    body = token.split(".", 1)[0]
+    payload = _json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+    # A provider records the whole URL inside the file it inserts, so anyone
+    # who opens that file can read this payload.
+    assert set(payload) == {"v", "fi_ref", "exp"}
+
+    verified = verify_file_download_token(
+        "secret", token, fi_ref="staged:abc:chart.png", require_user_scope=False
+    )
+    assert verified["fi_ref"] == "staged:abc:chart.png"
+
+    # The surfaces that do serve a person's own file still demand the scope.
+    try:
+        verify_file_download_token("secret", token, fi_ref="staged:abc:chart.png")
+    except ValueError as exc:
+        assert "user scope" in str(exc)
+    else:  # pragma: no cover - the guard must hold
+        raise AssertionError("a person-facing download accepted an unscoped token")

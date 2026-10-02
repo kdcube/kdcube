@@ -219,6 +219,40 @@ def test_batch_edit_rejects_request_kind_not_in_allowlist():
     assert out["ok"] is False and out["error"]["code"] == "request_kind_not_allowed"
 
 
+def test_batch_edit_pins_a_table_header_row():
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            seen.append(json.loads(request.content))
+            return _json(request, {"replies": [{}]})
+        return _json(request, _TABBED_DOC)
+
+    out = _run(
+        "batch_edit",
+        {
+            "document_ref": "D1",
+            "tab_id": "t.0",
+            "requests": [
+                {
+                    "pinTableHeaderRows": {
+                        "tableStartLocation": {"index": 5},
+                        "pinnedHeaderRowsCount": 1,
+                    }
+                }
+            ],
+        },
+        handler,
+    )
+
+    # Without this a caller can build a table through the door but never mark
+    # the header row that names its columns on every later read.
+    assert out["ok"] is True, out
+    pinned = seen[0]["requests"][0]["pinTableHeaderRows"]
+    assert pinned["pinnedHeaderRowsCount"] == 1
+    assert pinned["tableStartLocation"]["tabId"] == "t.0"
+
+
 def test_batch_edit_rejects_multi_key_request():
     out = _run("batch_edit", {"document_ref": "D1", "requests": [
         {"insertText": {"text": "x"}, "replaceAllText": {}},

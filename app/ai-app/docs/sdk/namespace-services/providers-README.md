@@ -4,7 +4,7 @@ title: "Namespace Services: Providers"
 summary: "Transport-neutral SDK concept for apps (bundles) and platform subsystems that publish namespace service provider surfaces: namespace ownership, object operations, resolvers, capabilities, relations, and integrations over API, MCP, Data Bus, or local adapters."
 status: current
 tags: ["sdk", "namespace-services", "named-service-provider", "services", "namespaces", "objects", "resolvers", "mcp", "api", "data-bus", "apps", "bundles"]
-updated_at: 2026-08-14
+updated_at: 2026-10-02
 keywords:
   [
     "named service provider",
@@ -550,16 +550,14 @@ Provider implementations follow these rules:
    program, account capability, or missing API remain unavailable. A specific
    request must not be silently downgraded to a broader effect.
 
-Google Docs illustrates the last rule. The stable
+Google Docs illustrates the last rule. The
 [Drive comments API](https://developers.google.com/workspace/drive/api/guides/manage-comments)
-provides document-level threads. Native tab anchors and richer comment
-mutations are part of the
-[Docs API Developer Preview](https://developers.google.com/workspace/docs/api/reference/rest/v1/documents),
-whose use requires [preview program registration](https://developers.google.com/workspace/preview).
-A provider using only the stable surface must describe comments as
-document-level and reject a tab-anchored request with a precise capability
-error. Seeing both a tab and a Drive comment in one document is not evidence
-that the comment belongs to that tab.
+creates document-level threads only; a comment attached to text needs the Docs
+API `insertComment` request, which carries the range it is tied to. A request
+that names text therefore either reaches `insertComment` or fails with the
+reason; a document-level Drive comment is created only when no text is named. Comment reads take the attachment from
+the Docs comment anchors of each tab, not from the presence of a tab and a
+comment in the same document.
 
 The shipped `docs` provider follows that boundary. Its tab selector supports
 exact title, literal title fragment, 1-based position, and hierarchy. Its
