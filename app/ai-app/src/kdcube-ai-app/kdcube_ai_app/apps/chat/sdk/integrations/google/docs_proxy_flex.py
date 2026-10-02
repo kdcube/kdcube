@@ -90,7 +90,11 @@ _ALLOWED_REQUEST_KINDS = frozenset({
     "pinTableHeaderRows",
     "createNamedRange",
     "deleteNamedRange",
+    "insertComment",
 })
+
+# Docs insertComment: content "must not exceed 2048 UTF-8 code units".
+MAX_COMMENT_UTF8 = 2048
 
 # Request kinds whose text payload we bound.
 _TEXT_KINDS = {"insertText", "replaceAllText"}
@@ -307,6 +311,30 @@ def _stamp_tab_id(request: dict[str, Any], tab_id: str) -> None:
     _walk(request)
 
 
+def _validate_insert_comment(spec: Mapping[str, Any]) -> None:
+    content = str(spec.get("content") or "")
+    if not content.strip():
+        raise DocsValidationError("content_required", "insertComment needs content.")
+    if len(content.encode("utf-8")) > MAX_COMMENT_UTF8:
+        raise DocsValidationError(
+            "content_too_large",
+            f"insertComment content holds at most {MAX_COMMENT_UTF8} UTF-8 bytes.",
+        )
+    if spec.get("assigneeEmailAddress"):
+        raise DocsValidationError(
+            "comment_assignee_not_allowed",
+            "insertComment through batch_edit does not assign comments to people.",
+        )
+    text_range = spec.get("range")
+    start = text_range.get("startIndex") if isinstance(text_range, Mapping) else None
+    end = text_range.get("endIndex") if isinstance(text_range, Mapping) else None
+    if not (isinstance(start, int) and isinstance(end, int) and 1 <= start < end):
+        raise DocsValidationError(
+            "invalid_range",
+            "insertComment needs range.startIndex >= 1 and endIndex greater than it.",
+        )
+
+
 def _validate_request(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, Mapping) or len(raw) != 1:
         raise DocsValidationError(
@@ -325,6 +353,8 @@ def _validate_request(raw: Any) -> dict[str, Any]:
         raise DocsValidationError(
             "invalid_request", f"Request '{kind}' body must be an object."
         )
+    if kind == "insertComment":
+        _validate_insert_comment(spec)
     if kind in _TEXT_KINDS:
         text = str((spec.get("text") if kind == "insertText" else spec.get("replaceText")) or "")
         if len(text) > MAX_TEXT_CHARS:
@@ -421,6 +451,22 @@ async def _batch_edit(
     body = response.json()
     body = dict(body) if isinstance(body, Mapping) else {}
     replies = body.get("replies") if isinstance(body.get("replies"), list) else []
+    comments: dict[str, Any] = {}
+    if "insertComment" in kinds:
+        comments = {
+            "comment_update_state": _clean(body.get("commentUpdateState")),
+            "comments": [
+                {
+                    "comment_id": _clean(thread.get("commentId")),
+                    "anchor": _clean(thread.get("anchorId")),
+                    "quoted_text": _clean(thread.get("plainTextQuote")),
+                }
+                for reply in replies
+                if isinstance(reply, Mapping)
+                for thread in [((reply.get("insertComment") or {}).get("commentThread"))]
+                if isinstance(thread, Mapping)
+            ],
+        }
     return {
         "document_id": document_id,
         "web_url": _web_url(document_id),
@@ -431,6 +477,7 @@ async def _batch_edit(
         "applied_requests": len(requests),
         "request_kinds": kinds,
         "reply_count": len(replies),
+        **comments,
     }
 
 

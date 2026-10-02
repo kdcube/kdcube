@@ -403,6 +403,126 @@ def body_segments(body: Mapping[str, Any] | None) -> list[dict[str, Any]]:
     return sorted(segments, key=lambda row: row["start"])
 
 
+# Stands in for a paragraph element that is not text (chip, image, rule), so a
+# phrase cannot be matched across it and every character keeps its index.
+OBJECT_PLACEHOLDER = "￼"
+
+
+def _utf16_units(char: str) -> int:
+    return 2 if ord(char) > 0xFFFF else 1
+
+
+def _paragraphs(content: Sequence[Any] | None) -> list[Mapping[str, Any]]:
+    """Every paragraph of a body or cell, table cells included, in document order."""
+
+    out: list[Mapping[str, Any]] = []
+    for block in content or []:
+        if not isinstance(block, Mapping):
+            continue
+        if isinstance(block.get("paragraph"), Mapping):
+            out.append(block)
+            continue
+        table = block.get("table")
+        if isinstance(table, Mapping):
+            for row in table.get("tableRows") or []:
+                for cell in (row.get("tableCells") or []) if isinstance(row, Mapping) else []:
+                    if isinstance(cell, Mapping):
+                        out.extend(_paragraphs(cell.get("content")))
+    return out
+
+
+def text_spans(body: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    """One span per paragraph: its text and the Google index of every character.
+
+    ``indices[i]`` is the UTF-16 index of ``text[i]``; a non-text element is one
+    ``OBJECT_PLACEHOLDER`` per index it occupies. A paragraph inside a table
+    cell carries that cell's ``table``, ``row`` and ``column``.
+    """
+
+    segments = body_segments(body)
+    cells = [segment for segment in segments if segment["kind"] == "cell"]
+    content = body.get("content") if isinstance(body, Mapping) else None
+    spans: list[dict[str, Any]] = []
+    for block in _paragraphs(content):
+        paragraph = block["paragraph"]
+        chars: list[str] = []
+        indices: list[int] = []
+        for element in paragraph.get("elements") or []:
+            if not isinstance(element, Mapping):
+                continue
+            index = _int(element.get("startIndex"))
+            text_run = element.get("textRun")
+            if isinstance(text_run, Mapping):
+                for char in str(text_run.get("content") or ""):
+                    chars.append(char)
+                    indices.append(index)
+                    index += _utf16_units(char)
+                continue
+            for offset in range(max(1, _int(element.get("endIndex")) - index)):
+                chars.append(OBJECT_PLACEHOLDER)
+                indices.append(index + offset)
+        while chars and chars[-1] == "\n":
+            chars.pop()
+            indices.pop()
+        start = _int(block.get("startIndex"))
+        span: dict[str, Any] = {
+            "text": "".join(chars),
+            "indices": indices,
+            "start": start,
+            "kind": "heading" if _heading(paragraph) else "paragraph",
+        }
+        for cell in cells:
+            if cell["start"] <= start < cell["end"] + 1:
+                span.update(
+                    kind="cell", table=cell["table"], row=cell["row"], column=cell["column"]
+                )
+                break
+        spans.append(span)
+    return spans
+
+
+def span_range(span: Mapping[str, Any], offset: int, length: int) -> tuple[int, int]:
+    """The Google [start, end) range of ``length`` characters at ``offset`` in a span."""
+
+    indices = span["indices"]
+    last = offset + length - 1
+    return indices[offset], indices[last] + _utf16_units(span["text"][last])
+
+
+def find_text(
+    spans: Sequence[Mapping[str, Any]],
+    needle: str,
+    *,
+    match_case: bool = True,
+    context_chars: int = 40,
+) -> list[dict[str, Any]]:
+    """Every occurrence of ``needle`` inside one paragraph or cell paragraph."""
+
+    if not needle:
+        return []
+    wanted = needle if match_case else needle.lower()
+    matches: list[dict[str, Any]] = []
+    for span in spans:
+        text = str(span["text"])
+        hay = text if match_case else text.lower()
+        offset = hay.find(wanted)
+        while offset >= 0:
+            start, end = span_range(span, offset, len(needle))
+            match: dict[str, Any] = {
+                "start_index": start,
+                "end_index": end,
+                "text": text[offset : offset + len(needle)],
+                "kind": span["kind"],
+                "context": text[max(0, offset - context_chars) : offset + len(needle) + context_chars],
+            }
+            for key in ("table", "row", "column"):
+                if key in span:
+                    match[key] = span[key]
+            matches.append(match)
+            offset = hay.find(wanted, offset + 1)
+    return matches
+
+
 def table_grid(
     table: Mapping[str, Any],
     *,

@@ -219,7 +219,7 @@ DOCS_PRODUCTIVITY_TOOLS: dict[str, dict[str, Any]] = {
     # ── comment (docs:comment) ────────────────────────────────────────────
     "productivity_docs_create_comment": {
         "label": "Comment on Google Doc",
-        "description": "Create a comment on a document.",
+        "description": "Comment on a document or on text in it.",
         **_requirement(_COMMENT_CLAIMS),
     },
     "productivity_docs_update_comment": {
@@ -485,10 +485,13 @@ def register_google_docs_tools(
         name="productivity_docs_list_comments",
         title="List Google Doc comments",
         description=(
-            "List comments on a document, newest first, each with its replies. "
-            "Resolved threads are hidden unless include_resolved is set. Pass a "
-            "returned comment_id to productivity_docs_reply_comment or "
-            "productivity_docs_resolve_comment."
+            "List comments on a document, newest first, each with its replies "
+            "and what it is attached to: scope (text, cell or document), the "
+            "tab, where (paragraph, heading or table/row/column) and "
+            "current_text, the text under it now. With tab_id, only comments "
+            "attached in that tab. Resolved threads are hidden unless "
+            "include_resolved is set. Pass a returned comment_id to "
+            "productivity_docs_reply_comment or productivity_docs_resolve_comment."
         ),
         annotations=read_only_annotations(
             ToolAnnotations, title="List Google Doc comments"
@@ -512,6 +515,10 @@ def register_google_docs_tools(
             str,
             Field(description="Optional next_cursor returned by an earlier call."),
         ] = "",
+        tab_id: Annotated[
+            str,
+            Field(description="Only comments attached in this tab, from productivity_docs_get."),
+        ] = "",
         account_id: Annotated[
             str,
             Field(
@@ -531,6 +538,7 @@ def register_google_docs_tools(
                 "limit": limit,
                 "include_resolved": include_resolved,
                 "cursor": cursor,
+                "tab_id": tab_id,
             },
             account_id=account_id,
         )
@@ -1898,9 +1906,20 @@ def register_google_docs_tools(
         name="productivity_docs_create_comment",
         title="Comment on Google Doc",
         description=(
-            "Create a comment on a document, optionally quoting a passage. Returns "
-            "the new comment_id; use productivity_docs_list_comments to read the "
-            "thread later. This changes the document each time it succeeds."
+            "Comment on text a document holds, without indices. quoted_text "
+            "attaches the comment to that literal text, copied exactly from the "
+            "document; when it appears more than once nothing is written and the "
+            "answer lists the matches, and occurrence picks one. To comment on "
+            "a table cell, name it with table or selector from "
+            "productivity_docs_get, plus row (number or {where: {column, "
+            "equals}}) and column: the comment attaches to that cell's text, and "
+            "quoted_text, when given, is searched only inside it. Header and row "
+            "labels identify a cell; they are not quoted_text. "
+            "Without quoted_text or a cell the comment belongs to the whole "
+            "document. The answer states scope, where (paragraph or "
+            "table/row/column) and the new comment_id: check where names the "
+            "place you meant. preview shows the target and writes nothing. This "
+            "changes the document each time it succeeds."
         ),
         annotations=write_annotations(
             ToolAnnotations, title="Comment on Google Doc"
@@ -1918,12 +1937,56 @@ def register_google_docs_tools(
         ],
         quoted_text: Annotated[
             str,
-            Field(description="Optional passage the comment quotes."),
+            Field(description="Text to attach the comment to, copied exactly from the document."),
         ] = "",
-        anchor: Annotated[
+        occurrence: Annotated[
+            int | None,
+            Field(ge=1, description="Which match of quoted_text, 1-based, when it appears more than once."),
+        ] = None,
+        match_case: Annotated[
+            bool,
+            Field(description="Match quoted_text case exactly (default true)."),
+        ] = True,
+        table: Annotated[
+            dict[str, Any] | int | None,
+            Field(
+                description=(
+                    "Table selector: {position}, {after_heading}, "
+                    "{header_contains}; a bare number is a position within the "
+                    "tab. Omit when selector is given."
+                )
+            ),
+        ] = None,
+        selector: Annotated[
+            dict[str, Any] | None,
+            Field(description="A tables[].selector from productivity_docs_get, passed unchanged."),
+        ] = None,
+        row: Annotated[
+            dict[str, Any] | int | None,
+            Field(description="1-based row number, or {where: {column, equals | contains}}."),
+        ] = None,
+        column: Annotated[
+            str | int | None,
+            Field(description="Column name (when the table has a header) or 1-based number."),
+        ] = None,
+        header: Annotated[
+            int | None,
+            Field(ge=0, description="Header row count when the document does not mark the header."),
+        ] = None,
+        tab_id: Annotated[
             str,
-            Field(description="Optional Drive anchor JSON binding the comment to a region."),
+            Field(
+                description=(
+                    "Tab where quoted_text or the cell is found, from "
+                    "productivity_docs_get. Required when the document has "
+                    "multiple tabs and a target is given."
+                )
+            ),
         ] = "",
+        preview: Annotated[
+            bool,
+            Field(description="Show the text the comment would attach to; write nothing."),
+        ] = False,
         idempotency_key: Annotated[
             str,
             Field(
@@ -1951,7 +2014,15 @@ def register_google_docs_tools(
                 "document_ref": document_ref,
                 "content": content,
                 "quoted_text": quoted_text,
-                "anchor": anchor,
+                "occurrence": occurrence,
+                "match_case": match_case,
+                "table": table,
+                "selector": selector,
+                "row": row,
+                "column": column,
+                "header": header,
+                "tab_id": tab_id,
+                "preview": preview,
                 "idempotency_key": idempotency_key,
             },
             account_id=account_id,
@@ -2254,8 +2325,10 @@ def register_google_docs_tools(
             "updateParagraphStyle, createParagraphBullets, insertTable, "
             "insertTableRow/Column, mergeTableCells, pinTableHeaderRows, "
             "insertInlineImage, insertPageBreak, "
-            "createNamedRange, ...). Pin a new table's header row to name its "
-            "columns on later reads. Get indices/tab_id from "
+            "createNamedRange, insertComment, ...). Pin a new table's header "
+            "row to name its columns on later reads. insertComment attaches a "
+            "comment to an explicit range; the answer reports "
+            "comment_update_state and the new comment ids. Get indices/tab_id from "
             "productivity_docs_get_structure first. This is the flexible "
             "alternative to the single-purpose edit tools; unknown request kinds "
             "are rejected."

@@ -225,6 +225,10 @@ DOCS_SINGLE_TAB_ACTIONS = frozenset(
         ACTION_ADD_ROW,
     }
 )
+# A tab narrows where create_comment looks for its text and which comments
+# list_comments returns; every other comment action names one comment.
+DOCS_TAB_SCOPED_COMMENT_ACTIONS = frozenset({ACTION_CREATE_COMMENT, ACTION_LIST_COMMENTS})
+
 DOCS_COMMENT_REFERENCE_ACTIONS = frozenset(
     {
         ACTION_GET_COMMENT,
@@ -493,21 +497,28 @@ DOCS_SCHEMA = {
         },
         "comment_selector": {
             "description": (
-                "Identify one document-level comment from bounded Drive comment "
-                "pages. Matching is case-insensitive and lexical. Use author='me' "
-                "for a comment written by the connected account."
+                "Identify one comment from bounded comment pages. Matching is "
+                "case-insensitive and lexical. Use author='me' for a comment "
+                "written by the connected account."
             ),
             "fields": {
-                "text_contains": "Literal fragment in the comment or quoted text.",
-                "quoted_text_contains": "Literal fragment in quoted document text.",
+                "text_contains": (
+                    "Literal fragment in the comment, its quoted text, or the text "
+                    "under it now."
+                ),
+                "quoted_text_contains": (
+                    "Literal fragment of the commented document text, as written "
+                    "or as it reads now."
+                ),
+                "scope": "What the comment is attached to: text, cell or document.",
                 "author": "Exact display name, or 'me'.",
                 "author_contains": "Literal fragment of the author display name.",
                 "resolved": "Whether the comment thread is resolved.",
                 "position": "1-based position in the bounded provider result.",
             },
             "scope": (
-                "The stable Drive provider path manages document-level comments. "
-                "A tab-scoped request returns tab_anchored_comments_unavailable."
+                "To work with the comments of one tab, list them with tab_id or "
+                "tab_selector and use the comment_id."
             ),
         },
         "table": {
@@ -629,8 +640,8 @@ DOCS_SCHEMA = {
     },
     "delete": {
         "description": (
-            "Remove one document-level comment identified by comment_id or "
-            "comment_selector. Document files remain under their provider's "
+            "Remove one comment identified by comment_id or comment_selector. "
+            "Document files remain under their provider's "
             "lifecycle controls."
         ),
         "object_ref": "document ref",
@@ -963,33 +974,64 @@ DOCS_SCHEMA = {
             "claim": "drive:read",
         },
         ACTION_LIST_COMMENTS: {
-            "description": "List comments on the document.",
+            "description": (
+                "List comments on the document. Each comment says what it is "
+                "attached to: scope text, cell or document, the tab, where "
+                "(paragraph, heading or table/row/column) and current_text, the "
+                "text under it now; quoted_text is the text when it was written. "
+                "With tab_id or tab_selector, only comments attached in that tab."
+            ),
             "object_ref": "document ref",
-            "payload": ["include_resolved", "cursor", "limit"],
+            "payload": ["include_resolved", "cursor", "limit", "tab_id", "tab_selector"],
             "claim": "docs:read",
         },
         ACTION_GET_COMMENT: {
-            "description": "Read one document-level comment by id or selector.",
+            "description": "Read one comment by id or selector, with what it is attached to.",
             "object_ref": "document ref",
             "payload": ["comment_id", "comment_selector"],
             "claim": "docs:read",
         },
         ACTION_CREATE_COMMENT: {
-            "description": "Create a comment on the document.",
+            "description": (
+                "Comment on text the document holds. quoted_text attaches the "
+                "comment to that literal text, copied exactly from the document; "
+                "when it appears more than once, the answer lists the matches and "
+                "occurrence picks one. To comment on a table cell, name it with "
+                "table, row and column (row as a number or {where: {column, "
+                "equals}}): the comment attaches to that cell's text, and "
+                "quoted_text, when given, is searched only inside it. Header and "
+                "row labels identify a cell; they are not quoted_text. Without quoted_text or a cell the comment belongs to "
+                "the whole document. The answer states scope and where (paragraph "
+                "or table/row/column): check it names the place you meant. With "
+                "preview: true nothing is written: the answer shows the text the "
+                "comment would attach to."
+            ),
             "object_ref": "document ref",
-            "payload": ["content", "quoted_text", "anchor"],
+            "payload": [
+                "content",
+                "quoted_text",
+                "occurrence",
+                "match_case",
+                "table",
+                "row",
+                "column",
+                "header",
+                "tab_id",
+                "tab_selector",
+                "preview",
+            ],
             "claim": "docs:comment",
         },
         ACTION_REPLY_COMMENT: {
-            "description": "Reply to one document-level comment by id or selector.",
+            "description": "Reply to one comment by id or selector.",
             "object_ref": "document ref",
             "payload": ["comment_id", "comment_selector", "content"],
             "claim": "docs:comment",
         },
         ACTION_UPDATE_COMMENT: {
             "description": (
-                "Rewrite the text of one document-level comment, named by id or "
-                "selector. With reply_id, rewrite that reply instead of the "
+                "Rewrite the text of one comment, named by id or selector. With "
+                "reply_id, rewrite that reply instead of the "
                 "comment. Only the author's own comment can be rewritten."
             ),
             "object_ref": "document ref",
@@ -997,13 +1039,13 @@ DOCS_SCHEMA = {
             "claim": "docs:comment",
         },
         ACTION_RESOLVE_COMMENT: {
-            "description": "Resolve one document-level comment by id or selector.",
+            "description": "Resolve one comment by id or selector.",
             "object_ref": "document ref",
             "payload": ["comment_id", "comment_selector", "content"],
             "claim": "docs:comment",
         },
         ACTION_DELETE_COMMENT: {
-            "description": "Delete one document-level comment by id or selector.",
+            "description": "Delete one comment by id or selector.",
             "object_ref": "document ref",
             "payload": ["comment_id", "comment_selector"],
             "claim": "docs:comment",
@@ -1346,7 +1388,7 @@ DOCS_PRESENTATION = {
         },
         ACTION_CREATE_COMMENT: {
             "label": "Comment on a document",
-            "description": "Leave a comment on a document.",
+            "description": "Leave a comment on a document or on text in it.",
         },
         ACTION_REPLY_COMMENT: {
             "label": "Reply to a comment",
@@ -2149,17 +2191,16 @@ class DocsNamedServiceProvider(NamedServiceProvider):
         request: NamedServiceRequest,
     ) -> NamedServiceResponse:
         return NamedServiceResponse.error_response(
-            code="tab_anchored_comments_unavailable",
+            code="docs_comment_tab_not_supported",
             message=(
-                "This provider manages comments at document scope. Remove the tab "
-                "selector and identify the document-level comment instead."
+                "This action names a comment by comment_id or comment_selector, "
+                "not by tab."
             ),
             status=422,
             details={
-                "supported_scope": "document",
                 "next_action": (
-                    "List document comments, then use comment_selector with text, "
-                    "author, resolved state, or position."
+                    "List comments with tab_id or tab_selector, then pass the "
+                    "comment_id of the one you mean."
                 ),
             },
             provider=self._provider_identity(),
@@ -2888,8 +2929,11 @@ class DocsNamedServiceProvider(NamedServiceProvider):
                         "the returned export ref is delivered or streamed out of band."
                     ),
                     (
-                        "Use document-level comment actions with comment_id or a "
-                        "selector over text, author, resolved state, or position."
+                        "Comment on text with object.action create_comment: quote "
+                        "the text, or name a table cell by table, row and column. "
+                        "Act on one comment with its comment_id or a selector over "
+                        "text, the commented text, author, resolved state, scope, "
+                        "or position."
                     ),
                 ],
                 "providers": DOCS_PROVIDER_CATALOG,
@@ -3749,6 +3793,7 @@ class DocsNamedServiceProvider(NamedServiceProvider):
         selector_resolution: dict[str, Any] | None = None
         if (
             action in DOCS_DOCUMENT_COMMENT_ACTIONS
+            and action not in DOCS_TAB_SCOPED_COMMENT_ACTIONS
             and self._requests_tab_scoped_comment(payload)
         ):
             return self._tab_comment_scope_error(request)

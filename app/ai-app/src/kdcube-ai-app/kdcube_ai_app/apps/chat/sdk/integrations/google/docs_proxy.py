@@ -48,12 +48,14 @@ from kdcube_ai_app.apps.chat.sdk.integrations.google.docs_structure import (
     OBJECT_KINDS,
     body_tables,
     body_segments,
+    find_text,
     inline_image_record,
     magnitude_pt,
     object_record,
     public_cell,
     public_table,
     table_grid,
+    text_spans,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.provider_errors import (
     ProviderFailure,
@@ -95,6 +97,9 @@ MAX_TITLE_CHARS = 300
 MAX_REPLACEMENTS = 50
 MAX_COMMENT_CHARS = 20_000
 MAX_COMMENTS = 100
+# Docs insertComment: content "must not exceed 2048 UTF-8 code units".
+MAX_ANCHORED_COMMENT_UTF8 = 2048
+MAX_COMMENT_CANDIDATES = 5
 TABLE_WRITE_MODES = ("replace", "append", "prepend")
 
 _DOC_URL_RE = re.compile(
@@ -882,7 +887,10 @@ def _tables_inventory(
 
 
 def _resolve_tab_id(
-    tabs: Sequence[Mapping[str, Any]], selector: Mapping[str, Any]
+    tabs: Sequence[Mapping[str, Any]],
+    selector: Mapping[str, Any],
+    *,
+    holds: str = "the table",
 ) -> str:
     tab_id = _clean(selector.get("tab_id"))
     if tab_id:
@@ -902,7 +910,7 @@ def _resolve_tab_id(
     if len(tabs) > 1:
         raise DocsValidationError(
             "docs_tab_selection_required",
-            "This document has multiple tabs. Name the tab that holds the table.",
+            f"This document has multiple tabs. Name the tab that holds {holds}.",
             details=_tab_selection_details(tabs),
         )
     return _clean(tabs[0].get("tab_id")) if tabs else ""
@@ -3452,6 +3460,116 @@ def _comment_row(row: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+async def _fetch_comment_anchors(
+    client: httpx.AsyncClient, *, access_token: str, document_id: str
+) -> dict[str, Any]:
+    response = await client.get(
+        f"{DOCS_API}/documents/{document_id}",
+        headers=_headers(access_token),
+        params={
+            "includeTabsContent": "true",
+            "commentsViewMode": "COMMENTS_VIEW_MODE_INCLUDED",
+            "suggestionsViewMode": "SUGGESTIONS_INLINE",
+        },
+    )
+    _raise_for_status(response, operation="get", mutating=False)
+    body = response.json()
+    return dict(body) if isinstance(body, Mapping) else {}
+
+
+def _comment_anchor_index(document: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """anchor id -> the tab it sits in and its current ranges."""
+
+    index: dict[str, dict[str, Any]] = {}
+
+    def _walk(tabs: Any) -> None:
+        for tab in tabs or []:
+            if not isinstance(tab, Mapping):
+                continue
+            properties = tab.get("tabProperties") if isinstance(tab.get("tabProperties"), Mapping) else {}
+            document_tab = tab.get("documentTab") if isinstance(tab.get("documentTab"), Mapping) else {}
+            anchors = document_tab.get("commentAnchors")
+            for anchor_id, anchor in (anchors.items() if isinstance(anchors, Mapping) else []):
+                ranges = [
+                    (_int(item.get("startIndex")), _int(item.get("endIndex")))
+                    for item in (anchor.get("ranges") or [] if isinstance(anchor, Mapping) else [])
+                    if isinstance(item, Mapping)
+                ]
+                index[str(anchor_id)] = {
+                    "tab_id": _clean(properties.get("tabId")),
+                    "tab_title": _clean(properties.get("title")),
+                    "ranges": [pair for pair in ranges if pair[1] > pair[0]],
+                }
+            _walk(tab.get("childTabs"))
+
+    _walk(document.get("tabs"))
+    return index
+
+
+def _anchor_view(
+    document: Mapping[str, Any],
+    anchors: Mapping[str, Mapping[str, Any]],
+    anchor_id: str,
+) -> dict[str, Any]:
+    """Where a comment's anchor sits now, in the reader's terms."""
+
+    if not anchor_id:
+        return {"scope": "document"}
+    anchor = anchors.get(anchor_id)
+    if not anchor or not anchor["ranges"]:
+        return {"scope": "text", "anchor_state": "detached"}
+    tab_id = anchor["tab_id"]
+    start, end = anchor["ranges"][0]
+    pieces: list[str] = []
+    where: Any = "paragraph"
+    scope = "text"
+    for span in text_spans(_tab_body(document, tab_id=tab_id)):
+        chosen = [
+            char
+            for char, index in zip(span["text"], span["indices"])
+            if start <= index < end
+        ]
+        if not chosen:
+            continue
+        if not pieces:
+            if span["kind"] == "cell":
+                scope = "cell"
+                where = {key: span[key] for key in ("table", "row", "column")}
+            else:
+                where = span["kind"]
+        pieces.append("".join(chosen))
+    return {
+        "scope": scope,
+        "anchor_state": "attached",
+        "tab_id": tab_id,
+        "tab_title": anchor["tab_title"],
+        "where": where,
+        "current_text": "\n".join(pieces),
+    }
+
+
+async def _with_anchors(
+    client: httpx.AsyncClient,
+    *,
+    access_token: str,
+    document_id: str,
+    rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
+    """Rows joined with their anchors, or the rows and why anchors are missing."""
+
+    try:
+        document = await _fetch_comment_anchors(
+            client, access_token=access_token, document_id=document_id
+        )
+    except _DocsApiError as exc:
+        return rows, exc.failure.message or "anchors could not be read", {}
+    anchors = _comment_anchor_index(document)
+    return [
+        {**row, **_anchor_view(document, anchors, _clean(row.get("anchor")))}
+        for row in rows
+    ], "", document
+
+
 async def _list_comments(
     client: httpx.AsyncClient, *, access_token: str, payload: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -3480,13 +3598,31 @@ async def _list_comments(
     ]
     if not bool(payload.get("include_resolved")):
         items = [item for item in items if not item["resolved"]]
-    return {
+    items, anchors_unavailable, document = await _with_anchors(
+        client, access_token=access_token, document_id=document_id, rows=items
+    )
+    tab_id = ""
+    if payload.get("tab_id") or payload.get("tab_selector") not in (None, "", {}):
+        if anchors_unavailable:
+            raise DocsValidationError(
+                "docs_comment_anchors_unavailable",
+                "Comments cannot be narrowed to a tab because their anchors could "
+                f"not be read: {anchors_unavailable}",
+            )
+        tab_id = _resolve_tab_id(_document_tabs(document), payload)
+        items = [item for item in items if item.get("tab_id") == tab_id]
+    result: dict[str, Any] = {
         "document_id": document_id,
         "web_url": _web_url(document_id),
         "comments": items,
         "count": len(items),
         "next_cursor": _clean(body.get("nextPageToken")),
     }
+    if tab_id:
+        result["tab_id"] = tab_id
+    if anchors_unavailable:
+        result["anchors_unavailable"] = anchors_unavailable
+    return result
 
 
 async def _get_comment(
@@ -3503,11 +3639,20 @@ async def _get_comment(
     )
     _raise_for_status(response, operation="get_comment", mutating=False)
     body = response.json()
-    return {
+    rows, anchors_unavailable, _document = await _with_anchors(
+        client,
+        access_token=access_token,
+        document_id=document_id,
+        rows=[_comment_row(body if isinstance(body, Mapping) else {})],
+    )
+    result: dict[str, Any] = {
         "document_id": document_id,
         "web_url": _web_url(document_id),
-        "comment": _comment_row(body if isinstance(body, Mapping) else {}),
+        "comment": rows[0],
     }
+    if anchors_unavailable:
+        result["anchors_unavailable"] = anchors_unavailable
+    return result
 
 
 def _bounded_comment(value: Any) -> str:
@@ -3522,31 +3667,266 @@ def _bounded_comment(value: Any) -> str:
     return content
 
 
-async def _create_comment(
-    client: httpx.AsyncClient, *, access_token: str, payload: Mapping[str, Any]
+def _comment_cell_target(
+    document: Mapping[str, Any], payload: Mapping[str, Any]
+) -> tuple[str, dict[str, Any]]:
+    """The tab and one table cell a comment names, by the set_cells selectors."""
+
+    tables, tabs = _document_tables(document)
+    tab_id = _resolve_tab_id(tabs, payload)
+    table = _resolve_document_table(tables, tabs, payload, tab_id=tab_id)
+    try:
+        header_rows = effective_header_rows(table, payload.get("header"))
+        row = resolve_row(table, payload.get("row"), header_rows=header_rows)
+        column = resolve_column(table, payload.get("column"), header_rows=header_rows)
+    except DocsSelectorError as exc:
+        raise _selector_failure(exc) from exc
+    cell = table["cells"][row - 1][column - 1]
+    where = {"table": table.get("position"), "row": row, "column": column}
+    if cell.get("merged_into"):
+        head_row, head_column = cell["merged_into"]
+        raise DocsValidationError(
+            "docs_table_cell_merged",
+            f"Row {row}, column {column} is merged into row {head_row}, column "
+            f"{head_column}. Name that cell instead.",
+            details={**where, "merged_into": cell["merged_into"]},
+        )
+    return tab_id, {**cell, **where}
+
+
+def _comment_target(
+    document: Mapping[str, Any], payload: Mapping[str, Any]
 ) -> dict[str, Any]:
-    document_id = _document_id(payload.get("document_ref"))
+    """Where an anchored comment lands, resolved from quoted text and/or a cell."""
+
+    quoted = str(payload.get("quoted_text") or "")
+    names_cell = any(payload.get(key) not in (None, "", {}) for key in ("table", "row", "column"))
+    cell: dict[str, Any] = {}
+    if names_cell:
+        tab_id, cell = _comment_cell_target(document, payload)
+    else:
+        tab_id = _resolve_tab_id(_document_tabs(document), payload, holds="the commented text")
+    tab_titles = {tab["tab_id"]: tab.get("title") for tab in _document_tabs(document)}
+    spans = text_spans(_tab_body(document, tab_id=tab_id))
+    if cell:
+        spans = [
+            span for span in spans
+            if cell["content_start"] <= int(span["start"]) <= cell["content_end"]
+        ]
+    if not quoted:
+        if not cell.get("text"):
+            raise DocsValidationError(
+                "docs_comment_cell_empty",
+                "That cell holds no text to comment on. Name text with quoted_text, "
+                "or comment on the whole document by leaving out the cell.",
+                details={key: cell.get(key) for key in ("table", "row", "column")},
+            )
+        start, end = cell["content_start"], cell["content_end"]
+        text = str(cell["text"])
+        where = {key: cell[key] for key in ("table", "row", "column")}
+        return {
+            "scope": "cell", "tab_id": tab_id, "tab_title": tab_titles.get(tab_id, ""),
+            "start": start, "end": end, "text": text, "where": where,
+        }
+    match_case = payload.get("match_case") is not False
+    matches = find_text(spans, quoted, match_case=match_case)
+    if not matches:
+        raise DocsValidationError(
+            "quoted_text_not_found",
+            "quoted_text does not appear in the selected tab"
+            + (" cell" if cell else "")
+            + ". Copy it from the document text exactly, or set match_case=false.",
+            details={"tab_id": tab_id, "match_case": match_case},
+        )
+    occurrence = payload.get("occurrence")
+    if occurrence in (None, ""):
+        if len(matches) > 1:
+            raise DocsValidationError(
+                "quoted_text_ambiguous",
+                f"quoted_text appears {len(matches)} times. Retry with occurrence, "
+                "the 1-based number of the match to comment on.",
+                details={
+                    "occurrences": len(matches),
+                    "candidates": [
+                        {"occurrence": number, **_public_match(match)}
+                        for number, match in enumerate(
+                            matches[:MAX_COMMENT_CANDIDATES], start=1
+                        )
+                    ],
+                    "candidates_truncated": len(matches) > MAX_COMMENT_CANDIDATES,
+                },
+            )
+        chosen = matches[0]
+    else:
+        number = _int(occurrence)
+        if number < 1 or number > len(matches):
+            raise DocsValidationError(
+                "invalid_occurrence",
+                f"occurrence must be between 1 and {len(matches)}.",
+                details={"occurrences": len(matches)},
+            )
+        chosen = matches[number - 1]
+    public = _public_match(chosen)
+    return {
+        "scope": "cell" if chosen["kind"] == "cell" else "text",
+        "tab_id": tab_id,
+        "tab_title": tab_titles.get(tab_id, ""),
+        "start": chosen["start_index"],
+        "end": chosen["end_index"],
+        "text": chosen["text"],
+        "where": public["where"],
+    }
+
+
+def _public_match(match: Mapping[str, Any]) -> dict[str, Any]:
+    if match.get("kind") == "cell":
+        where: Any = {key: match[key] for key in ("table", "row", "column")}
+    else:
+        where = match.get("kind") or "paragraph"
+    return {"where": where, "context": match.get("context", "")}
+
+
+def _anchored_comment_content(value: Any) -> str:
+    content = _bounded_comment(value)
+    if len(content.encode("utf-8")) > MAX_ANCHORED_COMMENT_UTF8:
+        raise DocsValidationError(
+            "content_too_large",
+            f"An anchored comment holds at most {MAX_ANCHORED_COMMENT_UTF8} UTF-8 "
+            "bytes; shorten it.",
+        )
+    return content
+
+
+async def _create_document_comment(
+    client: httpx.AsyncClient,
+    *,
+    access_token: str,
+    document_id: str,
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
     content = _bounded_comment(payload.get("content"))
-    body: dict[str, Any] = {"content": content}
-    quoted = _clean(payload.get("quoted_text"))
-    if quoted:
-        body["quotedFileContent"] = {"value": quoted[:MAX_COMMENT_CHARS]}
-    anchor = _clean(payload.get("anchor"))
-    if anchor:
-        body["anchor"] = anchor
     response = await client.post(
         f"{DRIVE_API}/files/{document_id}/comments",
         headers=_headers(access_token),
         params={"fields": _COMMENT_FIELDS},
-        json=body,
+        json={"content": content},
     )
     _raise_for_status(response, operation="create_comment", mutating=True)
     result = response.json()
     return {
         "document_id": document_id,
         "web_url": _web_url(document_id),
+        "scope": "document",
         "comment": _comment_row(result if isinstance(result, Mapping) else {}),
         "idempotency_key": _clean(payload.get("idempotency_key")),
+    }
+
+
+async def _create_comment(
+    client: httpx.AsyncClient, *, access_token: str, payload: Mapping[str, Any]
+) -> dict[str, Any]:
+    payload = spread_table_selector(payload)
+    document_id = _document_id(payload.get("document_ref"))
+    anchored = bool(payload.get("quoted_text")) or any(
+        payload.get(key) not in (None, "", {}) for key in ("table", "row", "column")
+    )
+    if not anchored:
+        if payload.get("tab_id") or payload.get("tab_selector") not in (None, "", {}):
+            raise DocsValidationError(
+                "docs_comment_target_required",
+                "A tab narrows where quoted_text or a cell is found; a comment "
+                "without either belongs to the whole document. Add quoted_text or a "
+                "cell, or leave out the tab.",
+            )
+        if payload.get("preview") is True:
+            return {
+                "document_id": document_id,
+                "web_url": _web_url(document_id),
+                "scope": "document",
+                "written": False,
+            }
+        return await _create_document_comment(
+            client, access_token=access_token, document_id=document_id, payload=payload
+        )
+    content = _anchored_comment_content(payload.get("content"))
+    attempts = 0
+    while True:
+        attempts += 1
+        document = await _fetch_document(
+            client, access_token=access_token, document_id=document_id
+        )
+        revision = _clean(document.get("revisionId"))
+        target = _comment_target(document, payload)
+        summary = {
+            "scope": target["scope"],
+            "tab_id": target["tab_id"],
+            "tab_title": target["tab_title"],
+            "where": target["where"],
+            "quoted_text": target["text"],
+        }
+        if payload.get("preview") is True:
+            return {
+                "document_id": document_id,
+                "web_url": _web_url(document_id),
+                **summary,
+                "written": False,
+            }
+        text_range: dict[str, Any] = {"startIndex": target["start"], "endIndex": target["end"]}
+        if target["tab_id"]:
+            text_range["tabId"] = target["tab_id"]
+        try:
+            response = await _batch_update(
+                client,
+                access_token=access_token,
+                document_id=document_id,
+                requests=[{"insertComment": {"content": content, "range": text_range}}],
+                operation="create_comment",
+                write_control={"requiredRevisionId": revision} if revision else None,
+            )
+        except _DocsApiError as exc:
+            if attempts == 1 and _is_revision_mismatch(exc):
+                continue
+            raise
+        break
+    state = _clean(response.get("commentUpdateState"))
+    replies = response.get("replies") or []
+    thread = (
+        (replies[0].get("insertComment") or {}).get("commentThread")
+        if replies and isinstance(replies[0], Mapping)
+        else None
+    )
+    if state != "ALL_SAVED" or not isinstance(thread, Mapping):
+        raise DocsValidationError(
+            "docs_comment_not_saved",
+            "Google accepted the request but did not save the comment "
+            f"(commentUpdateState={state or 'missing'}). Nothing was added; retry later.",
+            details={"comment_update_state": state},
+        )
+    return {
+        "document_id": document_id,
+        "web_url": _web_url(document_id),
+        **summary,
+        "comment": _thread_row(thread),
+        "idempotency_key": _clean(payload.get("idempotency_key")),
+    }
+
+
+def _thread_row(thread: Mapping[str, Any]) -> dict[str, Any]:
+    """A Docs comment thread in the shape of a Drive comment row."""
+
+    head = thread.get("headPost") if isinstance(thread.get("headPost"), Mapping) else {}
+    author = head.get("author") if isinstance(head.get("author"), Mapping) else {}
+    return {
+        "comment_id": _clean(thread.get("commentId")),
+        "content": _clean(head.get("content")),
+        "anchor": _clean(thread.get("anchorId")),
+        "resolved": _clean(thread.get("status")).upper() == "RESOLVED",
+        "quoted_text": _clean(thread.get("plainTextQuote")),
+        "created_time": _clean(head.get("createTime")),
+        "modified_time": _clean(head.get("updateTime")),
+        "author": _clean(author.get("displayName")),
+        "author_is_me": bool(author.get("me")),
+        "replies": [],
     }
 
 

@@ -5,7 +5,7 @@ summary: "One recipe for connecting Google services to KDCube: one Google OAuth 
 status: active
 tags: ["recipes", "connections", "connection-hub", "google", "gmail", "sheets", "docs", "oauth", "connected-accounts", "delegated-to-kdcube", "mcp"]
 keywords: ["google connected account", "google docs named service", "google sheets tools", "google oauth scopes", "document tab selector", "document comment selector", "document table cells", "set_cells"]
-updated_at: 2026-09-21
+updated_at: 2026-10-02
 see_also:
   - https://github.com/elenaviter/app-ecosystem/blob/main/docs/connection-hub/frontend/application/integrations/google.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/google/google-README.md
@@ -508,9 +508,10 @@ workflow:
 - title, title-fragment, position, and hierarchy selectors choose an existing
   tab for content operations; creating, renaming, moving, or deleting the tab
   itself is not part of the current Docs action set;
-- stable Google Drive comments are document-level. The agent can select a
-  thread naturally by literal text, quoted text, author, and resolved state,
-  but it cannot claim that the thread belongs to a particular tab;
+- a comment is attached to text the agent names by quoting it, or to a table
+  cell named by table, row, and column; the adapter finds the place and
+  computes the range. Without either, the comment belongs to the whole
+  document;
 - tables are addressed by tab, table, row, and column; a cell holding a nested
   table, a cell merged into another, and (for a replacement) a cell holding an
   image or chip are refused rather than edited partially;
@@ -842,20 +843,58 @@ keeps at least one tab, so deleting the only tab is refused with
 
 `object.action update_comment` rewrites a comment's text, or one reply's with `reply_id`; Google allows it only for the comment's own author.
 
-The stable Drive comments path manages document-level threads. Named-service
-actions that read, reply to, resolve, or delete one comment accept either an
-exact `comment_id` or a `comment_selector`. A selector can combine a literal
-comment or quoted-text fragment, an author (`author: me` selects the connected
-user), resolved state, and 1-based position. The adapter pages through a bounded
-provider result, translates one unambiguous match to the provider id, performs
-the action, and returns the resolved candidate in `selector_resolution`.
+A review comment belongs next to the words it is about. `create_comment`
+attaches it there without the agent counting indices:
+
+- `quoted_text` names the text, copied exactly from the document. The adapter
+  finds it inside one paragraph or table cell of the selected tab, counts the
+  range in UTF-16 units around chips and images, and sends Docs
+  `insertComment` with that range. When the text appears more than once,
+  nothing is written: the answer lists the matches with where they sit and
+  their surrounding text, and `occurrence` picks one. Text that is not there
+  returns `quoted_text_not_found`; `match_case: false` relaxes casing.
+- `table`, `row`, and `column` (the `set_cells` selectors) attach the comment to
+  one cell's text, or narrow where `quoted_text` is searched.
+- `tab_id` or `tab_selector` chooses the tab; a document with several tabs needs
+  one when a target is given.
+- Without `quoted_text` or a cell the comment belongs to the whole document and
+  is created through Drive, as before.
+- `preview: true` returns the text the comment would attach to and writes
+  nothing.
+
+The answer states `scope` (`text`, `cell`, or `document`), the tab, `where`
+(paragraph, heading, or table/row/column), the attached text, and the new
+`comment_id`. A batch Google accepts without saving the comment
+(`commentUpdateState` other than `ALL_SAVED`) returns `docs_comment_not_saved`.
+An attached comment's text is limited to 2048 UTF-8 bytes, Google's bound.
+
+Comment reads say what each comment is attached to. `list_comments` and
+`get_comment` join the Drive thread with the Docs comment anchors of each tab
+and add `scope`, `tab_id`, `where`, `current_text` (the text under the comment
+now), and `anchor_state: detached` when the commented text was deleted;
+`quoted_text` stays the text at the time the comment was written. With
+`tab_id` or `tab_selector`, `list_comments` returns only comments attached in
+that tab. When the anchors cannot be read, the comments are still listed and
+the answer carries `anchors_unavailable` with the reason.
+
+Named-service actions that read, reply to, update, resolve, or delete one
+comment accept either an exact `comment_id` or a `comment_selector`. A selector
+can combine a literal comment fragment, a fragment of the commented text as
+written or as it reads now, an author (`author: me` selects the connected
+user), resolved state, `scope`, and 1-based position. The adapter pages through
+a bounded provider result, translates one unambiguous match to the provider id,
+performs the action, and returns the resolved candidate in
+`selector_resolution`. These actions name one comment, so a tab selector on them
+returns `docs_comment_tab_not_supported`; list the tab's comments and pass the
+`comment_id`. A comment is moved by deleting it and creating it on the new text.
 
 Several matches return `docs_comment_selector_ambiguous` with bounded
 candidates. A bounded scan with more provider pages returns
-`docs_comment_selector_incomplete`. Stable Drive comments do not carry native
-Google Docs tab placement, so a request that combines a comment action with a
-tab selector returns `tab_anchored_comments_unavailable` rather than creating a
-broader document comment silently.
+`docs_comment_selector_incomplete`.
+
+On the flexible path, `batch_edit` accepts native `insertComment` requests with
+an explicit range; the batch tab is stamped into the range, content is bounded
+to 2048 UTF-8 bytes, and assigning a comment to a person is refused.
 
 For a ReAct agent, declare `docs` as both a named-service namespace and an event
 source. The namespace tools discover document and import-source refs. A native
@@ -979,9 +1018,11 @@ disposable data:
 12. Create two document-level comments with overlapping text. Reply using a
     selector that adds author or resolved state, and verify
     `selector_resolution` names the chosen thread. Retry with only the shared
-    text and verify the ambiguous response performs no mutation. Add a tab
-    selector to a comment request and verify
-    `tab_anchored_comments_unavailable`.
+    text and verify the ambiguous response performs no mutation. Comment on a
+    sentence with `quoted_text`, on a phrase that appears twice (expect
+    candidates, then `occurrence`), and on a table cell; verify each comment
+    sits beside its text in the editor and that `list_comments` reports its
+    `scope`, `where`, and `current_text`.
 13. Under a heading, add a table with a marked header row (`Task | Status |
     Owner`), a second table without a header, and a merged cell. Verify `get`
     lists both tables with selectors, `filters.tables` returns cell text, and

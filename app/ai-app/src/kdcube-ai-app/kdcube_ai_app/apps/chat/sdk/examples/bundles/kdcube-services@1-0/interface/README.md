@@ -468,10 +468,11 @@ spreadsheet/document id or a full Google Sheets/Docs URL. Sheets describe
 returns stable sheet ids. A Docs read returns every document tab with its stable
 tab id and body indices. Through `named_services`, multi-tab edits can resolve
 tabs by title, literal title fragment, position, or hierarchy, and
-document-level comment actions can resolve one thread by text, author, resolved
-state, or position. Exact ids remain valid for direct typed operations.
-Ambiguity returns candidates and performs no write; a tab-scoped comment request
-returns `tab_anchored_comments_unavailable`. MCP `tools/list` is authoritative
+comment actions can resolve one thread by text, the commented text, author,
+resolved state, scope, or position. `create_comment` attaches a comment to
+quoted text or a table cell, and comment reads say what each comment is attached
+to. Exact ids remain valid for direct typed operations. Ambiguity returns
+candidates and performs no write. MCP `tools/list` is authoritative
 for typed parameters and bounds. Docs edits are typed `batchUpdate` operations,
 never raw JSON, and comment operations require `docs:comment`, distinct from the
 `docs:write` edit claim.

@@ -1383,26 +1383,41 @@ async def test_comment_selector_ambiguity_does_not_run_the_requested_action() ->
 
 
 @pytest.mark.anyio
-async def test_tab_scoped_comment_request_names_the_capability_boundary() -> None:
+async def test_a_tab_narrows_create_comment_and_is_refused_where_a_comment_is_named() -> None:
     fake = _FakeDocs()
-    response = await _provider(fake).dispatch(
+    provider = _provider(fake)
+    ref = "docs:google:account-1:document:doc-1"
+    created = await provider.dispatch(
         _ctx(),
         NamedServiceRequest(
             operation=OBJECT_ACTION,
             namespace="docs",
-            object_ref="docs:google:account-1:document:doc-1",
+            object_ref=ref,
             action=ACTION_CREATE_COMMENT,
             payload={
-                "content": "Review this tab.",
+                "content": "Review this.",
+                "quoted_text": "Launch",
                 "tab_selector": {"title": "Main"},
             },
         ),
     )
+    assert created.ok is True
+    assert fake.calls[-1]["payload"]["tab_selector"] == {"title": "Main"}
 
-    assert response.ok is False
-    assert response.error.code == "tab_anchored_comments_unavailable"
-    assert response.error.details["supported_scope"] == "document"
-    assert fake.calls == []
+    calls = len(fake.calls)
+    replied = await provider.dispatch(
+        _ctx(),
+        NamedServiceRequest(
+            operation=OBJECT_ACTION,
+            namespace="docs",
+            object_ref=ref,
+            action=ACTION_REPLY_COMMENT,
+            payload={"content": "Done.", "comment_id": "c-1", "tab_id": "t.0"},
+        ),
+    )
+    assert replied.ok is False
+    assert replied.error.code == "docs_comment_tab_not_supported"
+    assert len(fake.calls) == calls
 
 
 @pytest.mark.anyio
