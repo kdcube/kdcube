@@ -46,7 +46,10 @@ LINKEDIN_POST_MAX_CHARS = 3000
 # endpoint and permission for both.
 MULTI_IMAGE_MIN = 2
 MULTI_IMAGE_MAX = 20
-MAX_IMAGE_BYTES = 36_152_320
+# Images API: fewer than 36,152,320 pixels (width x height), JPG/PNG/GIF, a GIF
+# of at most 250 frames. LinkedIn publishes no byte limit for images.
+MAX_IMAGE_PIXELS = 36_152_320
+MAX_GIF_FRAMES = 250
 SUPPORTED_IMAGE_MIME = ("image/jpeg", "image/png", "image/gif")
 # ArticleContent (the link-preview card): source + title required, the rest
 # optional. A post carries an article card OR images, never both.
@@ -869,7 +872,8 @@ __all__ = [
     "LINKEDIN_REST_BASE",
     "LINKEDIN_REST_SOCIAL_ACTIONS_URL",
     "LINKEDIN_SOCIAL_ACTIONS_URL",
-    "MAX_IMAGE_BYTES",
+    "MAX_GIF_FRAMES",
+    "MAX_IMAGE_PIXELS",
     "MULTI_IMAGE_MAX",
     "MULTI_IMAGE_MIN",
     "SUPPORTED_IMAGE_MIME",
