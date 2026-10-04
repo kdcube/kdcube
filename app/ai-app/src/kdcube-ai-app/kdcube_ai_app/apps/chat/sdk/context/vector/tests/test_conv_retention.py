@@ -444,8 +444,15 @@ async def test_a_failed_body_delete_can_be_completed_by_running_the_deletion_aga
     assert result["hot_rows"] == 1 and result["cold_rows"] == 1 and db.deletions[1]["state"] == "completed"
 
 
+def test_the_daily_archive_is_on_by_default():
+    # Operator, 2026-10-04: "yes that's correct - by default its ON".
+    from kdcube_ai_app.apps.chat.sdk.config import Settings
+
+    assert Settings.model_fields["CONVERSATION_ARCHIVE_ENABLED"].default is True
+
+
 @pytest.mark.asyncio
-async def test_the_daily_archive_is_off_until_the_operator_turns_retention_on(monkeypatch):
+async def test_the_daily_archive_runs_unless_the_setting_turns_it_off(monkeypatch):
     from types import SimpleNamespace
 
     import kdcube_ai_app.infra.plugin.admin_bundle.entrypoint as admin

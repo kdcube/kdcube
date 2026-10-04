@@ -706,9 +706,9 @@ class Settings(PLATFORM_CONFIG):
     # Conversation store retention: rows of conv_messages older than
     # this many days move to the cold tier; assembly routines.conversation_store.hot_days.
     CONVERSATION_HOT_DAYS: int = Field(default=90)
-    # Off until the operator turns retention on: the daily archive moves rows
-    # out of the hot index; assembly routines.conversation_store.archive_enabled.
-    CONVERSATION_ARCHIVE_ENABLED: bool = Field(default=False)
+    # On by default: the daily archive moves rows past the hot window to the
+    # cold tier; assembly routines.conversation_store.archive_enabled: false turns it off.
+    CONVERSATION_ARCHIVE_ENABLED: bool = Field(default=True)
 
     # Subscription rollover scheduler
     SUBSCRIPTION_ROLLOVER_ENABLED: bool = Field(default=True)

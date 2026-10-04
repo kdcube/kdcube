@@ -47,10 +47,11 @@ check deletes nothing and records the error on the batch. A run that stops
 anywhere resumes from the ledger on the next run.
 
 The built-in admin bundle runs it daily as the system cron
-`conversation-archive` (02:20 UTC, one instance per tenant and project), and
-only when the assembly property `routines.conversation_store.archive_enabled`
-is true: retention is off until the operator turns it on. The window is
-`routines.conversation_store.hot_days` (default 90).
+`conversation-archive` (02:20 UTC, one instance per tenant and project). It is
+on by default: rows past the hot window move to the cold tier on the next
+nightly run. The assembly property `routines.conversation_store.archive_enabled:
+false` turns it off. The window is `routines.conversation_store.hot_days`
+(default 90).
 
 ## How reads reach the cold tier
 
