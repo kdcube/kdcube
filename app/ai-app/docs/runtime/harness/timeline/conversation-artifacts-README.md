@@ -6,6 +6,7 @@ tags: ["runtime", "harness", "timeline", "artifacts", "conversation"]
 updated_at: 2026-08-22
 keywords: ["ContextRAGClient", "save_artifact", "save_turn_log_artifact", "conversation store", "minimal turn transcript rows", "conv.artifacts.events", "projection:minimal.turn.log"]
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/timeline/conversation-retention-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/timeline/README.md
   - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/timeline/turn-view-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/timeline/turn-log-README.md
