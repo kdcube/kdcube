@@ -56,6 +56,47 @@ def _edge_dict(edge: Any) -> Dict[str, Any]:
     return out
 
 
+_START_TAGS = frozenset({"conv.start", "artifact:turn.fingerprint.v1"})
+
+
+def conversation_index_rows(batch_id: str, records: Sequence[Dict[str, Any]]) -> List[Tuple[Any, ...]]:
+    """One `conv_archive_conversations` row per conversation scope in a batch."""
+
+    groups: Dict[Tuple[str, str, str, str], Dict[str, Any]] = {}
+    for record in records:
+        key = (
+            str(record.get("user_id") or ""),
+            str(record.get("conversation_id") or ""),
+            str(record.get("bundle_id") or ""),
+            str(record.get("agent_id") or ""),
+        )
+        ts = _as_utc(record["ts"])
+        ttl = record.get("ttl_days")
+        expires = ts + timedelta(days=int(ttl)) if ttl is not None else None
+        entry = groups.setdefault(key, {
+            "rows": 0, "min_ts": ts, "max_ts": ts, "expires_at": expires,
+            "start_min_ts": None, "start_last_ts": None, "start_last_text": None,
+        })
+        entry["rows"] += 1
+        entry["min_ts"] = min(entry["min_ts"], ts)
+        entry["max_ts"] = max(entry["max_ts"], ts)
+        if expires is None or entry["expires_at"] is None:
+            entry["expires_at"] = None
+        else:
+            entry["expires_at"] = max(entry["expires_at"], expires)
+        if _START_TAGS.issubset(set(record.get("tags") or ())):
+            if entry["start_min_ts"] is None or ts < entry["start_min_ts"]:
+                entry["start_min_ts"] = ts
+            if entry["start_last_ts"] is None or ts >= entry["start_last_ts"]:
+                entry["start_last_ts"] = ts
+                entry["start_last_text"] = record.get("text")
+    return [
+        (batch_id, *key, e["rows"], e["min_ts"], e["max_ts"], e["expires_at"],
+         e["start_min_ts"], e["start_last_ts"], e["start_last_text"])
+        for key, e in sorted(groups.items())
+    ]
+
+
 class ConversationRetention:
     """Archive, read and delete across the hot index and the cold tier."""
 
@@ -75,8 +116,9 @@ class ConversationRetention:
     ) -> Dict[str, int]:
         """Move every hot row with ts < cutoff to the cold tier."""
 
-        summary = {"resumed": 0, "batches": 0, "rows": 0}
+        summary = {"resumed": 0, "batches": 0, "rows": 0, "indexed": 0}
         summary["resumed"] = await self._resume_unfinished()
+        summary["indexed"] = await self._index_unindexed_batches()
         while max_batches is None or summary["batches"] < max_batches:
             async with self._pool.acquire() as con:
                 rows = await con.fetch(
@@ -115,22 +157,63 @@ class ConversationRetention:
         batch_id = f"{day:%Y%m%d}-{min(ids)}-{max(ids)}"
         manifest = await self.archive.write_batch(day=day, batch_id=batch_id, records=records)
         async with self._pool.acquire() as con:
-            await con.execute(
-                f"""
-                INSERT INTO {self.schema}.conv_archive_batches
-                    (batch_id, day, row_count, min_id, max_id, min_ts, max_ts, part_key, manifest_key, sha256, state)
-                VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7::timestamptz, $8, $9, $10, 'written')
-                ON CONFLICT (batch_id) DO UPDATE
-                   SET sha256 = EXCLUDED.sha256, row_count = EXCLUDED.row_count,
-                       state = 'written', error = NULL, updated_at = now()
-                 WHERE {self.schema}.conv_archive_batches.state <> 'pruned'
-                """,
-                batch_id, day, len(ids), min(ids), max(ids),
-                datetime.fromisoformat(manifest["min_ts"]) if manifest.get("min_ts") else None,
-                datetime.fromisoformat(manifest["max_ts"]) if manifest.get("max_ts") else None,
-                manifest["part_key"], self.archive.manifest_key(day, batch_id), manifest["sha256"],
-            )
+            async with con.transaction():
+                await con.execute(
+                    f"""
+                    INSERT INTO {self.schema}.conv_archive_batches
+                        (batch_id, day, row_count, min_id, max_id, min_ts, max_ts, part_key, manifest_key, sha256, state)
+                    VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7::timestamptz, $8, $9, $10, 'written')
+                    ON CONFLICT (batch_id) DO UPDATE
+                       SET sha256 = EXCLUDED.sha256, row_count = EXCLUDED.row_count,
+                           state = 'written', error = NULL, updated_at = now()
+                     WHERE {self.schema}.conv_archive_batches.state <> 'pruned'
+                    """,
+                    batch_id, day, len(ids), min(ids), max(ids),
+                    datetime.fromisoformat(manifest["min_ts"]) if manifest.get("min_ts") else None,
+                    datetime.fromisoformat(manifest["max_ts"]) if manifest.get("max_ts") else None,
+                    manifest["part_key"], self.archive.manifest_key(day, batch_id), manifest["sha256"],
+                )
+                await self._index_batch(con, batch_id, records)
         await self._verify_and_prune(day, batch_id)
+
+    async def _index_batch(self, con: Any, batch_id: str, records: Sequence[Dict[str, Any]]) -> None:
+        """Record which conversations the batch holds (replacing any earlier rows for it)."""
+
+        await con.execute(
+            f"DELETE FROM {self.schema}.conv_archive_conversations WHERE batch_id = $1", batch_id
+        )
+        rows = conversation_index_rows(batch_id, records)
+        if rows:
+            await con.executemany(
+                f"""
+                INSERT INTO {self.schema}.conv_archive_conversations
+                    (batch_id, user_id, conversation_id, bundle_id, agent_id, row_count, min_ts, max_ts,
+                     expires_at, start_min_ts, start_last_ts, start_last_text)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                """,
+                rows,
+            )
+
+    async def _index_unindexed_batches(self) -> int:
+        """Index live batches archived before the conversation index existed."""
+
+        async with self._pool.acquire() as con:
+            pending = await con.fetch(
+                f"""
+                SELECT b.batch_id, b.day FROM {self.schema}.conv_archive_batches b
+                 WHERE b.state = 'pruned'
+                   AND NOT EXISTS (SELECT 1 FROM {self.schema}.conv_archive_conversations c
+                                    WHERE c.batch_id = b.batch_id)
+                 ORDER BY b.day, b.batch_id
+                """
+            )
+        for row in pending:
+            manifest = await self.archive.read_manifest(row["day"], row["batch_id"])
+            records = await self.archive.read_part(manifest)
+            async with self._pool.acquire() as con:
+                async with con.transaction():
+                    await self._index_batch(con, row["batch_id"], records)
+        return len(pending)
 
     async def _verify_and_prune(self, day: date, batch_id: str) -> None:
         manifest = await self.archive.read_manifest(day, batch_id)
@@ -238,6 +321,105 @@ class ConversationRetention:
             agent_id=agent_id,
             roles=roles,
             tags_all=tags_all,
+        )
+        if not include_embedding:
+            out = [{k: v for k, v in r.items() if k != "embedding"} for r in out]
+        for record in out:
+            record["storage"] = "cold"
+        return out
+
+    async def list_archived_conversations(
+        self,
+        *,
+        user_id: str,
+        from_ts: Any,
+        bundle_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """The user's archived conversations from the conversation index; reads no part."""
+
+        args: List[Any] = [user_id, _as_utc(from_ts)]
+        where = [
+            "b.state = 'pruned'",
+            "c.user_id = $1",
+            "c.max_ts >= $2",
+            "(c.expires_at IS NULL OR c.expires_at >= now())",
+        ]
+        if bundle_id:
+            args.append(bundle_id)
+            where.append(f"c.bundle_id = ${len(args)}")
+        async with self._pool.acquire() as con:
+            rows = await con.fetch(
+                f"""
+                SELECT c.conversation_id,
+                       max(c.max_ts) AS last_activity_at,
+                       min(c.start_min_ts) AS started_at,
+                       (array_agg(c.start_last_text ORDER BY c.start_last_ts DESC NULLS LAST))[1] AS conv_start_text
+                  FROM {self.schema}.conv_archive_conversations c
+                  JOIN {self.schema}.conv_archive_batches b ON b.batch_id = c.batch_id
+                 WHERE {' AND '.join(where)}
+                 GROUP BY c.conversation_id
+                """,
+                *args,
+            )
+        return [dict(r) for r in rows]
+
+    async def fetch_cold_conversation(
+        self,
+        *,
+        user_id: str,
+        conversation_id: str,
+        from_ts: Any,
+        bundle_id: Optional[str] = None,
+        bundle_ids: Optional[Sequence[str]] = None,
+        agent_id: Optional[str] = None,
+        roles: Optional[Sequence[str]] = None,
+        include_embedding: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """One conversation's cold records since from_ts, oldest first; reads only the parts that hold it."""
+
+        start = _as_utc(from_ts)
+        args: List[Any] = [user_id, conversation_id, start]
+        where = ["b.state = 'pruned'", "c.user_id = $1", "c.conversation_id = $2", "c.max_ts >= $3"]
+        if bundle_id:
+            args.append(bundle_id)
+            where.append(f"c.bundle_id = ${len(args)}")
+        elif bundle_ids is not None:
+            args.append([str(v).strip() for v in bundle_ids if str(v).strip()])
+            where.append(f"c.bundle_id = ANY(${len(args)}::text[])")
+        if agent_id:
+            args.append(agent_id)
+            where.append(f"c.agent_id = ${len(args)}")
+        async with self._pool.acquire() as con:
+            batches = await con.fetch(
+                f"""
+                SELECT DISTINCT b.batch_id, b.day
+                  FROM {self.schema}.conv_archive_conversations c
+                  JOIN {self.schema}.conv_archive_batches b ON b.batch_id = c.batch_id
+                 WHERE {' AND '.join(where)}
+                 ORDER BY b.day, b.batch_id
+                """,
+                *args,
+            )
+        allowed = None
+        if not bundle_id and bundle_ids is not None:
+            allowed = {str(v).strip() for v in bundle_ids if str(v).strip()}
+        records: List[Dict[str, Any]] = []
+        for batch in batches:
+            manifest = await self.archive.read_manifest(batch["day"], batch["batch_id"])
+            for record in await self.archive.read_part(manifest):
+                if _as_utc(record["ts"]) < start:
+                    continue
+                if allowed is not None and record.get("bundle_id") not in allowed:
+                    continue
+                records.append(record)
+        records.sort(key=lambda r: (r["ts"], r["id"]))
+        out = filter_records(
+            records,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            bundle_id=bundle_id or None,
+            agent_id=agent_id or None,
+            roles=roles,
         )
         if not include_embedding:
             out = [{k: v for k, v in r.items() if k != "embedding"} for r in out]
@@ -396,12 +578,20 @@ class ConversationRetention:
                             f"UPDATE {self.schema}.conv_archive_batches SET state = 'retired', updated_at = now() WHERE batch_id = $1",
                             batch_id,
                         )
+                        await self._index_batch(con, new_id, kept)
+                        await con.execute(
+                            f"DELETE FROM {self.schema}.conv_archive_conversations WHERE batch_id = $1", batch_id
+                        )
             else:
                 async with self._pool.acquire() as con:
-                    await con.execute(
-                        f"UPDATE {self.schema}.conv_archive_batches SET state = 'retired', updated_at = now() WHERE batch_id = $1",
-                        batch_id,
-                    )
+                    async with con.transaction():
+                        await con.execute(
+                            f"UPDATE {self.schema}.conv_archive_batches SET state = 'retired', updated_at = now() WHERE batch_id = $1",
+                            batch_id,
+                        )
+                        await con.execute(
+                            f"DELETE FROM {self.schema}.conv_archive_conversations WHERE batch_id = $1", batch_id
+                        )
             # The ledger already says retired; removing the files is cleanup,
             # and a part left behind is never read (reads follow the ledger).
             await self.archive.delete_batch(day, batch_id)

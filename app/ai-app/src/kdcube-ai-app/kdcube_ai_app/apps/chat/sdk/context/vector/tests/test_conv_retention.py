@@ -66,6 +66,42 @@ class _Con:
                 and (first is None or b["day"] >= first)
                 and (last is None or b["day"] <= last)
             ]
+        if q.startswith("SELECT b.batch_id, b.day FROM kdcube_test_w536.conv_archive_batches b WHERE b.state = 'pruned' AND NOT EXISTS"):
+            indexed = {c["batch_id"] for c in self.db.conversations}
+            return [b for b in self.db.sorted_batches() if b["state"] == "pruned" and b["batch_id"] not in indexed]
+        if q.startswith("SELECT c.conversation_id, max(c.max_ts) AS last_activity_at"):
+            user_id, from_ts, *rest = args
+            since = None
+            bundle = rest.pop(0) if "c.bundle_id = $" in q else None
+            groups: dict = {}
+            for c in self.db.live_conversations():
+                if c["user_id"] != user_id or c["max_ts"] < from_ts:
+                    continue
+                if since is not None and c["max_ts"] < since:
+                    continue
+                if bundle is not None and c["bundle_id"] != bundle:
+                    continue
+                if c["expires_at"] is not None and c["expires_at"] < datetime.now(timezone.utc):
+                    continue
+                groups.setdefault(c["conversation_id"], []).append(c)
+            out = []
+            for cid, rows in groups.items():
+                starts = [r for r in rows if r["start_min_ts"] is not None]
+                latest = max(starts, key=lambda r: r["start_last_ts"]) if starts else None
+                out.append({
+                    "conversation_id": cid,
+                    "last_activity_at": max(r["max_ts"] for r in rows),
+                    "started_at": min(r["start_min_ts"] for r in starts) if starts else None,
+                    "conv_start_text": latest["start_last_text"] if latest else None,
+                })
+            return out
+        if q.startswith("SELECT DISTINCT b.batch_id, b.day FROM kdcube_test_w536.conv_archive_conversations c"):
+            user_id, conversation_id, from_ts, *rest = args
+            hits = {
+                c["batch_id"] for c in self.db.live_conversations()
+                if c["user_id"] == user_id and c["conversation_id"] == conversation_id and c["max_ts"] >= from_ts
+            }
+            return [b for b in self.db.sorted_batches() if b["batch_id"] in hits]
         if q.startswith("SELECT hosted_uri FROM kdcube_test_w536.conv_messages WHERE user_id = $1"):
             return [{"hosted_uri": r["hosted_uri"]} for r in self._scope(q, args)]
         if q.startswith("DELETE FROM kdcube_test_w536.conv_messages WHERE user_id = $1"):
@@ -92,8 +128,20 @@ class _Con:
             return max(stamps) if stamps else None
         raise AssertionError(f"unexpected fetchval: {q}")
 
+    async def executemany(self, query: str, rows):
+        q = " ".join(query.split())
+        if q.startswith("INSERT INTO kdcube_test_w536.conv_archive_conversations"):
+            keys = ("batch_id", "user_id", "conversation_id", "bundle_id", "agent_id", "row_count", "min_ts",
+                    "max_ts", "expires_at", "start_min_ts", "start_last_ts", "start_last_text")
+            self.db.conversations.extend(dict(zip(keys, row)) for row in rows)
+            return None
+        raise AssertionError(f"unexpected executemany: {q}")
+
     async def execute(self, query: str, *args):
         q = " ".join(query.split())
+        if q.startswith("DELETE FROM kdcube_test_w536.conv_archive_conversations WHERE batch_id = $1"):
+            self.db.conversations = [c for c in self.db.conversations if c["batch_id"] != args[0]]
+            return "DELETE"
         if q.startswith("INSERT INTO kdcube_test_w536.conv_archive_batches"):
             batch_id, day, count, min_id, max_id, min_ts, max_ts, part_key, manifest_key, sha = args
             state = "pruned" if "'pruned')" in q else "written"
@@ -145,13 +193,21 @@ class _Db:
         self.edges: list[dict] = []
         self.batches: dict[str, dict] = {}
         self.deletions: list[tuple] = []
+        self.conversations: list[dict] = []  # conv_archive_conversations
         self.fail_prune_after_verify = False
 
     def snapshot(self):
-        return ([dict(m) for m in self.messages], {k: dict(v) for k, v in self.batches.items()})
+        return (
+            [dict(m) for m in self.messages],
+            {k: dict(v) for k, v in self.batches.items()},
+            [dict(c) for c in self.conversations],
+        )
 
     def restore(self, snap) -> None:
-        self.messages, self.batches = snap[0], snap[1]
+        self.messages, self.batches, self.conversations = snap[0], snap[1], snap[2]
+
+    def live_conversations(self):
+        return [c for c in self.conversations if self.batches.get(c["batch_id"], {}).get("state") == "pruned"]
 
     def sorted_batches(self):
         return sorted(self.batches.values(), key=lambda b: (b["day"], b["batch_id"]))
@@ -578,3 +634,49 @@ async def test_a_wholly_archived_conversation_is_still_listed_after_the_active_o
     assert await index.list_user_conversations(user_id="u1", since=_days_ago(100)) == [
         {"conversation_id": "c1", "last_activity_at": hot["last_activity_at"].isoformat(), "started_at": rows[0]["started_at"]},
     ]
+
+
+@pytest.mark.asyncio
+async def test_listing_reads_no_part_and_opening_reads_only_that_conversations_parts():
+    index = await _archived_index({}, [
+        _live_msg(1, days_ago=200, conv="a", tags=["turn:a1", "conv.start", "artifact:turn.fingerprint.v1"], turn="a1"),
+        _live_msg(2, days_ago=150, conv="b", tags=["turn:b1"], turn="b1"),
+        _live_msg(3, days_ago=120, conv="c", tags=["turn:c1"], turn="c1"),
+    ])
+    retention = index.cold_retention
+    reads: list = []
+    original = retention.archive.read_part
+
+    async def counting(manifest):
+        reads.append(manifest["batch_id"])
+        return await original(manifest)
+
+    retention.archive.read_part = counting
+    listed = await index.list_user_conversations(user_id="u1")
+    assert sorted(r["conversation_id"] for r in listed) == ["a", "b", "c"] and reads == []
+    occ = await index.get_conversation_turn_ids_from_tags(user_id="u1", conversation_id="b")
+    assert [o["turn_id"] for o in occ] == ["b1"]
+    assert len(reads) == 1 and reads[0].startswith((_days_ago(150) - timedelta(minutes=2)).strftime("%Y%m%d"))
+
+
+@pytest.mark.asyncio
+async def test_deleting_an_archived_conversation_removes_it_from_the_index():
+    index = await _archived_index({}, [
+        _live_msg(1, days_ago=150, conv="a", tags=["turn:a1"], turn="a1"),
+        _live_msg(2, days_ago=150, conv="b", tags=["turn:b1"], turn="b1"),
+    ])
+    retention = index.cold_retention
+    await retention.delete_messages(actor="owner", user_id="u1", conversation_id="a")
+    assert [r["conversation_id"] for r in await index.list_user_conversations(user_id="u1")] == ["b"]
+    assert [o["turn_id"] for o in await index.get_conversation_turn_ids_from_tags(user_id="u1", conversation_id="b")] == ["b1"]
+
+
+@pytest.mark.asyncio
+async def test_batches_archived_before_the_index_existed_are_indexed_on_the_next_run():
+    db, _, _, _, retention = _setup()
+    db.messages = [_live_msg(1, days_ago=150, conv="a", tags=["turn:a1"], turn="a1")]
+    await retention.archive_before(datetime.now(timezone.utc) - timedelta(days=90))
+    db.conversations = []  # as if archived by the release without the index
+    summary = await retention.archive_before(datetime.now(timezone.utc) - timedelta(days=90))
+    assert summary["indexed"] == 1
+    assert [c["conversation_id"] for c in db.live_conversations()] == ["a"]

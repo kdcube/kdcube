@@ -1325,38 +1325,35 @@ class ConvIndex:
             label: str,
             days: int,
             user_id: str,
-            conversation_id: Optional[str] = None,
+            conversation_id: str,
             bundle_id: Optional[str] = None,
             bundle_ids: Optional[Sequence[str]] = None,
             agent_id: Optional[str] = None,
             roles: Optional[Sequence[str]] = None,
     ) -> List[Dict[str, Any]]:
-        """Cold records inside a read's rolling `days` window, oldest first.
+        """One conversation's cold records inside a read's rolling `days` window, oldest first.
 
-        The reads that open or list a conversation use it, so a conversation
-        whose older messages were archived still shows them. Cross-
-        conversation search does not: it reaches the cold tier only through
-        a date filter.
+        Opening a conversation uses it, so its archived messages still show.
+        It reads only the parts that hold this conversation (the archive's
+        conversation index names them). Cross-conversation search does not
+        use it: it reaches the cold tier only through a date filter.
         """
         retention = self.retention()
         if retention is None:
             return []
         try:
-            records = await retention.fetch_cold(
-                from_ts=datetime.now(timezone.utc) - timedelta(days=int(days)),
+            return await retention.fetch_cold_conversation(
                 user_id=user_id,
                 conversation_id=conversation_id,
+                from_ts=datetime.now(timezone.utc) - timedelta(days=int(days)),
                 bundle_id=bundle_id or None,
+                bundle_ids=bundle_ids,
                 agent_id=agent_id or None,
                 roles=roles,
             )
         except Exception:
             logger.exception("[conv_index.%s] cold tier read failed; serving the hot index only", label)
             return []
-        if not bundle_id and bundle_ids is not None:
-            allowed = {str(v).strip() for v in bundle_ids if str(v).strip()}
-            records = [r for r in records if r.get("bundle_id") in allowed]
-        return records
 
     async def fetch_turn_catalog(
             self,
@@ -2117,33 +2114,32 @@ class ConvIndex:
 
         Archived messages are older than every hot one, so a conversation that
         still has hot messages keeps its place and only an earlier start; a
-        conversation that is wholly archived follows all of them.
+        conversation that is wholly archived follows all of them. The archive's
+        conversation index answers this in SQL; no cold part is read.
         """
-        cold = await self._cold_window_records(
-            label="list_user_conversations",
-            days=days,
-            user_id=user_id,
-            bundle_id=bundle_id,
-        )
-        if not cold:
+        retention = self.retention()
+        if retention is None:
             return hot
-        floor = _coerce_ts(since) if since is not None else None
-        start_tags = {"conv.start", "artifact:turn.fingerprint.v1"}
+        try:
+            archived_rows = await retention.list_archived_conversations(
+                user_id=user_id,
+                from_ts=datetime.now(timezone.utc) - timedelta(days=int(days)),
+                bundle_id=bundle_id,
+            )
+        except Exception:
+            logger.exception("[conv_index.list_user_conversations] cold tier read failed; serving the hot index only")
+            return hot
+        if not archived_rows:
+            return hot
         summary: Dict[str, Dict[str, Any]] = {}
-        for record in cold:
-            cid = record.get("conversation_id")
-            if not cid:
-                continue
-            ts = _coerce_ts(record["ts"])
-            entry = summary.setdefault(cid, {"last": None, "start": None, "start_text": None, "start_ts": None})
-            if floor is None or ts >= floor:
-                entry["last"] = ts if entry["last"] is None or ts > entry["last"] else entry["last"]
-            if start_tags.issubset(set(record.get("tags") or ())):
-                if entry["start"] is None or ts < entry["start"]:
-                    entry["start"] = ts
-                if entry["start_ts"] is None or ts >= entry["start_ts"]:
-                    entry["start_ts"] = ts
-                    entry["start_text"] = record.get("text")
+        for row in archived_rows:
+            last = row.get("last_activity_at")
+            start = row.get("started_at")
+            summary[row["conversation_id"]] = {
+                "last": _coerce_ts(last) if last is not None else None,
+                "start": _coerce_ts(start) if start is not None else None,
+                "start_text": row.get("conv_start_text"),
+            }
         listed = {row["conversation_id"]: row for row in hot}
         for cid, entry in summary.items():
             row = listed.get(cid)
@@ -2155,6 +2151,9 @@ class ConvIndex:
                     row["started_at"] = entry["start"].isoformat()
             if include_conv_start_text and not row.get("conv_start_text") and entry["start_text"]:
                 row["conv_start_text"] = entry["start_text"]
+        # `since` limits which conversations are listed by their last activity;
+        # a listed conversation's start still comes from all of its messages.
+        floor = _coerce_ts(since) if since is not None else None
         archived = [
             {
                 "conversation_id": cid,
@@ -2164,7 +2163,7 @@ class ConvIndex:
                 "storage": "cold",
             }
             for cid, entry in summary.items()
-            if cid not in listed and entry["last"] is not None
+            if cid not in listed and entry["last"] is not None and (floor is None or entry["last"] >= floor)
         ]
         archived.sort(key=lambda row: row["last_activity_at"], reverse=True)
         out = hot + archived

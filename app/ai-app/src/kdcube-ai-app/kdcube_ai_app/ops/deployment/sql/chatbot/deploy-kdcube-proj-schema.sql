@@ -194,6 +194,27 @@ CREATE TABLE IF NOT EXISTS <SCHEMA>.conv_archive_batches (
     );
 CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_archive_state ON <SCHEMA>.conv_archive_batches (state, day);
 
+-- Which conversations each archived batch holds, so listing archived
+-- conversations reads only this table and opening one reads only the parts
+-- that hold it. Rows of a batch count only while the batch is 'pruned'.
+CREATE TABLE IF NOT EXISTS <SCHEMA>.conv_archive_conversations (
+    batch_id        TEXT NOT NULL,
+    user_id         TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    bundle_id       TEXT NOT NULL DEFAULT '',
+    agent_id        TEXT NOT NULL DEFAULT '',
+    row_count       INTEGER NOT NULL,
+    min_ts          TIMESTAMPTZ NOT NULL,
+    max_ts          TIMESTAMPTZ NOT NULL,
+    expires_at      TIMESTAMPTZ,
+    start_min_ts    TIMESTAMPTZ,
+    start_last_ts   TIMESTAMPTZ,
+    start_last_text TEXT,
+    PRIMARY KEY (batch_id, user_id, conversation_id, bundle_id, agent_id)
+    );
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_archive_conv_user ON <SCHEMA>.conv_archive_conversations (user_id, max_ts);
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_archive_conv_conversation ON <SCHEMA>.conv_archive_conversations (user_id, conversation_id);
+
 -- Every explicit conversation deletion: who, when, what and how much. The row
 -- is written before anything is deleted and finishes 'completed' or 'failed'.
 CREATE TABLE IF NOT EXISTS <SCHEMA>.conv_archive_deletions (
