@@ -706,6 +706,9 @@ class Settings(PLATFORM_CONFIG):
     # Conversation store retention: rows of conv_messages older than
     # this many days move to the cold tier; assembly routines.conversation_store.hot_days.
     CONVERSATION_HOT_DAYS: int = Field(default=90)
+    # Off until the operator turns retention on: the daily archive moves rows
+    # out of the hot index; assembly routines.conversation_store.archive_enabled.
+    CONVERSATION_ARCHIVE_ENABLED: bool = Field(default=False)
 
     # Subscription rollover scheduler
     SUBSCRIPTION_ROLLOVER_ENABLED: bool = Field(default=True)
@@ -1498,6 +1501,10 @@ class Settings(PLATFORM_CONFIG):
             val = self._assembly_int("routines.economics.subscription_rollover_sweep_limit")
             if val is not None:
                 self.SUBSCRIPTION_ROLLOVER_SWEEP_LIMIT = val
+        if not self._env_present("CONVERSATION_ARCHIVE_ENABLED"):
+            val = self._assembly_bool("routines.conversation_store.archive_enabled")
+            if val is not None:
+                self.CONVERSATION_ARCHIVE_ENABLED = val
         if not self._env_present("CONVERSATION_HOT_DAYS"):
             val = self._assembly_int("routines.conversation_store.hot_days")
             if val is not None:

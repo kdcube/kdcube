@@ -442,3 +442,29 @@ async def test_a_failed_body_delete_can_be_completed_by_running_the_deletion_aga
     result = await retention.delete_messages(actor="operator", user_id="u1", conversation_id="c1")
     assert sorted(store.deleted) == ["cb/x/1.json", "cb/x/2.json"]
     assert result["hot_rows"] == 1 and result["cold_rows"] == 1 and db.deletions[1]["state"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_the_daily_archive_is_off_until_the_operator_turns_retention_on(monkeypatch):
+    from types import SimpleNamespace
+
+    import kdcube_ai_app.infra.plugin.admin_bundle.entrypoint as admin
+    import kdcube_ai_app.apps.chat.sdk.context.vector.conv_index as conv_index_module
+
+    calls = []
+
+    class _Retention:
+        async def archive_before(self, cutoff):
+            calls.append(cutoff)
+            return {"resumed": 0, "batches": 0, "rows": 0}
+
+    monkeypatch.setattr(conv_index_module.ConvIndex, "retention", lambda self, store=None: _Retention())
+    owner = SimpleNamespace(pg_pool=_Pool(_Db()))
+
+    monkeypatch.setattr(admin, "get_settings", lambda: SimpleNamespace(CONVERSATION_ARCHIVE_ENABLED=False, CONVERSATION_HOT_DAYS=90))
+    await admin.AdminBundleEntrypoint.archive_conversations(owner)
+    assert calls == []
+
+    monkeypatch.setattr(admin, "get_settings", lambda: SimpleNamespace(CONVERSATION_ARCHIVE_ENABLED=True, CONVERSATION_HOT_DAYS=90))
+    await admin.AdminBundleEntrypoint.archive_conversations(owner)
+    assert len(calls) == 1

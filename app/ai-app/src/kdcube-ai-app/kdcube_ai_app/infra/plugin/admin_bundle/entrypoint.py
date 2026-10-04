@@ -55,9 +55,10 @@ class AdminBundleEntrypoint(BaseEntrypoint):
     async def archive_conversations(self) -> None:
         """Move conversation index rows older than the hot window to the cold tier.
 
-        Once a day, one instance per tenant and project. The window is the
-        assembly property routines.conversation_store.hot_days (default 90);
-        the bundle prop enabled.cron.conversation-archive switches it off.
+        Once a day, one instance per tenant and project, only when the
+        assembly property routines.conversation_store.archive_enabled is true
+        (default off). The window is routines.conversation_store.hot_days
+        (default 90).
         Every step is recorded in conv_archive_batches, so a run that stops
         resumes on the next one.
         """
@@ -65,6 +66,11 @@ class AdminBundleEntrypoint(BaseEntrypoint):
         from kdcube_ai_app.apps.chat.sdk.context.vector.conv_retention import hot_cutoff
 
         settings = get_settings()
+        if not settings.CONVERSATION_ARCHIVE_ENABLED:
+            # Retention is the operator's decision: nothing moves until the
+            # assembly property routines.conversation_store.archive_enabled is true.
+            logger.info("[conversation-archive] off (routines.conversation_store.archive_enabled is not true)")
+            return
         index = ConvIndex(pool=self.pg_pool)
         if index._pool is None:
             await index.init()
