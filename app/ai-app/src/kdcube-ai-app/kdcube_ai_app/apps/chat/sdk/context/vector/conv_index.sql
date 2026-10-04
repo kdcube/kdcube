@@ -201,6 +201,11 @@ CREATE TABLE IF NOT EXISTS <SCHEMA>.conv_archive_conversations (
     );
 CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_archive_conv_user ON <SCHEMA>.conv_archive_conversations (user_id, max_ts);
 CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_archive_conv_conversation ON <SCHEMA>.conv_archive_conversations (user_id, conversation_id);
+-- Each conversation start with its own expiry (a scope can mix TTLs), so the
+-- list never shows an expired start. Added after the table first shipped.
+ALTER TABLE <SCHEMA>.conv_archive_conversations ADD COLUMN IF NOT EXISTS start_ts_list      TIMESTAMPTZ[];
+ALTER TABLE <SCHEMA>.conv_archive_conversations ADD COLUMN IF NOT EXISTS start_expires_list TIMESTAMPTZ[];
+ALTER TABLE <SCHEMA>.conv_archive_conversations ADD COLUMN IF NOT EXISTS start_text_list    TEXT[];
 
 -- Every explicit conversation deletion: who, when, what and how much. The row
 -- is written before anything is deleted and finishes 'completed' or 'failed'.

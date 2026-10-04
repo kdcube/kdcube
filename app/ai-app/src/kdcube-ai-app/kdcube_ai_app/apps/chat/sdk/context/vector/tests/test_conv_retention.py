@@ -67,7 +67,7 @@ class _Con:
                 and (last is None or b["day"] <= last)
             ]
         if q.startswith("SELECT b.batch_id, b.day FROM kdcube_test_w536.conv_archive_batches b WHERE b.state = 'pruned' AND NOT EXISTS"):
-            indexed = {c["batch_id"] for c in self.db.conversations}
+            indexed = {c["batch_id"] for c in self.db.conversations if c.get("start_ts_list") is not None}
             return [b for b in self.db.sorted_batches() if b["state"] == "pruned" and b["batch_id"] not in indexed]
         if q.startswith("SELECT c.conversation_id, max(c.max_ts) AS last_activity_at"):
             user_id, from_ts, *rest = args
@@ -85,14 +85,19 @@ class _Con:
                     continue
                 groups.setdefault(c["conversation_id"], []).append(c)
             out = []
+            now = datetime.now(timezone.utc)
             for cid, rows in groups.items():
-                starts = [r for r in rows if r["start_min_ts"] is not None]
-                latest = max(starts, key=lambda r: r["start_last_ts"]) if starts else None
+                live = [
+                    (ts, text)
+                    for r in rows
+                    for ts, expires, text in zip(r["start_ts_list"] or [], r["start_expires_list"] or [], r["start_text_list"] or [])
+                    if expires is None or expires >= now
+                ]
                 out.append({
                     "conversation_id": cid,
                     "last_activity_at": max(r["max_ts"] for r in rows),
-                    "started_at": min(r["start_min_ts"] for r in starts) if starts else None,
-                    "conv_start_text": latest["start_last_text"] if latest else None,
+                    "started_at": min(ts for ts, _ in live) if live else None,
+                    "conv_start_text": max(live)[1] if live else None,
                 })
             return out
         if q.startswith("SELECT DISTINCT b.batch_id, b.day FROM kdcube_test_w536.conv_archive_conversations c"):
@@ -132,7 +137,8 @@ class _Con:
         q = " ".join(query.split())
         if q.startswith("INSERT INTO kdcube_test_w536.conv_archive_conversations"):
             keys = ("batch_id", "user_id", "conversation_id", "bundle_id", "agent_id", "row_count", "min_ts",
-                    "max_ts", "expires_at", "start_min_ts", "start_last_ts", "start_last_text")
+                    "max_ts", "expires_at", "start_min_ts", "start_last_ts", "start_last_text",
+                    "start_ts_list", "start_expires_list", "start_text_list")
             self.db.conversations.extend(dict(zip(keys, row)) for row in rows)
             return None
         raise AssertionError(f"unexpected executemany: {q}")
@@ -676,7 +682,45 @@ async def test_batches_archived_before_the_index_existed_are_indexed_on_the_next
     db, _, _, _, retention = _setup()
     db.messages = [_live_msg(1, days_ago=150, conv="a", tags=["turn:a1"], turn="a1")]
     await retention.archive_before(datetime.now(timezone.utc) - timedelta(days=90))
-    db.conversations = []  # as if archived by the release without the index
+    for row in db.conversations:  # as if indexed by the release without per-start expiry
+        row["start_ts_list"] = None
     summary = await retention.archive_before(datetime.now(timezone.utc) - timedelta(days=90))
     assert summary["indexed"] == 1
     assert [c["conversation_id"] for c in db.live_conversations()] == ["a"]
+
+
+@pytest.mark.asyncio
+async def test_an_expired_start_never_shows_in_the_list_even_when_the_scope_mixes_ttls():
+    # Infra's audit of #318 (P2): one conversation, one UTC day, a start that
+    # has expired (30-day TTL) beside a live message (365-day TTL).
+    start = _live_msg(1, days_ago=120, conv="mix", turn="m1",
+                      tags=["turn:m1", "conv.start", "artifact:turn.fingerprint.v1"])
+    start["ttl_days"], start["text"] = 30, "SYNTHETIC_EXPIRED_START"
+    live = _live_msg(2, days_ago=120, conv="mix", turn="m2", tags=["turn:m2"])
+    live["ttl_days"] = 365
+    later = _live_msg(3, days_ago=110, conv="mix", turn="m3",
+                      tags=["turn:m3", "conv.start", "artifact:turn.fingerprint.v1"])
+    later["ttl_days"], later["text"] = 365, "LIVE_START"
+    index = await _archived_index({}, [start, live, later])
+    [row] = await index.list_user_conversations(user_id="u1", include_conv_start_text=True)
+    assert row["conversation_id"] == "mix" and row["conv_start_text"] == "LIVE_START"
+    assert row["started_at"] == later["ts"].isoformat()
+    occ = await index.get_conversation_turn_ids_from_tags(user_id="u1", conversation_id="mix")
+    assert [o["turn_id"] for o in occ] == ["m2", "m3"]  # opening already drops the expired start
+
+
+@pytest.mark.asyncio
+async def test_a_start_that_expires_after_archiving_leaves_the_list():
+    start = _live_msg(1, days_ago=120, conv="c", turn="t1",
+                      tags=["turn:t1", "conv.start", "artifact:turn.fingerprint.v1"])
+    start["ttl_days"], start["text"] = 130, "START"
+    other = _live_msg(2, days_ago=120, conv="c", turn="t2", tags=["turn:t2"])
+    index = await _archived_index({}, [start, other])
+    [row] = await index.list_user_conversations(user_id="u1", include_conv_start_text=True)
+    assert row["conv_start_text"] == "START"
+    # Time passes past the start's own expiry; the list reads it at query time.
+    db_rows = index.cold_retention._pool.db.conversations
+    for c in db_rows:
+        c["start_expires_list"] = [datetime.now(timezone.utc) - timedelta(seconds=1) for _ in c["start_expires_list"]]
+    [row] = await index.list_user_conversations(user_id="u1", include_conv_start_text=True)
+    assert row["conv_start_text"] is None and row["started_at"] is None
