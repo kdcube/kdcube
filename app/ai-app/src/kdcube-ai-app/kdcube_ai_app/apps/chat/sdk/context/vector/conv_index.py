@@ -8,7 +8,7 @@ import json
 import re
 import asyncpg
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional, Sequence, Union, Callable, Iterable, Tuple
 
 
@@ -922,7 +922,50 @@ class ConvIndex:
         """
         async with self._pool.acquire() as con:
             rows = await con.fetch(q, *args)
-        return [dict(r) for r in rows]
+        out = [dict(r) for r in rows]
+        if conversation_id and len(out) < int(limit):
+            # Opening a conversation shows its archived messages too; they are
+            # older than every hot row, so they continue the newest-first list.
+            cold = await self._cold_window_records(
+                label="fetch_recent",
+                days=days,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                bundle_id=bundle_id,
+                bundle_ids=bundle_ids,
+                agent_id=agent_id,
+                roles=roles,
+            )
+            seen = {r.get("id") for r in out}
+            for record in reversed(cold):
+                if len(out) >= int(limit):
+                    break
+                tags = set(record.get("tags") or ())
+                if record.get("id") in seen:
+                    continue
+                if turn_id is not None and record.get("turn_id") != turn_id:
+                    continue
+                if any_tags and not tags.intersection(any_tags):
+                    continue
+                if all_tags and not set(all_tags).issubset(tags):
+                    continue
+                if not_tags and tags.intersection(not_tags):
+                    continue
+                out.append({
+                    "id": record.get("id"),
+                    "message_id": record.get("message_id"),
+                    "role": record.get("role"),
+                    "text": record.get("text"),
+                    "hosted_uri": record.get("hosted_uri"),
+                    "ts": _coerce_ts(record["ts"]),
+                    "tags": list(record.get("tags") or []),
+                    "turn_id": record.get("turn_id"),
+                    "bundle_id": record.get("bundle_id"),
+                    "agent_id": record.get("agent_id"),
+                    "conversation_id": record.get("conversation_id"),
+                    "storage": "cold",
+                })
+        return out
 
     async def fetch_message_page(
             self,
@@ -1275,6 +1318,42 @@ class ConvIndex:
             logger.exception("[conv_index.fetch_turn_catalog] cold tier read failed; returning hot turns only")
             return []
         return cold_turn_catalog(records)
+
+    async def _cold_window_records(
+            self,
+            *,
+            label: str,
+            days: int,
+            user_id: str,
+            conversation_id: str,
+            bundle_id: Optional[str] = None,
+            bundle_ids: Optional[Sequence[str]] = None,
+            agent_id: Optional[str] = None,
+            roles: Optional[Sequence[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """One conversation's cold records inside a read's rolling `days` window, oldest first.
+
+        Opening a conversation uses it, so its archived messages still show.
+        It reads only the parts that hold this conversation (the archive's
+        conversation index names them). Cross-conversation search does not
+        use it: it reaches the cold tier only through a date filter.
+        """
+        retention = self.retention()
+        if retention is None:
+            return []
+        try:
+            return await retention.fetch_cold_conversation(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                from_ts=datetime.now(timezone.utc) - timedelta(days=int(days)),
+                bundle_id=bundle_id or None,
+                bundle_ids=bundle_ids,
+                agent_id=agent_id or None,
+                roles=roles,
+            )
+        except Exception:
+            logger.exception("[conv_index.%s] cold tier read failed; serving the hot index only", label)
+            return []
 
     async def fetch_turn_catalog(
             self,
@@ -1875,7 +1954,41 @@ class ConvIndex:
                 "bundle_id": r.get("bundle_id"),
                 "agent_id": r.get("agent_id"),
             })
-        return out
+
+        # Archived messages of this conversation, so opening it shows every turn.
+        cold = await self._cold_window_records(
+            label="get_conversation_turn_ids_from_tags",
+            days=days,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            bundle_id=bundle_id,
+            bundle_ids=bundle_ids,
+            agent_id=agent_id,
+        )
+        if not cold:
+            return out
+        wanted = {str(t) for t in turn_ids} if turn_ids else None
+        cold_out: List[Dict[str, Any]] = []
+        for record in cold:
+            tags = list(record.get("tags") or [])
+            for tag in tags:
+                if not str(tag).startswith("turn:"):
+                    continue
+                tid = str(tag)[len("turn:"):]
+                if not tid or (wanted is not None and tid not in wanted):
+                    continue
+                cold_out.append({
+                    "turn_id": tid,
+                    "ts": _coerce_ts(record["ts"]).isoformat(),
+                    "tags": tags,
+                    "mid": record.get("message_id"),
+                    "hosted_uri": record.get("hosted_uri"),
+                    "bundle_id": record.get("bundle_id"),
+                    "agent_id": record.get("agent_id"),
+                })
+        merged = cold_out + out
+        merged.sort(key=lambda item: _coerce_ts(item["ts"]))
+        return merged
 
     async def list_user_conversations(
             self,
@@ -1976,6 +2089,86 @@ class ConvIndex:
                 "started_at": sa.isoformat() if (sa and hasattr(sa, "isoformat")) else sa,
                 **({"conv_start_text": r.get("conv_start_text")} if include_conv_start_text else {}),
             })
+        return await self._with_archived_conversations(
+            out,
+            user_id=user_id,
+            since=since,
+            limit=limit,
+            days=days,
+            include_conv_start_text=include_conv_start_text,
+            bundle_id=bundle_id,
+        )
+
+    async def _with_archived_conversations(
+            self,
+            hot: List[Dict[str, Any]],
+            *,
+            user_id: str,
+            since: Optional[Union[str, datetime]],
+            limit: Optional[int],
+            days: int,
+            include_conv_start_text: bool,
+            bundle_id: Optional[str],
+    ) -> List[Dict[str, Any]]:
+        """The conversation list with conversations whose messages were archived.
+
+        Archived messages are older than every hot one, so a conversation that
+        still has hot messages keeps its place and only an earlier start; a
+        conversation that is wholly archived follows all of them. The archive's
+        conversation index answers this in SQL; no cold part is read.
+        """
+        retention = self.retention()
+        if retention is None:
+            return hot
+        try:
+            archived_rows = await retention.list_archived_conversations(
+                user_id=user_id,
+                from_ts=datetime.now(timezone.utc) - timedelta(days=int(days)),
+                bundle_id=bundle_id,
+            )
+        except Exception:
+            logger.exception("[conv_index.list_user_conversations] cold tier read failed; serving the hot index only")
+            return hot
+        if not archived_rows:
+            return hot
+        summary: Dict[str, Dict[str, Any]] = {}
+        for row in archived_rows:
+            last = row.get("last_activity_at")
+            start = row.get("started_at")
+            summary[row["conversation_id"]] = {
+                "last": _coerce_ts(last) if last is not None else None,
+                "start": _coerce_ts(start) if start is not None else None,
+                "start_text": row.get("conv_start_text"),
+            }
+        listed = {row["conversation_id"]: row for row in hot}
+        for cid, entry in summary.items():
+            row = listed.get(cid)
+            if row is None:
+                continue
+            if entry["start"] is not None:
+                current = row.get("started_at")
+                if not current or entry["start"] < _coerce_ts(current):
+                    row["started_at"] = entry["start"].isoformat()
+            if include_conv_start_text and not row.get("conv_start_text") and entry["start_text"]:
+                row["conv_start_text"] = entry["start_text"]
+        # `since` limits which conversations are listed by their last activity;
+        # a listed conversation's start still comes from all of its messages.
+        floor = _coerce_ts(since) if since is not None else None
+        archived = [
+            {
+                "conversation_id": cid,
+                "last_activity_at": entry["last"].isoformat(),
+                "started_at": entry["start"].isoformat() if entry["start"] else None,
+                **({"conv_start_text": entry["start_text"]} if include_conv_start_text else {}),
+                "storage": "cold",
+            }
+            for cid, entry in summary.items()
+            if cid not in listed and entry["last"] is not None and (floor is None or entry["last"] >= floor)
+        ]
+        archived.sort(key=lambda row: row["last_activity_at"], reverse=True)
+        out = hot + archived
+        if limit and limit > 0:
+            out = out[: int(limit)]
         return out
 
     async def search_turn_logs_via_content(
