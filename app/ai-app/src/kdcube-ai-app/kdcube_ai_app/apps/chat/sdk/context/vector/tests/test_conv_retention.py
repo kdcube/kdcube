@@ -308,3 +308,24 @@ def test_parts_are_deterministic_gzip_jsonl():
     records = [{"id": 2, "ts": "x"}, {"id": 1, "ts": "y"}]
     assert encode_part(records) == encode_part(list(reversed(records)))
     assert [r["id"] for r in decode_part(encode_part(records))] == [1, 2]
+
+
+def test_the_index_builds_retention_with_the_apps_store(monkeypatch):
+    from types import SimpleNamespace
+
+    import kdcube_ai_app.apps.chat.sdk.context.vector.conv_index as conv_index_module
+    import kdcube_ai_app.storage.storage as storage_module
+
+    monkeypatch.setattr(
+        conv_index_module,
+        "get_settings",
+        lambda: SimpleNamespace(STORAGE_PATH="mem://", TENANT="t", PROJECT="p"),
+    )
+    monkeypatch.setattr(storage_module, "create_storage_backend", lambda uri: InMemoryStorageBackend())
+    store = _Store()
+    index = ConvIndex(pool=_Pool(_Db()), schema=SCHEMA)  # type: ignore[arg-type]
+
+    retention = index.retention(store=store)
+
+    assert retention is not None and retention.store is store and retention.schema == SCHEMA
+    assert retention.archive.root == "cb/tenants/t/projects/p/conversation-cold"

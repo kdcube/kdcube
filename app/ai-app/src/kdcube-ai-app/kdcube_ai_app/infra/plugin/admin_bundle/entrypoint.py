@@ -69,7 +69,7 @@ class AdminBundleEntrypoint(BaseEntrypoint):
         if index._pool is None:
             await index.init()
         try:
-            retention = index._cold_retention()
+            retention = index.retention()
             if retention is None:
                 logger.warning("[conversation-archive] cold tier unavailable; nothing archived")
                 return

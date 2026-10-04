@@ -103,8 +103,12 @@ class ConvIndex:
         if self._pool and not self.shared_pool:
             await self._pool.close()
 
-    def _cold_retention(self):
-        """The cold tier for this index, or None when it cannot be resolved."""
+    def retention(self, *, store: Any = None):
+        """Hot/cold retention for this index, or None when the cold tier cannot be resolved.
+
+        Pass the app's `ConversationStore` as `store` when deleting messages,
+        so their stored bodies are deleted too.
+        """
         if self.cold_retention is not None:
             return self.cold_retention
         try:
@@ -118,7 +122,7 @@ class ConvIndex:
                 tenant=settings.TENANT,
                 project=settings.PROJECT,
             )
-            return ConversationRetention(pool=self._pool, schema=self.schema, archive=archive)
+            return ConversationRetention(pool=self._pool, schema=self.schema, archive=archive, store=store)
         except Exception:
             logger.exception("[conv_index] cold tier unavailable; serving the hot index only")
             return None
@@ -1260,7 +1264,7 @@ class ConvIndex:
 
     async def _cold_turn_catalog(self, **scope: Any) -> List[Dict[str, Any]]:
         """Catalog entries from the cold tier for a date-filtered read."""
-        retention = self._cold_retention()
+        retention = self.retention()
         if retention is None:
             return []
         from kdcube_ai_app.apps.chat.sdk.context.vector.conv_retention import cold_turn_catalog
