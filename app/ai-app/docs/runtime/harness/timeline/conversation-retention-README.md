@@ -59,8 +59,21 @@ A read with an explicit date range whose start is older than the archive
 watermark (the newest archived message time) also reads the cold days in that
 range. `ConvIndex.fetch_turn_catalog`, which serves temporal conversation
 search, appends cold turns by time, without ranking and without ordinals,
-marked `"storage": "cold"`. Reads without a date range serve the hot index
-only.
+marked `"storage": "cold"`.
+
+Opening and listing conversations reach the cold tier too, within their own
+rolling window (365 days for the conversation browser):
+
+- `list_user_conversations` still lists a conversation whose messages were all
+  archived, after every conversation with hot messages, and takes a
+  conversation's start from its archived messages when they are older.
+- `get_conversation_turn_ids_from_tags`, which opens a conversation, returns
+  its archived turns before its hot ones, so every turn and its stored body
+  appear.
+- `fetch_recent` with a `conversation_id` continues newest-first into the
+  conversation's archived messages when the hot rows do not fill the limit.
+
+Cross-conversation reads without a date range serve the hot index only.
 
 ## Deleting a scope
 

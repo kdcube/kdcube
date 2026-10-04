@@ -475,3 +475,106 @@ async def test_the_daily_archive_runs_unless_the_setting_turns_it_off(monkeypatc
     monkeypatch.setattr(admin, "get_settings", lambda: SimpleNamespace(CONVERSATION_ARCHIVE_ENABLED=True, CONVERSATION_HOT_DAYS=90))
     await admin.AdminBundleEntrypoint.archive_conversations(owner)
     assert len(calls) == 1
+
+
+# Opening and listing conversations reach the cold tier (A2): an archived
+# conversation is still listed, and opening one shows every turn.
+
+
+class _HotCon:
+    def __init__(self, rows_by_kind: dict) -> None:
+        self.rows_by_kind = rows_by_kind
+
+    async def fetch(self, query, *args):
+        if "JOIN LATERAL unnest(m.tags)" in query:
+            return self.rows_by_kind.get("turns", [])
+        if "WITH recent AS" in query:
+            return self.rows_by_kind.get("conversations", [])
+        return self.rows_by_kind.get("recent", [])
+
+
+class _HotPool:
+    def __init__(self, rows_by_kind: dict) -> None:
+        self.con = _HotCon(rows_by_kind)
+
+    @asynccontextmanager
+    async def acquire(self):
+        yield self.con
+
+
+async def _archived_index(hot_rows_by_kind: dict, messages: list[dict]):
+    db, _, _, _, retention = _setup()
+    db.messages = messages
+    await retention.archive_before(datetime.now(timezone.utc) - timedelta(days=90))
+    index = ConvIndex(pool=_HotPool(hot_rows_by_kind), schema=SCHEMA)  # type: ignore[arg-type]
+    index.cold_retention = retention
+    return index
+
+
+def _days_ago(days: int, minutes: int = 0) -> datetime:
+    return datetime.now(timezone.utc) - timedelta(days=days, minutes=minutes)
+
+
+def _live_msg(i, *, days_ago, **kw):
+    row = _msg(i, days_ago=0, **kw)
+    row["ts"] = _days_ago(days_ago, i)
+    return row
+
+
+@pytest.mark.asyncio
+async def test_opening_a_conversation_shows_its_archived_turns_first():
+    hot_turn = {"turn_id": "t9", "ts": _days_ago(1), "tags": ["turn:t9"], "mid": "m9",
+                "hosted_uri": "cb/x/9.json", "bundle_id": "b1", "agent_id": "codex"}
+    index = await _archived_index({"turns": [hot_turn]}, [
+        _live_msg(1, days_ago=200, turn="t1", tags=["turn:t1", "artifact:conv.user_shortcuts"]),
+        _live_msg(2, days_ago=150, turn="t2", tags=["turn:t2"]),
+        _live_msg(3, days_ago=150, turn="t3", conv="other", tags=["turn:t3"]),
+    ])
+    occ = await index.get_conversation_turn_ids_from_tags(user_id="u1", conversation_id="c1")
+    assert [o["turn_id"] for o in occ] == ["t1", "t2", "t9"]
+    assert occ[0]["hosted_uri"] == "cb/x/1.json" and occ[0]["mid"] == "m1"
+    only = await index.get_conversation_turn_ids_from_tags(user_id="u1", conversation_id="c1", turn_ids=["t2"])
+    assert [o["turn_id"] for o in only] == ["t2", "t9"]  # the hot query applies its own filter
+
+
+@pytest.mark.asyncio
+async def test_a_conversations_recent_messages_continue_into_the_cold_tier():
+    hot = {"id": 9, "message_id": "m9", "role": "artifact", "text": "hot", "hosted_uri": "cb/x/9.json",
+           "ts": _days_ago(1), "tags": ["artifact:timeline"], "turn_id": "t9", "bundle_id": "b1",
+           "agent_id": "codex", "conversation_id": "c1"}
+    index = await _archived_index({"recent": [hot]}, [
+        _live_msg(1, days_ago=200, role="artifact", tags=["artifact:timeline"]),
+        _live_msg(2, days_ago=150, role="artifact", tags=["artifact:timeline", "secret"]),
+        _live_msg(3, days_ago=120, role="user", tags=["artifact:timeline"]),
+    ])
+    rows = await index.fetch_recent(user_id="u1", conversation_id="c1", roles=("artifact",),
+                                    all_tags=["artifact:timeline"], not_tags=["secret"], limit=5, days=365)
+    assert [r["id"] for r in rows] == [9, 1]
+    assert rows[1]["storage"] == "cold" and isinstance(rows[1]["ts"], datetime)
+    limited = await index.fetch_recent(user_id="u1", conversation_id="c1", roles=("artifact",), limit=1, days=365)
+    assert [r["id"] for r in limited] == [9]
+    across = await index.fetch_recent(user_id="u1", roles=("artifact",), limit=5, days=365)
+    assert [r["id"] for r in across] == [9]  # cross-conversation reads stay hot
+
+
+@pytest.mark.asyncio
+async def test_a_wholly_archived_conversation_is_still_listed_after_the_active_ones():
+    hot = {"conversation_id": "c1", "last_activity_at": _days_ago(1), "started_at": None, "conv_start_text": None}
+    start = ["conv.start", "artifact:turn.fingerprint.v1"]
+    index = await _archived_index({"conversations": [hot]}, [
+        _live_msg(1, days_ago=200, conv="c1", tags=start),
+        _live_msg(2, days_ago=150, conv="old", tags=start),
+        _live_msg(3, days_ago=140, conv="old"),
+        _live_msg(4, days_ago=130, conv="mine-not", user="u2"),
+    ])
+    rows = await index.list_user_conversations(user_id="u1", include_conv_start_text=True)
+    assert [r["conversation_id"] for r in rows] == ["c1", "old"]
+    # c1 still has hot messages; its archived start moves its started_at earlier.
+    assert rows[0]["started_at"] is not None and rows[0]["started_at"] < rows[1]["started_at"]
+    assert rows[0]["conv_start_text"] == "text 1"
+    assert rows[1]["storage"] == "cold" and rows[1]["conv_start_text"] == "text 2"
+    assert rows[1]["started_at"] < rows[1]["last_activity_at"]
+    assert [r["conversation_id"] for r in await index.list_user_conversations(user_id="u1", limit=1)] == ["c1"]
+    assert await index.list_user_conversations(user_id="u1", since=_days_ago(100)) == [
+        {"conversation_id": "c1", "last_activity_at": hot["last_activity_at"].isoformat(), "started_at": rows[0]["started_at"]},
+    ]
