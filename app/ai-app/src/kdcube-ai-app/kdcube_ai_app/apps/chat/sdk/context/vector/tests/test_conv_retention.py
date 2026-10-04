@@ -66,19 +66,24 @@ class _Con:
                 and (first is None or b["day"] >= first)
                 and (last is None or b["day"] <= last)
             ]
+        if q.startswith("SELECT hosted_uri FROM kdcube_test_w536.conv_messages WHERE user_id = $1"):
+            return [{"hosted_uri": r["hosted_uri"]} for r in self._scope(q, args)]
         if q.startswith("DELETE FROM kdcube_test_w536.conv_messages WHERE user_id = $1"):
-            user_id, conversation_id, *rest = args
-            bundle = rest.pop(0) if "bundle_id = $3" in q else None
-            tags = rest.pop(0) if "tags @>" in q else None
-            hit = [
-                r for r in self.db.messages
-                if r["user_id"] == user_id and r["conversation_id"] == conversation_id
-                and (bundle is None or r["bundle_id"] == bundle)
-                and (tags is None or set(tags) <= set(r["tags"]))
-            ]
+            hit = self._scope(q, args)
             self.db.delete_ids({r["id"] for r in hit})
             return [{"id": r["id"], "hosted_uri": r["hosted_uri"]} for r in hit]
         raise AssertionError(f"unexpected fetch: {q}")
+
+    def _scope(self, q: str, args) -> list[dict]:
+        user_id, conversation_id, *rest = args
+        bundle = rest.pop(0) if "bundle_id = $3" in q else None
+        tags = rest.pop(0) if "tags @>" in q else None
+        return [
+            r for r in self.db.messages
+            if r["user_id"] == user_id and r["conversation_id"] == conversation_id
+            and (bundle is None or r["bundle_id"] == bundle)
+            and (tags is None or set(tags) <= set(r["tags"]))
+        ]
 
     async def fetchval(self, query: str, *args):
         q = " ".join(query.split())
@@ -170,6 +175,9 @@ class _Store:
         self.deleted: list[str] = []
 
     async def delete_message(self, uri: str) -> bool:
+        # Like ConversationStore.delete_message: False when the body is already gone.
+        if uri in self.deleted:
+            return False
         self.deleted.append(uri)
         return True
 
@@ -404,7 +412,33 @@ async def test_a_deletion_that_fails_part_way_is_still_recorded():
     archive.read_manifest = broken  # type: ignore[assignment]
     with pytest.raises(RuntimeError):
         await retention.delete_messages(actor="operator", user_id="u1", conversation_id="c1")
-    assert db.messages == []
+    # Nothing is deleted before the failing step; the attempt is still recorded.
+    assert [m["id"] for m in db.messages] == [2]
     (deletion,) = db.deletions
     assert deletion["state"] == "failed" and "storage unavailable" in deletion["error"]
-    assert deletion["actor"] == "operator" and deletion["hot_rows"] == 1
+    assert deletion["actor"] == "operator" and deletion["hot_rows"] == 0
+
+
+@pytest.mark.asyncio
+async def test_a_failed_body_delete_can_be_completed_by_running_the_deletion_again():
+    db, backend, archive, store, retention = _setup()
+    db.messages = [_msg(1, days_ago=200), _msg(2, days_ago=1)]
+    await retention.archive_before(NOW - timedelta(days=90))
+    original = store.delete_message
+    calls = []
+
+    async def fail_second(uri):
+        calls.append(uri)
+        if len(calls) == 2:
+            raise RuntimeError("storage unavailable")
+        return await original(uri)
+
+    store.delete_message = fail_second  # type: ignore[assignment]
+    with pytest.raises(RuntimeError):
+        await retention.delete_messages(actor="operator", user_id="u1", conversation_id="c1")
+    assert db.deletions[0]["state"] == "failed"
+    assert [m["id"] for m in db.messages] == [2]  # records stay until their bodies are gone
+    store.delete_message = original  # type: ignore[assignment]
+    result = await retention.delete_messages(actor="operator", user_id="u1", conversation_id="c1")
+    assert sorted(store.deleted) == ["cb/x/1.json", "cb/x/2.json"]
+    assert result["hot_rows"] == 1 and result["cold_rows"] == 1 and db.deletions[1]["state"] == "completed"

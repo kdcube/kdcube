@@ -70,7 +70,8 @@ new verified batch. Apps pass their `ConversationStore` through
 `ConvIndex.retention(store=...)` so the bodies go too. Every deletion is a row
 in `conv_archive_deletions`, written before anything is deleted with the
 actor, the time and the scope, and finished `completed` with its counts or
-`failed` with the error; a failed deletion can be run again.
+`failed` with the error. Bodies are deleted before the records that point at
+them, so running a failed deletion again finds every body it left behind.
 
 Reads and deletions follow the ledger: only batches it records as `pruned`
 are cold data. A part left in storage by an interrupted archive or

@@ -286,19 +286,24 @@ class ConversationRetention:
             if tags:
                 args.append(tags)
                 where.append(f"tags @> ${len(args)}::text[]")
+            scope_sql = " AND ".join(where)
+            # Bodies first: while their records exist, a failed deletion can
+            # be run again and still find every body it has not removed.
             async with self._pool.acquire() as con:
-                deleted = await con.fetch(
-                    f"DELETE FROM {self.schema}.conv_messages WHERE {' AND '.join(where)} RETURNING id, hosted_uri",
-                    *args,
+                hot = await con.fetch(
+                    f"SELECT hosted_uri FROM {self.schema}.conv_messages WHERE {scope_sql}", *args
                 )
-            counts["hot_rows"] = len(deleted)
-            uris = {r["hosted_uri"] for r in deleted if r["hosted_uri"]}
-            cold_rows, cold_uris = await self._delete_cold(
+            cold_plan, cold_uris = await self._cold_matches(
                 user_id=user_id, conversation_id=conversation_id, bundle_id=bundle_id, tags=tags
             )
-            counts["cold_rows"] = cold_rows
-            uris |= cold_uris
+            uris = {r["hosted_uri"] for r in hot if r["hosted_uri"]} | cold_uris
             counts["body_objects"] = await self._delete_bodies(uris)
+            async with self._pool.acquire() as con:
+                deleted = await con.fetch(
+                    f"DELETE FROM {self.schema}.conv_messages WHERE {scope_sql} RETURNING id", *args
+                )
+            counts["hot_rows"] = len(deleted)
+            counts["cold_rows"] = await self._apply_cold_deletion(cold_plan)
         except Exception as exc:
             await self._finish_deletion(deletion_id, "failed", counts, error=f"{type(exc).__name__}: {exc}")
             raise
@@ -326,20 +331,17 @@ class ConversationRetention:
                 deletion_id, state, counts["hot_rows"], counts["body_objects"], counts["cold_rows"], error[:500] or None,
             )
 
-    async def _delete_cold(
+    async def _cold_matches(
         self,
         *,
         user_id: str,
         conversation_id: str,
         bundle_id: Optional[str],
         tags: Sequence[str],
-    ) -> Tuple[int, set]:
-        """Rewrite every live cold batch that holds matching records without them.
+    ) -> Tuple[List[Dict[str, Any]], set]:
+        """The live cold batches holding matching records, and those records' body URIs."""
 
-        Returns the number of removed records and their body URIs.
-        """
-
-        removed = 0
+        plan: List[Dict[str, Any]] = []
         uris: set = set()
         for batch in await self._pruned_batches():
             day, batch_id = batch["day"], batch["batch_id"]
@@ -355,9 +357,22 @@ class ConversationRetention:
             )
             if not matching:
                 continue
-            matching_ids = {int(r["id"]) for r in matching}
             uris |= {r["hosted_uri"] for r in matching if r.get("hosted_uri")}
-            kept = [r for r in records if int(r["id"]) not in matching_ids]
+            plan.append({
+                "day": day,
+                "batch_id": batch_id,
+                "records": records,
+                "matching_ids": {int(r["id"]) for r in matching},
+            })
+        return plan, uris
+
+    async def _apply_cold_deletion(self, plan: Sequence[Dict[str, Any]]) -> int:
+        """Rewrite each planned batch without its matching records; returns how many were removed."""
+
+        removed = 0
+        for entry in plan:
+            day, batch_id, matching_ids = entry["day"], entry["batch_id"], entry["matching_ids"]
+            kept = [r for r in entry["records"] if int(r["id"]) not in matching_ids]
             removed += len(matching_ids)
             if kept:
                 new_id = f"{batch_id}-r{uuid.uuid4().hex[:8]}"
@@ -390,7 +405,7 @@ class ConversationRetention:
             # The ledger already says retired; removing the files is cleanup,
             # and a part left behind is never read (reads follow the ledger).
             await self.archive.delete_batch(day, batch_id)
-        return removed, uris
+        return removed
 
 
 def _turn_key(record: Dict[str, Any]) -> Optional[str]:
