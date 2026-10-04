@@ -76,6 +76,7 @@ def conversation_index_rows(batch_id: str, records: Sequence[Dict[str, Any]]) ->
         entry = groups.setdefault(key, {
             "rows": 0, "min_ts": ts, "max_ts": ts, "expires_at": expires,
             "start_min_ts": None, "start_last_ts": None, "start_last_text": None,
+            "starts": [],
         })
         entry["rows"] += 1
         entry["min_ts"] = min(entry["min_ts"], ts)
@@ -85,16 +86,23 @@ def conversation_index_rows(batch_id: str, records: Sequence[Dict[str, Any]]) ->
         else:
             entry["expires_at"] = max(entry["expires_at"], expires)
         if _START_TAGS.issubset(set(record.get("tags") or ())):
+            # Each start keeps its own expiry: a scope can mix TTLs, and the
+            # list must never show a start that has expired.
+            entry["starts"].append((ts, expires, record.get("text")))
             if entry["start_min_ts"] is None or ts < entry["start_min_ts"]:
                 entry["start_min_ts"] = ts
             if entry["start_last_ts"] is None or ts >= entry["start_last_ts"]:
                 entry["start_last_ts"] = ts
                 entry["start_last_text"] = record.get("text")
-    return [
-        (batch_id, *key, e["rows"], e["min_ts"], e["max_ts"], e["expires_at"],
-         e["start_min_ts"], e["start_last_ts"], e["start_last_text"])
-        for key, e in sorted(groups.items())
-    ]
+    rows = []
+    for key, e in sorted(groups.items()):
+        starts = sorted(e["starts"], key=lambda s: s[0])
+        rows.append((
+            batch_id, *key, e["rows"], e["min_ts"], e["max_ts"], e["expires_at"],
+            e["start_min_ts"], e["start_last_ts"], e["start_last_text"],
+            [s[0] for s in starts], [s[1] for s in starts], [s[2] for s in starts],
+        ))
+    return rows
 
 
 class ConversationRetention:
@@ -188,14 +196,16 @@ class ConversationRetention:
                 f"""
                 INSERT INTO {self.schema}.conv_archive_conversations
                     (batch_id, user_id, conversation_id, bundle_id, agent_id, row_count, min_ts, max_ts,
-                     expires_at, start_min_ts, start_last_ts, start_last_text)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                     expires_at, start_min_ts, start_last_ts, start_last_text,
+                     start_ts_list, start_expires_list, start_text_list)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                        $13::timestamptz[], $14::timestamptz[], $15::text[])
                 """,
                 rows,
             )
 
     async def _index_unindexed_batches(self) -> int:
-        """Index live batches archived before the conversation index existed."""
+        """Index live batches archived before the conversation index (or its per-start expiry) existed."""
 
         async with self._pool.acquire() as con:
             pending = await con.fetch(
@@ -203,7 +213,7 @@ class ConversationRetention:
                 SELECT b.batch_id, b.day FROM {self.schema}.conv_archive_batches b
                  WHERE b.state = 'pruned'
                    AND NOT EXISTS (SELECT 1 FROM {self.schema}.conv_archive_conversations c
-                                    WHERE c.batch_id = b.batch_id)
+                                    WHERE c.batch_id = b.batch_id AND c.start_ts_list IS NOT NULL)
                  ORDER BY b.day, b.batch_id
                 """
             )
@@ -335,7 +345,11 @@ class ConversationRetention:
         from_ts: Any,
         bundle_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """The user's archived conversations from the conversation index; reads no part."""
+        """The user's archived conversations from the conversation index; reads no part.
+
+        Like the hot list, a conversation start counts only inside the read's
+        rolling window (`from_ts`) and while its own TTL lasts.
+        """
 
         args: List[Any] = [user_id, _as_utc(from_ts)]
         where = [
@@ -352,10 +366,15 @@ class ConversationRetention:
                 f"""
                 SELECT c.conversation_id,
                        max(c.max_ts) AS last_activity_at,
-                       min(c.start_min_ts) AS started_at,
-                       (array_agg(c.start_last_text ORDER BY c.start_last_ts DESC NULLS LAST))[1] AS conv_start_text
+                       min(s.ts) FILTER (WHERE s.ts >= $2 AND (s.expires IS NULL OR s.expires >= now()))
+                           AS started_at,
+                       (array_agg(s.text ORDER BY s.ts DESC)
+                           FILTER (WHERE s.ts >= $2 AND (s.expires IS NULL OR s.expires >= now())))[1]
+                           AS conv_start_text
                   FROM {self.schema}.conv_archive_conversations c
                   JOIN {self.schema}.conv_archive_batches b ON b.batch_id = c.batch_id
+                  LEFT JOIN LATERAL unnest(c.start_ts_list, c.start_expires_list, c.start_text_list)
+                         AS s(ts, expires, text) ON TRUE
                  WHERE {' AND '.join(where)}
                  GROUP BY c.conversation_id
                 """,

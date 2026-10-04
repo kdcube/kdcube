@@ -78,9 +78,11 @@ than the window is neither listed nor opened, hot or cold):
 
 These reads use `conv_archive_conversations`, written in the same transaction
 as each batch's ledger row: one row per conversation scope in a batch, with its
-time range and conversation start. Listing reads only that table; opening reads
-only the parts that hold the conversation. A batch archived before the table
-existed is indexed by the next archive run.
+time range and every conversation start with its own expiry (a scope can mix
+TTLs, so a start that has expired is never listed). Listing reads only that
+table; opening reads only the parts that hold the conversation. A batch
+archived before the table, or before its per-start expiry, existed is indexed
+by the next archive run.
 
 Cross-conversation reads without a date range serve the hot index only.
 
