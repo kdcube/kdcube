@@ -477,6 +477,14 @@ class ConversationStore:
         rel = self._rel_from_uri_or_path(uri_or_path)
         return await self.backend.read_bytes_a(rel)
 
+    async def delete_message(self, uri_or_path: str) -> bool:
+        """Delete one stored message body; False when it was already gone."""
+        rel = self._rel_from_uri_or_path(uri_or_path)
+        if not await self.backend.exists_a(rel):
+            return False
+        await self.backend.delete_a(rel)
+        return True
+
     # ---------- execution snapshot (role-aware RNs in manifest) ----------
 
     async def put_execution_snapshot(

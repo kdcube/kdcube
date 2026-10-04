@@ -50,6 +50,14 @@ def _safe_json_loads(value: Any) -> Any:
 
 CONV_STATE_KIND = "artifact:conversation.state"
 
+def _catalog_reads_cold(ordinal: Optional[int]) -> bool:
+    """Ordinals number the hot catalog; an ordinal request never reads the cold tier."""
+    try:
+        return ordinal is None or int(ordinal) <= 0
+    except Exception:
+        return True
+
+
 def _state_tag(state: str) -> str:
     return f"conv.state:{state}"
 
@@ -64,6 +72,9 @@ class ConvIndex:
         self._pool: Optional[asyncpg.Pool] = pool
         self.shared_pool = pool is not None
         self._settings = None
+        # The cold tier. Injected by callers and tests; otherwise built
+        # per call from settings (never cached across turns).
+        self.cold_retention = None
         if schema:
             self.schema = str(schema)
         else:
@@ -91,6 +102,30 @@ class ConvIndex:
     async def close(self):
         if self._pool and not self.shared_pool:
             await self._pool.close()
+
+    def retention(self, *, store: Any = None):
+        """Hot/cold retention for this index, or None when the cold tier cannot be resolved.
+
+        Pass the app's `ConversationStore` as `store` when deleting messages,
+        so their stored bodies are deleted too.
+        """
+        if self.cold_retention is not None:
+            return self.cold_retention
+        try:
+            from kdcube_ai_app.apps.chat.sdk.context.vector.conv_cold import ConversationColdArchive
+            from kdcube_ai_app.apps.chat.sdk.context.vector.conv_retention import ConversationRetention
+            from kdcube_ai_app.storage.storage import create_storage_backend
+
+            settings = self._settings or get_settings()
+            archive = ConversationColdArchive(
+                create_storage_backend(settings.STORAGE_PATH),
+                tenant=settings.TENANT,
+                project=settings.PROJECT,
+            )
+            return ConversationRetention(pool=self._pool, schema=self.schema, archive=archive, store=store)
+        except Exception:
+            logger.exception("[conv_index] cold tier unavailable; serving the hot index only")
+            return None
 
     def _load_ctx(self, ctx: Optional[dict] = None) -> dict:
         if ctx is not None:
@@ -1227,6 +1262,20 @@ class ConvIndex:
                 r["ts"] = ts.isoformat()
         return rows
 
+    async def _cold_turn_catalog(self, **scope: Any) -> List[Dict[str, Any]]:
+        """Catalog entries from the cold tier for a date-filtered read."""
+        retention = self.retention()
+        if retention is None:
+            return []
+        from kdcube_ai_app.apps.chat.sdk.context.vector.conv_retention import cold_turn_catalog
+
+        try:
+            records = await retention.fetch_cold(**scope)
+        except Exception:
+            logger.exception("[conv_index.fetch_turn_catalog] cold tier read failed; returning hot turns only")
+            return []
+        return cold_turn_catalog(records)
+
     async def fetch_turn_catalog(
             self,
             *,
@@ -1407,9 +1456,24 @@ class ConvIndex:
         async with self._pool.acquire() as con:
             rows = await con.fetch(q, *args)
 
+        merged: List[Dict[str, Any]] = [dict(raw) for raw in rows]
+        if from_ts is not None and _catalog_reads_cold(ordinal):
+            cold = await self._cold_turn_catalog(
+                user_id=user_id,
+                conversation_id=conversation_id if scope == "conversation" else None,
+                bundle_id=bundle_id,
+                agent_id=agent_id,
+                from_ts=from_ts,
+                to_ts=to_ts,
+            )
+            if cold:
+                # Cold turns are older than every hot turn: by time, without ranking.
+                cold_sorted = cold if sort_dir == "ASC" else list(reversed(cold))
+                merged = (cold_sorted + merged) if sort_dir == "ASC" else (merged + cold_sorted)
+                merged = merged[:limit]
+
         out: List[Dict[str, Any]] = []
-        for raw in rows:
-            r = dict(raw)
+        for r in merged:
             for key in ("ts", "working_summary_ts", "first_user_ts", "last_assistant_ts"):
                 ts = r.get(key)
                 if hasattr(ts, "isoformat"):

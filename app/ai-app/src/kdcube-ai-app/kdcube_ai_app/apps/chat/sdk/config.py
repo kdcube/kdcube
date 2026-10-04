@@ -703,6 +703,10 @@ class Settings(PLATFORM_CONFIG):
     # only (no per-request raw scans for the current day). "off" disables.
     OPEX_TODAY_REFRESH_CRON: str = Field(default="7 * * * *")
 
+    # Conversation store retention: rows of conv_messages older than
+    # this many days move to the cold tier; assembly routines.conversation_store.hot_days.
+    CONVERSATION_HOT_DAYS: int = Field(default=90)
+
     # Subscription rollover scheduler
     SUBSCRIPTION_ROLLOVER_ENABLED: bool = Field(default=True)
     SUBSCRIPTION_ROLLOVER_CRON: str = Field(default="15 * * * *")
@@ -1494,6 +1498,10 @@ class Settings(PLATFORM_CONFIG):
             val = self._assembly_int("routines.economics.subscription_rollover_sweep_limit")
             if val is not None:
                 self.SUBSCRIPTION_ROLLOVER_SWEEP_LIMIT = val
+        if not self._env_present("CONVERSATION_HOT_DAYS"):
+            val = self._assembly_int("routines.conversation_store.hot_days")
+            if val is not None:
+                self.CONVERSATION_HOT_DAYS = val
         if not self._env_present("STRIPE_RECONCILE_ENABLED"):
             val = self._assembly_bool("routines.stripe.reconcile_enabled")
             if val is not None:

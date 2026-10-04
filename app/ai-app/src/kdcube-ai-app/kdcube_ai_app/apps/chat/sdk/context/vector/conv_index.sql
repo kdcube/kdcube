@@ -159,3 +159,40 @@ CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_tickets_conv_user
   ON <SCHEMA>.conv_track_tickets (conversation_id, user_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_tickets_turn
   ON <SCHEMA>.conv_track_tickets (turn_id);
+
+-- === cold tier ledger ===
+-- One row per archived batch. Hot rows are deleted only after the batch is
+-- read back and matches its manifest (state 'verified' -> 'pruned').
+CREATE TABLE IF NOT EXISTS <SCHEMA>.conv_archive_batches (
+    batch_id     TEXT PRIMARY KEY,
+    day          DATE NOT NULL,
+    row_count    INTEGER NOT NULL,
+    min_id       BIGINT NOT NULL,
+    max_id       BIGINT NOT NULL,
+    min_ts       TIMESTAMPTZ,
+    max_ts       TIMESTAMPTZ,
+    part_key     TEXT NOT NULL,
+    manifest_key TEXT NOT NULL,
+    sha256       TEXT,
+    state        TEXT NOT NULL CHECK (state IN ('written', 'verified', 'pruned', 'retired')),
+    error        TEXT,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_archive_state ON <SCHEMA>.conv_archive_batches (state, day);
+
+-- Every explicit conversation deletion: who, when, what and how much. The row
+-- is written before anything is deleted and finishes 'completed' or 'failed'.
+CREATE TABLE IF NOT EXISTS <SCHEMA>.conv_archive_deletions (
+    deletion_id  TEXT PRIMARY KEY,
+    actor        TEXT NOT NULL,
+    reason       TEXT,
+    scope        JSONB NOT NULL,
+    state        TEXT NOT NULL DEFAULT 'started' CHECK (state IN ('started', 'completed', 'failed')),
+    hot_rows     INTEGER NOT NULL DEFAULT 0,
+    body_objects INTEGER NOT NULL DEFAULT 0,
+    cold_rows    INTEGER NOT NULL DEFAULT 0,
+    error        TEXT,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at TIMESTAMPTZ
+    );

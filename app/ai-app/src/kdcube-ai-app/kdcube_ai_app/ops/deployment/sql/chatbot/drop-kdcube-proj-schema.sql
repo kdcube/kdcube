@@ -78,6 +78,8 @@ DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_tickets_turn;
 
 -- ---------- Tables ----------
 DROP TABLE IF EXISTS <SCHEMA>.conv_artifact_edges CASCADE;
+DROP TABLE IF EXISTS <SCHEMA>.conv_archive_deletions CASCADE;
+DROP TABLE IF EXISTS <SCHEMA>.conv_archive_batches CASCADE;
 DROP TABLE IF EXISTS <SCHEMA>.conv_track_tickets CASCADE;
 DROP TABLE IF EXISTS <SCHEMA>.rag_chunks CASCADE;
 DROP TABLE IF EXISTS <SCHEMA>.conv_pref_exceptions CASCADE;
