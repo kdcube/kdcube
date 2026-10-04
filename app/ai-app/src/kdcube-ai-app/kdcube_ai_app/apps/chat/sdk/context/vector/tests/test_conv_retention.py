@@ -91,7 +91,7 @@ class _Con:
                     (ts, text)
                     for r in rows
                     for ts, expires, text in zip(r["start_ts_list"] or [], r["start_expires_list"] or [], r["start_text_list"] or [])
-                    if expires is None or expires >= now
+                    if ts >= from_ts and (expires is None or expires >= now)
                 ]
                 out.append({
                     "conversation_id": cid,
@@ -724,3 +724,23 @@ async def test_a_start_that_expires_after_archiving_leaves_the_list():
         c["start_expires_list"] = [datetime.now(timezone.utc) - timedelta(seconds=1) for _ in c["start_expires_list"]]
     [row] = await index.list_user_conversations(user_id="u1", include_conv_start_text=True)
     assert row["conv_start_text"] is None and row["started_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_start_outside_the_read_window_is_not_listed_even_when_its_batch_straddles_the_cutoff():
+    # Infra's review of #319: one batch (one UTC day) holds a start just older
+    # than the read's window floor and a message just inside it. The hot list
+    # and opening both apply the window; the archived list must too.
+    floor = (datetime.now(timezone.utc) - timedelta(days=300)).replace(hour=12, minute=0, second=0, microsecond=0)
+    start = _live_msg(1, days_ago=0, conv="edge", turn="e1",
+                      tags=["turn:e1", "conv.start", "artifact:turn.fingerprint.v1"])
+    start["ts"], start["text"] = floor - timedelta(minutes=1), "OUTSIDE_WINDOW_MARKER"
+    inside = _live_msg(2, days_ago=0, conv="edge", turn="e2", tags=["turn:e2"])
+    inside["ts"] = floor + timedelta(minutes=1)
+    index = await _archived_index({}, [start, inside])
+    assert len(index.cold_retention._pool.db.batches) == 1  # one batch straddles the floor
+    [row] = await index.cold_retention.list_archived_conversations(user_id="u1", from_ts=floor)
+    assert row["conversation_id"] == "edge"
+    assert row["conv_start_text"] is None and row["started_at"] is None
+    [wider] = await index.cold_retention.list_archived_conversations(user_id="u1", from_ts=floor - timedelta(hours=1))
+    assert wider["conv_start_text"] == "OUTSIDE_WINDOW_MARKER"

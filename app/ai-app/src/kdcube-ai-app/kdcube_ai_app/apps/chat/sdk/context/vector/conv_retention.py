@@ -345,7 +345,11 @@ class ConversationRetention:
         from_ts: Any,
         bundle_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """The user's archived conversations from the conversation index; reads no part."""
+        """The user's archived conversations from the conversation index; reads no part.
+
+        Like the hot list, a conversation start counts only inside the read's
+        rolling window (`from_ts`) and while its own TTL lasts.
+        """
 
         args: List[Any] = [user_id, _as_utc(from_ts)]
         where = [
@@ -362,10 +366,10 @@ class ConversationRetention:
                 f"""
                 SELECT c.conversation_id,
                        max(c.max_ts) AS last_activity_at,
-                       min(s.ts) FILTER (WHERE s.ts IS NOT NULL AND (s.expires IS NULL OR s.expires >= now()))
+                       min(s.ts) FILTER (WHERE s.ts >= $2 AND (s.expires IS NULL OR s.expires >= now()))
                            AS started_at,
                        (array_agg(s.text ORDER BY s.ts DESC)
-                           FILTER (WHERE s.ts IS NOT NULL AND (s.expires IS NULL OR s.expires >= now())))[1]
+                           FILTER (WHERE s.ts >= $2 AND (s.expires IS NULL OR s.expires >= now())))[1]
                            AS conv_start_text
                   FROM {self.schema}.conv_archive_conversations c
                   JOIN {self.schema}.conv_archive_batches b ON b.batch_id = c.batch_id
