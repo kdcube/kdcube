@@ -11,7 +11,8 @@ import shlex
 import shutil
 import subprocess
 import sys
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
+from functools import wraps
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
@@ -61,7 +62,12 @@ from kdcube_cli.deployment_provenance import (
     write_platform_source_marker,
 )
 from kdcube_cli.docker_storage import build_storage_maintenance_commands
-from kdcube_cli.deployment_preservation import HOLD_REPOSITORY_PREFIX
+from kdcube_cli.deployment_preservation import (
+    HOLD_REPOSITORY_PREFIX,
+    DeploymentPreservation,
+    DeploymentPreservationError,
+    deployment_operation,
+)
 from kdcube_cli.export_live_bundles import export_live_bundle_descriptors
 from kdcube_cli.host_vault import (
     HostVaultConfigurationError,
@@ -361,12 +367,25 @@ def _compose_logs_dir_from_env(env_file: Path, fallback_workdir: Path) -> Path:
     return fallback_workdir / "logs"
 
 
+def _native_operation(function):
+    @wraps(function)
+    def guarded(*args, **kwargs):
+        try:
+            with deployment_operation(kwargs["workdir"]):
+                return function(*args, **kwargs)
+        except DeploymentPreservationError as exc:
+            raise SystemExit(str(exc)) from exc
+    return guarded
+
+
+@_native_operation
 def stop_compose_stack(
     console: Console,
     *,
     repo_root: Path,
     workdir: Path,
     remove_volumes: bool = False,
+    preservation_manifest: str | None = None,
 ) -> None:
     target = LocalDeploymentTarget(
         DeploymentTargetRef.local(workdir),
@@ -378,6 +397,7 @@ def stop_compose_stack(
         target.stop(
             LocalStopRequest(remove_volumes=remove_volumes),
             event_sink=_control_event_renderer(console),
+            **({"preservation_manifest": preservation_manifest} if preservation_manifest else {}),
         )
     except KDCubeControlError as exc:
         raise SystemExit(exc.summary) from exc
@@ -387,12 +407,14 @@ def stop_compose_stack(
         console.print("[dim]Host data under the workdir was preserved.[/dim]")
 
 
+@_native_operation
 def start_compose_stack(
     console: Console,
     *,
     repo_root: Path,
     workdir: Path,
     build: bool = False,
+    preservation_manifest: str | None = None,
 ) -> None:
     target = LocalDeploymentTarget(
         DeploymentTargetRef.local(workdir),
@@ -401,11 +423,15 @@ def start_compose_stack(
         stream_process_output=True,
     )
     if build:
+        preservation_manifest = _preserve_before_change(
+            console, repo_root=repo_root, workdir=workdir, manifest_id=preservation_manifest,
+        )
         _maintain_docker_build_storage(console, phase="before")
     try:
         result = target.start(
             LocalStartRequest(build=build),
             event_sink=_control_event_renderer(console),
+            **({"preservation_manifest": preservation_manifest} if preservation_manifest else {}),
         )
     except KDCubeControlError as exc:
         raise SystemExit(exc.summary) from exc
@@ -764,11 +790,13 @@ def _build_and_restart(
         )
 
 
+@_native_operation
 def build_compose_images(
     console: Console,
     *,
     repo_root: Path,
     workdir: Path,
+    preservation_manifest: str | None = None,
 ) -> None:
     ctx = _build_paths_for_repo(repo_root, workdir)
     env_file = ctx.config_dir / ".env"
@@ -804,6 +832,9 @@ def build_compose_images(
     if not (ui_image_override and not installer_mod.is_placeholder(ui_image_override)):
         build_services.append("web-ui")
 
+    _preserve_before_change(
+        console, repo_root=repo_root, workdir=workdir, manifest_id=preservation_manifest,
+    )
     _maintain_docker_build_storage(console, phase="before")
     try:
         _run_compose(
@@ -838,6 +869,61 @@ def build_compose_images(
     finally:
         _maintain_docker_build_storage(console, phase="after")
     console.print("[green]Docker images built. The stack was not started.[/green]")
+
+
+def _preserve_before_change(
+    console: Console, *, repo_root: Path, workdir: Path, manifest_id: str | None = None,
+) -> str | None:
+    ctx = _build_paths_for_repo(repo_root, workdir)
+    try:
+        preservation = DeploymentPreservation(
+            workdir=workdir, docker_dir=ctx.docker_dir, env_file=ctx.config_dir / ".env",
+        )
+        manifest = preservation.retain(manifest_id) if manifest_id else preservation.prepare_current()
+    except DeploymentPreservationError as exc:
+        raise SystemExit(f"Baseline preservation refused before deployment change: {exc}") from exc
+    if manifest:
+        console.print(f"[dim]Protected rollback manifest:[/dim] {manifest['manifest_id']}")
+        return manifest["manifest_id"]
+    console.print("[dim]Fresh deployment: no container/image-receipt rollback baseline exists.[/dim]")
+    return None
+
+
+def _run_preservation_command(console: Console, args, *, repo_root: Path, workdir: Path) -> None:
+    ctx = _build_paths_for_repo(repo_root, workdir)
+    try:
+        preservation = DeploymentPreservation(
+            workdir=workdir, docker_dir=ctx.docker_dir, env_file=ctx.config_dir / ".env",
+        )
+        if args.preservation_action == "prepare":
+            result = preservation.prepare(key=args.key, owner=args.owner, consumers=args.consumer,
+                                          protect=not args.no_protect)
+        elif args.preservation_action == "protect":
+            result = preservation.protect(args.manifest)
+        elif args.preservation_action == "status":
+            result = preservation.status(args.manifest)
+        elif args.preservation_action == "consumer-done":
+            result = preservation.consumer_done(args.manifest, consumer=args.consumer,
+                                                evidence_ref=args.evidence_ref)
+        elif args.preservation_action == "release":
+            try:
+                qualification = json.loads(Path(args.qualification).expanduser().read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                raise SystemExit("Release qualification must be a readable JSON object.") from None
+            if not isinstance(qualification, dict):
+                raise SystemExit("Release qualification must be a JSON object.")
+            result = preservation.release(args.manifest, qualification=qualification)
+        else:
+            raise SystemExit("Unknown preservation action.")
+    except DeploymentPreservationError as exc:
+        raise SystemExit(str(exc)) from exc
+    if args.json_output:
+        console.print_json(data=result)
+    else:
+        console.print(f"Preservation {result['manifest_id']}: {result['state']}")
+        console.print(f"[dim]Recorded manifest:[/dim] {preservation.manifest_path(result['manifest_id'])}")
+        if args.preservation_action == "status":
+            console.print("[dim]Recorded state only; status does not probe or repair Docker image holds.[/dim]")
 
 
 def clean_docker_images(console: Console) -> None:
@@ -5502,6 +5588,29 @@ def main() -> None:
     _sp = subparsers.add_parser("clean", help="Clean local Docker image/cache artifacts")
     _add_quiet_arg(_sp)
 
+    _sp = subparsers.add_parser("preservation", help="Manage native exact-image rollback manifests and holds")
+    _preservation_subparsers = _sp.add_subparsers(dest="preservation_action", required=True)
+    for _action in ("prepare", "protect", "status", "consumer-done", "release"):
+        _ps = _preservation_subparsers.add_parser(_action)
+        _add_quiet_arg(_ps)
+        _ps.add_argument("--workdir", default="", help="Initialized runtime workdir")
+        _ps.add_argument("--path", default=str(DEFAULT_DIR), help="Platform repo path")
+        _ps.add_argument("--tenant", default="", help="Tenant for workdir resolution")
+        _ps.add_argument("--project", default="", help="Project for workdir resolution")
+        _ps.add_argument("--json", action="store_true", dest="json_output")
+        if _action == "prepare":
+            _ps.add_argument("--key", required=True, help="Stable operation key (unchanged on retry)")
+            _ps.add_argument("--owner", required=True, help="Named preservation owner")
+            _ps.add_argument("--consumer", action="append", default=[], help="Named open consumer (repeatable)")
+            _ps.add_argument("--no-protect", action="store_true", help="Prepare manifest only; cannot restore yet")
+        else:
+            _ps.add_argument("--manifest", required=True, help="Complete manifest ID returned by prepare/refresh")
+        if _action == "consumer-done":
+            _ps.add_argument("--consumer", required=True)
+            _ps.add_argument("--evidence-ref", required=True, help="Named ALL CLEAR closure evidence")
+        if _action == "release":
+            _ps.add_argument("--qualification", required=True, help="Path to bound independent ALL CLEAR JSON")
+
     _sp = subparsers.add_parser("defaults", help="Save persistent operator defaults")
     _add_quiet_arg(_sp)
     _sp.add_argument("--default-tenant", default="", help="Default tenant to persist")
@@ -5771,7 +5880,16 @@ def main() -> None:
         if args.descriptors_location
         else implicit_descriptors_location
     )
+    _lifecycle_guards = ExitStack()
     try:
+        if args.command == "preservation":
+            _resolved = _resolve_subcommand_workdir(
+                args.workdir, cli_defaults, tenant_arg=args.tenant, project_arg=args.project,
+            )
+            _repo = _resolve_subcommand_repo(args.path, workdir=_resolved,
+                                            path_provided=_arg_provided("--path"))
+            _run_preservation_command(console, args, repo_root=_repo, workdir=_resolved)
+            return
         if args.command == "authority":
             _authority_workdir = _resolve_subcommand_workdir(
                 args.workdir,
@@ -7084,6 +7202,14 @@ def main() -> None:
                     "the override is installed while constructing platform images."
                 )
 
+            # Read the installed source BEFORE checkout/copy/proxy/config
+            # staging. Carry this exact baseline through the refresh tail;
+            # candidate configuration changes must not recapture latest tags.
+            _lifecycle_guards.enter_context(deployment_operation(_resolved))
+            _baseline_repo = _resolve_subcommand_repo(args.path, workdir=_resolved, path_provided=False)
+            _refresh_preservation = _preserve_before_change(
+                console, repo_root=_baseline_repo, workdir=_resolved,
+            )
             _repo = _resolve_subcommand_repo(args.path, workdir=_resolved, path_provided=_refresh_path_provided)
             if _refresh_version_selector:
                 if not _is_git_repo(_repo):
@@ -7137,7 +7263,8 @@ def main() -> None:
             _t, _p = _parse_workdir_namespace(_resolved)
             # Stop if running (no-op if already stopped).
             try:
-                stop_compose_stack(console, repo_root=_repo, workdir=_resolved)
+                stop_compose_stack(console, repo_root=_repo, workdir=_resolved,
+                                   preservation_manifest=_refresh_preservation)
             except SystemExit as _stop_exit:
                 _stop_msg = str(_stop_exit)
                 if "Deployment is not running" in _stop_msg:
@@ -7165,14 +7292,16 @@ def main() -> None:
                                 "[dim]Maintainer local Python package:[/dim] "
                                 f"{_local_package.distribution} <- {_local_package.source}"
                             )
-                    build_compose_images(console, repo_root=_repo, workdir=_resolved)
+                    build_compose_images(console, repo_root=_repo, workdir=_resolved,
+                                         preservation_manifest=_refresh_preservation)
                 finally:
                     if _refresh_local_python_packages:
                         clear_local_python_package_sources(_repo)
 
             def _refresh_start() -> None:
                 _check_before_start(console, tenant=_t, project=_p, workdir=_resolved)
-                start_compose_stack(console, repo_root=_repo, workdir=_resolved, build=False)
+                start_compose_stack(console, repo_root=_repo, workdir=_resolved, build=False,
+                                    preservation_manifest=_refresh_preservation)
 
             _build_and_restart(
                 console,
@@ -7962,6 +8091,8 @@ def main() -> None:
                 )
             except Exception:
                 pass
+    except DeploymentPreservationError as exc:
+        raise SystemExit(str(exc)) from exc
     except ManagementCliError as exc:
         raise SystemExit(f"error[{exc.code}]: {exc.message}") from exc
     except _AmbiguousWorkdirError as exc:
@@ -7985,6 +8116,8 @@ def main() -> None:
         raise SystemExit(130)
     except subprocess.CalledProcessError as exc:
         raise SystemExit(f"Command failed with exit code {exc.returncode}.") from exc
+    finally:
+        _lifecycle_guards.close()
 
 
 if __name__ == "__main__":

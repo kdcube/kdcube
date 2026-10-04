@@ -61,6 +61,14 @@ class FakeRunner:
         )
         if self.missing and command[:2] == ["docker", "info"]:
             raise FileNotFoundError("docker")
+        if "config" in command:
+            return CommandResult(0, json.dumps({"name": "fixture", "services": {
+                "web-proxy": {"image": "fixture-proxy:latest"},
+            }}))
+        if "ps" in command and "-q" in command:
+            # These lifecycle tests model a fresh runtime. Complete existing
+            # baseline protection/ordering is covered by the preservation fake.
+            return CommandResult(0, "")
         if "ps" in command:
             return CommandResult(returncode=0, stdout=self.running_services)
         return CommandResult(returncode=0, stdout="26.1.0\n")
@@ -737,6 +745,9 @@ def test_cli_start_and_stop_adapters_use_public_local_target(monkeypatch, tmp_pa
             )
 
     monkeypatch.setattr(cli_mod, "LocalDeploymentTarget", FakeTarget)
+    # This test covers adapter delegation, not the separately tested native
+    # preservation engine. Keep its synthetic target away from a real daemon.
+    monkeypatch.setattr(cli_mod, "_preserve_before_change", lambda *a, **kw: None)
     monkeypatch.setattr(
         cli_mod,
         "_maintain_docker_build_storage",

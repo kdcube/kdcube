@@ -688,6 +688,51 @@ Compose profiles, declared local executor profiles, and configuration hashes.
 It contains no resolved environment or credential values. A local preservation
 manifest is operator-owned evidence, not an authentication grant.
 
+Refresh captures the installed baseline before source checkout/copy or staged
+configuration changes. Build protects it before cache maintenance or image
+reference movement; native start/stop protect it before replacing/removing
+containers. The same protected manifest is carried through the refresh tail,
+including `--no-restart`, failed builds and failed source receipts. A stopped
+deployment needs complete image receipts; an existing protected history with
+no current container/receipt evidence cannot be called a fresh deployment.
+First-time setup without any baseline evidence has nothing to preserve.
+Concurrent native changes of the same workdir refuse immediately. These
+guards do not fence arbitrary administrator Docker commands or another
+deployment's mutable auxiliary selector; qualification requires quiescence.
+
+The native operator commands return a complete manifest ID:
+
+```bash
+kdcube preservation prepare --workdir <runtime> --key <stable-operation-key> \
+  --owner <owner> --consumer <qualification-window> --json
+kdcube preservation protect --workdir <runtime> --manifest <manifest-id> --json
+kdcube preservation status --workdir <runtime> --manifest <manifest-id> --json
+```
+
+Preparation protects by default; `--no-protect` records only a prepared
+manifest, which cannot be restored until `protect` succeeds. Retrying the
+same key/owner/consumer set reuses interrupted preparation and its existing
+holds. Automatic native preparation opens the `rollback` consumer. Status is
+an atomic read of **recorded** state: it does not query or repair Docker and
+is not current local image-availability proof.
+
+Only after independent qualification, close each named consumer and release:
+
+```bash
+kdcube preservation consumer-done --workdir <runtime> --manifest <manifest-id> \
+  --consumer <consumer> --evidence-ref <all-clear-evidence> --json
+kdcube preservation release --workdir <runtime> --manifest <manifest-id> \
+  --qualification <qualification.json> --json
+```
+
+The qualification JSON has exactly `manifest_id`, `binding_sha256`, `owner`,
+`all_clear: true`, `qualified_by` (different from the owner), and `evidence_ref`.
+Use the full ID, binding and owner from the recorded manifest. It is an
+explicit trusted-operator declaration of independently collected evidence,
+not a signature/authentication mechanism. Release removes only that manifest's
+verified owned hold tags; an interrupted release retries without removing
+unrelated tags. It never prunes images/volumes or deletes backups.
+
 The preservation core validates every local baseline ID and configuration
 binding before restore disruption and attests the complete restored image map.
 Startup is delegated to the existing native lifecycle so its host-vault and

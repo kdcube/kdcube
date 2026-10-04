@@ -40,6 +40,7 @@ from kdcube_cli.host_vault import (
     validate_assembly_for_start as validate_host_vault_assembly_for_start,
 )
 from kdcube_cli.host_vault_service import ensure_host_vault_running
+from kdcube_cli.deployment_preservation import DeploymentPreservation, deployment_operation
 
 
 class LocalLifecycleController:
@@ -59,10 +60,19 @@ class LocalLifecycleController:
         self._stream_process_output = bool(stream_process_output)
 
     def start(
+        self, request: LocalStartRequest, *, event_sink: Optional[EventSink],
+        preservation_manifest: str | None = None,
+    ) -> OperationResult:
+        with deployment_operation(self._context.workdir):
+            return self._start(request, event_sink=event_sink,
+                               preservation_manifest=preservation_manifest)
+
+    def _start(
         self,
         request: LocalStartRequest,
         *,
         event_sink: Optional[EventSink],
+        preservation_manifest: str | None = None,
     ) -> OperationResult:
         env_file = self._context.config_dir / ".env"
         if not env_file.exists():
@@ -111,6 +121,7 @@ class LocalLifecycleController:
                     message=vault_state.describe(),
                 )
             )
+        self._preserve_before_change(preservation_manifest, event_sink=event_sink)
         env_main = installer_mod.load_env_file(env_file)
         installer_mod.ensure_compose_log_dirs(logs_dir(env_main, self._context.workdir))
         runtime_env = installer_mod.write_env_overlay(
@@ -159,10 +170,19 @@ class LocalLifecycleController:
         )
 
     def stop(
+        self, request: LocalStopRequest, *, event_sink: Optional[EventSink],
+        preservation_manifest: str | None = None,
+    ) -> OperationResult:
+        with deployment_operation(self._context.workdir):
+            return self._stop(request, event_sink=event_sink,
+                              preservation_manifest=preservation_manifest)
+
+    def _stop(
         self,
         request: LocalStopRequest,
         *,
         event_sink: Optional[EventSink],
+        preservation_manifest: str | None = None,
     ) -> OperationResult:
         env_file = self._context.config_dir / ".env"
         if not env_file.exists():
@@ -175,6 +195,7 @@ class LocalLifecycleController:
             )
         self.ensure_docker_responsive()
         self._check_before_stop()
+        self._preserve_before_change(preservation_manifest, event_sink=event_sink)
         command = [
             "docker",
             "compose",
@@ -208,6 +229,16 @@ class LocalLifecycleController:
             changed=True,
             running=False,
         )
+
+    def _preserve_before_change(self, manifest_id, *, event_sink):
+        preservation = DeploymentPreservation(
+            workdir=self._context.workdir, docker_dir=self._context.docker_dir,
+            env_file=self._context.config_dir / ".env", runner=self._runner,
+        )
+        manifest = preservation.retain(manifest_id) if manifest_id else preservation.prepare_current()
+        if manifest and event_sink is not None:
+            event_sink(ControlEvent(kind=ControlEventKind.PROGRESS,
+                                    message=f"Protected rollback manifest: {manifest['manifest_id']}"))
 
     def _remove_running_proxy_login(
         self,

@@ -43,6 +43,9 @@ def test_the_build_receipt_reads_the_proxylogin_profile(monkeypatch, tmp_path: P
         lambda repo_root, workdir: SimpleNamespace(docker_dir=docker_dir, config_dir=tmp_path),
     )
     monkeypatch.setattr(cli, "_ensure_docker_responsive", lambda: None)
+    # Receipt/profile isolation; the preservation module separately covers
+    # complete fake-Docker baseline ordering and receipt-failure retention.
+    monkeypatch.setattr(cli, "_preserve_before_change", lambda *a, **kw: None)
     monkeypatch.setattr(cli.installer_mod, "load_env_file", lambda path: SimpleNamespace(entries={}))
     monkeypatch.setattr(cli.installer_mod, "missing_build_keys", lambda env: [])
     monkeypatch.setattr(cli, "_maintain_docker_build_storage", lambda console, phase: None)

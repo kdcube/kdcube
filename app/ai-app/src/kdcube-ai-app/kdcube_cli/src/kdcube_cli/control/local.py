@@ -22,6 +22,7 @@ from kdcube_cli.control.initialization import (
     RuntimeInitializer,
 )
 from kdcube_cli.control.local_lifecycle import LocalLifecycleController
+from kdcube_cli.deployment_preservation import DeploymentPreservationError
 from kdcube_cli.control.local_runtime import (
     DEFAULT_CLI_LOCK,
     LocalRuntimeContext,
@@ -380,10 +381,15 @@ class LocalDeploymentTarget:
         request: LocalStartRequest = LocalStartRequest(),
         *,
         event_sink: Optional[EventSink] = None,
+        preservation_manifest: str | None = None,
     ) -> OperationResult:
         self._require(TargetCapability.START)
         try:
-            return self._lifecycle().start(request, event_sink=event_sink)
+            return self._lifecycle().start(request, event_sink=event_sink,
+                                           preservation_manifest=preservation_manifest)
+        except DeploymentPreservationError as exc:
+            raise OperationFailedError("start", self.reference.target_id,
+                                       f"Baseline preservation refused before start: {exc}") from exc
         except KDCubeControlError:
             raise
         except Exception as exc:
@@ -398,10 +404,15 @@ class LocalDeploymentTarget:
         request: LocalStopRequest = LocalStopRequest(),
         *,
         event_sink: Optional[EventSink] = None,
+        preservation_manifest: str | None = None,
     ) -> OperationResult:
         self._require(TargetCapability.STOP)
         try:
-            return self._lifecycle().stop(request, event_sink=event_sink)
+            return self._lifecycle().stop(request, event_sink=event_sink,
+                                          preservation_manifest=preservation_manifest)
+        except DeploymentPreservationError as exc:
+            raise OperationFailedError("stop", self.reference.target_id,
+                                       f"Baseline preservation refused before stop: {exc}") from exc
         except KDCubeControlError:
             raise
         except Exception as exc:

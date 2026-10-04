@@ -16,9 +16,11 @@ import os
 import re
 import subprocess
 import tempfile
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from functools import wraps
 from typing import Any, Callable, Mapping, Sequence
 
 import yaml
@@ -34,6 +36,7 @@ IMMUTABLE_FIELDS = (
     "schema", "manifest_id", "identity", "owner", "profiles", "configuration_sha256",
     "services", "auxiliary", "excluded_profiles", "source_receipts_sha256",
 )
+_OPERATION_DEPTH = threading.local()
 
 
 class DeploymentPreservationError(RuntimeError):
@@ -46,6 +49,50 @@ def _fail(code: str, detail: str) -> None:
 
 def _digest(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+@contextmanager
+def deployment_operation(workdir: Path):
+    """One native workdir change at a time; nested calls in this thread reuse it.
+
+    Another process/thread refuses immediately, rather than waiting while its
+    previously inspected image/config state becomes stale. OS release on
+    interruption leaves manifests and image holds intact.
+    """
+    root = Path(workdir).expanduser().resolve() / ".kdcube" / "preservation"
+    key = str(root)
+    depths = getattr(_OPERATION_DEPTH, "depths", {})
+    _OPERATION_DEPTH.depths = depths
+    if key in depths:
+        depths[key] += 1
+        try:
+            yield
+        finally:
+            depths[key] -= 1
+        return
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd = os.open(root / "operation.lock", os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            _fail("operation_in_progress", "Another native change owns this workdir; retry after it ends.")
+        depths[key] = 1
+        try:
+            yield
+        finally:
+            depths.pop(key, None)
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+def _mutating(method):
+    @wraps(method)
+    def guarded(self, *args, **kwargs):
+        with deployment_operation(self.workdir):
+            return method(self, *args, **kwargs)
+    return guarded
 
 
 def _atomic_json(path: Path, value: Mapping[str, Any]) -> None:
@@ -288,13 +335,15 @@ class DeploymentPreservation:
             return {}
         try:
             value = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(value, dict):
+            if (not isinstance(value, dict) or not isinstance(value.get("latest_services"), dict) or
+                    not value["latest_services"] or
+                    any(not isinstance(row, dict) for row in value["latest_services"].values())):
                 raise ValueError()
         except (OSError, ValueError):
             _fail("receipt_invalid", "Existing deployment image evidence is unreadable.")
         return value
 
-    def _capture(self, references, *, identity, containers, receipt):
+    def _capture(self, references, *, identity, containers, receipt, required_receipts=()):
         observed = {}
         for container in containers:
             if not self._belongs(container, identity):
@@ -316,6 +365,8 @@ class DeploymentPreservation:
                     _fail("baseline_mismatch", f"Service {name} has incompatible existing image evidence.")
                 value, selection = prior["image_id"], "receipt"
             else:
+                if receipt and name in required_receipts:
+                    _fail("baseline_incomplete", f"Stopped service {name} has no saved baseline image evidence.")
                 value, selection = self._image(reference), "configured-local-image"
             if not isinstance(value, str) or not IMAGE_ID.fullmatch(value) or self._image(value) != value:
                 _fail("image_missing", f"Service {name} has no intact local baseline ID.")
@@ -333,7 +384,30 @@ class DeploymentPreservation:
             _fail("manifest_invalid", "Manifest identity, completeness or immutable binding changed.")
         if value.get("state") not in {"preparing", "protected", "restoring", "restored", "releasing", "released"}:
             _fail("manifest_invalid", "Manifest state is invalid.")
-        identity = value.get("identity") or {}
+        identity = value.get("identity")
+        if (not isinstance(identity, dict) or
+                set(identity) != {"workdir", "docker_dir", "env_file", "compose_project", "daemon_id", "tenant", "project"} or
+                any(not isinstance(v, str) for v in identity.values()) or
+                not isinstance(value.get("owner"), str) or not value["owner"].strip() or
+                not isinstance(value.get("profiles"), list) or
+                any(not isinstance(p, str) for p in value["profiles"]) or
+                not isinstance(value.get("services"), dict) or not value["services"] or
+                not isinstance(value.get("auxiliary"), dict) or
+                not isinstance(value.get("excluded_profiles"), dict) or
+                not isinstance(value.get("consumers"), dict)):
+            _fail("manifest_invalid", "Manifest fields must describe one complete native lifecycle.")
+        for rows in (value["services"], value["auxiliary"]):
+            for name, row in rows.items():
+                if (not isinstance(name, str) or not name or not isinstance(row, dict) or
+                        not isinstance(row.get("image_id"), str) or not IMAGE_ID.fullmatch(row["image_id"]) or
+                        not isinstance(row.get("reference"), str) or not row["reference"] or
+                        not isinstance(row.get("hold_ref"), str)):
+                    _fail("manifest_invalid", "Every manifest image needs its exact ID, selector and hold.")
+        if any(not isinstance(name, str) or not name or not isinstance(row, dict) or
+               row.get("state") not in {"open", "closed"} or
+               (row.get("state") == "closed" and not isinstance(row.get("evidence_ref"), str))
+               for name, row in value["consumers"].items()):
+            _fail("manifest_invalid", "Consumer state must retain its named closure evidence.")
         if identity.get("workdir") != str(self.workdir) or identity.get("docker_dir") != str(self.docker_dir):
             _fail("foreign_manifest", "Manifest belongs to another deployment directory.")
         return value
@@ -367,42 +441,98 @@ class DeploymentPreservation:
             if holds and self._image(expected) != row["image_id"]:
                 _fail("hold_mismatch", "A retention reference is missing or points at another image.")
 
+    def _snapshot(self, config, identity, containers, receipt):
+        references, excluded = self._catalog(config)
+        services = self._capture(
+            references, identity=identity, containers=containers, receipt=receipt,
+            required_receipts={name for name in references if config["services"][name].get("build")},
+        )
+        auxiliary = self._capture(self._auxiliary_references(config),
+                                  identity=identity, containers=[], receipt=receipt)
+        by_reference = {}
+        for row in auxiliary.values():
+            by_reference.setdefault(row["reference"], set()).add(row["image_id"])
+        if any(len(ids) != 1 for ids in by_reference.values()):
+            _fail("baseline_ambiguous", "One auxiliary selector has conflicting baseline image IDs.")
+        return {"identity": identity, "profiles": list(self.profiles),
+                "configuration_sha256": self._configuration_hash(config),
+                "services": services, "auxiliary": auxiliary, "excluded_profiles": excluded,
+                "source_receipts_sha256": _digest(receipt)}
+
+    @_mutating
+    def prepare_current(self):
+        """Protect the current installed baseline before native lifecycle changes.
+
+        A brand-new deployment has neither containers nor an image receipt and
+        has no rollback baseline. Existing/partly stopped deployments require
+        the complete map; missing public, built or executor images refuse.
+        """
+        with self._locked():
+            config = self._configuration()
+            identity = self._identity(config)
+            containers, receipt = self._containers(), self._receipt()
+            if not containers and not receipt:
+                for path in self.root.glob("*.json"):
+                    if MANIFEST_ID.fullmatch(path.stem) and self._load(path.stem)["state"] != "released":
+                        _fail("baseline_evidence_missing", "Existing protected history needs an explicit baseline; this is not a fresh deployment.")
+                return None
+            snapshot = self._snapshot(config, identity, containers, receipt)
+            # Selection provenance can change (container -> receipt) without
+            # changing the baseline; do not create another set of hold tags.
+            key = _digest({**{k: v for k, v in snapshot.items() if k != "source_receipts_sha256"}, "services": {
+                name: {k: v for k, v in row.items() if k != "selection"}
+                for name, row in snapshot["services"].items()
+            }, "auxiliary": {
+                name: {k: v for k, v in row.items() if k != "selection"}
+                for name, row in snapshot["auxiliary"].items()
+            }})
+            return self._prepare(key=f"native:{key}", owner="native-lifecycle",
+                                 consumers=("rollback",), protect=True, snapshot=snapshot)
+
+    @_mutating
+    def retain(self, manifest_id):
+        """Verify already protected images after deliberate candidate config changes.
+
+        This is NOT restore compatibility validation: it only verifies the
+        original workdir/daemon identity and all owned immutable image holds.
+        """
+        with self._locked():
+            manifest = self._load(manifest_id)
+            if manifest["state"] not in {"protected", "restored"}:
+                _fail("manifest_not_protected", "A complete protected baseline is required.")
+            if self._identity(self._configuration()) != manifest["identity"]:
+                _fail("foreign_manifest", "Protected baseline belongs to another deployment or daemon.")
+            self._validate_images(manifest, holds=True)
+            return copy.deepcopy(manifest)
+
+    @_mutating
     def prepare(self, *, key: str, owner: str, consumers: Sequence[str] = (), protect: bool = True):
         if not key.strip() or not owner.strip() or any(not c.strip() for c in consumers):
             _fail("preparation_invalid", "A stable operation key and named owner/consumers are required.")
         with self._locked():
-            manifest_id = _digest({"workdir": str(self.workdir), "key": key})
-            if self.manifest_path(manifest_id).exists():
-                manifest = self._load(manifest_id)
-                if (manifest["owner"] != owner or set(manifest["consumers"]) != set(consumers) or
-                        manifest["state"] in {"releasing", "released"}):
-                    _fail("preparation_conflict", "Operation key already names a different or released lifecycle.")
-            else:
+            return self._prepare(key=key, owner=owner, consumers=consumers, protect=protect)
+
+    def _prepare(self, *, key, owner, consumers, protect, snapshot=None):
+        manifest_id = _digest({"workdir": str(self.workdir), "key": key})
+        if self.manifest_path(manifest_id).exists():
+            manifest = self._load(manifest_id)
+            if (manifest["owner"] != owner or set(manifest["consumers"]) != set(consumers) or
+                    manifest["state"] in {"releasing", "released"}):
+                _fail("preparation_conflict", "Operation key already names a different or released lifecycle.")
+        else:
+            if snapshot is None:
                 config = self._configuration()
-                identity = self._identity(config)
-                references, excluded = self._catalog(config)
-                containers, receipt = self._containers(), self._receipt()
-                services = self._capture(references, identity=identity, containers=containers, receipt=receipt)
-                auxiliary = self._capture(self._auxiliary_references(config),
-                                          identity=identity, containers=[], receipt=receipt)
-                by_reference = {}
-                for row in auxiliary.values():
-                    by_reference.setdefault(row["reference"], set()).add(row["image_id"])
-                if any(len(ids) != 1 for ids in by_reference.values()):
-                    _fail("baseline_ambiguous", "One auxiliary selector has conflicting baseline image IDs.")
-                manifest = {"schema": SCHEMA, "manifest_id": manifest_id, "identity": identity,
-                            "owner": owner, "profiles": list(self.profiles), "state": "preparing",
-                            "configuration_sha256": self._configuration_hash(config),
-                            "services": services, "auxiliary": auxiliary, "excluded_profiles": excluded,
-                            "source_receipts_sha256": _digest(receipt),
-                            "consumers": {c: {"state": "open"} for c in sorted(set(consumers))},
-                            "created_at": datetime.now(timezone.utc).isoformat()}
-                namespace = f"{HOLD_REPOSITORY_PREFIX}{_digest(identity)[:24]}:{manifest_id[:24]}-"
-                for name, row in [*services.items(), *auxiliary.items()]:
-                    row["hold_ref"] = namespace + _digest(name)[:24]
-                manifest["binding_sha256"] = _digest({k: manifest[k] for k in IMMUTABLE_FIELDS})
-                self._save(manifest)
-            return self._protect(manifest) if protect else copy.deepcopy(manifest)
+                snapshot = self._snapshot(config, self._identity(config), self._containers(), self._receipt())
+            manifest = {**snapshot, "schema": SCHEMA, "manifest_id": manifest_id,
+                        "owner": owner, "state": "preparing",
+                        "consumers": {c: {"state": "open"} for c in sorted(set(consumers))},
+                        "created_at": datetime.now(timezone.utc).isoformat()}
+            namespace = f"{HOLD_REPOSITORY_PREFIX}{_digest(manifest['identity'])[:24]}:{manifest_id[:24]}-"
+            for name, row in [*manifest["services"].items(), *manifest["auxiliary"].items()]:
+                row["hold_ref"] = namespace + _digest(name)[:24]
+            manifest["binding_sha256"] = _digest({k: manifest[k] for k in IMMUTABLE_FIELDS})
+            self._save(manifest)
+        return self._protect(manifest) if protect else copy.deepcopy(manifest)
 
     def _protect(self, manifest):
         self._validate(manifest, holds=manifest["state"] != "preparing")
@@ -419,6 +549,7 @@ class DeploymentPreservation:
             self._save(manifest)
         return copy.deepcopy(manifest)
 
+    @_mutating
     def protect(self, manifest_id):
         with self._locked():
             manifest = self._load(manifest_id)
@@ -439,6 +570,7 @@ class DeploymentPreservation:
             if (config.get("Image") in references or env_refs.intersection(references)) and not self._belongs(container, manifest["identity"]):
                 _fail("foreign_consumer", "Another deployment consumes the auxiliary image selector.")
 
+    @_mutating
     def restore(self, manifest_id, *, start_stack: Callable[[Path], None] | None = None,
                 before_disruption: Callable[[], None] | None = None):
         with self._locked():
@@ -487,11 +619,14 @@ class DeploymentPreservation:
             self._save(manifest)
             return copy.deepcopy(manifest)
 
+    @_mutating
     def consumer_done(self, manifest_id, *, consumer: str, evidence_ref: str):
         if not evidence_ref.strip():
             _fail("consumer_evidence_missing", "Closing a consumer requires named evidence.")
         with self._locked():
             manifest = self._load(manifest_id)
+            if manifest["state"] in {"releasing", "released"}:
+                _fail("manifest_released", "Released preservation cannot change consumer evidence.")
             if consumer not in manifest["consumers"]:
                 _fail("consumer_unknown", "This preservation lifecycle does not name that consumer.")
             result = {"state": "closed", "evidence_ref": evidence_ref}
@@ -502,6 +637,7 @@ class DeploymentPreservation:
             self._save(manifest)
             return copy.deepcopy(manifest)
 
+    @_mutating
     def release(self, manifest_id, *, qualification: Mapping[str, Any]):
         with self._locked():
             manifest = self._load(manifest_id)

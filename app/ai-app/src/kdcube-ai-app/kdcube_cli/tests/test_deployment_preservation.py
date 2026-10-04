@@ -80,7 +80,9 @@ class Docker:
                 return CommandResult(0)
             if "up" in c:
                 files = [c[i+1] for i, value in enumerate(c) if value == "-f"]
-                self.override = json.loads(Path(files[-1]).read_text())
+                self.override = (json.loads(Path(files[-1]).read_text()) if len(files) > 1 else
+                                 {"services": {name: details for name, details in self.config["services"].items()
+                                               if not details.get("profiles") or "proxylogin" in c}})
                 for service, details in self.override["services"].items():
                     self.add_container(service, details["image"])
                 return CommandResult(0)
@@ -317,3 +319,272 @@ def test_status_is_nonmutating_and_release_requires_closed_consumers_and_indepen
     before = list(setup[2].mutations)
     e.release(m["manifest_id"], qualification=qualification)
     assert setup[2].mutations == before
+
+
+def test_automatic_protection_skips_only_a_fresh_deployment_without_baseline_evidence(setup):
+    e = engine(setup)
+    assert e.prepare_current() is None
+    assert not setup[2].mutations
+    setup[2].add_container("chat-proc", "kdcube-proc:latest")
+    setup[2].images.pop("postgres:16")
+    with pytest.raises(RuntimeError, match="image_missing"):
+        e.prepare_current()
+    assert not setup[2].mutations
+
+
+def test_existing_protected_history_cannot_be_misclassified_as_fresh_after_containers_disappear(setup):
+    e = engine(setup)
+    m = e.prepare(key="prior-baseline", owner="operator")
+    before = list(setup[2].mutations)
+    with pytest.raises(RuntimeError, match="baseline_evidence_missing"):
+        e.prepare_current()
+    assert e.status(m["manifest_id"])["state"] == "protected"
+    assert setup[2].mutations == before
+
+
+def test_automatic_protection_reuses_complete_current_baseline_and_retains_after_candidate_config_changes(setup):
+    e = engine(setup)
+    docker = setup[2]
+    docker.add_container("chat-proc", "kdcube-proc:latest")
+    first = e.prepare_current()
+    assert first["consumers"] == {"rollback": {"state": "open"}}
+    before = list(docker.mutations)
+    assert e.prepare_current()["manifest_id"] == first["manifest_id"]
+    assert docker.mutations == before
+    docker.config["services"]["postgres-db"]["volumes"] = ["candidate:/db"]
+    assert e.retain(first["manifest_id"])["state"] == "protected"
+    assert docker.mutations == before
+    with pytest.raises(RuntimeError, match="configuration_mismatch"):
+        e.restore(first["manifest_id"], start_stack=native_start_stub(e, docker))
+
+
+def test_stopped_deployment_with_incomplete_built_image_receipts_fails_closed(setup):
+    workdir, _, docker = setup
+    (workdir / ".kdcube").mkdir()
+    (workdir / ".kdcube/deployment-images.v1.json").write_text(json.dumps({
+        "latest_services": {"postgres-setup": {
+            "image": "kdcube-setup:latest", "image_id": image_id("postgres-setup"),
+        }},
+    }))
+    with pytest.raises(RuntimeError, match="baseline_incomplete"):
+        engine(setup).prepare_current()
+    assert not docker.mutations
+
+
+@pytest.mark.parametrize("failure", ["build", "receipt", "none"])
+def test_cli_build_protects_before_maintenance_and_retains_through_finally(setup, monkeypatch, failure):
+    from types import SimpleNamespace
+    from kdcube_cli import cli
+    e = engine(setup)
+    setup[2].add_container("chat-proc", "kdcube-proc:latest")
+    monkeypatch.setattr(cli, "_build_paths_for_repo", lambda *a: SimpleNamespace(
+        config_dir=setup[0] / "config", docker_dir=setup[1]))
+    monkeypatch.setattr(cli, "_ensure_docker_responsive", lambda: None)
+    monkeypatch.setattr(cli, "DeploymentPreservation", lambda **kw: e)
+    monkeypatch.setattr(cli.installer_mod, "missing_build_keys", lambda env: [])
+    events = []
+
+    def maintenance(console, *, phase):
+        assert any("tag" in c for c in setup[2].mutations)
+        events.append(phase)
+
+    def build(console, command, **kwargs):
+        assert events[0] == "before"
+        events.append("build")
+        if failure == "build":
+            raise SystemExit("synthetic failed build")
+
+    def receipt(**kwargs):
+        if failure == "receipt":
+            raise cli.DeploymentProvenanceError("synthetic receipt failure")
+
+    monkeypatch.setattr(cli, "_maintain_docker_build_storage", maintenance)
+    monkeypatch.setattr(cli, "_run_compose", build)
+    monkeypatch.setattr(cli, "record_compose_image_receipts", receipt)
+    if failure == "none":
+        cli.build_compose_images(Console(quiet=True), repo_root=setup[0], workdir=setup[0])
+    else:
+        expected = SystemExit if failure == "build" else cli.ImageReceiptError
+        with pytest.raises(expected):
+            cli.build_compose_images(Console(quiet=True), repo_root=setup[0], workdir=setup[0])
+    assert events[-1] == "after"
+    assert not any(c[:3] == ("docker", "image", "rm") for c in setup[2].mutations)
+    assert e.prepare_current()["state"] == "protected"
+
+
+def test_native_controller_protects_before_up_and_down_with_real_preservation_fake(setup, monkeypatch):
+    from types import SimpleNamespace
+    from kdcube_cli.control import local_lifecycle
+    from kdcube_cli.control.models import DeploymentTargetRef, LocalStartRequest, LocalStopRequest
+    workdir, docker_dir, docker = setup
+    docker.add_container("chat-proc", "kdcube-proc:latest")
+    monkeypatch.setattr(local_lifecycle, "validate_host_vault_assembly_for_start", lambda *a, **kw: None)
+    monkeypatch.setattr(local_lifecycle, "ensure_host_vault_running",
+                        lambda *a, **kw: SimpleNamespace(describe=lambda: ""))
+    monkeypatch.setattr(local_lifecycle.installer_mod, "generate_runtime_tokens",
+                        lambda: {"SECRETS_ADMIN_TOKEN": "synthetic-only"})
+    controller = local_lifecycle.LocalLifecycleController(
+        DeploymentTargetRef.local(workdir),
+        SimpleNamespace(workdir=workdir, docker_dir=docker_dir, config_dir=workdir / "config",
+                        ai_app_root=workdir), runner=docker, lock_file=workdir / "lock.json",
+        stream_process_output=False,
+    )
+    controller.start(LocalStartRequest(build=True), event_sink=None)
+    first_up = next(i for i, c in enumerate(docker.commands) if "up" in c)
+    assert any(c[:3] == ("docker", "image", "tag") for c in docker.commands[:first_up])
+    controller.stop(LocalStopRequest(), event_sink=None)
+    assert not any("-v" in c for c in docker.commands)
+    assert engine(setup).prepare(key="another", owner="operator")["state"] == "protected"
+    assert not list((workdir / "config").glob("*.runtime*"))
+
+
+def test_workdir_operation_refuses_concurrent_mutation_and_reuses_nested_owner(setup):
+    from concurrent.futures import ThreadPoolExecutor
+    from kdcube_cli.deployment_preservation import deployment_operation
+    e = engine(setup)
+    setup[2].add_container("chat-proc", "kdcube-proc:latest")
+    with deployment_operation(setup[0]):
+        manifest = e.prepare_current()
+        assert e.retain(manifest["manifest_id"])["state"] == "protected"
+        before = list(setup[2].commands)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            with pytest.raises(RuntimeError, match="operation_in_progress"):
+                executor.submit(e.prepare_current).result(timeout=5)
+        assert setup[2].commands == before
+    assert e.prepare_current()["state"] == "protected"
+
+
+def test_preservation_cli_prepare_and_recorded_status_use_native_engine_without_secret_output(setup, monkeypatch, capsys):
+    from types import SimpleNamespace
+    from kdcube_cli import cli
+    e = engine(setup)
+    monkeypatch.setattr(cli, "DeploymentPreservation", lambda **kw: e)
+    monkeypatch.setattr(cli, "_build_paths_for_repo", lambda *a: SimpleNamespace(
+        config_dir=setup[0] / "config", docker_dir=setup[1]))
+    common = ["--workdir", str(setup[0]), "--path", str(setup[0]), "--json", "--quiet"]
+    monkeypatch.setattr(cli.sys, "argv", ["kdcube", "preservation", "prepare", *common,
+                                        "--key", "cli-one", "--owner", "operator", "--consumer", "qualification"])
+    cli.main()
+    text = capsys.readouterr().out
+    prepared = json.loads(text)
+    assert "synthetic-secret" not in text and prepared["state"] == "protected"
+    commands = list(setup[2].commands)
+    manifest_before = e.manifest_path(prepared["manifest_id"]).read_bytes()
+    monkeypatch.setattr(cli.sys, "argv", ["kdcube", "preservation", "status", *common,
+                                        "--manifest", prepared["manifest_id"]])
+    cli.main()
+    assert json.loads(capsys.readouterr().out)["manifest_id"] == prepared["manifest_id"]
+    assert setup[2].commands == commands
+    assert e.manifest_path(prepared["manifest_id"]).read_bytes() == manifest_before
+
+
+@pytest.mark.parametrize("field,value", [("services", []), ("consumers", {"rollback": None}),
+                                         ("identity", "wrong-shape")])
+def test_rehashed_but_malformed_manifest_has_named_refusal_before_mutation(setup, field, value):
+    from kdcube_cli import deployment_preservation as preservation
+    e = engine(setup)
+    m = e.prepare(key="malformed", owner="operator")
+    m[field] = value
+    m["binding_sha256"] = preservation._digest({k: m[k] for k in preservation.IMMUTABLE_FIELDS})
+    e.manifest_path(m["manifest_id"]).write_text(json.dumps(m))
+    before = list(setup[2].mutations)
+    with pytest.raises(RuntimeError, match="manifest_invalid"):
+        e.restore(m["manifest_id"], start_stack=native_start_stub(e, setup[2]))
+    assert setup[2].mutations == before
+
+
+def test_changed_executor_profile_map_refuses_before_disruption(setup):
+    e = engine(setup)
+    m = e.prepare(key="profile-change", owner="operator")
+    (setup[0] / "config/bundles.yaml").write_text(
+        "bundles: {items: [{id: app, config: {execution: {runtime: {image: 'out-of-map:latest'}}}}]}\n")
+    before = list(setup[2].mutations)
+    with pytest.raises(RuntimeError, match="configuration_mismatch"):
+        e.restore(m["manifest_id"], start_stack=native_start_stub(e, setup[2]))
+    assert setup[2].mutations == before
+
+
+@pytest.mark.parametrize("failure", ["none", "build", "receipt"])
+def test_refresh_protects_installed_source_before_copy_config_stop_and_build(setup, monkeypatch, failure):
+    from types import SimpleNamespace
+    from kdcube_cli import cli
+    workdir, docker_dir, docker = setup
+    e = engine(setup)
+    docker.add_container("chat-proc", "kdcube-proc:latest")
+    installed_repo = workdir / "installed-source"
+    candidate_repo = workdir / "candidate-source"
+    events = []
+    seen_manifest = []
+    monkeypatch.setattr(cli, "DeploymentPreservation", lambda **kw: e)
+    monkeypatch.setattr(cli, "_build_paths_for_repo", lambda *a: SimpleNamespace(
+        config_dir=workdir / "config", docker_dir=docker_dir))
+    monkeypatch.setattr(cli, "_canonical_descriptor_dir_from_initialized_workdir", lambda w: workdir / "config")
+    monkeypatch.setattr(cli, "_resolve_namespaced_runtime_target", lambda **kw: (workdir, "example", "app"))
+    monkeypatch.setattr(cli, "_resolve_subcommand_repo", lambda *a, path_provided=False, **kw:
+                        candidate_repo if path_provided else installed_repo)
+
+    def source_copy(console, *, source_repo, workdir):
+        assert source_repo == candidate_repo
+        assert any(c[:3] == ("docker", "image", "tag") for c in docker.mutations)
+        events.append("copy")
+        return installed_repo
+
+    def config_change(*a, **kw):
+        assert events == ["copy"]
+        events.append("config")
+
+    def stop(*a, preservation_manifest, **kw):
+        assert events == ["copy", "config"]
+        seen_manifest.append(preservation_manifest)
+        assert e.retain(preservation_manifest)["state"] == "protected"
+        events.append("stop")
+
+    def build(*a, preservation_manifest, **kw):
+        assert preservation_manifest == seen_manifest[0]
+        events.append("build")
+        if failure == "build":
+            raise SystemExit("synthetic build failure")
+        if failure == "receipt":
+            raise cli.ImageReceiptError("synthetic receipt failure")
+
+    monkeypatch.setattr(cli, "_copy_dirty_local_source", source_copy)
+    monkeypatch.setattr(cli, "_refresh_runtime_proxy_config", config_change)
+    monkeypatch.setattr(cli.installer_mod, "ensure_generated_runtime_secrets", lambda *a: False)
+    monkeypatch.setattr(cli, "stop_compose_stack", stop)
+    monkeypatch.setattr(cli, "build_compose_images", build)
+    monkeypatch.setattr(cli, "start_compose_stack", lambda *a, **kw: pytest.fail("--no-restart must not start"))
+    monkeypatch.setattr(cli.sys, "argv", ["kdcube", "refresh", "--workdir", str(workdir),
+                                        "--path", str(candidate_repo), "--build", "--no-restart", "--quiet"])
+    if failure == "none":
+        cli.main()
+    else:
+        with pytest.raises(SystemExit, match="synthetic"):
+            cli.main()
+    assert events == ["copy", "config", "stop", "build"]
+    assert e.status(seen_manifest[0])["state"] == "protected"
+
+
+def test_partial_release_is_durable_and_retry_removes_only_remaining_owned_tags(setup, monkeypatch):
+    e = engine(setup)
+    m = e.prepare(key="release-retry", owner="author")
+    qualification = {"manifest_id": m["manifest_id"], "binding_sha256": m["binding_sha256"],
+                     "owner": "author", "qualified_by": "independent", "all_clear": True,
+                     "evidence_ref": "all-clear"}
+    docker = setup[2]
+    original_run = docker.run
+    second = list(m["services"].values())[1]["hold_ref"]
+
+    def interrupted(command, **kw):
+        if list(command)[:3] == ["docker", "image", "rm"] and command[-1] == second:
+            return CommandResult(1, stderr="synthetic interruption")
+        return original_run(command, **kw)
+
+    monkeypatch.setattr(docker, "run", interrupted)
+    with pytest.raises(RuntimeError, match="command_failed"):
+        e.release(m["manifest_id"], qualification=qualification)
+    assert e.status(m["manifest_id"])["state"] == "releasing"
+    first = list(m["services"].values())[0]["hold_ref"]
+    assert first not in docker.images and second in docker.images
+    monkeypatch.setattr(docker, "run", original_run)
+    assert e.release(m["manifest_id"], qualification=qualification)["state"] == "released"
+    assert sum(c[-1] == first for c in docker.commands if c[:3] == ("docker", "image", "rm")) == 1
