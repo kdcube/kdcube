@@ -58,7 +58,14 @@ class _Con:
         if q.startswith("SELECT batch_id, day FROM") and "state IN ('written', 'verified')" in q:
             return [b for b in self.db.sorted_batches() if b["state"] in ("written", "verified")]
         if q.startswith("SELECT batch_id, day FROM") and "state = 'pruned'" in q:
-            return [b for b in self.db.sorted_batches() if b["state"] == "pruned"]
+            first = args[0] if "day >= $1" in q else None
+            last = args[-1] if "day <= $" in q else None
+            return [
+                b for b in self.db.sorted_batches()
+                if b["state"] == "pruned"
+                and (first is None or b["day"] >= first)
+                and (last is None or b["day"] <= last)
+            ]
         if q.startswith("DELETE FROM kdcube_test_w536.conv_messages WHERE user_id = $1"):
             user_id, conversation_id, *rest = args
             bundle = rest.pop(0) if "bundle_id = $3" in q else None
@@ -113,8 +120,17 @@ class _Con:
             self.db.batches[args[0]]["state"] = "retired"
             return "UPDATE 1"
         if q.startswith("INSERT INTO kdcube_test_w536.conv_archive_deletions"):
-            self.db.deletions.append(args)
+            deletion_id, actor, reason, scope = args
+            self.db.deletions.append(
+                {"deletion_id": deletion_id, "actor": actor, "reason": reason, "scope": scope, "state": "started"}
+            )
             return "INSERT 0 1"
+        if q.startswith("UPDATE kdcube_test_w536.conv_archive_deletions"):
+            deletion_id, state, hot, bodies, cold, error = args
+            for row in self.db.deletions:
+                if row["deletion_id"] == deletion_id:
+                    row.update(state=state, hot_rows=hot, body_objects=bodies, cold_rows=cold, error=error)
+            return "UPDATE 1"
         raise AssertionError(f"unexpected execute: {q}")
 
 
@@ -253,12 +269,13 @@ async def test_deleting_a_scope_removes_hot_rows_bodies_and_cold_lines_and_recor
         actor="operator:u1", user_id="u1", conversation_id="c1", tags_all=["pb:project:A"], reason="agent removed",
     )
 
-    assert result["hot_rows"] == 1 and result["cold_rows"] == 1 and result["body_objects"] == 1
-    assert store.deleted == ["cb/x/3.json"]
+    assert result["hot_rows"] == 1 and result["cold_rows"] == 1 and result["body_objects"] == 2
+    assert store.deleted == ["cb/x/1.json", "cb/x/3.json"]
     remaining = await archive.read_range(NOW - timedelta(days=400), NOW)
     assert [r["id"] for r in remaining] == [2]
     (deletion,) = db.deletions
-    assert deletion[1] == "operator:u1" and json.loads(deletion[3])["tags_all"] == ["pb:project:A"]
+    assert deletion["actor"] == "operator:u1" and json.loads(deletion["scope"])["tags_all"] == ["pb:project:A"]
+    assert deletion["state"] == "completed" and deletion["cold_rows"] == 1
 
 
 def test_cold_catalog_entries_carry_the_hot_catalog_shape():
@@ -329,3 +346,65 @@ def test_the_index_builds_retention_with_the_apps_store(monkeypatch):
 
     assert retention is not None and retention.store is store and retention.schema == SCHEMA
     assert retention.archive.root == "cb/tenants/t/projects/p/conversation-cold"
+
+
+# Review witnesses (kdcube #314 at dd3e207f), kept as regressions.
+
+
+@pytest.mark.asyncio
+async def test_deleting_an_archived_message_also_deletes_its_body():
+    db, backend, archive, store, retention = _setup()
+    db.messages = [_msg(1, days_ago=200), _msg(2, days_ago=200)]
+    await retention.archive_before(NOW - timedelta(days=90))
+    assert db.messages == []
+    result = await retention.delete_messages(actor="operator", user_id="u1", conversation_id="c1")
+    assert result["cold_rows"] == 2
+    assert sorted(store.deleted) == ["cb/x/1.json", "cb/x/2.json"]
+    assert result["body_objects"] == 2
+
+
+@pytest.mark.asyncio
+async def test_a_retired_part_left_in_storage_never_comes_back_in_reads():
+    db, backend, archive, store, retention = _setup()
+    db.messages = [_msg(1, days_ago=200), _msg(2, days_ago=200, conv="c2")]
+    await retention.archive_before(NOW - timedelta(days=90))
+    [old] = list(db.batches)
+    manifest = await archive.read_manifest(db.batches[old]["day"], old)
+    part = await backend.read_bytes_a(manifest["part_key"])
+    await retention.delete_messages(actor="operator", user_id="u1", conversation_id="c1")
+    # An interrupted retirement leaves the old files behind.
+    await backend.write_bytes_a(manifest["part_key"], part)
+    await backend.write_bytes_a(
+        archive.manifest_key(db.batches[old]["day"], old), json.dumps(manifest, sort_keys=True).encode()
+    )
+    records = await retention.fetch_cold(from_ts=NOW - timedelta(days=365))
+    assert [r["conversation_id"] for r in records] == ["c2"]
+
+
+@pytest.mark.asyncio
+async def test_a_written_batch_never_duplicates_hot_rows_in_reads():
+    db, backend, archive, store, retention = _setup()
+    db.messages = [_msg(1, days_ago=200)]
+    db.fail_prune_after_verify = True
+    with pytest.raises(RuntimeError):
+        await retention.archive_before(NOW - timedelta(days=90))
+    assert [m["id"] for m in db.messages] == [1]  # still hot; its part exists but is not pruned
+    assert await retention.fetch_cold(from_ts=NOW - timedelta(days=365)) == []
+
+
+@pytest.mark.asyncio
+async def test_a_deletion_that_fails_part_way_is_still_recorded():
+    db, backend, archive, store, retention = _setup()
+    db.messages = [_msg(1, days_ago=200), _msg(2, days_ago=1)]
+    await retention.archive_before(NOW - timedelta(days=90))
+
+    async def broken(*_a, **_k):
+        raise RuntimeError("storage unavailable")
+
+    archive.read_manifest = broken  # type: ignore[assignment]
+    with pytest.raises(RuntimeError):
+        await retention.delete_messages(actor="operator", user_id="u1", conversation_id="c1")
+    assert db.messages == []
+    (deletion,) = db.deletions
+    assert deletion["state"] == "failed" and "storage unavailable" in deletion["error"]
+    assert deletion["actor"] == "operator" and deletion["hot_rows"] == 1

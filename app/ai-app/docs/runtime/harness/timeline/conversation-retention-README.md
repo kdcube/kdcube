@@ -64,7 +64,14 @@ only.
 ## Deleting a scope
 
 `ConversationRetention.delete_messages(actor, user_id, conversation_id,
-bundle_id, tags_all, reason)` removes the matching hot rows, their stored
-bodies and their cold records, rewriting each affected cold part as a new
-verified batch. Every deletion is a row in `conv_archive_deletions` with the
-actor, the time, the scope and the counts.
+bundle_id, tags_all, reason)` removes the matching hot rows, their cold
+records and the stored bodies of both, rewriting each affected cold part as a
+new verified batch. Apps pass their `ConversationStore` through
+`ConvIndex.retention(store=...)` so the bodies go too. Every deletion is a row
+in `conv_archive_deletions`, written before anything is deleted with the
+actor, the time and the scope, and finished `completed` with its counts or
+`failed` with the error; a failed deletion can be run again.
+
+Reads and deletions follow the ledger: only batches it records as `pruned`
+are cold data. A part left in storage by an interrupted archive or
+retirement is never read.

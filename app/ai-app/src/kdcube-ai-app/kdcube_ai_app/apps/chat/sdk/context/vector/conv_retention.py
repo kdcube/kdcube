@@ -19,7 +19,7 @@ import logging
 import uuid
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from kdcube_ai_app.apps.chat.sdk.context.vector.conv_cold import (
     ConversationColdArchive,
@@ -41,6 +41,11 @@ _ROW_COLUMNS = (
 def _utc_day(ts: datetime) -> date:
     stamp = ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
     return stamp.astimezone(timezone.utc).date()
+
+
+def _as_utc(value: Any) -> datetime:
+    stamp = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    return stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)
 
 
 def _edge_dict(edge: Any) -> Dict[str, Any]:
@@ -174,6 +179,28 @@ class ConversationRetention:
             )
 
     # ---------- read ----------
+    async def _pruned_batches(self, first_day: Optional[date] = None, last_day: Optional[date] = None) -> List[Any]:
+        """The ledger's live cold batches, optionally within a day range.
+
+        Reads and deletions follow the ledger, never a storage listing: a part
+        left behind by an interrupted retirement or archive is not cold data.
+        """
+
+        args: List[Any] = []
+        where = ["state = 'pruned'"]
+        if first_day is not None:
+            args.append(first_day)
+            where.append(f"day >= ${len(args)}")
+        if last_day is not None:
+            args.append(last_day)
+            where.append(f"day <= ${len(args)}")
+        async with self._pool.acquire() as con:
+            return await con.fetch(
+                f"SELECT batch_id, day FROM {self.schema}.conv_archive_batches "
+                f"WHERE {' AND '.join(where)} ORDER BY day, batch_id",
+                *args,
+            )
+
     async def fetch_cold(
         self,
         *,
@@ -192,12 +219,17 @@ class ConversationRetention:
         mark = await self.watermark()
         if mark is None:
             return []
-        start = from_ts if isinstance(from_ts, datetime) else datetime.fromisoformat(str(from_ts).replace("Z", "+00:00"))
-        if start.tzinfo is None:
-            start = start.replace(tzinfo=timezone.utc)
+        start = _as_utc(from_ts)
         if start > mark:
             return []
-        records = await self.archive.read_range(start, to_ts)
+        end = _as_utc(to_ts) if to_ts is not None else mark + timedelta(microseconds=1)
+        records: List[Dict[str, Any]] = []
+        for batch in await self._pruned_batches(_utc_day(start), _utc_day(min(end, mark))):
+            manifest = await self.archive.read_manifest(batch["day"], batch["batch_id"])
+            for record in await self.archive.read_part(manifest):
+                if start <= _as_utc(record["ts"]) < end:
+                    records.append(record)
+        records.sort(key=lambda r: (r["ts"], r["id"]))
         out = filter_records(
             records,
             user_id=user_id,
@@ -224,49 +256,75 @@ class ConversationRetention:
         tags_all: Optional[Sequence[str]] = None,
         reason: str = "",
     ) -> Dict[str, Any]:
-        """Delete a scope of messages from the hot index, their bodies and the cold tier.
+        """Delete a scope of messages from the hot index, the cold tier and both tiers' bodies.
 
-        The deletion is recorded in `conv_archive_deletions` with who, when,
-        the scope and the counts.
+        The deletion is recorded in `conv_archive_deletions` before anything
+        is deleted (who, when, the scope), then marked `completed` with its
+        counts, or `failed` with the error; a failed deletion can be run again.
         """
 
         if not actor or not user_id or not conversation_id:
             raise ValueError("delete_messages needs actor, user_id and conversation_id")
         tags = [str(t) for t in (tags_all or ()) if str(t)]
-        args: List[Any] = [user_id, conversation_id]
-        where = ["user_id = $1", "conversation_id = $2"]
-        if bundle_id:
-            args.append(bundle_id)
-            where.append(f"bundle_id = ${len(args)}")
-        if tags:
-            args.append(tags)
-            where.append(f"tags @> ${len(args)}::text[]")
-        async with self._pool.acquire() as con:
-            deleted = await con.fetch(
-                f"DELETE FROM {self.schema}.conv_messages WHERE {' AND '.join(where)} RETURNING id, hosted_uri",
-                *args,
-            )
-        bodies = 0
-        if self.store is not None:
-            for uri in sorted({r["hosted_uri"] for r in deleted if r["hosted_uri"]}):
-                try:
-                    if await self.store.delete_message(uri):
-                        bodies += 1
-                except Exception:
-                    logger.exception("[conv_retention] body delete failed uri=%s", uri)
-        cold_rows = await self._delete_cold(user_id=user_id, conversation_id=conversation_id, bundle_id=bundle_id, tags=tags)
         deletion_id = f"del_{uuid.uuid4().hex}"
         scope = {"user_id": user_id, "conversation_id": conversation_id, "bundle_id": bundle_id, "tags_all": tags}
         async with self._pool.acquire() as con:
             await con.execute(
                 f"""
-                INSERT INTO {self.schema}.conv_archive_deletions
-                    (deletion_id, actor, reason, scope, hot_rows, body_objects, cold_rows)
-                VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)
+                INSERT INTO {self.schema}.conv_archive_deletions (deletion_id, actor, reason, scope, state)
+                VALUES ($1, $2, $3, $4::jsonb, 'started')
                 """,
-                deletion_id, actor, reason or None, json.dumps(scope), len(deleted), bodies, cold_rows,
+                deletion_id, actor, reason or None, json.dumps(scope),
             )
-        return {"deletion_id": deletion_id, "hot_rows": len(deleted), "body_objects": bodies, "cold_rows": cold_rows}
+        counts = {"hot_rows": 0, "body_objects": 0, "cold_rows": 0}
+        try:
+            args: List[Any] = [user_id, conversation_id]
+            where = ["user_id = $1", "conversation_id = $2"]
+            if bundle_id:
+                args.append(bundle_id)
+                where.append(f"bundle_id = ${len(args)}")
+            if tags:
+                args.append(tags)
+                where.append(f"tags @> ${len(args)}::text[]")
+            async with self._pool.acquire() as con:
+                deleted = await con.fetch(
+                    f"DELETE FROM {self.schema}.conv_messages WHERE {' AND '.join(where)} RETURNING id, hosted_uri",
+                    *args,
+                )
+            counts["hot_rows"] = len(deleted)
+            uris = {r["hosted_uri"] for r in deleted if r["hosted_uri"]}
+            cold_rows, cold_uris = await self._delete_cold(
+                user_id=user_id, conversation_id=conversation_id, bundle_id=bundle_id, tags=tags
+            )
+            counts["cold_rows"] = cold_rows
+            uris |= cold_uris
+            counts["body_objects"] = await self._delete_bodies(uris)
+        except Exception as exc:
+            await self._finish_deletion(deletion_id, "failed", counts, error=f"{type(exc).__name__}: {exc}")
+            raise
+        await self._finish_deletion(deletion_id, "completed", counts)
+        return {"deletion_id": deletion_id, **counts}
+
+    async def _delete_bodies(self, uris: Any) -> int:
+        if self.store is None:
+            return 0
+        deleted = 0
+        for uri in sorted(uris):
+            if await self.store.delete_message(uri):
+                deleted += 1
+        return deleted
+
+    async def _finish_deletion(self, deletion_id: str, state: str, counts: Dict[str, int], *, error: str = "") -> None:
+        async with self._pool.acquire() as con:
+            await con.execute(
+                f"""
+                UPDATE {self.schema}.conv_archive_deletions
+                   SET state = $2, hot_rows = $3, body_objects = $4, cold_rows = $5,
+                       error = $6, completed_at = now()
+                 WHERE deletion_id = $1
+                """,
+                deletion_id, state, counts["hot_rows"], counts["body_objects"], counts["cold_rows"], error[:500] or None,
+            )
 
     async def _delete_cold(
         self,
@@ -275,33 +333,32 @@ class ConversationRetention:
         conversation_id: str,
         bundle_id: Optional[str],
         tags: Sequence[str],
-    ) -> int:
-        """Rewrite every pruned batch that holds matching records without them."""
+    ) -> Tuple[int, set]:
+        """Rewrite every live cold batch that holds matching records without them.
 
-        async with self._pool.acquire() as con:
-            batches = await con.fetch(
-                f"SELECT batch_id, day FROM {self.schema}.conv_archive_batches WHERE state = 'pruned' ORDER BY day, batch_id"
-            )
+        Returns the number of removed records and their body URIs.
+        """
+
         removed = 0
-        for batch in batches:
+        uris: set = set()
+        for batch in await self._pruned_batches():
             day, batch_id = batch["day"], batch["batch_id"]
             manifest = await self.archive.read_manifest(day, batch_id)
             records = await self.archive.read_part(manifest)
-            matching = {
-                int(r["id"])
-                for r in filter_records(
-                    records,
-                    user_id=user_id,
-                    conversation_id=conversation_id,
-                    bundle_id=bundle_id,
-                    tags_all=tags,
-                    now=datetime.min.replace(tzinfo=timezone.utc),
-                )
-            }
+            matching = filter_records(
+                records,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                bundle_id=bundle_id,
+                tags_all=tags,
+                now=datetime.min.replace(tzinfo=timezone.utc),
+            )
             if not matching:
                 continue
-            kept = [r for r in records if int(r["id"]) not in matching]
-            removed += len(matching)
+            matching_ids = {int(r["id"]) for r in matching}
+            uris |= {r["hosted_uri"] for r in matching if r.get("hosted_uri")}
+            kept = [r for r in records if int(r["id"]) not in matching_ids]
+            removed += len(matching_ids)
             if kept:
                 new_id = f"{batch_id}-r{uuid.uuid4().hex[:8]}"
                 new_manifest = await self.archive.write_batch(day=day, batch_id=new_id, records=kept)
@@ -330,8 +387,10 @@ class ConversationRetention:
                         f"UPDATE {self.schema}.conv_archive_batches SET state = 'retired', updated_at = now() WHERE batch_id = $1",
                         batch_id,
                     )
+            # The ledger already says retired; removing the files is cleanup,
+            # and a part left behind is never read (reads follow the ledger).
             await self.archive.delete_batch(day, batch_id)
-        return removed
+        return removed, uris
 
 
 def _turn_key(record: Dict[str, Any]) -> Optional[str]:
