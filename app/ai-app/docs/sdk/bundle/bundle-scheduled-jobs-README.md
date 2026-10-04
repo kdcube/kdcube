@@ -93,6 +93,11 @@ The bundle-level kill-switch is enforced in `bundle_scheduler.py`
 (`reconcile`) before the per-job loop. Use it to disable the entire bundle —
 including all its cron jobs — without touching each job individually.
 
+An application's jobs also wait for its preparation: until the application
+reports ready, `reconcile` logs "Application is not ready; scheduled jobs
+remain inactive" and starts none of them. The built-in admin bundle
+(`kdcube.admin`) is never prepared, so this wait does not apply to it.
+
 ---
 
 ## Cron source rules

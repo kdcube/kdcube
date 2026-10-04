@@ -587,7 +587,7 @@ class BundleSchedulerManager:
             BundleSpec,
             load_bundle_manifest,
         )
-        from kdcube_ai_app.infra.plugin.bundle_store import get_bundle_props
+        from kdcube_ai_app.infra.plugin.bundle_store import ADMIN_BUNDLE_ID, get_bundle_props
         from kdcube_ai_app.infra.plugin.app_readiness import (
             ApplicationNotReadyError,
             application_readiness_registry,
@@ -598,11 +598,16 @@ class BundleSchedulerManager:
 
         for bundle_id, entry in (registry.bundles or {}).items():
             try:
-                application_readiness_registry.require_ready(
-                    tenant=self._tenant,
-                    project=self._project,
-                    application_id=bundle_id,
-                )
+                # The built-in admin bundle is loaded by the processor itself
+                # and never prepared (app_lifecycle/runtime.py leaves it out),
+                # so it has no readiness to wait for; gating it would keep its
+                # jobs inactive for good.
+                if bundle_id != ADMIN_BUNDLE_ID:
+                    application_readiness_registry.require_ready(
+                        tenant=self._tenant,
+                        project=self._project,
+                        application_id=bundle_id,
+                    )
             except ApplicationNotReadyError:
                 _log.info(
                     "[scheduler] Application is not ready; scheduled jobs remain inactive: bundle=%s",

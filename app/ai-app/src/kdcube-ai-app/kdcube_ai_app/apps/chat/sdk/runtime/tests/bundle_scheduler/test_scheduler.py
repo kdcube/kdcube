@@ -185,6 +185,40 @@ def test_reconcile_keeps_unready_application_jobs_inactive_until_ready():
     _run(_t())
 
 
+def test_reconcile_schedules_admin_bundle_jobs_while_its_scope_tracks_readiness():
+    # The admin bundle is never prepared, so it never has a readiness record.
+    # With another application's readiness tracked in the same scope, its jobs
+    # (conversation-archive) must still be scheduled.
+    manifest = _make_manifest([_make_job_spec(alias="conversation-archive", span="system")])
+    pm, pp, ph = _patches(manifest)
+
+    async def _t():
+        application_readiness_registry.replace_desired(
+            tenant="t",
+            project="p",
+            applications={
+                "echo.ui": DesiredApplicationState(
+                    generation="generation-a",
+                    readiness=ApplicationReadinessMode.INDEPENDENT,
+                )
+            },
+        )
+        mgr = BundleSchedulerManager(redis=None, tenant="t", project="p", instance_id="i1")
+        try:
+            with pm, pp, ph:
+                await mgr.reconcile(_make_registry("kdcube.admin", "echo.ui"))
+            assert set(mgr._tasks) == {_JobKey(bundle_id="kdcube.admin", job_alias="conversation-archive")}
+        finally:
+            await mgr.shutdown()
+            application_readiness_registry.deactivate_scope(
+                tenant="t",
+                project="p",
+                clear=True,
+            )
+
+    _run(_t())
+
+
 def test_reconcile_skips_bundle_without_path():
     async def _t():
         mgr = BundleSchedulerManager(redis=None, tenant="t", project="p", instance_id="i1")
