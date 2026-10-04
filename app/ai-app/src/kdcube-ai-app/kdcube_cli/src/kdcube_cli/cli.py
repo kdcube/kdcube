@@ -61,6 +61,7 @@ from kdcube_cli.deployment_provenance import (
     write_platform_source_marker,
 )
 from kdcube_cli.docker_storage import build_storage_maintenance_commands
+from kdcube_cli.deployment_preservation import HOLD_REPOSITORY_PREFIX
 from kdcube_cli.export_live_bundles import export_live_bundle_descriptors
 from kdcube_cli.host_vault import (
     HostVaultConfigurationError,
@@ -873,6 +874,8 @@ def clean_docker_images(console: Console) -> None:
             if len(parts) != 3:
                 continue
             image_id, repo, tag = parts
+            if repo.startswith(HOLD_REPOSITORY_PREFIX):
+                continue
             if tag == "<none>":
                 continue
             if repo.startswith("kdcube/"):

@@ -678,6 +678,26 @@ the KDCube runtime workdir. `kdcube clean` is still available for an explicit
 full removal of unused KDCube image tags and build cache, but repeated source
 refreshes should not require it as routine upkeep.
 
+Native deployment preservation uses workdir-owned manifests under
+`<workdir>/.kdcube/preservation/` and dedicated `kdcube-preservation/` image
+references. Both build maintenance and `kdcube clean` retain these references.
+Their release is an explicit lifecycle operation with independently qualified
+evidence and all named consumers closed; elapsed time alone releases nothing.
+The manifest records complete immutable image IDs, selected and excluded
+Compose profiles, declared local executor profiles, and configuration hashes.
+It contains no resolved environment or credential values. A local preservation
+manifest is operator-owned evidence, not an authentication grant.
+
+The preservation core validates every local baseline ID and configuration
+binding before restore disruption and attests the complete restored image map.
+Startup is delegated to the existing native lifecycle so its host-vault and
+transient startup-credential boundary remains explicit. External executor
+profiles and undeclared per-call image overrides are outside the local-image
+restore contract. Database volumes, their data, and backup files are retained;
+image restoration does not roll back database data or prove that a newly built
+candidate preserved its dependency/content set. Independently qualify those
+properties for the candidate being deployed.
+
 This replaces the older pattern of re-running `kdcube init` on an existing
 workdir, which used to silently reseed descriptors under some flag
 combinations.
