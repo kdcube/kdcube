@@ -3397,6 +3397,34 @@ async def search_context(
                 logger.log(f"Trigram search failed for where={where}: {e}", "WARN")
             return []
 
+    async def _search_one_cold(where: str, query: str) -> list[dict]:
+        # Archived turns join the fusion only through a date filter; a
+        # ConvIndex without the cold arm (or no retention) contributes none.
+        search_cold = getattr(conv_idx, "search_cold_turns", None)
+        if not callable(search_cold):
+            return []
+        try:
+            where, search_roles, search_tags = _resolve_roles_and_tags(where)
+            res = await search_cold(
+                user_id=user,
+                conversation_id=conv,
+                query_text=query,
+                search_roles=search_roles,
+                search_tags=search_tags,
+                top_k=top_k,
+                scope=scope,
+                half_life_days=half_life_days,
+                timestamp_filters=timestamp_filters,
+                include_recovery_sessions=include_recovery_sessions,
+                agent_id=agent_id,
+                bundle_id=bundle_id,
+            )
+            return res or []
+        except Exception as e:
+            if logger:
+                logger.log(f"Cold search failed for where={where}: {e}", "WARN")
+            return []
+
     # Collect all hits
     hits = []
 
@@ -3466,6 +3494,9 @@ async def search_context(
             "text": r.get("text", ""),
             "matched_text": r.get("matched_text", ""),
             "hosted_uri": r.get("hosted_uri"),
+            # W536: where the matched row was read from. Only the cold arm
+            # sets it; every index row is hot.
+            "storage": r.get("storage") or "hot",
         }
         if extra:
             hit.update(extra)
@@ -3488,10 +3519,13 @@ async def search_context(
             # lexical (BM25F via ts_rank_cd on search_tsv, simple+english union),
             # trigram (word_similarity on anchors and body — catches spelling
             # variants like Vinnitsa/Vinnytsia that token-equality misses).
-            sem_rows, lex_rows, trgm_rows = await asyncio.gather(
+            # A fourth arm reads archived (cold) turns, only when the search
+            # has a date filter that reaches past the archive watermark.
+            sem_rows, lex_rows, trgm_rows, cold_rows = await asyncio.gather(
                 _search_one(where, query, embedding=t.get("embedding")),
                 _search_one_lexical(where, query),
                 _search_one_trigram(where, query),
+                _search_one_cold(where, query),
             )
 
             def _rank_map(rows: list[dict]) -> dict:
@@ -3506,6 +3540,7 @@ async def search_context(
             sem_rank = _rank_map(sem_rows)
             lex_rank = _rank_map(lex_rows)
             trgm_rank = _rank_map(trgm_rows)
+            cold_rank = _rank_map(cold_rows)
 
             # Prefer the semantic row's payload (text/hosted_uri/log artifact);
             # fall back to lexical, then trigram, when only those produced the turn.
@@ -3522,6 +3557,10 @@ async def search_context(
                 tid = r.get("turn_id") or _turn_id_from_tags_safe(r.get("tags") or [])
                 if tid and tid not in by_tid:
                     by_tid[tid] = ("trgm", r)
+            for r in cold_rows:
+                tid = r.get("turn_id") or _turn_id_from_tags_safe(r.get("tags") or [])
+                if tid and tid not in by_tid:
+                    by_tid[tid] = ("cold", r)
 
             for tid, (origin, row) in by_tid.items():
                 # Weighted RRF: semantic weight scales the semantic arm;
@@ -3535,6 +3574,10 @@ async def search_context(
                     rrf_score += w_lex * (1.0 / (_RRF_K + lex_rank[tid]))
                 if tid in trgm_rank:
                     rrf_score += w_lex * (1.0 / (_RRF_K + trgm_rank[tid]))
+                # The cold arm is a text match over archived turns: it carries
+                # the lexical weight, and an archived turn has no hot arm.
+                if tid in cold_rank:
+                    rrf_score += w_lex * (1.0 / (_RRF_K + cold_rank[tid]))
                 rec = float(row.get("rec") or 0.0)
                 final_score = rrf_score * (1.0 + w_rec * _RECENCY_LIFT * rec)
                 extra = {
@@ -3542,6 +3585,7 @@ async def search_context(
                     "sem_rank": sem_rank.get(tid),
                     "lex_rank": lex_rank.get(tid),
                     "trgm_rank": trgm_rank.get(tid),
+                    "cold_rank": cold_rank.get(tid),
                     "primary_source": origin,
                 }
                 hits.append(_row_to_hit(
@@ -3608,7 +3652,7 @@ async def search_context(
             for k in ("score", "sim", "rec", "original_score", "rrf_score",
                       "sem_rank", "lex_rank", "primary_source",
                       "matched_via_role", "source_query", "source_where",
-                      "text", "matched_text", "hosted_uri", "role", "ts"):
+                      "text", "matched_text", "hosted_uri", "role", "ts", "storage"):
                 if k in h:
                     prev[k] = h[k]
     hits = list(deduped.values())

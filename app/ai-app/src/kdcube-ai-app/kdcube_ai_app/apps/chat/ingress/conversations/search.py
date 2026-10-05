@@ -118,6 +118,8 @@ class ConversationSearchHit(BaseModel):
     recency_score: Optional[float] = None
     matched_via_role: Optional[str] = None
     ts: Optional[str] = None
+    # W536: "hot" (the live index) or "cold" (the archive), as the backend read it.
+    storage: Optional[str] = None
 
 
 class ConversationSearchConversationInfo(BaseModel):
@@ -264,6 +266,7 @@ def _shape_hit(hit: Dict[str, Any]) -> ConversationSearchHit:
         recency_score=hit.get("recency_score"),
         matched_via_role=(str(hit["matched_via_role"]) if hit.get("matched_via_role") else None),
         ts=_ts_text(hit.get("ts")),
+        storage=(str(hit["storage"]) if hit.get("storage") else None),
     )
 
 

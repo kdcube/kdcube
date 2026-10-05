@@ -154,3 +154,62 @@ async def test_moving_legacy_parts_counts_toward_the_run_budget(env):
         )
     assert [r["state"] for r in rows] == ["retired", "pruned"]
     assert await _cold_ids(retention) == [1, 2, 4, 5]
+
+
+@pytest.mark.asyncio
+async def test_a_dated_search_finds_archived_turns_and_names_each_hits_storage(env):
+    """W536: a date filter past the watermark reaches cold turns; each hit says hot or cold."""
+
+    from kdcube_ai_app.apps.chat.sdk.context.vector.conv_index import ConvIndex
+    from kdcube_ai_app.apps.chat.sdk.solutions.conversation.ctx_rag import search_context
+
+    pool, schema, _, _, retention = env
+    now = datetime.now(timezone.utc)
+    rows = [
+        ("t-old", "assistant", "The index is consistent and the receipt table is renamed.", now - timedelta(days=200)),
+        ("t-old-other", "assistant", "Nothing about that here.", now - timedelta(days=199)),
+        ("t-new", "assistant", "The receipt table rename is live.", now - timedelta(days=2)),
+    ]
+    async with pool.acquire() as con:
+        for turn_id, role, text, ts in rows:
+            await con.execute(
+                f"INSERT INTO {schema}.conv_messages (user_id, bundle_id, conversation_id, message_id, role, text,"
+                f" hosted_uri, ts, ttl_days, tags, turn_id) VALUES ('u1','b1','c1',$1,$2,$3,$4,$5,3650,'{{}}',$6)",
+                f"m-{turn_id}", role, text, f"cb/x/{turn_id}.json", ts, turn_id,
+            )
+    summary = await retention.archive_before(now - timedelta(days=90))
+    assert summary["rows"] == 2
+
+    index = ConvIndex(pool, schema=schema)
+    index.cold_retention = retention
+
+    async def search(filters):
+        _, hits = await search_context(
+            index, object(), None,
+            targets=[{"where": "assistant", "query": "receipt table renamed"}],
+            user="u1", conv="c1", scope="user", top_k=10, days=3650,
+            scoring_mode="rrf_hybrid", timestamp_filters=filters,
+        )
+        return {h["turn_id"]: h["storage"] for h in hits}
+
+    dated = await search([{"op": ">=", "value": (now - timedelta(days=400)).isoformat()}])
+    assert dated == {"t-old": "cold", "t-new": "hot"}
+    # Without a date filter the archive is not read: only the hot turn.
+    assert await search(None) == {"t-new": "hot"}
+    # A date range that ends before the hot row returns only the archived turn.
+    old_only = await search([
+        {"op": ">=", "value": (now - timedelta(days=400)).isoformat()},
+        {"op": "<=", "value": (now - timedelta(days=150)).isoformat()},
+    ])
+    assert old_only == {"t-old": "cold"}
+
+    # Opening the conversation pages through its hot row and then its
+    # archived rows on one newest-first keyset (W536), so a cold match opens.
+    first = await index.fetch_message_page(user_id="u1", conversation_id="c1", limit=2, days=3650)
+    assert [(r["turn_id"], r.get("storage", "hot")) for r in first] == [("t-new", "hot"), ("t-old-other", "cold")]
+    last = first[-1]
+    second = await index.fetch_message_page(
+        user_id="u1", conversation_id="c1", limit=2, days=3650,
+        before_ts=last["ts"], before_id=int(last["id"]),
+    )
+    assert [(r["turn_id"], r["storage"]) for r in second] == [("t-old", "cold")]
