@@ -181,7 +181,8 @@ class _Con:
         if q.startswith("INSERT INTO kdcube_test_w536.conv_archive_deletions"):
             deletion_id, actor, reason, scope = args
             self.db.deletions.append(
-                {"deletion_id": deletion_id, "actor": actor, "reason": reason, "scope": scope, "state": "started"}
+                {"deletion_id": deletion_id, "actor": actor, "reason": reason, "scope": scope, "state": "started",
+                 "sql": q}
             )
             return "INSERT 0 1"
         if q.startswith("UPDATE kdcube_test_w536.conv_archive_deletions"):
@@ -422,6 +423,17 @@ def test_the_index_builds_retention_with_the_apps_store(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_the_deletion_scope_is_stored_as_a_json_object_through_any_pool():
+    # The platform pool registers a jsonb codec; JSON text bound straight to
+    # a jsonb parameter would be encoded again and stored as a string.
+    db, _, _, _, retention = _setup()
+    await retention.delete_messages(actor="operator:u1", user_id="u1", conversation_id="c1", reason="agent removed")
+
+    (row,) = db.deletions
+    assert "($4::text)::jsonb" in row["sql"]
+    assert json.loads(row["scope"]) == {"user_id": "u1", "conversation_id": "c1", "bundle_id": None, "tags_all": []}
+
+
 async def test_deleting_an_archived_message_also_deletes_its_body():
     db, backend, archive, store, retention = _setup()
     db.messages = [_msg(1, days_ago=200), _msg(2, days_ago=200)]

@@ -473,8 +473,10 @@ class ConversationRetention:
             await con.execute(
                 f"""
                 INSERT INTO {self.schema}.conv_archive_deletions (deletion_id, actor, reason, scope, state)
-                VALUES ($1, $2, $3, $4::jsonb, 'started')
+                VALUES ($1, $2, $3, ($4::text)::jsonb, 'started')
                 """,
+                # Through text: a pool with a jsonb codec (the platform's)
+                # would otherwise encode this JSON again and store a string.
                 deletion_id, actor, reason or None, json.dumps(scope),
             )
         counts = {"hot_rows": 0, "body_objects": 0, "cold_rows": 0}
