@@ -356,8 +356,9 @@ async def _run_with_redis_lock(
     before or during the run leaves that tick unrun (at most once per tick,
     not exactly once); a job that fails is not retried in the same tick; and
     if Redis loses the claim (restart without persistence, eviction, failover)
-    a late peer can run the tick again. A job whose effect must happen exactly
-    once keeps its own idempotency.
+    or the claim expires (``_TICK_CLAIM_TTL_SECONDS``) before a stalled peer
+    reaches the tick, that peer can run it again. A job whose effect must
+    happen exactly once keeps its own idempotency.
     """
     if redis is None:
         _log.warning(
