@@ -158,6 +158,8 @@ class ConversationRetention:
                 record = row_to_record(dict(row), edges=edges_by_id.get(int(row["id"]), ()))
                 groups[(str(record.get("user_id") or ""), str(record.get("conversation_id") or ""), _utc_day(row["ts"]))].append(record)
             for key in sorted(groups, key=lambda k: (k[2], k[0], k[1])):
+                if max_batches is not None and summary["batches"] + summary["relaid"] >= max_batches:
+                    return summary  # the rest stays hot for the next run
                 day, records = key[2], groups[key]
                 await self._archive_batch(day, records)
                 summary["batches"] += 1

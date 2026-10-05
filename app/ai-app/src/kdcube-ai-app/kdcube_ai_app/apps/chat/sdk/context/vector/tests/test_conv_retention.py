@@ -983,3 +983,17 @@ async def test_moving_legacy_parts_counts_toward_the_run_budget():
     assert db.batches["legacy-a"]["state"] == db.batches["legacy-b"]["state"] == "pruned"
     assert (await retention.archive_before(NOW - timedelta(days=90), max_batches=1))["relaid"] == 1
     assert sorted(b["state"] for k, b in db.batches.items() if k in ("legacy-a", "legacy-b")) == ["pruned", "retired"]
+
+
+
+@pytest.mark.asyncio
+async def test_the_run_budget_holds_when_one_fetch_spans_several_conversations():
+    db, backend, archive, store, retention = _setup()
+    db.messages = [_msg(1, days_ago=200), _msg(2, days_ago=200, conv="c2")]  # same day, two conversations
+
+    summary = await retention.archive_before(NOW - timedelta(days=90), max_batches=1)
+
+    assert summary["batches"] == 1 and summary["rows"] == 1
+    assert [m["id"] for m in db.messages] == [2]  # the second conversation stays hot for the next run
+    assert (await retention.archive_before(NOW - timedelta(days=90), max_batches=1))["batches"] == 1
+    assert db.messages == []
