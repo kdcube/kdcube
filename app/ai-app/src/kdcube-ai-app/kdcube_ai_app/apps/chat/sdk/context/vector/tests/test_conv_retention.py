@@ -55,9 +55,15 @@ class _Con:
         if q.startswith("SELECT from_id, to_id, policy, created_at FROM"):
             ids = set(args[0])
             return [e for e in self.db.edges if e["from_id"] in ids or e["to_id"] in ids]
-        if q.startswith("SELECT batch_id, day FROM") and "state IN ('written', 'verified')" in q:
+        if q.startswith("SELECT batch_id, day") and "state IN ('written', 'verified')" in q:
             return [b for b in self.db.sorted_batches() if b["state"] in ("written", "verified")]
-        if q.startswith("SELECT batch_id, day FROM") and "state = 'pruned'" in q:
+        if q.startswith("SELECT batch_id, day, part_key, manifest_key") and "part_key ~" in q:
+            import re
+            legacy = re.compile(r"/conversation-cold/[0-9]{4}/[0-9]{2}/[0-9]{2}/[^/]+$")
+            rows = [b for b in self.db.sorted_batches() if b["state"] == "pruned" and legacy.search(b["part_key"] or "")]
+            limit = re.search(r"LIMIT ([0-9]+)$", q)
+            return rows[: int(limit.group(1))] if limit else rows
+        if q.startswith("SELECT batch_id, day") and "state = 'pruned'" in q:
             first = args[0] if "day >= $1" in q else None
             last = args[-1] if "day <= $" in q else None
             return [
@@ -66,7 +72,7 @@ class _Con:
                 and (first is None or b["day"] >= first)
                 and (last is None or b["day"] <= last)
             ]
-        if q.startswith("SELECT b.batch_id, b.day FROM kdcube_test_w536.conv_archive_batches b WHERE b.state = 'pruned' AND NOT EXISTS"):
+        if q.startswith("SELECT b.batch_id, b.day") and "conv_archive_batches b WHERE b.state = 'pruned' AND NOT EXISTS" in q:
             indexed = {c["batch_id"] for c in self.db.conversations if c.get("start_ts_list") is not None}
             return [b for b in self.db.sorted_batches() if b["state"] == "pruned" and b["batch_id"] not in indexed]
         if q.startswith("SELECT c.conversation_id, max(c.max_ts) AS last_activity_at"):
@@ -100,11 +106,18 @@ class _Con:
                     "conv_start_text": max(live)[1] if live else None,
                 })
             return out
-        if q.startswith("SELECT DISTINCT b.batch_id, b.day FROM kdcube_test_w536.conv_archive_conversations c"):
-            user_id, conversation_id, from_ts, *rest = args
+        if q.startswith("SELECT DISTINCT b.batch_id, b.day") and "FROM kdcube_test_w536.conv_archive_conversations c" in q:
+            if "c.max_ts >= $3" in q:
+                user_id, conversation_id, from_ts, *rest = args
+            else:  # a deletion: every batch of the conversation, whatever its age
+                user_id, conversation_id, *rest = args
+                from_ts = None
+            bundle = rest[0] if "c.bundle_id = $" in q and rest else None
             hits = {
                 c["batch_id"] for c in self.db.live_conversations()
-                if c["user_id"] == user_id and c["conversation_id"] == conversation_id and c["max_ts"] >= from_ts
+                if c["user_id"] == user_id and c["conversation_id"] == conversation_id
+                and (from_ts is None or c["max_ts"] >= from_ts)
+                and (bundle is None or c["bundle_id"] == bundle)
             }
             return [b for b in self.db.sorted_batches() if b["batch_id"] in hits]
         if q.startswith("SELECT hosted_uri FROM kdcube_test_w536.conv_messages WHERE user_id = $1"):
@@ -128,6 +141,12 @@ class _Con:
 
     async def fetchval(self, query: str, *args):
         q = " ".join(query.split())
+        if q.startswith("UPDATE kdcube_test_w536.conv_archive_batches SET state = 'retired'"):
+            batch = self.db.batches.get(args[0])
+            if not batch or batch["state"] != "pruned":
+                return None
+            batch["state"] = "retired"
+            return args[0]
         if q.startswith("SELECT max(max_ts) FROM"):
             stamps = [b["max_ts"] for b in self.db.batches.values() if b["state"] == "pruned" and b["max_ts"]]
             return max(stamps) if stamps else None
@@ -157,6 +176,7 @@ class _Con:
             self.db.batches[batch_id] = {
                 "batch_id": batch_id, "day": day, "row_count": count, "max_ts": max_ts,
                 "sha256": sha, "state": state, "error": None,
+                "part_key": part_key, "manifest_key": manifest_key,
             }
             return "INSERT 0 1"
         if q.startswith("UPDATE kdcube_test_w536.conv_archive_batches SET error"):
@@ -274,7 +294,7 @@ async def test_old_rows_move_to_cold_with_embeddings_and_hot_keeps_the_window():
     assert summary["rows"] == 2 and summary["batches"] == 2
     assert [m["id"] for m in db.messages] == [3]
     assert {b["state"] for b in db.batches.values()} == {"pruned"}
-    cold = await archive.read_range(NOW - timedelta(days=400), NOW)
+    cold = await retention.fetch_cold(from_ts=NOW - timedelta(days=400), include_embedding=True)
     assert [r["id"] for r in cold] == [1, 2]
     assert cold[0]["embedding"] == [0.25, 0.5, -1.0]
     assert cold[0]["edges"][0]["to_id"] == 2
@@ -342,7 +362,7 @@ async def test_deleting_a_scope_removes_hot_rows_bodies_and_cold_lines_and_recor
 
     assert result["hot_rows"] == 1 and result["cold_rows"] == 1 and result["body_objects"] == 2
     assert store.deleted == ["cb/x/1.json", "cb/x/3.json"]
-    remaining = await archive.read_range(NOW - timedelta(days=400), NOW)
+    remaining = await retention.fetch_cold(from_ts=NOW - timedelta(days=400))
     assert [r["id"] for r in remaining] == [2]
     (deletion,) = db.deletions
     assert deletion["actor"] == "operator:u1" and json.loads(deletion["scope"])["tags_all"] == ["pb:project:A"]
@@ -450,15 +470,13 @@ async def test_a_retired_part_left_in_storage_never_comes_back_in_reads():
     db, backend, archive, store, retention = _setup()
     db.messages = [_msg(1, days_ago=200), _msg(2, days_ago=200, conv="c2")]
     await retention.archive_before(NOW - timedelta(days=90))
-    [old] = list(db.batches)
-    manifest = await archive.read_manifest(db.batches[old]["day"], old)
+    [old] = [b for b in db.batches.values() if "/c1/" in b["part_key"]]
+    manifest = await archive.read_manifest(old["manifest_key"])
     part = await backend.read_bytes_a(manifest["part_key"])
     await retention.delete_messages(actor="operator", user_id="u1", conversation_id="c1")
     # An interrupted retirement leaves the old files behind.
     await backend.write_bytes_a(manifest["part_key"], part)
-    await backend.write_bytes_a(
-        archive.manifest_key(db.batches[old]["day"], old), json.dumps(manifest, sort_keys=True).encode()
-    )
+    await backend.write_bytes_a(old["manifest_key"], json.dumps(manifest, sort_keys=True).encode())
     records = await retention.fetch_cold(from_ts=NOW - timedelta(days=365))
     assert [r["conversation_id"] for r in records] == ["c2"]
 
@@ -756,3 +774,226 @@ async def test_a_start_outside_the_read_window_is_not_listed_even_when_its_batch
     assert row["conv_start_text"] is None and row["started_at"] is None
     [wider] = await index.cold_retention.list_archived_conversations(user_id="u1", from_ts=floor - timedelta(hours=1))
     assert wider["conv_start_text"] == "OUTSIDE_WINDOW_MARKER"
+
+
+# W536 layout (operator, 2026-10-05: "in kdcube, amount of logged in users has
+# no bound. they can participate many projects. liekwise the agents. on one
+# day the amount of conversations can be HUGE"): a part never mixes users or
+# conversations, and lives under the user's and the conversation's folder.
+
+
+@pytest.mark.asyncio
+async def test_a_part_holds_one_users_conversation_under_its_folder():
+    db, backend, archive, _, retention = _setup()
+    db.messages = [
+        _msg(1, days_ago=200), _msg(2, days_ago=200, conv="c2"),
+        _msg(3, days_ago=200, user="u2"), _msg(4, days_ago=199),
+    ]
+
+    summary = await retention.archive_before(NOW - timedelta(days=90))
+
+    assert summary["rows"] == 4 and summary["batches"] == 4
+    keys = sorted(b["part_key"] for b in db.batches.values())
+    for key in keys:
+        user, conversation, yyyy, mm, dd = key.split("/conversation-cold/")[1].split("/")[:5]
+        records = await archive.read_part(await archive.read_manifest(key.replace(".jsonl.gz", ".manifest.json")))
+        assert {(r["user_id"], r["conversation_id"]) for r in records} == {(user, conversation)}
+        assert {r["ts"][:10] for r in records} == {f"{yyyy}-{mm}-{dd}"}
+    assert [k.split("/conversation-cold/")[1].rsplit("/", 2)[0] for k in keys][:1][0].startswith("u1/c1/")
+
+
+@pytest.mark.asyncio
+async def test_a_batch_that_mixes_users_is_refused():
+    archive = ConversationColdArchive(InMemoryStorageBackend(), tenant="t", project="p")
+    from kdcube_ai_app.apps.chat.sdk.context.vector.conv_cold import row_to_record
+
+    records = [row_to_record(dict(_msg(1, days_ago=200), embedding=None)), row_to_record(dict(_msg(2, days_ago=200, user="u2"), embedding=None))]
+    with pytest.raises(ValueError):
+        await archive.write_batch(day=NOW.date(), batch_id="x", records=records)
+
+
+def test_an_id_cannot_add_or_walk_folders():
+    archive = ConversationColdArchive(InMemoryStorageBackend(), tenant="t", project="p")
+    key = archive.part_key(NOW.date(), "b", user_id="a/../b", conversation_id="..")
+    tail = key.split("/conversation-cold/")[1]
+    assert tail.split("/")[0] == "a%2F..%2Fb" and tail.split("/")[1] == "%2E%2E"
+    assert archive.part_key(NOW.date(), "b", user_id="cognito:1-2", conversation_id="telegram_9").split("/conversation-cold/")[1].startswith("cognito:1-2/telegram_9/")
+
+
+@pytest.mark.asyncio
+async def test_a_deletion_reads_only_that_conversations_parts():
+    db, backend, archive, store, retention = _setup()
+    db.messages = [_msg(1, days_ago=200), _msg(2, days_ago=200, user="u2", conv="c9")]
+    await retention.archive_before(NOW - timedelta(days=90))
+    reads: list[str] = []
+    original = backend.read_bytes_a
+
+    async def counting(path, *a, **k):
+        reads.append(str(path))
+        return await original(path, *a, **k)
+
+    backend.read_bytes_a = counting
+    await retention.delete_messages(actor="operator", user_id="u1", conversation_id="c1")
+    assert reads and all("/u1/c1/" in r for r in reads)
+
+
+@pytest.mark.asyncio
+async def test_a_legacy_day_part_stays_readable_and_a_deletion_splits_what_stays():
+    db, backend, archive, store, retention = _setup()
+    from kdcube_ai_app.apps.chat.sdk.context.vector.conv_cold import encode_part, row_to_record, sha256_hex
+
+    day = (NOW - timedelta(days=200)).date()
+    legacy = [_msg(1, days_ago=200), _msg(2, days_ago=200, conv="c2"), _msg(3, days_ago=200, user="u2")]
+    records = [row_to_record(dict(m)) for m in legacy]
+    data = encode_part(records)
+    part_key, manifest_key = archive.part_key(day, "legacy"), archive.manifest_key(day, "legacy")
+    assert "/conversation-cold/" + day.strftime("%Y/%m/%d") + "/legacy" in part_key
+    manifest = {"batch_id": "legacy", "day": day.isoformat(), "row_count": 3, "ids": [1, 2, 3],
+                "sha256": sha256_hex(data), "part_key": part_key,
+                "min_ts": min(r["ts"] for r in records), "max_ts": max(r["ts"] for r in records)}
+    await backend.write_bytes_a(part_key, data)
+    await backend.write_bytes_a(manifest_key, json.dumps(manifest).encode())
+    db.batches["legacy"] = {"batch_id": "legacy", "day": day, "row_count": 3,
+                            "max_ts": datetime.fromisoformat(manifest["max_ts"]), "sha256": manifest["sha256"],
+                            "state": "pruned", "error": None, "part_key": part_key, "manifest_key": manifest_key}
+    await retention._index_batch(_Con(db), "legacy", records)
+
+    assert sorted(r["id"] for r in await retention.fetch_cold(from_ts=NOW - timedelta(days=400))) == [1, 2, 3]
+
+    await retention.delete_messages(actor="operator", user_id="u1", conversation_id="c1")
+
+    assert db.batches["legacy"]["state"] == "retired"
+    live = [b for b in db.batches.values() if b["state"] == "pruned"]
+    assert sorted(b["part_key"].split("/conversation-cold/")[1].rsplit("/", 1)[0] for b in live) == [
+        "u1/c2/" + day.strftime("%Y/%m/%d"), "u2/c1/" + day.strftime("%Y/%m/%d"),
+    ]
+    assert sorted(r["id"] for r in await retention.fetch_cold(from_ts=NOW - timedelta(days=400))) == [2, 3]
+
+
+@pytest.mark.asyncio
+async def test_the_next_archive_run_moves_legacy_day_parts_to_the_user_layout():
+    db, backend, archive, store, retention = _setup()
+    from kdcube_ai_app.apps.chat.sdk.context.vector.conv_cold import encode_part, row_to_record, sha256_hex
+
+    day = (NOW - timedelta(days=200)).date()
+    legacy = [_msg(1, days_ago=200), _msg(2, days_ago=200, conv="c2"), _msg(3, days_ago=200, user="u2")]
+    records = [row_to_record(dict(m)) for m in legacy]
+    data = encode_part(records)
+    part_key, manifest_key = archive.part_key(day, "legacy"), archive.manifest_key(day, "legacy")
+    manifest = {"batch_id": "legacy", "day": day.isoformat(), "row_count": 3, "ids": [1, 2, 3],
+                "sha256": sha256_hex(data), "part_key": part_key,
+                "min_ts": min(r["ts"] for r in records), "max_ts": max(r["ts"] for r in records)}
+    await backend.write_bytes_a(part_key, data)
+    await backend.write_bytes_a(manifest_key, json.dumps(manifest).encode())
+    db.batches["legacy"] = {"batch_id": "legacy", "day": day, "row_count": 3,
+                            "max_ts": datetime.fromisoformat(manifest["max_ts"]), "sha256": manifest["sha256"],
+                            "state": "pruned", "error": None, "part_key": part_key, "manifest_key": manifest_key}
+    await retention._index_batch(_Con(db), "legacy", records)
+
+    summary = await retention.archive_before(NOW - timedelta(days=90))
+
+    assert summary["relaid"] == 1
+    assert db.batches["legacy"]["state"] == "retired" and not await backend.exists_a(part_key)
+    live = sorted(b["part_key"].split("/conversation-cold/")[1].rsplit("/", 1)[0] for b in db.batches.values() if b["state"] == "pruned")
+    d = day.strftime("%Y/%m/%d")
+    assert live == [f"u1/c1/{d}", f"u1/c2/{d}", f"u2/c1/{d}"]
+    assert sorted(r["id"] for r in await retention.fetch_cold(from_ts=NOW - timedelta(days=400))) == [1, 2, 3]
+    assert (await retention.archive_before(NOW - timedelta(days=90)))["relaid"] == 0
+
+
+async def _legacy_part(db, backend, archive, retention, batch_id="legacy", ids=(1, 2, 3)):
+    from kdcube_ai_app.apps.chat.sdk.context.vector.conv_cold import encode_part, row_to_record, sha256_hex
+
+    day = (NOW - timedelta(days=200)).date()
+    shapes = {1: {}, 2: {"conv": "c2"}, 3: {"user": "u2"}, 4: {"conv": "c3"}, 5: {"user": "u3"}}
+    records = [row_to_record(dict(_msg(i, days_ago=200, **shapes[i]))) for i in ids]
+    data = encode_part(records)
+    part_key, manifest_key = archive.part_key(day, batch_id), archive.manifest_key(day, batch_id)
+    manifest = {"batch_id": batch_id, "day": day.isoformat(), "row_count": len(records), "ids": list(ids),
+                "sha256": sha256_hex(data), "part_key": part_key,
+                "min_ts": min(r["ts"] for r in records), "max_ts": max(r["ts"] for r in records)}
+    await backend.write_bytes_a(part_key, data)
+    await backend.write_bytes_a(manifest_key, json.dumps(manifest).encode())
+    db.batches[batch_id] = {"batch_id": batch_id, "day": day, "row_count": len(records),
+                            "max_ts": datetime.fromisoformat(manifest["max_ts"]), "sha256": manifest["sha256"],
+                            "state": "pruned", "error": None, "part_key": part_key, "manifest_key": manifest_key}
+    await retention._index_batch(_Con(db), batch_id, records)
+    return part_key
+
+
+# Review witnesses (kdcube #323 at 8498b26e, Infra), kept as regressions.
+
+
+@pytest.mark.asyncio
+async def test_a_deletion_completed_during_a_legacy_move_never_comes_back():
+    db, backend, archive, store, retention = _setup()
+    await _legacy_part(db, backend, archive, retention)
+    written: list[str] = []
+    original_read, original_write = archive.read_part, archive.write_batch
+    armed = {"race": True}
+
+    async def read_then_delete(manifest):
+        records = await original_read(manifest)
+        if armed.pop("race", False):  # the move has read the part; a deletion finishes now
+            done = await retention.delete_messages(actor="operator", user_id="u1", conversation_id="c1")
+            assert done["cold_rows"] == 1
+        return records
+
+    async def recording_write(**kwargs):
+        manifest = await original_write(**kwargs)
+        written.append(manifest["part_key"])
+        return manifest
+
+    archive.read_part, archive.write_batch = read_then_delete, recording_write
+    summary = await retention.archive_before(NOW - timedelta(days=90))
+
+    assert summary["relaid"] == 0  # the deletion already moved it
+    assert sorted(r["id"] for r in await retention.fetch_cold(from_ts=NOW - timedelta(days=400))) == [2, 3]
+    live = {b["part_key"] for b in db.batches.values() if b["state"] == "pruned"}
+    assert written and [await backend.exists_a(k) for k in written] == [k in live for k in written]  # the losing move left no files
+
+
+@pytest.mark.asyncio
+async def test_a_legacy_move_during_a_deletion_makes_the_deletion_plan_again():
+    db, backend, archive, store, retention = _setup()
+    await _legacy_part(db, backend, archive, retention)
+    original = retention._cold_matches
+    armed = {"race": True}
+
+    async def plan_then_move(**kwargs):
+        plan = await original(**kwargs)
+        if armed.pop("race", False):  # the deletion has planned; an archive run moves the part now
+            assert await retention._relayout_legacy_batches() == 1
+        return plan
+
+    retention._cold_matches = plan_then_move
+    done = await retention.delete_messages(actor="operator", user_id="u1", conversation_id="c1")
+
+    assert done["cold_rows"] == 1 and db.deletions[-1]["state"] == "completed"
+    assert sorted(r["id"] for r in await retention.fetch_cold(from_ts=NOW - timedelta(days=400))) == [2, 3]
+
+
+@pytest.mark.asyncio
+async def test_moving_legacy_parts_counts_toward_the_run_budget():
+    db, backend, archive, store, retention = _setup()
+    await _legacy_part(db, backend, archive, retention, "legacy-a", ids=(1, 2))
+    await _legacy_part(db, backend, archive, retention, "legacy-b", ids=(4, 5))
+
+    assert (await retention.archive_before(NOW - timedelta(days=90), max_batches=0))["relaid"] == 0
+    assert db.batches["legacy-a"]["state"] == db.batches["legacy-b"]["state"] == "pruned"
+    assert (await retention.archive_before(NOW - timedelta(days=90), max_batches=1))["relaid"] == 1
+    assert sorted(b["state"] for k, b in db.batches.items() if k in ("legacy-a", "legacy-b")) == ["pruned", "retired"]
+
+
+
+@pytest.mark.asyncio
+async def test_the_run_budget_holds_when_one_fetch_spans_several_conversations():
+    db, backend, archive, store, retention = _setup()
+    db.messages = [_msg(1, days_ago=200), _msg(2, days_ago=200, conv="c2")]  # same day, two conversations
+
+    summary = await retention.archive_before(NOW - timedelta(days=90), max_batches=1)
+
+    assert summary["batches"] == 1 and summary["rows"] == 1
+    assert [m["id"] for m in db.messages] == [2]  # the second conversation stays hot for the next run
+    assert (await retention.archive_before(NOW - timedelta(days=90), max_batches=1))["batches"] == 1
+    assert db.messages == []
