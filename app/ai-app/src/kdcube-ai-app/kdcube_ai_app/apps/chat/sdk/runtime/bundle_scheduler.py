@@ -34,6 +34,14 @@ _log = logging.getLogger("kdcube.bundle.scheduler")
 _LOCK_KEY_SYSTEM = "bundle:cron:lock:{tenant}:{project}:{bundle_id}:{job_alias}"
 _LOCK_KEY_INSTANCE = "bundle:cron:lock:{tenant}:{project}:{bundle_id}:{job_alias}:{instance_id}"
 
+# The claim on one tick (one scheduled fire time) of a job, taken before the
+# job lock and never released: a peer process that reaches the same tick later,
+# after a fast run has already released the job lock, finds it and skips (W549).
+_TICK_KEY_SYSTEM = "bundle:cron:tick:{tenant}:{project}:{bundle_id}:{job_alias}:{fire_at}"
+_TICK_KEY_INSTANCE = "bundle:cron:tick:{tenant}:{project}:{bundle_id}:{job_alias}:{instance_id}:{fire_at}"
+# How long a tick claim lives: longer than any lateness of a peer's tick.
+_TICK_CLAIM_TTL_SECONDS = 3600
+
 # How long (seconds) we hold the Redis lock — should cover the maximum expected job duration.
 _LOCK_TTL_SECONDS = 3600
 # How often (seconds) we renew the lock while the job is running.
@@ -313,6 +321,7 @@ async def _run_job_loop(
                 redis=redis,
                 bundle_spec=bundle_spec,
                 bundle_config=bundle_config,
+                fire_at=next_run,
             )
 
 
@@ -328,7 +337,28 @@ async def _run_with_redis_lock(
     redis: Any,
     bundle_spec: Any,
     bundle_config: Any,
+    fire_at: Optional[datetime] = None,
 ) -> None:
+    """Run one tick of a system or instance job under Redis, at most once per tick.
+
+    Two keys, in this order:
+
+    1. The **tick claim** (``fire_at`` given): ``SET NX`` on a key that names the
+       scheduled fire time, left to expire, never deleted. Every process that
+       schedules the job wakes for the same fire time; the first to claim it
+       goes on, and a later one skips, even when the run has already finished.
+       Without it a fast job ran once per process (W549).
+    2. The **job lock**: ``SET NX`` on the job's key, renewed while the job runs
+       and released when it ends. It keeps a run that outlasts its tick from
+       overlapping the next tick's run; that next tick is skipped, as before.
+
+    What this does not promise: a process that claims a tick and then dies
+    before or during the run leaves that tick unrun (at most once per tick,
+    not exactly once); a job that fails is not retried in the same tick; and
+    if Redis loses the claim (restart without persistence, eviction, failover)
+    a late peer can run the tick again. A job whose effect must happen exactly
+    once keeps its own idempotency.
+    """
     if redis is None:
         _log.warning(
             "[scheduler] Redis unavailable — skipping tick for bundle=%s alias=%s span=%s "
@@ -350,6 +380,32 @@ async def _run_with_redis_lock(
         )
 
     token = str(uuid.uuid4())
+
+    if fire_at is not None:
+        stamp = fire_at.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        if span == "system":
+            claim_key = _TICK_KEY_SYSTEM.format(
+                tenant=tenant, project=project, bundle_id=bundle_id, job_alias=job_alias, fire_at=stamp,
+            )
+        else:
+            claim_key = _TICK_KEY_INSTANCE.format(
+                tenant=tenant, project=project, bundle_id=bundle_id, job_alias=job_alias,
+                instance_id=instance_id, fire_at=stamp,
+            )
+        try:
+            claimed = await redis.set(claim_key, token, ex=_TICK_CLAIM_TTL_SECONDS, nx=True)
+        except Exception:
+            _log.warning(
+                "[scheduler] Redis error claiming tick for bundle=%s alias=%s — skipping tick",
+                bundle_id, job_alias, exc_info=True,
+            )
+            return
+        if not claimed:
+            _log.debug(
+                "[scheduler] Tick already claimed; skipping: bundle=%s alias=%s span=%s key=%s",
+                bundle_id, job_alias, span, claim_key,
+            )
+            return
 
     try:
         got_lock = await redis.set(lock_key, token, ex=_LOCK_TTL_SECONDS, nx=True)

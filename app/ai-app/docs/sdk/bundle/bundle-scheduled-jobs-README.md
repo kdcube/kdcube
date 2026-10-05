@@ -129,10 +129,11 @@ appears in the bundle descriptor as the declared default/fallback.
 - Coordinates one active lease holder per host (`INSTANCE_ID`) while the
   Redis lease remains valid.
 - Multiple proc processes on the same instance compete; only the one that
-  acquires the lock runs.
+  claims the tick runs it.
 
-Redis lock key:
+Redis keys:
 ```
+bundle:cron:tick:{tenant}:{project}:{bundle_id}:{job_alias}:{instance_id}:{fire_at}
 bundle:cron:lock:{tenant}:{project}:{bundle_id}:{job_alias}:{instance_id}
 ```
 
@@ -140,12 +141,36 @@ bundle:cron:lock:{tenant}:{project}:{bundle_id}:{job_alias}:{instance_id}
 
 - Coordinates one active lease holder across the deployed system for that
   tenant/project/bundle/job while the Redis lease remains valid.
-- All instances and all processes compete; only one wins.
+- All instances and all processes compete; only one runs each tick.
 
-Redis lock key:
+Redis keys:
 ```
+bundle:cron:tick:{tenant}:{project}:{bundle_id}:{job_alias}:{fire_at}
 bundle:cron:lock:{tenant}:{project}:{bundle_id}:{job_alias}
 ```
+
+### One run per tick
+
+Every process that schedules a job wakes for the same fire time. Two keys
+decide which of them runs it, in this order:
+
+1. **The tick claim** (`bundle:cron:tick:…:{fire_at}`, the fire time in UTC):
+   `SET NX` with a 1-hour TTL, never deleted. The first process to claim the
+   tick goes on; a later one skips it, even when the run has already finished.
+2. **The job lock** (`bundle:cron:lock:…`): `SET NX`, renewed while the job
+   runs and released when it ends. It keeps a run that outlasts its tick from
+   overlapping the next tick's run (see Overlap guard).
+
+Without the claim, a job that finished faster than the gap between two
+processes' wake-ups ran once per process: the job lock was already released
+when the second process reached the tick.
+
+The claim makes a tick run **at most once**, not exactly once:
+- a process that claims a tick and dies before or during the run leaves that
+  tick unrun;
+- a failed run is not retried in the same tick;
+- if Redis loses the claim (a restart without persistence, eviction or a
+  failover), a late peer can run the tick again.
 
 ### Redis unavailability
 
