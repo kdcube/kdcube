@@ -6,11 +6,18 @@
 of the last `hot_days`. Message bodies already live in bundle storage
 (`ConversationStore`), so moving a message to the cold tier moves only its
 index row. The archiver writes whole rows, embedding included (it cost money
-to compute and is kept for the record), to bundle storage, partitioned by the
+to compute and is kept for the record), to bundle storage, partitioned like
+the conversation store itself, by user and conversation, then by the
 message's UTC day:
 
-    cb/tenants/{tenant}/projects/{project}/conversation-cold/{yyyy}/{mm}/{dd}/{batch_id}.jsonl.gz
-    cb/tenants/{tenant}/projects/{project}/conversation-cold/{yyyy}/{mm}/{dd}/{batch_id}.manifest.json
+    cb/tenants/{tenant}/projects/{project}/conversation-cold/{user}/{conversation}/{yyyy}/{mm}/{dd}/{batch_id}.jsonl.gz
+    cb/tenants/{tenant}/projects/{project}/conversation-cold/{user}/{conversation}/{yyyy}/{mm}/{dd}/{batch_id}.manifest.json
+
+The number of users and conversations has no bound, so a part never mixes
+them: one user's archive is one folder, and one conversation's is one folder
+inside it. Parts written before this layout sit directly under
+`conversation-cold/{yyyy}/{mm}/{dd}/`; the batch ledger records each part's
+own location, and every read and deletion goes through the ledger.
 
 The manifest carries the row count, the row ids, the time range and the
 sha256 of the part. A batch is trusted only after its part is read back and
@@ -101,6 +108,20 @@ def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _segment(value: Any) -> str:
+    """One path segment from a user or conversation id, kept readable.
+
+    A slash or backslash in an id would add folders, and "." or ".." would
+    walk them, so those are escaped; everything else is the id as the
+    conversation store writes it.
+    """
+
+    text = str(value or "").replace("%", "%25").replace("/", "%2F").replace("\\", "%5C")
+    if text in ("", ".", ".."):
+        return "_" if not text else text.replace(".", "%2E")
+    return text
+
+
 def _name(entry: str) -> str:
     # Backends differ: the local one lists names, the in-memory one full keys.
     return str(entry).rstrip("/").rsplit("/", 1)[-1]
@@ -115,45 +136,68 @@ class ConversationColdArchive:
 
     # ---------- keys ----------
     def day_prefix(self, day: date) -> str:
+        """The folder of a legacy (day-only) part."""
+
         return f"{self.root}/{day.year:04d}/{day.month:02d}/{day.day:02d}"
 
-    def part_key(self, day: date, batch_id: str) -> str:
-        return f"{self.day_prefix(day)}/{batch_id}.jsonl.gz"
+    def scope_prefix(self, day: date, user_id: Any, conversation_id: Any) -> str:
+        return (
+            f"{self.root}/{_segment(user_id)}/{_segment(conversation_id)}"
+            f"/{day.year:04d}/{day.month:02d}/{day.day:02d}"
+        )
 
-    def manifest_key(self, day: date, batch_id: str) -> str:
-        return f"{self.day_prefix(day)}/{batch_id}.manifest.json"
+    def part_key(self, day: date, batch_id: str, *, user_id: Any = None, conversation_id: Any = None) -> str:
+        prefix = self.scope_prefix(day, user_id, conversation_id) if user_id is not None else self.day_prefix(day)
+        return f"{prefix}/{batch_id}.jsonl.gz"
+
+    def manifest_key(self, day: date, batch_id: str, *, user_id: Any = None, conversation_id: Any = None) -> str:
+        prefix = self.scope_prefix(day, user_id, conversation_id) if user_id is not None else self.day_prefix(day)
+        return f"{prefix}/{batch_id}.manifest.json"
 
     # ---------- write ----------
     async def write_batch(self, *, day: date, batch_id: str, records: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
-        """Write one part and then its manifest. Returns the manifest."""
+        """Write one part and then its manifest under the records' user and conversation. Returns the manifest.
+
+        Every record of a batch belongs to one user and one conversation; a
+        batch that mixes them is refused, so no part ever does.
+        """
 
         if not records:
             raise ValueError("a cold batch needs at least one record")
+        scopes = {(r.get("user_id"), r.get("conversation_id")) for r in records}
+        if len(scopes) != 1:
+            raise ValueError("a cold batch holds one user's records of one conversation")
+        ((user_id, conversation_id),) = scopes
         data = encode_part(records)
         stamps = [_utc(r["ts"]) for r in records if r.get("ts")]
         manifest = {
             "schema": MANIFEST_SCHEMA,
             "batch_id": batch_id,
             "day": day.isoformat(),
+            "user_id": user_id,
+            "conversation_id": conversation_id,
             "row_count": len(records),
             "ids": sorted(int(r["id"]) for r in records),
             "min_ts": min(stamps).isoformat() if stamps else None,
             "max_ts": max(stamps).isoformat() if stamps else None,
             "sha256": sha256_hex(data),
             "bytes": len(data),
-            "part_key": self.part_key(day, batch_id),
+            "part_key": self.part_key(day, batch_id, user_id=user_id, conversation_id=conversation_id),
+            "manifest_key": self.manifest_key(day, batch_id, user_id=user_id, conversation_id=conversation_id),
             "archived_at": datetime.now(timezone.utc).isoformat(),
         }
         await self.backend.write_bytes_a(manifest["part_key"], data, meta={"ContentType": "application/gzip"})
         await self.backend.write_bytes_a(
-            self.manifest_key(day, batch_id),
+            manifest["manifest_key"],
             json.dumps(manifest, sort_keys=True).encode("utf-8"),
             meta={"ContentType": "application/json"},
         )
         return manifest
 
-    async def read_manifest(self, day: date, batch_id: str) -> Dict[str, Any]:
-        return json.loads(await self.backend.read_bytes_a(self.manifest_key(day, batch_id)))
+    async def read_manifest(self, manifest_key: str) -> Dict[str, Any]:
+        """The manifest at the location the batch ledger recorded for it."""
+
+        return json.loads(await self.backend.read_bytes_a(manifest_key))
 
     async def read_part(self, manifest: Dict[str, Any]) -> List[Dict[str, Any]]:
         """The part's records, after checking them against the manifest."""
@@ -170,8 +214,10 @@ class ConversationColdArchive:
     async def verify_batch(self, manifest: Dict[str, Any]) -> None:
         await self.read_part(manifest)
 
-    async def delete_batch(self, day: date, batch_id: str) -> None:
-        for key in (self.part_key(day, batch_id), self.manifest_key(day, batch_id)):
+    async def delete_batch(self, part_key: str, manifest_key: str) -> None:
+        """Remove a part and its manifest at the locations the ledger recorded."""
+
+        for key in (part_key, manifest_key):
             if await self.backend.exists_a(key):
                 await self.backend.delete_a(key)
 

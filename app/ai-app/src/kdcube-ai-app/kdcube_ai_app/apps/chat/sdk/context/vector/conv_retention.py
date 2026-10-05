@@ -149,12 +149,14 @@ class ConversationRetention:
                 edges_by_id[int(edge["from_id"])].append(as_dict)
                 if int(edge["to_id"]) != int(edge["from_id"]):
                     edges_by_id[int(edge["to_id"])].append(as_dict)
-            by_day: Dict[date, List[Dict[str, Any]]] = defaultdict(list)
+            # One part per user, conversation and UTC day: users and
+            # conversations have no bound, so a part never mixes them.
+            groups: Dict[Tuple[str, str, date], List[Dict[str, Any]]] = defaultdict(list)
             for row in rows:
                 record = row_to_record(dict(row), edges=edges_by_id.get(int(row["id"]), ()))
-                by_day[_utc_day(row["ts"])].append(record)
-            for day in sorted(by_day):
-                records = by_day[day]
+                groups[(str(record.get("user_id") or ""), str(record.get("conversation_id") or ""), _utc_day(row["ts"]))].append(record)
+            for key in sorted(groups, key=lambda k: (k[2], k[0], k[1])):
+                day, records = key[2], groups[key]
                 await self._archive_batch(day, records)
                 summary["batches"] += 1
                 summary["rows"] += len(records)
@@ -179,10 +181,10 @@ class ConversationRetention:
                     batch_id, day, len(ids), min(ids), max(ids),
                     datetime.fromisoformat(manifest["min_ts"]) if manifest.get("min_ts") else None,
                     datetime.fromisoformat(manifest["max_ts"]) if manifest.get("max_ts") else None,
-                    manifest["part_key"], self.archive.manifest_key(day, batch_id), manifest["sha256"],
+                    manifest["part_key"], manifest["manifest_key"], manifest["sha256"],
                 )
                 await self._index_batch(con, batch_id, records)
-        await self._verify_and_prune(day, batch_id)
+        await self._verify_and_prune(manifest["manifest_key"], batch_id)
 
     async def _index_batch(self, con: Any, batch_id: str, records: Sequence[Dict[str, Any]]) -> None:
         """Record which conversations the batch holds (replacing any earlier rows for it)."""
@@ -210,7 +212,7 @@ class ConversationRetention:
         async with self._pool.acquire() as con:
             pending = await con.fetch(
                 f"""
-                SELECT b.batch_id, b.day FROM {self.schema}.conv_archive_batches b
+                SELECT b.batch_id, b.day, b.manifest_key FROM {self.schema}.conv_archive_batches b
                  WHERE b.state = 'pruned'
                    AND NOT EXISTS (SELECT 1 FROM {self.schema}.conv_archive_conversations c
                                     WHERE c.batch_id = b.batch_id AND c.start_ts_list IS NOT NULL)
@@ -218,15 +220,15 @@ class ConversationRetention:
                 """
             )
         for row in pending:
-            manifest = await self.archive.read_manifest(row["day"], row["batch_id"])
+            manifest = await self.archive.read_manifest(row["manifest_key"])
             records = await self.archive.read_part(manifest)
             async with self._pool.acquire() as con:
                 async with con.transaction():
                     await self._index_batch(con, row["batch_id"], records)
         return len(pending)
 
-    async def _verify_and_prune(self, day: date, batch_id: str) -> None:
-        manifest = await self.archive.read_manifest(day, batch_id)
+    async def _verify_and_prune(self, manifest_key: str, batch_id: str) -> None:
+        manifest = await self.archive.read_manifest(manifest_key)
         try:
             await self.archive.verify_batch(manifest)
         except Exception as exc:
@@ -256,11 +258,11 @@ class ConversationRetention:
     async def _resume_unfinished(self) -> int:
         async with self._pool.acquire() as con:
             pending = await con.fetch(
-                f"SELECT batch_id, day FROM {self.schema}.conv_archive_batches "
+                f"SELECT batch_id, day, manifest_key FROM {self.schema}.conv_archive_batches "
                 f"WHERE state IN ('written', 'verified') ORDER BY day, batch_id"
             )
         for row in pending:
-            await self._verify_and_prune(row["day"], row["batch_id"])
+            await self._verify_and_prune(row["manifest_key"], row["batch_id"])
         return len(pending)
 
     async def watermark(self) -> Optional[datetime]:
@@ -289,7 +291,7 @@ class ConversationRetention:
             where.append(f"day <= ${len(args)}")
         async with self._pool.acquire() as con:
             return await con.fetch(
-                f"SELECT batch_id, day FROM {self.schema}.conv_archive_batches "
+                f"SELECT batch_id, day, part_key, manifest_key FROM {self.schema}.conv_archive_batches "
                 f"WHERE {' AND '.join(where)} ORDER BY day, batch_id",
                 *args,
             )
@@ -318,7 +320,7 @@ class ConversationRetention:
         end = _as_utc(to_ts) if to_ts is not None else mark + timedelta(microseconds=1)
         records: List[Dict[str, Any]] = []
         for batch in await self._pruned_batches(_utc_day(start), _utc_day(min(end, mark))):
-            manifest = await self.archive.read_manifest(batch["day"], batch["batch_id"])
+            manifest = await self.archive.read_manifest(batch["manifest_key"])
             for record in await self.archive.read_part(manifest):
                 if start <= _as_utc(record["ts"]) < end:
                     records.append(record)
@@ -411,7 +413,7 @@ class ConversationRetention:
         async with self._pool.acquire() as con:
             batches = await con.fetch(
                 f"""
-                SELECT DISTINCT b.batch_id, b.day
+                SELECT DISTINCT b.batch_id, b.day, b.manifest_key
                   FROM {self.schema}.conv_archive_conversations c
                   JOIN {self.schema}.conv_archive_batches b ON b.batch_id = c.batch_id
                  WHERE {' AND '.join(where)}
@@ -424,7 +426,7 @@ class ConversationRetention:
             allowed = {str(v).strip() for v in bundle_ids if str(v).strip()}
         records: List[Dict[str, Any]] = []
         for batch in batches:
-            manifest = await self.archive.read_manifest(batch["day"], batch["batch_id"])
+            manifest = await self.archive.read_manifest(batch["manifest_key"])
             for record in await self.archive.read_part(manifest):
                 if _as_utc(record["ts"]) < start:
                     continue
@@ -546,9 +548,27 @@ class ConversationRetention:
 
         plan: List[Dict[str, Any]] = []
         uris: set = set()
-        for batch in await self._pruned_batches():
+        # Only the batches the conversation index says hold this conversation:
+        # never a scan of the whole cold tier.
+        args: List[Any] = [user_id, conversation_id]
+        where = ["b.state = 'pruned'", "c.user_id = $1", "c.conversation_id = $2"]
+        if bundle_id:
+            args.append(bundle_id)
+            where.append(f"c.bundle_id = ${len(args)}")
+        async with self._pool.acquire() as con:
+            batches = await con.fetch(
+                f"""
+                SELECT DISTINCT b.batch_id, b.day, b.part_key, b.manifest_key
+                  FROM {self.schema}.conv_archive_conversations c
+                  JOIN {self.schema}.conv_archive_batches b ON b.batch_id = c.batch_id
+                 WHERE {' AND '.join(where)}
+                 ORDER BY b.day, b.batch_id
+                """,
+                *args,
+            )
+        for batch in batches:
             day, batch_id = batch["day"], batch["batch_id"]
-            manifest = await self.archive.read_manifest(day, batch_id)
+            manifest = await self.archive.read_manifest(batch["manifest_key"])
             records = await self.archive.read_part(manifest)
             matching = filter_records(
                 records,
@@ -564,6 +584,8 @@ class ConversationRetention:
             plan.append({
                 "day": day,
                 "batch_id": batch_id,
+                "part_key": batch["part_key"],
+                "manifest_key": batch["manifest_key"],
                 "records": records,
                 "matching_ids": {int(r["id"]) for r in matching},
             })
@@ -578,28 +600,38 @@ class ConversationRetention:
             kept = [r for r in entry["records"] if int(r["id"]) not in matching_ids]
             removed += len(matching_ids)
             if kept:
-                new_id = f"{batch_id}-r{uuid.uuid4().hex[:8]}"
-                new_manifest = await self.archive.write_batch(day=day, batch_id=new_id, records=kept)
-                await self.archive.verify_batch(new_manifest)
-                ids = [int(r["id"]) for r in kept]
+                # What stays is rewritten one part per user and conversation,
+                # so a legacy day part that mixed them moves to the new layout.
+                kept_groups: Dict[Tuple[str, str], List[Dict[str, Any]]] = defaultdict(list)
+                for record in kept:
+                    kept_groups[(str(record.get("user_id") or ""), str(record.get("conversation_id") or ""))].append(record)
+                written = []
+                for scope in sorted(kept_groups):
+                    group = kept_groups[scope]
+                    new_id = f"{batch_id}-r{uuid.uuid4().hex[:8]}"
+                    new_manifest = await self.archive.write_batch(day=day, batch_id=new_id, records=group)
+                    await self.archive.verify_batch(new_manifest)
+                    written.append((new_id, new_manifest, group))
                 async with self._pool.acquire() as con:
                     async with con.transaction():
-                        await con.execute(
-                            f"""
-                            INSERT INTO {self.schema}.conv_archive_batches
-                                (batch_id, day, row_count, min_id, max_id, min_ts, max_ts, part_key, manifest_key, sha256, state)
-                            VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7::timestamptz, $8, $9, $10, 'pruned')
-                            """,
-                            new_id, day, len(ids), min(ids), max(ids),
-                            datetime.fromisoformat(new_manifest["min_ts"]) if new_manifest.get("min_ts") else None,
-                            datetime.fromisoformat(new_manifest["max_ts"]) if new_manifest.get("max_ts") else None,
-                            new_manifest["part_key"], self.archive.manifest_key(day, new_id), new_manifest["sha256"],
-                        )
+                        for new_id, new_manifest, group in written:
+                            ids = [int(r["id"]) for r in group]
+                            await con.execute(
+                                f"""
+                                INSERT INTO {self.schema}.conv_archive_batches
+                                    (batch_id, day, row_count, min_id, max_id, min_ts, max_ts, part_key, manifest_key, sha256, state)
+                                VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7::timestamptz, $8, $9, $10, 'pruned')
+                                """,
+                                new_id, day, len(ids), min(ids), max(ids),
+                                datetime.fromisoformat(new_manifest["min_ts"]) if new_manifest.get("min_ts") else None,
+                                datetime.fromisoformat(new_manifest["max_ts"]) if new_manifest.get("max_ts") else None,
+                                new_manifest["part_key"], new_manifest["manifest_key"], new_manifest["sha256"],
+                            )
+                            await self._index_batch(con, new_id, group)
                         await con.execute(
                             f"UPDATE {self.schema}.conv_archive_batches SET state = 'retired', updated_at = now() WHERE batch_id = $1",
                             batch_id,
                         )
-                        await self._index_batch(con, new_id, kept)
                         await con.execute(
                             f"DELETE FROM {self.schema}.conv_archive_conversations WHERE batch_id = $1", batch_id
                         )
@@ -615,7 +647,7 @@ class ConversationRetention:
                         )
             # The ledger already says retired; removing the files is cleanup,
             # and a part left behind is never read (reads follow the ledger).
-            await self.archive.delete_batch(day, batch_id)
+            await self.archive.delete_batch(entry["part_key"], entry["manifest_key"])
         return removed
 
 

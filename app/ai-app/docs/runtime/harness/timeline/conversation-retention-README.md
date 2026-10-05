@@ -3,7 +3,7 @@ id: repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/timeline/conversation-ret
 title: "Conversation Retention: Hot Index and Cold Tier"
 summary: "Conversation index rows older than the hot window move to a verified cold tier in bundle storage, embeddings included; date-filtered reads reach them by time, and explicit deletions remove a scope from both tiers with an audit row."
 tags: ["runtime", "conversation", "retention", "storage", "postgres"]
-updated_at: 2026-10-04
+updated_at: 2026-10-05
 keywords: ["conv_messages", "cold tier", "hot_days", "conv_archive_batches", "conv_archive_deletions", "ConversationRetention", "ConversationColdArchive", "conversation-archive"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/timeline/conversation-artifacts-README.md
@@ -28,10 +28,20 @@ embeddings move with them: they cost money to compute and stay on record.
 - **Message bodies:** unchanged. `ConversationStore` already keeps each body
   in bundle storage; a row's `hosted_uri` still resolves after the row moves.
 - **Cold tier:** whole index rows, embedding and artifact edges included, as
-  gzip JSONL parts in bundle storage, one folder per UTC day:
+  gzip JSONL parts in bundle storage, organized like the conversation store
+  itself: one folder per user, one per conversation inside it, then the UTC
+  day:
 
-      cb/tenants/{tenant}/projects/{project}/conversation-cold/{yyyy}/{mm}/{dd}/{batch_id}.jsonl.gz
-      cb/tenants/{tenant}/projects/{project}/conversation-cold/{yyyy}/{mm}/{dd}/{batch_id}.manifest.json
+      cb/tenants/{tenant}/projects/{project}/conversation/{user}/{conversation}/...                      (bodies)
+      cb/tenants/{tenant}/projects/{project}/conversation-cold/{user}/{conversation}/{yyyy}/{mm}/{dd}/{batch_id}.jsonl.gz
+      cb/tenants/{tenant}/projects/{project}/conversation-cold/{user}/{conversation}/{yyyy}/{mm}/{dd}/{batch_id}.manifest.json
+
+  Users, the projects they join and the agents they talk to have no bound,
+  so a part never mixes users or conversations: one user's archive is one
+  folder, and one conversation's archive is one folder inside it. A slash in
+  an id is escaped, so an id never adds a folder. Parts written before this
+  layout sit directly under `conversation-cold/{yyyy}/{mm}/{dd}/` and stay
+  readable: the batch ledger records every part's own location.
 
   A manifest carries the row count, the row ids, the time range and the
   sha256 of its part.
@@ -90,8 +100,11 @@ Cross-conversation reads without a date range serve the hot index only.
 
 `ConversationRetention.delete_messages(actor, user_id, conversation_id,
 bundle_id, tags_all, reason)` removes the matching hot rows, their cold
-records and the stored bodies of both, rewriting each affected cold part as a
-new verified batch. Apps pass their `ConversationStore` through
+records and the stored bodies of both. It reads only the cold parts the
+conversation index lists for that conversation, never the whole cold tier;
+when part of a part stays (a project filter, or a legacy day part shared with
+other conversations), what stays is rewritten as new verified parts, one per
+user and conversation. Apps pass their `ConversationStore` through
 `ConvIndex.retention(store=...)` so the bodies go too. Every deletion is a row
 in `conv_archive_deletions`, written before anything is deleted with the
 actor, the time and the scope, and finished `completed` with its counts or
