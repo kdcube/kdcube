@@ -170,7 +170,9 @@ The claim makes a tick run **at most once**, not exactly once:
   tick unrun;
 - a failed run is not retried in the same tick;
 - if Redis loses the claim (a restart without persistence, eviction or a
-  failover), a late peer can run the tick again.
+  failover), a late peer can run the tick again;
+- the claim lives one hour: a peer whose tick for the same fire time arrives
+  later than that (a process stalled for over an hour) runs it again.
 
 ### Redis unavailability
 
