@@ -127,8 +127,9 @@ class ConversationRetention:
         summary = {"resumed": 0, "batches": 0, "rows": 0, "indexed": 0, "relaid": 0}
         summary["resumed"] = await self._resume_unfinished()
         summary["indexed"] = await self._index_unindexed_batches()
-        summary["relaid"] = await self._relayout_legacy_batches()
-        while max_batches is None or summary["batches"] < max_batches:
+        # Moving legacy parts counts toward the same budget as archiving.
+        summary["relaid"] = await self._relayout_legacy_batches(limit=max_batches)
+        while max_batches is None or summary["batches"] + summary["relaid"] < max_batches:
             async with self._pool.acquire() as con:
                 rows = await con.fetch(
                     f"SELECT {_ROW_COLUMNS} FROM {self.schema}.conv_messages "
@@ -509,7 +510,21 @@ class ConversationRetention:
                     f"DELETE FROM {self.schema}.conv_messages WHERE {scope_sql} RETURNING id", *args
                 )
             counts["hot_rows"] = len(deleted)
-            counts["cold_rows"] = await self._apply_cold_deletion(cold_plan)
+            for _attempt in range(_COLD_DELETION_ATTEMPTS):
+                try:
+                    counts["cold_rows"] += await self._apply_cold_deletion(cold_plan)
+                    break
+                except _BatchChanged as changed:
+                    # Another run rewrote a part this deletion planned on (an
+                    # archive run moving a legacy part): plan again from the ledger.
+                    counts["cold_rows"] += changed.removed
+                    cold_plan, more_uris = await self._cold_matches(
+                        user_id=user_id, conversation_id=conversation_id, bundle_id=bundle_id, tags=tags
+                    )
+                    counts["body_objects"] += await self._delete_bodies(more_uris - uris)
+                    uris |= more_uris
+            else:
+                raise RuntimeError("the cold tier kept changing during the deletion; run it again")
         except Exception as exc:
             await self._finish_deletion(deletion_id, "failed", counts, error=f"{type(exc).__name__}: {exc}")
             raise
@@ -592,34 +607,43 @@ class ConversationRetention:
             })
         return plan, uris
 
-    async def _relayout_legacy_batches(self) -> int:
+    async def _relayout_legacy_batches(self, *, limit: Optional[int] = None) -> int:
         """Move parts written in the legacy day-only layout to the user/conversation layout.
 
         Each legacy part is read and verified, rewritten as one verified part
         per user and conversation, and retired in the same transaction that
         records the new parts; then its files are removed. A run that stops
         anywhere leaves the ledger consistent: the old part is live until the
-        new ones are recorded. Returns how many legacy parts moved.
+        new ones are recorded. A part that a deletion or another run rewrote
+        meanwhile is left to that run. At most `limit` parts move per call.
+        Returns how many legacy parts moved.
         """
 
+        if limit is not None and limit <= 0:
+            return 0
         async with self._pool.acquire() as con:
             legacy = await con.fetch(
                 f"SELECT batch_id, day, part_key, manifest_key FROM {self.schema}.conv_archive_batches "
                 f"WHERE state = 'pruned' AND part_key ~ '/conversation-cold/[0-9]{{4}}/[0-9]{{2}}/[0-9]{{2}}/[^/]+$' "
-                f"ORDER BY day, batch_id"
+                f"ORDER BY day, batch_id" + ("" if limit is None else f" LIMIT {int(limit)}")
             )
+        moved = 0
         for batch in legacy:
             manifest = await self.archive.read_manifest(batch["manifest_key"])
             records = await self.archive.read_part(manifest)
-            await self._apply_cold_deletion([{
-                "day": batch["day"],
-                "batch_id": batch["batch_id"],
-                "part_key": batch["part_key"],
-                "manifest_key": batch["manifest_key"],
-                "records": records,
-                "matching_ids": set(),
-            }])
-        return len(legacy)
+            try:
+                await self._apply_cold_deletion([{
+                    "day": batch["day"],
+                    "batch_id": batch["batch_id"],
+                    "part_key": batch["part_key"],
+                    "manifest_key": batch["manifest_key"],
+                    "records": records,
+                    "matching_ids": set(),
+                }])
+            except _BatchChanged:
+                continue
+            moved += 1
+        return moved
 
     async def _apply_cold_deletion(self, plan: Sequence[Dict[str, Any]]) -> int:
         """Rewrite each planned batch without its matching records; returns how many were removed."""
@@ -628,57 +652,88 @@ class ConversationRetention:
         for entry in plan:
             day, batch_id, matching_ids = entry["day"], entry["batch_id"], entry["matching_ids"]
             kept = [r for r in entry["records"] if int(r["id"]) not in matching_ids]
+            written: List[Tuple[str, Dict[str, Any], List[Dict[str, Any]]]] = []
+            try:
+                await self._rewrite_cold_batch(day, batch_id, kept, written)
+            except _BatchChanged:
+                # Retired by another run since it was read: what this call
+                # wrote is never recorded, so its files go too.
+                for _new_id, new_manifest, _group in written:
+                    await self.archive.delete_batch(new_manifest["part_key"], new_manifest["manifest_key"])
+                raise _BatchChanged(removed)
             removed += len(matching_ids)
-            if kept:
-                # What stays is rewritten one part per user and conversation,
-                # so a legacy day part that mixed them moves to the new layout.
-                kept_groups: Dict[Tuple[str, str], List[Dict[str, Any]]] = defaultdict(list)
-                for record in kept:
-                    kept_groups[(str(record.get("user_id") or ""), str(record.get("conversation_id") or ""))].append(record)
-                written = []
-                for scope in sorted(kept_groups):
-                    group = kept_groups[scope]
-                    new_id = f"{batch_id}-r{uuid.uuid4().hex[:8]}"
-                    new_manifest = await self.archive.write_batch(day=day, batch_id=new_id, records=group)
-                    await self.archive.verify_batch(new_manifest)
-                    written.append((new_id, new_manifest, group))
-                async with self._pool.acquire() as con:
-                    async with con.transaction():
-                        for new_id, new_manifest, group in written:
-                            ids = [int(r["id"]) for r in group]
-                            await con.execute(
-                                f"""
-                                INSERT INTO {self.schema}.conv_archive_batches
-                                    (batch_id, day, row_count, min_id, max_id, min_ts, max_ts, part_key, manifest_key, sha256, state)
-                                VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7::timestamptz, $8, $9, $10, 'pruned')
-                                """,
-                                new_id, day, len(ids), min(ids), max(ids),
-                                datetime.fromisoformat(new_manifest["min_ts"]) if new_manifest.get("min_ts") else None,
-                                datetime.fromisoformat(new_manifest["max_ts"]) if new_manifest.get("max_ts") else None,
-                                new_manifest["part_key"], new_manifest["manifest_key"], new_manifest["sha256"],
-                            )
-                            await self._index_batch(con, new_id, group)
-                        await con.execute(
-                            f"UPDATE {self.schema}.conv_archive_batches SET state = 'retired', updated_at = now() WHERE batch_id = $1",
-                            batch_id,
-                        )
-                        await con.execute(
-                            f"DELETE FROM {self.schema}.conv_archive_conversations WHERE batch_id = $1", batch_id
-                        )
-            else:
-                async with self._pool.acquire() as con:
-                    async with con.transaction():
-                        await con.execute(
-                            f"UPDATE {self.schema}.conv_archive_batches SET state = 'retired', updated_at = now() WHERE batch_id = $1",
-                            batch_id,
-                        )
-                        await con.execute(
-                            f"DELETE FROM {self.schema}.conv_archive_conversations WHERE batch_id = $1", batch_id
-                        )
             # The ledger already says retired; removing the files is cleanup,
             # and a part left behind is never read (reads follow the ledger).
             await self.archive.delete_batch(entry["part_key"], entry["manifest_key"])
         return removed
+
+    async def _retire(self, con: Any, batch_id: str) -> None:
+        """Retire a live batch, or raise `_BatchChanged` when another run already did."""
+
+        retired = await con.fetchval(
+            f"UPDATE {self.schema}.conv_archive_batches SET state = 'retired', updated_at = now() "
+            f"WHERE batch_id = $1 AND state = 'pruned' RETURNING batch_id",
+            batch_id,
+        )
+        if retired is None:
+            raise _BatchChanged(0)
+        await con.execute(f"DELETE FROM {self.schema}.conv_archive_conversations WHERE batch_id = $1", batch_id)
+
+    async def _rewrite_cold_batch(
+        self,
+        day: date,
+        batch_id: str,
+        kept: Sequence[Dict[str, Any]],
+        written: List[Tuple[str, Dict[str, Any], List[Dict[str, Any]]]],
+    ) -> None:
+        """Write `kept` as verified parts, then record them and retire `batch_id` in one transaction."""
+
+        if kept:
+            # What stays is rewritten one part per user and conversation,
+            # so a legacy day part that mixed them moves to the new layout.
+            kept_groups: Dict[Tuple[str, str], List[Dict[str, Any]]] = defaultdict(list)
+            for record in kept:
+                kept_groups[(str(record.get("user_id") or ""), str(record.get("conversation_id") or ""))].append(record)
+            for scope in sorted(kept_groups):
+                group = kept_groups[scope]
+                new_id = f"{batch_id}-r{uuid.uuid4().hex[:8]}"
+                new_manifest = await self.archive.write_batch(day=day, batch_id=new_id, records=group)
+                await self.archive.verify_batch(new_manifest)
+                written.append((new_id, new_manifest, group))
+            async with self._pool.acquire() as con:
+                async with con.transaction():
+                    # Retire first: a batch another run already rewrote
+                    # stops here, before anything stale is recorded.
+                    await self._retire(con, batch_id)
+                    for new_id, new_manifest, group in written:
+                        ids = [int(r["id"]) for r in group]
+                        await con.execute(
+                            f"""
+                            INSERT INTO {self.schema}.conv_archive_batches
+                                (batch_id, day, row_count, min_id, max_id, min_ts, max_ts, part_key, manifest_key, sha256, state)
+                            VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7::timestamptz, $8, $9, $10, 'pruned')
+                            """,
+                            new_id, day, len(ids), min(ids), max(ids),
+                            datetime.fromisoformat(new_manifest["min_ts"]) if new_manifest.get("min_ts") else None,
+                            datetime.fromisoformat(new_manifest["max_ts"]) if new_manifest.get("max_ts") else None,
+                            new_manifest["part_key"], new_manifest["manifest_key"], new_manifest["sha256"],
+                        )
+                        await self._index_batch(con, new_id, group)
+        else:
+            async with self._pool.acquire() as con:
+                async with con.transaction():
+                    await self._retire(con, batch_id)
+
+
+_COLD_DELETION_ATTEMPTS = 3
+
+
+class _BatchChanged(Exception):
+    """A cold batch was retired by another run between being read and rewritten."""
+
+    def __init__(self, removed: int) -> None:
+        super().__init__("cold batch changed")
+        self.removed = removed
 
 
 def _turn_key(record: Dict[str, Any]) -> Optional[str]:

@@ -60,7 +60,9 @@ class _Con:
         if q.startswith("SELECT batch_id, day, part_key, manifest_key") and "part_key ~" in q:
             import re
             legacy = re.compile(r"/conversation-cold/[0-9]{4}/[0-9]{2}/[0-9]{2}/[^/]+$")
-            return [b for b in self.db.sorted_batches() if b["state"] == "pruned" and legacy.search(b["part_key"] or "")]
+            rows = [b for b in self.db.sorted_batches() if b["state"] == "pruned" and legacy.search(b["part_key"] or "")]
+            limit = re.search(r"LIMIT ([0-9]+)$", q)
+            return rows[: int(limit.group(1))] if limit else rows
         if q.startswith("SELECT batch_id, day") and "state = 'pruned'" in q:
             first = args[0] if "day >= $1" in q else None
             last = args[-1] if "day <= $" in q else None
@@ -139,6 +141,12 @@ class _Con:
 
     async def fetchval(self, query: str, *args):
         q = " ".join(query.split())
+        if q.startswith("UPDATE kdcube_test_w536.conv_archive_batches SET state = 'retired'"):
+            batch = self.db.batches.get(args[0])
+            if not batch or batch["state"] != "pruned":
+                return None
+            batch["state"] = "retired"
+            return args[0]
         if q.startswith("SELECT max(max_ts) FROM"):
             stamps = [b["max_ts"] for b in self.db.batches.values() if b["state"] == "pruned" and b["max_ts"]]
             return max(stamps) if stamps else None
@@ -891,3 +899,87 @@ async def test_the_next_archive_run_moves_legacy_day_parts_to_the_user_layout():
     assert live == [f"u1/c1/{d}", f"u1/c2/{d}", f"u2/c1/{d}"]
     assert sorted(r["id"] for r in await retention.fetch_cold(from_ts=NOW - timedelta(days=400))) == [1, 2, 3]
     assert (await retention.archive_before(NOW - timedelta(days=90)))["relaid"] == 0
+
+
+async def _legacy_part(db, backend, archive, retention, batch_id="legacy", ids=(1, 2, 3)):
+    from kdcube_ai_app.apps.chat.sdk.context.vector.conv_cold import encode_part, row_to_record, sha256_hex
+
+    day = (NOW - timedelta(days=200)).date()
+    shapes = {1: {}, 2: {"conv": "c2"}, 3: {"user": "u2"}, 4: {"conv": "c3"}, 5: {"user": "u3"}}
+    records = [row_to_record(dict(_msg(i, days_ago=200, **shapes[i]))) for i in ids]
+    data = encode_part(records)
+    part_key, manifest_key = archive.part_key(day, batch_id), archive.manifest_key(day, batch_id)
+    manifest = {"batch_id": batch_id, "day": day.isoformat(), "row_count": len(records), "ids": list(ids),
+                "sha256": sha256_hex(data), "part_key": part_key,
+                "min_ts": min(r["ts"] for r in records), "max_ts": max(r["ts"] for r in records)}
+    await backend.write_bytes_a(part_key, data)
+    await backend.write_bytes_a(manifest_key, json.dumps(manifest).encode())
+    db.batches[batch_id] = {"batch_id": batch_id, "day": day, "row_count": len(records),
+                            "max_ts": datetime.fromisoformat(manifest["max_ts"]), "sha256": manifest["sha256"],
+                            "state": "pruned", "error": None, "part_key": part_key, "manifest_key": manifest_key}
+    await retention._index_batch(_Con(db), batch_id, records)
+    return part_key
+
+
+# Review witnesses (kdcube #323 at 8498b26e, Infra), kept as regressions.
+
+
+@pytest.mark.asyncio
+async def test_a_deletion_completed_during_a_legacy_move_never_comes_back():
+    db, backend, archive, store, retention = _setup()
+    await _legacy_part(db, backend, archive, retention)
+    written: list[str] = []
+    original_read, original_write = archive.read_part, archive.write_batch
+    armed = {"race": True}
+
+    async def read_then_delete(manifest):
+        records = await original_read(manifest)
+        if armed.pop("race", False):  # the move has read the part; a deletion finishes now
+            done = await retention.delete_messages(actor="operator", user_id="u1", conversation_id="c1")
+            assert done["cold_rows"] == 1
+        return records
+
+    async def recording_write(**kwargs):
+        manifest = await original_write(**kwargs)
+        written.append(manifest["part_key"])
+        return manifest
+
+    archive.read_part, archive.write_batch = read_then_delete, recording_write
+    summary = await retention.archive_before(NOW - timedelta(days=90))
+
+    assert summary["relaid"] == 0  # the deletion already moved it
+    assert sorted(r["id"] for r in await retention.fetch_cold(from_ts=NOW - timedelta(days=400))) == [2, 3]
+    live = {b["part_key"] for b in db.batches.values() if b["state"] == "pruned"}
+    assert written and [await backend.exists_a(k) for k in written] == [k in live for k in written]  # the losing move left no files
+
+
+@pytest.mark.asyncio
+async def test_a_legacy_move_during_a_deletion_makes_the_deletion_plan_again():
+    db, backend, archive, store, retention = _setup()
+    await _legacy_part(db, backend, archive, retention)
+    original = retention._cold_matches
+    armed = {"race": True}
+
+    async def plan_then_move(**kwargs):
+        plan = await original(**kwargs)
+        if armed.pop("race", False):  # the deletion has planned; an archive run moves the part now
+            assert await retention._relayout_legacy_batches() == 1
+        return plan
+
+    retention._cold_matches = plan_then_move
+    done = await retention.delete_messages(actor="operator", user_id="u1", conversation_id="c1")
+
+    assert done["cold_rows"] == 1 and db.deletions[-1]["state"] == "completed"
+    assert sorted(r["id"] for r in await retention.fetch_cold(from_ts=NOW - timedelta(days=400))) == [2, 3]
+
+
+@pytest.mark.asyncio
+async def test_moving_legacy_parts_counts_toward_the_run_budget():
+    db, backend, archive, store, retention = _setup()
+    await _legacy_part(db, backend, archive, retention, "legacy-a", ids=(1, 2))
+    await _legacy_part(db, backend, archive, retention, "legacy-b", ids=(4, 5))
+
+    assert (await retention.archive_before(NOW - timedelta(days=90), max_batches=0))["relaid"] == 0
+    assert db.batches["legacy-a"]["state"] == db.batches["legacy-b"]["state"] == "pruned"
+    assert (await retention.archive_before(NOW - timedelta(days=90), max_batches=1))["relaid"] == 1
+    assert sorted(b["state"] for k, b in db.batches.items() if k in ("legacy-a", "legacy-b")) == ["pruned", "retired"]
