@@ -57,6 +57,10 @@ class _Con:
             return [e for e in self.db.edges if e["from_id"] in ids or e["to_id"] in ids]
         if q.startswith("SELECT batch_id, day") and "state IN ('written', 'verified')" in q:
             return [b for b in self.db.sorted_batches() if b["state"] in ("written", "verified")]
+        if q.startswith("SELECT batch_id, day, part_key, manifest_key") and "part_key ~" in q:
+            import re
+            legacy = re.compile(r"/conversation-cold/[0-9]{4}/[0-9]{2}/[0-9]{2}/[^/]+$")
+            return [b for b in self.db.sorted_batches() if b["state"] == "pruned" and legacy.search(b["part_key"] or "")]
         if q.startswith("SELECT batch_id, day") and "state = 'pruned'" in q:
             first = args[0] if "day >= $1" in q else None
             last = args[-1] if "day <= $" in q else None
@@ -856,3 +860,34 @@ async def test_a_legacy_day_part_stays_readable_and_a_deletion_splits_what_stays
         "u1/c2/" + day.strftime("%Y/%m/%d"), "u2/c1/" + day.strftime("%Y/%m/%d"),
     ]
     assert sorted(r["id"] for r in await retention.fetch_cold(from_ts=NOW - timedelta(days=400))) == [2, 3]
+
+
+@pytest.mark.asyncio
+async def test_the_next_archive_run_moves_legacy_day_parts_to_the_user_layout():
+    db, backend, archive, store, retention = _setup()
+    from kdcube_ai_app.apps.chat.sdk.context.vector.conv_cold import encode_part, row_to_record, sha256_hex
+
+    day = (NOW - timedelta(days=200)).date()
+    legacy = [_msg(1, days_ago=200), _msg(2, days_ago=200, conv="c2"), _msg(3, days_ago=200, user="u2")]
+    records = [row_to_record(dict(m)) for m in legacy]
+    data = encode_part(records)
+    part_key, manifest_key = archive.part_key(day, "legacy"), archive.manifest_key(day, "legacy")
+    manifest = {"batch_id": "legacy", "day": day.isoformat(), "row_count": 3, "ids": [1, 2, 3],
+                "sha256": sha256_hex(data), "part_key": part_key,
+                "min_ts": min(r["ts"] for r in records), "max_ts": max(r["ts"] for r in records)}
+    await backend.write_bytes_a(part_key, data)
+    await backend.write_bytes_a(manifest_key, json.dumps(manifest).encode())
+    db.batches["legacy"] = {"batch_id": "legacy", "day": day, "row_count": 3,
+                            "max_ts": datetime.fromisoformat(manifest["max_ts"]), "sha256": manifest["sha256"],
+                            "state": "pruned", "error": None, "part_key": part_key, "manifest_key": manifest_key}
+    await retention._index_batch(_Con(db), "legacy", records)
+
+    summary = await retention.archive_before(NOW - timedelta(days=90))
+
+    assert summary["relaid"] == 1
+    assert db.batches["legacy"]["state"] == "retired" and not await backend.exists_a(part_key)
+    live = sorted(b["part_key"].split("/conversation-cold/")[1].rsplit("/", 1)[0] for b in db.batches.values() if b["state"] == "pruned")
+    d = day.strftime("%Y/%m/%d")
+    assert live == [f"u1/c1/{d}", f"u1/c2/{d}", f"u2/c1/{d}"]
+    assert sorted(r["id"] for r in await retention.fetch_cold(from_ts=NOW - timedelta(days=400))) == [1, 2, 3]
+    assert (await retention.archive_before(NOW - timedelta(days=90)))["relaid"] == 0

@@ -41,7 +41,10 @@ embeddings move with them: they cost money to compute and stay on record.
   folder, and one conversation's archive is one folder inside it. A slash in
   an id is escaped, so an id never adds a folder. Parts written before this
   layout sit directly under `conversation-cold/{yyyy}/{mm}/{dd}/` and stay
-  readable: the batch ledger records every part's own location.
+  readable: the batch ledger records every part's own location. Each archive
+  run moves them to the new layout: a legacy part is read and verified,
+  rewritten as one verified part per user and conversation, retired in the
+  transaction that records the new parts, and then removed.
 
   A manifest carries the row count, the row ids, the time range and the
   sha256 of its part.

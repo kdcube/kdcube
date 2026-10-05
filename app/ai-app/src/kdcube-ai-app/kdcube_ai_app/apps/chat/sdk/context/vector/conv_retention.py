@@ -124,9 +124,10 @@ class ConversationRetention:
     ) -> Dict[str, int]:
         """Move every hot row with ts < cutoff to the cold tier."""
 
-        summary = {"resumed": 0, "batches": 0, "rows": 0, "indexed": 0}
+        summary = {"resumed": 0, "batches": 0, "rows": 0, "indexed": 0, "relaid": 0}
         summary["resumed"] = await self._resume_unfinished()
         summary["indexed"] = await self._index_unindexed_batches()
+        summary["relaid"] = await self._relayout_legacy_batches()
         while max_batches is None or summary["batches"] < max_batches:
             async with self._pool.acquire() as con:
                 rows = await con.fetch(
@@ -590,6 +591,35 @@ class ConversationRetention:
                 "matching_ids": {int(r["id"]) for r in matching},
             })
         return plan, uris
+
+    async def _relayout_legacy_batches(self) -> int:
+        """Move parts written in the legacy day-only layout to the user/conversation layout.
+
+        Each legacy part is read and verified, rewritten as one verified part
+        per user and conversation, and retired in the same transaction that
+        records the new parts; then its files are removed. A run that stops
+        anywhere leaves the ledger consistent: the old part is live until the
+        new ones are recorded. Returns how many legacy parts moved.
+        """
+
+        async with self._pool.acquire() as con:
+            legacy = await con.fetch(
+                f"SELECT batch_id, day, part_key, manifest_key FROM {self.schema}.conv_archive_batches "
+                f"WHERE state = 'pruned' AND part_key ~ '/conversation-cold/[0-9]{{4}}/[0-9]{{2}}/[0-9]{{2}}/[^/]+$' "
+                f"ORDER BY day, batch_id"
+            )
+        for batch in legacy:
+            manifest = await self.archive.read_manifest(batch["manifest_key"])
+            records = await self.archive.read_part(manifest)
+            await self._apply_cold_deletion([{
+                "day": batch["day"],
+                "batch_id": batch["batch_id"],
+                "part_key": batch["part_key"],
+                "manifest_key": batch["manifest_key"],
+                "records": records,
+                "matching_ids": set(),
+            }])
+        return len(legacy)
 
     async def _apply_cold_deletion(self, plan: Sequence[Dict[str, Any]]) -> int:
         """Rewrite each planned batch without its matching records; returns how many were removed."""
