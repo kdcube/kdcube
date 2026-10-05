@@ -1046,7 +1046,53 @@ class ConvIndex:
         """
         async with self._pool.acquire() as con:
             rows = await con.fetch(q, *args)
-        return [dict(row) for row in rows]
+        out = [dict(row) for row in rows]
+        if conversation_id and len(out) < page_limit:
+            # W536: a conversation's archived messages continue the same
+            # newest-first keyset once its hot rows run out, so a cold search
+            # match can be opened. They are older than every hot row.
+            cold = await self._cold_window_records(
+                label="fetch_message_page",
+                days=days,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                bundle_id=bundle_id,
+                agent_id=agent_id,
+                roles=roles,
+            )
+            seen = {r.get("id") for r in out}
+            cursor = (_coerce_ts(before_ts), int(before_id)) if before_ts is not None else None
+            for record in sorted(cold, key=lambda r: (_coerce_ts(r["ts"]), int(r.get("id") or 0)), reverse=True):
+                if len(out) >= page_limit:
+                    break
+                ts = _coerce_ts(record["ts"])
+                rid = int(record.get("id") or 0)
+                tags = set(record.get("tags") or ())
+                if rid in seen:
+                    continue
+                if cursor is not None and (ts, rid) >= cursor:
+                    continue
+                if any_tags and not tags.intersection(any_tags):
+                    continue
+                if all_tags and not set(all_tags).issubset(tags):
+                    continue
+                if not_tags and tags.intersection(not_tags):
+                    continue
+                out.append({
+                    "id": rid,
+                    "message_id": record.get("message_id"),
+                    "role": record.get("role"),
+                    "text": record.get("text"),
+                    "hosted_uri": record.get("hosted_uri"),
+                    "ts": ts,
+                    "tags": list(record.get("tags") or []),
+                    "turn_id": record.get("turn_id"),
+                    "bundle_id": record.get("bundle_id"),
+                    "agent_id": record.get("agent_id"),
+                    "conversation_id": record.get("conversation_id"),
+                    "storage": "cold",
+                })
+        return out
 
     async def fetch_latest_reactions(
             self,
@@ -2568,6 +2614,113 @@ class ConvIndex:
                     rows = await con.fetch(q, *args)
 
         return [dict(r) for r in rows]
+
+    async def search_cold_turns(
+            self,
+            *,
+            user_id: str,
+            conversation_id: Optional[str],
+            query_text: str,
+            search_roles: tuple[str, ...] = ("user", "assistant", "artifact"),
+            search_tags: Optional[Sequence[str]] = None,
+            top_k: int = 8,
+            scope: str = "conversation",
+            bundle_id: Optional[str] = None,
+            agent_id: Optional[str] = None,
+            half_life_days: float = 7.0,
+            timestamp_filters: Optional[List[Dict[str, Any]]] = None,
+            include_recovery_sessions: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Archived (cold) turns matching the query, for a search with a date filter.
+
+        Cross-conversation search reaches the cold tier only through a date
+        filter: without a lower time bound (`>` or `>=` in
+        `timestamp_filters`) this returns nothing, and a bound newer than the
+        archive watermark reads no part. Records come from the retention
+        ledger under the hot index's scope rules (user, conversation when
+        scoped, bundle, agent, roles, any of `search_tags`, TTL). They are
+        ranked by the share of the query's content terms each text contains,
+        one row per turn, and every row carries `storage: "cold"`. The rows
+        have the lexical arm's shape, so a caller fuses them by rank.
+        """
+        from kdcube_ai_app.apps.chat.sdk.context.vector.query_terms import trigram_query_tokens
+
+        start: Optional[datetime] = None
+        end: Optional[datetime] = None
+        for tf in (timestamp_filters or []):
+            op = str(tf.get("op", "")).strip()
+            if not tf.get("value"):
+                continue
+            value = _coerce_ts(tf.get("value"))
+            if op in (">", ">="):
+                start = value if start is None else max(start, value)
+            elif op in ("<", "<="):
+                bound = value + timedelta(microseconds=1) if op == "<=" else value
+                end = bound if end is None else min(end, bound)
+        terms = [t.lower() for t in trigram_query_tokens(query_text or "")]
+        retention = self.retention()
+        if start is None or not terms or retention is None:
+            return []
+        try:
+            records = await retention.fetch_cold(
+                from_ts=start,
+                to_ts=end,
+                user_id=user_id,
+                conversation_id=conversation_id if scope == "conversation" and conversation_id else None,
+                bundle_id=bundle_id or None,
+                agent_id=agent_id or None,
+                roles=tuple(search_roles) if search_roles else None,
+            )
+        except Exception:
+            logger.exception("[conv_index.search_cold_turns] cold tier read failed; serving the hot index only")
+            return []
+        wanted = set(search_tags or ())
+        now = datetime.now(timezone.utc)
+        half_life = max(0.1, float(half_life_days)) * 24 * 3600.0
+        best: Dict[Tuple[Any, Any], Dict[str, Any]] = {}
+        for record in records:
+            tags = set(record.get("tags") or ())
+            if not record.get("turn_id"):
+                continue
+            if wanted and not tags.intersection(wanted):
+                continue
+            if not include_recovery_sessions and "kind:react.recovery.session" in tags:
+                continue
+            text = str(record.get("text") or "")
+            lowered = text.lower()
+            matched = sum(1 for term in terms if term in lowered)
+            if not matched:
+                continue
+            ts = _coerce_ts(record["ts"])
+            sim = matched / len(terms)
+            rec = 2.0 ** (-(now - ts).total_seconds() / half_life)
+            row = {
+                "id": record.get("id"),
+                "message_id": record.get("message_id"),
+                "role": record.get("role"),
+                "text": text,
+                "hosted_uri": record.get("hosted_uri"),
+                "ts": ts,
+                "tags": list(record.get("tags") or []),
+                "turn_id": record.get("turn_id"),
+                "conversation_id": record.get("conversation_id"),
+                "bundle_id": record.get("bundle_id"),
+                "agent_id": record.get("agent_id"),
+                "matched_text": text,
+                "sim": sim,
+                "rec": rec,
+                "score": 0.80 * sim + 0.20 * rec,
+                "relevance_score": sim,
+                "matched_role": record.get("role"),
+                "matched_ts": ts,
+                "storage": "cold",
+            }
+            key = (row["conversation_id"], row["turn_id"])
+            prev = best.get(key)
+            if prev is None or (row["sim"], row["ts"]) > (prev["sim"], prev["ts"]):
+                best[key] = row
+        rows = sorted(best.values(), key=lambda r: (r["score"], r["ts"]), reverse=True)
+        return rows[: int(top_k)]
 
     async def search_turn_logs_via_content_trigram(
             self,

@@ -523,6 +523,8 @@ async def run_conversation_search(
                 "about": row.get("about") or "",
                 "ts": row.get("started_at") or row.get("ts"),
                 "best_turn_id": tid,
+                # W536: the catalog marks archived turns; index rows are hot.
+                "storage": row.get("storage") or "hot",
             })
         search_hits_formatted = hits
         LOGGER.info(
@@ -797,8 +799,10 @@ async def run_conversation_search(
             "source_query": h.get("source_query"),
             "ts": h["ts"].isoformat() if hasattr(h.get("ts"), "isoformat") else h.get("ts"),
             "best_turn_id": best_tid,
+            # W536: where the matched turn was read from (backend-derived).
+            "storage": h.get("storage") or "hot",
         }
-        for key in ("rrf_score", "sem_rank", "lex_rank", "trgm_rank", "primary_source"):
+        for key in ("rrf_score", "sem_rank", "lex_rank", "trgm_rank", "cold_rank", "primary_source"):
             if key in h:
                 hit_out_meta[key] = h[key]
         search_hits_formatted.append(hit_out_meta)

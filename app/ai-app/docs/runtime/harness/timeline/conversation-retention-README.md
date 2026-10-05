@@ -74,6 +74,19 @@ range. `ConvIndex.fetch_turn_catalog`, which serves temporal conversation
 search, appends cold turns by time, without ranking and without ordinals,
 marked `"storage": "cold"`.
 
+Topic search (the hybrid path, a query plus a date filter) reads them too
+(W536). `ConvIndex.search_cold_turns` takes the lower bound of the search's
+`timestamp_filters` (`>` or `>=`; without one it reads nothing), reads the cold
+records in that range under the hot index's scope rules (user, conversation
+when scoped, bundle, agent, roles, any of the target's tags, TTL, recovery
+sessions excluded) and ranks them by the share of the query's content terms
+each text contains, one row per turn. `search_context` fuses that list as a
+fourth rank arm, weighted like the lexical arms; an archived turn has no hot
+arm. Every hit carries `storage` (`"hot"` or `"cold"`) as the backend read it,
+through `run_conversation_search` to the ingress `ConversationSearchHit` and
+the TypeScript `ConversationSearchHit`. The cold arm has no semantic or
+trigram ranking, so a cold hit ranks by its term share and the recency lift.
+
 Opening and listing conversations reach the cold tier too, within their own
 rolling window (`days`, 365 for the conversation browser; a conversation older
 than the window is neither listed nor opened, hot or cold):
@@ -88,6 +101,10 @@ than the window is neither listed nor opened, hot or cold):
   conversation's archived messages when the hot rows do not fill the limit.
   Archived rows are older than the hot window, so this matters only for a
   caller whose `days` exceeds it (the browser passes 365; the default is 30).
+- `fetch_message_page` with a `conversation_id` does the same on its keyset:
+  once the hot rows run out, the conversation's archived messages continue
+  newest-first strictly before the cursor's `(ts, id)`, each marked
+  `"storage": "cold"`, so a cold search match can be opened (W536).
 
 These reads use `conv_archive_conversations`, written in the same transaction
 as each batch's ledger row: one row per conversation scope in a batch, with its

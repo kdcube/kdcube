@@ -71,6 +71,8 @@ export interface ConversationSearchHit {
   recency_score?: number | null
   matched_via_role?: string | null
   ts?: string | null
+  /** Where the backend read the matched turn: the live index (`hot`) or the archive (`cold`). */
+  storage?: 'hot' | 'cold' | null
 }
 
 export interface ConversationSearchConversationMeta {
