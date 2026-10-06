@@ -56,6 +56,8 @@ class KDCubeIssuanceSecretCustody:
     """
 
     def __init__(self, store: KDCubeEphemeralSecretStore, *, settings: Any | None = None) -> None:
+        if type(store) is not KDCubeEphemeralSecretStore:
+            raise SessionIssuanceRefused("issuance_custody_not_durable")
         if store.provider_type == "in-memory":
             raise SessionIssuanceRefused("issuance_custody_not_durable")
         if store.provider_type == "secrets-service":
@@ -75,8 +77,26 @@ class KDCubeIssuanceSecretCustody:
 
     @property
     def effective_backend(self) -> str:
-        """Validated selection only; not deployed ACL/restart qualification."""
+        """Configured selection only; call qualify for the running service."""
         return self._effective_backend
+
+    @property
+    def declared_backend(self) -> str:
+        """The configured provider, never evidence of the running backend."""
+        return self._effective_backend
+
+    async def qualify(self) -> None:
+        """Refuse a mismatched/unavailable running backend before secret I/O.
+
+        Never cache this check: a later sidecar restart may change its backend.
+        It does not establish namespace ACLs or durability through restart.
+        """
+        try:
+            durable = await self._store.qualify_durable_backend()
+        except Exception:
+            raise SessionIssuanceRefused("issuance_custody_unavailable") from None
+        if durable is not True:
+            raise SessionIssuanceRefused("issuance_custody_not_durable")
 
     async def create(self, *, secret_ref: str, value: str, expires_at: int) -> bool:
         _validate_ref(secret_ref)
@@ -84,6 +104,7 @@ class KDCubeIssuanceSecretCustody:
             raise SessionIssuanceRefused("issuance_custody_invalid")
         if expires_at <= int(time.time()):
             raise SessionIssuanceRefused("issuance_custody_expired")
+        await self.qualify()
         envelope = json.dumps({
             "schema": _SCHEMA, "secret_ref": secret_ref,
             "expires_at": expires_at, "bearer": value,
@@ -99,6 +120,7 @@ class KDCubeIssuanceSecretCustody:
 
     async def get(self, *, secret_ref: str) -> str | None:
         _validate_ref(secret_ref)
+        await self.qualify()
         try:
             raw = await self._store.get(secret_ref=secret_ref)
         except Exception:
@@ -130,6 +152,7 @@ class KDCubeIssuanceSecretCustody:
         if (type(now) is not int or not 1 <= now <= int(time.time())
                 or type(limit) is not int or not 1 <= limit <= 1000):
             raise SessionIssuanceRefused("issuance_custody_invalid")
+        await self.qualify()
         try:
             return await self._store.purge_expired(now=now, limit=limit)
         except Exception:

@@ -4,6 +4,8 @@ import asyncio
 import hashlib
 import json
 import traceback
+import importlib.util
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -12,12 +14,17 @@ from kdcube_ai_app.auth.bundle.session_bound_issuer import _custody_call
 from kdcube_ai_app.auth.bundle.session_issuance import SessionIssuanceRefused
 from kdcube_ai_app.infra.secrets import ephemeral as ephemeral_module
 from kdcube_ai_app.infra.secrets import issuance as issuance_module
+from kdcube_ai_app.infra.secrets import manager as manager_module
 from kdcube_ai_app.infra.secrets.ephemeral import KDCubeEphemeralSecretStore, ephemeral_secret_store
 from kdcube_ai_app.infra.secrets.issuance import KDCubeIssuanceSecretCustody, issuance_secret_custody
 from kdcube_ai_app.infra.secrets.manager import (
     AwsSecretsManagerSecretsManager, InMemorySecretsManager, SecretsManagerConfig, SecretsManagerError,
+    SecretsServiceSecretsManager,
 )
-from kdcube_ai_app.infra.secrets.tests.test_manager import _FakeAwsSecretsClient, _FakeAwsSession
+from kdcube_ai_app.infra.secrets.tests.test_manager import (
+    _FakeAwsSecretsClient, _FakeAwsSession, _FakeHttpResponse,
+    _FakeHttpxModule, _FakeSecretsHttpClient,
+)
 
 NAMESPACE = "connection-hub-issuance-custody"
 REF = "a" * 32
@@ -28,6 +35,9 @@ HOST_SETTINGS = SimpleNamespace(SECRETS_SERVICE_BACKEND="host-vault")
 class _ProviderFixture(InMemorySecretsManager):
     """Test seam only: same manager protocol, NOT a production durability proof."""
     provider_type = "secrets-service"
+
+    async def qualify_host_vault(self):
+        return True
 
 
 @pytest.fixture
@@ -262,3 +272,109 @@ async def test_aws_adapter_different_value_contender_cannot_replace_original(mon
     assert len(client.data) == 1
     winner = next(value for value, result in zip(values, results) if result is True)
     assert digest(await store.get(secret_ref=REF)) == digest(winner)
+
+
+def _http_custody():
+    manager = SecretsServiceSecretsManager(SecretsManagerConfig(
+        provider="secrets-service", component="ingress",
+        url="http://synthetic-secrets", admin_token="synthetic-admin",
+    ))
+    return issuance_secret_custody(namespace=NAMESPACE, manager=manager, settings=HOST_SETTINGS)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", [
+    {"status": "ok"}, {}, [], None,
+    {"status": "ok", "vault": {}},
+    {"status": "ok", "vault": {"ok": 1, "code": "ok"}},
+    {"status": "ok", "vault": {"ok": False, "code": "ok"}},
+    {"status": "ok", "vault": {"ok": True, "code": "backend_unavailable"}},
+])
+async def test_declared_host_vault_refuses_unqualified_running_backend(monkeypatch, payload):
+    client = _FakeSecretsHttpClient(_FakeHttpResponse(200, payload))
+    monkeypatch.setattr(manager_module, "_get_httpx", lambda: _FakeHttpxModule(client))
+    custody = _http_custody()
+    assert custody.declared_backend == "host-vault"
+    with pytest.raises(SessionIssuanceRefused, match="^issuance_custody_not_durable$"):
+        await custody.qualify()
+    assert client.requests == [("GET", "http://synthetic-secrets/health", {})]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [302, 401, 503])
+async def test_backend_health_failure_is_unavailable_without_response_disclosure(monkeypatch, status):
+    client = _FakeSecretsHttpClient(_FakeHttpResponse(status, {"detail": CANARY}))
+    monkeypatch.setattr(manager_module, "_get_httpx", lambda: _FakeHttpxModule(client))
+    with pytest.raises(SessionIssuanceRefused, match="^issuance_custody_unavailable$") as captured:
+        await _http_custody().qualify()
+    assert CANARY not in "".join(traceback.format_exception(captured.value))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["network", "json"])
+async def test_health_transport_or_json_exception_is_sanitized(monkeypatch, failure):
+    client = _FakeSecretsHttpClient(
+        response=_FakeHttpResponse(200, ValueError(CANARY)),
+        error=RuntimeError(CANARY) if failure == "network" else None,
+    )
+    monkeypatch.setattr(manager_module, "_get_httpx", lambda: _FakeHttpxModule(client))
+    with pytest.raises(SessionIssuanceRefused, match="^issuance_custody_unavailable$") as captured:
+        await _http_custody().qualify()
+    assert CANARY not in "".join(traceback.format_exception(captured.value))
+
+
+@pytest.mark.asyncio
+async def test_qualification_is_not_cached_across_backend_replacement(monkeypatch):
+    client = _FakeSecretsHttpClient(_FakeHttpResponse(200, {
+        "status": "ok", "vault": {"ok": True, "code": "ok"},
+    }))
+    monkeypatch.setattr(manager_module, "_get_httpx", lambda: _FakeHttpxModule(client))
+    custody = _http_custody()
+    await custody.qualify()
+    client.response = _FakeHttpResponse(200, {"status": "ok"})
+    with pytest.raises(SessionIssuanceRefused, match="^issuance_custody_not_durable$"):
+        await custody.get(secret_ref=REF)
+    assert len(client.requests) == 2
+    assert all(request[1].endswith("/health") for request in client.requests)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["create", "get", "purge_expired"])
+async def test_real_ephemeral_sidecar_refused_before_secret_io(monkeypatch, tmp_path, operation):
+    """Real ASGI sidecar; no deployed service or credentials are used."""
+    import httpx
+    source = Path(__file__).resolve().parents[6] / "deployment/docker/all_in_one_kdcube/secrets/secrets_server.py"
+    spec = importlib.util.spec_from_file_location("issuance_ephemeral_sidecar_fixture", source)
+    sidecar = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sidecar)
+    monkeypatch.setattr(sidecar, "STORE_PATH", str(tmp_path / "store.json"))
+    requests = []
+
+    async def record_request(request):
+        requests.append(request.url.path)
+    real_client = httpx.AsyncClient
+    transport = httpx.ASGITransport(app=sidecar.app)
+    monkeypatch.setattr(manager_module, "_get_httpx", lambda: SimpleNamespace(
+        AsyncClient=lambda **kwargs: real_client(
+            **kwargs, transport=transport, event_hooks={"request": [record_request]},
+        ),
+    ))
+    monkeypatch.setattr(issuance_module, "time", SimpleNamespace(time=lambda: 10))
+    custody = _http_custody()
+    arguments = {
+        "create": {"secret_ref": REF, "value": CANARY, "expires_at": 30},
+        "get": {"secret_ref": REF},
+        "purge_expired": {"now": 10, "limit": 1},
+    }
+    with pytest.raises(SessionIssuanceRefused, match="^issuance_custody_not_durable$"):
+        await getattr(custody, operation)(**arguments[operation])
+    assert requests == ["/health"]
+    assert not (tmp_path / "store.json").exists()
+
+
+def test_duck_typed_or_subclassed_store_is_not_a_qualified_adapter():
+    for store in (SimpleNamespace(provider_type="secrets-service", namespace=NAMESPACE),
+                  type("StoreSubclass", (KDCubeEphemeralSecretStore,), {})(
+                      _ProviderFixture(), namespace=NAMESPACE)):
+        with pytest.raises(SessionIssuanceRefused, match="^issuance_custody_not_durable$"):
+            KDCubeIssuanceSecretCustody(store, settings=HOST_SETTINGS)

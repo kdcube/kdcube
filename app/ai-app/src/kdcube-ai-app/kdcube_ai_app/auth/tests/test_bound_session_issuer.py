@@ -94,6 +94,9 @@ class _EnvelopeProviderFixture(InMemorySecretsManager):
     """Protocol fixture only; not a deployed secrets-service durability proof."""
     provider_type = "secrets-service"
 
+    async def qualify_host_vault(self):
+        return True
+
 
 def envelope_custody(manager):
     return issuance_secret_custody(

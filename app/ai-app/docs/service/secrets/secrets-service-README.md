@@ -102,11 +102,19 @@ secrets-service must explicitly select `secrets.service.backend: host-vault`,
 even with an injected manager. The generic `ephemeral_secret_store` gains an
 opt-in `durability_required=True`; its default behavior is unchanged. Provider
 selection is not proof of deployed restart durability or reader authorization.
-The wrapper exposes read-only `namespace` and `effective_backend` (`host-vault`
-or `aws-sm`) from its validated selection. Direct wrapper construction enforces
-the same backend setting. Composition should require this wrapper type and the
-exact namespace, never supply an unverified label or default a missing namespace.
-These properties do not attest a deployed security policy or persistence.
+The wrapper exposes read-only `namespace` and `declared_backend` (`host-vault`
+or `aws-sm`); the compatibility name `effective_backend` is also only the
+configured selection. Direct construction requires the exact host store type
+and the same backend setting. Composition should require the exact wrapper
+type and namespace, never default a missing namespace or trust a label.
+Call `await custody.qualify()` before composing production issuance. Every
+create, get and purge also enforces it: a secrets-service endpoint must return
+healthy host-vault broker evidence from `/health`, not the temporary sidecar's
+plain `{status}` response. The check is not cached, so a later replacement or
+unavailable service refuses before secret I/O. It uses no secret request headers
+and does not expose response text in errors. AWS uses its own provider lane.
+Neither backend labels nor this health check attest a deployed security policy,
+reader isolation, or persistence through restart.
 The host must qualify actual backend behavior and the second-identity negative
 case. In particular, the deployment-wide broker's accepted read tokens share
 one application scope unless a narrower host policy/identity lane is supplied.

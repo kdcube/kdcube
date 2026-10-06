@@ -281,6 +281,14 @@ class SecretsManagerConfig:
 class ISecretsManager(ABC):
     provider_type: str
 
+    async def qualify_host_vault(self) -> bool:
+        """Confirm the running secrets-service backend, not a configuration label.
+
+        Other provider implementations do not attest a host-vault broker.
+        This is a reachability/backend check, not ACL or restart proof.
+        """
+        return False
+
     @abstractmethod
     async def get_secret(self, key: str) -> Optional[str]:
         raise NotImplementedError
@@ -1188,6 +1196,25 @@ class SecretsServiceSecretsManager(ISecretsManager):
 
     def _key_url(self, key: str) -> str:
         return f"{self._url}/secret/{quote(key, safe='')}"
+
+    async def qualify_host_vault(self) -> bool:
+        """Reject the temporary sidecar and unhealthy host-vault brokers."""
+        if not self._url:
+            raise SecretsManagerError("Secrets service is not configured")
+        try:
+            async with _get_httpx().AsyncClient(timeout=self._read_timeout) as client:
+                # Health needs no secret header. Do not follow redirects to a
+                # different backend or expose response text in errors.
+                response = await client.get(f"{self._url}/health")
+            if response.status_code != 200:
+                raise SecretsManagerError("Secrets service backend is unavailable")
+            payload = response.json()
+        except Exception:
+            raise SecretsManagerError("Secrets service backend is unavailable") from None
+        vault = payload.get("vault") if type(payload) is dict else None
+        return (type(payload) is dict and payload.get("status") == "ok"
+                and type(vault) is dict and vault.get("ok") is True
+                and vault.get("code") == "ok")
 
     @staticmethod
     def _validate_write_response(response: Any, *, operation: str) -> int | None:

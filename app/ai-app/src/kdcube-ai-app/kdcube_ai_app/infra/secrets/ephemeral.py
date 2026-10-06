@@ -81,6 +81,18 @@ class KDCubeEphemeralSecretStore:
     def namespace(self) -> str:
         return self._namespace.lower()
 
+    async def qualify_durable_backend(self) -> bool:
+        """Check the running service on every custody operation.
+
+        AWS selects a different provider implementation; its actual IAM and
+        durability qualification remain deployment responsibilities.
+        """
+        if self.provider_type == "aws-sm":
+            return True
+        if self.provider_type == "secrets-service":
+            return await self._manager.qualify_host_vault()
+        return False
+
     async def set(
         self,
         *,

@@ -141,8 +141,11 @@ it stays in secret storage, never the public receipt. Reads refuse expired or
 malformed envelopes by name, rather than returning absence and recreating one.
 This also supplies the format needed by local expiry purge. The factory rejects
 in-memory providers and requires an explicit `host-vault` backend for
-secrets-service, including injected managers. Generic ephemeral-store defaults
-remain unchanged. The host must separately qualify backend restart durability
+secrets-service, including injected managers. It checks the running broker's
+host-vault health evidence before every custody operation and refuses a
+temporary sidecar or unavailable backend; `await custody.qualify()` also lets
+the host check this before composing issuance. The result is never cached.
+Generic ephemeral-store defaults remain unchanged. The host must separately qualify backend restart durability
 and reader isolation: a namespace string is not an access-control proof.
 See [runtime-secret custody](../secrets/secrets-service-README.md#11-expiring-runtime-secret-custody).
 
