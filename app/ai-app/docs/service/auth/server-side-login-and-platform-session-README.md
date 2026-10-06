@@ -125,7 +125,7 @@ reservation. Existing pending rows without a captured revision fail closed;
 already-active rows can still recover their original receipt without changing
 the current user's grants.
 
-The result `BoundIssuance(session_id, secret_ref, bearer_sha256, outcome)` exposes
+The result `SessionIssuanceReceipt(session_id, secret_ref, bearer_sha256, outcome)` exposes
 coordinates and a digest; the original bearer remains in the host-injected
 durable secret store. Its `create(secret_ref=..., value=..., expires_at=...)`
 is atomic/create-only and its `get(secret_ref=...)` returns `None` only for
@@ -133,6 +133,18 @@ absence; unavailable or uncertain outcomes raise. Expiry and
 signing-key changes cannot cause a retry to mint a new session identity.
 Reservations remain identity tombstones after completion or expiry, so any
 retention policy must preserve their no-remint identity.
+
+For KDCube host composition, `issuance_secret_custody(namespace=..., settings=...)`
+in `infra.secrets.issuance` wraps the selected secret backend in a create-only
+JSON envelope. The envelope contains the bearer and original absolute expiry;
+it stays in secret storage, never the public receipt. Reads refuse expired or
+malformed envelopes by name, rather than returning absence and recreating one.
+This also supplies the format needed by local expiry purge. The factory rejects
+in-memory providers and requires an explicit `host-vault` backend for
+secrets-service, including injected managers. Generic ephemeral-store defaults
+remain unchanged. The host must separately qualify backend restart durability
+and reader isolation: a namespace string is not an access-control proof.
+See [runtime-secret custody](../secrets/secrets-service-README.md#11-expiring-runtime-secret-custody).
 
 The source tests cover PostgreSQL reservation/replay, concurrent issuers, and
 SIGKILL followed by a fresh issuer after reservation, custody, and activation.

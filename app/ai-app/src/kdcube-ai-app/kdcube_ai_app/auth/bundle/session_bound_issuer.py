@@ -59,6 +59,18 @@ async def _signed(sign: Callable[[Mapping[str, Any]], Awaitable[str]], claims: M
         raise SessionIssuanceRefused("issuance_signing_unavailable") from None
 
 
+async def _custody_call(call: Callable[..., Awaitable[Any]], **kwargs: Any) -> Any:
+    try:
+        return await call(**kwargs)
+    except SessionIssuanceRefused as exc:
+        if exc.reason in {"issuance_custody_invalid", "issuance_custody_expired",
+                          "issuance_custody_not_durable"}:
+            raise SessionIssuanceRefused(exc.reason) from None
+        raise SessionIssuanceRefused("issuance_custody_unavailable") from None
+    except Exception:
+        raise SessionIssuanceRefused("issuance_custody_unavailable") from None
+
+
 async def issue_bound_session(
     context: object, *, tenant: str | None, project: str | None, store: Any,
     user_id: str, roles: Sequence[str], permissions: Sequence[str],
@@ -128,10 +140,7 @@ async def issue_bound_session(
         if reservation.session_id != sid:
             candidate = None  # a concurrent reservation owns the original
 
-    try:
-        original = await custody.get(secret_ref=reservation.secret_ref)
-    except Exception:
-        raise SessionIssuanceRefused("issuance_custody_unavailable") from None
+    original = await _custody_call(custody.get, secret_ref=reservation.secret_ref)
     if original is None:
         if reservation.state == "active":
             raise SessionIssuanceRefused("issuance_custody_missing")
@@ -141,16 +150,13 @@ async def issue_bound_session(
             candidate = await _signed(sign, reservation.record["claims"])
         if hashlib.sha256(candidate.encode("utf-8")).hexdigest() != reservation.record["token_sha256"]:
             raise SessionIssuanceRefused("issuance_custody_unrecoverable")
-        try:
-            await custody.create(
-                secret_ref=reservation.secret_ref, value=candidate,
-                expires_at=reservation.expires_at,
-            )
-            # A false create or an uncertain concurrent outcome must read the
-            # winner. No candidate bearer is trusted just because we made it.
-            original = await custody.get(secret_ref=reservation.secret_ref)
-        except Exception:
-            raise SessionIssuanceRefused("issuance_custody_unavailable") from None
+        await _custody_call(
+            custody.create, secret_ref=reservation.secret_ref, value=candidate,
+            expires_at=reservation.expires_at,
+        )
+        # A false create or an uncertain concurrent outcome must read the
+        # winner. No candidate bearer is trusted just because we made it.
+        original = await _custody_call(custody.get, secret_ref=reservation.secret_ref)
     if type(original) is not str or not original:
         raise SessionIssuanceRefused("issuance_custody_missing")
     if hashlib.sha256(original.encode("utf-8")).hexdigest() != reservation.record["token_sha256"]:

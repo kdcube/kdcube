@@ -55,7 +55,12 @@ def _runtime_secret_manager(settings: Any | None) -> ISecretsManager:
 class KDCubeEphemeralSecretStore:
     """Bind portable expiring-secret contracts to one deployment namespace."""
 
-    def __init__(self, manager: ISecretsManager, *, namespace: str) -> None:
+    def __init__(
+        self, manager: ISecretsManager, *, namespace: str,
+        durability_required: bool = False,
+    ) -> None:
+        if durability_required and manager.provider_type == "in-memory":
+            raise SecretsManagerError("Durable runtime secret custody cannot use in-memory storage")
         if manager.provider_type not in SUPPORTED_EPHEMERAL_SECRET_PROVIDERS:
             raise SecretsManagerError(
                 "Short-lived runtime secrets require the host vault locally or "
@@ -67,6 +72,10 @@ class KDCubeEphemeralSecretStore:
             )
         self._manager = manager
         self._namespace = str(namespace or "").strip()
+
+    @property
+    def provider_type(self) -> str:
+        return self._manager.provider_type
 
     async def set(
         self,
@@ -129,12 +138,17 @@ def ephemeral_secret_store(
     namespace: str,
     settings: Any | None = None,
     manager: ISecretsManager | None = None,
+    durability_required: bool = False,
 ) -> KDCubeEphemeralSecretStore:
     """Build the deployment-selected host-vault or AWS adapter."""
 
+    selected = manager or _runtime_secret_manager(settings)
+    if durability_required and selected.provider_type == "secrets-service":
+        backend = str(getattr(settings, "SECRETS_SERVICE_BACKEND", None) or "").strip().lower().replace("_", "-")
+        if backend != "host-vault":
+            raise SecretsManagerError("Durable secrets-service custody requires the host-vault backend")
     return KDCubeEphemeralSecretStore(
-        manager or _runtime_secret_manager(settings),
-        namespace=namespace,
+        selected, namespace=namespace, durability_required=durability_required,
     )
 
 

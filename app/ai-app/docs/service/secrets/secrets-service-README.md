@@ -4,7 +4,7 @@ title: "Secrets Manager Implementations"
 summary: "System map for KDCube secret resolution: descriptor selectors, trusted-runtime read and write flows, persistence choices, and provider-specific behavior."
 tags: ["service", "secrets", "configuration", "aws", "runtime"]
 keywords: ["SECRETS_PROVIDER", "secrets.service.backend", "secrets-service", "host-vault", "aws-sm", "secrets-file", "in-memory", "user secrets", "bundle secrets", "secret flow"]
-updated_at: 2026-09-22
+updated_at: 2026-10-06
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/service-runtime-configuration-mapping-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/secrets-descriptor-README.md
@@ -81,6 +81,30 @@ success; `ResourceExistsException` identifies a different operation that
 already owns the name. The in-memory provider performs the test and insert
 under its process lock. Existing `set` operations remain available for
 protocols that do not consume the create outcome.
+
+The opaque adapter does not impose a JSON value format or enforce expiry on
+reads. Local expiry purge expects the stored value to be a JSON envelope with
+an integer `expires_at`; AWS additionally records the deadline in its expiry
+tag. Protocols must not hand local purge a bare bearer string.
+
+Recoverable session issuance uses `issuance_secret_custody` from
+`infra.secrets.issuance`. It wraps the original bearer in a versioned,
+reference-bound JSON envelope and refuses malformed or expired reads with
+finite `issuance_custody_invalid` / `issuance_custody_expired` reasons. Missing
+records return `None`; provider failures remain unavailable, not absence.
+Its purge accepts a non-future timestamp and a limit from 1 to 1000. The issuer
+still trusts only readback matching the digest captured in its reservation,
+not the create Boolean. An identical AWS idempotent replay may return `True`
+without creating a new version; different material never replaces it.
+
+The factory requires durable-provider selection: in-memory is refused, and
+secrets-service must explicitly select `secrets.service.backend: host-vault`,
+even with an injected manager. The generic `ephemeral_secret_store` gains an
+opt-in `durability_required=True`; its default behavior is unchanged. Provider
+selection is not proof of deployed restart durability or reader authorization.
+The host must qualify actual backend behavior and the second-identity negative
+case. In particular, the deployment-wide broker's accepted read tokens share
+one application scope unless a narrower host policy/identity lane is supplied.
 
 ### 1.2 Two selectors with different jobs
 
