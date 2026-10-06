@@ -64,7 +64,10 @@ def bind_bundle_job_context(
             tenant_id=auth_context.tenant, project_id=auth_context.project,
         ),
         routing=ExternalEventRouting(bundle_id=auth_context.bundle_id, session_id=""),
-        user=ExternalEventUser(user_type="service"),
+        # The job's service principal remains in AuthContext. The normal local
+        # bridge consumes a browser UserSession projection, so headless calls
+        # use its existing identity-free type rather than inventing a sign-in.
+        user=ExternalEventUser(user_type="anonymous"),
     )
     local_caller = make_local_bundle_operation_caller(
         redis=redis, pg_pool=pg_pool, comm_context=comm_context.model_copy(deep=True),

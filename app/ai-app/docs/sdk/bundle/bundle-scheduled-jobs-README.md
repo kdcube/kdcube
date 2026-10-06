@@ -227,7 +227,7 @@ available inside a cron method:
 | `self.pg_pool` | Postgres pool — same singleton used by the rest of the process |
 | Secrets | Same resolution path as normal bundle execution |
 | `self.config` | Real `Config` object; `self.config.ai_bundle_spec.id` is set correctly |
-| `self.comm_context` | Invocation-scoped service actor, tenant/project and source bundle; empty session ID |
+| `self.comm_context` | Invocation-scoped identity-free request projection, tenant/project and source bundle; empty session ID |
 | `call_bundle_operation(...)` | Standard local peer operation bridge, scoped to this job's tenant/project |
 
 What is **not** available:
@@ -238,10 +238,13 @@ What is **not** available:
 
 A job can perform service-to-service recovery through the same local operation
 bridge used by request handlers. The scheduler binds `AuthContext.for_bundle_job`
-and a typed service request context for the invocation. The peer receives the
-job's tenant/project and a `service` user type; the source job retains its bundle
-and job principal. Peer operation admission and secret resolution follow the
-standard bridge path.
+and a typed identity-free request context for the invocation. The job retains
+its `job` principal, `service` AuthContext and bundle scope. The peer transport
+receives the job's tenant/project and the existing `anonymous` user projection
+with an empty session ID. This projection is the bridge's headless transport
+shape, not a browser identity or an authority grant. Peer operation admission
+and secret resolution follow the standard bridge path; public recovery endpoints
+authenticate their recorded transaction proof themselves.
 
 ```python
 from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import call_bundle_operation

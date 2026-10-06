@@ -91,7 +91,7 @@ def test_job_calls_normal_local_bridge_as_its_service_actor(invocation):
         assert context.actor.project_id == "project"
         assert context.routing.bundle_id == "source@1-0"
         assert context.routing.session_id == ""
-        assert context.user.user_type == "service"
+        assert context.user.user_type == "anonymous"
         assert context.user.user_id is None
         assert context.user.roles == [] and context.user.permissions == []
         assert context.user.identity_authority == {}
@@ -321,11 +321,12 @@ def test_scheduled_job_uses_real_dispatch_and_target_admission(monkeypatch, rest
         @bundle_loader.api(alias="finish", route="public", roles=["kdcube:role:super-admin"] if restricted else [])
         async def finish(self, *, data, user_id, fingerprint):
             context = get_current_request_context()
-            assert context.user.user_type == "service"
+            assert context.user.user_type == "anonymous"
             assert context.user.user_id is None and context.user.identity_authority == {}
             assert context.routing.session_id == "" and context.routing.bundle_id == "peer@1-0"
             assert (context.actor.tenant_id, context.actor.project_id) == ("tenant", "project")
             assert get_current_auth_context().principal_id == "source@1-0:recover"
+            assert get_current_auth_context().user_type == "service"
             assert user_id is None and fingerprint is None
             seen.append(("dispatch", data))
             return {"ok": True, "data": data}
