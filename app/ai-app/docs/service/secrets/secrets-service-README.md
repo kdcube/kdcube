@@ -119,6 +119,23 @@ The host must qualify actual backend behavior and the second-identity negative
 case. In particular, the deployment-wide broker's accepted read tokens share
 one application scope unless a narrower host policy/identity lane is supplied.
 
+#### Dedicated file-runtime records
+
+The file manager has a separate runtime-record primitive. A trusted host may
+construct `SecretsManagerConfig` with `runtime_secrets_root` (an absolute,
+dedicated persistent directory) and `runtime_secret_namespaces` (the exact
+authorized namespace set). These records never enter configuration descriptor
+YAML. Creation, reads, deletion and bounded expiry purge share a cross-process
+OS file lock; commits use private files, atomic rename and file/directory fsync.
+Reads enforce expiry, and create-only collisions preserve the original value.
+No runtime root or namespace authorization is inferred from a descriptor path.
+
+This storage primitive does not by itself lift the issuance factory's older
+provider restrictions. Those restrictions still
+apply until that integration is completed. Private local files prove neither a
+container mount's persistence through replacement nor isolation from co-located
+code running as the same OS identity. The host owns those deployment guarantees.
+
 ### 1.2 Two selectors with different jobs
 
 Local Compose has two independent selectors:

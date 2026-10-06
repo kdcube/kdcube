@@ -274,6 +274,8 @@ class SecretsManagerConfig:
     redis_url: Optional[str] = None
     global_secrets_yaml: Optional[str] = None
     bundle_secrets_yaml: Optional[str] = None
+    runtime_secrets_root: Optional[str] = None
+    runtime_secret_namespaces: tuple[str, ...] = ()
     read_timeout_seconds: float = 2.0
     write_timeout_seconds: float = 5.0
 
@@ -929,6 +931,11 @@ class SecretsFileSecretsManager(ISecretsManager):
         self._lock = threading.RLock()
         self._redis = None
 
+        # Runtime records are not descriptor values. The trusted host must
+        # supply a dedicated persistent root and authorize exact namespaces.
+        self._runtime_secrets_root = config.runtime_secrets_root
+        self._runtime_secret_namespaces = config.runtime_secret_namespaces
+
     def _load_current_data(self) -> dict[str, str]:
         merged: dict[str, str] = {}
         if self._global_uri:
@@ -1022,6 +1029,33 @@ class SecretsFileSecretsManager(ISecretsManager):
             "secrets-file cannot store short-lived runtime secrets in tracked descriptors"
         )
 
+    def _runtime_store(self, namespace: str):
+        from kdcube_ai_app.infra.secrets.runtime_file import RuntimeFileStore
+
+        if not self._runtime_secrets_root:
+            raise self._ephemeral_secrets_are_unsupported()
+        runtime_root = Path(self._runtime_secrets_root).resolve()
+        for uri in (self._global_uri, self._bundle_uri):
+            parsed = urlparse(uri or "")
+            if parsed.scheme == "file" and runtime_root == Path(parsed.path).resolve().parent:
+                raise SecretsManagerWriteError("runtime_secret_storage_must_be_separate")
+        return RuntimeFileStore(
+            root=self._runtime_secrets_root,
+            namespace=namespace,
+            authorized_namespaces=self._runtime_secret_namespaces,
+        )
+
+    async def _runtime_file_call(self, namespace: str, operation: str, **kwargs):
+        from kdcube_ai_app.infra.secrets.runtime_file import RuntimeFileError
+
+        try:
+            store = self._runtime_store(namespace)
+            return await _run_blocking_critical_section(
+                lambda: getattr(store, operation)(**kwargs)
+            )
+        except RuntimeFileError as exc:
+            raise SecretsManagerWriteError(str(exc)) from None
+
     async def set_ephemeral_secret(
         self,
         *,
@@ -1030,8 +1064,13 @@ class SecretsFileSecretsManager(ISecretsManager):
         value: str,
         expires_at: int,
     ) -> None:
-        del namespace, secret_ref, value, expires_at
-        raise self._ephemeral_secrets_are_unsupported()
+        # File runtime records are immutable, including the compatibility set
+        # operation. A collision must never overwrite another original.
+        created = await self.create_ephemeral_secret(
+            namespace=namespace, secret_ref=secret_ref, value=value, expires_at=expires_at,
+        )
+        if not created:
+            raise SecretsManagerWriteError("runtime_secret_create_conflict")
 
     async def create_ephemeral_secret(
         self,
@@ -1041,8 +1080,9 @@ class SecretsFileSecretsManager(ISecretsManager):
         value: str,
         expires_at: int,
     ) -> bool:
-        del namespace, secret_ref, value, expires_at
-        raise self._ephemeral_secrets_are_unsupported()
+        return await self._runtime_file_call(
+            namespace, "create", secret_ref=secret_ref, value=value, expires_at=expires_at,
+        )
 
     async def get_ephemeral_secret(
         self,
@@ -1050,8 +1090,7 @@ class SecretsFileSecretsManager(ISecretsManager):
         namespace: str,
         secret_ref: str,
     ) -> Optional[str]:
-        del namespace, secret_ref
-        raise self._ephemeral_secrets_are_unsupported()
+        return await self._runtime_file_call(namespace, "get", secret_ref=secret_ref)
 
     async def delete_ephemeral_secret(
         self,
@@ -1059,8 +1098,7 @@ class SecretsFileSecretsManager(ISecretsManager):
         namespace: str,
         secret_ref: str,
     ) -> None:
-        del namespace, secret_ref
-        raise self._ephemeral_secrets_are_unsupported()
+        await self._runtime_file_call(namespace, "delete", secret_ref=secret_ref)
 
     async def purge_expired_ephemeral_secrets(
         self,
@@ -1069,8 +1107,7 @@ class SecretsFileSecretsManager(ISecretsManager):
         now: int,
         limit: int = 100,
     ) -> int:
-        del namespace, now, limit
-        raise self._ephemeral_secrets_are_unsupported()
+        return await self._runtime_file_call(namespace, "purge_expired", now=now, limit=limit)
 
     async def set_many(self, values: Mapping[str, str]) -> None:
         normalized_values = {
