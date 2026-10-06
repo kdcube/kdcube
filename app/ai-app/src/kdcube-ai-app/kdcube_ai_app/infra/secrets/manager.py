@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
 from urllib.parse import quote, urlparse
 
+from kdcube_ai_app.storage.uri import local_file_uri_path
+
 logger = logging.getLogger("kdcube.secrets.manager")
 
 _SECRET_INVENTORY_SUFFIX = ".__keys"
@@ -742,11 +744,11 @@ def _storage_backend_and_key_from_uri(storage_uri: str) -> tuple[str, str]:
         backend_uri = f"s3://{bucket}/{prefix}" if prefix else f"s3://{bucket}"
         return backend_uri, leaf
 
-    file_path = parsed.path if parsed.scheme == "file" else raw
+    file_path = local_file_uri_path(raw) if parsed.scheme == "file" else raw
     resolved = Path(file_path).expanduser().resolve()
     if not resolved.name:
         raise SecretsManagerError(f"Secrets file URI must point to a file: {storage_uri}")
-    backend_uri = f"file://{resolved.parent}"
+    backend_uri = resolved.parent.as_uri()
     return backend_uri, resolved.name
 
 
@@ -796,7 +798,8 @@ def _write_yaml_mapping_to_storage(storage_uri: str, payload: Mapping[str, Any])
         rendered = yaml.safe_dump(dict(payload), allow_unicode=True, sort_keys=False)
         parsed = urlparse(str(storage_uri or "").strip())
         if parsed.scheme in {"", "file"}:
-            file_path = parsed.path if parsed.scheme == "file" else str(storage_uri or "").strip()
+            raw = str(storage_uri or "").strip()
+            file_path = local_file_uri_path(raw) if parsed.scheme == "file" else raw
             resolved = Path(file_path).expanduser().resolve()
             resolved.parent.mkdir(parents=True, exist_ok=True)
             tmp_path = resolved.with_name(f".{resolved.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}")
