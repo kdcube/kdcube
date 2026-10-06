@@ -3811,6 +3811,7 @@ async def token(request: Request) -> Response:
         account_scope: Mapping[str, Mapping[str, list[str] | tuple[str, ...]]] | None = None
         card_pointer = str(rec.get("registry_access_id") or "").strip()
         refresh_card_kind = str(rec.get("card_kind") or "").strip()
+        rotation_limits = {}
         if card_pointer:
             tenant, project = oauth_tenant_project(request)
             credential = rec.get("credential")
@@ -3882,6 +3883,12 @@ async def token(request: Request) -> Response:
             resource_grants = dict(card.resource_grants)
             resource_operations = dict(card.resource_operations)
             account_scope = card.account_scope
+            # Only the stored pointer and resolved live Card supply limits.
+            # The portable store combines them with its stored family cap and
+            # revision under the rotation lock, never a fresh now + TTL cap.
+            rotation_limits["card_incarnation"] = card.card_revision
+            if card.expires_at:
+                rotation_limits["expires_at_cap"] = card.expires_at
         try:
             new_rt = await store.rotate_refresh_token(
                 rt,
@@ -3896,6 +3903,7 @@ async def token(request: Request) -> Response:
                 ),
                 card_kind=refresh_card_kind or None,
                 state=refresh_state,
+                **rotation_limits,
                 **(
                     {"refresh_request_fingerprint": retry_fingerprint}
                     if retry_fingerprint

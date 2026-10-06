@@ -48,3 +48,18 @@ Ordinary human login and delegated service authentication retain their existing
 contracts; a client asks its human operator to complete authorization in their
 own session. The host's broader platform-login policy remains a separate
 boundary.
+
+## Refresh lifetime forwarding
+
+When a refresh record has a server-stored Card pointer, the host resolves that
+live Card before rotation and passes its revision and nonzero absolute deadline
+to the portable grant store. The SQL authority combines that deadline with the
+family's stored cap and checks its revision in the locked rotation transaction.
+A deadline is not renewed from the current time plus a TTL, and request fields
+cannot supply a Card pointer or override these limits. A revoked or expired
+Card is refused before rotation; a store refusal produces no access credential.
+
+Records without a stored Card pointer retain their existing refresh behavior
+and receive no Card-limit arguments. The Redis fallback bounds the successor's
+TTL but has no SQL family revision fence. This host forwarding requires a
+portable grant store that accepts `expires_at_cap` and `card_incarnation`.
