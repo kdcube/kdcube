@@ -16,7 +16,7 @@ from typing import Any
 
 from kdcube_ai_app.auth.bundle.session_issuance import SessionIssuanceRefused
 from kdcube_ai_app.infra.secrets.ephemeral import KDCubeEphemeralSecretStore, ephemeral_secret_store
-from kdcube_ai_app.infra.secrets.manager import ISecretsManager
+from kdcube_ai_app.infra.secrets.manager import ISecretsManager, SecretsManagerError
 
 _SCHEMA = "kdcube.issuance_custody.v1"
 _REF = re.compile(r"[0-9a-f]{32}")
@@ -55,10 +55,28 @@ class KDCubeIssuanceSecretCustody:
     this class cannot infer backend ACLs or restart durability from its name.
     """
 
-    def __init__(self, store: KDCubeEphemeralSecretStore) -> None:
+    def __init__(self, store: KDCubeEphemeralSecretStore, *, settings: Any | None = None) -> None:
         if store.provider_type == "in-memory":
             raise SessionIssuanceRefused("issuance_custody_not_durable")
+        if store.provider_type == "secrets-service":
+            backend = str(getattr(settings, "SECRETS_SERVICE_BACKEND", None) or "").strip().lower().replace("_", "-")
+            if backend != "host-vault":
+                raise SecretsManagerError("Durable secrets-service custody requires the host-vault backend")
+            self._effective_backend = "host-vault"
+        elif store.provider_type == "aws-sm":
+            self._effective_backend = "aws-sm"
+        else:
+            raise SessionIssuanceRefused("issuance_custody_not_durable")
         self._store = store
+
+    @property
+    def namespace(self) -> str:
+        return self._store.namespace
+
+    @property
+    def effective_backend(self) -> str:
+        """Validated selection only; not deployed ACL/restart qualification."""
+        return self._effective_backend
 
     async def create(self, *, secret_ref: str, value: str, expires_at: int) -> bool:
         _validate_ref(secret_ref)
@@ -123,9 +141,11 @@ def issuance_secret_custody(
 ) -> KDCubeIssuanceSecretCustody:
     """Select durable-provider custody; host authorization still needs proof."""
 
-    return KDCubeIssuanceSecretCustody(ephemeral_secret_store(
-        namespace=namespace, settings=settings, manager=manager, durability_required=True,
-    ))
+    return KDCubeIssuanceSecretCustody(
+        ephemeral_secret_store(
+            namespace=namespace, settings=settings, manager=manager, durability_required=True,
+        ), settings=settings,
+    )
 
 
 __all__ = ["KDCubeIssuanceSecretCustody", "issuance_secret_custody"]

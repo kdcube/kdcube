@@ -102,6 +102,11 @@ secrets-service must explicitly select `secrets.service.backend: host-vault`,
 even with an injected manager. The generic `ephemeral_secret_store` gains an
 opt-in `durability_required=True`; its default behavior is unchanged. Provider
 selection is not proof of deployed restart durability or reader authorization.
+The wrapper exposes read-only `namespace` and `effective_backend` (`host-vault`
+or `aws-sm`) from its validated selection. Direct wrapper construction enforces
+the same backend setting. Composition should require this wrapper type and the
+exact namespace, never supply an unverified label or default a missing namespace.
+These properties do not attest a deployed security policy or persistence.
 The host must qualify actual backend behavior and the second-identity negative
 case. In particular, the deployment-wide broker's accepted read tokens share
 one application scope unless a narrower host policy/identity lane is supplied.

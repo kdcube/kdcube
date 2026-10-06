@@ -77,6 +77,10 @@ class KDCubeEphemeralSecretStore:
     def provider_type(self) -> str:
         return self._manager.provider_type
 
+    @property
+    def namespace(self) -> str:
+        return self._namespace.lower()
+
     async def set(
         self,
         *,

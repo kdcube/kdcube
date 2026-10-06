@@ -169,6 +169,23 @@ def test_production_factory_allows_explicit_host_vault_selection(monkeypatch):
     )
 
 
+def test_wrapper_exposes_exact_namespace_and_validated_effective_backend(custody):
+    store, _ = custody
+    assert store.namespace == NAMESPACE
+    assert store.effective_backend == "host-vault"
+    with pytest.raises(AttributeError):
+        store.namespace = "other-namespace"
+    with pytest.raises(AttributeError):
+        store.effective_backend = "aws-sm"
+
+
+@pytest.mark.parametrize("backend", [None, "ephemeral", "unknown"])
+def test_direct_wrapper_constructor_requires_actual_host_vault_setting(backend):
+    store = KDCubeEphemeralSecretStore(_ProviderFixture(), namespace=NAMESPACE)
+    with pytest.raises(SecretsManagerError, match="requires the host-vault backend"):
+        KDCubeIssuanceSecretCustody(store, settings=SimpleNamespace(SECRETS_SERVICE_BACKEND=backend))
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reason", ["issuance_custody_expired", "issuance_custody_invalid",
                                     "issuance_custody_not_durable", CANARY])
@@ -215,6 +232,7 @@ async def test_aws_adapter_identical_replay_preserves_original_version(monkeypat
     client = _FakeAwsSecretsClient()
     manager._session = _FakeAwsSession(client)
     store = issuance_secret_custody(namespace=NAMESPACE, manager=manager)
+    assert store.namespace == NAMESPACE and store.effective_backend == "aws-sm"
     assert await store.create(secret_ref=REF, value=CANARY, expires_at=30)
     original_versions = dict(client.version_tokens)
     assert await store.create(secret_ref=REF, value=CANARY, expires_at=30)
