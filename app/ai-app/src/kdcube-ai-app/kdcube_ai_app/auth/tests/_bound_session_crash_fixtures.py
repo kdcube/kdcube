@@ -57,12 +57,14 @@ class PhasedStore:
 
     async def reserve_issuance(self, *args, **kwargs):
         original = await self.store.reserve_issuance(*args, **kwargs)
-        await self.hook("after_reservation")
+        if self.hook is not None:
+            await self.hook("after_reservation")
         return original
 
     async def activate_reserved(self, *args, **kwargs):
         original = await self.store.activate_reserved(*args, **kwargs)
-        await self.hook("after_activation")
+        if self.hook is not None:
+            await self.hook("after_activation")
         return original
 
 

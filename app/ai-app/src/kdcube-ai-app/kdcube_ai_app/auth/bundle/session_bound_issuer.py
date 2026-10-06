@@ -92,6 +92,7 @@ async def issue_bound_session(
     if reservation is None:
         login = await _store_call(store.get_login_state, user_id)
         version = login.version if login is not None else 1
+        user_revision = login.user_revision if login is not None else 0
         if login is not None and login.user.get("disabled"):
             raise SessionIssuanceRefused("issuance_authority_moved")
         now = int(time.time())
@@ -116,6 +117,7 @@ async def issue_bound_session(
             store.reserve_issuance,
             bound.identity, fingerprint, sid, secret_ref, bound.expires_at,
             session_record=record, expected_version=version,
+            expected_user_revision=user_revision,
             user_record={
                 "sub": user_id, "username": user_id, "provider": provider,
                 "provider_subject": None, "roles": granted_roles,

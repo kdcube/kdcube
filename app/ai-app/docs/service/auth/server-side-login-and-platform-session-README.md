@@ -116,6 +116,15 @@ before changing the user or custody. Revocation, a moved user epoch and expiry
 remain refusals, and replay of an activated reservation never restores earlier
 user grants.
 
+The reservation captures the user's authority revision under the user lock.
+First activation takes the same lock and refuses if that revision changed:
+an older pending issuance cannot replace a newer grant for the same subject.
+The issuer also passes the revision observed before signing (or an absence
+fence for a new subject), so an intervening update or creation refuses before
+reservation. Existing pending rows without a captured revision fail closed;
+already-active rows can still recover their original receipt without changing
+the current user's grants.
+
 The result `BoundIssuance(session_id, secret_ref, bearer_sha256, outcome)` exposes
 coordinates and a digest; the original bearer remains in the host-injected
 durable secret store. Its `create(secret_ref=..., value=..., expires_at=...)`

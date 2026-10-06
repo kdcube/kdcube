@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS {schema}.{TABLE_ISSUANCES} (
     subject             TEXT NOT NULL
                         REFERENCES {schema}.{TABLE_USERS}(subject),
     expected_version    BIGINT NOT NULL CHECK (expected_version >= 1),
+    expected_user_revision BIGINT CHECK (expected_user_revision >= 1),
     session_record      JSONB NOT NULL,
     user_record         JSONB,
     expires_at          TIMESTAMPTZ NOT NULL,
@@ -83,4 +84,9 @@ CREATE TABLE IF NOT EXISTS {schema}.{TABLE_ISSUANCES} (
 
 ALTER TABLE {schema}.{TABLE_ISSUANCES}
     ADD COLUMN IF NOT EXISTS user_record JSONB;
+
+-- An older pending reservation has no trustworthy historical revision.
+-- Leave it NULL; first activation refuses rather than inventing a fence.
+ALTER TABLE {schema}.{TABLE_ISSUANCES}
+    ADD COLUMN IF NOT EXISTS expected_user_revision BIGINT;
 """

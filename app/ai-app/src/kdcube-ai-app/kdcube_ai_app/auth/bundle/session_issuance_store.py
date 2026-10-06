@@ -61,6 +61,7 @@ class SessionIssuanceReservation:
     state: str
     created: bool = False
     user_record: dict[str, Any] | None = None
+    expected_user_revision: int | None = None
 
 
 class PostgresSessionIssuanceStore:
@@ -82,6 +83,8 @@ class PostgresSessionIssuanceStore:
             expected_version=int(value["expected_version"]),
             record=_record(value["session_record"]), state=value["state"], created=created,
             user_record=_record(value.get("user_record")) or None,
+            expected_user_revision=(int(value["expected_user_revision"])
+                                    if value.get("expected_user_revision") is not None else None),
         )
 
     async def read_issuance(self, identity: str) -> SessionIssuanceReservation | None:
@@ -98,6 +101,7 @@ class PostgresSessionIssuanceStore:
         self, identity: str, inputs_digest: str, session_id: str, secret_ref: str,
         expires_at: int, *, session_record: Mapping[str, Any], expected_version: int,
         user_record: Mapping[str, Any] | None = None,
+        expected_user_revision: int | None = None,
     ) -> SessionIssuanceReservation:
         if not isinstance(session_record, Mapping):
             raise SessionIssuanceRefused("issuance_record_invalid")
@@ -109,6 +113,8 @@ class PostgresSessionIssuanceStore:
             or type(session_id) is not str or not session_id or len(session_id) > 256
             or type(expires_at) is not int or expires_at <= 0
             or type(expected_version) is not int or expected_version < 1
+            or (expected_user_revision is not None
+                and (type(expected_user_revision) is not int or expected_user_revision < 0))
             or record.get("session_id") != session_id
             or not isinstance(record.get("sub"), str) or not record["sub"]
             or type(record.get("token_sha256")) is not str
@@ -149,23 +155,24 @@ class PostgresSessionIssuanceStore:
                             or original.record.get("sub") != record["sub"]):
                         raise SessionIssuanceRefused("issuance_identity_conflict")
                     return original
+                provisioned_subject = None
                 if profile is not None:
                     provisioned = {**profile, "roles": [], "permissions": []}
-                    await connection.execute(
+                    provisioned_subject = await connection.fetchval(
                         f"""
                         INSERT INTO {self.schema}.{TABLE_USERS} (
                             subject, tenant, project, record, session_version,
                             state, disabled, created_at, updated_at
                         ) VALUES ($1, $2, $3, ($4::text)::jsonb, 1,
                             'active', FALSE, to_timestamp($5), to_timestamp($5))
-                        ON CONFLICT (subject) DO NOTHING
+                        ON CONFLICT (subject) DO NOTHING RETURNING subject
                         """, record["sub"], self.tenant, self.project,
                         json.dumps(provisioned, sort_keys=True, separators=(",", ":")), record["iat"],
                     )
                 # All authority writes lock the user before a session/issuance.
                 # Following that order avoids a revoke-versus-activate deadlock.
                 user = await connection.fetchrow(
-                    f"SELECT subject, session_version, record, state, disabled FROM {self.schema}.{TABLE_USERS} "
+                    f"SELECT subject, session_version, revision, record, state, disabled FROM {self.schema}.{TABLE_USERS} "
                     "WHERE subject = $1 FOR UPDATE", record["sub"],
                 )
                 if user is None:
@@ -173,16 +180,23 @@ class PostgresSessionIssuanceStore:
                 if (user["state"] != "active" or user["disabled"]
                         or int(user["session_version"]) != expected_version):
                     raise SessionIssuanceRefused("issuance_authority_moved")
+                captured_revision = int(user["revision"])
+                if (expected_user_revision is not None
+                        and ((expected_user_revision == 0 and provisioned_subject is None)
+                             or (expected_user_revision > 0
+                                 and captured_revision != expected_user_revision))):
+                    raise SessionIssuanceRefused("issuance_authority_moved")
                 inserted = await connection.fetchrow(
                     f"""
                     INSERT INTO {self.schema}.{TABLE_ISSUANCES} (
                         identity, inputs_digest, session_id, secret_ref, subject,
-                        expected_version, session_record, expires_at, user_record
-                    ) VALUES ($1, $2, $3, $4, $5, $6, ($7::text)::jsonb, to_timestamp($8), ($9::text)::jsonb)
+                        expected_version, session_record, expires_at, user_record, expected_user_revision
+                    ) VALUES ($1, $2, $3, $4, $5, $6, ($7::text)::jsonb, to_timestamp($8), ($9::text)::jsonb, $10)
                     ON CONFLICT (identity) DO NOTHING RETURNING identity
                     """, identity, inputs_digest, session_id, secret_ref, record["sub"],
                     expected_version, encoded, expires_at,
                     json.dumps(profile, sort_keys=True, separators=(",", ":")) if profile is not None else None,
+                    captured_revision,
                 )
                 row = await connection.fetchrow(
                     f"SELECT *, floor(extract(epoch FROM expires_at))::bigint AS expires_epoch "
@@ -204,7 +218,7 @@ class PostgresSessionIssuanceStore:
         async with self._pool.acquire() as connection:
             async with connection.transaction():
                 user = await connection.fetchrow(
-                    f"SELECT session_version, record, state, disabled FROM {self.schema}.{TABLE_USERS} "
+                    f"SELECT session_version, revision, record, state, disabled FROM {self.schema}.{TABLE_USERS} "
                     "WHERE subject = $1 FOR UPDATE", initial.record["sub"],
                 )
                 row = await connection.fetchrow(
@@ -219,6 +233,10 @@ class PostgresSessionIssuanceStore:
                     raise SessionIssuanceRefused("issuance_expired")
                 if (user is None or user["state"] != "active" or user["disabled"]
                         or int(user["session_version"]) != current.expected_version):
+                    raise SessionIssuanceRefused("issuance_authority_moved")
+                if (current.state != "active"
+                        and (current.expected_user_revision is None
+                             or int(user["revision"]) != current.expected_user_revision)):
                     raise SessionIssuanceRefused("issuance_authority_moved")
                 record = current.record
                 await connection.execute(

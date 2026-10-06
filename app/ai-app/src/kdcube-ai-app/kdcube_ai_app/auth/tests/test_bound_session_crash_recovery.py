@@ -296,6 +296,60 @@ async def test_user_authority_moves_after_custody_before_activation(store, mutat
 
 
 @pytest.mark.asyncio
+async def test_sigkill_old_issuance_refuses_after_newer_grant_activates(store):
+    bound = context(store)
+    custody = PostgresTestCustody(store)
+    await custody.ensure_schema()
+    await kill_after_commit(store, bound, "after_reservation")
+    old = await store.read_issuance(bound.identity)
+    newer = await authority(store).issue_bound_session(
+        replace(bound, transaction_id="d" * 64), user_id="integration:unit:human",
+        roles=["delegated-client"], permissions=["new:read", "new:write"], custody=custody,
+    )
+    newest_profile = await store.get_user("integration:unit:human")
+    with pytest.raises(SessionIssuanceRefused, match="^issuance_authority_moved$"):
+        await issue(store, custody, bound)
+    assert (await store.read_issuance(bound.identity)).session_id == old.session_id
+    assert (await store.read_issuance(bound.identity)).state == "reserved"
+    assert await store.get_user("integration:unit:human") == newest_profile
+    assert await counts(store) == (1, 2, 1)
+    token = await custody.get(secret_ref=newer.secret_ref)
+    user = await BundleSessionAuthManager(authority=authority(store)).authenticate(token)
+    assert user.permissions == ["new:read", "new:write"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("existing", [False, True])
+async def test_authority_moves_between_login_read_and_reservation(store, existing):
+    if existing:
+        await store.register_user(sub="integration:unit:human", updates={}, now=int(time.time()))
+
+    class ChangedAfterRead(PhasedStore):
+        async def get_login_state(self, sub):
+            original = await store.get_login_state(sub)
+            await store.register_user(
+                sub=sub, updates={"roles": [], "permissions": ["newer:grant"]},
+                now=int(time.time()),
+            )
+            return original
+
+    issuer = BundleSessionAuthority(
+        tenant=store.tenant, project=store.project,
+        authority_store=ChangedAfterRead(store, None), secret="unit-session-signing-secret",
+    )
+    custody = PostgresTestCustody(store)
+    await custody.ensure_schema()
+    with pytest.raises(SessionIssuanceRefused, match="^issuance_authority_moved$"):
+        await issuer.issue_bound_session(
+            context(store), user_id="integration:unit:human", roles=["delegated-client"],
+            permissions=["records:read"], custody=custody,
+        )
+    assert (await store.get_user("integration:unit:human"))["permissions"] == ["newer:grant"]
+    assert await counts(store) == (1, 0, 0)
+    assert await custody.count() == 0
+
+
+@pytest.mark.asyncio
 async def test_deadline_passes_before_locked_activation_without_revival(store):
     bound = replace(context(store), expires_at=int(time.time()) + 2)
     custody = PostgresTestCustody(store)

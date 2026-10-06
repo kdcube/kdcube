@@ -47,11 +47,12 @@ def candidate(expires_at, *, sub="integration:unit:human"):
     }
 
 
-async def reserve(store, *, identity="a" * 64, digest="b" * 64, expires_at=None, sub="integration:unit:human"):
+async def reserve(store, *, identity="a" * 64, digest="b" * 64, expires_at=None,
+                  sub="integration:unit:human", permissions=("records:read",)):
     expiry = expires_at if expires_at is not None else int(time.time()) + 600
     sid, ref, record = candidate(expiry, sub=sub)
     profile = {
-        "sub": sub, "roles": ["delegated-client"], "permissions": ["records:read"],
+        "sub": sub, "roles": ["delegated-client"], "permissions": list(permissions),
         "provider": "integration", "disabled": False,
         "created_at": record["iat"], "updated_at": record["iat"],
     }
@@ -71,6 +72,7 @@ async def counts(store):
 async def test_reservation_provisions_user_without_activating_session(store):
     original = await reserve(store)
     assert original.created and original.state == "reserved"
+    assert original.expected_user_revision == 1
     assert await counts(store) == (1, 1, 0)
     assert (await store.get_user(original.record["sub"]))["permissions"] == []
     row = await store.read_issuance(original.identity)
@@ -90,6 +92,95 @@ async def test_authority_changes_only_on_first_activation_not_recovery(store):
     )
     await store.activate_reserved(original.identity)
     assert (await store.get_user(original.record["sub"]))["permissions"] == ["newer:grant"]
+
+
+@pytest.mark.asyncio
+async def test_pending_old_reservation_cannot_overwrite_newer_activated_grant(store):
+    old = await reserve(store, permissions=("old:read",))
+    newer = await reserve(store, identity="d" * 64, permissions=("new:read", "new:write"))
+    await store.activate_reserved(newer.identity)
+    newer_profile = await store.get_user(newer.record["sub"])
+    newer_revision = (await store.get_login_state(newer.record["sub"])).user_revision
+    with pytest.raises(SessionIssuanceRefused, match="^issuance_authority_moved$"):
+        await store.activate_reserved(old.identity)
+    assert (await store.read_issuance(old.identity)).state == "reserved"
+    assert await store.get_user(newer.record["sub"]) == newer_profile
+    assert (await store.get_login_state(newer.record["sub"])).user_revision == newer_revision
+    assert await counts(store) == (1, 2, 1)
+
+
+@pytest.mark.asyncio
+async def test_pending_reservation_refuses_changed_grants_without_epoch_change(store):
+    original = await reserve(store)
+    before = await store.get_login_state(original.record["sub"])
+    await store.register_user(
+        sub=original.record["sub"], updates={"roles": [], "permissions": ["newer:grant"]},
+        now=int(time.time()),
+    )
+    after = await store.get_login_state(original.record["sub"])
+    assert before.version == after.version
+    assert before.user_revision < after.user_revision
+    with pytest.raises(SessionIssuanceRefused, match="^issuance_authority_moved$"):
+        await store.activate_reserved(original.identity)
+    assert (await store.get_user(original.record["sub"]))["permissions"] == ["newer:grant"]
+    assert await counts(store) == (1, 1, 0)
+
+
+@pytest.mark.asyncio
+async def test_legacy_pending_reservation_with_unknown_revision_refuses_activation(store):
+    original = await reserve(store)
+    async with store._pool.acquire() as connection:
+        await connection.execute(
+            f"UPDATE {store.schema}.{TABLE_ISSUANCES} SET expected_user_revision = NULL WHERE identity = $1",
+            original.identity,
+        )
+    with pytest.raises(SessionIssuanceRefused, match="^issuance_authority_moved$"):
+        await store.activate_reserved(original.identity)
+    assert await counts(store) == (1, 1, 0)
+
+
+@pytest.mark.asyncio
+async def test_legacy_active_reservation_replays_without_restoring_older_grants(store):
+    original = await reserve(store)
+    await store.activate_reserved(original.identity)
+    async with store._pool.acquire() as connection:
+        await connection.execute(
+            f"UPDATE {store.schema}.{TABLE_ISSUANCES} SET expected_user_revision = NULL WHERE identity = $1",
+            original.identity,
+        )
+    await store.register_user(
+        sub=original.record["sub"], updates={"permissions": ["newer:grant"]}, now=int(time.time()),
+    )
+    recovered = await store.activate_reserved(original.identity)
+    assert recovered.session_id == original.session_id
+    assert recovered.expected_user_revision is None
+    assert (await store.get_user(original.record["sub"]))["permissions"] == ["newer:grant"]
+    assert await counts(store) == (1, 1, 1)
+
+
+@pytest.mark.asyncio
+async def test_additive_revision_migration_preserves_active_replay_and_refuses_pending(store):
+    active = await reserve(store)
+    await store.activate_reserved(active.identity)
+    pending = await reserve(store, identity="d" * 64, permissions=("old:read",))
+    await store.register_user(
+        sub=active.record["sub"], updates={"permissions": ["newer:grant"]}, now=int(time.time()),
+    )
+    async with store._pool.acquire() as connection:
+        await connection.execute(
+            f"ALTER TABLE {store.schema}.{TABLE_ISSUANCES} DROP COLUMN expected_user_revision",
+        )
+    await store.ensure_schema()
+    await store.ensure_schema()
+    assert (await store.read_issuance(pending.identity)).expected_user_revision is None
+    with pytest.raises(SessionIssuanceRefused, match="^issuance_authority_moved$"):
+        await store.activate_reserved(pending.identity)
+    recovered = await store.activate_reserved(active.identity)
+    assert recovered.session_id == active.session_id
+    assert recovered.expected_user_revision is None
+    assert (await store.get_user(active.record["sub"]))["permissions"] == ["newer:grant"]
+    assert (await store.read_issuance(pending.identity)).state == "reserved"
+    assert await counts(store) == (1, 2, 1)
 
 
 @pytest.mark.asyncio
