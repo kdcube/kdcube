@@ -289,6 +289,10 @@ def _http_custody():
     {"status": "ok", "vault": {"ok": 1, "code": "ok"}},
     {"status": "ok", "vault": {"ok": False, "code": "ok"}},
     {"status": "ok", "vault": {"ok": True, "code": "backend_unavailable"}},
+    {"status": "ok", "vault": {"ok": True, "code": "ok"}, "extra": True},
+    {"status": "ok", "vault": {"ok": True, "code": "ok", "extra": True}},
+    {"status": "ok", "vault": {"ok": True, "code": "ok", "deployment_id": True}},
+    {"status": "ok", "vault": {"ok": True, "code": "ok", "deployment_id": ""}},
 ])
 async def test_declared_host_vault_refuses_unqualified_running_backend(monkeypatch, payload):
     client = _FakeSecretsHttpClient(_FakeHttpResponse(200, payload))
@@ -324,7 +328,8 @@ async def test_health_transport_or_json_exception_is_sanitized(monkeypatch, fail
 
 
 @pytest.mark.asyncio
-async def test_qualification_is_not_cached_across_backend_replacement(monkeypatch):
+@pytest.mark.parametrize("operation", ["create", "get", "purge_expired"])
+async def test_qualification_is_not_cached_across_backend_replacement(monkeypatch, operation):
     client = _FakeSecretsHttpClient(_FakeHttpResponse(200, {
         "status": "ok", "vault": {"ok": True, "code": "ok"},
     }))
@@ -332,10 +337,25 @@ async def test_qualification_is_not_cached_across_backend_replacement(monkeypatc
     custody = _http_custody()
     await custody.qualify()
     client.response = _FakeHttpResponse(200, {"status": "ok"})
+    arguments = {
+        "create": {"secret_ref": REF, "value": CANARY, "expires_at": 30},
+        "get": {"secret_ref": REF},
+        "purge_expired": {"now": 10, "limit": 1},
+    }
+    monkeypatch.setattr(issuance_module, "time", SimpleNamespace(time=lambda: 10))
     with pytest.raises(SessionIssuanceRefused, match="^issuance_custody_not_durable$"):
-        await custody.get(secret_ref=REF)
+        await getattr(custody, operation)(**arguments[operation])
     assert len(client.requests) == 2
     assert all(request[1].endswith("/health") for request in client.requests)
+
+
+@pytest.mark.asyncio
+async def test_host_vault_health_with_deployment_coordinate_is_qualified(monkeypatch):
+    client = _FakeSecretsHttpClient(_FakeHttpResponse(200, {
+        "status": "ok", "vault": {"ok": True, "code": "ok", "deployment_id": "fixture/project"},
+    }))
+    monkeypatch.setattr(manager_module, "_get_httpx", lambda: _FakeHttpxModule(client))
+    await _http_custody().qualify()
 
 
 @pytest.mark.asyncio

@@ -1212,9 +1212,15 @@ class SecretsServiceSecretsManager(ISecretsManager):
         except Exception:
             raise SecretsManagerError("Secrets service backend is unavailable") from None
         vault = payload.get("vault") if type(payload) is dict else None
-        return (type(payload) is dict and payload.get("status") == "ok"
-                and type(vault) is dict and vault.get("ok") is True
-                and vault.get("code") == "ok")
+        return (type(payload) is dict and set(payload) == {"status", "vault"}
+                and payload["status"] == "ok" and type(vault) is dict
+                and {"ok", "code"} <= set(vault) <= {"ok", "code", "deployment_id"}
+                and vault["ok"] is True and vault["code"] == "ok"
+                and ("deployment_id" not in vault or (
+                    type(vault["deployment_id"]) is str
+                    and bool(vault["deployment_id"].strip())
+                    and len(vault["deployment_id"]) <= 1024
+                )))
 
     @staticmethod
     def _validate_write_response(response: Any, *, operation: str) -> int | None:
