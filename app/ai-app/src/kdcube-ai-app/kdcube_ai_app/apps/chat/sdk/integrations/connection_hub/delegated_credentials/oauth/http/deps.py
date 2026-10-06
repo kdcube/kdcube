@@ -16,7 +16,7 @@ to) and the auth cookie name are resolved from platform descriptors.
 """
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Mapping, Optional
 
 from fastapi import Request
 
@@ -32,6 +32,21 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentia
 )
 
 AuthenticateFn = Callable[[str], Awaitable[Optional[dict]]]
+
+
+def is_integration_consent_identity(user: Mapping[str, Any]) -> bool:
+    """Identify a verified external-client principal at the human consent boundary.
+
+    The session authenticator supplies these identity fields. The delegated
+    issuer reserves ``integration:`` subjects for machine credentials; a
+    display name, requested grant or unverified token claim is not evidence.
+    Authentication itself remains usable by delegated service surfaces.
+    """
+    return any(
+        isinstance(user.get(field), str) and user[field].startswith("integration:")
+        for field in ("sub", "user_id", "id")
+    )
+
 
 def oauth_tenant_project(source: Any | None = None) -> tuple[str, str]:
     cfg = oauth_delegated_config(source)

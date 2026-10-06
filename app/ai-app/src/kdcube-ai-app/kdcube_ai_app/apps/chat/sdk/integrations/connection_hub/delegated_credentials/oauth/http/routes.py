@@ -89,6 +89,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentia
     get_authenticate,
     get_grant_store,
     is_admin,
+    is_integration_consent_identity,
     oauth_tenant_project,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.http.discovery import resolve_issuer
@@ -958,6 +959,10 @@ async def _require_user(request: Request) -> Tuple[Optional[dict], Optional[Resp
     user = await get_authenticate(request)(token)
     if not user:
         return None, JSONResponse(status_code=401, content={"error": "login_required"})
+    if is_integration_consent_identity(user):
+        return None, JSONResponse(
+            status_code=403, content={"error": "oauth_human_consent_required"}
+        )
     return user, None
 
 

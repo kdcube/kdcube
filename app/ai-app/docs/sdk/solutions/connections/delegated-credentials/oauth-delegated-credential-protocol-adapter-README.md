@@ -5,7 +5,7 @@ summary: "Points from KDCube's OAuth host routes to Connection Hub's canonical d
 status: active
 tags: ["sdk", "connections", "connection-hub", "oauth", "delegated-credentials"]
 keywords: ["OAuth2 authorization server", "PKCE", "CIMD", "dynamic client registration", "client metadata", "Connection Hub"]
-updated_at: 2026-09-23
+updated_at: 2026-10-06
 see_also:
   - https://github.com/elenaviter/app-ecosystem/blob/main/docs/connection-hub/package/oauth-delegated-credential-protocol.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
@@ -31,3 +31,20 @@ The KDCube DCR host accepts the bounded public registration metadata defined by
 that canonical contract, persists it with the client snapshot, and passes it to
 the resulting Card. The fields are owner-facing identification only; KDCube
 does not project them into caller identity or policy.
+
+## Human consent admission
+
+The KDCube host admits verified human platform sessions to authorization,
+device verification, consent draft, consent decision, and consent submission.
+An authenticated external-client principal whose verified identity starts with
+`integration:` receives HTTP 403 with `oauth_human_consent_required` at their
+shared admission boundary, before any consent draft is read or consumed, device
+request approved, authorization code created, or credential minted. Both
+Card-bound and unbound integration credentials receive that refusal.
+
+This check uses the authenticator's subject fields (`sub`, `user_id`, `id`).
+Display names and caller-supplied request data do not classify a principal.
+Ordinary human login and delegated service authentication retain their existing
+contracts; a client asks its human operator to complete authorization in their
+own session. The host's broader platform-login policy remains a separate
+boundary.
