@@ -7,6 +7,10 @@ import json
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
 
+from kdcube_ai_app.auth.bundle.session_issuance_store import (
+    PostgresSessionIssuanceStore,
+    SessionIssuanceReservation,
+)
 from kdcube_ai_app.auth.bundle.session_schema import (
     TABLE_SESSIONS,
     TABLE_USERS,
@@ -136,6 +140,29 @@ class PostgresBundleSessionStore:
         async with self._pool.acquire() as connection:
             async with connection.transaction():
                 await connection.execute(bundle_session_schema_sql(self.schema))
+
+    async def read_issuance(self, identity: str) -> SessionIssuanceReservation | None:
+        return await PostgresSessionIssuanceStore(
+            pg_pool=self._pool, schema=self.schema, tenant=self.tenant, project=self.project,
+        ).read_issuance(identity)
+
+    async def reserve_issuance(
+        self, identity: str, inputs_digest: str, session_id: str, secret_ref: str,
+        expires_at: int, *, session_record: Mapping[str, Any], expected_version: int,
+        user_record: Mapping[str, Any] | None = None,
+    ) -> SessionIssuanceReservation:
+        return await PostgresSessionIssuanceStore(
+            pg_pool=self._pool, schema=self.schema, tenant=self.tenant, project=self.project,
+        ).reserve_issuance(
+            identity, inputs_digest, session_id, secret_ref, expires_at,
+            session_record=session_record, expected_version=expected_version,
+            user_record=user_record,
+        )
+
+    async def activate_reserved(self, identity: str) -> SessionIssuanceReservation:
+        return await PostgresSessionIssuanceStore(
+            pg_pool=self._pool, schema=self.schema, tenant=self.tenant, project=self.project,
+        ).activate_reserved(identity)
 
     async def import_user_authority(
         self,

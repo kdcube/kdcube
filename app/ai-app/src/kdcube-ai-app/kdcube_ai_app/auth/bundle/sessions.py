@@ -25,6 +25,8 @@ from typing import Any, Awaitable, Callable, Iterable, Mapping, Optional
 
 from kdcube_ai_app.auth.AuthManager import AuthManager, AuthenticationError, User, email_verified_claim
 from kdcube_ai_app.auth.bundle.session_store import BundleSessionStore
+from kdcube_ai_app.auth.bundle.session_issuance import BoundIssuance, IssuanceContext
+from kdcube_ai_app.auth.bundle.session_bound_issuer import IssuanceSecretCustody
 from kdcube_ai_app.auth.session_authority_runtime import (
     bundle_session_store_for,
 )
@@ -542,6 +544,27 @@ class BundleSessionAuthority:
                 idle_ttl_seconds=idle_ttl_seconds,
                 metadata=metadata,
             )
+
+    async def issue_bound_session(
+        self, context: IssuanceContext, *, user_id: str, roles: list[str],
+        permissions: list[str], custody: IssuanceSecretCustody,
+    ) -> BoundIssuance:
+        """Issue/recover a trusted host's committed credential into durable custody.
+
+        Hosts validate actor, intent, effect and live target eligibility before
+        this internal call. Request JSON never supplies that authority. Redis
+        migration storage and ephemeral custody are not recovery backends.
+        """
+        from kdcube_ai_app.auth.bundle.session_bound_issuer import issue_bound_session
+
+        async def sign(claims):
+            return _make_token(claims, secret=await self._resolve_secret())
+
+        return await issue_bound_session(
+            context, tenant=self.tenant, project=self.project,
+            store=self._active_authority_store(), user_id=user_id,
+            roles=roles, permissions=permissions, custody=custody, sign=sign,
+        )
 
     async def _login_durable(
         self,

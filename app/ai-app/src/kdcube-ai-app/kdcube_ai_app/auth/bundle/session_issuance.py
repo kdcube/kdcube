@@ -136,6 +136,54 @@ class SessionIssuanceContextReader(Protocol):
 
 
 @dataclass(frozen=True)
+class IssuanceContext:
+    """A trusted host's validated immutable committed-intent context.
+
+    The host derives this from its authenticated actor, validated effect and
+    committed decision. This internal SDK value is not an HTTP request model
+    or an authorization proof a caller may manufacture from request JSON.
+    """
+
+    tenant: str
+    project: str
+    transaction_id: str
+    slot: str
+    actor: str
+    effect_digest: str
+    receipt_digest: str
+    access_id: str
+    target_incarnation: int
+    expires_at: int
+
+    @classmethod
+    def from_context(cls, context: object) -> IssuanceContext:
+        if isinstance(context, dict):
+            raise SessionIssuanceRefused("issuance_context_invalid")
+        try:
+            value = cls(**{name: getattr(context, name) for name in cls.__dataclass_fields__})
+        except (AttributeError, TypeError):
+            raise SessionIssuanceRefused("issuance_context_invalid") from None
+        for name in ("tenant", "project", "actor", "access_id"):
+            _text(getattr(value, name), reason="issuance_context_invalid")
+        _text(value.slot, reason="issuance_context_invalid", ascii_only=True)
+        for name in ("transaction_id", "effect_digest", "receipt_digest"):
+            _digest(getattr(value, name), reason="issuance_context_invalid")
+        if (type(value.target_incarnation) is not int or value.target_incarnation < 1
+                or type(value.expires_at) is not int or value.expires_at <= 0):
+            raise SessionIssuanceRefused("issuance_context_invalid")
+        return value
+
+    @property
+    def identity(self) -> str:
+        return hashlib.sha256(_canonical([
+            self.tenant, self.project, self.transaction_id, self.slot,
+        ]).encode("ascii")).hexdigest()
+
+    def to_record(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class SessionIssuanceReceipt:
     """Replay-stable public outcome; bearer values stay in secret custody."""
 
@@ -156,3 +204,7 @@ class SessionIssuanceReceipt:
     def to_public_dict(self) -> dict[str, str]:
         self.validated()
         return asdict(self)
+
+
+# The host-facing contract and the existing internal receipt share one type.
+BoundIssuance = SessionIssuanceReceipt

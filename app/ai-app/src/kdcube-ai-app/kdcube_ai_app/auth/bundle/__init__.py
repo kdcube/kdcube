@@ -3,7 +3,8 @@
 
 """Bundle-owned platform session auth helpers."""
 
-from .sessions import (
+from kdcube_ai_app.auth.bundle.session_issuance import BoundIssuance, IssuanceContext
+from kdcube_ai_app.auth.bundle.sessions import (
     BUNDLE_SESSION_SECRET_KEY,
     SESSION_TOKEN_PREFIX,
     SESSION_TOKEN_SCHEMA,
@@ -27,6 +28,8 @@ from .sessions import (
 )
 
 __all__ = [
+    "BoundIssuance",
+    "IssuanceContext",
     "BUNDLE_SESSION_SECRET_KEY",
     "SESSION_TOKEN_PREFIX",
     "SESSION_TOKEN_SCHEMA",

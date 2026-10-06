@@ -4,7 +4,7 @@ title: "Server-Side Login And The Platform Session"
 summary: "How an app-defined login turns an authenticator proof into one KDCube-owned platform session with PostgreSQL authority, a fenced Redis projection, protected browser entry, and sliding lifetime."
 tags: ["service", "auth", "application", "bundle", "session", "sso"]
 keywords: ["server-side login", "app-defined authenticator", "platform session", "platform principal", "connection edge", "bundle", "kst1", "login lane", "login", "logout", "register", "invalidate", "sliding session", "OIDC", "Cognito hosted UI"]
-updated_at: 2026-09-23
+updated_at: 2026-10-06
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/app-simple-idp-bridge-README.md
@@ -95,6 +95,40 @@ Platform UserSession
 | PostgreSQL | Platform | Authoritative bundle users, user versions, bundle sessions, platform sessions, revocation state, and expiry. |
 | Redis | Platform | Stores generation-scoped session projections with native TTL plus digest-only login-attempt pointers bound to the current Redis run. Cache misses rebuild from PostgreSQL. |
 | Deployment secret provider | Deployment | Stores `platform.services.session_token.secret` and short-lived login-attempt payloads. Local runtimes use the host vault; hosted runtimes use dedicated Secrets Manager records. |
+
+## Recoverable Committed Session Issuance
+
+`BundleSessionAuthority.issue_bound_session(context, *, user_id, roles,
+permissions, custody)` is an internal host integration point for a credential
+effect whose authenticated actor, immutable intent and committed decision have
+already been validated. The host also enforces the current target's eligibility.
+`IssuanceContext` carries the tenant, project, transaction, effect slot, actor,
+effect and receipt digests, access identity, target incarnation and absolute
+expiry. The SDK compares every immutable context and grant field on replay.
+
+The durable sequence is reservation, create-only original bearer custody, then
+session activation. PostgreSQL reserves the fixed session id, opaque secret
+reference, signed inputs and bearer digest before an active session exists.
+Register-if-absent happens in that same transaction; granted roles and
+permissions are installed at first activation. An identical retry uses the
+stored reservation and original custody entry. A conflicting request refuses
+before changing the user or custody. Revocation, a moved user epoch and expiry
+remain refusals, and replay of an activated reservation never restores earlier
+user grants.
+
+The result `BoundIssuance(session_id, secret_ref, bearer_sha256, outcome)` exposes
+coordinates and a digest; the original bearer remains in the host-injected
+durable secret store. Its `create` is atomic/create-only and its `get` returns
+`None` only for absence; unavailable or uncertain outcomes raise. Expiry and
+signing-key changes cannot cause a retry to mint a new session identity.
+Reservations remain identity tombstones after completion or expiry, so any
+retention policy must preserve their no-remint identity.
+
+This source integration point currently has PostgreSQL reservation/replay and
+basic issuer tests. Deployment integration still requires a qualified durable
+custody backend, crash/restart and unknown-outcome gates, host target fencing,
+and the OAuth refresh/refusal-cleanup adapters. Ordinary `login` and
+`login_or_register` keep their existing behavior.
 
 ## Descriptor Contract
 
