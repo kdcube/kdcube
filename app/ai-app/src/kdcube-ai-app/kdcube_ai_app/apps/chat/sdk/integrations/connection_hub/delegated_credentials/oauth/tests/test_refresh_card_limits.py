@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import time
+from functools import wraps
 from types import SimpleNamespace
 
 import pytest
@@ -76,6 +77,7 @@ async def test_pointer_refresh_forwards_exact_live_card_limits(ctx, monkeypatch,
         assert kwargs["expected_grantor_subject"] == "human"
         return card
 
+    @wraps(original_rotate)
     async def rotate(token, **kwargs):
         rotations.append(kwargs)
         return await original_rotate(token, **kwargs)
@@ -110,6 +112,7 @@ async def test_unbound_refresh_does_not_accept_caller_card_limits(ctx, monkeypat
     async def resolve(*args, **kwargs):
         pytest.fail("An unbound stored record must not resolve a caller Card")
 
+    @wraps(original_rotate)
     async def rotate(token, **kwargs):
         rotations.append(kwargs)
         return await original_rotate(token, **kwargs)
@@ -145,6 +148,149 @@ async def test_deadline_passed_after_live_lookup_refuses_before_mint(ctx, monkey
 
     assert response.status_code == 400
     assert response.json()["error"] == "invalid_grant"
+    assert issued == []
+    assert await store.validate_refresh_token(token) is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api", ["legacy", "cap_only", "revision_only", "kwargs", "positional_only", "uninspectable"])
+@pytest.mark.parametrize("bounded", [False, True])
+async def test_unsupported_card_rotation_api_refuses_before_consume_or_mint(ctx, monkeypatch, caplog, api, bounded):
+    client, store, issued = ctx
+    token = await _seed(store)
+    rotations = []
+
+    async def resolve(*args, **kwargs):
+        return _card(expires_at=int(time.time()) + 300 if bounded else 0)
+
+    async def legacy(token, *, scopes=None):
+        rotations.append(token)
+
+    async def cap_only(token, *, expires_at_cap=None):
+        rotations.append(token)
+
+    async def revision_only(token, *, card_incarnation=None):
+        rotations.append(token)
+
+    async def kwargs_sink(token, **kwargs):
+        rotations.append(token)
+
+    async def positional_only(token, expires_at_cap=None, card_incarnation=None, /):
+        rotations.append(token)
+
+    class Uninspectable:
+        __signature__ = 1
+
+        async def __call__(self, *args, **kwargs):
+            rotations.append(token)
+
+    methods = {
+        "legacy": legacy, "cap_only": cap_only, "revision_only": revision_only,
+        "kwargs": kwargs_sink, "positional_only": positional_only,
+        "uninspectable": Uninspectable(),
+    }
+    monkeypatch.setattr(store, "rotate_refresh_token", methods[api])
+    monkeypatch.setattr(routes, "resolve_live_grant_card", resolve)
+    with caplog.at_level("WARNING", logger="kdcube.connection_hub.oauth"):
+        response = client.post("/oauth/token", data={
+            "grant_type": "refresh_token", "refresh_token": token, "client_id": "client",
+        })
+
+    assert response.status_code == 503, response.json()
+    assert response.json()["error"] == "temporarily_unavailable"
+    assert response.headers["retry-after"] == "30"
+    assert "refresh_card_limits_unsupported" in caplog.text
+    assert token not in caplog.text
+    assert rotations == []
+    assert issued == []
+    assert await store.validate_refresh_token(token) is not None
+
+
+def test_mixed_facade_and_authority_api_is_not_qualified():
+    async def current(token, *, expires_at_cap=None, card_incarnation=None):
+        pass
+
+    async def legacy(token):
+        pass
+
+    authority = SimpleNamespace(rotate_refresh_token=legacy)
+    store = SimpleNamespace(rotate_refresh_token=current, _authority_store=authority)
+    assert routes._refresh_store_supports_card_limits(store) is False
+    authority.rotate_refresh_token = current
+    assert routes._refresh_store_supports_card_limits(store) is True
+
+
+@pytest.mark.asyncio
+async def test_legacy_authority_refuses_without_calling_rotation(ctx, monkeypatch):
+    client, store, issued = ctx
+    token = await _seed(store)
+    state = await store.get_refresh_token_state(token)
+    rotations = []
+
+    async def read(token):
+        return state
+
+    async def legacy_rotate(token, replacement, *, ttl_seconds):
+        rotations.append(token)
+
+    async def resolve(*args, **kwargs):
+        return _card()
+
+    monkeypatch.setattr(store, "_authority_store", SimpleNamespace(
+        get_refresh_token_state=read, rotate_refresh_token=legacy_rotate,
+    ))
+    monkeypatch.setattr(routes, "resolve_live_grant_card", resolve)
+    response = client.post("/oauth/token", data={
+        "grant_type": "refresh_token", "refresh_token": token, "client_id": "client",
+    })
+    assert response.status_code == 503, response.json()
+    assert rotations == []
+    assert issued == []
+    monkeypatch.setattr(store, "_authority_store", None)
+    assert await store.validate_refresh_token(token) is not None
+
+
+@pytest.mark.asyncio
+async def test_unbound_refresh_keeps_legacy_rotation_api(ctx, monkeypatch):
+    client, store, issued = ctx
+    token = await _seed(store, pointer="", kind="")
+    original_rotate = store.rotate_refresh_token
+    rotations = []
+
+    async def legacy(token, *, scopes=None, operations=None, resource_grants=None,
+                     resource_operations=None, resource=None, card_kind=None, state=None):
+        rotations.append(token)
+        return await original_rotate(
+            token, scopes=scopes, operations=operations, resource_grants=resource_grants,
+            resource_operations=resource_operations, resource=resource, card_kind=card_kind,
+            state=state,
+        )
+
+    monkeypatch.setattr(store, "rotate_refresh_token", legacy)
+    response = client.post("/oauth/token", data={
+        "grant_type": "refresh_token", "refresh_token": token, "client_id": "client",
+    })
+    assert response.status_code == 200, response.json()
+    assert rotations == [token]
+    assert len(issued) == 1
+
+
+@pytest.mark.asyncio
+async def test_actual_package_without_card_api_refuses_before_mint(ctx, monkeypatch):
+    client, store, issued = ctx
+    if routes._refresh_store_supports_card_limits(store):
+        pytest.skip("This cross-version regression requires the older package API")
+    token = await _seed(store)
+
+    async def resolve(*args, **kwargs):
+        return _card()
+
+    monkeypatch.setattr(routes, "resolve_live_grant_card", resolve)
+    response = client.post("/oauth/token", data={
+        "grant_type": "refresh_token", "refresh_token": token, "client_id": "client",
+    })
+    assert response.status_code == 503, response.json()
+    assert response.json()["error"] == "temporarily_unavailable"
     assert issued == []
     assert await store.validate_refresh_token(token) is not None
 

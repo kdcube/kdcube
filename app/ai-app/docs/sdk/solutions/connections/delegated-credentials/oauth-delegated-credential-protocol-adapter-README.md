@@ -63,3 +63,16 @@ Records without a stored Card pointer retain their existing refresh behavior
 and receive no Card-limit arguments. The Redis fallback bounds the successor's
 TTL but has no SQL family revision fence. This host forwarding requires a
 portable grant store that accepts `expires_at_cap` and `card_incarnation`.
+
+Before consuming a Card-bound refresh token, the host checks that both the
+portable facade and any configured SQL authority expose those two keyword
+parameters. An older, uninspectable, or generic `**kwargs` API is not qualified:
+the host returns a retryable HTTP 503 (`temporarily_unavailable`, `Retry-After:
+30`) without rotating the token or minting an access credential. There is no
+fallback that drops the Card limits. Transparent wrappers must preserve the
+underlying signature, for example with `functools.wraps`.
+
+The release ledger must record a Connection Hub package containing commit
+`db5a7f3406857c62b04a4a6fbe5bb54e8ac06d57` or a qualified descendant in the
+same runtime build as this host. The compatibility refusal protects mixed
+versions; it does not make an older package capable of serving Card refresh.

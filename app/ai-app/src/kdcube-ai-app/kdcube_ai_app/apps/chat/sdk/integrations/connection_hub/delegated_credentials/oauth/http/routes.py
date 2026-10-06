@@ -3251,6 +3251,32 @@ def _refresh_issuance_unavailable(
     return JSONResponse(status_code=503, content=content, headers=headers)
 
 
+def _refresh_store_supports_card_limits(store) -> bool:
+    """Require the cap/revision API before any Card-bound token is consumed.
+
+    A generic **kwargs sink is not evidence that limits reach the rotation
+    transaction. Transparent wrappers may expose their real signature via
+    functools.wraps; unavailable or unqualified signatures fail closed.
+    """
+    stores = [store]
+    authority = getattr(store, "_authority_store", None)
+    if authority is not None:
+        stores.append(authority)
+    for candidate in stores:
+        try:
+            parameters = inspect.signature(candidate.rotate_refresh_token).parameters
+        except Exception:
+            return False
+        for name in ("expires_at_cap", "card_incarnation"):
+            parameter = parameters.get(name)
+            if parameter is None or parameter.kind not in {
+                inspect.Parameter.KEYWORD_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            }:
+                return False
+    return True
+
+
 def _minter_accepts_authority_kwargs(minter) -> bool:
     try:
         signature = inspect.signature(minter)
@@ -3889,6 +3915,19 @@ async def token(request: Request) -> Response:
             rotation_limits["card_incarnation"] = card.card_revision
             if card.expires_at:
                 rotation_limits["expires_at_cap"] = card.expires_at
+        if rotation_limits and not _refresh_store_supports_card_limits(store):
+            LOGGER.warning(
+                "[connection-hub.oauth] refresh denied "
+                "reason=refresh_card_limits_unsupported client_id=%s",
+                str(rec.get("client_id") or ""),
+            )
+            return _token_error(
+                "temporarily_unavailable",
+                "Card-bound refresh requires a compatible grant store; "
+                "the presented refresh token remains valid, retry after the package update",
+                status=503,
+                retry_after_seconds=30,
+            )
         try:
             new_rt = await store.rotate_refresh_token(
                 rt,
