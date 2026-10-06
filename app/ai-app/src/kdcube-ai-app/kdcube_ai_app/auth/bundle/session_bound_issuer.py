@@ -21,15 +21,42 @@ class IssuanceSecretCustody(Protocol):
     """A host-injected durable, authorized create-only secret store."""
 
     async def create(self, *, secret_ref: str, value: str, expires_at: int) -> bool: ...
-    async def get(self, secret_ref: str) -> str | None: ...
+    async def get(self, *, secret_ref: str) -> str | None: ...
+
+
+def _valid_text(value: object, *, maximum_bytes: int) -> bool:
+    if type(value) is not str or not value or value != value.strip():
+        return False
+    try:
+        return (len(value.encode("utf-8")) <= maximum_bytes
+                and not any(ord(character) < 32 or ord(character) == 127 for character in value))
+    except UnicodeError:
+        return False
 
 
 def _authority_values(values: Sequence[str]) -> list[str]:
     if (not isinstance(values, (list, tuple)) or len(values) > 256
-            or any(type(value) is not str or not value or value != value.strip()
-                   or len(value.encode("utf-8")) > 2048 for value in values)):
+            or any(not _valid_text(value, maximum_bytes=2048) for value in values)):
         raise SessionIssuanceRefused("issuance_authority_invalid")
     return sorted(set(values))
+
+
+async def _store_call(call: Callable[..., Awaitable[Any]], *args: Any, **kwargs: Any) -> Any:
+    try:
+        return await call(*args, **kwargs)
+    except SessionIssuanceRefused:
+        raise
+    except Exception:
+        # A write may have committed even when its response was lost. A named
+        # unavailable outcome does not authorize a fresh identity on retry.
+        raise SessionIssuanceRefused("issuance_store_unavailable") from None
+
+
+async def _signed(sign: Callable[[Mapping[str, Any]], Awaitable[str]], claims: Mapping[str, Any]) -> str:
+    try:
+        return await sign(claims)
+    except Exception:
+        raise SessionIssuanceRefused("issuance_signing_unavailable") from None
 
 
 async def issue_bound_session(
@@ -41,8 +68,7 @@ async def issue_bound_session(
     bound = IssuanceContext.from_context(context)
     if bound.tenant != tenant or bound.project != project:
         raise SessionIssuanceRefused("issuance_namespace_mismatch")
-    if (type(user_id) is not str or not user_id or user_id != user_id.strip()
-            or len(user_id.encode("utf-8")) > 1024):
+    if not _valid_text(user_id, maximum_bytes=1024):
         raise SessionIssuanceRefused("issuance_user_invalid")
     granted_roles = _authority_values(roles)
     granted_permissions = _authority_values(permissions)
@@ -56,7 +82,7 @@ async def issue_bound_session(
     if not all(callable(getattr(custody, name, None)) for name in ("create", "get")):
         raise SessionIssuanceRefused("issuance_custody_unavailable")
 
-    reservation = await store.read_issuance(bound.identity)
+    reservation = await _store_call(store.read_issuance, bound.identity)
     if reservation is not None and reservation.inputs_digest != fingerprint:
         # This comes before user/key/custody access and before any mutation.
         raise SessionIssuanceRefused("issuance_identity_conflict")
@@ -64,7 +90,7 @@ async def issue_bound_session(
         raise SessionIssuanceRefused("issuance_expired")
     candidate = None
     if reservation is None:
-        login = await store.get_login_state(user_id)
+        login = await _store_call(store.get_login_state, user_id)
         version = login.version if login is not None else 1
         if login is not None and login.user.get("disabled"):
             raise SessionIssuanceRefused("issuance_authority_moved")
@@ -77,7 +103,7 @@ async def issue_bound_session(
             "sid": sid, "sub": user_id, "provider": provider,
             "provider_subject": None, "ver": version, "iat": now, "exp": bound.expires_at,
         }
-        candidate = await sign(claims)
+        candidate = await _signed(sign, claims)
         record = {
             "schema": claims["schema"], "session_id": sid, "sub": user_id,
             "provider": provider, "provider_subject": None,
@@ -86,7 +112,8 @@ async def issue_bound_session(
             "iat": now, "exp": bound.expires_at, "max_exp": bound.expires_at,
             "last_seen": now,
         }
-        reservation = await store.reserve_issuance(
+        reservation = await _store_call(
+            store.reserve_issuance,
             bound.identity, fingerprint, sid, secret_ref, bound.expires_at,
             session_record=record, expected_version=version,
             user_record={
@@ -100,7 +127,7 @@ async def issue_bound_session(
             candidate = None  # a concurrent reservation owns the original
 
     try:
-        original = await custody.get(reservation.secret_ref)
+        original = await custody.get(secret_ref=reservation.secret_ref)
     except Exception:
         raise SessionIssuanceRefused("issuance_custody_unavailable") from None
     if original is None:
@@ -109,7 +136,7 @@ async def issue_bound_session(
         if candidate is None:
             # The original signed input was reserved before activation. A
             # restart re-signs exactly that input, never new claims or an id.
-            candidate = await sign(reservation.record["claims"])
+            candidate = await _signed(sign, reservation.record["claims"])
         if hashlib.sha256(candidate.encode("utf-8")).hexdigest() != reservation.record["token_sha256"]:
             raise SessionIssuanceRefused("issuance_custody_unrecoverable")
         try:
@@ -119,7 +146,7 @@ async def issue_bound_session(
             )
             # A false create or an uncertain concurrent outcome must read the
             # winner. No candidate bearer is trusted just because we made it.
-            original = await custody.get(reservation.secret_ref)
+            original = await custody.get(secret_ref=reservation.secret_ref)
         except Exception:
             raise SessionIssuanceRefused("issuance_custody_unavailable") from None
     if type(original) is not str or not original:
@@ -127,7 +154,7 @@ async def issue_bound_session(
     if hashlib.sha256(original.encode("utf-8")).hexdigest() != reservation.record["token_sha256"]:
         raise SessionIssuanceRefused("issuance_custody_mismatch")
 
-    active = await store.activate_reserved(bound.identity)
+    active = await _store_call(store.activate_reserved, bound.identity)
     return SessionIssuanceReceipt(
         session_id=active.session_id, secret_ref=active.secret_ref,
         bearer_sha256=active.record["token_sha256"],

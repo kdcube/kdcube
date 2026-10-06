@@ -118,17 +118,26 @@ user grants.
 
 The result `BoundIssuance(session_id, secret_ref, bearer_sha256, outcome)` exposes
 coordinates and a digest; the original bearer remains in the host-injected
-durable secret store. Its `create` is atomic/create-only and its `get` returns
-`None` only for absence; unavailable or uncertain outcomes raise. Expiry and
+durable secret store. Its `create(secret_ref=..., value=..., expires_at=...)`
+is atomic/create-only and its `get(secret_ref=...)` returns `None` only for
+absence; unavailable or uncertain outcomes raise. Expiry and
 signing-key changes cannot cause a retry to mint a new session identity.
 Reservations remain identity tombstones after completion or expiry, so any
 retention policy must preserve their no-remint identity.
 
-This source integration point currently has PostgreSQL reservation/replay and
-basic issuer tests. Deployment integration still requires a qualified durable
-custody backend, crash/restart and unknown-outcome gates, host target fencing,
-and the OAuth refresh/refusal-cleanup adapters. Ordinary `login` and
-`login_or_register` keep their existing behavior.
+The source tests cover PostgreSQL reservation/replay, concurrent issuers, and
+SIGKILL followed by a fresh issuer after reservation, custody, and activation.
+They also exercise committed-but-lost responses at all three steps, named
+custody outages, missing/mismatched readback, signing-key changes, and authority
+or deadline movement before activation. Process tests use a durable
+PostgreSQL **test-only** custody table holding synthetic bearers in an isolated
+schema; they qualify the issuer's interruption protocol, not a production
+secret provider. A separate signature test exercises the existing runtime
+secret adapter with an in-memory manager and makes no durability claim.
+
+Deployment integration still requires a qualified durable custody backend,
+host target fencing, and the OAuth refresh/refusal-cleanup adapters. Ordinary
+`login` and `login_or_register` keep their existing behavior.
 
 ## Descriptor Contract
 
