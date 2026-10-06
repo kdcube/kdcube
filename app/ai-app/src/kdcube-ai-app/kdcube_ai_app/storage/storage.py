@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import AsyncIterator, Optional, List, Dict, Any
 from urllib.parse import urlparse
 
+from kdcube_ai_app.storage.uri import local_file_uri_path
+
 logger = logging.getLogger("KnowledgeBase.Storage")
 
 mimetypes.add_type("application/json", ".json")
@@ -848,7 +850,11 @@ def create_storage_backend(storage_uri: str, **kwargs) -> IStorageBackend:
 
     if parsed.scheme == 'file' or not parsed.scheme:
         # Local filesystem
-        path = parsed.path if parsed.path else storage_uri
+        path = (
+            local_file_uri_path(storage_uri) or storage_uri
+            if parsed.scheme == 'file'
+            else parsed.path or storage_uri
+        )
         return LocalFileSystemBackend(path)
 
     elif parsed.scheme == 's3':
