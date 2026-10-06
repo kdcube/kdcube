@@ -34,12 +34,19 @@ import logging
 import math
 import os
 import re
+import stat
 import threading
 import time
 from collections.abc import Iterable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
+
+try:
+    import fcntl
+except ImportError:  # Native host-vault custody requires POSIX file locks.
+    fcntl = None
 
 from kdcube_ai_app.infra.secrets.host_vault.keys import (
     Envelope,
@@ -117,6 +124,7 @@ class FileDurableSecretStore:
     outside the KDCube runtime workdir."""
 
     CANDIDATE_SUFFIX = ".candidate"
+    LOCK_NAME = ".store.lock"
 
     def __init__(self, root: Path, keys: RootKeyProvider) -> None:
         self._root = Path(root)
@@ -128,6 +136,53 @@ class FileDurableSecretStore:
         except OSError:
             pass
         self.recover()
+
+    @contextmanager
+    def _locked(self):
+        """Serialize generation checks, commits and recovery across processes.
+
+        Each acquisition opens its own descriptor, so independent store objects
+        in one process also contend. The private lock inode must remain in place
+        for the lifetime of the service root; cleanup must never unlink it.
+        """
+        with self._lock:
+            if fcntl is None or not hasattr(os, "O_NOFOLLOW"):
+                raise VaultError(ErrorCode.BACKEND_UNAVAILABLE)
+            fd = None
+            lock_ready = False
+            try:
+                lock_path = self._root / self.LOCK_NAME
+                fd = os.open(
+                    lock_path,
+                    os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW
+                    | getattr(os, "O_CLOEXEC", 0),
+                    0o600,
+                )
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                metadata = os.fstat(fd)
+                entry = lock_path.lstat()
+                if (
+                    not stat.S_ISREG(metadata.st_mode)
+                    or metadata.st_uid != os.geteuid()
+                    or stat.S_IMODE(metadata.st_mode) != 0o600
+                    or metadata.st_nlink != 1
+                    or (metadata.st_dev, metadata.st_ino)
+                    != (entry.st_dev, entry.st_ino)
+                ):
+                    raise VaultError(ErrorCode.BACKEND_UNAVAILABLE)
+                lock_ready = True
+            except OSError:
+                raise VaultError(ErrorCode.BACKEND_UNAVAILABLE) from None
+            finally:
+                # Acquisition can be interrupted before reaching the yield.
+                # Release in that case too, including KeyboardInterrupt.
+                if fd is not None and not lock_ready:
+                    os.close(fd)
+            try:
+                yield
+            finally:
+                # Closing also releases the advisory lock on exceptional exits.
+                os.close(fd)
 
     # ── layout ────────────────────────────────────────────────────────────
 
@@ -148,14 +203,15 @@ class FileDurableSecretStore:
     def recover(self) -> int:
         """Crash recovery: drop candidates that never reached commit. Called
         on start; safe to call any time. Returns the number removed."""
-        removed = 0
-        for candidate in self._root.rglob(f"*{self.CANDIDATE_SUFFIX}"):
-            try:
-                candidate.unlink()
-                removed += 1
-            except OSError:
-                pass
-        return removed
+        with self._locked():
+            removed = 0
+            for candidate in self._root.rglob(f"*{self.CANDIDATE_SUFFIX}"):
+                try:
+                    candidate.unlink()
+                    removed += 1
+                except OSError:
+                    pass
+            return removed
 
     # ── record codec ──────────────────────────────────────────────────────
 
@@ -277,7 +333,7 @@ class FileDurableSecretStore:
     # ── operations ────────────────────────────────────────────────────────
 
     def get(self, reference: SecretReference) -> tuple[StoredRecord, bytes] | None:
-        with self._lock:
+        with self._locked():
             payload = self._read_raw(reference)
             if payload is None or payload.get("deleted"):
                 return None
@@ -295,7 +351,7 @@ class FileDurableSecretStore:
     def put(self, reference: SecretReference, value: bytes, *, expected_generation: int | None) -> StoredRecord:
         if len(value) > MAX_VALUE_BYTES:
             raise VaultError(ErrorCode.TOO_LARGE)
-        with self._lock:
+        with self._locked():
             payload = self._read_raw(reference)
             generation = self._check_generation(payload, expected_generation) + 1
             sealed = self._envelope.seal(value, record_id=self._record_id(reference, generation))
@@ -316,7 +372,7 @@ class FileDurableSecretStore:
             return self._record(new_payload)
 
     def delete(self, reference: SecretReference, *, expected_generation: int | None) -> StoredRecord:
-        with self._lock:
+        with self._locked():
             payload = self._read_raw(reference)
             if payload is None or payload.get("deleted"):
                 if expected_generation is not None:
@@ -352,7 +408,7 @@ class FileDurableSecretStore:
             raise VaultError(ErrorCode.INVALID_REQUEST)
         found: set[str] = set()
         scanned = 0
-        with self._lock:
+        with self._locked():
             for path in self._root.rglob("*.json"):
                 scanned += 1
                 if scanned > MAX_LIST_SCAN_RECORDS:
@@ -393,7 +449,7 @@ class FileDurableSecretStore:
         A record that fails to unwrap is left as is and counted nowhere; it
         surfaces as corrupt on its next read, which is the honest state."""
         count = 0
-        with self._lock:
+        with self._locked():
             for path in self._all_paths():
                 try:
                     payload = self._read_path(path)

@@ -449,6 +449,22 @@ Writes are atomic: candidate file, fsync, `os.replace`, directory fsync. A
 crash between candidate and commit leaves the previous value in place, and
 the server removes stale candidates on start.
 
+All store operations and startup recovery take the same POSIX exclusive lock
+at `<home>/store/.store.lock`. It covers the committed-generation check,
+candidate write, rename, and directory fsync across service processes and
+independent store objects. Recovery waits for active writes before removing
+abandoned candidates. Process death releases the lock automatically.
+Every process that accesses this root must use the locking implementation;
+coordinate replacement of older service processes before accepting concurrent
+access.
+
+The lock file must be a regular, single-link, service-owned `0600` file;
+unsafe ownership, permissions, links, or unavailable OS locking fail closed
+with `backend_unavailable`. Keep this inode in place while any process uses
+the store. This is cooperative process serialization on a host-local
+filesystem; filesystem persistence, host isolation, and remote filesystem
+locking require their own deployment acceptance.
+
 Root keys come from a `RootKeyProvider`. The shipped `FileRootKeyProvider`
 keeps raw 32-byte keys as `0400` files in a `0700` directory with a `CURRENT`
 marker, and refuses to serve a key file that is group- or other-readable.
@@ -913,6 +929,12 @@ fake certificates and the labeled in-memory root-key provider and covers:
 - a stateless broker that acknowledges only committed writes
 - root-key rotation with rewrap, and identity file modes
 - a real mTLS round trip, a bearer without a client certificate refused at the handshake and at the service, and sanitized TLS failures
+
+`test_storage_process_lock.py` adds spawned-process proofs with synthetic
+file-backed root keys: racing create/delete generations, read/list/rewrap and
+recovery serialization, startup during an active candidate write, process
+death before commit, and unsafe lock-file refusal. These tests exercise the
+encrypted disk store without changing a configured vault or provider.
 
 Run from the repository root with the platform venv interpreter:
 
