@@ -49,6 +49,23 @@ async def create_runtime_metadata_schema(pool, *, schema: str) -> None:
                     )
                 """)
                 await connection.execute(f"""
+                    CREATE OR REPLACE FUNCTION "{schema}".runtime_terminal_guard()
+                    RETURNS trigger LANGUAGE plpgsql AS $$
+                    BEGIN
+                        IF OLD.state = 'terminal' AND NEW.state != 'terminal' THEN
+                            RAISE EXCEPTION 'runtime_secret_terminal_immutable'
+                                USING ERRCODE = '23514';
+                        END IF;
+                        RETURN NEW;
+                    END;
+                    $$
+                """)
+                await connection.execute(f"DROP TRIGGER IF EXISTS runtime_terminal_guard ON {records}")
+                await connection.execute(
+                    f"CREATE TRIGGER runtime_terminal_guard BEFORE UPDATE ON {records} "
+                    f'FOR EACH ROW EXECUTE FUNCTION "{schema}".runtime_terminal_guard()',
+                )
+                await connection.execute(f"""
                     CREATE TABLE IF NOT EXISTS {cleanup} (
                         namespace text NOT NULL,
                         job_id text NOT NULL CHECK (job_id ~ '^[0-9a-f]{{64}}$'),

@@ -88,6 +88,10 @@ class PostgresRuntimeCustodyMetadata:
         self._namespace = namespace
         self._prefix = cloud_prefix
 
+    @property
+    def namespace(self) -> str:
+        return self._namespace
+
     @asynccontextmanager
     async def _transaction(self):
         try:
@@ -211,12 +215,14 @@ class PostgresRuntimeCustodyMetadata:
                 if record.arn != arn or record.version_id != version_id:
                     raise RuntimeMetadataError("runtime_secret_metadata_binding_invalid")
                 return True
-            await connection.execute(
+            changed = await connection.fetchval(
                 f"UPDATE {self._records} SET state = 'active', arn = $4, version_id = $5, "
                 "updated_at = clock_timestamp() WHERE namespace = $1 "
-                "AND secret_ref = $2 AND incarnation = $3",
+                "AND secret_ref = $2 AND incarnation = $3 AND state = 'reserved' RETURNING TRUE",
                 self._namespace, secret_ref, incarnation, arn, version_id,
             )
+            if changed is not True:
+                raise RuntimeMetadataError("runtime_secret_metadata_binding_invalid")
             return True
 
     async def read_active(self, *, secret_ref: str) -> RuntimeCustodyRecord | None:
@@ -227,6 +233,23 @@ class PostgresRuntimeCustodyMetadata:
                 return None
             if row["state"] != "active":
                 raise RuntimeMetadataError("runtime_secret_metadata_unavailable")
+            return self._record(row)
+
+    async def read_original(self, *, secret_ref: str,
+                            live_only: bool = False) -> RuntimeCustodyRecord | None:
+        """Trusted cloud recovery/cleanup coordinates, never a value endpoint.
+
+        A live reserved row is unresolved, not cloud absence. Cleanup also
+        needs terminal rows; an HTTP reader must request live_only and recheck
+        active state/pins after recovering the original creation version.
+        """
+        _hex(secret_ref, _HEX32)
+        if type(live_only) is not bool:
+            raise RuntimeMetadataError("runtime_secret_metadata_binding_invalid")
+        async with self._transaction() as connection:
+            row = await self._locked(connection, secret_ref)
+            if row is None or (live_only and (row["state"] == "terminal" or not row["live"])):
+                return None
             return self._record(row)
 
     async def confirms_active(self, original: RuntimeCustodyRecord) -> bool:
@@ -244,6 +267,19 @@ class PostgresRuntimeCustodyMetadata:
             if row is None or row["incarnation"] != incarnation:
                 raise RuntimeMetadataError("runtime_secret_metadata_binding_invalid")
             await self._retire(connection, self._record(row))
+
+    async def retire_reference(self, *, secret_ref: str) -> None:
+        """Retire the current original under its lock; missing delete is a no-op.
+
+        Every cloud create must have committed its reservation first, so a
+        missing row cannot hide a legitimate in-flight cloud create. No cloud
+        lookup, new incarnation or replacement-target deletion follows it.
+        """
+        _hex(secret_ref, _HEX32)
+        async with self._transaction() as connection:
+            row = await self._locked(connection, secret_ref)
+            if row is not None:
+                await self._retire(connection, self._record(row))
 
     async def retire_expired(self, *, now: int, limit: int) -> int:
         """Atomically retire at most limit rows and queue value-free cleanup."""

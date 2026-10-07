@@ -1,6 +1,13 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Elena Viter
-"""Real-PG metadata fences, not AWS/service/deployment qualification."""
+"""Real-PG metadata fences, not AWS/service/deployment qualification.
+
+Use a disposable trust-authenticated loopback/local-socket fixture for the
+whole infra/secrets importlib gate. SCRAM calls stdlib secrets.token_bytes;
+the package's secrets name currently shadows it in that whole-directory
+collection. A focused-file SCRAM run is a different test input, not proof
+that the whole-directory input works with SCRAM.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -502,8 +509,9 @@ async def test_expired_new_reference_does_not_allocate_metadata(metadata):
         assert await connection.fetchval(f"SELECT count(*) FROM {metadata._records}") == 0
 
 
+@pytest.mark.parametrize("terminal_state", ["active", "reserved"])
 @pytest.mark.asyncio
-async def test_service_role_needs_dml_only_not_ddl_or_delete(metadata):
+async def test_service_role_needs_dml_only_not_ddl_or_delete(metadata, terminal_state):
     """Disposable role fixture; does not attest a deployed pool or DB role."""
     import asyncpg
 
@@ -530,6 +538,11 @@ async def test_service_role_needs_dml_only_not_ddl_or_delete(metadata):
         assert len(claims) == 2
         assert all([await service.settle_cleanup(claim, outcome="retry") for claim in claims])
         async with service_pool.acquire() as connection:
+            with pytest.raises(asyncpg.CheckViolationError, match="runtime_secret_terminal_immutable"):
+                await connection.execute(
+                    f"UPDATE {service._records} SET state = $1 WHERE secret_ref = $2",
+                    terminal_state, original.secret_ref,
+                )
             for sql in (f"DELETE FROM {service._records}",
                         f'CREATE TABLE "{schema}".forbidden_ddl (id integer)'):
                 with pytest.raises(asyncpg.InsufficientPrivilegeError):

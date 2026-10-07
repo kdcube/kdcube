@@ -156,13 +156,48 @@ become cleanup work, including a different incarnation of the cloud name.
 Cleanup settlement compares the incarnation, full pins and unexpired claim
 token; a stale worker cannot settle a newer claim.
 
-This supporting layer is not yet selected by the service entrypoint or an AWS
-runtime adapter, and does not make AWS qualification true. Cloud-attempt
+The migrator installs a terminal-state guard trigger. Even the service's DML
+role cannot change a terminal record back to reserved or active; publication
+also requires a reserved-state UPDATE precondition.
+
+`RuntimeAwsStore` adds asynchronous cloud operations over these coordinates.
+An identical create collision returns False; recovery can complete the same
+reserved creation token but cannot choose another incarnation or deadline.
+Active reads send the pinned full ARN and explicit original VersionId, verify
+the value commitment, then recheck metadata before returning the value.
+Omitting VersionId would select the current cloud version rather than prove
+the original. See the [AWS GetSecretValue contract](https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_GetSecretValue.html).
+
+Nonempty strings use SecretString without envelope overhead, up to its 65536
+byte limit. An empty public string uses a one-byte SecretBinary marker; the
+original commitment must still match the empty string before decoding it.
+Other binary values and responses containing both fields are refused. These
+are internal service encodings, not a format imposed on caller values.
+
+Deletion and purge retire metadata first, without claiming physical erasure.
+`drain_cleanup(limit=...)` is a trusted maintenance operation, not a public
+job endpoint. It deletes only a full ARN from a durable claim. An accepted
+delete advances to a separate full-ARN confirmation phase. Name lookup is
+restricted to unresolved-creation discovery with the original VersionId;
+it never authorizes deletion by name. Cloud exception text is not exposed.
+
+These supporting components are not yet selected by the service entrypoint
+or SDK runtime consumer, and do not make AWS qualification true. Cloud-attempt
 reconciliation remains open: one absent-resource lookup cannot disprove a
 lost or in-flight create. Unknown-create jobs therefore remain durable rather
-than being marked complete. Service wiring, a deployed least-privilege pool
+than being marked complete. Their queue/load growth is an activation blocker:
+an attempt ledger or sound reconciliation closure protocol is required, not
+a post-activation follow-up. Service wiring, a deployed least-privilege pool
 and role, cloud operations, IAM isolation and the complete guarantee matrix
 must be established separately before production custody can use this lane.
+
+The real-PG tests read `KDCUBE_TEST_POSTGRES_DSN`. For the whole `infra/secrets`
+pytest importlib gate, use a disposable trust-authenticated loopback or local
+socket fixture. SCRAM calls stdlib `secrets.token_bytes`, which can be shadowed
+by this package's name during whole-directory collection; a focused-file SCRAM
+run is a different input. This test-only requirement is not a recommendation
+to change production database authentication. Synthetic AWS actors and the
+installed SDK response parser tests do not attest live AWS behavior or IAM.
 
 ### 1.2 Two selectors with different jobs
 
@@ -183,6 +218,11 @@ secrets:
 The accepted service backend values are `ephemeral` and `host-vault`. The
 active durable local combination is exactly `provider: secrets-service` plus
 `backend: host-vault`. The name `secret-vault` is not a configured backend.
+
+When the dedicated runtime root is unset, Compose binds `/dev/null` with
+`create_host_path: false`; it cannot qualify as a persistent directory.
+Runtime API 503 then means custody is not configured. The ordinary secrets
+service can still start and serve its separately configured storage.
 
 Changing only `service.backend` prepares the service side. It does not reroute
 runtime reads away from the provider named by `secrets.provider`. This
