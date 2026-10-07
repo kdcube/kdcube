@@ -379,7 +379,8 @@ async def test_qualifier_stays_closed_without_cloud_or_metadata_io(metadata):
     assert cloud.calls == []
 
 
-@pytest.mark.parametrize("value", [None, "\ud800", "x" * 65537])
+@pytest.mark.parametrize("value", [None, "\ud800", "x" * 65537],
+                         ids=["not-string", "invalid-unicode", "over-byte-limit"])
 @pytest.mark.asyncio
 async def test_invalid_value_refuses_before_reservation_or_cloud_io(metadata, value):
     cloud = SyntheticAws()
@@ -391,7 +392,8 @@ async def test_invalid_value_refuses_before_reservation_or_cloud_io(metadata, va
         assert await connection.fetchval(f"SELECT count(*) FROM {metadata._records}") == 0
 
 
-@pytest.mark.parametrize("value", ["", "\0", "x" * 65536, "é" * 32768])
+@pytest.mark.parametrize("value", ["", "\0", "x" * 65536, "é" * 32768],
+                         ids=["empty", "nul", "max-ascii", "max-utf8"])
 @pytest.mark.asyncio
 async def test_empty_and_full_byte_limit_strings_round_trip_without_current_fallback(metadata, value):
     cloud = SyntheticAws()
