@@ -105,6 +105,24 @@ def _pick_existing_rel(store: ConversationStore, rels: List[str]) -> Optional[st
             return rel
     return None
 
+async def _read_message_body(store: ConversationStore, rel: str) -> tuple:
+    """The original message body and its tier ("hot" or "cold"), read cold-aware.
+
+    The hot key may hold a pointer to the body's cold copy (W619); a body whose
+    cold copy is missing, corrupt or fails its hash is a 503, never the pointer.
+    """
+    try:
+        obj = await store.get_message(rel)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Not found")
+    if not isinstance(obj, dict):
+        return obj, "hot"
+    storage = obj.pop("storage", "hot")
+    if storage == "unavailable":
+        logger.warning("message body unavailable rel=%s reason=%s", rel, obj.get("body_unavailable_reason"))
+        raise HTTPException(status_code=503, detail="message_body_unavailable")
+    return obj, storage
+
 @router.post("/by-rn", response_model=RNContentResponse)
 async def chatbot_content_by_rn(req: RNContentRequest,
                                 request: Request,
@@ -147,10 +165,9 @@ async def chatbot_content_by_rn(req: RNContentRequest,
             rel = _pick_existing_rel(store, [conv_rel(owner_id, message_id)] + legacy)
             if not rel:
                 raise HTTPException(status_code=404, detail="Not found")
-            raw = store.backend.read_text(rel)
-            obj = json.loads(raw)
+            obj, storage = await _read_message_body(store, rel)
             return RNContentResponse(rn=req.rn, content_type="message", content=obj,
-                                     metadata={"uri": store._uri_for_path(rel)})
+                                     metadata={"uri": store._uri_for_path(rel), "storage": storage})
 
         router_or_app = request.scope.get("router") or request.scope.get("app")
         # ----- attachment/file -----
@@ -230,15 +247,13 @@ async def chatbot_content_by_rn(req: RNContentRequest,
             if len(tail) < 1:
                 raise HTTPException(status_code=400, detail="Missing message_id")
             message_id = rn_unescape(tail[0])
-            pick = _pick_namespace_exists(store, tenant, project, owner_id, conv_id, turn_id,
-                                          lambda who, uid: conv_rel(who, uid, message_id))
-            if not pick:
+            legacy = [conv_rel_legacy(w, owner_id, message_id) for w in ("registered", "anonymous", "privileged", "paid")]
+            rel = _pick_existing_rel(store, [conv_rel(owner_id, message_id)] + legacy)
+            if not rel:
                 raise HTTPException(status_code=404, detail="Not found")
-            who, uid = pick
-            rel = conv_rel(who, uid, message_id)
-            obj = json.loads(store.backend.read_text(rel))
+            obj, storage = await _read_message_body(store, rel)
             return RNContentResponse(rn=req.rn, content_type="citable", content=obj,
-                                     metadata={"uri": store._uri_for_path(rel)})
+                                     metadata={"uri": store._uri_for_path(rel), "storage": storage})
 
         raise HTTPException(status_code=400, detail=f"Unsupported stage: {stage}")
     except HTTPException:
