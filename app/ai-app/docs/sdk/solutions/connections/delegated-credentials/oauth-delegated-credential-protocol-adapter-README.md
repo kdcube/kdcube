@@ -89,6 +89,21 @@ the host returns a retryable HTTP 503 (`temporarily_unavailable`, `Retry-After:
 fallback that drops the Card limits. Transparent wrappers must preserve the
 underlying signature, for example with `functools.wraps`.
 
+A Card revision change between the host's read and locked rotation raises the
+portable `RefreshCardIncarnationMoved` refusal before any generation is
+consumed. The host returns HTTP 503 (`temporarily_unavailable`, `Retry-After:
+30`); the client retries with its same refresh token, and the next request
+resolves the live Card again. The original family's absolute cap is retained.
+Terminal expiry or revocation remains `invalid_grant`. The host logs a fixed
+reason without disclosing a bearer or exception detail, and performs no
+additional old-generation lookup to classify this refusal.
+
+Card-bound refresh also requires the portable package's named refusal type.
+A package without it is refused before rotation; unbound refresh retains its
+existing behavior. Qualification requires Connection Hub commit
+`12580623294816688f5a9c799d860988af1be7b2` or its qualified descendant,
+alongside the cap/revision API below.
+
 The release ledger must record a Connection Hub package containing commit
 `db5a7f3406857c62b04a4a6fbe5bb54e8ac06d57` or a qualified descendant in the
 same runtime build as this host. The compatibility refusal protects mixed

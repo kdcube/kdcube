@@ -121,6 +121,7 @@ from connection_hub.delegated_credentials.oauth.flow import (
     parse_authorize_request,
 )
 from connection_hub.delegated_credentials.oauth.pkce import verify_s256
+from connection_hub.delegated_credentials.oauth import authority_store as oauth_authority_store
 from connection_hub.delegated_credentials.oauth.authority_store import (
     RefreshTokenReuseDetected,
     refresh_request_fingerprint,
@@ -146,6 +147,13 @@ from connection_hub.mcp_metadata import (
 
 router = APIRouter()
 LOGGER = logging.getLogger("kdcube.connection_hub.oauth")
+
+# Package capability, not a locally invented refusal type. Older packages can
+# still load the route; Card-bound refresh fails closed before consumption.
+_REFRESH_CARD_INCARNATION_MOVED_ERRORS = (
+    (oauth_authority_store.RefreshCardIncarnationMoved,)
+    if hasattr(oauth_authority_store, "RefreshCardIncarnationMoved") else ()
+)
 
 _AUTHORIZE_FORM_KEYS = (
     "client_id", "redirect_uri", "response_type", "scope",
@@ -3256,12 +3264,14 @@ def _refresh_issuance_unavailable(
 
 
 def _refresh_store_supports_card_limits(store) -> bool:
-    """Require the cap/revision API before any Card-bound token is consumed.
+    """Require limit and typed-refusal APIs before a Card token is consumed.
 
     A generic **kwargs sink is not evidence that limits reach the rotation
     transaction. Transparent wrappers may expose their real signature via
     functools.wraps; unavailable or unqualified signatures fail closed.
     """
+    if not _REFRESH_CARD_INCARNATION_MOVED_ERRORS:
+        return False
     stores = [store]
     authority = getattr(store, "_authority_store", None)
     if authority is not None:
@@ -3970,6 +3980,18 @@ async def token(request: Request) -> Response:
                     if retry_fingerprint
                     else {}
                 ),
+            )
+        except _REFRESH_CARD_INCARNATION_MOVED_ERRORS:
+            LOGGER.warning(
+                "[connection-hub.oauth] refresh denied "
+                "reason=refresh_card_incarnation_moved client_id=%s",
+                str(rec.get("client_id") or ""),
+            )
+            return _token_error(
+                "temporarily_unavailable",
+                "Delegated consent changed during refresh; retry with the same refresh token",
+                status=503,
+                retry_after_seconds=30,
             )
         except RefreshTokenReuseDetected:
             return _refresh_refused(

@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from connection_hub.delegated_credentials.cards.model import CardAuthority
 from connection_hub.delegated_credentials.oauth import store as portable_store
+from connection_hub.delegated_credentials.oauth.authority_store import RefreshCardIncarnationMoved
 from connection_hub.delegated_credentials.oauth.store import GrantStore
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.http import routes
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.tests.helpers import (
@@ -314,5 +315,63 @@ async def test_missing_live_card_refuses_without_rotation_or_mint(ctx, monkeypat
 
     assert response.status_code == 400
     assert response.json()["error"] == "invalid_grant"
+    assert issued == []
+    assert await store.validate_refresh_token(token) is not None
+
+
+@pytest.mark.asyncio
+async def test_incarnation_conflict_returns_retryable_refusal_without_disclosing_exception(ctx, monkeypatch, caplog):
+    client, store, issued = ctx
+    token = await _seed(store)
+    original_rotate = store.rotate_refresh_token
+    private_detail = "synthetic-conflict-detail-not-for-response"
+
+    async def resolve(*args, **kwargs):
+        return _card(expires_at=int(time.time()) + 300)
+
+    @wraps(original_rotate)
+    async def moved(token, **kwargs):
+        raise RefreshCardIncarnationMoved(private_detail)
+
+    monkeypatch.setattr(routes, "resolve_live_grant_card", resolve)
+    monkeypatch.setattr(store, "rotate_refresh_token", moved)
+    with caplog.at_level("WARNING", logger="kdcube.connection_hub.oauth"):
+        response = client.post("/oauth/token", data={
+            "grant_type": "refresh_token", "refresh_token": token, "client_id": "client",
+        })
+    assert response.status_code == 503, response.json()
+    assert response.json()["error"] == "temporarily_unavailable"
+    assert response.headers["retry-after"] == "30"
+    assert token not in response.text and token not in caplog.text
+    assert private_detail not in response.text and private_detail not in caplog.text
+    assert "refresh_card_incarnation_moved" in caplog.text
+    assert issued == []
+    assert await store.validate_refresh_token(token) is not None
+
+
+@pytest.mark.asyncio
+async def test_package_without_typed_conflict_seam_refuses_before_rotation(ctx, monkeypatch):
+    client, store, issued = ctx
+    token = await _seed(store)
+    original_rotate = store.rotate_refresh_token
+    rotations = []
+
+    async def resolve(*args, **kwargs):
+        return _card()
+
+    @wraps(original_rotate)
+    async def observe_rotate(token, **kwargs):
+        rotations.append(token)
+        return await original_rotate(token, **kwargs)
+
+    monkeypatch.setattr(routes, "_REFRESH_CARD_INCARNATION_MOVED_ERRORS", ())
+    monkeypatch.setattr(routes, "resolve_live_grant_card", resolve)
+    monkeypatch.setattr(store, "rotate_refresh_token", observe_rotate)
+    response = client.post("/oauth/token", data={
+        "grant_type": "refresh_token", "refresh_token": token, "client_id": "client",
+    })
+    assert response.status_code == 503, response.json()
+    assert response.json()["error"] == "temporarily_unavailable"
+    assert rotations == []
     assert issued == []
     assert await store.validate_refresh_token(token) is not None

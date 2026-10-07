@@ -16,6 +16,7 @@ import pytest_asyncio
 from connection_hub.delegated_credentials.caller_writer_gate import CallerWriteRefused
 from connection_hub.delegated_credentials.cards.model import CardAuthority
 from connection_hub.delegated_credentials.oauth.authority_store import PostgresOAuthAuthorityStore
+from connection_hub.delegated_credentials.oauth.authority_schema import TABLE_FAMILIES, TABLE_REFRESH_GENERATIONS
 from connection_hub.delegated_credentials.oauth.store import GrantStore
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.cards.service import CardConflict
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.http import routes
@@ -264,3 +265,82 @@ async def test_successful_card_commit_keeps_issued_credentials(grant_store, monk
     body = json.loads(response.body)
     assert await grant_store.get_access_grant_record(body["access_token"]) is not None
     assert await grant_store.validate_refresh_token(body["refresh_token"]) is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("grant_store", ["postgres"], indirect=True)
+async def test_card_edit_between_route_read_and_sql_rotation_preserves_original_for_retry(grant_store, monkeypatch):
+    from fastapi.responses import JSONResponse
+
+    authority = grant_store._authority_store
+    deadline = int(time.time()) + 300
+    original_token = await grant_store.create_refresh_token(
+        client_id="client", sub="human", scopes=["records:read", "records:write"],
+        operations=["records_export"], resource="*", registry_access_id="synthetic-card",
+        card_kind="automation", cap_expires_at=deadline, card_revision=8,
+    )
+    observed = {"edited": False, "reads": 0, "issued": []}
+
+    async def form():
+        return {"grant_type": "refresh_token", "refresh_token": original_token, "client_id": "client"}
+
+    async def resolve(*args, **kwargs):
+        observed["reads"] += 1
+        return CardAuthority(
+            access_id="synthetic-card", client_id="client", grantor_subject="human",
+            delegate_subject="", source="oauth", card_kind="automation",
+            card_revision=9 if observed["edited"] else 8, expires_at=deadline,
+            operations=("records_export",),
+            resource_grants={"*": ("records:read",) if observed["edited"] else ("records:read", "records:write")},
+        )
+
+    rotate = grant_store.rotate_refresh_token
+
+    @wraps(rotate)
+    async def edit_then_rotate(token, **kwargs):
+        if not observed["edited"]:
+            # Synthetic family update models the Card edit after the host's
+            # trusted read. The actual facade and locked SQL refusal stay real.
+            async with authority._pool.acquire() as connection:
+                assert await connection.execute(
+                    f'UPDATE "{authority.schema}".{TABLE_FAMILIES} SET card_revision = 9'
+                ) == "UPDATE 1"
+            observed["edited"] = True
+        return await rotate(token, **kwargs)
+
+    async def issue(_request, _store, **kwargs):
+        observed["issued"].append(kwargs)
+        return JSONResponse({"refresh_token": kwargs["refresh_token"]})
+
+    monkeypatch.setattr(routes, "oauth_tenant_project", lambda request: ("home", "cleanup"))
+    monkeypatch.setattr(routes, "get_grant_store", lambda request: grant_store)
+    monkeypatch.setattr(routes, "delegated_serving_resolvers", lambda request: SimpleNamespace(cards=None))
+    monkeypatch.setattr(routes, "delegated_card_store", lambda **kwargs: None)
+    monkeypatch.setattr(routes, "resolve_live_grant_card", resolve)
+    monkeypatch.setattr(routes, "_issue_tokens", issue)
+    monkeypatch.setattr(grant_store, "rotate_refresh_token", edit_then_rotate)
+
+    refused = await routes.token(SimpleNamespace(form=form))
+    assert refused.status_code == 503
+    assert json.loads(refused.body)["error"] == "temporarily_unavailable"
+    assert refused.headers["retry-after"] == "30"
+    assert original_token.encode() not in refused.body
+    assert observed["issued"] == [] and observed["reads"] == 1
+    assert await grant_store.validate_refresh_token(original_token) is not None
+    async with authority._pool.acquire() as connection:
+        assert await connection.fetchval(f'SELECT count(*) FROM "{authority.schema}".{TABLE_REFRESH_GENERATIONS}') == 1
+        family = await connection.fetchrow(f'SELECT card_revision, cap_expires_at FROM "{authority.schema}".{TABLE_FAMILIES}')
+        assert family["card_revision"] == 9
+        assert int(family["cap_expires_at"].timestamp()) == deadline
+
+    retried = await routes.token(SimpleNamespace(form=form))
+    assert retried.status_code == 200
+    successor = json.loads(retried.body)["refresh_token"]
+    assert successor != original_token
+    assert observed["reads"] == 2 and len(observed["issued"]) == 1
+    assert observed["issued"][0]["scopes"] == ["records:read"]
+    assert await grant_store.validate_refresh_token(successor) is not None
+    async with authority._pool.acquire() as connection:
+        family = await connection.fetchrow(f'SELECT card_revision, cap_expires_at FROM "{authority.schema}".{TABLE_FAMILIES}')
+        assert family["card_revision"] == 9
+        assert int(family["cap_expires_at"].timestamp()) == deadline
