@@ -231,6 +231,45 @@ terminal SDK retirement and physical custody erasure are separate host
 integration responsibilities. A prepared receipt describes stable custody
 coordinates and does not assert that the session is active or usable.
 
+### Original authorization-code delivery mapping
+
+`oauth.original_exchange_store.PostgresOriginalExchangeStore` lets a trusted
+host recover the original plan after a validated authorization code has been
+consumed. It uses the host's bound PostgreSQL pool and the tenant/project
+session schema. `CodeExchangeProof.from_request` hashes the code, redirect URI
+and PKCE S256 challenge; raw codes and verifiers stay in request memory.
+`ValidatedCodeExchange.from_consumed` compares the live consumed server payload
+with that proof and captures a digest of the complete payload and the exact
+candidate inputs the host will pass to Hub begin. A retry proof alone is not
+first-exchange validation or authorization.
+
+The host calls `begin(binding)` before Hub begin or any mint, uses the returned
+identity as Hub's `original_request_id`, then `pin_plan(binding, original_plan)`
+before credential preparation. The Hub decision-request identity must match
+the original namespace, grantor, client and host-selected decision scope.
+The ledger pins the complete original plan, including its transaction, Card
+incarnation, effect digests and deadlines. Identical retries reuse it; changed
+proofs, inputs or plans refuse. `read(proof)` performs no mint or activation.
+If validation was recorded but no plan was pinned, the host returns pending
+or a named refusal, rather than starting a replacement from client input.
+
+An unfinished mapping has a fixed 600-second recovery bound captured by
+PostgreSQL at first validation. Once pinned, the Hub's original delivery
+deadline is retained exactly, separately from that unfinished-mapping bound.
+Both are checked with PostgreSQL `clock_timestamp()` after relevant lock waits.
+Expired rows remain no-rebegin tombstones. Each operation uses one bounded
+connection acquisition and a short transaction; it holds no connection across
+Hub completion, minting or custody calls. Database unavailability returns
+`original_exchange_unavailable`, and never licenses a replacement mint.
+
+The ledger stores digests and original plan data, not bearer bytes, raw codes,
+verifiers or consumed payloads. The plan is recovery data, not permission
+authority: serving resolves the current live Card behind a stable token
+pointer. Card permission edits do not rewrite that token. The HTTP token route
+does not yet invoke this primitive; the authenticated original decision reader,
+custody recovery, live-Card serving checks and terminal callbacks must be
+composed and verified together before enabling this workflow.
+
 Deployment integration still requires a qualified durable custody backend,
 host target fencing, and the OAuth refresh/refusal-cleanup adapters. Ordinary
 `login` and `login_or_register` keep their existing behavior.
