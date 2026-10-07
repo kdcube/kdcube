@@ -506,8 +506,9 @@ The runtime namespace is additionally a trusted service grant supplied when
 constructing the adapter; the common HTTP policy must still enforce its exact
 read/write caller grants. Neither this source-level assertion nor its synthetic
 filesystem-classification tests prove deployed mount survival or physical host
-isolation. The common server/bootstrap, descriptor projection, AWS provider
-matrix and independent/mounted acceptance remain separate unfinished legs.
+isolation. The deployment broker now installs this adapter through the common
+startup composition described below. AWS provider coverage and
+independent/mounted acceptance remain separate unfinished legs.
 
 The common runtime HTTP adapter treats store acknowledgements as a strict
 contract: `qualify()` and `delete()` complete with `None`, or raise a fixed
@@ -525,8 +526,47 @@ keys before authentication or storage access, with
 Parent-level inventories omit runtime keys; the broker does not read those
 keys while checking legacy inventory hints. Runtime custody must use the
 scoped, expiry-aware protocol, never the ordinary deployment door token.
-These refusal tests do not complete common bootstrap, descriptor projection,
-AWS qualification or mounted acceptance.
+These refusal tests do not complete AWS qualification or mounted acceptance.
+
+### Common runtime-service startup (source checkpoint, not activation)
+
+Both deployment HTTP entry points install `/runtime-secrets/{namespace}` using
+`runtime_bootstrap.install_configured_runtime_routes`. The selected file server
+uses a dedicated runtime file root; the selected host-vault broker uses its
+existing enrolled native broker. There is no request-selected provider, health
+fallback or automatic native-to-file fallback. Every operation requalifies
+storage before reading or mutating a record. An unconfigured policy denies
+access before storage is opened; a transient/unqualified store returns a fixed
+503 rather than accepting a value.
+
+The operator's `assembly.yaml` supplies `secrets.runtime.root`, exact
+`secrets.runtime.namespaces` and an optional `secrets.runtime.scope_policy`.
+The policy uses schema `kdcube.runtime_secret_scopes.v1` with `read` and `write`
+maps from SHA-256 credential identifiers to lists of declared namespaces.
+It contains identifiers, not raw credentials. Ordinary door tokens are **not**
+automatically granted custody access; missing policy remains closed.
+The CLI validates and projects these descriptor values into the internal
+`KDCUBE_SECRETS_RUNTIME_ROOT`, `KDCUBE_SECRETS_RUNTIME_NAMESPACES` and
+`KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY` service inputs. Ambient inputs do not
+override the descriptor during projection. A server snapshots those inputs at
+startup, not from requests or subsequent environment changes.
+
+Compose binds `HOST_KDCUBE_RUNTIME_SECRETS_ROOT` to the exact configured root,
+separately from the legacy `/run/kdcube-secrets` tmpfs. It does not create a
+missing host directory automatically. File qualification requires a
+service-owned private directory on a recognized persistent filesystem. The
+native path additionally requires its exact enrollment/root-key/storage proof.
+The CLI projection itself creates no root, credentials or enrollment and
+does not start or activate any runtime.
+
+Source tests import the actual deployment servers and exercise file restart,
+conflict, expiry/tombstones, transient-store refusal before record I/O and
+separate legacy/runtime credentials. Native startup tests use the real enrolled
+protocol and encrypted disk store with in-process transport and synthetic
+filesystem classification. These are not installed volume-survival, live mTLS,
+negative-reader isolation or cloud IAM witnesses. The AWS backend/bootstrap,
+full three-mode gate, independent whole review and mounted acceptance remain
+unfinished; clients must still use the same mode-neutral custody protocol.
 
 Assumptions this phase makes and states: the vault home is owned by a
 dedicated service user on the host, the root-key directory is not on a

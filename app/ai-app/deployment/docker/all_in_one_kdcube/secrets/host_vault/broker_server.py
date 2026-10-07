@@ -48,6 +48,7 @@ from kdcube_ai_app.infra.secrets.host_vault.transport import ClientTLS, HostVaul
 from pydantic import BaseModel
 from kdcube_ai_app.infra.secrets.runtime_contract import runtime_key_namespace
 from kdcube_ai_app.infra.secrets.runtime_http import reject_legacy_runtime_key
+from kdcube_ai_app.infra.secrets.runtime_bootstrap import install_configured_runtime_routes
 
 logging.basicConfig(
     level=os.getenv("SECRETS_LOG_LEVEL", "INFO").upper(),
@@ -125,6 +126,8 @@ def build_broker() -> SecretsBroker:
 
 app = FastAPI()
 BROKER = build_broker()
+install_configured_runtime_routes(app, environ=os.environ,
+                                 broker_factory=lambda: BROKER, application=APPLICATION)
 
 
 class SecretItem(BaseModel):
