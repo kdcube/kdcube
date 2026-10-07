@@ -106,6 +106,81 @@ async def test_purge_is_bounded_and_deleted_entry_returns_absence(custody, monke
 
 
 @pytest.mark.asyncio
+async def test_delete_retires_only_original_reference_and_is_idempotent(custody):
+    store, manager = custody
+    await store.create(secret_ref=REF, value=CANARY, expires_at=30)
+    other = "b" * 32
+    await store.create(secret_ref=other, value=CANARY + "-other", expires_at=30)
+    await store.delete(secret_ref=REF)
+    assert await manager.get_ephemeral_secret(namespace=NAMESPACE, secret_ref=REF) is None
+    fresh = issuance_secret_custody(namespace=NAMESPACE, manager=manager)
+    await fresh.delete(secret_ref=REF)
+    assert await fresh.get(secret_ref=REF) is None
+    assert digest(await fresh.get(secret_ref=other)) == digest(CANARY + "-other")
+
+
+@pytest.mark.asyncio
+async def test_delete_retires_expired_original_without_reading_bearer(custody, monkeypatch):
+    store, manager = custody
+    await store.create(secret_ref=REF, value=CANARY, expires_at=20)
+    monkeypatch.setattr(issuance_module, "time", SimpleNamespace(time=lambda: 30))
+    async def forbidden_read(**kwargs):
+        raise AssertionError("deletion must not fetch bearer material")
+    monkeypatch.setattr(manager, "get_ephemeral_secret", forbidden_read)
+    await store.delete(secret_ref=REF)
+    assert manager._data == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("secret_ref", [None, True, "", CANARY, "../outside", "A" * 32, "a" * 33])
+async def test_delete_invalid_reference_refuses_before_provider_io(custody, monkeypatch, secret_ref):
+    store, manager = custody
+    calls = []
+    async def forbidden_io(**kwargs):
+        calls.append(kwargs)
+        raise AssertionError("invalid reference reached provider")
+    monkeypatch.setattr(manager, "qualify_runtime_custody", forbidden_io)
+    monkeypatch.setattr(manager, "delete_ephemeral_secret", forbidden_io)
+    with pytest.raises(SessionIssuanceRefused, match="^issuance_custody_invalid$"):
+        await store.delete(secret_ref=secret_ref)
+    assert calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_type", [RuntimeError, SessionIssuanceRefused])
+async def test_delete_provider_failure_is_sanitized(custody, monkeypatch, caplog, failure_type):
+    store, manager = custody
+    async def unavailable(**kwargs):
+        raise failure_type(CANARY)
+    monkeypatch.setattr(manager, "delete_ephemeral_secret", unavailable)
+    with pytest.raises(SessionIssuanceRefused, match="^issuance_custody_unavailable$") as captured:
+        await store.delete(secret_ref=REF)
+    assert CANARY not in "".join(traceback.format_exception(captured.value))
+    assert CANARY not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_lost_delete_response_is_unavailable_then_same_reference_retry(custody, monkeypatch):
+    store, manager = custody
+    await store.create(secret_ref=REF, value=CANARY, expires_at=30)
+    delete = manager.delete_ephemeral_secret
+    calls = []
+    async def deleted_then_lost(**kwargs):
+        calls.append(kwargs)
+        await delete(**kwargs)
+        raise RuntimeError(CANARY)
+    monkeypatch.setattr(manager, "delete_ephemeral_secret", deleted_then_lost)
+    with pytest.raises(SessionIssuanceRefused, match="^issuance_custody_unavailable$"):
+        await store.delete(secret_ref=REF)
+    assert await manager.get_ephemeral_secret(namespace=NAMESPACE, secret_ref=REF) is None
+    monkeypatch.setattr(manager, "delete_ephemeral_secret", delete)
+    fresh = issuance_secret_custody(namespace=NAMESPACE, manager=manager)
+    await fresh.delete(secret_ref=REF)
+    assert await fresh.get(secret_ref=REF) is None
+    assert calls == [{"namespace": NAMESPACE, "secret_ref": REF}]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("raw", ["raw-bearer", "{}", "null", "[]", "{invalid-json",
                                  '{"expires_at":20,"expires_at":30}', "[" * 2000])
 async def test_malformed_or_unenveloped_custody_refuses(custody, raw):
@@ -339,7 +414,7 @@ async def test_health_transport_or_json_exception_is_sanitized(monkeypatch, fail
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["create", "get", "purge_expired"])
+@pytest.mark.parametrize("operation", ["create", "get", "delete", "purge_expired"])
 async def test_qualification_is_not_cached_across_backend_replacement(monkeypatch, operation):
     client = _FakeSecretsHttpClient(_FakeHttpResponse(200, qualification(NAMESPACE)))
     monkeypatch.setattr(manager_module, "_get_httpx", lambda: _FakeHttpxModule(client))
@@ -349,6 +424,7 @@ async def test_qualification_is_not_cached_across_backend_replacement(monkeypatc
     arguments = {
         "create": {"secret_ref": REF, "value": CANARY, "expires_at": 30},
         "get": {"secret_ref": REF},
+        "delete": {"secret_ref": REF},
         "purge_expired": {"now": 10, "limit": 1},
     }
     monkeypatch.setattr(issuance_module, "time", SimpleNamespace(time=lambda: 10))
@@ -366,7 +442,7 @@ async def test_complete_namespace_bound_common_contract_is_qualified(monkeypatch
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["create", "get", "purge_expired"])
+@pytest.mark.parametrize("operation", ["create", "get", "delete", "purge_expired"])
 async def test_real_ephemeral_sidecar_refused_before_secret_io(monkeypatch, tmp_path, operation):
     """Real ASGI sidecar; no deployed service or credentials are used."""
     import httpx
@@ -391,6 +467,7 @@ async def test_real_ephemeral_sidecar_refused_before_secret_io(monkeypatch, tmp_
     arguments = {
         "create": {"secret_ref": REF, "value": CANARY, "expires_at": 30},
         "get": {"secret_ref": REF},
+        "delete": {"secret_ref": REF},
         "purge_expired": {"now": 10, "limit": 1},
     }
     with pytest.raises(SessionIssuanceRefused, match="^issuance_custody_not_durable$"):
