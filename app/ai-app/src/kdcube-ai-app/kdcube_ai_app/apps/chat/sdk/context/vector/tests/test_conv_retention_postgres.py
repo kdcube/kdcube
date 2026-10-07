@@ -549,3 +549,139 @@ async def test_a_deletion_waits_for_a_running_archive_and_nothing_comes_back(env
     await retention.archive_before(_night(8))
     assert await _scope_ids(pool, schema, retention, "u1", "c1") == ([], [])
     assert await _scope_ids(pool, schema, retention, "u2", "c1") == ([], [other])
+
+
+# ---------- W536 review: hot bundle scope, a per-batch lock, a bounded deletion wait ----------
+
+
+@pytest.mark.asyncio
+async def test_a_deletion_scoped_to_some_bundles_keeps_the_other_bundles_hot_rows(env):
+    pool, schema, backend, archive, retention = env
+    recent = datetime(2026, 10, 5, 9, tzinfo=UTC)
+    in_a = [await _msg(pool, schema, "u1", "c1", recent, bundle="bA"),
+            await _msg(pool, schema, "u1", "c1", recent + timedelta(minutes=1), bundle="bA")]
+    in_b = [await _msg(pool, schema, "u1", "c1", recent, bundle="bB"),
+            await _msg(pool, schema, "u1", "c1", recent + timedelta(minutes=1), bundle="bB")]
+
+    done = await retention.delete_messages(actor="u1", user_id="u1", conversation_id="c1", bundle_ids=["bA"])
+
+    assert done["hot_rows"] == len(in_a)
+    assert await _scope_ids(pool, schema, retention, "u1", "c1") == (sorted(in_b), [])
+
+
+async def _until_a_lock_waiter(pool, timeout: float = 10.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while True:
+        async with pool.acquire() as con:
+            if await con.fetchval(
+                "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted "
+                "AND database = (SELECT oid FROM pg_database WHERE datname = current_database())"
+            ):
+                return
+        assert asyncio.get_running_loop().time() < deadline, "the deletion never queued for the retention lock"
+        await asyncio.sleep(0.02)
+
+
+@pytest.mark.asyncio
+async def test_a_deletion_issued_mid_run_waits_for_at_most_one_batch(env):
+    pool, schema, backend, archive, retention = env
+    night = datetime(2026, 9, 10, 9, tzinfo=UTC)
+    ids = [await _msg(pool, schema, f"u{i}", "c1", night + timedelta(minutes=i)) for i in range(5)]
+    events: list = []
+    entered, gate = asyncio.Event(), asyncio.Event()
+    write, delete_locked = archive.write_batch, retention._delete_messages_locked
+
+    async def tracked_write(**kw):
+        events.append(("write", kw["batch_id"]))
+        manifest = await write(**kw)
+        if len(events) == 2:  # the second batch is in flight
+            entered.set()
+            await gate.wait()
+        return manifest
+
+    async def tracked_delete(**kw):
+        done = await delete_locked(**kw)
+        events.append(("deleted", done["hot_rows"], done["cold_rows"]))  # still under the lock
+        return done
+
+    archive.write_batch = tracked_write
+    retention._delete_messages_locked = tracked_delete
+    run = asyncio.create_task(retention.archive_before(_night(7), batch_size=1))
+    deletion = None
+    try:
+        await asyncio.wait_for(entered.wait(), 10)
+        # u4's only row would be the fifth batch: the deletion finds it hot.
+        deletion = asyncio.create_task(retention.delete_messages(actor="operator", user_id="u4", conversation_id="c1"))
+        await _until_a_lock_waiter(pool)
+    finally:
+        gate.set()
+        summary = await asyncio.wait_for(run, 30)
+        if deletion:
+            await asyncio.wait_for(deletion, 30)
+    archive.write_batch, retention._delete_messages_locked = write, delete_locked
+
+    deleted_at = [i for i, e in enumerate(events) if e[0] == "deleted"]
+    assert deleted_at == [2], f"the deletion waited for more than the batch in flight: {events}"
+    assert events[2] == ("deleted", 1, 0)
+    assert (summary["batches"], summary["rows"]) == (4, 4)
+    assert await _scope_ids(pool, schema, retention, "u4", "c1") == ([], [])
+    for i in range(4):
+        assert await _scope_ids(pool, schema, retention, f"u{i}", "c1") == ([], [ids[i]])
+    summary = await retention.archive_before(_night(8), batch_size=1)
+    assert summary["rows"] == 0 and await _scope_ids(pool, schema, retention, "u4", "c1") == ([], [])
+
+
+@pytest.mark.asyncio
+async def test_the_ingress_delete_answers_503_when_the_retention_lock_stays_held(env, monkeypatch):
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+
+    from kdcube_ai_app.apps.chat.ingress.conversations import conversations
+    from kdcube_ai_app.apps.chat.sdk.context.vector.conv_index import ConvIndex
+    from kdcube_ai_app.apps.chat.sdk.solutions.conversation.ctx_rag import ContextRAGClient
+
+    pool, schema, backend, archive, retention = env
+    store = _RecordingStore()
+    retention.store = store
+    kept = await _msg(pool, schema, "u1", "c1", datetime(2026, 10, 5, 9, tzinfo=UTC))
+    idx = ConvIndex(pool=pool, schema=schema)
+    idx.cold_retention = retention
+    client = SimpleNamespace(idx=idx, store=store)
+
+    class _Browser:
+        async def get_conversation_details(self, **kw):
+            return {"bundle_id": "b1", "turns": [{"turn_id": "t1"}]}
+
+        async def delete_conversation(self, **kw):
+            return await ContextRAGClient.delete_conversation(client, lock_wait_s=0.5, **kw)
+
+    class _Comm:
+        async def emit_conversation_status(self, **kw):
+            raise AssertionError("a refused delete reports no deleted status")
+
+    async def _registry(runtime_ctx, tenant, project):
+        return SimpleNamespace(bundles={"b1": object()})
+
+    monkeypatch.setattr(conversations, "load_persisted_registry_from_runtime_ctx", _registry)
+    monkeypatch.setattr(conversations.router, "state", SimpleNamespace(conversation_browser=_Browser(), chat_comm=_Comm()),
+                        raising=False)
+    session = SimpleNamespace(user_id="u1", session_id="s1", user_type="registered", fingerprint="fp")
+    async with pool.acquire() as holder:  # an archive step in another process holds the lock
+        await holder.fetchval("SELECT pg_advisory_lock($1)", retention._lock_key())
+        try:
+            with pytest.raises(HTTPException) as refused:
+                await asyncio.wait_for(conversations.delete_conversation(
+                    tenant="t", project="p", conversation_id="c1", session=session), 10)
+        finally:
+            await holder.fetchval("SELECT pg_advisory_unlock($1)", retention._lock_key())
+
+    assert refused.value.status_code == 503
+    assert refused.value.detail["code"] == "conversation_delete_busy"
+    assert await _scope_ids(pool, schema, retention, "u1", "c1") == ([kept], [])
+    async with pool.acquire() as con:
+        assert await con.fetchval(f"SELECT count(*) FROM {schema}.conv_archive_deletions") == 0
+    done = await ContextRAGClient.delete_conversation(
+        client, tenant="t", project="p", user_id="u1", conversation_id="c1", user_type="registered",
+        bundle_ids=["b1"], lock_wait_s=0.5)
+    assert done["deleted_messages"] == 1
