@@ -5,7 +5,7 @@ summary: "Points from KDCube's OAuth host routes to Connection Hub's canonical d
 status: active
 tags: ["sdk", "connections", "connection-hub", "oauth", "delegated-credentials"]
 keywords: ["OAuth2 authorization server", "PKCE", "CIMD", "dynamic client registration", "client metadata", "Connection Hub"]
-updated_at: 2026-10-06
+updated_at: 2026-10-07
 see_also:
   - https://github.com/elenaviter/app-ecosystem/blob/main/docs/connection-hub/package/oauth-delegated-credential-protocol.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
@@ -48,6 +48,21 @@ Ordinary human login and delegated service authentication retain their existing
 contracts; a client asks its human operator to complete authorization in their
 own session. The host's broader platform-login policy remains a separate
 boundary.
+
+## Late Card refusal cleanup
+
+A known `CardConflict` from the Hub after minting causes the host to withhold
+the response and attempt revocation of both the portable access grant and
+refresh family. This applies to both generic refusals and stale-revision
+replacement conflicts. Each revocation is attempted independently, so a
+failure of one does not prevent the other. Cleanup failures retain the original
+refusal and log only the credential kind and client identity, without bearer or
+exception text. A failed backing-store call is not proof of revocation.
+
+This cleanup operates on delegated grant bindings and refresh families. It
+does not change ordinary platform-login authentication or claim to revoke the
+underlying platform session. Initial refresh-family cap/revision stamping and
+uncertain Card-commit recovery remain separate issuance boundaries.
 
 ## Refresh lifetime forwarding
 

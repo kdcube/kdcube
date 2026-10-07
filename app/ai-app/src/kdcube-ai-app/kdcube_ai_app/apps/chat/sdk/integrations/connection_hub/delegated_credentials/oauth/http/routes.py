@@ -48,6 +48,9 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentia
     oauth_delegated_config,
     oauth_delegated_config_from_connections,
 )
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.issuance_cleanup import (
+    revoke_withheld_oauth_credentials,
+)
 from connection_hub.delegated_credentials.oauth.consent import (
     CONSENT_CONTRACT_VERSION,
     named_service_selection_rows,
@@ -3556,17 +3559,11 @@ async def _issue_tokens(
                 invocation_policies=invocation_policies,
             )
     except CardConflict as exc:
+        await revoke_withheld_oauth_credentials(
+            store, access_token=access_token, refresh_token=refresh_token,
+            client_id=str(client_id or ""),
+        )
         if replace_authority and expected_card_revision is not None:
-            try:
-                await store.revoke_access_grant(access_token)
-                if refresh_token:
-                    await store.revoke_refresh_token(str(refresh_token))
-            except Exception:
-                LOGGER.exception(
-                    "[connection-hub.oauth] failed to remove tokens after card conflict "
-                    "client=%s",
-                    client_id,
-                )
             LOGGER.warning(
                 "[connection-hub.oauth] token withheld: card changed after consent "
                 "client=%s current_revision=%s",
