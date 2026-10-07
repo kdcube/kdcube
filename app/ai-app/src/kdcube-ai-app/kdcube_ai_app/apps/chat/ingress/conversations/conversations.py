@@ -20,6 +20,7 @@ from kdcube_ai_app.apps.chat.ingress.resolvers import (
 from kdcube_ai_app.auth.AuthManager import RequireUser
 from kdcube_ai_app.auth.sessions import UserSession
 from kdcube_ai_app.apps.chat.sdk.tools.citations import strip_base64_from_citables_artifact
+from kdcube_ai_app.apps.chat.sdk.context.vector.conv_retention import ConversationDeleteUnavailable
 from kdcube_ai_app.infra.plugin.bundle_registry import (
     load_persisted_registry_from_runtime_ctx,
     resolve_default_bundle_id_from_runtime_ctx,
@@ -455,6 +456,14 @@ async def delete_conversation(
         )
     except HTTPException:
         raise
+    except ConversationDeleteUnavailable as e:
+        # Nothing was deleted; the client may retry.
+        logger.warning(f"Conversation delete refused for now: conversation={conversation_id} code={e.code}: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail={"code": e.code, "message": str(e)},
+            headers={"Retry-After": str(e.retry_after_s)},
+        )
     except Exception as e:
         logger.error(
             f"Failed to delete conversation={conversation_id} for user={session.user_id}: {e}",

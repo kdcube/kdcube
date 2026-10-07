@@ -51,10 +51,18 @@ class _Con:
         if q.startswith(f"SELECT id, user_id, bundle_id") and "FROM kdcube_test_w536.conv_messages WHERE ts < $1" in q:
             cutoff, limit = args
             rows = sorted((r for r in self.db.messages if r["ts"] < cutoff), key=lambda r: (r["ts"], r["id"]))
+            if rows:  # one batch: the oldest row's user, conversation and UTC day
+                group = lambda r: (r["user_id"], r["conversation_id"], r["ts"].astimezone(timezone.utc).date())
+                rows = [r for r in rows if group(r) == group(rows[0])]
             return [dict(r, embedding=json.dumps(r["embedding"])) for r in rows[:limit]]
         if q.startswith("SELECT from_id, to_id, policy, created_at FROM"):
             ids = set(args[0])
             return [e for e in self.db.edges if e["from_id"] in ids or e["to_id"] in ids]
+        if q.startswith("SELECT b.batch_id, b.part_key, b.manifest_key") and "b.state IN ('written', 'verified')" in q:
+            user_id, conversation_id = args
+            hits = {c["batch_id"] for c in self.db.conversations
+                    if c["user_id"] == user_id and c["conversation_id"] == conversation_id}
+            return [b for b in self.db.sorted_batches() if b["state"] in ("written", "verified") and b["batch_id"] in hits]
         if q.startswith("SELECT batch_id, day") and "state IN ('written', 'verified')" in q:
             return [b for b in self.db.sorted_batches() if b["state"] in ("written", "verified")]
         if q.startswith("SELECT batch_id, day, part_key, manifest_key") and "part_key ~" in q:
@@ -141,6 +149,19 @@ class _Con:
 
     async def fetchval(self, query: str, *args):
         q = " ".join(query.split())
+        if q in ("SELECT pg_try_advisory_lock($1)", "SELECT pg_advisory_lock($1)", "SELECT pg_advisory_unlock($1)"):
+            # One process here; the lock itself is exercised against real PostgreSQL.
+            self.db.locks.append((q.split()[1].split("(")[0], args[0]))
+            return True
+        if q == "SELECT set_config('lock_timeout', $1, false)":
+            self.db.locks.append(("lock_timeout", args[0]))
+            return args[0]
+        if q.startswith("UPDATE kdcube_test_w536.conv_archive_batches SET state = 'retired', error = $2"):
+            batch = self.db.batches.get(args[0])
+            if not batch or batch["state"] not in ("written", "verified"):
+                return None
+            batch.update(state="retired", error=args[1])
+            return args[0]
         if q.startswith("UPDATE kdcube_test_w536.conv_archive_batches SET state = 'retired'"):
             batch = self.db.batches.get(args[0])
             if not batch or batch["state"] != "pruned":
@@ -151,6 +172,13 @@ class _Con:
             stamps = [b["max_ts"] for b in self.db.batches.values() if b["state"] == "pruned" and b["max_ts"]]
             return max(stamps) if stamps else None
         raise AssertionError(f"unexpected fetchval: {q}")
+
+    async def fetchrow(self, query: str, *args):
+        q = " ".join(query.split())
+        if q.startswith("SELECT state, part_key FROM kdcube_test_w536.conv_archive_batches WHERE batch_id = $1"):
+            batch = self.db.batches.get(args[0])
+            return {"state": batch["state"], "part_key": batch["part_key"]} if batch else None
+        raise AssertionError(f"unexpected fetchrow: {q}")
 
     async def executemany(self, query: str, rows):
         q = " ".join(query.split())
@@ -164,6 +192,9 @@ class _Con:
 
     async def execute(self, query: str, *args):
         q = " ".join(query.split())
+        if q == "RESET lock_timeout":
+            self.db.locks.append(("reset", None))
+            return "RESET"
         if q.startswith("DELETE FROM kdcube_test_w536.conv_archive_conversations WHERE batch_id = $1"):
             self.db.conversations = [c for c in self.db.conversations if c["batch_id"] != args[0]]
             return "DELETE"
@@ -222,6 +253,7 @@ class _Db:
         self.deletions: list[tuple] = []
         self.conversations: list[dict] = []  # conv_archive_conversations
         self.fail_prune_after_verify = False
+        self.locks: list[tuple] = []
 
     def snapshot(self):
         return (
@@ -994,7 +1026,8 @@ async def test_the_run_budget_holds_when_one_fetch_spans_several_conversations()
     summary = await retention.archive_before(NOW - timedelta(days=90), max_batches=1)
 
     assert summary["batches"] == 1 and summary["rows"] == 1
-    assert [m["id"] for m in db.messages] == [2]  # the second conversation stays hot for the next run
+    # The oldest row's conversation (2 is a minute older) goes first; the other stays hot for the next run.
+    assert [m["id"] for m in db.messages] == [1]
     assert (await retention.archive_before(NOW - timedelta(days=90), max_batches=1))["batches"] == 1
     assert db.messages == []
 
@@ -1081,3 +1114,142 @@ async def test_the_daily_archive_logs_stuck_batches(monkeypatch, caplog):
     (line,) = [r for r in caplog.records if r.getMessage().startswith("[conversation-archive] cutoff=")]
     assert line.levelname == "WARNING"
     assert "hot_days=14" in line.getMessage() and "stuck=1 stuck_batches=20260910-1-1" in line.getMessage()
+
+
+@pytest.mark.asyncio
+async def test_archive_runs_and_deletions_hold_the_same_schema_lock_and_release_it():
+    db, _, _, _, retention = _setup()
+    db.messages = [_msg(1, days_ago=200)]
+    await retention.archive_before(NOW - timedelta(days=90))
+    await retention.delete_messages(actor="operator", user_id="u1", conversation_id="c1")
+
+    # The archive takes the lock per step (one batch, then the empty selection);
+    # the deletion queues for it with a bounded wait.
+    assert db.locks[:4] == [("pg_try_advisory_lock", retention._lock_key()), ("pg_advisory_unlock", retention._lock_key())] * 2
+    assert db.locks[4:] == [("lock_timeout", "30000ms"), ("pg_advisory_lock", retention._lock_key()), ("reset", None),
+                            ("pg_advisory_unlock", retention._lock_key())]
+
+
+@pytest.mark.asyncio
+async def test_a_deletion_that_cannot_get_the_lock_in_time_is_refused_as_busy_and_records_nothing():
+    from kdcube_ai_app.apps.chat.sdk.context.vector.conv_retention import ConversationDeleteBusy
+
+    db, _, _, _, retention = _setup()
+    db.messages = [_msg(1, days_ago=10)]
+
+    class LockNotAvailable(Exception):
+        sqlstate = "55P03"
+
+    original = _Con.fetchval
+
+    async def held(self, query, *args):
+        if " ".join(query.split()) == "SELECT pg_advisory_lock($1)":
+            raise LockNotAvailable("canceling statement due to lock timeout")
+        return await original(self, query, *args)
+
+    _Con.fetchval = held
+    try:
+        with pytest.raises(ConversationDeleteBusy) as refused:
+            await retention.delete_messages(actor="u1", user_id="u1", conversation_id="c1", lock_wait_s=0.25)
+    finally:
+        _Con.fetchval = original
+    assert refused.value.code == "conversation_delete_busy"
+    assert db.locks == [("lock_timeout", "250ms"), ("reset", None)]
+    assert db.deletions == [] and [m["id"] for m in db.messages] == [1]
+
+
+@pytest.mark.asyncio
+async def test_a_retired_batch_whose_files_cannot_be_removed_is_logged_for_the_orphan_sweep(caplog):
+    db, backend, archive, _, retention = _setup()
+    db.messages = [_msg(1, days_ago=200)]
+    original = archive.write_batch
+
+    async def corrupt(**kw):
+        manifest = await original(**kw)
+        await backend.write_bytes_a(manifest["part_key"], b"tampered")
+        return manifest
+
+    archive.write_batch = corrupt  # type: ignore[assignment]
+    with pytest.raises(ColdArchiveIntegrityError):
+        await retention.archive_before(NOW - timedelta(days=90))
+    (batch,) = db.batches.values()
+
+    async def unavailable(part_key, manifest_key):
+        raise OSError("storage unavailable")
+
+    archive.delete_batch = unavailable  # type: ignore[assignment]
+    with caplog.at_level("ERROR", logger="kdcube_ai_app.apps.chat.sdk.context.vector.conv_retention"):
+        done = await retention.delete_messages(actor="operator", user_id="u1", conversation_id="c1")
+
+    assert done["unfinished_batches"] == {"finished": 0, "retired": 1} and done["hot_rows"] == 1
+    assert batch["state"] == "retired" and db.deletions[0]["state"] == "completed"
+    (line,) = [r for r in caplog.records if r.levelname == "ERROR"]
+    message = line.getMessage()
+    assert batch["batch_id"] in message and done["deletion_id"] in message
+    assert f"part_key={batch['part_key']}" in message and f"manifest_key={batch['manifest_key']}" in message
+    assert "storage unavailable" in message
+
+
+@pytest.mark.asyncio
+async def test_the_app_hard_delete_goes_through_retention_with_the_user_as_actor():
+    from types import SimpleNamespace
+
+    from kdcube_ai_app.apps.chat.sdk.solutions.conversation.ctx_rag import ContextRAGClient
+
+    calls = []
+
+    class _Retention:
+        async def delete_messages(self, **scope):
+            calls.append(scope)
+            return {"hot_rows": 1, "cold_rows": 2, "body_objects": 3}
+
+    class _Idx:
+        def retention(self, *, store):
+            calls.append(("store", store))
+            return _Retention()
+
+        async def delete_conversation(self, **scope):
+            raise AssertionError("the hot-only path must not run when the cold tier is available")
+
+    class _Sweep:
+        def _who_and_id(self, user_id, fingerprint):
+            return "registered", user_id
+
+        async def delete_conversation(self, **scope):
+            return {"messages": 4, "attachments": 0, "executions": 0}
+
+    store = _Sweep()
+    result = await ContextRAGClient.delete_conversation(
+        SimpleNamespace(idx=_Idx(), store=store), tenant="t", project="p", user_id="u1", conversation_id="c1",
+        user_type="registered", bundle_ids=["b1"],
+    )
+
+    assert result["deleted_messages"] == 3 and result["deleted_storage_messages"] == 4
+    assert calls == [("store", store), {"actor": "u1", "user_id": "u1", "conversation_id": "c1", "bundle_id": None,
+                                        "bundle_ids": ["b1"], "reason": "user delete", "lock_wait_s": 30.0}]
+
+
+@pytest.mark.asyncio
+async def test_the_app_hard_delete_refuses_retryably_when_the_cold_tier_is_unavailable():
+    from types import SimpleNamespace
+
+    from kdcube_ai_app.apps.chat.sdk.context.vector.conv_retention import ConversationDeleteUnavailable
+    from kdcube_ai_app.apps.chat.sdk.solutions.conversation.ctx_rag import ContextRAGClient
+
+    class _Idx:
+        def retention(self, *, store):
+            return None
+
+        async def delete_conversation(self, **scope):
+            raise AssertionError("a hot-only delete would leave the archived messages behind")
+
+    class _Sweep:
+        async def delete_conversation(self, **scope):
+            raise AssertionError("nothing is deleted when the deletion is refused")
+
+    with pytest.raises(ConversationDeleteUnavailable) as refused:
+        await ContextRAGClient.delete_conversation(
+            SimpleNamespace(idx=_Idx(), store=_Sweep()), tenant="t", project="p", user_id="u1", conversation_id="c1",
+            user_type="registered", bundle_ids=["b1"],
+        )
+    assert refused.value.code == "conversation_delete_cold_unavailable"

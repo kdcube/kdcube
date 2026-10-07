@@ -7,6 +7,7 @@ KDCUBE_TEST_POSTGRES_DSN (a disposable database with pgvector).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import uuid
@@ -103,7 +104,9 @@ async def test_a_deletion_completed_during_a_legacy_move_never_comes_back(env):
     async def read_then_delete(manifest):
         records = await original(manifest)
         if armed.pop("race", False):
-            done = await retention.delete_messages(actor="operator", user_id="u1", conversation_id="c1")
+            # Both entry points take the retention lock, so only a deletion that
+            # does not (a process of an older version, say) can land here.
+            done = await retention._delete_messages_locked(actor="operator", user_id="u1", conversation_id="c1")
             assert done["cold_rows"] == 1
         return records
 
@@ -353,3 +356,332 @@ async def test_a_stuck_batch_holds_back_only_its_own_utc_day(env, tmp_path):
     assert summary["stuck"] == 1 and (summary["batches"], summary["rows"]) == (1, 1)
     assert await _hot_ids(pool, schema) == [first, last]
     assert await _cold_ids(retention) == [other_day]
+
+
+# ---------- W536 D1/D2: a hard delete covers the cold tier and stays deleted ----------
+
+
+class _RecordingStore:
+    """Bodies for retention, plus the ConversationStore surface the app's hard delete uses."""
+
+    def __init__(self) -> None:
+        self.deleted: list[str] = []
+
+    async def delete_message(self, uri: str) -> bool:
+        self.deleted.append(uri)
+        return True
+
+    def _who_and_id(self, user_id, fingerprint):
+        return "registered", user_id
+
+    async def delete_conversation(self, **scope):
+        return {"messages": 0, "attachments": 0, "executions": 0}
+
+
+async def _msg(pool, schema, user, conv, ts, bundle="b1") -> int:
+    async with pool.acquire() as con:
+        return await con.fetchval(
+            f"INSERT INTO {schema}.conv_messages (user_id, bundle_id, conversation_id, role, text, hosted_uri, ts, tags) "
+            f"VALUES ($1, $2, $3, 'user', 'x', $4, $5, ARRAY['conv.start', 'artifact:turn.fingerprint.v1']) RETURNING id",
+            user, bundle, conv, f"cb/{user}/{conv}/{uuid.uuid4().hex}.json", ts,
+        )
+
+
+async def _scope_ids(pool, schema, retention, user, conv) -> tuple[list[int], list[int]]:
+    async with pool.acquire() as con:
+        hot = sorted(r["id"] for r in await con.fetch(
+            f"SELECT id FROM {schema}.conv_messages WHERE user_id = $1 AND conversation_id = $2", user, conv))
+    cold = sorted(int(r["id"]) for r in await retention.fetch_cold(
+        from_ts=NOW - timedelta(days=400), user_id=user, conversation_id=conv))
+    return hot, cold
+
+
+def _orphan_parts(backend, live_part_keys) -> set:
+    on_disk = {str(p.relative_to(backend.base_path)) for p in Path(backend.base_path).rglob("*.jsonl.gz")}
+    return {k.split("conversation-cold/")[1] for k in on_disk} - {k.split("conversation-cold/")[1] for k in live_part_keys}
+
+
+async def _live_parts(pool, schema) -> set:
+    async with pool.acquire() as con:
+        return {r["part_key"] for r in await con.fetch(
+            f"SELECT part_key FROM {schema}.conv_archive_batches WHERE state = 'pruned'")}
+
+
+@pytest.mark.asyncio
+async def test_the_app_hard_delete_removes_archived_rows_and_unlists_the_conversation(env):
+    from types import SimpleNamespace
+
+    from kdcube_ai_app.apps.chat.sdk.context.vector.conv_index import ConvIndex
+    from kdcube_ai_app.apps.chat.sdk.solutions.conversation.ctx_rag import ContextRAGClient
+
+    pool, schema, backend, archive, retention = env
+    store = _RecordingStore()
+    retention.store = store
+    old, later = datetime(2026, 9, 10, 9, tzinfo=UTC), datetime(2026, 9, 11, 9, tzinfo=UTC)
+    target_cold = [await _msg(pool, schema, "u1", "c1", old), await _msg(pool, schema, "u1", "c1", later)]
+    other_bundle = await _msg(pool, schema, "u1", "c1", old, bundle="b2")  # outside the caller's bundles
+    other_conv = await _msg(pool, schema, "u1", "c2", old)
+    other_user = await _msg(pool, schema, "u2", "c1", old)
+    assert (await retention.archive_before(_night(7)))["rows"] == 5
+    target_hot = await _msg(pool, schema, "u1", "c1", datetime(2026, 10, 5, 9, tzinfo=UTC))
+    async with pool.acquire() as con:
+        target_uris = {r["hosted_uri"] for r in await con.fetch(
+            f"SELECT hosted_uri FROM {schema}.conv_messages WHERE id = $1", target_hot)}
+    target_uris |= {r["hosted_uri"] for r in await retention.fetch_cold(from_ts=NOW - timedelta(days=400))
+                    if r["id"] in target_cold}
+
+    idx = ConvIndex(pool=pool, schema=schema)
+    idx.cold_retention = retention
+    client = SimpleNamespace(idx=idx, store=store)
+    result = await ContextRAGClient.delete_conversation(
+        client, tenant="t", project="p", user_id="u1", conversation_id="c1", user_type="registered",
+        bundle_id=None, bundle_ids=["b1"],
+    )
+
+    assert result["deleted_messages"] == 3  # one hot row and two archived ones
+    assert set(store.deleted) == target_uris
+    assert await _scope_ids(pool, schema, retention, "u1", "c1") == ([], [other_bundle])
+    assert await retention.fetch_cold_conversation(
+        user_id="u1", conversation_id="c1", from_ts=NOW - timedelta(days=400), bundle_ids=["b1"]) == []
+    listed = await retention.list_archived_conversations(
+        user_id="u1", from_ts=NOW - timedelta(days=400), bundle_id="b1")
+    assert [r["conversation_id"] for r in listed] == ["c2"]
+    assert await _scope_ids(pool, schema, retention, "u1", "c2") == ([], [other_conv])
+    assert await _scope_ids(pool, schema, retention, "u2", "c1") == ([], [other_user])
+    assert _orphan_parts(backend, await _live_parts(pool, schema)) == set()
+    async with pool.acquire() as con:
+        audit = await con.fetchrow(
+            f"SELECT actor, reason, state, hot_rows, cold_rows, scope::text AS scope FROM {schema}.conv_archive_deletions")
+    assert (audit["actor"], audit["reason"], audit["state"], audit["hot_rows"], audit["cold_rows"]) == (
+        "u1", "user delete", "completed", 1, 2)
+    assert json.loads(audit["scope"])["bundle_ids"] == ["b1"]
+
+
+@pytest.mark.asyncio
+async def test_a_deletion_after_a_crashed_run_stays_deleted_on_the_next_night(env):
+    pool, schema, backend, archive, retention = env
+    kept = await _msg(pool, schema, "u1", "c1", datetime(2026, 9, 10, 9, tzinfo=UTC))
+    await _msg(pool, schema, "u2", "c2", datetime(2026, 9, 10, 10, tzinfo=UTC))
+    original, calls = retention._verify_and_prune, {"n": 0}
+
+    async def crash_on_second(manifest_key, batch_id):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("crash after write")
+        return await original(manifest_key, batch_id)
+
+    retention._verify_and_prune = crash_on_second
+    with pytest.raises(RuntimeError):
+        await retention.archive_before(_night(7))
+    retention._verify_and_prune = original
+    assert [s for _, s, _, _ in await _ledger(pool, schema)] == ["pruned", "written"]
+
+    done = await retention.delete_messages(actor="operator", user_id="u2", conversation_id="c2", reason="test")
+    assert done["unfinished_batches"] == {"finished": 1, "retired": 0}
+    assert (done["hot_rows"], done["cold_rows"]) == (0, 1)
+    summary = await retention.archive_before(_night(8))
+
+    assert (summary["resumed"], summary["stuck"], summary["rows"]) == (0, 0, 0)
+    assert await _scope_ids(pool, schema, retention, "u2", "c2") == ([], [])
+    assert await retention.list_archived_conversations(user_id="u2", from_ts=NOW - timedelta(days=400)) == []
+    assert await _scope_ids(pool, schema, retention, "u1", "c1") == ([], [kept])
+
+
+@pytest.mark.asyncio
+async def test_a_deletion_retires_a_stuck_batch_of_its_conversation_and_nothing_comes_back(env):
+    pool, schema, backend, archive, retention = env
+    await _msg(pool, schema, "u1", "c1", datetime(2026, 9, 10, 9, tzinfo=UTC))
+    original = archive.write_batch
+
+    async def corrupt(**kw):
+        manifest = await original(**kw)
+        await backend.write_bytes_a(manifest["part_key"], b"tampered")
+        return manifest
+
+    archive.write_batch = corrupt
+    with pytest.raises(ColdArchiveIntegrityError):
+        await retention.archive_before(_night(7))
+    archive.write_batch = original
+    other = await _msg(pool, schema, "u2", "c1", datetime(2026, 9, 10, 10, tzinfo=UTC))
+
+    done = await retention.delete_messages(actor="operator", user_id="u1", conversation_id="c1")
+    assert done["unfinished_batches"] == {"finished": 0, "retired": 1}
+    assert done["hot_rows"] == 1
+    (batch, state, error, _), = await _ledger(pool, schema)
+    assert state == "retired" and done["deletion_id"] in error and "sha256 mismatch" in error
+    assert list(Path(backend.base_path).rglob("*.jsonl.gz")) == []  # the stuck part is gone
+
+    summary = await retention.archive_before(_night(8))
+    assert (summary["stuck"], summary["rows"]) == (0, 1)
+    assert await _scope_ids(pool, schema, retention, "u1", "c1") == ([], [])
+    assert await _scope_ids(pool, schema, retention, "u2", "c1") == ([], [other])
+
+
+@pytest.mark.asyncio
+async def test_a_deletion_waits_for_a_running_archive_and_nothing_comes_back(env):
+    pool, schema, backend, archive, retention = env
+    await _msg(pool, schema, "u1", "c1", datetime(2026, 9, 10, 9, tzinfo=UTC))
+    other = await _msg(pool, schema, "u2", "c1", datetime(2026, 9, 10, 10, tzinfo=UTC))
+    original, entered, gate = archive.write_batch, asyncio.Event(), asyncio.Event()
+
+    async def paused(**kw):
+        manifest = await original(**kw)  # the part is written, the ledger does not know it yet
+        entered.set()
+        await gate.wait()
+        return manifest
+
+    archive.write_batch = paused
+    run = asyncio.create_task(retention.archive_before(_night(7)))
+    deletion = None
+    try:
+        await asyncio.wait_for(entered.wait(), 10)
+        deletion = asyncio.create_task(retention.delete_messages(actor="operator", user_id="u1", conversation_id="c1"))
+        await asyncio.sleep(0.5)
+        waited = not deletion.done()
+    finally:
+        gate.set()
+        await run
+        done = await deletion if deletion else None
+    archive.write_batch = original
+    assert waited, "the deletion ran while the archive run was between writing a part and recording it"
+    assert (done["hot_rows"], done["cold_rows"]) == (0, 1)
+
+    await retention.archive_before(_night(8))
+    assert await _scope_ids(pool, schema, retention, "u1", "c1") == ([], [])
+    assert await _scope_ids(pool, schema, retention, "u2", "c1") == ([], [other])
+
+
+# ---------- W536 review: hot bundle scope, a per-batch lock, a bounded deletion wait ----------
+
+
+@pytest.mark.asyncio
+async def test_a_deletion_scoped_to_some_bundles_keeps_the_other_bundles_hot_rows(env):
+    pool, schema, backend, archive, retention = env
+    recent = datetime(2026, 10, 5, 9, tzinfo=UTC)
+    in_a = [await _msg(pool, schema, "u1", "c1", recent, bundle="bA"),
+            await _msg(pool, schema, "u1", "c1", recent + timedelta(minutes=1), bundle="bA")]
+    in_b = [await _msg(pool, schema, "u1", "c1", recent, bundle="bB"),
+            await _msg(pool, schema, "u1", "c1", recent + timedelta(minutes=1), bundle="bB")]
+
+    done = await retention.delete_messages(actor="u1", user_id="u1", conversation_id="c1", bundle_ids=["bA"])
+
+    assert done["hot_rows"] == len(in_a)
+    assert await _scope_ids(pool, schema, retention, "u1", "c1") == (sorted(in_b), [])
+
+
+async def _until_a_lock_waiter(pool, timeout: float = 10.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while True:
+        async with pool.acquire() as con:
+            if await con.fetchval(
+                "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted "
+                "AND database = (SELECT oid FROM pg_database WHERE datname = current_database())"
+            ):
+                return
+        assert asyncio.get_running_loop().time() < deadline, "the deletion never queued for the retention lock"
+        await asyncio.sleep(0.02)
+
+
+@pytest.mark.asyncio
+async def test_a_deletion_issued_mid_run_waits_for_at_most_one_batch(env):
+    pool, schema, backend, archive, retention = env
+    night = datetime(2026, 9, 10, 9, tzinfo=UTC)
+    ids = [await _msg(pool, schema, f"u{i}", "c1", night + timedelta(minutes=i)) for i in range(5)]
+    events: list = []
+    entered, gate = asyncio.Event(), asyncio.Event()
+    write, delete_locked = archive.write_batch, retention._delete_messages_locked
+
+    async def tracked_write(**kw):
+        events.append(("write", kw["batch_id"]))
+        manifest = await write(**kw)
+        if len(events) == 2:  # the second batch is in flight
+            entered.set()
+            await gate.wait()
+        return manifest
+
+    async def tracked_delete(**kw):
+        done = await delete_locked(**kw)
+        events.append(("deleted", done["hot_rows"], done["cold_rows"]))  # still under the lock
+        return done
+
+    archive.write_batch = tracked_write
+    retention._delete_messages_locked = tracked_delete
+    run = asyncio.create_task(retention.archive_before(_night(7), batch_size=1))
+    deletion = None
+    try:
+        await asyncio.wait_for(entered.wait(), 10)
+        # u4's only row would be the fifth batch: the deletion finds it hot.
+        deletion = asyncio.create_task(retention.delete_messages(actor="operator", user_id="u4", conversation_id="c1"))
+        await _until_a_lock_waiter(pool)
+    finally:
+        gate.set()
+        summary = await asyncio.wait_for(run, 30)
+        if deletion:
+            await asyncio.wait_for(deletion, 30)
+    archive.write_batch, retention._delete_messages_locked = write, delete_locked
+
+    deleted_at = [i for i, e in enumerate(events) if e[0] == "deleted"]
+    assert deleted_at == [2], f"the deletion waited for more than the batch in flight: {events}"
+    assert events[2] == ("deleted", 1, 0)
+    assert (summary["batches"], summary["rows"]) == (4, 4)
+    assert await _scope_ids(pool, schema, retention, "u4", "c1") == ([], [])
+    for i in range(4):
+        assert await _scope_ids(pool, schema, retention, f"u{i}", "c1") == ([], [ids[i]])
+    summary = await retention.archive_before(_night(8), batch_size=1)
+    assert summary["rows"] == 0 and await _scope_ids(pool, schema, retention, "u4", "c1") == ([], [])
+
+
+@pytest.mark.asyncio
+async def test_the_ingress_delete_answers_503_when_the_retention_lock_stays_held(env, monkeypatch):
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+
+    from kdcube_ai_app.apps.chat.ingress.conversations import conversations
+    from kdcube_ai_app.apps.chat.sdk.context.vector.conv_index import ConvIndex
+    from kdcube_ai_app.apps.chat.sdk.solutions.conversation.ctx_rag import ContextRAGClient
+
+    pool, schema, backend, archive, retention = env
+    store = _RecordingStore()
+    retention.store = store
+    kept = await _msg(pool, schema, "u1", "c1", datetime(2026, 10, 5, 9, tzinfo=UTC))
+    idx = ConvIndex(pool=pool, schema=schema)
+    idx.cold_retention = retention
+    client = SimpleNamespace(idx=idx, store=store)
+
+    class _Browser:
+        async def get_conversation_details(self, **kw):
+            return {"bundle_id": "b1", "turns": [{"turn_id": "t1"}]}
+
+        async def delete_conversation(self, **kw):
+            return await ContextRAGClient.delete_conversation(client, lock_wait_s=0.5, **kw)
+
+    class _Comm:
+        async def emit_conversation_status(self, **kw):
+            raise AssertionError("a refused delete reports no deleted status")
+
+    async def _registry(runtime_ctx, tenant, project):
+        return SimpleNamespace(bundles={"b1": object()})
+
+    monkeypatch.setattr(conversations, "load_persisted_registry_from_runtime_ctx", _registry)
+    monkeypatch.setattr(conversations.router, "state", SimpleNamespace(conversation_browser=_Browser(), chat_comm=_Comm()),
+                        raising=False)
+    session = SimpleNamespace(user_id="u1", session_id="s1", user_type="registered", fingerprint="fp")
+    async with pool.acquire() as holder:  # an archive step in another process holds the lock
+        await holder.fetchval("SELECT pg_advisory_lock($1)", retention._lock_key())
+        try:
+            with pytest.raises(HTTPException) as refused:
+                await asyncio.wait_for(conversations.delete_conversation(
+                    tenant="t", project="p", conversation_id="c1", session=session), 10)
+        finally:
+            await holder.fetchval("SELECT pg_advisory_unlock($1)", retention._lock_key())
+
+    assert refused.value.status_code == 503
+    assert refused.value.detail["code"] == "conversation_delete_busy"
+    assert await _scope_ids(pool, schema, retention, "u1", "c1") == ([kept], [])
+    async with pool.acquire() as con:
+        assert await con.fetchval(f"SELECT count(*) FROM {schema}.conv_archive_deletions") == 0
+    done = await ContextRAGClient.delete_conversation(
+        client, tenant="t", project="p", user_id="u1", conversation_id="c1", user_type="registered",
+        bundle_ids=["b1"], lock_wait_s=0.5)
+    assert done["deleted_messages"] == 1

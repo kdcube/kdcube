@@ -23,6 +23,10 @@ import kdcube_ai_app.apps.chat.sdk.tools.citations as citation_utils
 
 from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import ConversationStore, MAX_CONCURRENT_ARTIFACT_FETCHES
 from kdcube_ai_app.apps.chat.sdk.context.vector.conv_index import ConvIndex
+from kdcube_ai_app.apps.chat.sdk.context.vector.conv_retention import (
+    DELETE_LOCK_WAIT_S,
+    ConversationDeleteUnavailable,
+)
 from kdcube_ai_app.apps.chat.sdk.runtime.user_inputs import iter_turn_user_input_entries
 
 logger = logging.getLogger(__name__)
@@ -3105,11 +3109,20 @@ class ContextRAGClient:
             bundle_id: Optional[str] = None,
             bundle_ids: Optional[Sequence[str]] = None,
             fingerprint: Optional[str] = None,
+            actor: Optional[str] = None,
+            reason: str = "user delete",
+            lock_wait_s: float = DELETE_LOCK_WAIT_S,
     ) -> Dict[str, int]:
         """
         Hard-delete a conversation for a user:
 
-          1) Remove all conv_messages rows (and edges) from the index
+          1) Remove its messages from both index tiers (hot rows and edges,
+             archived cold records) and their bodies, through retention's
+             audited `delete_messages` (actor defaults to the user).
+             Raises `ConversationDeleteUnavailable` (retryable, HTTP 503) and
+             deletes nothing when the cold tier cannot be resolved
+             (code conversation_delete_cold_unavailable) or the retention
+             lock stays held for `lock_wait_s` (ConversationDeleteBusy).
           2) Best-effort delete blobs in ConversationStore under
              conversation/attachments/executions for this conversation.
 
@@ -3121,13 +3134,25 @@ class ContextRAGClient:
             "deleted_storage_executions": ...
           }
         """
-        # 1) Delete index rows
-        deleted_rows = await self.idx.delete_conversation(
+        # 1) Delete index rows in both tiers, with their bodies
+        retention = self.idx.retention(store=self.store)
+        if retention is None:
+            # A hot-only delete would leave the archived messages behind: refuse, retryably.
+            logger.error(f"Cold tier unavailable: conversation={conversation_id} is not deleted")
+            raise ConversationDeleteUnavailable(
+                "the conversation's cold tier is unavailable; nothing was deleted, try again later",
+                code="conversation_delete_cold_unavailable",
+            )
+        deleted = await retention.delete_messages(
+            actor=actor or user_id,
             user_id=user_id,
             conversation_id=conversation_id,
             bundle_id=bundle_id,
             bundle_ids=bundle_ids,
+            reason=reason,
+            lock_wait_s=lock_wait_s,
         )
+        deleted_rows = int(deleted.get("hot_rows") or 0) + int(deleted.get("cold_rows") or 0)
 
         # 2) Delete blobs from storage
         # user_or_fp is the stable id used in RNs; same logic as put_message/attachments

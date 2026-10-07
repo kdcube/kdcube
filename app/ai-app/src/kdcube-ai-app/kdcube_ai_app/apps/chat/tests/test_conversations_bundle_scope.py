@@ -414,6 +414,39 @@ async def test_delete_conversation_scopes_index_delete_to_registry_bundle_set(mo
     }) in _router_state.browser.calls
 
 
+
+@pytest.mark.parametrize("refusal", ["busy", "cold_unavailable"])
+@pytest.mark.asyncio
+async def test_delete_conversation_maps_a_retryable_refusal_to_503(monkeypatch, _router_state, refusal):
+    from fastapi import HTTPException
+
+    from kdcube_ai_app.apps.chat.sdk.context.vector.conv_retention import (
+        ConversationDeleteBusy,
+        ConversationDeleteUnavailable,
+    )
+
+    async def _load_registry(runtime_ctx, tenant, project):
+        return SimpleNamespace(bundles={"bundle.from.db": object()})
+
+    async def _refuse(**kwargs):
+        _router_state.browser.calls.append(("delete_conversation", kwargs))
+        if refusal == "busy":
+            raise ConversationDeleteBusy("the retention lock stayed held")
+        raise ConversationDeleteUnavailable("no cold tier", code="conversation_delete_cold_unavailable")
+
+    monkeypatch.setattr(conversations, "load_persisted_registry_from_runtime_ctx", _load_registry)
+    monkeypatch.setattr(_router_state.browser, "delete_conversation", _refuse)
+    session = SimpleNamespace(user_id="user-1", session_id="session-1", user_type="standard", fingerprint="fp-1")
+    with pytest.raises(HTTPException) as exc:
+        await conversations.delete_conversation(
+            tenant="tenant-a", project="project-a", conversation_id="conv-1", session=session,
+        )
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail["code"] == f"conversation_delete_{refusal}"
+    assert exc.value.headers == {"Retry-After": "5"}
+    assert _router_state.chat_comm.calls == []  # no "deleted" status for a refused delete
+
 @pytest.mark.asyncio
 async def test_fetch_turns_with_feedbacks_does_not_resolve_default_bundle_and_preserves_inferred_bundle_id(
     monkeypatch, _router_state
