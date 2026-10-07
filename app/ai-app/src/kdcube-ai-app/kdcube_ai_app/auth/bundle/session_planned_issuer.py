@@ -12,7 +12,9 @@ from kdcube_ai_app.auth.bundle.session_bound_issuer import (
     IssuanceSecretCustody, _custody_call, _prepare_bound_session, _store_call,
 )
 from kdcube_ai_app.auth.bundle.session_issuance import SessionIssuanceReceipt, SessionIssuanceRefused
-from kdcube_ai_app.auth.bundle.session_planned_issuance import AppliedIssuanceContext, PlannedIssuanceContext
+from kdcube_ai_app.auth.bundle.session_planned_issuance import (
+    AppliedIssuanceContext, PlannedIssuanceContext, TerminalIssuanceContext, TerminalIssuanceReceipt,
+)
 
 
 async def prepare_bound_session(
@@ -76,3 +78,25 @@ async def activate_prepared_bound_session(
         session_id=active.session_id, secret_ref=active.secret_ref,
         bearer_sha256=active.record["token_sha256"], outcome="recovered",
     ).validated()
+
+
+async def retire_prepared_bound_session(
+    context: object, *, tenant: str | None, project: str | None,
+    store: Any, custody: IssuanceSecretCustody,
+) -> TerminalIssuanceReceipt:
+    terminal = TerminalIssuanceContext.from_context(context)
+    bound = terminal.plan
+    if bound.tenant != tenant or bound.project != project:
+        raise SessionIssuanceRefused("issuance_namespace_mismatch")
+    if not callable(getattr(store, "retire_issuance", None)):
+        raise SessionIssuanceRefused("issuance_store_unavailable")
+    if not callable(getattr(custody, "delete", None)):
+        raise SessionIssuanceRefused("issuance_custody_unavailable")
+    # Do not cross the provider boundary on an unknown database outcome.
+    # Recovery retries the same tombstone and exact original secret reference.
+    original = await _store_call(store.retire_issuance, terminal)
+    if original is not None:
+        await _custody_call(custody.delete, secret_ref=original.secret_ref)
+    return TerminalIssuanceReceipt(
+        identity=bound.identity, secret_ref=original.secret_ref if original is not None else None,
+    )

@@ -11,13 +11,17 @@ previous transaction to mint again.
 """
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 import re
 from dataclasses import dataclass
 from typing import Any, Mapping
 
 from kdcube_ai_app.auth.bundle.session_issuance import SessionIssuanceRefused
-from kdcube_ai_app.auth.bundle.session_schema import TABLE_ISSUANCES, TABLE_SESSIONS, TABLE_USERS
+from kdcube_ai_app.auth.bundle.session_schema import (
+    TABLE_ISSUANCES, TABLE_ISSUANCE_TERMINALS, TABLE_SESSIONS, TABLE_USERS,
+)
 
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 _HEX32 = re.compile(r"[0-9a-f]{32}")
@@ -102,11 +106,75 @@ class PostgresSessionIssuanceStore:
         if type(identity) is not str or not _HEX64.fullmatch(identity):
             raise SessionIssuanceRefused("issuance_identity_invalid")
         async with self._pool.acquire() as connection:
+            await self._require_not_terminal(connection, identity)
             row = await connection.fetchrow(
                 f"SELECT *, {_EPOCH_COLUMNS} "
                 f"FROM {self.schema}.{TABLE_ISSUANCES} WHERE identity = $1", identity,
             )
         return self._reservation(row) if row is not None else None
+
+    async def _require_not_terminal(self, connection: Any, identity: str) -> None:
+        if await connection.fetchval(
+            f"SELECT EXISTS(SELECT 1 FROM {self.schema}.{TABLE_ISSUANCE_TERMINALS} WHERE identity=$1)",
+            identity,
+        ):
+            raise SessionIssuanceRefused("issuance_terminal")
+
+    async def retire_issuance(self, context: object) -> SessionIssuanceReservation | None:
+        """Commit a no-mint fence before external custody retirement.
+
+        Only an inactive original is eligible. No user, session, sibling
+        issuance, permission or delivered token is revoked by this operation.
+        The same short identity/row lock serializes reserve and activation.
+        """
+        from kdcube_ai_app.auth.bundle.session_planned_issuance import TerminalIssuanceContext
+        terminal = TerminalIssuanceContext.from_context(context)
+        bound = terminal.plan
+        if bound.tenant != self.tenant or bound.project != self.project:
+            raise SessionIssuanceRefused("issuance_namespace_mismatch")
+        encoded_plan = json.dumps(bound.to_record(), sort_keys=True, separators=(",", ":"))
+        plan_digest = hashlib.sha256(encoded_plan.encode("ascii")).hexdigest()
+        async with asyncio.timeout(5), self._pool.acquire() as connection:
+            async with connection.transaction():
+                await connection.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                    self.schema + ":session-issuance:" + bound.identity,
+                )
+                row = await connection.fetchrow(
+                    f"SELECT *, {_EPOCH_COLUMNS} FROM {self.schema}.{TABLE_ISSUANCES} "
+                    "WHERE identity=$1 FOR UPDATE", bound.identity,
+                )
+                original = self._reservation(row) if row is not None else None
+                if original is not None:
+                    if original.record.get("issuance_plan") != bound.to_record():
+                        raise SessionIssuanceRefused("issuance_identity_conflict")
+                    if (original.state == "active" or original.activation_digest is not None
+                            or await connection.fetchval(
+                                f"SELECT EXISTS(SELECT 1 FROM {self.schema}.{TABLE_SESSIONS} WHERE session_id=$1)",
+                                original.session_id,
+                            )):
+                        raise SessionIssuanceRefused("issuance_already_active")
+                    if terminal.token_sha256 and original.record["token_sha256"] != terminal.token_sha256:
+                        raise SessionIssuanceRefused("issuance_commitment_mismatch")
+                prior = await connection.fetchrow(
+                    f"SELECT plan_digest, terminal_digest FROM {self.schema}.{TABLE_ISSUANCE_TERMINALS} "
+                    "WHERE identity=$1", bound.identity,
+                )
+                if prior is not None:
+                    if prior["plan_digest"] != plan_digest or prior["terminal_digest"] != terminal.digest:
+                        raise SessionIssuanceRefused("issuance_terminal_conflict")
+                    return original
+                if terminal.state == "expired" and not await connection.fetchval(
+                    "SELECT clock_timestamp() >= to_timestamp($1)", bound.delivery_deadline,
+                ):
+                    raise SessionIssuanceRefused("issuance_delivery_not_expired")
+                reason = terminal.slot_outcome if terminal.state == "committed" else terminal.state
+                await connection.execute(
+                    f"INSERT INTO {self.schema}.{TABLE_ISSUANCE_TERMINALS} "
+                    "(identity, plan_digest, terminal_digest, reason) VALUES ($1,$2,$3,$4)",
+                    bound.identity, plan_digest, terminal.digest, reason,
+                )
+        return original
 
     async def reserve_issuance(
         self, identity: str, inputs_digest: str, session_id: str, secret_ref: str,
@@ -171,6 +239,7 @@ class PostgresSessionIssuanceStore:
                     "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
                     self.schema + ":session-issuance:" + identity,
                 )
+                await self._require_not_terminal(connection, identity)
                 prior = await connection.fetchrow(
                     f"SELECT *, {_EPOCH_COLUMNS} "
                     f"FROM {self.schema}.{TABLE_ISSUANCES} WHERE identity = $1", identity,
@@ -274,6 +343,7 @@ class PostgresSessionIssuanceStore:
                     f"SELECT *, {_EPOCH_COLUMNS} FROM {self.schema}.{TABLE_ISSUANCES} "
                     "WHERE identity = $1 FOR UPDATE", identity,
                 )
+                await self._require_not_terminal(connection, identity)
                 current = self._reservation(row)
                 planned = "issuance_plan" in current.record
                 if planned:

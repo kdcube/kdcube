@@ -27,6 +27,7 @@ from kdcube_ai_app.auth.AuthManager import AuthManager, AuthenticationError, Use
 from kdcube_ai_app.auth.bundle.session_store import BundleSessionStore
 from kdcube_ai_app.auth.bundle.session_issuance import BoundIssuance, IssuanceContext
 from kdcube_ai_app.auth.bundle.session_bound_issuer import IssuanceSecretCustody
+from kdcube_ai_app.auth.bundle.session_planned_issuance import TerminalIssuanceReceipt
 from kdcube_ai_app.auth.session_authority_runtime import (
     bundle_session_store_for,
 )
@@ -589,6 +590,17 @@ class BundleSessionAuthority:
         from kdcube_ai_app.auth.bundle.session_planned_issuer import activate_prepared_bound_session
 
         return await activate_prepared_bound_session(
+            context, tenant=self.tenant, project=self.project,
+            store=self._active_authority_store(), custody=custody,
+        )
+
+    async def retire_prepared_bound_session(
+        self, context: object, *, custody: IssuanceSecretCustody,
+    ) -> TerminalIssuanceReceipt:
+        """Retire only a never-active original after a trusted terminal result."""
+        from kdcube_ai_app.auth.bundle.session_planned_issuer import retire_prepared_bound_session
+
+        return await retire_prepared_bound_session(
             context, tenant=self.tenant, project=self.project,
             store=self._active_authority_store(), custody=custody,
         )

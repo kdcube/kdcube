@@ -154,3 +154,92 @@ class AppliedIssuanceContext:
     @property
     def digest(self) -> str:
         return hashlib.sha256(_canonical(asdict(self)).encode("ascii")).hexdigest()
+
+
+@dataclass(frozen=True)
+class TerminalIssuanceContext:
+    """Trusted original terminal result, or the original delivery deadline.
+
+    No current Card edit supplies this authority. A host must authenticate
+    the original result; the structural adapter is not request authorization.
+    Expiry is checked again using PostgreSQL time under the issuance lock.
+    """
+    plan: PlannedIssuanceContext
+    state: str
+    slot_outcome: str
+    receipt_digest: str
+    token_sha256: str
+
+    @classmethod
+    def from_context(cls, context: object) -> TerminalIssuanceContext:
+        if isinstance(context, dict):
+            raise SessionIssuanceRefused("issuance_result_invalid")
+        try:
+            value = cls(**{name: getattr(context, name) for name in cls.__dataclass_fields__})
+        except (AttributeError, TypeError):
+            raise SessionIssuanceRefused("issuance_result_invalid") from None
+        if (type(value.state) is not str or type(value.slot_outcome) is not str
+                or (value.state, value.slot_outcome) not in {
+            ("aborted", "released"), ("committed", "superseded"), ("expired", "expired"),
+        }):
+            raise SessionIssuanceRefused("issuance_result_not_terminal")
+        if value.state == "committed":
+            _digest(value.receipt_digest, reason="issuance_result_invalid")
+            _digest(value.token_sha256, reason="issuance_result_invalid")
+        elif value.receipt_digest != "":
+            raise SessionIssuanceRefused("issuance_result_invalid")
+        if value.token_sha256 != "":
+            _digest(value.token_sha256, reason="issuance_result_invalid")
+        return cls(
+            plan=PlannedIssuanceContext.from_context(value.plan),
+            state=value.state, slot_outcome=value.slot_outcome,
+            receipt_digest=value.receipt_digest, token_sha256=value.token_sha256,
+        )
+
+    @classmethod
+    def from_oauth_result(cls, plan: object, result: object) -> TerminalIssuanceContext:
+        bound = PlannedIssuanceContext.from_context(plan)
+        if isinstance(result, dict):
+            raise SessionIssuanceRefused("issuance_result_invalid")
+        try:
+            slot = result.per_slot[bound.slot]
+            expected_revision = bound.card_revision if result.state == "committed" else bound.base_revision
+            if (result.transaction_id != bound.transaction_id
+                    or result.intent_digest != bound.intent_digest
+                    or result.access_id != bound.access_id
+                    or result.card_revision != expected_revision
+                    or result.expires_at != bound.cap_expires_at
+                    or result.delivery_deadline != bound.delivery_deadline
+                    or slot.effect_digest != bound.effect_digest):
+                raise SessionIssuanceRefused("issuance_identity_conflict")
+            # Hub reports an absent, never-reserved slot as pending even
+            # after the ONE decision has irreversibly aborted.
+            outcome = ("released" if result.state == "aborted" and slot.outcome == "pending"
+                       and slot.token_sha256 == "" else slot.outcome)
+            value = cls(plan=bound, state=result.state, slot_outcome=outcome,
+                        receipt_digest=result.receipt_digest, token_sha256=slot.token_sha256)
+        except (AttributeError, KeyError, TypeError):
+            raise SessionIssuanceRefused("issuance_result_invalid") from None
+        # An original Hub result never reports our local delivery-window
+        # expiry. A caller cannot smuggle that path through this adapter.
+        if value.state == "expired":
+            raise SessionIssuanceRefused("issuance_result_not_terminal")
+        return cls.from_context(value)
+
+    @classmethod
+    def expired(cls, plan: object) -> TerminalIssuanceContext:
+        return cls.from_context(cls(
+            plan=PlannedIssuanceContext.from_context(plan), state="expired",
+            slot_outcome="expired", receipt_digest="", token_sha256="",
+        ))
+
+    @property
+    def digest(self) -> str:
+        return hashlib.sha256(_canonical(asdict(self)).encode("ascii")).hexdigest()
+
+
+@dataclass(frozen=True)
+class TerminalIssuanceReceipt:
+    """Public retirement coordinates, not a physical provider-erasure proof."""
+    identity: str
+    secret_ref: str | None

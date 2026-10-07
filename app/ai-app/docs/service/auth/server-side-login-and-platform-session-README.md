@@ -226,10 +226,50 @@ their original behavior; additive nullable columns preserve legacy rows and
 planned rows with missing historical deadlines fail closed.
 
 These are SDK internal composition primitives. Host validation of original
-Plan/Result, live Card incarnation fencing, consumed authorization-code replay,
-terminal SDK retirement and physical custody erasure are separate host
-integration responsibilities. A prepared receipt describes stable custody
-coordinates and does not assert that the session is active or usable.
+Plan/Result, live Card incarnation fencing, consumed authorization-code replay
+and physical custody erasure remain host integration responsibilities. A
+prepared receipt describes stable custody coordinates and does not assert
+that the session is active or usable.
+
+### Terminal retirement of a never-active original
+
+`retire_prepared_bound_session(context, *, custody)` first commits a durable
+identity tombstone, then invokes `custody.delete` on only the original reserved
+reference. Its internal `TerminalIssuanceContext.from_oauth_result(plan, result)`
+accepts an authenticated original ABORT/released result or a committed
+superseded slot. An absent never-reserved slot is reported by Hub as pending
+even after ABORT; only that empty-commitment ABORT case is adapted to release.
+Pending decisions and applied slots never authorize retirement. The host,
+not this structural adapter, authenticates the original result.
+
+`TerminalIssuanceContext.expired(plan)` requests retirement after the original
+delivery window. PostgreSQL rechecks that deadline after taking the identity
+and reservation locks; a caller clock or current Card expiry cannot shorten
+it. A session which is already active, has an activation commitment or has
+ever acquired a session row refuses all of these cleanup paths. This is not a
+logout/revocation API and does not touch user grants, epochs or sibling tokens.
+Ordinary Card permission edits do not retire delivered stable token pointers.
+
+The additive `kdcube_bundle_session_issuance_terminals` table also fences an
+ABORT that arrives before the first SDK reservation. It stores only identity,
+plan/result digests, reason and retirement time; no bearer or copied serving
+permissions. Read, reserve and activation refuse a retired identity forever.
+Do not remove tombstones after provider deletion, or reuse a retired reference.
+
+No database connection or lock spans the provider call. Retirement uses one
+short transaction with a five-second bound. A lost commit response does not
+trigger custody I/O; retrying the same terminal context recovers the same
+reference. Unknown/failed deletion stays a finite custody refusal, not mint
+permission. Preparation rechecks the durable terminal fence after custody I/O
+and deletes an original write which finished late.
+
+The returned retirement coordinates are not a physical-erasure proof: a
+provider may distinguish logical retirement from backing-store erasure. An
+in-flight first create can also outlive an absent-reference delete; if its
+process dies before the post-write check, host recovery must retry retirement
+of that same reference. The terminal fence still prevents activation or
+delivery. Provider-qualified restart/denial and combined crash tests remain
+required before enabling the full HTTP workflow.
 
 ### Original authorization-code delivery mapping
 

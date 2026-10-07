@@ -22,6 +22,7 @@ class IssuanceSecretCustody(Protocol):
 
     async def create(self, *, secret_ref: str, value: str, expires_at: int) -> bool: ...
     async def get(self, *, secret_ref: str) -> str | None: ...
+    async def delete(self, *, secret_ref: str) -> None: ...
 
 
 def _valid_text(value: object, *, maximum_bytes: int) -> bool:
@@ -206,4 +207,19 @@ async def _prepare_bound_session(
     if hashlib.sha256(original.encode("utf-8")).hexdigest() != reservation.record["token_sha256"]:
         raise SessionIssuanceRefused("issuance_custody_mismatch")
 
+    if planned:
+        # Retirement can commit while an external custody write is in flight.
+        # An absent-reference provider delete may not fence that first create.
+        # Recheck the durable no-mint record before returning preparation, and
+        # retire any late original value. If this process dies before the
+        # recheck, the terminal retry still owns this exact reference.
+        try:
+            await _store_call(store.read_issuance, bound.identity)
+        except SessionIssuanceRefused as exc:
+            if exc.reason == "issuance_terminal":
+                delete = getattr(custody, "delete", None)
+                if not callable(delete):
+                    raise SessionIssuanceRefused("issuance_custody_unavailable") from None
+                await _custody_call(delete, secret_ref=reservation.secret_ref)
+            raise
     return reservation

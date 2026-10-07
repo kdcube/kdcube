@@ -8,6 +8,7 @@ from kdcube_ai_app.ops.deployment.sql.db_deployment import project_schema
 TABLE_USERS = "kdcube_bundle_session_users"
 TABLE_SESSIONS = "kdcube_bundle_sessions"
 TABLE_ISSUANCES = "kdcube_bundle_session_issuances"
+TABLE_ISSUANCE_TERMINALS = "kdcube_bundle_session_issuance_terminals"
 
 def bundle_session_schema(*, tenant: str, project: str) -> str:
     return project_schema(tenant or "default", project or "default-project")
@@ -101,4 +102,15 @@ ALTER TABLE {schema}.{TABLE_ISSUANCES}
     ADD COLUMN IF NOT EXISTS reserved_until TIMESTAMPTZ;
 ALTER TABLE {schema}.{TABLE_ISSUANCES}
     ADD COLUMN IF NOT EXISTS activation_digest CHAR(64);
+
+-- Keep identity tombstones even if ABORT precedes the first SDK reservation.
+-- No bearer or user authority is stored here. Never remove a terminal row
+-- merely because the physical custody value was erased.
+CREATE TABLE IF NOT EXISTS {schema}.{TABLE_ISSUANCE_TERMINALS} (
+    identity            CHAR(64) PRIMARY KEY,
+    plan_digest         CHAR(64) NOT NULL,
+    terminal_digest     CHAR(64) NOT NULL,
+    reason              TEXT NOT NULL CHECK (reason IN ('aborted', 'superseded', 'expired')),
+    retired_at          TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
 """

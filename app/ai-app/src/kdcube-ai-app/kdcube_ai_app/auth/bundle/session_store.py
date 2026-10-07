@@ -175,6 +175,11 @@ class PostgresBundleSessionStore:
             activation_digest=activation_digest,
         )
 
+    async def retire_issuance(self, context: object) -> SessionIssuanceReservation | None:
+        return await PostgresSessionIssuanceStore(
+            pg_pool=self._pool, schema=self.schema, tenant=self.tenant, project=self.project,
+        ).retire_issuance(context)
+
     async def import_user_authority(
         self,
         *,
