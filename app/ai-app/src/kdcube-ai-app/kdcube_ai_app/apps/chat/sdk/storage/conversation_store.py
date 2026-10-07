@@ -483,10 +483,16 @@ class ConversationStore:
         rel = self._rel_from_uri_or_path(uri_or_path)
         return await conversation_body_cold.delete_async(self.backend, rel)
 
-    async def archive_message_body(self, uri_or_path: str) -> bool:
-        """Move an old message object to the configured cold prefix after readback."""
+    async def archive_message_body(self, uri_or_path: str) -> str:
+        """Move a message body to its dated cold key after a sha256 readback.
 
-        rel = self._rel_from_uri_or_path(uri_or_path)
+        Returns "moved", "already_cold", "not_a_body" (e.g. "index_only") or
+        "missing"; raises, leaving the hot body in place, when the copy fails.
+        """
+        try:
+            rel = self._rel_from_uri_or_path(uri_or_path)
+        except ValueError:
+            return conversation_body_cold.NOT_A_BODY
         return await conversation_body_cold.move_async(self.backend, rel)
 
     async def restore_message_body(self, uri_or_path: str) -> bool:
@@ -665,9 +671,15 @@ class ConversationStore:
         if not rel.endswith(".json"):
             raise ValueError(f"Message path must point to a .json file: got '{rel}'")
 
+        raw: Optional[bytes] = None
         try:
-            raw = await self.backend.read_text_a(rel)
+            if await self.backend.exists_a(rel):
+                raw = await self.backend.read_bytes_a(rel)
         except Exception as e:
             raise FileNotFoundError(f"Cannot read message at {uri_or_path}: {e}")
-
-        return await conversation_body_cold.read_async(self.backend, rel, raw.encode("utf-8"))
+        try:
+            # Hot body, hot pointer to the cold copy, or (hot key gone) the cold copy by date.
+            # `storage` on the result says which: "hot", "cold" or "unavailable".
+            return await conversation_body_cold.read_async(self.backend, rel, raw)
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Cannot read message at {uri_or_path}: in neither the hot nor the cold tier")

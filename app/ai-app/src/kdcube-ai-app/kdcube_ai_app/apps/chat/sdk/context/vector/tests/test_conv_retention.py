@@ -344,8 +344,9 @@ async def test_a_corrupt_cold_part_deletes_nothing():
         return manifest
 
     archive.write_batch = corrupt  # type: ignore[assignment]
-    with pytest.raises(ColdArchiveIntegrityError):
-        await retention.archive_before(hot_cutoff(90, now=NOW))
+    # W619: a failed new batch is reported and the night goes on; nothing is deleted for it.
+    summary = await retention.archive_before(hot_cutoff(90, now=NOW))
+    assert summary["stuck"] == 1 and summary["batches"] == 0 and summary["rows"] == 0
     assert [m["id"] for m in db.messages] == [1]
     (batch,) = db.batches.values()
     assert batch["state"] == "written" and "sha256 mismatch" in batch["error"]
@@ -590,6 +591,7 @@ async def test_the_daily_archive_runs_unless_the_setting_turns_it_off(monkeypatc
             return {"resumed": 0, "batches": 0, "rows": 0}
 
     monkeypatch.setattr(conv_index_module.ConvIndex, "retention", lambda self, store=None: _Retention())
+    monkeypatch.setattr(admin, "_conversation_store", lambda settings: object())
     owner = SimpleNamespace(pg_pool=_Pool(_Db()))
 
     monkeypatch.setattr(admin, "get_settings", lambda: SimpleNamespace(CONVERSATION_ARCHIVE_ENABLED=False, CONVERSATION_HOT_DAYS=90))
@@ -1083,6 +1085,7 @@ async def test_the_daily_archive_refuses_an_invalid_hot_days(monkeypatch, caplog
             return {"resumed": 0, "stuck": 0, "batches": 0, "rows": 0}
 
     monkeypatch.setattr(conv_index_module.ConvIndex, "retention", lambda self, store=None: _Retention())
+    monkeypatch.setattr(admin, "_conversation_store", lambda settings: object())
     owner = SimpleNamespace(pg_pool=_Pool(_Db()))
     monkeypatch.setattr(admin, "get_settings", lambda: SimpleNamespace(CONVERSATION_ARCHIVE_ENABLED=True, CONVERSATION_HOT_DAYS=hot_days))
     with caplog.at_level("INFO", logger=admin.logger.name):
@@ -1106,6 +1109,7 @@ async def test_the_daily_archive_logs_stuck_batches(monkeypatch, caplog):
             return {"resumed": 0, "stuck": 1, "stuck_batches": ["20260910-1-1"], "batches": 2, "rows": 3}
 
     monkeypatch.setattr(conv_index_module.ConvIndex, "retention", lambda self, store=None: _Retention())
+    monkeypatch.setattr(admin, "_conversation_store", lambda settings: object())
     owner = SimpleNamespace(pg_pool=_Pool(_Db()))
     monkeypatch.setattr(admin, "get_settings", lambda: SimpleNamespace(CONVERSATION_ARCHIVE_ENABLED=True, CONVERSATION_HOT_DAYS=14))
     with caplog.at_level("INFO", logger=admin.logger.name):
@@ -1170,8 +1174,7 @@ async def test_a_retired_batch_whose_files_cannot_be_removed_is_logged_for_the_o
         return manifest
 
     archive.write_batch = corrupt  # type: ignore[assignment]
-    with pytest.raises(ColdArchiveIntegrityError):
-        await retention.archive_before(NOW - timedelta(days=90))
+    assert (await retention.archive_before(NOW - timedelta(days=90)))["stuck"] == 1
     (batch,) = db.batches.values()
 
     async def unavailable(part_key, manifest_key):

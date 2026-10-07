@@ -124,6 +124,17 @@ class ConversationDeleteUnavailable(RuntimeError):
             self.code = code
 
 
+class _BatchStuck(RuntimeError):
+    """A new batch failed its readback (part or a body): it stays 'written', its rows and bodies stay hot."""
+
+    def __init__(self, batch_id: str, error: Exception) -> None:
+        super().__init__(f"{batch_id}: {error}")
+        self.batch_id = batch_id
+
+
+BODY_COUNTERS = ("bodies_moved", "bodies_already_cold", "bodies_not_a_body", "bodies_missing")
+
+
 class ConversationDeleteBusy(ConversationDeleteUnavailable):
     """The retention lock stayed held for the deletion's whole wait."""
 
@@ -141,6 +152,36 @@ class ConversationRetention:
         self.schema = schema
         self.archive = archive
         self.store = store
+        self._body_counts: Dict[str, int] = dict.fromkeys(BODY_COUNTERS, 0)
+        self._body_errors: List[str] = []
+
+    def _body_mover(self) -> Any:
+        mover = getattr(self.store, "archive_message_body", None)
+        return mover if callable(mover) else None
+
+    async def _move_bodies(self, records: Sequence[Dict[str, Any]]) -> None:
+        """Move every body the records reference to the cold tier; raises on the first failed readback.
+
+        A body that fails stays hot (the mover replaces the hot object only
+        after a verified copy), is named in the run's `body_errors`, and its
+        batch is not pruned.
+        """
+
+        mover = self._body_mover()
+        if mover is None:
+            return
+        for record in records:
+            uri = record.get("hosted_uri")
+            if not uri:
+                self._body_counts["bodies_not_a_body"] += 1
+                continue
+            try:
+                outcome = await mover(uri)
+            except Exception as exc:
+                self._body_errors.append(f"{uri}: {str(exc)[:200]}")
+                raise
+            key = f"bodies_{outcome}"
+            self._body_counts[key] = self._body_counts.get(key, 0) + 1
 
     def _lock_key(self) -> int:
         return int.from_bytes(
@@ -214,10 +255,22 @@ class ConversationRetention:
         pruned, and the lock is released, so a deletion waits at most one
         batch. A deletion between batches commits before the next selection,
         and one that finds a batch left written or verified settles it first.
+
+        With a store (`archive_message_body`), each batch also moves the
+        bodies its rows reference, inside the same lock and before its hot
+        rows go: copy to the dated cold key, sha256 readback, then the hot
+        object becomes a pointer. A new batch whose part or body fails stays
+        'written' with its error, is reported in "stuck_batches" (the body in
+        "body_errors"), keeps its rows and bodies hot, and the night goes on.
+        Parts pruned without bodies (older releases, or a run without a
+        store) have body_state 'pending' and are caught up first, within
+        max_batches.
         """
 
         summary: Dict[str, Any] = {"resumed": 0, "stuck": 0, "batches": 0, "rows": 0, "indexed": 0, "relaid": 0}
-        if callable(getattr(self.store, "archive_message_body", None)):
+        self._body_counts = dict.fromkeys(BODY_COUNTERS, 0)
+        self._body_errors = []
+        if self._body_mover() is not None:
             summary["body_resumed"], summary["body_stuck"] = await self._resume_pruned_bodies(
                 guard=self._exclusive, limit=max_batches,
             )
@@ -227,13 +280,29 @@ class ConversationRetention:
         # Moving legacy parts counts toward the same budget as archiving.
         remaining = None if max_batches is None else max(0, max_batches - summary.get("body_resumed", 0))
         summary["relaid"] = await self._relayout_legacy_batches(limit=remaining, guard=self._exclusive)
-        while max_batches is None or summary["batches"] + summary["relaid"] + summary.get("body_resumed", 0) < max_batches:
-            async with self._exclusive():
-                rows = await self._archive_next_batch(cutoff, batch_size)
+        new_stuck = 0
+        while max_batches is None or (
+            summary["batches"] + new_stuck + summary["relaid"] + summary.get("body_resumed", 0) < max_batches
+        ):
+            try:
+                async with self._exclusive():
+                    rows = await self._archive_next_batch(cutoff, batch_size)
+            except _BatchStuck as stuck:
+                # Its rows are now excluded from selection (see _not_stuck), so the night goes on.
+                logger.warning("[conversation-archive] stuck batch %s", stuck)
+                if stuck.batch_id in summary["stuck_batches"]:
+                    break  # selected again: never spin on one batch
+                summary["stuck_batches"].append(stuck.batch_id)
+                summary["stuck"] += 1
+                new_stuck += 1
+                continue
             if not rows:
                 break
             summary["batches"] += 1
             summary["rows"] += rows
+        summary.update(self._body_counts)
+        summary["body_errors"] = list(self._body_errors)
+        summary["bodies_mover"] = self._body_mover() is not None
         return summary
 
     def _not_stuck(self, alias: str) -> str:
@@ -369,18 +438,17 @@ class ConversationRetention:
         manifest = await self.archive.read_manifest(manifest_key)
         try:
             await self.archive.verify_batch(manifest)
-            mover = getattr(self.store, "archive_message_body", None)
-            if callable(mover):
-                for record in await self.archive.read_part(manifest):
-                    if record.get("hosted_uri"):
-                        await mover(record["hosted_uri"])
+            # Bodies move (copy, readback, hot pointer) before any hot row goes;
+            # a crash here leaves the batch 'written' and the resume repeats the
+            # idempotent move.
+            await self._move_bodies(await self.archive.read_part(manifest))
         except Exception as exc:
             async with self._pool.acquire() as con:
                 await con.execute(
                     f"UPDATE {self.schema}.conv_archive_batches SET error = $2, updated_at = now() WHERE batch_id = $1",
                     batch_id, str(exc)[:500],
                 )
-            raise
+            raise _BatchStuck(batch_id, exc) from exc
         async with self._pool.acquire() as con:
             async with con.transaction():
                 await con.execute(
@@ -395,14 +463,13 @@ class ConversationRetention:
                 await con.execute(
                     f"UPDATE {self.schema}.conv_archive_batches "
                     f"SET state = 'pruned', body_state = $2, updated_at = now() WHERE batch_id = $1",
-                    batch_id, "complete" if callable(mover) else "pending",
+                    batch_id, "complete" if self._body_mover() is not None else "pending",
                 )
 
     async def _resume_pruned_bodies(self, *, guard: Any = _unguarded, limit: Optional[int] = None) -> Tuple[int, List[str]]:
         """Copy bodies in index-only parts from older releases, one verified part at a time."""
 
-        mover = getattr(self.store, "archive_message_body", None)
-        if not callable(mover):
+        if self._body_mover() is None:
             return 0, []
         async with self._pool.acquire() as con:
             pending = await con.fetch(
@@ -423,9 +490,7 @@ class ConversationRetention:
                     continue
                 try:
                     manifest = await self.archive.read_manifest(row["manifest_key"])
-                    for record in await self.archive.read_part(manifest):
-                        if record.get("hosted_uri"):
-                            await mover(record["hosted_uri"])
+                    await self._move_bodies(await self.archive.read_part(manifest))
                     async with self._pool.acquire() as con:
                         await con.execute(
                             f"UPDATE {self.schema}.conv_archive_batches "

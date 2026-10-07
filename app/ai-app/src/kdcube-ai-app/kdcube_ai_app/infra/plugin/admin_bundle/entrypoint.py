@@ -18,6 +18,14 @@ BUNDLE_ID = "kdcube.admin"
 logger = logging.getLogger(__name__)
 
 
+def _conversation_store(settings: Any) -> Any:
+    """The configured ConversationStore (STORAGE_PATH: file or S3) whose bodies the archive moves."""
+
+    from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import ConversationStore
+
+    return ConversationStore(storage_uri=settings.STORAGE_PATH)
+
+
 @bundle_entrypoint(name=BUNDLE_ID, version="1.0.0", priority=100)
 class AdminBundleEntrypoint(BaseEntrypoint):
     """Built-in admin-only bundle used as a safe default for UI access."""
@@ -53,7 +61,7 @@ class AdminBundleEntrypoint(BaseEntrypoint):
 
     @cron(alias="conversation-archive", cron_expression="20 2 * * *", span="system")
     async def archive_conversations(self) -> None:
-        """Move conversation index rows older than the hot window to the cold tier.
+        """Move conversation index rows and their stored bodies older than the hot window to the cold tier.
 
         Once a day, one instance per tenant and project. On by default; the
         assembly property routines.conversation_store.archive_enabled: false
@@ -84,7 +92,13 @@ class AdminBundleEntrypoint(BaseEntrypoint):
         if index._pool is None:
             await index.init()
         try:
-            retention = index.retention()
+            try:
+                store = _conversation_store(settings)
+            except Exception:
+                # Never archive the index without the bodies: all old data must move.
+                logger.exception("[conversation-archive] conversation store unavailable; nothing archived")
+                return
+            retention = index.retention(store=store)
             if retention is None:
                 logger.warning("[conversation-archive] cold tier unavailable; nothing archived")
                 return
@@ -93,10 +107,13 @@ class AdminBundleEntrypoint(BaseEntrypoint):
             stuck = summary.get("stuck", 0)
             logger.log(
                 logging.WARNING if stuck else logging.INFO,
-                "[conversation-archive] cutoff=%s hot_days=%s resumed=%s batches=%s rows=%s stuck=%s%s",
+                "[conversation-archive] cutoff=%s hot_days=%s resumed=%s batches=%s rows=%s stuck=%s%s "
+                "bodies_moved=%s bodies_already_cold=%s bodies_missing=%s body_resumed=%s",
                 cutoff.isoformat(), hot_days,
                 summary["resumed"], summary["batches"], summary["rows"], stuck,
                 f" stuck_batches={','.join(summary.get('stuck_batches') or [])}" if stuck else "",
+                summary.get("bodies_moved", 0), summary.get("bodies_already_cold", 0),
+                summary.get("bodies_missing", 0), summary.get("body_resumed", 0),
             )
         finally:
             await index.close()

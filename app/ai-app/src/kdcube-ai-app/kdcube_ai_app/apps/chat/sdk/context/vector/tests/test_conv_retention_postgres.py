@@ -269,8 +269,8 @@ async def test_a_corrupt_written_batch_does_not_stop_later_nights(env, tmp_path)
         return manifest
 
     archive.write_batch = corrupt
-    with pytest.raises(ColdArchiveIntegrityError):
-        await retention.archive_before(_night(1))
+    # W619: reported as stuck, the night goes on
+    assert (await retention.archive_before(_night(1)))["stuck"] == 1
     archive.write_batch = original
     (stuck_batch, state, error, _), = await _ledger(pool, schema)
     assert state == "written" and "sha256 mismatch" in error
@@ -324,7 +324,8 @@ async def test_a_quiet_night_moves_and_writes_nothing(env, tmp_path):
 
     summary = await retention.archive_before(_night(7))
     assert summary == {"resumed": 0, "stuck": 0, "stuck_batches": [], "batches": 0, "rows": 0,
-                       "indexed": 0, "relaid": 0}
+                       "indexed": 0, "relaid": 0, "bodies_moved": 0, "bodies_already_cold": 0,
+                       "bodies_not_a_body": 0, "bodies_missing": 0, "body_errors": [], "bodies_mover": False}
     assert _files(tmp_path) == files
     assert await _ledger(pool, schema) == ledger
     assert await retention.watermark() == mark
@@ -348,8 +349,8 @@ async def test_a_stuck_batch_holds_back_only_its_own_utc_day(env, tmp_path):
         return manifest
 
     archive.write_batch = corrupt
-    with pytest.raises(ColdArchiveIntegrityError):
-        await retention.archive_before(_night(1))  # cutoff 09-17 02:20: only the 09-10 rows
+    # W619: reported as stuck, the night goes on
+    assert (await retention.archive_before(_night(1)))["stuck"] == 1  # cutoff 09-17 02:20: only the 09-10 rows
     archive.write_batch = original
 
     summary = await retention.archive_before(_night(3))  # cutoff 09-19 02:20
@@ -499,8 +500,8 @@ async def test_a_deletion_retires_a_stuck_batch_of_its_conversation_and_nothing_
         return manifest
 
     archive.write_batch = corrupt
-    with pytest.raises(ColdArchiveIntegrityError):
-        await retention.archive_before(_night(7))
+    # W619: reported as stuck, the night goes on
+    assert (await retention.archive_before(_night(7)))["stuck"] == 1
     archive.write_batch = original
     other = await _msg(pool, schema, "u2", "c1", datetime(2026, 9, 10, 10, tzinfo=UTC))
 
