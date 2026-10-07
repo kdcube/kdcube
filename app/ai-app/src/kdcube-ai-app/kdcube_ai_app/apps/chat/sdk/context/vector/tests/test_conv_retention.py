@@ -1256,3 +1256,44 @@ async def test_the_app_hard_delete_refuses_retryably_when_the_cold_tier_is_unava
             user_type="registered", bundle_ids=["b1"],
         )
     assert refused.value.code == "conversation_delete_cold_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_the_daily_archive_passes_the_configured_store_so_bodies_move(monkeypatch, tmp_path, caplog):
+    """W619: the cron hands retention the ConversationStore of STORAGE_PATH; without one it archives nothing."""
+
+    from types import SimpleNamespace
+
+    import kdcube_ai_app.infra.plugin.admin_bundle.entrypoint as admin
+    import kdcube_ai_app.apps.chat.sdk.context.vector.conv_index as conv_index_module
+
+    stores, calls = [], []
+
+    class _Retention:
+        async def archive_before(self, cutoff):
+            calls.append(cutoff)
+            return {"resumed": 0, "stuck": 0, "batches": 1, "rows": 2, "bodies_moved": 2}
+
+    def retention(self, store=None):
+        stores.append(store)
+        return _Retention()
+
+    monkeypatch.setattr(conv_index_module.ConvIndex, "retention", retention)
+    owner = SimpleNamespace(pg_pool=_Pool(_Db()))
+    monkeypatch.setattr(admin, "get_settings", lambda: SimpleNamespace(
+        CONVERSATION_ARCHIVE_ENABLED=True, CONVERSATION_HOT_DAYS=14, STORAGE_PATH=tmp_path.as_uri()))
+    with caplog.at_level("INFO", logger=admin.logger.name):
+        await admin.AdminBundleEntrypoint.archive_conversations(owner)
+    (store,) = stores
+    assert callable(getattr(store, "archive_message_body", None)) and store.storage_uri == tmp_path.as_uri()
+    assert len(calls) == 1 and any("bodies_moved=2" in r.getMessage() for r in caplog.records)
+
+    stores.clear()
+    calls.clear()
+
+    def broken(settings):
+        raise RuntimeError("storage unavailable")
+
+    monkeypatch.setattr(admin, "_conversation_store", broken)
+    await admin.AdminBundleEntrypoint.archive_conversations(owner)
+    assert stores == [] and calls == []

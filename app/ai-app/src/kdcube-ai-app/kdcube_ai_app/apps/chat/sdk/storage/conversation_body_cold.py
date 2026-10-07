@@ -20,6 +20,15 @@ at any step before the pointer leaves the hot body in place.
 
 Reads return the body with `storage` set to "hot", "cold" or "unavailable"
 (cold copy missing, corrupt or failing its hash), never an empty body.
+
+Not moved by this pass, and why: the nightly archive moves the bodies its
+archived index rows reference. A `hosted_uri` that is not a message body
+("index_only", or a key outside `conversation/`) is skipped with its count
+(`bodies_not_a_body`) and its index row still moves. Blobs under
+`attachments/` and `executions/` (and message bodies no index row references)
+are not moved: they are binary or tree-shaped, read through `get_blob_bytes`
+and bundle paths that have no cold fallback yet, and whether they move is
+pending Root's decision (W619 scope note).
 """
 
 from __future__ import annotations
@@ -189,6 +198,10 @@ async def move_async(backend: Any, rel: str) -> str:
     digest = _sha(raw)
     await backend.write_bytes_a(cold_key, raw, meta={"ContentType": "application/json"})
     if _sha(await backend.read_bytes_a(cold_key)) != digest:
+        try:  # leave no unverified copy behind; the hot body is untouched
+            await backend.delete_a(cold_key)
+        except Exception:
+            pass
         raise ValueError(f"cold body readback mismatch at {cold_key}")
     if await backend.read_bytes_a(rel) != raw:
         raise ValueError(f"message changed during cold copy: {rel}")
