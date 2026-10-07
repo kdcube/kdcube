@@ -306,6 +306,15 @@ qualification. Persistent key provisioning, entropy and denied-reader IAM
 evidence remain operator/deployment-owned. Key rotation or legacy-row rollout
 requires a separately reviewed migration preserving existing commitments.
 
+The SecretsService image source packages the AWS adapter, service lifecycle,
+PostgreSQL access checks, metadata store and explicit schema migrator. Its
+requirements reuse the platform's pinned async AWS stack and include asyncpg.
+The image-manifest regression stages only the Dockerfile's actual COPY inputs
+in an isolated directory, imports the service from those bytes in a separate
+process, and checks construction/route installation without resource I/O.
+That test uses the prepared interpreter's installed dependencies; it is not a
+fresh image build, package-install or deployed-runtime verdict.
+
 These supporting components are not yet selected by the deployment entrypoint
 or SDK runtime consumer, and do not make AWS qualification true. The new
 attempt/closure protocol requires independent review and configured-provider
