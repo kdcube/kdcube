@@ -1350,6 +1350,7 @@ async def test_aws_ephemeral_store_uses_dedicated_prefix_and_force_deletes():
             provider="aws-sm",
             component="ingress",
             aws_sm_prefix="kdcube/demo/demo-march",
+            runtime_secret_namespaces=("login-attempts",),
         )
     )
     client = _FakeAwsSecretsClient()
@@ -1395,6 +1396,7 @@ async def test_aws_ephemeral_create_preserves_existing_record():
             provider="aws-sm",
             component="ingress",
             aws_sm_prefix="kdcube/demo/demo-march",
+            runtime_secret_namespaces=("resident-secrets",),
         )
     )
     client = _FakeAwsSecretsClient()
@@ -1426,6 +1428,7 @@ async def test_aws_ephemeral_create_replays_after_a_lost_success_response():
             provider="aws-sm",
             component="ingress",
             aws_sm_prefix="kdcube/demo/demo-march",
+            runtime_secret_namespaces=("resident-secrets",),
         )
     )
     client = _LostAwsCreateResponseClient()
@@ -1463,6 +1466,7 @@ async def test_aws_ephemeral_create_uses_canonical_ref_as_idempotency_token():
             provider="aws-sm",
             component="ingress",
             aws_sm_prefix="kdcube/demo/demo-march",
+            runtime_secret_namespaces=("resident-secrets",),
         )
     )
     client = _FakeAwsSecretsClient()
@@ -1485,6 +1489,7 @@ async def test_aws_ephemeral_purge_scans_at_most_three_pages():
             provider="aws-sm",
             component="ingress",
             aws_sm_prefix="kdcube/demo/demo-march",
+            runtime_secret_namespaces=("login-attempts",),
         )
     )
     prefix = "kdcube/demo/demo-march/runtime/login-attempts/"

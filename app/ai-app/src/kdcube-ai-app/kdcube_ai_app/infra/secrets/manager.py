@@ -1569,7 +1569,8 @@ class AwsSecretsManagerSecretsManager(ISecretsManager):
             raise SecretsManagerError("Runtime secret qualification is unavailable") from None
 
     def _require_runtime_scope(self, namespace: str) -> None:
-        if self._runtime_secret_namespaces and namespace not in self._runtime_secret_namespaces:
+        """Require explicit host enrollment before every raw runtime operation."""
+        if namespace not in self._runtime_secret_namespaces:
             raise SecretsManagerWriteError("runtime_secret_scope_forbidden")
 
     def _get_session(self):
