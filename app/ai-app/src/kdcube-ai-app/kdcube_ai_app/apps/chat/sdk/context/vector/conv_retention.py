@@ -14,10 +14,13 @@ A run that stops anywhere resumes from the ledger on the next run.
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 import logging
 import uuid
 from collections import defaultdict
+from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -114,6 +117,30 @@ class ConversationRetention:
         self.archive = archive
         self.store = store
 
+    @asynccontextmanager
+    async def _exclusive(self):
+        """Hold this schema's retention lock: archive runs and deletions never interleave.
+
+        A PostgreSQL session advisory lock, so it holds across processes. A
+        waiter polls and holds no pool connection while it waits, so waiters
+        cannot starve the holder of the connections it needs to finish.
+        """
+
+        key = int.from_bytes(
+            hashlib.sha256(f"kdcube.conv_retention:{self.schema}".encode()).digest()[:8], "big", signed=True
+        )
+        delay = 0.05
+        while True:
+            async with self._pool.acquire() as con:
+                if await con.fetchval("SELECT pg_try_advisory_lock($1)", key):
+                    try:
+                        yield
+                    finally:
+                        await con.fetchval("SELECT pg_advisory_unlock($1)", key)
+                    return
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 1.0)
+
     # ---------- archive ----------
     async def archive_before(
         self,
@@ -127,8 +154,19 @@ class ConversationRetention:
         A resumed batch that fails its readback stays 'written' with its
         error recorded and is reported in "stuck_batches"; its hot rows stay
         hot and are left out of new batches, and the run goes on.
+        Holds the retention lock, so no deletion runs meanwhile.
         """
 
+        async with self._exclusive():
+            return await self._archive_before_locked(cutoff, batch_size=batch_size, max_batches=max_batches)
+
+    async def _archive_before_locked(
+        self,
+        cutoff: datetime,
+        *,
+        batch_size: int = ARCHIVE_BATCH_SIZE,
+        max_batches: Optional[int] = None,
+    ) -> Dict[str, Any]:
         summary: Dict[str, Any] = {"resumed": 0, "stuck": 0, "batches": 0, "rows": 0, "indexed": 0, "relaid": 0}
         summary["resumed"], summary["stuck_batches"] = await self._resume_unfinished()
         summary["stuck"] = len(summary["stuck_batches"])
@@ -491,6 +529,7 @@ class ConversationRetention:
         user_id: str,
         conversation_id: str,
         bundle_id: Optional[str] = None,
+        bundle_ids: Optional[Sequence[str]] = None,
         tags_all: Optional[Sequence[str]] = None,
         reason: str = "",
     ) -> Dict[str, Any]:
@@ -499,13 +538,40 @@ class ConversationRetention:
         The deletion is recorded in `conv_archive_deletions` before anything
         is deleted (who, when, the scope), then marked `completed` with its
         counts, or `failed` with the error; a failed deletion can be run again.
+        `bundle_ids` (used when `bundle_id` is not given) limits the scope to
+        those bundles; an empty list matches nothing.
+
+        Holds the retention lock, so no archive run interleaves. Batches of
+        the conversation that an earlier run left unfinished are finished
+        first, or retired when their readback fails (all their rows are
+        still hot), so the next run cannot bring the deleted rows back.
         """
 
         if not actor or not user_id or not conversation_id:
             raise ValueError("delete_messages needs actor, user_id and conversation_id")
+        async with self._exclusive():
+            return await self._delete_messages_locked(
+                actor=actor, user_id=user_id, conversation_id=conversation_id, bundle_id=bundle_id,
+                bundle_ids=bundle_ids, tags_all=tags_all, reason=reason,
+            )
+
+    async def _delete_messages_locked(
+        self,
+        *,
+        actor: str,
+        user_id: str,
+        conversation_id: str,
+        bundle_id: Optional[str] = None,
+        bundle_ids: Optional[Sequence[str]] = None,
+        tags_all: Optional[Sequence[str]] = None,
+        reason: str = "",
+    ) -> Dict[str, Any]:
         tags = [str(t) for t in (tags_all or ()) if str(t)]
+        bundles = None if bundle_id or bundle_ids is None else sorted({str(b).strip() for b in bundle_ids if str(b).strip()})
         deletion_id = f"del_{uuid.uuid4().hex}"
         scope = {"user_id": user_id, "conversation_id": conversation_id, "bundle_id": bundle_id, "tags_all": tags}
+        if bundles is not None:
+            scope["bundle_ids"] = bundles
         async with self._pool.acquire() as con:
             await con.execute(
                 f"""
@@ -517,12 +583,17 @@ class ConversationRetention:
                 deletion_id, actor, reason or None, json.dumps(scope),
             )
         counts = {"hot_rows": 0, "body_objects": 0, "cold_rows": 0}
+        settled = {"finished": 0, "retired": 0}
         try:
+            settled = await self._settle_unfinished(deletion_id, user_id=user_id, conversation_id=conversation_id)
             args: List[Any] = [user_id, conversation_id]
             where = ["user_id = $1", "conversation_id = $2"]
             if bundle_id:
                 args.append(bundle_id)
                 where.append(f"bundle_id = ${len(args)}")
+            elif bundles is not None:
+                args.append(bundles)
+                where.append(f"bundle_id = ANY(${len(args)}::text[])")
             if tags:
                 args.append(tags)
                 where.append(f"tags @> ${len(args)}::text[]")
@@ -534,7 +605,7 @@ class ConversationRetention:
                     f"SELECT hosted_uri FROM {self.schema}.conv_messages WHERE {scope_sql}", *args
                 )
             cold_plan, cold_uris = await self._cold_matches(
-                user_id=user_id, conversation_id=conversation_id, bundle_id=bundle_id, tags=tags
+                user_id=user_id, conversation_id=conversation_id, bundle_id=bundle_id, tags=tags, bundles=bundles
             )
             uris = {r["hosted_uri"] for r in hot if r["hosted_uri"]} | cold_uris
             counts["body_objects"] = await self._delete_bodies(uris)
@@ -552,7 +623,8 @@ class ConversationRetention:
                     # archive run moving a legacy part): plan again from the ledger.
                     counts["cold_rows"] += changed.removed
                     cold_plan, more_uris = await self._cold_matches(
-                        user_id=user_id, conversation_id=conversation_id, bundle_id=bundle_id, tags=tags
+                        user_id=user_id, conversation_id=conversation_id, bundle_id=bundle_id, tags=tags,
+                        bundles=bundles,
                     )
                     counts["body_objects"] += await self._delete_bodies(more_uris - uris)
                     uris |= more_uris
@@ -562,7 +634,54 @@ class ConversationRetention:
             await self._finish_deletion(deletion_id, "failed", counts, error=f"{type(exc).__name__}: {exc}")
             raise
         await self._finish_deletion(deletion_id, "completed", counts)
-        return {"deletion_id": deletion_id, **counts}
+        return {"deletion_id": deletion_id, **counts, "unfinished_batches": settled}
+
+    async def _settle_unfinished(self, deletion_id: str, *, user_id: str, conversation_id: str) -> Dict[str, int]:
+        """Finish or retire the conversation's 'written'/'verified' batches before a deletion plans.
+
+        A batch is finished (verified and pruned) when its readback passes, so
+        the deletion's cold plan sees it. One whose readback fails is retired
+        and its files removed: pruning only follows a verified readback, so
+        every row it holds is still hot, and the deletion removes the scope's
+        rows there; the rest are archived again by the next run. Its ledger
+        row names the deletion. Nothing an unfinished batch holds can come back.
+        """
+
+        async with self._pool.acquire() as con:
+            pending = await con.fetch(
+                f"""
+                SELECT b.batch_id, b.part_key, b.manifest_key FROM {self.schema}.conv_archive_batches b
+                 WHERE b.state IN ('written', 'verified')
+                   AND EXISTS (SELECT 1 FROM {self.schema}.conv_archive_conversations c
+                                WHERE c.batch_id = b.batch_id AND c.user_id = $1 AND c.conversation_id = $2)
+                 ORDER BY b.day, b.batch_id
+                """,
+                user_id, conversation_id,
+            )
+        settled = {"finished": 0, "retired": 0}
+        for row in pending:
+            try:
+                await self._verify_and_prune(row["manifest_key"], row["batch_id"])
+                settled["finished"] += 1
+                continue
+            except Exception as exc:
+                error = f"retired by deletion {deletion_id}: {exc}"[:500]
+            logger.warning("[conversation-archive] %s", error[:200])
+            async with self._pool.acquire() as con:
+                async with con.transaction():
+                    retired = await con.fetchval(
+                        f"UPDATE {self.schema}.conv_archive_batches SET state = 'retired', error = $2, updated_at = now() "
+                        f"WHERE batch_id = $1 AND state IN ('written', 'verified') RETURNING batch_id",
+                        row["batch_id"], error,
+                    )
+                    if retired is not None:
+                        await con.execute(
+                            f"DELETE FROM {self.schema}.conv_archive_conversations WHERE batch_id = $1", row["batch_id"]
+                        )
+            if retired is not None:
+                await self.archive.delete_batch(row["part_key"], row["manifest_key"])
+                settled["retired"] += 1
+        return settled
 
     async def _delete_bodies(self, uris: Any) -> int:
         if self.store is None:
@@ -592,6 +711,7 @@ class ConversationRetention:
         conversation_id: str,
         bundle_id: Optional[str],
         tags: Sequence[str],
+        bundles: Optional[Sequence[str]] = None,
     ) -> Tuple[List[Dict[str, Any]], set]:
         """The live cold batches holding matching records, and those records' body URIs."""
 
@@ -604,6 +724,9 @@ class ConversationRetention:
         if bundle_id:
             args.append(bundle_id)
             where.append(f"c.bundle_id = ${len(args)}")
+        elif bundles is not None:
+            args.append(list(bundles))
+            where.append(f"c.bundle_id = ANY(${len(args)}::text[])")
         async with self._pool.acquire() as con:
             batches = await con.fetch(
                 f"""
@@ -627,6 +750,8 @@ class ConversationRetention:
                 tags_all=tags,
                 now=datetime.min.replace(tzinfo=timezone.utc),
             )
+            if bundles is not None:
+                matching = [r for r in matching if r.get("bundle_id") in set(bundles)]
             if not matching:
                 continue
             uris |= {r["hosted_uri"] for r in matching if r.get("hosted_uri")}

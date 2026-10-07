@@ -55,6 +55,11 @@ class _Con:
         if q.startswith("SELECT from_id, to_id, policy, created_at FROM"):
             ids = set(args[0])
             return [e for e in self.db.edges if e["from_id"] in ids or e["to_id"] in ids]
+        if q.startswith("SELECT b.batch_id, b.part_key, b.manifest_key") and "b.state IN ('written', 'verified')" in q:
+            user_id, conversation_id = args
+            hits = {c["batch_id"] for c in self.db.conversations
+                    if c["user_id"] == user_id and c["conversation_id"] == conversation_id}
+            return [b for b in self.db.sorted_batches() if b["state"] in ("written", "verified") and b["batch_id"] in hits]
         if q.startswith("SELECT batch_id, day") and "state IN ('written', 'verified')" in q:
             return [b for b in self.db.sorted_batches() if b["state"] in ("written", "verified")]
         if q.startswith("SELECT batch_id, day, part_key, manifest_key") and "part_key ~" in q:
@@ -141,6 +146,16 @@ class _Con:
 
     async def fetchval(self, query: str, *args):
         q = " ".join(query.split())
+        if q in ("SELECT pg_try_advisory_lock($1)", "SELECT pg_advisory_unlock($1)"):
+            # One process here; the lock itself is exercised against real PostgreSQL.
+            self.db.locks.append((q.split()[1].split("(")[0], args[0]))
+            return True
+        if q.startswith("UPDATE kdcube_test_w536.conv_archive_batches SET state = 'retired', error = $2"):
+            batch = self.db.batches.get(args[0])
+            if not batch or batch["state"] not in ("written", "verified"):
+                return None
+            batch.update(state="retired", error=args[1])
+            return args[0]
         if q.startswith("UPDATE kdcube_test_w536.conv_archive_batches SET state = 'retired'"):
             batch = self.db.batches.get(args[0])
             if not batch or batch["state"] != "pruned":
@@ -222,6 +237,7 @@ class _Db:
         self.deletions: list[tuple] = []
         self.conversations: list[dict] = []  # conv_archive_conversations
         self.fail_prune_after_verify = False
+        self.locks: list[tuple] = []
 
     def snapshot(self):
         return (
@@ -1081,3 +1097,53 @@ async def test_the_daily_archive_logs_stuck_batches(monkeypatch, caplog):
     (line,) = [r for r in caplog.records if r.getMessage().startswith("[conversation-archive] cutoff=")]
     assert line.levelname == "WARNING"
     assert "hot_days=14" in line.getMessage() and "stuck=1 stuck_batches=20260910-1-1" in line.getMessage()
+
+
+@pytest.mark.asyncio
+async def test_archive_runs_and_deletions_hold_the_same_schema_lock_and_release_it():
+    db, _, _, _, retention = _setup()
+    db.messages = [_msg(1, days_ago=200)]
+    await retention.archive_before(NOW - timedelta(days=90))
+    await retention.delete_messages(actor="operator", user_id="u1", conversation_id="c1")
+
+    assert [kind for kind, _ in db.locks] == ["pg_try_advisory_lock", "pg_advisory_unlock"] * 2
+    assert len({key for _, key in db.locks}) == 1
+
+
+@pytest.mark.asyncio
+async def test_the_app_hard_delete_goes_through_retention_with_the_user_as_actor():
+    from types import SimpleNamespace
+
+    from kdcube_ai_app.apps.chat.sdk.solutions.conversation.ctx_rag import ContextRAGClient
+
+    calls = []
+
+    class _Retention:
+        async def delete_messages(self, **scope):
+            calls.append(scope)
+            return {"hot_rows": 1, "cold_rows": 2, "body_objects": 3}
+
+    class _Idx:
+        def retention(self, *, store):
+            calls.append(("store", store))
+            return _Retention()
+
+        async def delete_conversation(self, **scope):
+            raise AssertionError("the hot-only path must not run when the cold tier is available")
+
+    class _Sweep:
+        def _who_and_id(self, user_id, fingerprint):
+            return "registered", user_id
+
+        async def delete_conversation(self, **scope):
+            return {"messages": 4, "attachments": 0, "executions": 0}
+
+    store = _Sweep()
+    result = await ContextRAGClient.delete_conversation(
+        SimpleNamespace(idx=_Idx(), store=store), tenant="t", project="p", user_id="u1", conversation_id="c1",
+        user_type="registered", bundle_ids=["b1"],
+    )
+
+    assert result["deleted_messages"] == 3 and result["deleted_storage_messages"] == 4
+    assert calls == [("store", store), {"actor": "u1", "user_id": "u1", "conversation_id": "c1", "bundle_id": None,
+                                        "bundle_ids": ["b1"], "reason": "user delete"}]
