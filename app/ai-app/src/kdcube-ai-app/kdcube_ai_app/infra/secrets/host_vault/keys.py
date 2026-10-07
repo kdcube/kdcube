@@ -28,12 +28,14 @@ import json
 import os
 import re
 import secrets
+import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
 from kdcube_ai_app.infra.secrets.host_vault.protocol import ErrorCode, VaultError
+from kdcube_ai_app.infra.secrets.runtime_contract import persistent_filesystem
 
 try:  # pragma: no cover - import guard
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -78,6 +80,8 @@ class RootKeyProvider(Protocol):
 
     def rotate(self) -> str: ...
 
+    def qualify_custody(self) -> None: ...
+
 
 class FakeInMemoryRootKeyProvider:
     """FAKE root-key provider for portable tests. Keys live in process memory
@@ -105,6 +109,9 @@ class FakeInMemoryRootKeyProvider:
         self._current = key_id
         return key_id
 
+    def qualify_custody(self) -> None:
+        raise VaultError(ErrorCode.BACKEND_UNAVAILABLE)
+
 
 class FileRootKeyProvider:
     """Root keys as files in a service-owned directory.
@@ -120,31 +127,117 @@ class FileRootKeyProvider:
     def __init__(self, directory: Path) -> None:
         self._dir = Path(directory)
 
+    def _read_owned_file(self, name: str, *, bound: int, secret: bool,
+                         missing: ErrorCode = ErrorCode.BACKEND_UNAVAILABLE) -> bytes:
+        """Read a bounded private inode, never a symlink, device or FIFO.
+
+        The directory descriptor pins the parent while the file is opened.
+        A shared UID can still replace its own files; that is not an isolation
+        boundary this adapter claims to supply.
+        """
+        directory_fd = file_fd = None
+        try:
+            if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
+                raise VaultError(ErrorCode.BACKEND_UNAVAILABLE)
+            directory_fd = os.open(self._dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            directory = os.fstat(directory_fd)
+            entry = self._dir.lstat()
+            if (not stat.S_ISDIR(directory.st_mode) or directory.st_uid != os.geteuid()
+                    or stat.S_IMODE(directory.st_mode) != 0o700
+                    or (directory.st_dev, directory.st_ino) != (entry.st_dev, entry.st_ino)):
+                raise VaultError(ErrorCode.BACKEND_UNAVAILABLE)
+            file_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                              dir_fd=directory_fd)
+            metadata = os.fstat(file_fd)
+            mode = stat.S_IMODE(metadata.st_mode)
+            allowed_modes = {0o400, 0o600} if secret else {0o400, 0o600, 0o644}
+            entry = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid()
+                    or metadata.st_nlink != 1 or mode not in allowed_modes
+                    or metadata.st_size > bound
+                    or (metadata.st_dev, metadata.st_ino) != (entry.st_dev, entry.st_ino)):
+                raise VaultError(ErrorCode.BACKEND_UNAVAILABLE)
+            value = bytearray()
+            while len(value) <= bound:
+                part = os.read(file_fd, bound + 1 - len(value))
+                if not part:
+                    break
+                value.extend(part)
+            entry = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            final_file = os.fstat(file_fd)
+            final_directory = os.fstat(directory_fd)
+            directory_entry = self._dir.lstat()
+            if (len(value) > bound
+                    or not stat.S_ISREG(final_file.st_mode)
+                    or final_file.st_uid != os.geteuid()
+                    or final_file.st_nlink != 1
+                    or stat.S_IMODE(final_file.st_mode) not in allowed_modes
+                    or final_file.st_size > bound
+                    or (metadata.st_dev, metadata.st_ino) != (final_file.st_dev, final_file.st_ino)
+                    or (final_file.st_dev, final_file.st_ino) != (entry.st_dev, entry.st_ino)
+                    or not stat.S_ISDIR(final_directory.st_mode)
+                    or final_directory.st_uid != os.geteuid()
+                    or stat.S_IMODE(final_directory.st_mode) != 0o700
+                    or (directory.st_dev, directory.st_ino) != (final_directory.st_dev, final_directory.st_ino)
+                    or (final_directory.st_dev, final_directory.st_ino) != (directory_entry.st_dev, directory_entry.st_ino)):
+                raise VaultError(ErrorCode.BACKEND_UNAVAILABLE)
+            return bytes(value)
+        except FileNotFoundError:
+            raise VaultError(missing) from None
+        except OSError:
+            raise VaultError(ErrorCode.BACKEND_UNAVAILABLE) from None
+        finally:
+            if file_fd is not None:
+                os.close(file_fd)
+            if directory_fd is not None:
+                os.close(directory_fd)
+
     def _key_path(self, key_id: str) -> Path:
-        if not _KEY_ID_RE.match(key_id):
+        if type(key_id) is not str or not _KEY_ID_RE.fullmatch(key_id):
             raise VaultError(ErrorCode.CORRUPT_RECORD, detail="key id grammar")
         return self._dir / f"{key_id}.key"
 
     def current_key_id(self) -> str:
-        marker = self._dir / "CURRENT"
-        if not marker.is_file():
-            raise VaultError(ErrorCode.BACKEND_UNAVAILABLE, detail="no current root key")
-        key_id = marker.read_text(encoding="utf-8").strip()
-        if not _KEY_ID_RE.match(key_id):
+        try:
+            key_id = self._read_owned_file("CURRENT", bound=64, secret=False).decode("utf-8").strip()
+        except UnicodeError:
+            raise VaultError(ErrorCode.BACKEND_UNAVAILABLE) from None
+        if not _KEY_ID_RE.fullmatch(key_id):
             raise VaultError(ErrorCode.BACKEND_UNAVAILABLE, detail="current marker grammar")
         return key_id
 
     def key(self, key_id: str) -> bytes:
         path = self._key_path(key_id)
-        if not path.is_file():
-            raise VaultError(ErrorCode.CORRUPT_RECORD, detail="unknown root key version")
-        mode = path.stat().st_mode & 0o777
-        if mode & 0o077:
-            raise VaultError(ErrorCode.BACKEND_UNAVAILABLE, detail="root key file is group/other readable")
-        data = path.read_bytes()
+        data = self._read_owned_file(path.name, bound=KEY_BYTES, secret=True,
+                                    missing=ErrorCode.CORRUPT_RECORD)
         if len(data) != KEY_BYTES:
             raise VaultError(ErrorCode.CORRUPT_RECORD, detail="root key length")
         return data
+
+    def qualify_custody(self) -> None:
+        """Check current AND historical root-key material on durable storage.
+
+        This is a local source-level gate, not proof that a deployed mount
+        survives host replacement, or that namespace credentials are scoped.
+        The common runtime service must separately establish those legs.
+        """
+        try:
+            current = self.current_key_id()
+            if persistent_filesystem(self._dir) is not True:
+                raise VaultError(ErrorCode.BACKEND_UNAVAILABLE)
+            names = []
+            with os.scandir(self._dir) as entries:
+                for entry in entries:
+                    if len(names) >= 1024:
+                        raise VaultError(ErrorCode.BACKEND_UNAVAILABLE)
+                    names.append(entry.name)
+            if f"{current}.key" not in names:
+                raise VaultError(ErrorCode.BACKEND_UNAVAILABLE)
+            for name in names:
+                if name.endswith(".key"):
+                    self.key(name[:-4])
+        except (OSError, ValueError, TypeError):
+            raise VaultError(ErrorCode.BACKEND_UNAVAILABLE) from None
 
     def rotate(self) -> str:
         self._dir.mkdir(parents=True, exist_ok=True)

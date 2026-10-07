@@ -16,7 +16,7 @@ from typing import Any
 
 from kdcube_ai_app.auth.bundle.session_issuance import SessionIssuanceRefused
 from kdcube_ai_app.infra.secrets.ephemeral import KDCubeEphemeralSecretStore, ephemeral_secret_store
-from kdcube_ai_app.infra.secrets.manager import ISecretsManager, SecretsManagerError
+from kdcube_ai_app.infra.secrets.manager import ISecretsManager
 
 _SCHEMA = "kdcube.issuance_custody.v1"
 _REF = re.compile(r"[0-9a-f]{32}")
@@ -58,17 +58,9 @@ class KDCubeIssuanceSecretCustody:
     def __init__(self, store: KDCubeEphemeralSecretStore, *, settings: Any | None = None) -> None:
         if type(store) is not KDCubeEphemeralSecretStore:
             raise SessionIssuanceRefused("issuance_custody_not_durable")
-        if store.provider_type == "in-memory":
-            raise SessionIssuanceRefused("issuance_custody_not_durable")
-        if store.provider_type == "secrets-service":
-            backend = str(getattr(settings, "SECRETS_SERVICE_BACKEND", None) or "").strip().lower().replace("_", "-")
-            if backend != "host-vault":
-                raise SecretsManagerError("Durable secrets-service custody requires the host-vault backend")
-            self._effective_backend = "host-vault"
-        elif store.provider_type == "aws-sm":
-            self._effective_backend = "aws-sm"
-        else:
-            raise SessionIssuanceRefused("issuance_custody_not_durable")
+        del settings
+        # Telemetry only. No client may authorize/refuse custody by this name.
+        self._effective_backend = store.provider_type
         self._store = store
 
     @property

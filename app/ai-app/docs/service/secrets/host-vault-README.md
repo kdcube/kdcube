@@ -467,11 +467,66 @@ locking require their own deployment acceptance.
 
 Root keys come from a `RootKeyProvider`. The shipped `FileRootKeyProvider`
 keeps raw 32-byte keys as `0400` files in a `0700` directory with a `CURRENT`
-marker, and refuses to serve a key file that is group- or other-readable.
+marker. Every key/marker read pins its service-owned `0700` directory and
+opens a bounded regular, single-link inode without following symlinks. Keys
+must be `0400` or `0600`; the non-secret marker may also be `0644` inside
+that private directory. Foreign ownership, special files, shared links,
+executable keys and unsafe permissions refuse instead of serving material.
+Directory/file ownership, permissions and inode bindings are rechecked after
+each key or marker read, before returning material.
 Rotation makes a new key current and rewraps every record's data key (the
 ciphertext itself is untouched). Old versions remain readable until rewrap
 completes. A hardware- or OS-keychain-backed provider can replace this
-class behind the same three calls (`current_key_id`, `key`, `rotate`).
+class behind the same ordinary calls (`current_key_id`, `key`, `rotate`).
+
+Recoverable-custody composition additionally requires
+`qualify_custody()`: the file provider checks the current and every historical
+key version, bounded to 1024 directory entries, and refuses unknown or transient
+filesystem classifications. The in-memory provider always refuses. This local
+source-level check is not a deployed mount-survival, namespace-credential or
+complete runtime-service qualification. Those legs remain separate and the
+common runtime HTTP/bootstrap composition still requires its own qualification.
+No health response is treated as that proof.
+
+The non-mutating `custody.qualify` operation takes a bounded inventory selector
+and uses the same mTLS transport and live trust registry as secret operations.
+Its positive response requires the requested native namespace explicitly in
+the certificate's enrollment ACL (wildcard-only grants do not qualify), private
+service-owned data storage, the OS process lock, persistent filesystem
+classifications and qualified current/historical root keys.
+Storage ownership/permissions and the acquired lock's inode are rechecked
+after the root-provider probe while the OS lock is still held. The closed
+`kdcube.host_vault_custody.v1` assertion contains only namespace/reference-digest
+binding and fixed guarantee flags, not values or filesystem paths. The broker
+requires the exact request id and selector binding on every qualification;
+old healthy servers and malformed, stale or foreign answers refuse.
+
+`RuntimeVaultStore.qualify()` consumes that native assertion, not `health()`.
+The runtime namespace is additionally a trusted service grant supplied when
+constructing the adapter; the common HTTP policy must still enforce its exact
+read/write caller grants. Neither this source-level assertion nor its synthetic
+filesystem-classification tests prove deployed mount survival or physical host
+isolation. The common server/bootstrap, descriptor projection, AWS provider
+matrix and independent/mounted acceptance remain separate unfinished legs.
+
+The common runtime HTTP adapter treats store acknowledgements as a strict
+contract: `qualify()` and `delete()` complete with `None`, or raise a fixed
+failure. A false, true, numeric, string or mapping return is an invalid
+acknowledgement and produces `503 runtime_secret_storage_unavailable` with
+`Cache-Control: no-store`. It cannot become a positive qualification assertion
+or an acknowledged deletion. The SDK surfaces this unavailable outcome rather
+than treating it as qualified custody or successful cleanup. The ASGI regression
+suite exercises both operations and the actual SDK HTTP adapter with malformed
+backend returns; it does not prove installed bootstrap or mount behavior.
+
+The legacy `/secret`, `/set` and broker `/verify` handlers refuse runtime
+keys before authentication or storage access, with
+`403 runtime_secret_scoped_api_required` and `Cache-Control: no-store`.
+Parent-level inventories omit runtime keys; the broker does not read those
+keys while checking legacy inventory hints. Runtime custody must use the
+scoped, expiry-aware protocol, never the ordinary deployment door token.
+These refusal tests do not complete common bootstrap, descriptor projection,
+AWS qualification or mounted acceptance.
 
 Assumptions this phase makes and states: the vault home is owned by a
 dedicated service user on the host, the root-key directory is not on a

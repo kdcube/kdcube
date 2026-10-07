@@ -49,6 +49,7 @@ from kdcube_ai_app.infra.secrets.host_vault.protocol import (
     VaultError,
     VaultRequest,
     VaultResponse,
+    custody_qualification,
     sanitize_failure,
 )
 from kdcube_ai_app.infra.secrets.host_vault.storage import DurableSecretStore
@@ -113,6 +114,20 @@ class HostVaultService:
         assert request.reference is not None
         if not identity.allows(request.reference.namespace):
             raise VaultError(ErrorCode.FORBIDDEN)
+        if request.operation is Operation.QUALIFY:
+            # Existing read/write wildcard ACL behavior is unchanged. A
+            # custody assertion requires this namespace explicitly enrolled.
+            if request.reference.namespace.path not in identity.namespaces:
+                raise VaultError(ErrorCode.FORBIDDEN)
+            qualifier = getattr(self._store, "qualify_custody", None)
+            if not callable(qualifier):
+                raise VaultError(ErrorCode.BACKEND_UNAVAILABLE)
+            try:
+                if qualifier() is not None:
+                    raise VaultError(ErrorCode.BACKEND_UNAVAILABLE)
+            except Exception:
+                raise VaultError(ErrorCode.BACKEND_UNAVAILABLE) from None
+            return VaultResponse.success(request, custody=custody_qualification(request.reference))
         if request.operation in MUTATING_OPERATIONS:
             return self._mutate(request, identity)
         return self._read(request)

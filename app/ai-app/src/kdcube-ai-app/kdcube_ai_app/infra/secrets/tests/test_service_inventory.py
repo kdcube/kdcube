@@ -98,7 +98,7 @@ def test_ephemeral_service_create_only_preserves_existing_record(
     store = tmp_path / "store.json"
     monkeypatch.setenv("SECRETS_STORE_PATH", str(store))
     module = _load_script(_DEPLOYMENT_SECRETS / "secrets_server.py", "secrets_server")
-    key = "platform.runtime.resident-secrets." + ("a" * 32)
+    key = "platform.services.fixture.created"
 
     assert module.set_secret(
         module.SecretItem(key=key, value="original", expected_generation=0),

@@ -82,6 +82,57 @@ def test_scope_is_explicit_not_namespace_spelling(tmp_path):
     assert list(tmp_path.iterdir()) == []
 
 
+@pytest.mark.parametrize("operation", ["delete", "purge"])
+def test_cleanup_keeps_a_value_free_tombstone_across_restart(tmp_path, monkeypatch, operation):
+    import json
+
+    clock = [1000]
+    monkeypatch.setattr(runtime_file, "time", SimpleNamespace(time=lambda: clock[0]))
+    root = tmp_path / "runtime"
+    store = _store(root)
+    assert store.create(secret_ref=REF, value="synthetic-tombstone-canary", expires_at=1001)
+    if operation == "delete":
+        store.delete(secret_ref=REF)
+    else:
+        clock[0] = 1001
+        assert store.purge_expired(now=1001, limit=1) == 1
+    restarted = _store(root)
+    assert restarted.get(secret_ref=REF) is None
+    assert not restarted.create(secret_ref=REF, value="synthetic-replacement", expires_at=1010)
+    raw = (root / f"{NAMESPACE}.json").read_text()
+    assert "synthetic-tombstone-canary" not in raw
+    assert json.loads(raw)[REF] == {"value": None, "expires_at": 1001}
+    clock[0] = 1002
+    assert restarted.purge_expired(now=1002, limit=1) == 0
+
+
+def test_string_namespace_collection_is_not_a_grant(tmp_path):
+    with pytest.raises(RuntimeFileError, match="^runtime_secret_scope_forbidden$"):
+        RuntimeFileStore(root=tmp_path / "runtime", namespace="c", authorized_namespaces="custody")
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_invalid_unicode_create_is_a_finite_value_free_error(tmp_path):
+    with pytest.raises(RuntimeFileError, match="^runtime_secret_value_invalid$"):
+        _store(tmp_path / "runtime").create(secret_ref=REF, value="\ud800", expires_at=2000)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_replaced_lock_inode_is_refused_before_read(tmp_path, monkeypatch):
+    store = _store(tmp_path / "runtime")
+    flock = runtime_file.fcntl.flock
+
+    def replaced(descriptor, operation):
+        flock(descriptor, operation)
+        store._lock_path.unlink()
+        replacement = os.open(store._lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        os.close(replacement)
+
+    monkeypatch.setattr(runtime_file.fcntl, "flock", replaced)
+    with pytest.raises(RuntimeFileError, match="^runtime_secret_storage_unavailable$"):
+        store.get(secret_ref=REF)
+
+
 def test_writer_waiting_on_lock_cannot_create_after_deadline(tmp_path, monkeypatch):
     clock = [1000]
     monkeypatch.setattr(runtime_file, "time", SimpleNamespace(time=lambda: clock[0]))

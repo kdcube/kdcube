@@ -28,6 +28,11 @@ from enum import Enum
 from typing import Any
 
 PROTOCOL_VERSION = "kdcube-host-vault/1"
+CUSTODY_SCHEMA = "kdcube.host_vault_custody.v1"
+CUSTODY_GUARANTEES = frozenset({
+    "atomic_generation", "restart_persistent", "encrypted",
+    "process_lock", "namespace_authorized",
+})
 
 # Bounds. Values are provider credentials (tokens, app passwords, OAuth
 # refresh tokens): kilobytes, never files.
@@ -45,6 +50,7 @@ _NAME_RE = re.compile(
 
 class Operation(str, Enum):
     HEALTH = "health"
+    QUALIFY = "custody.qualify"
     GET = "secret.get"
     LIST = "secret.list"
     SET = "secret.set"
@@ -181,6 +187,29 @@ class SecretReference:
         return cls(namespace=namespace, name=_clean(internal_key))
 
 
+def custody_qualification(reference: SecretReference) -> dict[str, Any]:
+    """Non-secret service assertion, bound to the requested namespace/selector."""
+    return {"schema": CUSTODY_SCHEMA, "namespace": reference.namespace.path,
+            "reference_digest": reference.digest,
+            **{name: True for name in CUSTODY_GUARANTEES}}
+
+
+def valid_custody_qualification(payload: Any) -> bool:
+    if (type(payload) is not dict
+            or set(payload) != {"schema", "namespace", "reference_digest"} | CUSTODY_GUARANTEES
+            or type(payload["schema"]) is not str or payload["schema"] != CUSTODY_SCHEMA
+            or type(payload["namespace"]) is not str
+            or type(payload["reference_digest"]) is not str
+            or re.fullmatch(r"[a-f0-9]{24}", payload["reference_digest"]) is None
+            or any(payload[name] is not True for name in CUSTODY_GUARANTEES)):
+        return False
+    try:
+        parts = payload["namespace"].split("/")
+        return len(parts) == 3 and SecretNamespace(*parts).path == payload["namespace"]
+    except VaultError:
+        return False
+
+
 @dataclass(frozen=True)
 class VaultRequest:
     """One request. ``deployment_id`` is filled by the transport from the
@@ -308,23 +337,25 @@ class VaultRequest:
             )
         if operation in (Operation.SET, Operation.ROTATE) and value is None:
             raise VaultError(ErrorCode.INVALID_REQUEST, "value is required.")
-        if operation in {Operation.HEALTH, Operation.GET, Operation.DELETE} and (
+        if operation in {Operation.HEALTH, Operation.QUALIFY, Operation.GET, Operation.DELETE} and (
             value is not None
         ):
             raise VaultError(ErrorCode.INVALID_REQUEST, "operation does not accept a value.")
-        if operation in {Operation.HEALTH, Operation.GET} and expected is not None:
+        if operation in {Operation.HEALTH, Operation.QUALIFY, Operation.GET} and expected is not None:
             raise VaultError(
                 ErrorCode.INVALID_REQUEST,
                 "operation does not accept expected_generation.",
             )
         if operation is Operation.HEALTH and "reference" in data:
             raise VaultError(ErrorCode.INVALID_REQUEST, "health does not accept a reference.")
-        if operation is Operation.LIST and (
+        if operation is Operation.QUALIFY and ("value" in data or "expected_generation" in data):
+            raise VaultError(ErrorCode.INVALID_REQUEST, "qualification does not mutate.")
+        if operation in {Operation.LIST, Operation.QUALIFY} and (
             reference is None or not reference.name.endswith(".__keys")
         ):
             raise VaultError(
                 ErrorCode.INVALID_REQUEST,
-                "list requires a secret inventory reference.",
+                "operation requires a secret inventory reference.",
             )
         if operation is Operation.LIST and (
             value is not None or expected is not None
@@ -374,7 +405,7 @@ class VaultResponse:
             data["value"] = self.value
         if self.generation is not None:
             data["generation"] = self.generation
-        if set(self.extra) - {"deployment_id", "names"}:
+        if set(self.extra) - {"deployment_id", "names", "custody"}:
             raise VaultError(ErrorCode.INTERNAL, "The vault answer is malformed.")
         data.update(self.extra)
         VaultResponse.from_wire(data)
@@ -394,6 +425,7 @@ class VaultResponse:
             "generation",
             "deployment_id",
             "names",
+            "custody",
         }
         if set(data) - known:
             raise VaultError(ErrorCode.INTERNAL, "The vault answer is malformed.")
@@ -460,6 +492,12 @@ class VaultResponse:
             or not _SEGMENT_RE.fullmatch(deployment_id)
         ):
             raise VaultError(ErrorCode.INTERNAL, "The vault answer is malformed.")
+        if "custody" in data and (
+            not ok or "value" in data or "generation" in data
+            or "deployment_id" in data or "names" in data
+            or not valid_custody_qualification(data["custody"])
+        ):
+            raise VaultError(ErrorCode.INTERNAL, "The vault answer is malformed.")
         return cls(
             ok=ok,
             code=code,
@@ -469,7 +507,7 @@ class VaultResponse:
             generation=generation,
             extra={
                 key: data[key]
-                for key in ("deployment_id", "names")
+                for key in ("deployment_id", "names", "custody")
                 if key in data
             },
         )
@@ -487,6 +525,8 @@ def sanitize_failure(exc: BaseException) -> VaultError:
 
 
 __all__ = [
+    "CUSTODY_GUARANTEES",
+    "CUSTODY_SCHEMA",
     "MAX_LIST_NAMES",
     "MAX_NAME_CHARS",
     "MAX_REQUEST_SKEW_SECONDS",
@@ -500,5 +540,7 @@ __all__ = [
     "VaultError",
     "VaultRequest",
     "VaultResponse",
+    "custody_qualification",
+    "valid_custody_qualification",
     "sanitize_failure",
 ]

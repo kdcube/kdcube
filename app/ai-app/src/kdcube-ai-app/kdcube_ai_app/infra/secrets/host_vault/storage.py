@@ -60,6 +60,7 @@ from kdcube_ai_app.infra.secrets.host_vault.protocol import (
     SecretReference,
     VaultError,
 )
+from kdcube_ai_app.infra.secrets.runtime_contract import persistent_filesystem
 
 RECORD_FORMAT = "kdcube-host-vault-record/1"
 MAX_RECORD_BYTES = MAX_VALUE_BYTES * 2 + 4096
@@ -79,6 +80,8 @@ class StoredRecord:
 
 
 class DurableSecretStore(Protocol):
+    def qualify_custody(self) -> None: ...
+
     def get(self, reference: SecretReference) -> tuple[StoredRecord, bytes] | None: ...
 
     def put(self, reference: SecretReference, value: bytes, *, expected_generation: int | None) -> StoredRecord: ...
@@ -128,6 +131,7 @@ class FileDurableSecretStore:
 
     def __init__(self, root: Path, keys: RootKeyProvider) -> None:
         self._root = Path(root)
+        self._keys = keys
         self._envelope = Envelope(keys)
         self._lock = threading.RLock()
         self._root.mkdir(parents=True, exist_ok=True)
@@ -136,6 +140,54 @@ class FileDurableSecretStore:
         except OSError:
             pass
         self.recover()
+
+    def qualify_custody(self) -> None:
+        """Check private persistent storage and root keys under the OS lock.
+
+        This does not attest a deployment mount's retention policy or host
+        isolation. Those are independent installation/qualification legs.
+        """
+        fd = None
+        try:
+            if not hasattr(os, "O_DIRECTORY") or not hasattr(os, "O_NOFOLLOW"):
+                raise VaultError(ErrorCode.BACKEND_UNAVAILABLE)
+            fd = os.open(self._root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            metadata = os.fstat(fd)
+            entry = self._root.lstat()
+            if (not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.geteuid()
+                    or stat.S_IMODE(metadata.st_mode) != 0o700
+                    or (metadata.st_dev, metadata.st_ino) != (entry.st_dev, entry.st_ino)):
+                raise VaultError(ErrorCode.BACKEND_UNAVAILABLE)
+            with self._locked() as lock_fd:
+                if (persistent_filesystem(self._root) is not True
+                        or self._keys.qualify_custody() is not None):
+                    raise VaultError(ErrorCode.BACKEND_UNAVAILABLE)
+                current = os.fstat(fd)
+                entry = self._root.lstat()
+                if (not stat.S_ISDIR(current.st_mode) or current.st_uid != os.geteuid()
+                        or stat.S_IMODE(current.st_mode) != 0o700
+                        or (metadata.st_dev, metadata.st_ino) != (current.st_dev, current.st_ino)
+                        or (current.st_dev, current.st_ino) != (entry.st_dev, entry.st_ino)):
+                    raise VaultError(ErrorCode.BACKEND_UNAVAILABLE)
+                self._validate_lock(lock_fd)
+        except Exception:
+            # Root providers and OS probes may contain private paths/material.
+            raise VaultError(ErrorCode.BACKEND_UNAVAILABLE) from None
+        finally:
+            if fd is not None:
+                os.close(fd)
+
+    def _validate_lock(self, fd: int) -> None:
+        metadata = os.fstat(fd)
+        entry = (self._root / self.LOCK_NAME).lstat()
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or metadata.st_nlink != 1
+            or (metadata.st_dev, metadata.st_ino) != (entry.st_dev, entry.st_ino)
+        ):
+            raise VaultError(ErrorCode.BACKEND_UNAVAILABLE)
 
     @contextmanager
     def _locked(self):
@@ -159,17 +211,7 @@ class FileDurableSecretStore:
                     0o600,
                 )
                 fcntl.flock(fd, fcntl.LOCK_EX)
-                metadata = os.fstat(fd)
-                entry = lock_path.lstat()
-                if (
-                    not stat.S_ISREG(metadata.st_mode)
-                    or metadata.st_uid != os.geteuid()
-                    or stat.S_IMODE(metadata.st_mode) != 0o600
-                    or metadata.st_nlink != 1
-                    or (metadata.st_dev, metadata.st_ino)
-                    != (entry.st_dev, entry.st_ino)
-                ):
-                    raise VaultError(ErrorCode.BACKEND_UNAVAILABLE)
+                self._validate_lock(fd)
                 lock_ready = True
             except OSError:
                 raise VaultError(ErrorCode.BACKEND_UNAVAILABLE) from None
@@ -179,7 +221,7 @@ class FileDurableSecretStore:
                 if fd is not None and not lock_ready:
                     os.close(fd)
             try:
-                yield
+                yield fd
             finally:
                 # Closing also releases the advisory lock on exceptional exits.
                 os.close(fd)

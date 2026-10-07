@@ -17,6 +17,7 @@ from kdcube_ai_app.infra.secrets import issuance as issuance_module
 from kdcube_ai_app.infra.secrets import manager as manager_module
 from kdcube_ai_app.infra.secrets.ephemeral import KDCubeEphemeralSecretStore, ephemeral_secret_store
 from kdcube_ai_app.infra.secrets.issuance import KDCubeIssuanceSecretCustody, issuance_secret_custody
+from kdcube_ai_app.infra.secrets.runtime_contract import qualification
 from kdcube_ai_app.infra.secrets.manager import (
     AwsSecretsManagerSecretsManager, InMemorySecretsManager, SecretsManagerConfig, SecretsManagerError,
     SecretsServiceSecretsManager,
@@ -36,8 +37,8 @@ class _ProviderFixture(InMemorySecretsManager):
     """Test seam only: same manager protocol, NOT a production durability proof."""
     provider_type = "secrets-service"
 
-    async def qualify_host_vault(self):
-        return True
+    async def qualify_runtime_custody(self, *, namespace):
+        return namespace == NAMESPACE
 
 
 @pytest.fixture
@@ -152,24 +153,28 @@ async def test_invalid_purge_bounds_refuse_before_deletion(custody, now, limit):
     assert await manager.get_ephemeral_secret(namespace=NAMESPACE, secret_ref=REF) is not None
 
 
-def test_in_memory_rejected_by_factory_and_direct_custody_constructor():
+@pytest.mark.asyncio
+async def test_in_memory_refuses_qualification_before_secret_io():
     manager = InMemorySecretsManager()
-    with pytest.raises(SecretsManagerError, match="cannot use in-memory"):
-        issuance_secret_custody(namespace=NAMESPACE, manager=manager)
+    custody = issuance_secret_custody(namespace=NAMESPACE, manager=manager)
     ordinary = KDCubeEphemeralSecretStore(manager, namespace=NAMESPACE)
-    with pytest.raises(SessionIssuanceRefused, match="^issuance_custody_not_durable$"):
-        KDCubeIssuanceSecretCustody(ordinary)
+    for adapter in (custody, KDCubeIssuanceSecretCustody(ordinary)):
+        with pytest.raises(SessionIssuanceRefused, match="^issuance_custody_not_durable$"):
+            await adapter.qualify()
+    assert manager._data == {}
 
 
 @pytest.mark.parametrize("backend", [None, "ephemeral", "unknown"])
 @pytest.mark.parametrize("injected", [False, True])
-def test_production_factory_refuses_non_host_vault_secrets_service(monkeypatch, backend, injected):
+@pytest.mark.asyncio
+async def test_factory_uses_common_qualification_not_internal_backend_labels(monkeypatch, backend, injected):
     monkeypatch.setattr(ephemeral_module, "_runtime_secret_manager", lambda settings: _ProviderFixture())
-    with pytest.raises(SecretsManagerError, match="requires the host-vault backend"):
-        issuance_secret_custody(
-            namespace=NAMESPACE, settings=SimpleNamespace(SECRETS_SERVICE_BACKEND=backend),
-            manager=_ProviderFixture() if injected else None,
-        )
+    adapter = issuance_secret_custody(
+        namespace=NAMESPACE, settings=SimpleNamespace(SECRETS_SERVICE_BACKEND=backend),
+        manager=_ProviderFixture() if injected else None,
+    )
+    await adapter.qualify()
+    assert adapter.effective_backend == "secrets-service"
 
 
 def test_production_factory_allows_explicit_host_vault_selection(monkeypatch):
@@ -182,7 +187,7 @@ def test_production_factory_allows_explicit_host_vault_selection(monkeypatch):
 def test_wrapper_exposes_exact_namespace_and_validated_effective_backend(custody):
     store, _ = custody
     assert store.namespace == NAMESPACE
-    assert store.effective_backend == "host-vault"
+    assert store.effective_backend == "secrets-service"
     with pytest.raises(AttributeError):
         store.namespace = "other-namespace"
     with pytest.raises(AttributeError):
@@ -190,10 +195,12 @@ def test_wrapper_exposes_exact_namespace_and_validated_effective_backend(custody
 
 
 @pytest.mark.parametrize("backend", [None, "ephemeral", "unknown"])
-def test_direct_wrapper_constructor_requires_actual_host_vault_setting(backend):
-    store = KDCubeEphemeralSecretStore(_ProviderFixture(), namespace=NAMESPACE)
-    with pytest.raises(SecretsManagerError, match="requires the host-vault backend"):
-        KDCubeIssuanceSecretCustody(store, settings=SimpleNamespace(SECRETS_SERVICE_BACKEND=backend))
+@pytest.mark.asyncio
+async def test_backend_setting_cannot_qualify_an_unqualified_manager(backend):
+    store = KDCubeEphemeralSecretStore(InMemorySecretsManager(), namespace=NAMESPACE)
+    adapter = KDCubeIssuanceSecretCustody(store, settings=SimpleNamespace(SECRETS_SERVICE_BACKEND=backend))
+    with pytest.raises(SessionIssuanceRefused, match="^issuance_custody_not_durable$"):
+        await adapter.qualify()
 
 
 @pytest.mark.asyncio
@@ -277,7 +284,7 @@ async def test_aws_adapter_different_value_contender_cannot_replace_original(mon
 def _http_custody():
     manager = SecretsServiceSecretsManager(SecretsManagerConfig(
         provider="secrets-service", component="ingress",
-        url="http://synthetic-secrets", admin_token="synthetic-admin",
+        url="http://synthetic-secrets", token="synthetic-reader", admin_token="synthetic-admin",
     ))
     return issuance_secret_custody(namespace=NAMESPACE, manager=manager, settings=HOST_SETTINGS)
 
@@ -298,10 +305,12 @@ async def test_declared_host_vault_refuses_unqualified_running_backend(monkeypat
     client = _FakeSecretsHttpClient(_FakeHttpResponse(200, payload))
     monkeypatch.setattr(manager_module, "_get_httpx", lambda: _FakeHttpxModule(client))
     custody = _http_custody()
-    assert custody.declared_backend == "host-vault"
+    assert custody.declared_backend == "secrets-service"
     with pytest.raises(SessionIssuanceRefused, match="^issuance_custody_not_durable$"):
         await custody.qualify()
-    assert client.requests == [("GET", "http://synthetic-secrets/health", {})]
+    assert client.requests == [("GET", f"http://synthetic-secrets/runtime-secrets/{NAMESPACE}/qualification",
+                                {"headers": {"X-KDCUBE-SECRET-TOKEN": "synthetic-reader",
+                                             "X-KDCUBE-ADMIN-TOKEN": "synthetic-admin"}})]
 
 
 @pytest.mark.asyncio
@@ -330,9 +339,7 @@ async def test_health_transport_or_json_exception_is_sanitized(monkeypatch, fail
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["create", "get", "purge_expired"])
 async def test_qualification_is_not_cached_across_backend_replacement(monkeypatch, operation):
-    client = _FakeSecretsHttpClient(_FakeHttpResponse(200, {
-        "status": "ok", "vault": {"ok": True, "code": "ok"},
-    }))
+    client = _FakeSecretsHttpClient(_FakeHttpResponse(200, qualification(NAMESPACE)))
     monkeypatch.setattr(manager_module, "_get_httpx", lambda: _FakeHttpxModule(client))
     custody = _http_custody()
     await custody.qualify()
@@ -346,14 +353,12 @@ async def test_qualification_is_not_cached_across_backend_replacement(monkeypatc
     with pytest.raises(SessionIssuanceRefused, match="^issuance_custody_not_durable$"):
         await getattr(custody, operation)(**arguments[operation])
     assert len(client.requests) == 2
-    assert all(request[1].endswith("/health") for request in client.requests)
+    assert all(request[1].endswith(f"/runtime-secrets/{NAMESPACE}/qualification") for request in client.requests)
 
 
 @pytest.mark.asyncio
-async def test_host_vault_health_with_deployment_coordinate_is_qualified(monkeypatch):
-    client = _FakeSecretsHttpClient(_FakeHttpResponse(200, {
-        "status": "ok", "vault": {"ok": True, "code": "ok", "deployment_id": "fixture/project"},
-    }))
+async def test_complete_namespace_bound_common_contract_is_qualified(monkeypatch):
+    client = _FakeSecretsHttpClient(_FakeHttpResponse(200, qualification(NAMESPACE)))
     monkeypatch.setattr(manager_module, "_get_httpx", lambda: _FakeHttpxModule(client))
     await _http_custody().qualify()
 
@@ -388,7 +393,7 @@ async def test_real_ephemeral_sidecar_refused_before_secret_io(monkeypatch, tmp_
     }
     with pytest.raises(SessionIssuanceRefused, match="^issuance_custody_not_durable$"):
         await getattr(custody, operation)(**arguments[operation])
-    assert requests == ["/health"]
+    assert requests == [f"/runtime-secrets/{NAMESPACE}/qualification"]
     assert not (tmp_path / "store.json").exists()
 
 

@@ -50,7 +50,8 @@ class RuntimeFileStore:
     def __init__(self, *, root: str | Path, namespace: str, authorized_namespaces: Iterable[str]):
         if type(namespace) is not str or _NAMESPACE.fullmatch(namespace) is None:
             raise RuntimeFileError("runtime_secret_scope_invalid")
-        if namespace not in frozenset(authorized_namespaces):
+        if (isinstance(authorized_namespaces, (str, bytes))
+                or namespace not in frozenset(authorized_namespaces)):
             raise RuntimeFileError("runtime_secret_scope_forbidden")
         self._root = Path(root)
         if not self._root.is_absolute() or self._root == Path("/"):
@@ -68,7 +69,7 @@ class RuntimeFileStore:
 
     def _prepare_root(self) -> None:
         # A configured broad/public directory is refused, never chmod-ed.
-        self._root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self._root.mkdir(mode=0o700, exist_ok=True)
         info = self._root.lstat()
         if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
                 or stat.S_IMODE(info.st_mode) != 0o700
@@ -85,6 +86,12 @@ class RuntimeFileStore:
             )
             self._private_file(descriptor)
             fcntl.flock(descriptor, fcntl.LOCK_EX)
+            # A replaced lock entry must not split cooperating writers into
+            # separate lock domains while one waited on the original inode.
+            entry, opened = self._lock_path.lstat(), os.fstat(descriptor)
+            if (entry.st_dev, entry.st_ino) != (opened.st_dev, opened.st_ino):
+                raise RuntimeFileError("runtime_secret_storage_unavailable")
+            self._private_file(descriptor)
             yield
         except (OSError, UnicodeError, ValueError, TypeError):
             raise RuntimeFileError("runtime_secret_storage_unavailable") from None
@@ -95,6 +102,10 @@ class RuntimeFileStore:
     def qualify(self) -> None:
         """Check actual private storage/locking and read integrity, without a value."""
         with self._locked():
+            from kdcube_ai_app.infra.secrets.runtime_contract import persistent_filesystem
+
+            if not persistent_filesystem(self._root):
+                raise RuntimeFileError("runtime_secret_storage_not_persistent")
             self._load()
 
     def _load(self) -> dict:
@@ -114,8 +125,9 @@ class RuntimeFileStore:
             for ref, record in records.items():
                 self._validate_ref(ref)
                 if (type(record) is not dict or set(record) != {"value", "expires_at"}
-                        or type(record["value"]) is not str
-                        or len(record["value"].encode("utf-8")) > _MAX_VALUE_BYTES
+                        or (record["value"] is not None and (
+                            type(record["value"]) is not str
+                            or len(record["value"].encode("utf-8")) > _MAX_VALUE_BYTES))
                         or type(record["expires_at"]) is not int or record["expires_at"] <= 0):
                     raise ValueError
             return records
@@ -151,9 +163,12 @@ class RuntimeFileStore:
 
     def create(self, *, secret_ref: str, value: str, expires_at: int) -> bool:
         self._validate_ref(secret_ref)
-        if (type(value) is not str or len(value.encode("utf-8")) > _MAX_VALUE_BYTES
-                or type(expires_at) is not int or expires_at <= 0):
-            raise RuntimeFileError("runtime_secret_value_invalid")
+        try:
+            if (type(value) is not str or len(value.encode("utf-8")) > _MAX_VALUE_BYTES
+                    or type(expires_at) is not int or expires_at <= 0):
+                raise ValueError
+        except (ValueError, UnicodeError):
+            raise RuntimeFileError("runtime_secret_value_invalid") from None
         with self._locked():
             # The clock is read after the writer lock, not before waiting.
             if expires_at <= int(time.time()):
@@ -177,7 +192,11 @@ class RuntimeFileStore:
         self._validate_ref(secret_ref)
         with self._locked():
             records = self._load()
-            if records.pop(secret_ref, None) is not None:
+            record = records.get(secret_ref)
+            if record is not None and record["value"] is not None:
+                # Retain the used reference, with no bearer material, so a
+                # delayed identical create cannot become a new incarnation.
+                record["value"] = None
                 self._save(records)
 
     def purge_expired(self, *, now: int, limit: int) -> int:
@@ -187,9 +206,10 @@ class RuntimeFileStore:
             if now > int(time.time()):
                 raise RuntimeFileError("runtime_secret_purge_invalid")
             records = self._load()
-            expired = [ref for ref, record in records.items() if record["expires_at"] <= now][:limit]
+            expired = [ref for ref, record in records.items()
+                       if record["value"] is not None and record["expires_at"] <= now][:limit]
             for ref in expired:
-                del records[ref]
+                records[ref]["value"] = None
             if expired:
                 self._save(records)
             return len(expired)
