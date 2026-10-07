@@ -5,13 +5,16 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import uuid
+from functools import wraps
 from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
 
 from connection_hub.delegated_credentials.caller_writer_gate import CallerWriteRefused
+from connection_hub.delegated_credentials.cards.model import CardAuthority
 from connection_hub.delegated_credentials.oauth.authority_store import PostgresOAuthAuthorityStore
 from connection_hub.delegated_credentials.oauth.store import GrantStore
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.cards.service import CardConflict
@@ -155,6 +158,67 @@ async def test_caller_write_cleanup_failure_keeps_other_attempt_and_fixed_log(gr
         assert await grant_store.get_access_grant_record(ACCESS) is None
     if failed_operation != "revoke_refresh_token":
         assert await grant_store.validate_refresh_token(observed["refresh_token"]) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("refusal_kind", ["card-conflict", "caller-write"])
+async def test_refresh_route_late_refusal_revokes_old_and_new_family(grant_store, monkeypatch, refusal_kind):
+    observed = {}
+    original_token = await grant_store.create_refresh_token(
+        client_id="client", sub="human", scopes=["records:read"],
+        operations=["records_export"], resource="*", registry_access_id="synthetic-card",
+        card_kind="automation",
+    )
+
+    async def form():
+        return {"grant_type": "refresh_token", "refresh_token": original_token, "client_id": "client"}
+
+    async def resolve(*args, **kwargs):
+        return CardAuthority(
+            access_id="synthetic-card", client_id="client", grantor_subject="human",
+            delegate_subject="", source="oauth", card_kind="automation",
+            card_revision=8, expires_at=int(time.time()) + 300,
+            operations=("records_export",), resource_grants={"*": ("records:read",)},
+        )
+
+    async def mint(sub, scopes):
+        observed["mint_count"] = observed.get("mint_count", 0) + 1
+        return {"access_token": ACCESS, "expires_in": 300}
+
+    async def record(**kwargs):
+        observed.update(kwargs)
+        assert kwargs["refresh_token"] != original_token
+        assert await grant_store.validate_refresh_token(kwargs["refresh_token"]) is not None
+        if refusal_kind == "caller-write":
+            raise CallerWriteRefused("caller_writer_refused")
+        raise CardConflict("synthetic_late_card_conflict", current_revision=9)
+
+    rollback = grant_store.rollback_refresh_token_rotation
+
+    @wraps(rollback)
+    async def observe_rollback(*args, **kwargs):
+        observed["rollback_attempts"] = observed.get("rollback_attempts", 0) + 1
+        return await rollback(*args, **kwargs)
+
+    monkeypatch.setattr(routes, "oauth_tenant_project", lambda request: ("home", "cleanup"))
+    monkeypatch.setattr(routes, "get_grant_store", lambda request: grant_store)
+    monkeypatch.setattr(routes, "get_access_token_minter", lambda request: mint)
+    monkeypatch.setattr(routes, "get_automation_access", lambda request: SimpleNamespace(record_oauth_grant=record))
+    monkeypatch.setattr(routes, "delegated_serving_resolvers", lambda request: SimpleNamespace(cards=None))
+    monkeypatch.setattr(routes, "delegated_card_store", lambda **kwargs: None)
+    monkeypatch.setattr(routes, "resolve_live_grant_card", resolve)
+    monkeypatch.setattr(grant_store, "rollback_refresh_token_rotation", observe_rollback)
+    response = await routes.token(SimpleNamespace(form=form))
+
+    assert response.status_code == 503
+    body = json.loads(response.body)
+    assert "access_token" not in body and "refresh_token" not in body
+    assert "authorize again" in body["error_description"]
+    assert observed["mint_count"] == 1
+    assert observed["rollback_attempts"] == 1
+    assert await grant_store.get_access_grant_record(ACCESS) is None
+    assert await grant_store.validate_refresh_token(original_token) is None
+    assert await grant_store.validate_refresh_token(observed["refresh_token"]) is None
 
 
 @pytest.mark.asyncio
