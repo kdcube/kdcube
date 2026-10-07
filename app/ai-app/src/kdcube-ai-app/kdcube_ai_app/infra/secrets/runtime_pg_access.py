@@ -8,9 +8,42 @@ database/IAM boundary. The service runs them on every pool acquisition.
 """
 from __future__ import annotations
 
+import asyncio
+import json
+import logging
 import re
 
 from kdcube_ai_app.infra.secrets.runtime_pg_schema import RuntimeMetadataError, metadata_tables
+
+_LOG = logging.getLogger(__name__)
+
+
+async def _warn_outside_relation(connection, *, schema: str) -> None:
+    """Best-effort, bounded catalog diagnostic; never log driver text or rows."""
+    try:
+        row = await asyncio.wait_for(connection.fetchrow("""
+            SELECT n.nspname AS schema_name, c.relname AS relation_name
+            FROM pg_catalog.pg_class c
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname != $1 AND n.nspname != 'information_schema'
+                AND n.nspname NOT LIKE 'pg_%' AND c.relkind IN ('r','p','v','m','f')
+                AND has_table_privilege(current_user, c.oid,
+                    'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+            ORDER BY n.nspname, c.relname LIMIT 1
+        """, schema, timeout=0.25), timeout=0.25)
+        if row is None:
+            return
+        names = (row["schema_name"], row["relation_name"])
+        if any(type(name) is not str for name in names):
+            return
+        # PostgreSQL identifiers are at most 63 bytes; also bound unexpected
+        # input and escape control characters to keep one value-free log line.
+        schema_name, table_name = (json.dumps(name[:63], ensure_ascii=True) for name in names)
+        _LOG.warning("runtime_secret_metadata_outside_relation schema=%s table=%s", schema_name, table_name)
+    except Exception:
+        # A failed diagnostic (including logging) cannot weaken access refusal
+        # or replace its fixed public error. Cancellation still propagates.
+        pass
 
 
 async def check_runtime_metadata_access(connection, *, schema: str, service_role: str) -> None:
@@ -62,6 +95,7 @@ async def check_runtime_metadata_access(connection, *, schema: str, service_role
                             'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'))
         """, schema, service_role)
         if valid is not True:
+            await _warn_outside_relation(connection, schema=schema)
             raise RuntimeMetadataError("runtime_secret_metadata_unavailable")
         # Preparing explicit columns detects stale/pre-ledger schema input
         # without reading a record or running DDL. This is not a hash-based

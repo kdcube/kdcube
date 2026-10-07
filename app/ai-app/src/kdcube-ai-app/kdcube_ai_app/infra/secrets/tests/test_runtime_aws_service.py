@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import time
 import uuid
@@ -283,6 +284,145 @@ async def test_service_principal_with_outside_table_access_cannot_be_substituted
         with pytest.raises(RuntimeCloudError, match="^runtime_secret_storage_unavailable$"):
             await service.start()
         assert len(pools) == 1 and pools[0].is_closing()
+    finally:
+        async with admin.acquire() as connection:
+            await connection.execute(f'DROP SCHEMA "{outside}" CASCADE')
+
+
+@pytest.mark.asyncio
+async def test_public_outside_privilege_logs_only_escaped_relation_names_and_refuses_startup(system, caplog):
+    service, config, admin, cloud, session, pools, arguments = system
+    outside = "w585_outside_" + uuid.uuid4().hex + '"\n'
+    table = 'unrelated"\nauthority'
+    quoted_schema = '"' + outside.replace('"', '""') + '"'
+    quoted_table = '"' + table.replace('"', '""') + '"'
+    try:
+        async with admin.acquire() as connection:
+            await connection.execute(f'CREATE SCHEMA {quoted_schema}')
+            await connection.execute(f'CREATE TABLE {quoted_schema}.{quoted_table} (value text)')
+            await connection.execute(f'INSERT INTO {quoted_schema}.{quoted_table} VALUES ($1)', DSN_CANARY)
+            # Effective PUBLIC access must be refused even without a direct
+            # table grant or schema USAGE grant to the service principal.
+            await connection.execute(f'GRANT SELECT ON {quoted_schema}.{quoted_table} TO PUBLIC')
+        with caplog.at_level(logging.WARNING, logger="kdcube_ai_app.infra.secrets.runtime_pg_access"):
+            with pytest.raises(RuntimeCloudError, match="^runtime_secret_storage_unavailable$"):
+                await service.start()
+        records = [r for r in caplog.records if r.name == "kdcube_ai_app.infra.secrets.runtime_pg_access"]
+        assert len(records) == 1
+        assert records[0].getMessage() == (
+            "runtime_secret_metadata_outside_relation "
+            f"schema={json.dumps(outside, ensure_ascii=True)} table={json.dumps(table, ensure_ascii=True)}")
+        assert records[0].exc_info is None and "\n" not in records[0].getMessage()
+        for sensitive in (DSN_CANARY, KEY.hex(), config.database_dsn_ref.arn, config.commitment_key_ref.arn):
+            assert sensitive not in caplog.text
+        assert len(pools) == 1 and pools[0].is_closing()
+        assert service._pool is None and service._commitment_key is None
+    finally:
+        async with admin.acquire() as connection:
+            await connection.execute(f'DROP SCHEMA {quoted_schema} CASCADE')
+
+
+@pytest.mark.parametrize("failure", ["driver", "timeout", "invalid_row", "logger"])
+@pytest.mark.asyncio
+async def test_relation_diagnostic_is_bounded_best_effort_and_keeps_fixed_refusal(failure, caplog, monkeypatch):
+    import kdcube_ai_app.infra.secrets.runtime_pg_access as access
+    calls = []
+
+    class Connection:
+        async def fetchval(self, *args):
+            return False
+        async def fetchrow(self, query, *args, **kwargs):
+            calls.append((query, args, kwargs))
+            if failure == "driver":
+                raise RuntimeError(DSN_CANARY)
+            if failure == "timeout":
+                await asyncio.sleep(10)
+            if failure == "invalid_row":
+                return {"schema_name": object(), "relation_name": DSN_CANARY}
+            return {"schema_name": "outside", "relation_name": "authority"}
+        async def execute(self, *args):
+            raise AssertionError("must refuse before column checks")
+
+    if failure == "logger":
+        def broken_warning(*args, **kwargs):
+            raise RuntimeError(DSN_CANARY)
+        monkeypatch.setattr(logging.getLogger(access.__name__), "warning", broken_warning)
+    with caplog.at_level(logging.WARNING, logger=access.__name__):
+        with pytest.raises(RuntimeMetadataError, match="^runtime_secret_metadata_unavailable$") as caught:
+            await asyncio.wait_for(check_runtime_metadata_access(
+                Connection(), schema="runtime_test", service_role="runtime_service"), timeout=1)
+    assert len(calls) == 1 and calls[0][1] == ("runtime_test",)
+    assert calls[0][2] == {"timeout": 0.25} and "LIMIT 1" in calls[0][0]
+    assert DSN_CANARY not in str(caught.value) and DSN_CANARY not in caplog.text
+    assert not caplog.records
+
+
+@pytest.mark.asyncio
+async def test_relation_diagnostic_cancellation_is_not_converted_to_public_refusal():
+    class Connection:
+        async def fetchval(self, *args):
+            return False
+        async def fetchrow(self, *args, **kwargs):
+            raise asyncio.CancelledError
+    with pytest.raises(asyncio.CancelledError):
+        await check_runtime_metadata_access(Connection(), schema="runtime_test", service_role="runtime_service")
+
+
+@pytest.mark.asyncio
+async def test_relation_diagnostic_bounds_unexpected_identifier_lengths(caplog):
+    name = '"\n\u2603' * 100
+    class Connection:
+        async def fetchval(self, *args):
+            return False
+        async def fetchrow(self, *args, **kwargs):
+            return {"schema_name": name, "relation_name": name}
+    with caplog.at_level(logging.WARNING, logger="kdcube_ai_app.infra.secrets.runtime_pg_access"):
+        with pytest.raises(RuntimeMetadataError, match="^runtime_secret_metadata_unavailable$"):
+            await check_runtime_metadata_access(Connection(), schema="runtime_test", service_role="runtime_service")
+    records = [r for r in caplog.records if r.name == "kdcube_ai_app.infra.secrets.runtime_pg_access"]
+    assert len(records) == 1
+    escaped = json.dumps(name[:63], ensure_ascii=True)
+    assert records[0].getMessage() == f"runtime_secret_metadata_outside_relation schema={escaped} table={escaped}"
+    assert len(records[0].getMessage()) < 850 and "\n" not in records[0].getMessage()
+
+
+@pytest.mark.asyncio
+async def test_acquisition_guard_large_disposable_catalog_stays_within_service_command_timeout(system, record_property):
+    service, config, admin, cloud, session, pools, arguments = system
+    outside = "w585_catalog_" + uuid.uuid4().hex
+    catalog_tables = 1000
+    try:
+        async with admin.acquire() as connection:
+            await connection.execute(f'CREATE SCHEMA "{outside}"')
+            await connection.execute(f"""
+                DO $fixture$ BEGIN
+                    FOR i IN 1..{catalog_tables} LOOP
+                        EXECUTE format('CREATE TABLE %I.%I (id integer)', '{outside}', 'catalog_' || i);
+                    END LOOP;
+                END $fixture$
+            """)
+            assert await connection.fetchval("""
+                SELECT count(*) FROM pg_catalog.pg_class c
+                JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = $1 AND c.relkind = 'r'
+            """, outside) == catalog_tables
+        started = time.perf_counter()
+        await service.start()
+        startup_seconds = time.perf_counter() - started
+        assert arguments[0]["command_timeout"] == 5
+        samples = []
+        for _ in range(10):
+            started = time.perf_counter()
+            async with service._pool.acquire():
+                pass
+            samples.append(time.perf_counter() - started)
+        record_property("synthetic_catalog_tables", catalog_tables)
+        record_property("service_command_timeout_seconds", 5)
+        record_property("startup_seconds", startup_seconds)
+        record_property("acquisition_seconds", json.dumps(samples))
+        record_property("maximum_acquisition_seconds", max(samples))
+        assert max(samples) < 5, "fixture measurement only, not a deployment performance guarantee"
+        assert len(cloud.calls) == 2, "acquisition guard reads catalogs only"
     finally:
         async with admin.acquire() as connection:
             await connection.execute(f'DROP SCHEMA "{outside}" CASCADE')

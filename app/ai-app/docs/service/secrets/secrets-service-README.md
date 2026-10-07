@@ -305,6 +305,15 @@ unrelated user-schema table therefore refuses even without a direct grant.
 Provisioning and diagnostics must address the database's actual effective
 privileges rather than weakening this guard.
 
+After an access refusal, a best-effort catalog query may emit one warning
+`runtime_secret_metadata_outside_relation` naming only the first offending
+schema and table. Identifiers are length-bounded and JSON-escaped to one line;
+no record values, DSN, key, secret reference, driver exception or traceback is
+logged. The diagnostic query has a 250 ms timeout and returns at most one
+relation. Diagnostic failure cannot replace the fixed public refusal or grant
+access. It does not diagnose other role/schema failures or expose an HTTP
+diagnostic endpoint.
+
 The disposable PostgreSQL lifecycle tests explicitly replace the production
 verified-TLS setting with loopback trust/SSL-disabled input. They exercise a
 real separate login role, permission drift, failure cleanup, and restart with
@@ -314,6 +323,11 @@ Common ASGI routes remain 503 with zero runtime-record I/O because
 qualification. Persistent key provisioning, entropy and denied-reader IAM
 evidence remain operator/deployment-owned. Key rotation or legacy-row rollout
 requires a separately reviewed migration preserving existing commitments.
+The catalog-cost regression adds 1,000 empty synthetic tables with no service
+grants, measures startup and ten actual pool acquisitions under the service's
+five-second command timeout, and records timings in JUnit properties. This is
+a disposable local catalog measurement, not a production latency or scale
+guarantee; deployment catalog size and concurrent load need their own evidence.
 
 The SecretsService image source packages the AWS adapter, service lifecycle,
 PostgreSQL access checks, metadata store and explicit schema migrator. Its
