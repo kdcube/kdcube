@@ -227,11 +227,45 @@ available inside a cron method:
 | `self.pg_pool` | Postgres pool — same singleton used by the rest of the process |
 | Secrets | Same resolution path as normal bundle execution |
 | `self.config` | Real `Config` object; `self.config.ai_bundle_spec.id` is set correctly |
+| `self.comm_context` | Invocation-scoped identity-free request projection, tenant/project and source bundle; empty session ID |
+| `call_bundle_operation(...)` | Standard local peer operation bridge, scoped to this job's tenant/project |
 
 What is **not** available:
 
 - `self.comm` / communicator — there is no user session or SSE stream target
-- `self.comm_context` — not bound in headless mode
+
+### Peer operations from a job
+
+A job can perform service-to-service recovery through the same local operation
+bridge used by request handlers. The scheduler binds `AuthContext.for_bundle_job`
+and a typed identity-free request context for the invocation. The job retains
+its `job` principal, `service` AuthContext and bundle scope. The peer transport
+receives the job's tenant/project and the existing `anonymous` user projection
+with an empty session ID. This projection is the bridge's headless transport
+shape, not a browser identity or an authority grant. Peer operation admission
+and secret resolution follow the standard bridge path; public recovery endpoints
+authenticate their recorded transaction proof themselves.
+
+```python
+from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import call_bundle_operation
+
+@cron(cron_expression="*/5 * * * *", span="system")
+async def recover(self) -> None:
+    recorded_intent = await self.load_recovery_intent()
+    await call_bundle_operation(
+        bundle_id="peer@1-0", operation="finish", data=recorded_intent,
+    )
+```
+
+The request carries no interactive user, session, roles, permissions or identity
+authority. Pass the original recorded transaction intent in `data`; this binding
+does not create grants or renew approval. Missing job scope and tenant/project
+overrides are refused before peer dispatch.
+
+Bindings restore the enclosing context on return, exception and cancellation.
+Nested and concurrent jobs have separate callers. A copied caller requires its
+matching active job request, and expires when that invocation exits, including
+copies inherited by child tasks. Await job work within the invocation.
 
 For comm event recording, configure and send from the `@on_job` handler that
 executes the due work, or write cron-owned operational facts directly to durable

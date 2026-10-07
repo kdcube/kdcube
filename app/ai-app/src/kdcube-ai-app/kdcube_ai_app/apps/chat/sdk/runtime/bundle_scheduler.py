@@ -493,8 +493,8 @@ async def _invoke_job(
     bundle_config: Any,
 ) -> None:
     """Load the bundle entrypoint instance and invoke the scheduled method."""
-    from kdcube_ai_app.apps.chat.sdk.infra.auth_context import AuthContext, bind_auth_context
-    from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import bind_current_bundle_id
+    from kdcube_ai_app.apps.chat.sdk.infra.auth_context import AuthContext
+    from kdcube_ai_app.apps.chat.sdk.runtime.bundle_job_context import bind_bundle_job_context
     from kdcube_ai_app.infra.plugin.bundle_loader import get_workflow_instance_async
 
     # Resolve pg_pool lazily — same singleton used by the rest of the proc process.
@@ -518,8 +518,9 @@ async def _invoke_job(
             bundle_config._headless_auth_context = auth_context
         except Exception:
             pass
-        comm_context = getattr(bundle_config, "_headless_comm_context", bundle_config)
-        with bind_auth_context(auth_context), bind_current_bundle_id(bundle_id):
+        with bind_bundle_job_context(
+            auth_context, redis=getattr(bundle_config, "redis", None), pg_pool=pg_pool,
+        ) as comm_context:
             instance, _ = await get_workflow_instance_async(
                 bundle_spec,
                 bundle_config,
