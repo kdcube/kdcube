@@ -296,6 +296,15 @@ refuses acquisition. These checks are bounded structural/access evidence;
 they do not attest every constraint/trigger body, SECURITY DEFINER function,
 database persistence or the complete deployed database/IAM boundary.
 
+This service uses a password login role with zero role memberships and direct
+grants on its own metadata schema. RDS IAM database authentication is outside
+this composition: its `rds_iam` membership is rejected by the acquisition
+check, and [AWS documents that this role selects IAM rather than password authentication](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.IAMDBAuth.html).
+Effective privileges inherited from PUBLIC are checked too; access to an
+unrelated user-schema table therefore refuses even without a direct grant.
+Provisioning and diagnostics must address the database's actual effective
+privileges rather than weakening this guard.
+
 The disposable PostgreSQL lifecycle tests explicitly replace the production
 verified-TLS setting with loopback trust/SSL-disabled input. They exercise a
 real separate login role, permission drift, failure cleanup, and restart with

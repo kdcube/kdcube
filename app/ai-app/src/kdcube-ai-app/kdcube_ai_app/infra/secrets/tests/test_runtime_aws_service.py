@@ -222,11 +222,12 @@ async def test_actual_login_role_or_schema_failure_refuses_startup_and_closes_ow
     service, config, admin, cloud, session, pools, arguments = system
     role, schema = config.service_role, config.schema
     async with admin.acquire() as connection:
+        parent_role = await connection.fetchval("SELECT quote_ident(current_user)")
         sql = {
             "delete": f'GRANT DELETE ON ALL TABLES IN SCHEMA "{schema}" TO "{role}"',
             "ddl": f'GRANT CREATE ON SCHEMA "{schema}" TO "{role}"',
             "superuser": f'ALTER ROLE "{role}" SUPERUSER',
-            "member": f'GRANT w585_test TO "{role}"',
+            "member": f'GRANT {parent_role} TO "{role}"',
             "missing_column": f'ALTER TABLE "{schema}".runtime_secret_cleanup DROP COLUMN retry_count',
             "disabled_trigger": f'ALTER TABLE "{schema}".runtime_secret_records DISABLE TRIGGER runtime_terminal_guard',
             "unlogged": f'ALTER TABLE "{schema}".runtime_secret_cleanup SET UNLOGGED',
