@@ -140,6 +140,22 @@ class KDCubeIssuanceSecretCustody:
             raise SessionIssuanceRefused("issuance_custody_expired")
         return envelope["bearer"]
 
+    async def delete(self, *, secret_ref: str) -> None:
+        """Retire an original custody reference through its qualified provider.
+
+        The trusted issuance host owns the terminal ABORT/deadline decision.
+        Deletion does not read bearer material and remains valid after expiry.
+        Provider retirement and physical backend erasure are distinct outcomes.
+        """
+        _validate_ref(secret_ref)
+        await self.qualify()
+        try:
+            await self._store.delete(secret_ref=secret_ref)
+        except Exception:
+            # A lost delete response may follow a committed retirement. Refuse
+            # with a finite reason; a retry targets the same original reference.
+            raise SessionIssuanceRefused("issuance_custody_unavailable") from None
+
     async def purge_expired(self, *, now: int, limit: int) -> int:
         if (type(now) is not int or not 1 <= now <= int(time.time())
                 or type(limit) is not int or not 1 <= limit <= 1000):

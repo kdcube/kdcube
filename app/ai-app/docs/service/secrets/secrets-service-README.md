@@ -4,7 +4,7 @@ title: "Secrets Manager Implementations"
 summary: "System map for KDCube secret resolution: descriptor selectors, trusted-runtime read and write flows, persistence choices, and provider-specific behavior."
 tags: ["service", "secrets", "configuration", "aws", "runtime"]
 keywords: ["SECRETS_PROVIDER", "secrets.service.backend", "secrets-service", "host-vault", "aws-sm", "secrets-file", "in-memory", "user secrets", "bundle secrets", "secret flow"]
-updated_at: 2026-10-06
+updated_at: 2026-10-07
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/service-runtime-configuration-mapping-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/secrets-descriptor-README.md
@@ -91,6 +91,16 @@ still trusts only readback matching the digest captured in its reservation,
 not the create Boolean. Recovery reads the original after a collision; it never
 overwrites that reference or moves to a fresh reference after an unknown result.
 
+The issuance wrapper's `delete(secret_ref=...)` retires one validated opaque
+reference in its fixed namespace, including an expired record, without reading
+the bearer. The trusted host calls it after the original terminal ABORT or
+delivery-deadline decision. Same-reference retries are idempotent under the
+provider contract; an unavailable or lost response raises the finite
+`issuance_custody_unavailable` reason and does not prove successful deletion.
+This adapter supplies the deletion operation, not the decision callback or a
+new issuance protocol. Cloud retirement and physical erasure remain separate
+states as described below; the host still qualifies its backend's cleanup.
+
 The factories use the same mode-neutral qualification operation,
 `qualify_runtime_custody(namespace=...)`, rather than a provider-name allowlist
 or `/health` response. The compatibility `durability_required` constructor
@@ -101,7 +111,7 @@ the exact host store type. Composition must require the exact wrapper and
 namespace, never default a missing namespace or trust a provider label.
 
 Call `await custody.qualify()` before composing production issuance. Every
-create, get and purge repeats the check before value I/O; it is not cached.
+create, get, delete and purge repeats the check before value I/O; it is not cached.
 The running service must attest all five guarantees for the exact namespace:
 create-only writes, restart persistence, expiry-enforced reads, bounded atomic
 purge and scope authorization. Its authenticated qualification endpoint is
