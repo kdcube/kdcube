@@ -198,6 +198,63 @@ class PostgresRuntimeCustodyMetadata:
                 self._namespace, original.secret_ref, original.incarnation,
             ) is True
 
+    async def record_create_refusal(self, original: RuntimeCustodyRecord) -> bool:
+        """Record trusted received non-creation evidence, never a negative GET.
+
+        A refusal permanently retires this exact original and closes its
+        discovery work atomically. A claimed discovery worker loses its CAS
+        rights. Capacity is released, but the reference is never reusable.
+        Only the trusted cloud adapter can classify the sole SDK response.
+        """
+        if (type(original) is not RuntimeCustodyRecord or original.namespace != self._namespace
+                or original.attempt_state not in {"unstarted", "unknown"}
+                or original.arn is not None or original.version_id is not None):
+            raise RuntimeMetadataError("runtime_secret_metadata_binding_invalid")
+        _hex(original.secret_ref, _HEX32)
+        async with self._transaction() as connection:
+            row = await self._locked(connection, original.secret_ref)
+            if (row is None or row["attempt_state"] != "unknown" or row["arn"] is not None
+                    or row["state"] not in {"reserved", "terminal"}
+                    or any(row[field] != getattr(original, field) for field in (
+                        "namespace", "secret_ref", "incarnation", "request_digest",
+                        "expires_at", "creation_token", "secret_name",
+                    ))):
+                return False
+            await connection.execute(
+                f"UPDATE {self._records} SET state = 'terminal', attempt_state = 'refused', "
+                "updated_at = clock_timestamp() WHERE namespace = $1 AND secret_ref = $2 AND incarnation = $3",
+                self._namespace, original.secret_ref, original.incarnation,
+            )
+            await connection.execute(
+                f"UPDATE {self._cleanup} SET state = 'reconciled', claim_token = NULL, claim_until = NULL, "
+                "updated_at = clock_timestamp() WHERE namespace = $1 AND secret_ref = $2 "
+                "AND incarnation = $3 AND phase = 'reconcile' AND arn IS NULL AND version_id IS NULL",
+                self._namespace, original.secret_ref, original.incarnation,
+            )
+            return True
+
+    async def admission_status(self) -> dict[str, int | bool]:
+        """Trusted namespace-only operator/metrics input, with no record IDs.
+
+        The dedicated service pool bounds this aggregate by command timeout.
+        It is not an HTTP reader endpoint or a qualification/readiness proof.
+        Legacy/terminal unknown rows remain visible and consume capacity.
+        """
+        async with self._transaction() as connection:
+            row = await connection.fetchrow(
+                f"SELECT count(*) FILTER (WHERE attempt_state = 'unknown') AS unknown, "
+                "count(*) FILTER (WHERE attempt_state = 'legacy_unknown') AS legacy_unknown, "
+                "count(*) FILTER (WHERE attempt_state = 'unstarted' AND state != 'terminal') AS unstarted "
+                f"FROM {self._records} WHERE namespace = $1 AND (attempt_state IN ('unknown', 'legacy_unknown') "
+                "OR (attempt_state = 'unstarted' AND state != 'terminal'))", self._namespace,
+            )
+            counts = {name: row[name] for name in ("unknown", "legacy_unknown", "unstarted")}
+            if any(type(value) is not int or value < 0 for value in counts.values()):
+                raise RuntimeMetadataError("runtime_secret_metadata_unavailable")
+            total = sum(counts.values())
+            return dict(counts, unresolved=total, capacity=self._max_unresolved,
+                        saturated=total >= self._max_unresolved)
+
     def _validate_pin(self, record, *, request_digest, arn, version_id):
         if (type(request_digest) is not str or type(version_id) is not str
                 or request_digest != record.request_digest or version_id != record.creation_token):
@@ -252,7 +309,7 @@ class PostgresRuntimeCustodyMetadata:
                 raise RuntimeMetadataError("runtime_secret_metadata_binding_invalid")
             record = self._record(row)
             self._validate_pin(record, request_digest=request_digest, arn=arn, version_id=version_id)
-            if record.attempt_state == "unstarted":
+            if record.attempt_state in {"unstarted", "refused"}:
                 raise RuntimeMetadataError("runtime_secret_metadata_binding_invalid")
             # Trusted positive evidence for the sole no-retry dispatch. Persist
             # its immutable full pin even if retirement won the publication race.
@@ -382,8 +439,8 @@ class PostgresRuntimeCustodyMetadata:
         """CAS a trusted worker result; a delete ACK is not physical erasure.
 
         'deleted' requires a confirm-phase claim after deletion acceptance or
-        a separate full-ARN absence response. 'reconciled' closes only a positively
-        observed sole dispatch, never a negative cloud lookup. Retry uses
+        a separate full-ARN absence response. 'reconciled' closes a positively
+        observed or durably refused sole dispatch, never a negative lookup. Retry uses
         database-clock exponential backoff capped at five minutes.
         """
         if (type(claim) is not RuntimeCleanupClaim or claim.namespace != self._namespace
@@ -409,8 +466,9 @@ class PostgresRuntimeCustodyMetadata:
             if outcome == "reconciled":
                 row = await self._locked(connection, claim.secret_ref)
                 if (row is None or row["incarnation"] != claim.incarnation
-                        or row["state"] != "terminal" or row["attempt_state"] != "observed"
-                        or row["arn"] is None):
+                        or row["state"] != "terminal"
+                        or not ((row["attempt_state"] == "observed" and row["arn"] is not None)
+                                or (row["attempt_state"] == "refused" and row["arn"] is None))):
                     return False
             changed = await connection.fetchval(
                 f"UPDATE {self._cleanup} SET state = $8, phase = $9, claim_token = NULL, "

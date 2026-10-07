@@ -21,6 +21,34 @@ _REF = re.compile(r"[0-9a-f]{32}")
 _MAX_VALUE_BYTES = 65536
 
 
+def _received_create_refusal(exc) -> bool:
+    """A single SDK request was positively denied before resource creation.
+
+    Code text alone, 5xx, transport loss, ResourceExists and crypto/internal
+    errors do not establish non-creation. Never classify client-enter/exit
+    errors or a different SDK operation as a CreateSecret response.
+    """
+    from botocore.exceptions import ClientError
+
+    if not isinstance(exc, ClientError) or exc.operation_name != "CreateSecret":
+        return False
+    response = exc.response
+    error = response.get("Error") if type(response) is dict else None
+    metadata = response.get("ResponseMetadata") if type(response) is dict else None
+    if type(error) is not dict or type(metadata) is not dict:
+        return False
+    status, retries = metadata.get("HTTPStatusCode"), metadata.get("RetryAttempts")
+    code = error.get("Code")
+    return (type(status) is int and 400 <= status < 500
+            and type(retries) is int and retries == 0
+            and type(code) is str and code in {
+                "AccessDeniedException", "AccessDenied", "NotAuthorized",
+                "InvalidClientTokenId", "IncompleteSignature", "OptInRequired", "RequestExpired",
+                "ThrottlingException", "InvalidParameterException", "InvalidRequestException",
+                "LimitExceededException", "ValidationError", "ValidationException",
+            })
+
+
 class RuntimeAwsClientFactory:
     """Trusted service SDK composition, not a caller-provided retry label."""
 
@@ -103,7 +131,13 @@ class RuntimeAwsStore:
                         raise RuntimeCloudError("runtime_secret_storage_unavailable")
                     if not await self._metadata.begin_create(dispatch_record):
                         return None
-                response = await getattr(client, operation)(**arguments)
+                try:
+                    response = await getattr(client, operation)(**arguments)
+                except Exception as exc:
+                    if (operation == "create_secret" and _received_create_refusal(exc)
+                            and await self._metadata.record_create_refusal(dispatch_record)):
+                        raise RuntimeCloudError("runtime_secret_create_refused") from None
+                    raise
             if type(response) is not dict:
                 raise ValueError
             return response
@@ -244,7 +278,9 @@ class RuntimeAwsStore:
                         or original.incarnation != claim.incarnation):
                     raise RuntimeCloudError("runtime_secret_cleanup_binding_invalid")
                 if claim.phase == "reconcile":
-                    if original.attempt_state != "observed":
+                    if original.attempt_state == "refused":
+                        outcome = "reconciled"
+                    elif original.attempt_state != "observed":
                         _, full_arn, version = await self._fetch_original(original)
                         await self._metadata.publish_original(
                             secret_ref=original.secret_ref, incarnation=original.incarnation,

@@ -40,7 +40,7 @@ async def create_runtime_metadata_schema(pool, *, schema: str) -> None:
                         arn text,
                         version_id text,
                         attempt_state text NOT NULL DEFAULT 'legacy_unknown'
-                            CHECK (attempt_state IN ('unstarted', 'unknown', 'observed', 'legacy_unknown')),
+                            CHECK (attempt_state IN ('unstarted', 'unknown', 'observed', 'legacy_unknown', 'refused')),
                         created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
                         updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
                         PRIMARY KEY (namespace, secret_ref),
@@ -57,6 +57,20 @@ async def create_runtime_metadata_schema(pool, *, schema: str) -> None:
                     "NOT NULL DEFAULT 'legacy_unknown' "
                     "CHECK (attempt_state IN ('unstarted', 'unknown', 'observed', 'legacy_unknown'))",
                 )
+                await connection.execute(
+                    f"ALTER TABLE {records} DROP CONSTRAINT IF EXISTS runtime_secret_records_attempt_state_check",
+                )
+                await connection.execute(
+                    f"ALTER TABLE {records} ADD CONSTRAINT runtime_secret_records_attempt_state_check "
+                    "CHECK (attempt_state IN ('unstarted', 'unknown', 'observed', 'legacy_unknown', 'refused'))",
+                )
+                await connection.execute(
+                    f"ALTER TABLE {records} DROP CONSTRAINT IF EXISTS runtime_secret_refused_terminal",
+                )
+                await connection.execute(
+                    f"ALTER TABLE {records} ADD CONSTRAINT runtime_secret_refused_terminal "
+                    "CHECK (attempt_state != 'refused' OR (state = 'terminal' AND arn IS NULL AND version_id IS NULL))",
+                )
                 await connection.execute(f"""
                     CREATE OR REPLACE FUNCTION "{schema}".runtime_terminal_guard()
                     RETURNS trigger LANGUAGE plpgsql AS $$
@@ -68,6 +82,7 @@ async def create_runtime_metadata_schema(pool, *, schema: str) -> None:
                         IF (OLD.attempt_state = 'observed' AND NEW.attempt_state != 'observed')
                             OR (OLD.attempt_state IN ('unknown', 'legacy_unknown') AND NEW.attempt_state = 'unstarted')
                             OR (OLD.attempt_state = 'legacy_unknown' AND NEW.attempt_state != 'legacy_unknown')
+                            OR (OLD.attempt_state = 'refused' AND NEW.attempt_state != 'refused')
                             OR (OLD.state = 'terminal' AND OLD.attempt_state = 'unstarted'
                                 AND NEW.attempt_state != 'unstarted') THEN
                             RAISE EXCEPTION 'runtime_secret_attempt_immutable'

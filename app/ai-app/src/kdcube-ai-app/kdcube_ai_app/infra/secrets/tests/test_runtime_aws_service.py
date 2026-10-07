@@ -251,6 +251,25 @@ async def test_privilege_drift_is_rechecked_on_each_actual_pool_acquisition(syst
 
 
 @pytest.mark.asyncio
+async def test_trusted_collector_status_is_namespace_bound_value_free_and_not_qualification(system):
+    service, config, admin, cloud, session, pools, arguments = system
+    await service.start()
+    assert await service.admission_status(NS) == dict(
+        unknown=0, legacy_unknown=0, unstarted=0, unresolved=0, capacity=1000, saturated=False)
+    ref = uuid.uuid4().hex
+    await service.store(NS)._metadata.reserve(secret_ref=ref, request_digest="a" * 64,
+                                             expires_at=int(time.time()) + 60)
+    status = await service.admission_status(NS)
+    assert status["unstarted"] == status["unresolved"] == 1
+    assert ref not in json.dumps(status) and DSN_CANARY not in json.dumps(status)
+    with pytest.raises(RuntimeCloudError, match="scope_forbidden"):
+        await service.admission_status("ungranted")
+    with pytest.raises(RuntimeCloudError, match="storage_unavailable"):
+        await service.store(NS).qualify()
+    assert len(cloud.calls) == 2, "collector reads metadata only, not a cloud availability proof"
+
+
+@pytest.mark.asyncio
 async def test_service_principal_with_outside_table_access_cannot_be_substituted_for_dedicated_role(system):
     service, config, admin, cloud, session, pools, arguments = system
     outside = "w585_outside_" + uuid.uuid4().hex

@@ -242,6 +242,31 @@ and consume capacity. Migration occurs before opening the service pool;
 existing pre-ledger deployments require separately reviewed reconciliation
 and rollout evidence, not automatic activation of this new lane.
 
+A received, definite CreateSecret refusal has its own terminal attempt state,
+`refused`. The adapter requires an actual botocore `ClientError` for
+`CreateSecret`, a received 4xx HTTP status, zero SDK retries, and a narrow
+authorization/throttling/validation/quota error allowlist. The distinction is
+based on the [AWS common errors](https://docs.aws.amazon.com/secretsmanager/latest/apireference/CommonErrors.html)
+and [CreateSecret error contract](https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_CreateSecret.html).
+It is evaluated only around the actual SDK operation, not client-enter/exit.
+ResourceExists, crypto/internal errors, 5xx, transport loss, cancellation,
+missing/malformed status or a code-only arbitrary exception stay unknown.
+
+Recording the refusal atomically retires the exact immutable original and
+closes pending/claimed discovery work. This releases admission capacity while
+keeping the reference permanently unavailable for replay; stale cleanup claims
+lose their CAS rights. Refused rows cannot rearm, revive or acquire a late pin.
+Migration explicitly adds this state and its terminal/no-pin constraint. A
+crash or database failure before the refusal receipt commits conservatively
+leaves unknown: a later negative read still cannot supply the lost evidence.
+
+`RuntimeAwsService.admission_status(namespace)` exposes a trusted, value-free
+collector input: unstarted, unknown, legacy-unknown and total unresolved counts,
+capacity and saturation. It uses the dedicated pool's acquisition checks and
+command timeout and emits no secret, reference, incarnation, ARN or error text.
+It installs no public HTTP route; operator/metrics collector deployment remains
+a separate wiring step. Status and startup success never qualify custody.
+
 `RuntimeAwsService` now composes this store with a dedicated, bounded asyncpg
 pool and the common HTTP boundary through an explicit ASGI lifespan. Its
 trusted composition input is `RuntimeAwsServiceConfig`: exact namespaces,

@@ -210,6 +210,14 @@ class RuntimeAwsService:
             return self.store(namespace)
         install_runtime_routes(app, policy=policy, store_factory=factory)
 
+    async def admission_status(self, namespace: str):
+        """Value-free input for the trusted operator/metrics collector.
+
+        This service capability does not install a public status route or
+        claim a collector is deployed. No secret/reference identity is emitted.
+        """
+        return await self.store(namespace)._metadata.admission_status()
+
     @asynccontextmanager
     async def lifespan(self, app):
         await self.start()
