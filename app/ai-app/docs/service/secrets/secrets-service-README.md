@@ -67,25 +67,19 @@ keeping provider choice inside KDCube.
 
 `create(secret_ref, value, expires_at)` is an atomic create-only operation:
 
-- `True` proves this create operation owns the requested record; an exact
-  replay after a lost success response has the same result.
-- `False` proves the reference already existed and its value remains intact.
+- `True` means this call created the requested record.
+- `False` means the reference already existed, including an identical replay;
+  its original value, identity and deadline remain intact.
 - an exception means the outcome is unknown. The record remains eligible for
   its provider expiry purge, and callers never infer that it is absent.
 
-The local secrets-service path sends `expected_generation: 0`. Both the
-host-vault broker and the temporary sidecar enforce that precondition at the
-storage mutation. AWS uses `CreateSecret` with the opaque reference as its
-idempotency token, so a retry of the same operation returns its original
-success; `ResourceExistsException` identifies a different operation that
-already owns the name. The in-memory provider performs the test and insert
-under its process lock. Existing `set` operations remain available for
-protocols that do not consume the create outcome.
-
-The opaque adapter does not impose a JSON value format or enforce expiry on
-reads. Local expiry purge expects the stored value to be a JSON envelope with
-an integer `expires_at`; AWS additionally records the deadline in its expiry
-tag. Protocols must not hand local purge a bare bearer string.
+The dedicated runtime service path uses create-only records, separate from
+configuration descriptor storage and the legacy generic write endpoint.
+The file runtime store uses an OS lock; the host-vault runtime path uses a
+fixed reference binding and generation-zero creation. In-memory and legacy
+raw AWS operations do not establish the common custody guarantees merely
+because they support writes. In particular, a cloud idempotency token alone
+does not enforce read expiry or provide a terminal deletion fence.
 
 Recoverable session issuance uses `issuance_secret_custody` from
 `infra.secrets.issuance`. It wraps the original bearer in a versioned,
@@ -94,30 +88,35 @@ finite `issuance_custody_invalid` / `issuance_custody_expired` reasons. Missing
 records return `None`; provider failures remain unavailable, not absence.
 Its purge accepts a non-future timestamp and a limit from 1 to 1000. The issuer
 still trusts only readback matching the digest captured in its reservation,
-not the create Boolean. An identical AWS idempotent replay may return `True`
-without creating a new version; different material never replaces it.
+not the create Boolean. Recovery reads the original after a collision; it never
+overwrites that reference or moves to a fresh reference after an unknown result.
 
-The factory requires durable-provider selection: in-memory is refused, and
-secrets-service must explicitly select `secrets.service.backend: host-vault`,
-even with an injected manager. The generic `ephemeral_secret_store` gains an
-opt-in `durability_required=True`; its default behavior is unchanged. Provider
-selection is not proof of deployed restart durability or reader authorization.
-The wrapper exposes read-only `namespace` and `declared_backend` (`host-vault`
-or `aws-sm`); the compatibility name `effective_backend` is also only the
-configured selection. Direct construction requires the exact host store type
-and the same backend setting. Composition should require the exact wrapper
-type and namespace, never default a missing namespace or trust a label.
+The factories use the same mode-neutral qualification operation,
+`qualify_runtime_custody(namespace=...)`, rather than a provider-name allowlist
+or `/health` response. The compatibility `durability_required` constructor
+argument is not an authorization decision. The wrapper's `namespace` is its
+bound address; `declared_backend` and the compatibility `effective_backend`
+are configured provider telemetry, not authority. Direct construction requires
+the exact host store type. Composition must require the exact wrapper and
+namespace, never default a missing namespace or trust a provider label.
+
 Call `await custody.qualify()` before composing production issuance. Every
-create, get and purge also enforces it: a secrets-service endpoint must return
-healthy host-vault broker evidence from `/health`, not the temporary sidecar's
-plain `{status}` response. The check is not cached, so a later replacement or
-unavailable service refuses before secret I/O. It uses no secret request headers
-and does not expose response text in errors. AWS uses its own provider lane.
-Neither backend labels nor this health check attest a deployed security policy,
-reader isolation, or persistence through restart.
-The host must qualify actual backend behavior and the second-identity negative
-case. In particular, the deployment-wide broker's accepted read tokens share
-one application scope unless a narrower host policy/identity lane is supplied.
+create, get and purge repeats the check before value I/O; it is not cached.
+The running service must attest all five guarantees for the exact namespace:
+create-only writes, restart persistence, expiry-enforced reads, bounded atomic
+purge and scope authorization. Its authenticated qualification endpoint is
+`/runtime-secrets/{namespace}/qualification`. Host-owned policy grants exact
+namespaces to read and write credential hashes; neither a namespace supplied
+in a request nor a shared application token is itself a grant. Malformed or
+missing policy denies access. The AWS lane currently returns unqualified.
+The host must still verify real replacement persistence and second-identity
+denial: unit fixtures and configured labels are not deployment evidence.
+
+For a cloud backend, bounded atomic purge means atomic logical retirement
+plus durable, bounded cleanup claims. It does not mean synchronous physical
+cloud erasure. A terminal record blocks reads and late publication before
+cleanup starts. Deletion acceptance and physical deletion confirmation are
+separate states, and unresolved create outcomes remain reconciliation work.
 
 #### Dedicated file-runtime records
 
@@ -130,11 +129,40 @@ OS file lock; commits use private files, atomic rename and file/directory fsync.
 Reads enforce expiry, and create-only collisions preserve the original value.
 No runtime root or namespace authorization is inferred from a descriptor path.
 
-This storage primitive does not by itself lift the issuance factory's older
-provider restrictions. Those restrictions still
-apply until that integration is completed. Private local files prove neither a
-container mount's persistence through replacement nor isolation from co-located
-code running as the same OS identity. The host owns those deployment guarantees.
+The file runtime store participates in the common qualification contract;
+there is no separate issuance-only provider allowlist. Private local files prove
+neither a container mount's persistence through replacement nor isolation from
+co-located code running as the same OS identity. The host owns those deployment
+guarantees.
+
+#### Service-owned PostgreSQL cloud metadata (supporting layer)
+
+`runtime_pg_schema` provides an explicit migrator, and
+`PostgresRuntimeCustodyMetadata` supplies non-secret reservations, original
+full-ARN/version pins, terminal tombstones and leased cleanup claims. Values
+do not enter these tables. A trusted service supplies a dedicated pool,
+schema, namespace enrollment and cloud prefix; these are not request JSON or
+Card/session-table authority. Normal operations need schema USAGE and table
+SELECT/INSERT/UPDATE, not migration privileges or DELETE.
+
+Reserve before cloud I/O. The immutable incarnation, request commitment,
+creation token and original deadline survive recovery. Only the original
+creation version may be published, never an arbitrary `AWSCURRENT` version.
+Read authorization and a live active metadata record must precede a pinned
+value fetch, followed by a state/deadline/pin recheck before returning it.
+Retirement and its cleanup jobs commit in one transaction. Late create
+acknowledgements cannot resurrect a terminal reference; their exact full ARNs
+become cleanup work, including a different incarnation of the cloud name.
+Cleanup settlement compares the incarnation, full pins and unexpired claim
+token; a stale worker cannot settle a newer claim.
+
+This supporting layer is not yet selected by the service entrypoint or an AWS
+runtime adapter, and does not make AWS qualification true. Cloud-attempt
+reconciliation remains open: one absent-resource lookup cannot disprove a
+lost or in-flight create. Unknown-create jobs therefore remain durable rather
+than being marked complete. Service wiring, a deployed least-privilege pool
+and role, cloud operations, IAM isolation and the complete guarantee matrix
+must be established separately before production custody can use this lane.
 
 ### 1.2 Two selectors with different jobs
 
