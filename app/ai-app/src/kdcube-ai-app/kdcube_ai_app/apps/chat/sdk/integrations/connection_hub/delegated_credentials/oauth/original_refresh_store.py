@@ -30,6 +30,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentia
 
 TABLE_REFRESH = "kdcube_oauth_original_refresh_issuances"
 REFRESH_SCHEMA = "kdcube.oauth.original_refresh.v1"
+CLAIM_FIELDS = frozenset({"schema", "tenant", "project", "transaction_id", "slot", "sid", "sub", "iat", "exp"})
 
 
 @dataclass(frozen=True)
@@ -61,10 +62,12 @@ class PostgresOriginalRefreshStore:
                 CREATE TABLE IF NOT EXISTS {self.schema}.{TABLE_REFRESH} (
                     identity CHAR(64) PRIMARY KEY, inputs_digest CHAR(64) NOT NULL,
                     binding JSONB NOT NULL, claims JSONB, secret_ref CHAR(32), bearer_sha256 CHAR(64),
+                    original_digest CHAR(64),
                     state TEXT NOT NULL CHECK (state IN ('reserved','ready','applied','retired')),
                     applied_receipt CHAR(64), terminal_digest CHAR(64),
                     created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
                 );
+                ALTER TABLE {self.schema}.{TABLE_REFRESH} ADD COLUMN IF NOT EXISTS original_digest CHAR(64);
             """, timeout=5)
 
     def _binding(self, plan: OAuthIssuancePlan, card_kind: str, ttl_seconds: int):
@@ -101,13 +104,24 @@ class PostgresOriginalRefreshStore:
         return now
 
     @staticmethod
+    def _original_digest(claims, secret_ref):
+        return digest(canonical({"claims": claims, "secret_ref": secret_ref}))
+
+    @staticmethod
     def _decode(row, bound):
         claims = json.loads(row["claims"]) if isinstance(row["claims"], str) else row["claims"]
-        if (not isinstance(claims, dict) or claims.get("schema") != REFRESH_SCHEMA
+        if (not isinstance(claims, dict) or set(claims) != CLAIM_FIELDS or claims.get("schema") != REFRESH_SCHEMA
                 or claims.get("tenant") != bound.tenant or claims.get("project") != bound.project
                 or claims.get("transaction_id") != bound.transaction_id or claims.get("slot") != "refresh"
                 or claims.get("sub") != bound.credential_subject or claims.get("exp") != bound.expires_at
-                or type(claims.get("iat")) is not int or not 0 < claims["iat"] < bound.expires_at):
+                or type(claims.get("iat")) is not int or not 0 < claims["iat"] < bound.expires_at
+                or type(claims.get("exp")) is not int
+                or type(claims.get("sid")) is not str or len(claims["sid"]) != 37
+                or not claims["sid"].startswith("oref_")
+                or any(char not in "0123456789abcdef" for char in claims["sid"][5:])
+                or not row["original_digest"]
+                or not hmac.compare_digest(row["original_digest"],
+                    PostgresOriginalRefreshStore._original_digest(claims, row["secret_ref"]))):
             raise OriginalExchangeRefused("original_refresh_record_invalid")
         # Use the public receipt validator for opaque reference/id/hash shape.
         SessionIssuanceReceipt(claims.get("sid"), row["secret_ref"], row["bearer_sha256"] or "0" * 64).validated()
@@ -129,9 +143,12 @@ class PostgresOriginalRefreshStore:
                               "transaction_id": bound.transaction_id, "slot": "refresh",
                               "sid": "oref_" + uuid.uuid4().hex, "sub": bound.credential_subject,
                               "iat": now, "exp": bound.expires_at}
+                    secret_ref = uuid.uuid4().hex
                     await connection.execute(f"INSERT INTO {self.schema}.{TABLE_REFRESH} "
-                        "(identity,inputs_digest,binding,claims,secret_ref,state) VALUES ($1,$2,$3::jsonb,$4::jsonb,$5,'reserved')",
-                        bound.identity, fingerprint, canonical(binding), canonical(claims), uuid.uuid4().hex, timeout=5)
+                        "(identity,inputs_digest,binding,claims,secret_ref,original_digest,state) "
+                        "VALUES ($1,$2,$3::jsonb,$4::jsonb,$5,$6,'reserved')",
+                        bound.identity, fingerprint, canonical(binding), canonical(claims), secret_ref,
+                        self._original_digest(claims, secret_ref), timeout=5)
                     row = await self._row(connection, bound.identity)
                 return self._decode(row, bound)
 
@@ -164,6 +181,10 @@ class PostgresOriginalRefreshStore:
                 if original.context != PlannedIssuanceContext.from_oauth_plan(
                         stored_plan, slot="refresh", expires_at=stored_plan.expires_at):
                     raise OriginalExchangeRefused("original_refresh_identity_conflict")
+                stored = self._decode(row, original.context)
+                if (canonical(original.claims) != canonical(stored.claims)
+                        or original.secret_ref != stored.secret_ref):
+                    raise OriginalExchangeRefused("original_refresh_identity_conflict")
                 await self._live(connection, original.context)
                 if row["bearer_sha256"] is not None and not hmac.compare_digest(row["bearer_sha256"], token_sha256):
                     raise OriginalExchangeRefused("original_refresh_commitment_mismatch")
@@ -182,6 +203,7 @@ class PostgresOriginalRefreshStore:
                 if row is None:
                     raise OriginalExchangeRefused("original_refresh_missing")
                 self._match(row, binding, fingerprint)
+                self._decode(row, bound)
                 await self._live(connection, bound)
                 if (row["state"] not in {"ready", "applied"} or row["bearer_sha256"] != applied.token_sha256
                         or row["applied_receipt"] not in {None, applied.digest}):
@@ -210,6 +232,10 @@ class PostgresOriginalRefreshStore:
                 stored = json.loads(row["binding"]) if isinstance(row["binding"], str) else row["binding"]
                 if row["inputs_digest"] != fingerprint or canonical(stored) != canonical(binding):
                     raise OriginalExchangeRefused("original_refresh_identity_conflict")
+                if row["claims"] is not None:
+                    self._decode(row, bound)
+                elif row["secret_ref"] is not None:
+                    raise OriginalExchangeRefused("original_refresh_record_invalid")
                 if row["state"] == "applied":
                     raise OriginalExchangeRefused("original_refresh_already_applied")
                 if row["terminal_digest"] not in {None, terminal.digest}:

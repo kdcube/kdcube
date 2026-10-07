@@ -163,6 +163,19 @@ The flow reads Hub's original result before selecting the credential provider.
 A committed replay selects `read_pair`, which must recover existing receipts
 without preparation. A pending result selects idempotent `prepare_pair`,
 reserves both original receipt digests, and completes Hub's existing decision.
+When a pending result already names any original slot digest, it instead reads
+the existing pair. It compares every held digest before reserving any absent
+slot, skips existing reservations and resumes that same decision's completion.
+This permits partial FINISH recovery after the decision committed, when a new
+reservation would correctly refuse. Missing or changed original issuer metadata
+stays closed and never becomes permission to prepare a replacement.
+
+Refresh metadata retains a canonical commitment to its first signing claims and
+custody reference. Sealing checks that the supplied originals still match those
+stored inputs. Existing rows without this commitment are unknown originals and
+refuse recovery; schema migration adds the nullable field without inventing
+historical claims or a replacement token. Terminal tombstones may have no claims.
+
 It checks both applied slot digests, re-reads the local pin and invokes the
 host's live-target fence before access activation and again after custody
 reads, before publishing either bearer. The provider must keep refresh

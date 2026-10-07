@@ -36,7 +36,7 @@ def rig(monkeypatch):
     r = SimpleNamespace(code="unit-original", verifier="x" * 48, consumes=0, prepares=0,
                         pair_reads=0, completions=0, activations=0, reserved=[], gets=0,
                         fenced=True, lose_complete=False, outcome="pending", original=None, retired=0,
-                        slot_outcomes={}, candidate_reads=0)
+                        slot_outcomes={}, candidate_reads=0, held_digests={})
     r.proof = CodeExchangeProof.from_request(tenant="unit-tenant", project="unit-project", code=r.code,
                                              client_id="unit-client", redirect_uri="https://unit.test/cb", verifier=r.verifier)
     r.payload = {"sub": "human", "client_id": "unit-client", "redirect_uri": "https://unit.test/cb",
@@ -98,11 +98,13 @@ def rig(monkeypatch):
                 expires_at=r.plan.expires_at, delivery_deadline=r.plan.delivery_deadline,
                 receipt_digest="f" * 64 if r.outcome == "committed" else "",
                 per_slot={slot: SlotOutcome(r.slot_outcomes.get(slot, "applied" if r.outcome == "committed" else "pending"),
-                         r.plan.effect_digests[slot], r.receipts[slot].bearer_sha256 if r.outcome == "committed" else "")
+                         r.plan.effect_digests[slot], r.receipts[slot].bearer_sha256 if r.outcome == "committed"
+                         else r.held_digests.get(slot, ""))
                           for slot in r.plan.slots})
         async def reserve_oauth_issuance(self, **value):
             assert value["plan"] == r.plan
             r.reserved.append(value["slot"])
+            r.held_digests[value["slot"]] = value["token_sha256"]
         async def complete_oauth_issuance(self, *, transaction_id, expect):
             assert transaction_id == r.plan.transaction_id
             assert expect == {slot: r.receipts[slot].bearer_sha256 for slot in r.plan.slots}
@@ -260,7 +262,14 @@ async def test_original_abort_result_retires_without_prepare_or_custody_read(rig
 @pytest.mark.parametrize("already_committed", [True, False])
 async def test_original_mixed_committed_result_retires_without_publication(rig, already_committed):
     rig.outcome = "committed" if already_committed else "pending"
-    rig.slot_outcomes = {"access": "applied", "refresh": "superseded"}
+    if already_committed:
+        rig.slot_outcomes = {"access": "applied", "refresh": "superseded"}
+    else:
+        complete = rig.hub.complete_oauth_issuance
+        async def supersede(**kwargs):
+            rig.slot_outcomes = {"access": "applied", "refresh": "superseded"}
+            return await complete(**kwargs)
+        rig.hub.complete_oauth_issuance = supersede
     response = await routes.token(rig.request)
     assert response.status_code == 400 and rig.retired == 1
     assert rig.pair_reads == rig.activations == rig.gets == 0
@@ -283,3 +292,45 @@ async def test_invalid_consumed_proof_never_calls_host_candidate_builder(rig):
     response = await routes.token(rig.request)
     assert response.status_code == 400 and rig.candidate_reads == 0
     assert rig.prepares == rig.activations == rig.gets == 0 and rig.original is None
+
+
+@pytest.mark.asyncio
+async def test_pending_original_after_partial_finish_reads_pair_and_completes_without_reservation(rig):
+    first = await routes.token(rig.request)
+    assert first.status_code == 200
+    rig.outcome = "pending"
+    rig.slot_outcomes = {"access": "applied", "refresh": "pending"}
+    async def forbidden(**kwargs):
+        pytest.fail("partial original finish attempted another reservation")
+    rig.hub.reserve_oauth_issuance = forbidden
+    complete = rig.hub.complete_oauth_issuance
+    async def finish(**kwargs):
+        rig.slot_outcomes = {}
+        return await complete(**kwargs)
+    rig.hub.complete_oauth_issuance = finish
+    again = await routes.token(rig.request)
+    assert again.status_code == 200 and again.body == first.body
+    assert rig.prepares == 1 and rig.pair_reads == 1 and rig.completions == 2
+
+
+@pytest.mark.asyncio
+async def test_conflicting_pending_original_digest_does_not_reserve_missing_other_slot(rig):
+    rig.held_digests = {"access": "0" * 64}
+    response = await routes.token(rig.request)
+    assert response.status_code == 400
+    assert rig.prepares == rig.activations == rig.gets == 0 and rig.reserved == []
+
+
+@pytest.mark.asyncio
+async def test_held_original_finishes_to_superseded_cleanup_after_live_target_moves(rig):
+    assert (await routes.token(rig.request)).status_code == 200
+    rig.outcome, rig.fenced = "pending", False
+    complete = rig.hub.complete_oauth_issuance
+    async def supersede(**kwargs):
+        rig.slot_outcomes = {slot: "superseded" for slot in rig.plan.slots}
+        return await complete(**kwargs)
+    rig.hub.complete_oauth_issuance = supersede
+    response = await routes.token(rig.request)
+    assert response.status_code == 400 and rig.retired == 1
+    assert rig.prepares == rig.pair_reads == 1 and rig.completions == 2
+    assert rig.activations == 1 and len(rig.reserved) == 2

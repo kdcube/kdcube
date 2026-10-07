@@ -126,6 +126,15 @@ class OriginalCodeExchangeFlow:
                     raise OriginalExchangeRefused("original_exchange_result_invalid")
                 if outcome.token_sha256:
                     hex_digest(outcome.token_sha256)
+        else:
+            for slot in plan.slots:
+                outcome = result.per_slot[slot]
+                if outcome.outcome not in {"pending", "applied", "superseded", "released"}:
+                    raise OriginalExchangeRefused("original_exchange_result_invalid")
+                if outcome.token_sha256:
+                    hex_digest(outcome.token_sha256)
+                elif outcome.outcome != "pending":
+                    raise OriginalExchangeRefused("original_exchange_result_invalid")
         return result
 
     async def _refuse_terminal_pair(self, plan, result, expiry):
@@ -208,13 +217,31 @@ class OriginalCodeExchangeFlow:
         if result.state == "committed":
             pair = self._pair(plan, expiry, await self.provider.read_pair(plan=plan, access_expires_at=expiry))
         else:
-            if await self.fence_target(plan=plan, result=result) is not True:
+            # Any Hub-held digest proves preparation already crossed the
+            # original reservation boundary. Metadata/custody loss there
+            # refuses; it never authorizes another preparation.
+            read_original = any(result.per_slot[slot].token_sha256 for slot in plan.slots)
+            if not read_original and await self.fence_target(plan=plan, result=result) is not True:
                 raise OriginalExchangeRefused("original_exchange_target_moved")
-            pair = self._pair(plan, expiry, await self.provider.prepare_pair(plan=plan, access_expires_at=expiry))
+            reader = self.provider.read_pair if read_original else self.provider.prepare_pair
+            pair = self._pair(plan, expiry, await reader(plan=plan, access_expires_at=expiry))
             # A concurrent original completion may have won while custody ran.
             result = self._result(plan, await self.hub.read_oauth_issuance(transaction_id=plan.transaction_id))
             if result.state == "pending":
+                missing = []
+                # Compare every existing commitment before reserving an absent
+                # slot. Partial FINISH retries skip existing reservations and
+                # resume the same decision's completion, even if it decided.
                 for slot in plan.slots:
+                    held = result.per_slot[slot]
+                    if held.token_sha256:
+                        if not hmac.compare_digest(held.token_sha256, pair[slot].receipt.bearer_sha256):
+                            raise OriginalExchangeRefused("original_exchange_pair_mismatch")
+                    elif held.outcome == "pending":
+                        missing.append(slot)
+                    else:
+                        raise OriginalExchangeRefused("original_exchange_result_invalid")
+                for slot in missing:
                     value = pair[slot]
                     await self.hub.reserve_oauth_issuance(
                         plan=plan, slot=slot, token_sha256=value.receipt.bearer_sha256,

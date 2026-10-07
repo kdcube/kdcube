@@ -195,3 +195,51 @@ async def test_early_expiry_without_preparation_cannot_make_terminal_tombstone(r
         await refresh.issuer.retire(plan=refresh.plan, terminal=TerminalIssuanceContext.expired(bound))
     await refresh.issuer.prepare(plan=refresh.plan)
     assert refresh.creates == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["claims", "secret_ref"])
+async def test_seal_refuses_changed_original_signing_inputs(refresh, field):
+    original = await refresh.db.reserve(plan=refresh.plan, card_kind="automation", ttl_seconds=180 * 86400)
+    changed = ({**original.claims, "iat": original.claims["iat"] - 1}
+               if field == "claims" else "0" * 32)
+    with pytest.raises(OriginalExchangeRefused, match="^original_refresh_identity_conflict$"):
+        await refresh.db.seal(replace(original, **{field: changed}), "a" * 64)
+    assert refresh.signs == refresh.creates == 0
+
+
+@pytest.mark.asyncio
+async def test_reserved_refresh_refuses_changed_durable_original_claims(refresh):
+    import json
+    original = await refresh.db.reserve(plan=refresh.plan, card_kind="automation", ttl_seconds=180 * 86400)
+    altered = {**original.claims, "iat": original.claims["iat"] - 1}
+    async with refresh.db._db._connection() as connection:
+        await connection.execute(f"UPDATE {refresh.db.schema}.{TABLE_REFRESH} SET claims=$2::jsonb WHERE identity=$1",
+                                 original.context.identity, json.dumps(altered))
+    with pytest.raises(OriginalExchangeRefused, match="^original_refresh_record_invalid$"):
+        await refresh.issuer.prepare(plan=refresh.plan)
+    assert refresh.signs == refresh.creates == 0
+
+
+@pytest.mark.asyncio
+async def test_legacy_unknown_refresh_original_is_not_reconstructed(refresh):
+    original = await refresh.db.reserve(plan=refresh.plan, card_kind="automation", ttl_seconds=180 * 86400)
+    async with refresh.db._db._connection() as connection:
+        await connection.execute(f"UPDATE {refresh.db.schema}.{TABLE_REFRESH} SET original_digest=NULL WHERE identity=$1",
+                                 original.context.identity)
+    with pytest.raises(OriginalExchangeRefused, match="^original_refresh_record_invalid$"):
+        await refresh.issuer.prepare(plan=refresh.plan)
+    assert refresh.signs == refresh.creates == 0
+
+
+@pytest.mark.asyncio
+async def test_corrupted_custody_coordinate_cannot_be_purged(refresh):
+    first = await refresh.issuer.prepare(plan=refresh.plan)
+    terminal = TerminalIssuanceContext.from_oauth_result(first.context,
+        result(refresh, first, state="aborted", outcome="released"))
+    async with refresh.db._db._connection() as connection:
+        await connection.execute(f"UPDATE {refresh.db.schema}.{TABLE_REFRESH} SET secret_ref=$2 WHERE identity=$1",
+                                 first.context.identity, "0" * 32)
+    with pytest.raises(OriginalExchangeRefused, match="^original_refresh_record_invalid$"):
+        await refresh.issuer.retire(plan=refresh.plan, terminal=terminal)
+    assert first.secret_ref in refresh.values and refresh.creates == 1
