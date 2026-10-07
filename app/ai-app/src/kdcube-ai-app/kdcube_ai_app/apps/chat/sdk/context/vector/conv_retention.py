@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 def _unguarded() -> Any:
     return nullcontext()
 
-DEFAULT_HOT_DAYS = 90
+DEFAULT_HOT_DAYS = 14
 ARCHIVE_BATCH_SIZE = 500
 
 _ROW_COLUMNS = (

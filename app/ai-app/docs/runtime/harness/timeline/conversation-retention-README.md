@@ -64,7 +64,7 @@ The built-in admin bundle runs it daily as the system cron
 on by default: rows past the hot window move to the cold tier on the next
 nightly run. The assembly property `routines.conversation_store.archive_enabled:
 false` turns it off. The window is `routines.conversation_store.hot_days`
-(default 90).
+(default 14).
 
 ## How reads reach the cold tier
 

@@ -58,7 +58,7 @@ class AdminBundleEntrypoint(BaseEntrypoint):
         Once a day, one instance per tenant and project. On by default; the
         assembly property routines.conversation_store.archive_enabled: false
         turns it off. The window is routines.conversation_store.hot_days
-        (default 90).
+        (default 14).
         Every step is recorded in conv_archive_batches, so a run that stops
         resumes on the next one.
         """
