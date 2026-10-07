@@ -78,6 +78,24 @@ async def issue_bound_session(
     sign: Callable[[Mapping[str, Any]], Awaitable[str]],
 ) -> SessionIssuanceReceipt:
     bound = IssuanceContext.from_context(context)
+    reservation = await _prepare_bound_session(
+        bound, tenant=tenant, project=project, store=store, user_id=user_id,
+        roles=roles, permissions=permissions, custody=custody, sign=sign,
+    )
+    active = await _store_call(store.activate_reserved, bound.identity)
+    return SessionIssuanceReceipt(
+        session_id=active.session_id, secret_ref=active.secret_ref,
+        bearer_sha256=active.record["token_sha256"],
+        outcome="issued" if reservation.created else "recovered",
+    ).validated()
+
+
+async def _prepare_bound_session(
+    bound: Any, *, tenant: str | None, project: str | None, store: Any,
+    user_id: str, roles: Sequence[str], permissions: Sequence[str],
+    custody: IssuanceSecretCustody,
+    sign: Callable[[Mapping[str, Any]], Awaitable[str]], planned: bool = False,
+) -> Any:
     if bound.tenant != tenant or bound.project != project:
         raise SessionIssuanceRefused("issuance_namespace_mismatch")
     if not _valid_text(user_id, maximum_bytes=1024):
@@ -100,6 +118,28 @@ async def issue_bound_session(
         raise SessionIssuanceRefused("issuance_identity_conflict")
     if bound.expires_at <= int(time.time()):
         raise SessionIssuanceRefused("issuance_expired")
+    if planned:
+        if reservation is not None and (
+            reservation.delivery_deadline != bound.delivery_deadline
+            or reservation.reserved_until != bound.reserved_until
+            or reservation.expires_at != bound.expires_at
+            or reservation.record.get("issuance_plan") != bound.to_record()
+        ):
+            raise SessionIssuanceRefused("issuance_identity_conflict")
+        if bound.delivery_deadline <= int(time.time()) or bound.reserved_until <= int(time.time()):
+            raise SessionIssuanceRefused("issuance_delivery_expired")
+        if user_id != bound.credential_subject:
+            raise SessionIssuanceRefused("issuance_user_invalid")
+        if reservation is not None:
+            # Reuse the original reservation under its identity lock, checking
+            # PostgreSQL time even when no new reservation is needed.
+            reservation = await _store_call(
+                store.reserve_issuance, bound.identity, fingerprint,
+                reservation.session_id, reservation.secret_ref, reservation.expires_at,
+                session_record=reservation.record, expected_version=reservation.expected_version,
+                user_record=reservation.user_record,
+                delivery_deadline=bound.delivery_deadline, reserved_until=bound.reserved_until,
+            )
     candidate = None
     if reservation is None:
         login = await _store_call(store.get_login_state, user_id)
@@ -125,6 +165,8 @@ async def issue_bound_session(
             "iat": now, "exp": bound.expires_at, "max_exp": bound.expires_at,
             "last_seen": now,
         }
+        if planned:
+            record["issuance_plan"] = bound.to_record()
         reservation = await _store_call(
             store.reserve_issuance,
             bound.identity, fingerprint, sid, secret_ref, bound.expires_at,
@@ -136,6 +178,8 @@ async def issue_bound_session(
                 "permissions": granted_permissions, "disabled": False,
                 "created_at": now, "updated_at": now,
             },
+            **({"delivery_deadline": bound.delivery_deadline,
+                "reserved_until": bound.reserved_until} if planned else {}),
         )
         if reservation.session_id != sid:
             candidate = None  # a concurrent reservation owns the original
@@ -162,9 +206,4 @@ async def issue_bound_session(
     if hashlib.sha256(original.encode("utf-8")).hexdigest() != reservation.record["token_sha256"]:
         raise SessionIssuanceRefused("issuance_custody_mismatch")
 
-    active = await _store_call(store.activate_reserved, bound.identity)
-    return SessionIssuanceReceipt(
-        session_id=active.session_id, secret_ref=active.secret_ref,
-        bearer_sha256=active.record["token_sha256"],
-        outcome="issued" if reservation.created else "recovered",
-    ).validated()
+    return reservation

@@ -76,6 +76,9 @@ CREATE TABLE IF NOT EXISTS {schema}.{TABLE_ISSUANCES} (
     session_record      JSONB NOT NULL,
     user_record         JSONB,
     expires_at          TIMESTAMPTZ NOT NULL,
+    delivery_deadline   TIMESTAMPTZ,
+    reserved_until      TIMESTAMPTZ,
+    activation_digest   CHAR(64),
     state               TEXT NOT NULL DEFAULT 'reserved'
                         CHECK (state IN ('reserved', 'active')),
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -89,4 +92,13 @@ ALTER TABLE {schema}.{TABLE_ISSUANCES}
 -- Leave it NULL; first activation refuses rather than inventing a fence.
 ALTER TABLE {schema}.{TABLE_ISSUANCES}
     ADD COLUMN IF NOT EXISTS expected_user_revision BIGINT;
+
+-- Legacy committed issuances keep their existing lifetime. Planned rows
+-- require their original deadlines; missing migration data fails closed.
+ALTER TABLE {schema}.{TABLE_ISSUANCES}
+    ADD COLUMN IF NOT EXISTS delivery_deadline TIMESTAMPTZ;
+ALTER TABLE {schema}.{TABLE_ISSUANCES}
+    ADD COLUMN IF NOT EXISTS reserved_until TIMESTAMPTZ;
+ALTER TABLE {schema}.{TABLE_ISSUANCES}
+    ADD COLUMN IF NOT EXISTS activation_digest CHAR(64);
 """

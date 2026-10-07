@@ -21,6 +21,11 @@ from kdcube_ai_app.auth.bundle.session_schema import TABLE_ISSUANCES, TABLE_SESS
 
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 _HEX32 = re.compile(r"[0-9a-f]{32}")
+_EPOCH_COLUMNS = (
+    "floor(extract(epoch FROM expires_at))::bigint AS expires_epoch, "
+    "floor(extract(epoch FROM delivery_deadline))::bigint AS delivery_epoch, "
+    "floor(extract(epoch FROM reserved_until))::bigint AS reserved_epoch"
+)
 _SECRET_FIELDS = frozenset({
     "token", "access_token", "refresh_token", "id_token", "bearer", "secret",
     "password", "client_secret", "private_key", "authorization", "cookie", "api_key",
@@ -62,6 +67,9 @@ class SessionIssuanceReservation:
     created: bool = False
     user_record: dict[str, Any] | None = None
     expected_user_revision: int | None = None
+    delivery_deadline: int | None = None
+    reserved_until: int | None = None
+    activation_digest: str | None = None
 
 
 class PostgresSessionIssuanceStore:
@@ -85,6 +93,9 @@ class PostgresSessionIssuanceStore:
             user_record=_record(value.get("user_record")) or None,
             expected_user_revision=(int(value["expected_user_revision"])
                                     if value.get("expected_user_revision") is not None else None),
+            delivery_deadline=(int(value["delivery_epoch"]) if value.get("delivery_epoch") is not None else None),
+            reserved_until=(int(value["reserved_epoch"]) if value.get("reserved_epoch") is not None else None),
+            activation_digest=value.get("activation_digest"),
         )
 
     async def read_issuance(self, identity: str) -> SessionIssuanceReservation | None:
@@ -92,7 +103,7 @@ class PostgresSessionIssuanceStore:
             raise SessionIssuanceRefused("issuance_identity_invalid")
         async with self._pool.acquire() as connection:
             row = await connection.fetchrow(
-                f"SELECT *, floor(extract(epoch FROM expires_at))::bigint AS expires_epoch "
+                f"SELECT *, {_EPOCH_COLUMNS} "
                 f"FROM {self.schema}.{TABLE_ISSUANCES} WHERE identity = $1", identity,
             )
         return self._reservation(row) if row is not None else None
@@ -102,6 +113,8 @@ class PostgresSessionIssuanceStore:
         expires_at: int, *, session_record: Mapping[str, Any], expected_version: int,
         user_record: Mapping[str, Any] | None = None,
         expected_user_revision: int | None = None,
+        delivery_deadline: int | None = None,
+        reserved_until: int | None = None,
     ) -> SessionIssuanceReservation:
         if not isinstance(session_record, Mapping):
             raise SessionIssuanceRefused("issuance_record_invalid")
@@ -128,6 +141,20 @@ class PostgresSessionIssuanceStore:
         ):
             raise SessionIssuanceRefused("issuance_record_invalid")
         _no_secret(record)
+        planned = "issuance_plan" in record
+        if planned:
+            plan_record = record["issuance_plan"]
+            if (type(delivery_deadline) is not int or type(reserved_until) is not int
+                    or not 0 < reserved_until <= delivery_deadline
+                    or not isinstance(plan_record, Mapping)
+                    or plan_record.get("delivery_deadline") != delivery_deadline
+                    or plan_record.get("reserved_until") != reserved_until
+                    or plan_record.get("expires_at") != expires_at
+                    or type(plan_record.get("cap_expires_at")) is not int
+                    or not max(expires_at, delivery_deadline) <= plan_record["cap_expires_at"]):
+                raise SessionIssuanceRefused("issuance_record_invalid")
+        elif delivery_deadline is not None or reserved_until is not None:
+            raise SessionIssuanceRefused("issuance_record_invalid")
         encoded = json.dumps(record, sort_keys=True, separators=(",", ":"), allow_nan=False)
         if len(encoded.encode("utf-8")) > 65536:
             raise SessionIssuanceRefused("issuance_record_invalid")
@@ -145,15 +172,22 @@ class PostgresSessionIssuanceStore:
                     self.schema + ":session-issuance:" + identity,
                 )
                 prior = await connection.fetchrow(
-                    f"SELECT *, floor(extract(epoch FROM expires_at))::bigint AS expires_epoch "
+                    f"SELECT *, {_EPOCH_COLUMNS} "
                     f"FROM {self.schema}.{TABLE_ISSUANCES} WHERE identity = $1", identity,
                 )
                 if prior is not None:
                     original = self._reservation(prior)
                     if (original.inputs_digest != inputs_digest
                             or original.expires_at != expires_at
+                            or original.delivery_deadline != delivery_deadline
+                            or original.reserved_until != reserved_until
                             or original.record.get("sub") != record["sub"]):
                         raise SessionIssuanceRefused("issuance_identity_conflict")
+                    if planned and not await connection.fetchval(
+                        "SELECT clock_timestamp() < to_timestamp($1) AND clock_timestamp() < to_timestamp($2)",
+                        delivery_deadline, reserved_until,
+                    ):
+                        raise SessionIssuanceRefused("issuance_delivery_expired")
                     return original
                 provisioned_subject = None
                 if profile is not None:
@@ -186,32 +220,47 @@ class PostgresSessionIssuanceStore:
                              or (expected_user_revision > 0
                                  and captured_revision != expected_user_revision))):
                     raise SessionIssuanceRefused("issuance_authority_moved")
+                if planned and not await connection.fetchval(
+                    "SELECT clock_timestamp() < to_timestamp($1) AND clock_timestamp() < to_timestamp($2)",
+                    delivery_deadline, reserved_until,
+                ):
+                    raise SessionIssuanceRefused("issuance_delivery_expired")
                 inserted = await connection.fetchrow(
                     f"""
                     INSERT INTO {self.schema}.{TABLE_ISSUANCES} (
                         identity, inputs_digest, session_id, secret_ref, subject,
-                        expected_version, session_record, expires_at, user_record, expected_user_revision
-                    ) VALUES ($1, $2, $3, $4, $5, $6, ($7::text)::jsonb, to_timestamp($8), ($9::text)::jsonb, $10)
+                        expected_version, session_record, expires_at, user_record, expected_user_revision,
+                        delivery_deadline, reserved_until
+                    ) VALUES ($1, $2, $3, $4, $5, $6, ($7::text)::jsonb, to_timestamp($8), ($9::text)::jsonb, $10,
+                        to_timestamp($11), to_timestamp($12))
                     ON CONFLICT (identity) DO NOTHING RETURNING identity
                     """, identity, inputs_digest, session_id, secret_ref, record["sub"],
                     expected_version, encoded, expires_at,
                     json.dumps(profile, sort_keys=True, separators=(",", ":")) if profile is not None else None,
-                    captured_revision,
+                    captured_revision, delivery_deadline, reserved_until,
                 )
                 row = await connection.fetchrow(
-                    f"SELECT *, floor(extract(epoch FROM expires_at))::bigint AS expires_epoch "
+                    f"SELECT *, {_EPOCH_COLUMNS} "
                     f"FROM {self.schema}.{TABLE_ISSUANCES} WHERE identity = $1 FOR UPDATE", identity,
                 )
                 reservation = self._reservation(row, created=inserted is not None)
                 if (
                     reservation.inputs_digest != inputs_digest
                     or reservation.expires_at != expires_at
+                    or reservation.delivery_deadline != delivery_deadline
+                    or reservation.reserved_until != reserved_until
                     or reservation.record.get("sub") != record["sub"]
                 ):
                     raise SessionIssuanceRefused("issuance_identity_conflict")
         return reservation
 
-    async def activate_reserved(self, identity: str) -> SessionIssuanceReservation:
+    async def activate_reserved(
+        self, identity: str, *, expected_inputs_digest: str | None = None,
+        activation_digest: str | None = None,
+    ) -> SessionIssuanceReservation:
+        for digest in (expected_inputs_digest, activation_digest):
+            if digest is not None and (type(digest) is not str or not _HEX64.fullmatch(digest)):
+                raise SessionIssuanceRefused("issuance_activation_invalid")
         initial = await self.read_issuance(identity)
         if initial is None:
             raise SessionIssuanceRefused("issuance_reservation_missing")
@@ -222,15 +271,33 @@ class PostgresSessionIssuanceStore:
                     "WHERE subject = $1 FOR UPDATE", initial.record["sub"],
                 )
                 row = await connection.fetchrow(
-                    f"SELECT *, floor(extract(epoch FROM expires_at))::bigint AS expires_epoch, "
-                    f"expires_at > clock_timestamp() AND "
-                    "(session_record->>'exp')::bigint > extract(epoch FROM clock_timestamp()) "
-                    f"AS live FROM {self.schema}.{TABLE_ISSUANCES} "
+                    f"SELECT *, {_EPOCH_COLUMNS} FROM {self.schema}.{TABLE_ISSUANCES} "
                     "WHERE identity = $1 FOR UPDATE", identity,
                 )
                 current = self._reservation(row)
-                if not row["live"]:
+                planned = "issuance_plan" in current.record
+                if planned:
+                    if expected_inputs_digest is None or activation_digest is None:
+                        raise SessionIssuanceRefused("issuance_activation_required")
+                    if (current.inputs_digest != expected_inputs_digest
+                            or current.delivery_deadline is None or current.reserved_until is None):
+                        raise SessionIssuanceRefused("issuance_identity_conflict")
+                    if ((current.activation_digest is not None and current.activation_digest != activation_digest)
+                            or (current.state == "active" and current.activation_digest is None)):
+                        raise SessionIssuanceRefused("issuance_activation_conflict")
+                elif expected_inputs_digest is not None or activation_digest is not None:
+                    raise SessionIssuanceRefused("issuance_activation_invalid")
+                # Evaluate the database clock only after both locks were taken.
+                # A long lock wait cannot reuse the pre-wait time observation.
+                live = await connection.fetchrow(
+                    "SELECT clock_timestamp() < to_timestamp($1) AND clock_timestamp() < to_timestamp($2) AS session_live, "
+                    "($3::double precision IS NULL OR clock_timestamp() < to_timestamp($3)) AS delivery_live",
+                    current.expires_at, current.record["exp"], current.delivery_deadline,
+                )
+                if not live["session_live"]:
                     raise SessionIssuanceRefused("issuance_expired")
+                if not live["delivery_live"]:
+                    raise SessionIssuanceRefused("issuance_delivery_expired")
                 if (user is None or user["state"] != "active" or user["disabled"]
                         or int(user["session_version"]) != current.expected_version):
                     raise SessionIssuanceRefused("issuance_authority_moved")
@@ -274,6 +341,7 @@ class PostgresSessionIssuanceStore:
                             )
                     await connection.execute(
                         f"UPDATE {self.schema}.{TABLE_ISSUANCES} "
-                        "SET state = 'active', activated_at = now() WHERE identity = $1", identity,
+                        "SET state = 'active', activated_at = now(), activation_digest = $2 WHERE identity = $1",
+                        identity, activation_digest,
                     )
-        return SessionIssuanceReservation(**{**current.__dict__, "state": "active"})
+        return SessionIssuanceReservation(**{**current.__dict__, "state": "active", "activation_digest": activation_digest})

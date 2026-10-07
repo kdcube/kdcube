@@ -182,6 +182,55 @@ schema; they qualify the issuer's interruption protocol, not a production
 secret provider. A separate signature test exercises the existing runtime
 secret adapter with an in-memory manager and makes no durability claim.
 
+### Prepare an original plan, then activate its applied result
+
+`BundleSessionAuthority.prepare_bound_session(context, *, user_id, roles,
+permissions, custody)` reserves and custodies one session while it remains
+inactive. A trusted host supplies `PlannedIssuanceContext` from its original
+authenticated decision. It binds the transaction, decision-request identity,
+intent and original-input digests, effect slot/digest, access id, target
+incarnation, Card revision, grantor actor, client, and credential issuer/subject.
+Credential identity is distinct from the actor who granted it. The host maps
+its candidate revision to `card_revision` and its canonical Card content hash
+to `target_incarnation`, retaining `base_revision` as well. The structural
+`PlannedIssuanceContext.from_oauth_plan(plan, slot=..., expires_at=...)` adapter
+performs this mapping. The host validates the original plan before this call.
+
+The fixed `expires_at` is the original session's absolute lifetime, capped by
+the Card's original `cap_expires_at`.
+`delivery_deadline` is the host's original bounded delivery window, and
+`reserved_until` also caps preparation by the original decision's expiry.
+The host captures these once from its durable original plan and issuer
+lifetime; retries reuse them. A future commit receipt is absent from this
+preparation fingerprint. The SDK stores the plan and bearer digest in
+PostgreSQL; bearer bytes stay in create-only custody.
+
+`activate_prepared_bound_session(context, *, custody)` accepts an internal
+`AppliedIssuanceContext` containing that same original plan, a validated
+`committed` decision and `applied` slot outcome, original receipt digest and
+bearer commitment. `AppliedIssuanceContext.from_oauth_result(plan, result)`
+compares the original transaction, intent, access identity, revision, Card
+expiry, delivery deadline and slot effect before constructing this binding.
+The host obtains these from its authenticated result reader,
+not caller JSON. The SDK compares the stored plan and original bearer digest,
+reads custody without signing or creating a credential, and activates the
+fixed reservation. It records the applied-result digest for exact replay.
+Pending, aborted, released or superseded outcomes refuse. The legacy
+`activate_reserved(identity)` path refuses planned rows without this binding.
+
+PostgreSQL evaluates the delivery deadline after acquiring the user and
+issuance locks. Expiry during a lock wait refuses activation even if the
+session's own lifetime remains valid. Preparation also checks the fixed
+reservation deadline inside its transaction. Existing committed issuances keep
+their original behavior; additive nullable columns preserve legacy rows and
+planned rows with missing historical deadlines fail closed.
+
+These are SDK internal composition primitives. Host validation of original
+Plan/Result, live Card incarnation fencing, consumed authorization-code replay,
+terminal SDK retirement and physical custody erasure are separate host
+integration responsibilities. A prepared receipt describes stable custody
+coordinates and does not assert that the session is active or usable.
+
 Deployment integration still requires a qualified durable custody backend,
 host target fencing, and the OAuth refresh/refusal-cleanup adapters. Ordinary
 `login` and `login_or_register` keep their existing behavior.

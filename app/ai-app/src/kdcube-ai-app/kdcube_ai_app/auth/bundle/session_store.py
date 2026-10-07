@@ -151,6 +151,8 @@ class PostgresBundleSessionStore:
         expires_at: int, *, session_record: Mapping[str, Any], expected_version: int,
         user_record: Mapping[str, Any] | None = None,
         expected_user_revision: int | None = None,
+        delivery_deadline: int | None = None,
+        reserved_until: int | None = None,
     ) -> SessionIssuanceReservation:
         return await PostgresSessionIssuanceStore(
             pg_pool=self._pool, schema=self.schema, tenant=self.tenant, project=self.project,
@@ -159,12 +161,19 @@ class PostgresBundleSessionStore:
             session_record=session_record, expected_version=expected_version,
             user_record=user_record,
             expected_user_revision=expected_user_revision,
+            delivery_deadline=delivery_deadline, reserved_until=reserved_until,
         )
 
-    async def activate_reserved(self, identity: str) -> SessionIssuanceReservation:
+    async def activate_reserved(
+        self, identity: str, *, expected_inputs_digest: str | None = None,
+        activation_digest: str | None = None,
+    ) -> SessionIssuanceReservation:
         return await PostgresSessionIssuanceStore(
             pg_pool=self._pool, schema=self.schema, tenant=self.tenant, project=self.project,
-        ).activate_reserved(identity)
+        ).activate_reserved(
+            identity, expected_inputs_digest=expected_inputs_digest,
+            activation_digest=activation_digest,
+        )
 
     async def import_user_authority(
         self,
