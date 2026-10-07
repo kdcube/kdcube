@@ -176,7 +176,15 @@ stored inputs. Existing rows without this commitment are unknown originals and
 refuse recovery; schema migration adds the nullable field without inventing
 historical claims or a replacement token. Terminal tombstones may have no claims.
 
-It checks both applied slot digests, re-reads the local pin and invokes the
+Source recovery gates terminate an issuer process after confirmed refresh
+reservation, digest sealing, custody creation and ready-state commit, then
+recover with a fresh process against the same PostgreSQL and private fsynced
+file service. They also lose confirmed PostgreSQL replies and race ABORT with
+an in-flight create. These gates qualify original metadata/reference recovery,
+not encryption, production signing keys, deployed mount lifecycle or a running
+Hub composition; those require the host's separate provider acceptance.
+
+The flow checks both applied slot digests, re-reads the local pin and invokes the
 host's live-target fence before access activation and again after custody
 reads, before publishing either bearer. The provider must keep refresh
 artifacts distinct from Bundle access sessions. The host still supplies the
