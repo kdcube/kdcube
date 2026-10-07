@@ -997,3 +997,87 @@ async def test_the_run_budget_holds_when_one_fetch_spans_several_conversations()
     assert [m["id"] for m in db.messages] == [2]  # the second conversation stays hot for the next run
     assert (await retention.archive_before(NOW - timedelta(days=90), max_batches=1))["batches"] == 1
     assert db.messages == []
+
+
+# The hot window is strict (G1): a value that is not a whole number of days
+# >= 1 never becomes the default 90 or a 1-day window; the cron refuses to run.
+
+
+@pytest.mark.parametrize(
+    "assembly_value, env_value, resolved",
+    [
+        ("14", None, 14), ("'14'", None, 14), ("14d", None, "14d"), ("0", None, 0), ("-5", None, -5),
+        ("14.5", None, 14.5), ("14", "0", 0), ("14", "-3", -3), ("14", "30", 30),
+    ],
+)
+def test_hot_days_is_never_replaced_by_another_window(monkeypatch, tmp_path, assembly_value, env_value, resolved):
+    from kdcube_ai_app.apps.chat.sdk.config import Settings
+    from kdcube_ai_app.apps.chat.sdk.context.vector.conv_retention import valid_hot_days
+
+    path = tmp_path / "assembly.yaml"
+    path.write_text(f"routines:\n  conversation_store:\n    hot_days: {assembly_value}\n")
+    monkeypatch.setenv("ASSEMBLY_YAML_DESCRIPTOR_PATH", str(path))
+    if env_value is None:
+        monkeypatch.delenv("CONVERSATION_HOT_DAYS", raising=False)
+    else:
+        monkeypatch.setenv("CONVERSATION_HOT_DAYS", env_value)
+    value = Settings().CONVERSATION_HOT_DAYS
+    assert value == resolved and type(value) is type(resolved)
+    assert valid_hot_days(value) == (resolved if isinstance(resolved, int) and resolved >= 1 else None)
+
+
+def test_an_unparseable_env_hot_days_fails_loudly(monkeypatch):
+    from kdcube_ai_app.apps.chat.sdk.config import Settings
+
+    monkeypatch.setenv("CONVERSATION_HOT_DAYS", "14d")
+    with pytest.raises(Exception, match="CONVERSATION_HOT_DAYS"):
+        Settings()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hot_days", ["14d", 0, -5, 14.5, None, True])
+async def test_the_daily_archive_refuses_an_invalid_hot_days(monkeypatch, caplog, hot_days):
+    from types import SimpleNamespace
+
+    import kdcube_ai_app.infra.plugin.admin_bundle.entrypoint as admin
+    import kdcube_ai_app.apps.chat.sdk.context.vector.conv_index as conv_index_module
+
+    calls = []
+
+    class _Retention:
+        async def archive_before(self, cutoff):
+            calls.append(cutoff)
+            return {"resumed": 0, "stuck": 0, "batches": 0, "rows": 0}
+
+    monkeypatch.setattr(conv_index_module.ConvIndex, "retention", lambda self, store=None: _Retention())
+    owner = SimpleNamespace(pg_pool=_Pool(_Db()))
+    monkeypatch.setattr(admin, "get_settings", lambda: SimpleNamespace(CONVERSATION_ARCHIVE_ENABLED=True, CONVERSATION_HOT_DAYS=hot_days))
+    with caplog.at_level("INFO", logger=admin.logger.name):
+        await admin.AdminBundleEntrypoint.archive_conversations(owner)
+    assert calls == []
+    assert any(r.levelname == "ERROR" and "[conversation-archive] invalid hot_days" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_the_daily_archive_logs_stuck_batches(monkeypatch, caplog):
+    from types import SimpleNamespace
+
+    import kdcube_ai_app.infra.plugin.admin_bundle.entrypoint as admin
+    import kdcube_ai_app.apps.chat.sdk.context.vector.conv_index as conv_index_module
+
+    calls = []
+
+    class _Retention:
+        async def archive_before(self, cutoff):
+            calls.append(cutoff)
+            return {"resumed": 0, "stuck": 1, "stuck_batches": ["20260910-1-1"], "batches": 2, "rows": 3}
+
+    monkeypatch.setattr(conv_index_module.ConvIndex, "retention", lambda self, store=None: _Retention())
+    owner = SimpleNamespace(pg_pool=_Pool(_Db()))
+    monkeypatch.setattr(admin, "get_settings", lambda: SimpleNamespace(CONVERSATION_ARCHIVE_ENABLED=True, CONVERSATION_HOT_DAYS=14))
+    with caplog.at_level("INFO", logger=admin.logger.name):
+        await admin.AdminBundleEntrypoint.archive_conversations(owner)
+    assert len(calls) == 1 and timedelta(days=13, hours=23) < datetime.now(timezone.utc) - calls[0] <= timedelta(days=14, minutes=1)
+    (line,) = [r for r in caplog.records if r.getMessage().startswith("[conversation-archive] cutoff=")]
+    assert line.levelname == "WARNING"
+    assert "hot_days=14" in line.getMessage() and "stuck=1 stuck_batches=20260910-1-1" in line.getMessage()

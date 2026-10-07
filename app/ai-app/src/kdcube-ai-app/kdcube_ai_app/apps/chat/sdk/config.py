@@ -1513,9 +1513,19 @@ class Settings(PLATFORM_CONFIG):
             if val is not None:
                 self.CONVERSATION_ARCHIVE_ENABLED = val
         if not self._env_present("CONVERSATION_HOT_DAYS"):
-            val = self._assembly_int("routines.conversation_store.hot_days")
-            if val is not None:
-                self.CONVERSATION_HOT_DAYS = val
+            # Strict: a value that is not a whole number is kept as given (never
+            # replaced by the default) so the archive cron refuses to run on it.
+            raw = _load_assembly_plain("routines.conversation_store.hot_days")
+            if raw is not None:
+                try:
+                    if isinstance(raw, (bool, float)):
+                        raise ValueError(raw)
+                    self.CONVERSATION_HOT_DAYS = int(str(raw).strip())
+                except (ValueError, TypeError):
+                    logging.getLogger(__name__).error(
+                        "invalid routines.conversation_store.hot_days %r: not a whole number of days", raw
+                    )
+                    self.CONVERSATION_HOT_DAYS = raw
         if not self._env_present("STRIPE_RECONCILE_ENABLED"):
             val = self._assembly_bool("routines.stripe.reconcile_enabled")
             if val is not None:

@@ -121,11 +121,17 @@ class ConversationRetention:
         *,
         batch_size: int = ARCHIVE_BATCH_SIZE,
         max_batches: Optional[int] = None,
-    ) -> Dict[str, int]:
-        """Move every hot row with ts < cutoff to the cold tier."""
+    ) -> Dict[str, Any]:
+        """Move every hot row with ts < cutoff to the cold tier.
 
-        summary = {"resumed": 0, "batches": 0, "rows": 0, "indexed": 0, "relaid": 0}
-        summary["resumed"] = await self._resume_unfinished()
+        A resumed batch that fails its readback stays 'written' with its
+        error recorded and is reported in "stuck_batches"; its hot rows stay
+        hot and are left out of new batches, and the run goes on.
+        """
+
+        summary: Dict[str, Any] = {"resumed": 0, "stuck": 0, "batches": 0, "rows": 0, "indexed": 0, "relaid": 0}
+        summary["resumed"], summary["stuck_batches"] = await self._resume_unfinished()
+        summary["stuck"] = len(summary["stuck_batches"])
         summary["indexed"] = await self._index_unindexed_batches()
         # Moving legacy parts counts toward the same budget as archiving.
         summary["relaid"] = await self._relayout_legacy_batches(limit=max_batches)
@@ -133,7 +139,15 @@ class ConversationRetention:
             async with self._pool.acquire() as con:
                 rows = await con.fetch(
                     f"SELECT {_ROW_COLUMNS} FROM {self.schema}.conv_messages "
-                    f"WHERE ts < $1 ORDER BY ts, id LIMIT $2",
+                    f"WHERE ts < $1 AND NOT EXISTS ("
+                    # rows of an unconfirmed (stuck) batch stay hot until it is resolved
+                    f"SELECT 1 FROM {self.schema}.conv_archive_batches b "
+                    f"JOIN {self.schema}.conv_archive_conversations c ON c.batch_id = b.batch_id "
+                    f"WHERE b.state IN ('written', 'verified') "
+                    f"AND conv_messages.id BETWEEN b.min_id AND b.max_id "
+                    f"AND (conv_messages.ts AT TIME ZONE 'UTC')::date = b.day "
+                    f"AND c.user_id = conv_messages.user_id AND c.conversation_id = conv_messages.conversation_id) "
+                    f"ORDER BY ts, id LIMIT $2",
                     cutoff,
                     max(1, int(batch_size)),
                 )
@@ -259,15 +273,32 @@ class ConversationRetention:
                     batch_id,
                 )
 
-    async def _resume_unfinished(self) -> int:
+    async def _resume_unfinished(self) -> Tuple[int, List[str]]:
+        """Finish batches left 'written'/'verified'; returns (finished, stuck batch ids).
+
+        Each batch is isolated: one whose readback fails keeps its state, gets
+        the error recorded on its ledger row, and does not stop the others.
+        Nothing is deleted for it, so its rows stay hot.
+        """
+
         async with self._pool.acquire() as con:
             pending = await con.fetch(
                 f"SELECT batch_id, day, manifest_key FROM {self.schema}.conv_archive_batches "
                 f"WHERE state IN ('written', 'verified') ORDER BY day, batch_id"
             )
+        stuck: List[str] = []
         for row in pending:
-            await self._verify_and_prune(row["manifest_key"], row["batch_id"])
-        return len(pending)
+            try:
+                await self._verify_and_prune(row["manifest_key"], row["batch_id"])
+            except Exception as exc:
+                logger.warning("[conversation-archive] stuck batch %s: %s", row["batch_id"], str(exc)[:200])
+                async with self._pool.acquire() as con:
+                    await con.execute(
+                        f"UPDATE {self.schema}.conv_archive_batches SET error = $2, updated_at = now() WHERE batch_id = $1",
+                        row["batch_id"], str(exc)[:500],
+                    )
+                stuck.append(str(row["batch_id"]))
+        return len(pending) - len(stuck), stuck
 
     async def watermark(self) -> Optional[datetime]:
         """The newest archived message time; reads older than it may need the cold tier."""
@@ -798,6 +829,14 @@ def cold_turn_catalog(records: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]
         entries.append(entry)
     entries.sort(key=lambda e: (e["ts"], e["id"]))
     return entries
+
+
+def valid_hot_days(value: Any) -> Optional[int]:
+    """`value` as a hot window in days, or None when it is not a whole number >= 1."""
+
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return None
+    return value
 
 
 def hot_cutoff(hot_days: int, *, now: Optional[datetime] = None) -> datetime:

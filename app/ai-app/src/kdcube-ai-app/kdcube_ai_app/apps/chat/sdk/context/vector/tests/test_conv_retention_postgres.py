@@ -16,12 +16,13 @@ from pathlib import Path
 import pytest
 
 from kdcube_ai_app.apps.chat.sdk.context.vector.conv_cold import (
+    ColdArchiveIntegrityError,
     ConversationColdArchive,
     encode_part,
     row_to_record,
     sha256_hex,
 )
-from kdcube_ai_app.apps.chat.sdk.context.vector.conv_retention import ConversationRetention
+from kdcube_ai_app.apps.chat.sdk.context.vector.conv_retention import ConversationRetention, hot_cutoff
 from kdcube_ai_app.storage.storage import LocalFileSystemBackend
 
 NOW = datetime(2026, 10, 4, 12, 0, tzinfo=timezone.utc)
@@ -213,3 +214,142 @@ async def test_a_dated_search_finds_archived_turns_and_names_each_hits_storage(e
         before_ts=last["ts"], before_id=int(last["id"]),
     )
     assert [(r["turn_id"], r["storage"]) for r in second] == [("t-old", "cold")]
+
+
+# Nightly runs (ported from scratch/W536 sim_conv_archive.py / sim_conv_poison.py):
+# hot_days=14 at 02:20 UTC, as the admin-bundle cron computes the cutoff.
+
+UTC = timezone.utc
+
+
+def _night(day: int) -> datetime:
+    return hot_cutoff(14, now=datetime(2026, 10, day, 2, 20, tzinfo=UTC))
+
+
+async def _add(pool, schema, user, conv, ts) -> int:
+    async with pool.acquire() as con:
+        return await con.fetchval(
+            f"INSERT INTO {schema}.conv_messages (user_id, conversation_id, role, text, hosted_uri, ts) "
+            f"VALUES ($1, $2, 'user', 'x', 'cb/x', $3) RETURNING id",
+            user, conv, ts,
+        )
+
+
+async def _hot_ids(pool, schema) -> list[int]:
+    async with pool.acquire() as con:
+        return sorted(r["id"] for r in await con.fetch(f"SELECT id FROM {schema}.conv_messages"))
+
+
+async def _ledger(pool, schema) -> list[tuple]:
+    async with pool.acquire() as con:
+        return [tuple(r) for r in await con.fetch(
+            f"SELECT batch_id, state, error, updated_at FROM {schema}.conv_archive_batches ORDER BY batch_id"
+        )]
+
+
+def _files(root: Path) -> dict:
+    return {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+
+
+@pytest.mark.asyncio
+async def test_a_corrupt_written_batch_does_not_stop_later_nights(env, tmp_path):
+    pool, schema, backend, archive, retention = env
+    stuck_row = await _add(pool, schema, "u1", "c1", datetime(2026, 9, 10, 9, tzinfo=UTC))
+
+    # Night N (10-01): the part is corrupted right after it is written.
+    original, good = archive.write_batch, {}
+
+    async def corrupt(**kw):
+        manifest = await original(**kw)
+        good["part"] = (manifest["part_key"], await backend.read_bytes_a(manifest["part_key"]))
+        await backend.write_bytes_a(manifest["part_key"], b"tampered")
+        return manifest
+
+    archive.write_batch = corrupt
+    with pytest.raises(ColdArchiveIntegrityError):
+        await retention.archive_before(_night(1))
+    archive.write_batch = original
+    (stuck_batch, state, error, _), = await _ledger(pool, schema)
+    assert state == "written" and "sha256 mismatch" in error
+    assert await _hot_ids(pool, schema) == [stuck_row]  # nothing deleted before a verified readback
+
+    # Rows that become eligible later, including one of the same user,
+    # conversation and day as the stuck batch, plus one that stays hot.
+    other_scope = await _add(pool, schema, "u2", "c1", datetime(2026, 9, 10, 11, tzinfo=UTC))
+    same_scope_later = await _add(pool, schema, "u1", "c1", datetime(2026, 9, 10, 12, tzinfo=UTC))
+    next_day = await _add(pool, schema, "u1", "c1", datetime(2026, 9, 18, 9, tzinfo=UTC))
+    recent = await _add(pool, schema, "u1", "c1", datetime(2026, 10, 1, 12, tzinfo=UTC))
+    total = 5
+
+    # Night N+1 (10-03): the stuck batch is reported, later rows still move.
+    summary = await retention.archive_before(_night(3))
+    assert summary["stuck"] == 1 and summary["stuck_batches"] == [stuck_batch]
+    assert summary["resumed"] == 0 and summary["batches"] == 3 and summary["rows"] == 3
+    hot, cold = await _hot_ids(pool, schema), await _cold_ids(retention)
+    assert hot == [stuck_row, recent]  # the stuck batch's hot row was not deleted
+    assert cold == sorted([other_scope, same_scope_later, next_day])
+    assert len(hot) + len(cold) == total and not set(hot) & set(cold)
+    ledger = {b: (s, e) for b, s, e, _ in await _ledger(pool, schema)}
+    assert ledger[stuck_batch][0] == "written" and "sha256 mismatch" in ledger[stuck_batch][1]
+    assert [s for b, (s, _) in ledger.items() if b != stuck_batch] == ["pruned"] * 3
+
+    # Night N+2 (10-04): nothing new is eligible; still reported, nothing moves.
+    files_before = _files(tmp_path)
+    summary = await retention.archive_before(_night(4))
+    assert (summary["stuck"], summary["batches"], summary["rows"]) == (1, 0, 0)
+    assert _files(tmp_path) == files_before
+    assert await _hot_ids(pool, schema) == [stuck_row, recent]
+
+    # Once the part is repaired the next night finishes the batch, with no duplicate.
+    await backend.write_bytes_a(*good["part"])
+    summary = await retention.archive_before(_night(5))
+    assert (summary["resumed"], summary["stuck"], summary["batches"]) == (1, 0, 0)
+    hot, cold = await _hot_ids(pool, schema), await _cold_ids(retention)
+    assert hot == [recent] and cold == sorted([stuck_row, other_scope, same_scope_later, next_day])
+    assert len(hot) + len(cold) == total
+
+
+@pytest.mark.asyncio
+async def test_a_quiet_night_moves_and_writes_nothing(env, tmp_path):
+    pool, schema, backend, archive, retention = env
+    old = await _add(pool, schema, "u1", "c1", datetime(2026, 9, 10, 9, tzinfo=UTC))
+    # 09-23 05:00 is past every cutoff up to night 10-07 (09-23 02:20).
+    recent = await _add(pool, schema, "u2", "c4", datetime(2026, 9, 23, 5, tzinfo=UTC))
+    first = await retention.archive_before(_night(6))
+    assert (first["batches"], first["rows"]) == (1, 1)
+    files, ledger, mark = _files(tmp_path), await _ledger(pool, schema), await retention.watermark()
+
+    summary = await retention.archive_before(_night(7))
+    assert summary == {"resumed": 0, "stuck": 0, "stuck_batches": [], "batches": 0, "rows": 0,
+                       "indexed": 0, "relaid": 0}
+    assert _files(tmp_path) == files
+    assert await _ledger(pool, schema) == ledger
+    assert await retention.watermark() == mark
+    assert await _hot_ids(pool, schema) == [recent] and await _cold_ids(retention) == [old]
+
+
+@pytest.mark.asyncio
+async def test_a_stuck_batch_holds_back_only_its_own_utc_day(env, tmp_path):
+    pool, schema, backend, archive, retention = env
+    # Ids 1..3 of one conversation: the stuck batch is the 09-10 day (ids 1 and 3);
+    # the 09-17 row (id 2) lies inside that id range but on another UTC day.
+    first = await _add(pool, schema, "u1", "c1", datetime(2026, 9, 10, 9, tzinfo=UTC))
+    other_day = await _add(pool, schema, "u1", "c1", datetime(2026, 9, 17, 9, tzinfo=UTC))
+    last = await _add(pool, schema, "u1", "c1", datetime(2026, 9, 10, 10, tzinfo=UTC))
+
+    original = archive.write_batch
+
+    async def corrupt(**kw):
+        manifest = await original(**kw)
+        await backend.write_bytes_a(manifest["part_key"], b"tampered")
+        return manifest
+
+    archive.write_batch = corrupt
+    with pytest.raises(ColdArchiveIntegrityError):
+        await retention.archive_before(_night(1))  # cutoff 09-17 02:20: only the 09-10 rows
+    archive.write_batch = original
+
+    summary = await retention.archive_before(_night(3))  # cutoff 09-19 02:20
+    assert summary["stuck"] == 1 and (summary["batches"], summary["rows"]) == (1, 1)
+    assert await _hot_ids(pool, schema) == [first, last]
+    assert await _cold_ids(retention) == [other_day]
