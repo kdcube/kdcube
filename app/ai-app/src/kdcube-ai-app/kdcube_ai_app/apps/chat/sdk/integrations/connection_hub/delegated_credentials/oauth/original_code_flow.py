@@ -29,7 +29,9 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentia
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.original_exchange import (
     CodeExchangeProof, OriginalExchangeRefused, ValidatedCodeExchange, canonical, digest, hex_digest, plan_snapshot,
+    validate_consumed_code_payload,
 )
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.original_candidate_inputs import oauth_issuance_arguments
 
 DECISION_SCOPE = f"{PARTICIPANT}:oauth-issuance"
 
@@ -169,12 +171,13 @@ class OriginalCodeExchangeFlow:
             payload = await self.grant_store.consume_auth_code(code)
             if payload is None:
                 raise OriginalExchangeRefused("original_exchange_validation_failed")
+            validate_consumed_code_payload(proof, payload)
+            payload = json.loads(canonical(dict(payload)))
             # Only the host's consumed server payload supplies actor and intent.
-            inputs = dict(await self.candidate_inputs(payload=payload))
+            inputs = oauth_issuance_arguments(await self.candidate_inputs(payload=json.loads(canonical(payload))))
             if (inputs.get("grantor_subject") != payload.get("sub")
                     or inputs.get("client_id") != proof.client_id or "original_request_id" in inputs):
                 raise OriginalExchangeRefused("original_exchange_binding_invalid")
-            inputs = json.loads(canonical(inputs))
             binding = ValidatedCodeExchange.from_consumed(
                 proof, payload, original_input_digest=original_input_digest(inputs), decision_scope=DECISION_SCOPE,
             )

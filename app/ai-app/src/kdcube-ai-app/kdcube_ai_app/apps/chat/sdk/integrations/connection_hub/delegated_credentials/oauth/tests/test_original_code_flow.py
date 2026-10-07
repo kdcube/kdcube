@@ -26,6 +26,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentia
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.original_code_flow import (
     DECISION_SCOPE, OriginalCodeExchangeFlow, OriginalExchangePending, PreparedOriginalCredential,
 )
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.original_candidate_inputs import oauth_issuance_arguments
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.http import routes, original_code
 
 
@@ -35,12 +36,12 @@ def rig(monkeypatch):
     r = SimpleNamespace(code="unit-original", verifier="x" * 48, consumes=0, prepares=0,
                         pair_reads=0, completions=0, activations=0, reserved=[], gets=0,
                         fenced=True, lose_complete=False, outcome="pending", original=None, retired=0,
-                        slot_outcomes={})
+                        slot_outcomes={}, candidate_reads=0)
     r.proof = CodeExchangeProof.from_request(tenant="unit-tenant", project="unit-project", code=r.code,
                                              client_id="unit-client", redirect_uri="https://unit.test/cb", verifier=r.verifier)
     r.payload = {"sub": "human", "client_id": "unit-client", "redirect_uri": "https://unit.test/cb",
                  "code_challenge": make_s256_challenge(r.verifier)}
-    r.inputs = {"grantor_subject": "human", "client_id": "unit-client", "scopes": ["records:read"]}
+    r.inputs = oauth_issuance_arguments({"grantor_subject": "human", "client_id": "unit-client", "scopes": ["records:read"]})
     binding = ValidatedCodeExchange.from_consumed(r.proof, r.payload,
                                                   original_input_digest=original_input_digest(r.inputs), decision_scope=DECISION_SCOPE)
     r.binding = binding
@@ -135,6 +136,7 @@ def rig(monkeypatch):
             r.gets += 1
             return next((r.bearers[slot] for slot in r.plan.slots if r.receipts[slot].secret_ref == secret_ref), None)
     async def candidates(*, payload):
+        r.candidate_reads += 1
         assert payload == r.payload
         return r.inputs
     async def fence(**value):
@@ -273,3 +275,11 @@ async def test_terminal_result_without_cleanup_capability_stays_retryable(rig):
     response = await routes.token(rig.request)
     assert response.status_code == 503
     assert rig.prepares == rig.pair_reads == rig.activations == rig.gets == 0
+
+
+@pytest.mark.asyncio
+async def test_invalid_consumed_proof_never_calls_host_candidate_builder(rig):
+    rig.payload["client_id"] = "other-client"
+    response = await routes.token(rig.request)
+    assert response.status_code == 400 and rig.candidate_reads == 0
+    assert rig.prepares == rig.activations == rig.gets == 0 and rig.original is None

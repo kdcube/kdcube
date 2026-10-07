@@ -142,6 +142,16 @@ candidate-input digest, and asks Hub to begin the original request. Its
 absolute access expiry in one PostgreSQL transaction. Replays preserve both;
 an older pinned plan with unknown expiry refuses this workflow.
 
+The consumed client/redirect/PKCE proof is checked before the host's candidate
+builder runs. The flow freezes that server payload and normalizes the builder's
+argument mapping through `oauth_issuance_arguments`, filling every default in
+Hub's public `begin_oauth_issuance` contract before computing the digest. This
+keeps a sparse host mapping and Hub's stored original input identical. Unknown
+arguments, a caller-selected original request id and ambiguous scope/operation
+containers refuse. Grant selection and live authority remain host/Hub checks;
+this pure argument normalization performs neither. Source tests compare the
+digest with the real Hub method using synthetic persistence ports.
+
 Before a local pin exists, recovery selects Hub's read-only
 `read_oauth_issuance_plan_by_request(decision_request_id=...)`. Once pinned,
 recovery selects the transaction-id plan reader and compares the complete

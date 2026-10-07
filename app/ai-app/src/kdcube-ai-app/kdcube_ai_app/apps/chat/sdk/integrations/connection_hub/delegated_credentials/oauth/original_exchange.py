@@ -64,6 +64,25 @@ def hex_digest(value: Any) -> None:
         raise OriginalExchangeRefused("original_exchange_binding_invalid")
 
 
+def validate_consumed_code_payload(proof: CodeExchangeProof, payload: Mapping[str, Any]) -> str:
+    """Check the live consumed code proof before any host candidate callback."""
+    if type(proof) is not CodeExchangeProof or not isinstance(payload, Mapping):
+        raise OriginalExchangeRefused("original_exchange_binding_invalid")
+    proof.validated()
+    try:
+        redirect, challenge, grantor = payload["redirect_uri"], payload["code_challenge"], payload["sub"]
+        text(redirect, 4096)
+        text(challenge)
+        text(grantor)
+        if (payload["client_id"] != proof.client_id
+                or not hmac.compare_digest(digest(redirect), proof.redirect_sha256)
+                or not hmac.compare_digest(digest(challenge), proof.challenge_sha256)):
+            raise OriginalExchangeRefused("original_exchange_validation_failed")
+    except (KeyError, OriginalExchangeRefused):
+        raise OriginalExchangeRefused("original_exchange_validation_failed") from None
+    return grantor
+
+
 @dataclass(frozen=True)
 class CodeExchangeProof:
     tenant: str
@@ -117,20 +136,7 @@ class ValidatedCodeExchange:
         The host computes original_input_digest from the exact candidate inputs
         passed to Hub begin. Payload bytes are hashed, not stored in this binding.
         """
-        if type(proof) is not CodeExchangeProof or not isinstance(payload, Mapping):
-            raise OriginalExchangeRefused("original_exchange_binding_invalid")
-        proof.validated()
-        try:
-            redirect, challenge, grantor = payload["redirect_uri"], payload["code_challenge"], payload["sub"]
-            text(redirect, 4096)
-            text(challenge)
-            text(grantor)
-            if (payload["client_id"] != proof.client_id
-                    or not hmac.compare_digest(digest(redirect), proof.redirect_sha256)
-                    or not hmac.compare_digest(digest(challenge), proof.challenge_sha256)):
-                raise OriginalExchangeRefused("original_exchange_validation_failed")
-        except (KeyError, OriginalExchangeRefused):
-            raise OriginalExchangeRefused("original_exchange_validation_failed") from None
+        grantor = validate_consumed_code_payload(proof, payload)
         return cls(proof, grantor, digest(canonical(dict(payload))), original_input_digest, decision_scope).validated()
 
     def validated(self) -> ValidatedCodeExchange:
