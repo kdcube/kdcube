@@ -209,6 +209,62 @@ async def test_planned_adapter_rejects_caller_json_before_authority_factory():
 
 
 @pytest.mark.asyncio
+async def test_planned_activation_rejects_non_access_slot_with_other_bindings_matching():
+    plan = _plan()
+    authority = _PlannedAuthority(plan)
+    original = await _prepare()(plan=plan, expires_at=plan.delivery_deadline,
+                               authority=authority, custody=object())
+    context = replace(original.context, slot="refresh", effect_digest=plan.effect_digests["refresh"])
+    prepared = replace(original, context=context)
+    result = replace(_result(plan, original.receipt), per_slot={
+        "refresh": SlotOutcome("applied", context.effect_digest, original.receipt.bearer_sha256),
+    })
+    with pytest.raises(SessionIssuanceRefused, match="^issuance_identity_conflict$"):
+        await _activate()(prepared=prepared, result=result, authority=authority, custody=object())
+    assert authority.activations == []
+    assert authority.calls == []
+
+
+@pytest.mark.asyncio
+async def test_planned_prepare_rejects_integration_actor_with_derived_subject_matching():
+    actor = "integration:already-delegated:human"
+    plan = replace(_plan(), grantor_subject=actor,
+                   credential_subject=integration_subject(actor, client_id="example-client"))
+    authority, called = _PlannedAuthority(plan), []
+
+    def factory(**kwargs):
+        called.append(kwargs)
+        return authority
+
+    with pytest.raises(SessionIssuanceRefused, match="^issuance_identity_conflict$"):
+        await _prepare()(plan=plan, expires_at=plan.delivery_deadline,
+                         authority_factory=factory, custody=object())
+    assert called == []
+    assert authority.preparations == []
+    assert authority.calls == []
+
+
+@pytest.mark.parametrize("scope", ["", " records:read ", 3])
+@pytest.mark.asyncio
+async def test_planned_prepare_rejects_invalid_scope_before_authority_factory(scope):
+    # One submitted scope isolates its validation: no mixed-type sort or
+    # session-authority validation is allowed to mask the adapter's guard.
+    plan = replace(_plan(), resource_grants={"records": (scope,)})
+    authority, called = _PlannedAuthority(plan), []
+
+    def factory(**kwargs):
+        called.append(kwargs)
+        return authority
+
+    with pytest.raises(SessionIssuanceRefused, match="^issuance_authority_invalid$"):
+        await _prepare()(plan=plan, expires_at=plan.delivery_deadline,
+                         authority_factory=factory, custody=object())
+    assert called == []
+    assert authority.preparations == []
+    assert authority.calls == []
+
+
+@pytest.mark.asyncio
 async def test_planned_adapter_missing_api_or_namespace_never_falls_back_to_login():
     plan = _plan()
     old = _FakeAuthority()
