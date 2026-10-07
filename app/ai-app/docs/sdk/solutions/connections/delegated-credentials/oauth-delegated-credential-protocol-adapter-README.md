@@ -51,10 +51,12 @@ boundary.
 
 ## Late Card refusal cleanup
 
-A known `CardConflict` from the Hub after minting causes the host to withhold
-the response and attempt revocation of both the portable access grant and
-refresh family. This applies to both generic refusals and stale-revision
-replacement conflicts. Each revocation is attempted independently, so a
+A known `CardConflict` or `CallerWriteRefused` from the Hub after minting
+causes the host to withhold the response and attempt revocation of both the
+portable access grant and refresh family. This applies to generic refusals,
+stale-revision replacement conflicts, and the caller-writer gate's explicit
+before-effect refusals. Its optional outcome-confirmation flag describes
+policy finalization; it does not grant issuance. Each revocation is attempted independently, so a
 failure of one does not prevent the other. Cleanup failures retain the original
 refusal and log only the credential kind and client identity, without bearer or
 exception text. A failed backing-store call is not proof of revocation.

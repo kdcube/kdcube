@@ -72,6 +72,7 @@ from connection_hub.delegated_credentials.resource_operations import (
 from connection_hub.delegated_credentials.cards.resolver import (
     CardUnavailable,
 )
+from connection_hub.delegated_credentials.caller_writer_gate import CallerWriteRefused
 from connection_hub.delegated_credentials.cards.identity import (
     CARD_KIND_AGENT,
     CARD_KIND_AUTOMATION,
@@ -3495,7 +3496,7 @@ async def _issue_tokens(
         )
     # Register the grant in the user's Connection Hub registry (Delegated by
     # KDCube tab) so the connection is visible and revocable. Registry write
-    # failures must never fail token issuance.
+    # completion gates publication of the issued credentials.
     try:
         service = get_automation_access(request)
         metadata_snapshot = dict(client_metadata or {})
@@ -3579,6 +3580,24 @@ async def _issue_tokens(
             "client=%s reason=%s",
             client_id,
             getattr(exc, "reason", type(exc).__name__),
+        )
+        return _token_error(
+            "temporarily_unavailable",
+            "The delegated access card could not be recorded; retry the request.",
+            status=503,
+        )
+    except CallerWriteRefused:
+        # The caller-writer gate refuses before any Card effect. Its optional
+        # outcome flag describes policy finalization, not permission to mint
+        # again or an uncertain committed Card. Keep that separate from the
+        # unavailable/unknown-COMMIT branches below.
+        await revoke_withheld_oauth_credentials(
+            store, access_token=access_token, refresh_token=refresh_token,
+            client_id=str(client_id or ""),
+        )
+        LOGGER.error(
+            "[connection-hub.oauth] token withheld: caller write refused client=%s",
+            client_id,
         )
         return _token_error(
             "temporarily_unavailable",
