@@ -9,7 +9,10 @@ from typing import Any
 from connection_hub.authority_registry import CredentialEnvelope, DELEGATED_CLIENT_AUTHENTICATOR_ID
 from connection_hub.delegated_credentials.oauth.authority import DELEGATED_CLIENT_AUDIENCE, DELEGATED_CLIENT_CREDENTIAL_KIND
 from connection_hub.delegated_credentials.oauth.grants import ACCESS_TOKEN_TTL_SECONDS
-from kdcube_ai_app.auth.bundle.session_planned_issuance import PlannedIssuanceContext, TerminalIssuanceContext
+from connection_hub.delegated_credentials.oauth_issuance import OAuthIssuancePlan, OAuthIssuanceResult
+from kdcube_ai_app.auth.bundle.session_planned_issuance import (
+    AppliedIssuanceContext, PlannedIssuanceContext, TerminalIssuanceContext,
+)
 from kdcube_ai_app.infra.secrets.issuance import KDCubeIssuanceSecretCustody
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.original_exchange import (
     OriginalExchangeRefused, text,
@@ -101,20 +104,38 @@ class OriginalCredentialPairProvider:
             result=result, custody=self.custody, authority_factory=self.authority_factory)
 
     async def retire_pair(self, *, plan, result, access_expires_at):
-        # Attempt each original cleanup even if the other provider is unavailable.
-        error = None
+        if (type(plan) is not OAuthIssuancePlan or type(result) is not OAuthIssuanceResult
+                or set(plan.slots) != {"access", "refresh"} or set(result.per_slot) != set(plan.slots)
+                or (plan.tenant, plan.project) != (self.refresh.store.tenant, self.refresh.store.project)):
+            raise OriginalExchangeRefused("original_exchange_result_invalid")
+        # Validate the complete result before crossing either cleanup boundary.
+        # An applied slot is preserved; only the original terminal slot is
+        # eligible for retirement. No access activation occurs on this path.
+        contexts = {}
         for slot in ("access", "refresh"):
             context = PlannedIssuanceContext.from_oauth_plan(plan, slot=slot,
                 expires_at=access_expires_at if slot == "access" else plan.expires_at)
-            terminal = TerminalIssuanceContext.from_oauth_result(context, result)
+            contexts[slot] = (AppliedIssuanceContext.from_oauth_result(context, result)
+                if result.state == "committed" and result.per_slot[slot].outcome == "applied"
+                else TerminalIssuanceContext.from_oauth_result(context, result))
+        if not any(isinstance(value, TerminalIssuanceContext) for value in contexts.values()):
+            raise OriginalExchangeRefused("original_exchange_result_not_terminal")
+        # Attempt each original cleanup even if the other provider is unavailable.
+        error = None
+        for slot in ("access", "refresh"):
             try:
+                context = contexts[slot]
+                if isinstance(context, AppliedIssuanceContext):
+                    if slot == "refresh":
+                        await self.refresh.protect_applied(plan=plan, result=result)
+                    continue
                 if slot == "refresh":
-                    await self.refresh.retire(plan=plan, terminal=terminal)
+                    await self.refresh.retire(plan=plan, terminal=context)
                 else:
                     authority = self.authority_factory(tenant=plan.tenant, project=plan.project)
                     if (getattr(authority, "tenant", None), getattr(authority, "project", None)) != (plan.tenant, plan.project):
                         raise OriginalExchangeRefused("original_exchange_namespace_mismatch")
-                    await authority.retire_prepared_bound_session(terminal, custody=self.custody)
+                    await authority.retire_prepared_bound_session(context, custody=self.custody)
             except Exception as exc:
                 error = error or exc
         if error is not None:

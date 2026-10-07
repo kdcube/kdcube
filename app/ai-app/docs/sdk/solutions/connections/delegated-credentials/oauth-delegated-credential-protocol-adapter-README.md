@@ -190,8 +190,11 @@ refresh receipt. That protects the applied original against retirement; it
 records the Hub outcome, not recipient delivery. An authenticated aborted flow
 retires both original slots, committing their terminal metadata before purging
 the exact custody references. Each cleanup is attempted independently.
-Applied/superseded mixed-slot recovery still requires its own orchestration
-gate; this aborted-flow path does not qualify it.
+A committed result containing a superseded slot withholds the whole pair and
+retires only the superseded original. An applied refresh slot records its
+protection receipt; an applied access slot is preserved without activation or
+retirement on this path. The complete original result is checked before either
+cleanup, and a missing cleanup capability gives a finite unavailable response.
 
 Source tests exercise PostgreSQL metadata and synthetic signing/custody
 capabilities. Qualification of the configured secrets-file, host-vault or AWS

@@ -34,7 +34,8 @@ def rig(monkeypatch):
     now = int(time.time())
     r = SimpleNamespace(code="unit-original", verifier="x" * 48, consumes=0, prepares=0,
                         pair_reads=0, completions=0, activations=0, reserved=[], gets=0,
-                        fenced=True, lose_complete=False, outcome="pending", original=None, retired=0)
+                        fenced=True, lose_complete=False, outcome="pending", original=None, retired=0,
+                        slot_outcomes={})
     r.proof = CodeExchangeProof.from_request(tenant="unit-tenant", project="unit-project", code=r.code,
                                              client_id="unit-client", redirect_uri="https://unit.test/cb", verifier=r.verifier)
     r.payload = {"sub": "human", "client_id": "unit-client", "redirect_uri": "https://unit.test/cb",
@@ -95,7 +96,7 @@ def rig(monkeypatch):
                 access_id=r.plan.access_id, card_revision=r.plan.candidate_revision if r.outcome == "committed" else r.plan.base_revision,
                 expires_at=r.plan.expires_at, delivery_deadline=r.plan.delivery_deadline,
                 receipt_digest="f" * 64 if r.outcome == "committed" else "",
-                per_slot={slot: SlotOutcome("applied" if r.outcome == "committed" else "pending",
+                per_slot={slot: SlotOutcome(r.slot_outcomes.get(slot, "applied" if r.outcome == "committed" else "pending"),
                          r.plan.effect_digests[slot], r.receipts[slot].bearer_sha256 if r.outcome == "committed" else "")
                           for slot in r.plan.slots})
         async def reserve_oauth_issuance(self, **value):
@@ -126,7 +127,7 @@ def rig(monkeypatch):
             r.activations += 1
             return credential.receipt
         async def retire_pair(self, *, plan, result, access_expires_at):
-            assert plan == r.plan and result.state == "aborted"
+            assert plan == r.plan and result.state in {"aborted", "committed"}
             assert access_expires_at == r.original.access_expires_at
             r.retired += 1
     class Custody:
@@ -251,3 +252,24 @@ async def test_original_abort_result_retires_without_prepare_or_custody_read(rig
     response = await routes.token(rig.request)
     assert response.status_code == 400 and rig.retired == 1
     assert rig.prepares == rig.activations == rig.gets == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("already_committed", [True, False])
+async def test_original_mixed_committed_result_retires_without_publication(rig, already_committed):
+    rig.outcome = "committed" if already_committed else "pending"
+    rig.slot_outcomes = {"access": "applied", "refresh": "superseded"}
+    response = await routes.token(rig.request)
+    assert response.status_code == 400 and rig.retired == 1
+    assert rig.pair_reads == rig.activations == rig.gets == 0
+    assert rig.prepares == (0 if already_committed else 1)
+    assert b"unit-original-access" not in response.body and b"unit-original-refresh" not in response.body
+
+
+@pytest.mark.asyncio
+async def test_terminal_result_without_cleanup_capability_stays_retryable(rig):
+    rig.outcome = "aborted"
+    rig.provider.retire_pair = None
+    response = await routes.token(rig.request)
+    assert response.status_code == 503
+    assert rig.prepares == rig.pair_reads == rig.activations == rig.gets == 0

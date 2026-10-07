@@ -110,9 +110,35 @@ class OriginalCodeExchangeFlow:
                 raise OriginalExchangeRefused("original_exchange_result_mismatch")
         if result.state == "committed":
             hex_digest(result.receipt_digest)
-            if any(result.per_slot[slot].outcome != "applied" for slot in plan.slots):
-                raise OriginalExchangeRefused("original_exchange_result_not_applied")
+            for slot in plan.slots:
+                if result.per_slot[slot].outcome not in {"applied", "superseded"}:
+                    raise OriginalExchangeRefused("original_exchange_result_invalid")
+                hex_digest(result.per_slot[slot].token_sha256)
+        elif result.state == "aborted":
+            if result.receipt_digest != "":
+                raise OriginalExchangeRefused("original_exchange_result_invalid")
+            for slot in plan.slots:
+                outcome = result.per_slot[slot]
+                if outcome.outcome not in {"pending", "released"} or (
+                        outcome.outcome == "pending" and outcome.token_sha256 != ""):
+                    raise OriginalExchangeRefused("original_exchange_result_invalid")
+                if outcome.token_sha256:
+                    hex_digest(outcome.token_sha256)
         return result
+
+    async def _refuse_terminal_pair(self, plan, result, expiry):
+        aborted = result.state == "aborted"
+        superseded = result.state == "committed" and any(
+            result.per_slot[slot].outcome == "superseded" for slot in plan.slots)
+        if not aborted and not superseded:
+            return
+        retire = getattr(self.provider, "retire_pair", None)
+        if not callable(retire):
+            # A missing cleanup capability is unavailable, not a completed
+            # retirement. Retrying the original never selects another issuer.
+            raise OriginalExchangePending()
+        await retire(plan=plan, result=result, access_expires_at=expiry)
+        raise OriginalExchangeRefused("original_exchange_aborted" if aborted else "original_exchange_superseded")
 
     @staticmethod
     def _pair(plan: OAuthIssuancePlan, expiry: int, pair: Any) -> Mapping[str, PreparedOriginalCredential]:
@@ -175,11 +201,7 @@ class OriginalCodeExchangeFlow:
         if type(expiry) is not int:
             raise OriginalExchangeRefused("original_exchange_access_expiry_unknown")
         result = self._result(plan, await self.hub.read_oauth_issuance(transaction_id=plan.transaction_id))
-        if result.state == "aborted":
-            retire = getattr(self.provider, "retire_pair", None)
-            if callable(retire):
-                await retire(plan=plan, result=result, access_expires_at=expiry)
-            raise OriginalExchangeRefused("original_exchange_aborted")
+        await self._refuse_terminal_pair(plan, result, expiry)
         if result.state == "committed":
             pair = self._pair(plan, expiry, await self.provider.read_pair(plan=plan, access_expires_at=expiry))
         else:
@@ -202,10 +224,8 @@ class OriginalCodeExchangeFlow:
                 ))
         if result.state == "pending":
             raise OriginalExchangePending()
+        await self._refuse_terminal_pair(plan, result, expiry)
         if result.state != "committed":
-            retire = getattr(self.provider, "retire_pair", None)
-            if result.state == "aborted" and callable(retire):
-                await retire(plan=plan, result=result, access_expires_at=expiry)
             raise OriginalExchangeRefused("original_exchange_aborted")
         for slot in plan.slots:
             if not hmac.compare_digest(result.per_slot[slot].token_sha256, pair[slot].receipt.bearer_sha256):
