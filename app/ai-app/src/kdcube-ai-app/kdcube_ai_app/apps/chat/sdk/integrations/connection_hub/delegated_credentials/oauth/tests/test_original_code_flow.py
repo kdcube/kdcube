@@ -228,6 +228,42 @@ async def test_target_moved_before_prepare_refuses_without_any_bearer(rig):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["grantor_subject", "client_id", "original_request_id"])
+async def test_candidate_inputs_must_bind_consumed_payload_before_begin(rig, field):
+    begins = []
+    async def candidates(*, payload):
+        return {**rig.inputs, field: "other"}
+    async def forbidden_begin(binding):
+        begins.append(binding)
+        raise OriginalExchangeRefused("original_exchange_binding_invalid")
+    rig.flow.candidate_inputs = candidates
+    rig.ledger.begin = forbidden_begin
+    with pytest.raises(OriginalExchangeRefused, match="^original_exchange_binding_invalid$"):
+        await rig.flow.exchange(proof=rig.proof, code=rig.code)
+    assert rig.original is None
+    assert not begins
+    assert rig.prepares == rig.completions == rig.activations == rig.gets == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changed", ["target", "ledger"])
+async def test_completed_original_is_refenced_before_access_activation(rig, changed):
+    complete = rig.hub.complete_oauth_issuance
+    async def moved(**kwargs):
+        result = await complete(**kwargs)
+        if changed == "target":
+            rig.fenced = False
+        else:
+            rig.original = replace(rig.original, access_expires_at=rig.original.access_expires_at - 1)
+        return result
+    rig.hub.complete_oauth_issuance = moved
+    response = await routes.token(rig.request)
+    assert response.status_code == 400
+    assert rig.prepares == rig.completions == 1
+    assert rig.activations == rig.gets == 0
+
+
+@pytest.mark.asyncio
 async def test_missing_original_custody_never_authorizes_replacement(rig):
     assert (await routes.token(rig.request)).status_code == 200
     rig.bearers["refresh"] = ""

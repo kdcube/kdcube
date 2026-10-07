@@ -99,6 +99,25 @@ async def test_original_refresh_read_only_recovery_uses_no_key_or_custody(store,
 
 
 @pytest.mark.asyncio
+async def test_read_only_refresh_with_hash_but_reserved_state_is_unsealed(refresh):
+    original = await refresh.db.reserve(plan=refresh.plan, card_kind="automation", ttl_seconds=180 * 86400)
+    original = await refresh.db.seal(original, "a" * 64)
+    assert original.state == "reserved" and original.bearer_sha256 is not None
+    with pytest.raises(OriginalExchangeRefused, match="^original_refresh_unsealed$"):
+        await refresh.issuer.read(plan=refresh.plan)
+    assert refresh.signs == refresh.creates == 0
+
+
+@pytest.mark.asyncio
+async def test_existing_refresh_custody_value_must_match_sealed_original_digest(refresh):
+    first = await refresh.issuer.prepare(plan=refresh.plan)
+    refresh.values[first.secret_ref] = "different-synthetic-refresh"
+    with pytest.raises(OriginalExchangeRefused, match="^original_refresh_custody_mismatch$"):
+        await refresh.issuer.prepare(plan=refresh.plan)
+    assert refresh.signs == refresh.creates == 1
+
+
+@pytest.mark.asyncio
 async def test_original_refresh_resume_after_metadata_reservation_uses_first_claims(refresh):
     first = await refresh.db.reserve(plan=refresh.plan, card_kind="automation", ttl_seconds=180 * 86400)
     prepared = await refresh.issuer.prepare(plan=refresh.plan)
