@@ -13,7 +13,7 @@ import hashlib
 from dataclasses import asdict, dataclass
 
 from kdcube_ai_app.auth.bundle.session_issuance import (
-    SessionIssuanceRefused, _canonical, _digest, _text,
+    SessionIssuanceReceipt, SessionIssuanceRefused, _canonical, _digest, _text,
 )
 
 
@@ -243,3 +243,11 @@ class TerminalIssuanceReceipt:
     """Public retirement coordinates, not a physical provider-erasure proof."""
     identity: str
     secret_ref: str | None
+
+
+@dataclass(frozen=True)
+class PreparedSessionSnapshot:
+    """Read-only original receipt and signing time; contains no bearer."""
+    context: PlannedIssuanceContext
+    receipt: SessionIssuanceReceipt
+    issued_at: int

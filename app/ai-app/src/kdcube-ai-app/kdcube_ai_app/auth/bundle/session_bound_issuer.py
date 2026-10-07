@@ -60,6 +60,17 @@ async def _signed(sign: Callable[[Mapping[str, Any]], Awaitable[str]], claims: M
         raise SessionIssuanceRefused("issuance_signing_unavailable") from None
 
 
+def _inputs_digest(bound: Any, *, user_id: str, roles: Sequence[str],
+                   permissions: Sequence[str]) -> str:
+    """One canonical input contract for preparation and read-only recovery."""
+    if not _valid_text(user_id, maximum_bytes=1024):
+        raise SessionIssuanceRefused("issuance_user_invalid")
+    return hashlib.sha256(json.dumps({
+        "context": bound.to_record(), "user_id": user_id,
+        "roles": _authority_values(roles), "permissions": _authority_values(permissions),
+    }, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")).hexdigest()
+
+
 async def _custody_call(call: Callable[..., Awaitable[Any]], **kwargs: Any) -> Any:
     try:
         return await call(**kwargs)
@@ -103,10 +114,8 @@ async def _prepare_bound_session(
         raise SessionIssuanceRefused("issuance_user_invalid")
     granted_roles = _authority_values(roles)
     granted_permissions = _authority_values(permissions)
-    fingerprint = hashlib.sha256(json.dumps({
-        "context": bound.to_record(), "user_id": user_id,
-        "roles": granted_roles, "permissions": granted_permissions,
-    }, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")).hexdigest()
+    fingerprint = _inputs_digest(bound, user_id=user_id, roles=granted_roles,
+                                 permissions=granted_permissions)
     if (store is None or not all(callable(getattr(store, name, None)) for name in
             ("read_issuance", "reserve_issuance", "activate_reserved", "get_login_state"))):
         raise SessionIssuanceRefused("issuance_store_unavailable")

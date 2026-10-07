@@ -126,6 +126,16 @@ recovery, configured encrypted-provider qualification, and installed/live
 acceptance remain open; transport selection alone proves none of them.
 Ordinary human login and the existing delegated minter are unchanged.
 
+`read_prepared_delegated_client_access_token` recovers the existing original
+access receipt and signing time through the public session authority's
+`read_prepared_bound_session`. That reader has no signing or custody dependency
+and uses only a stored issuance lookup. It checks the complete original plan,
+canonical user/role/permission inputs, delivery/access expiry and stored signing
+time. Missing, malformed, terminal or mismatched originals refuse without
+preparation, user changes or repair. A committed replay may read after the
+preparation-reservation deadline, within the original delivery/access deadline;
+the activation and publication fences remain separate.
+
 `OriginalCodeExchangeFlow` provides the host composition's code-to-pair
 orchestration. It consumes a validated code once, captures the canonical
 candidate-input digest, and asks Hub to begin the original request. Its

@@ -21,7 +21,9 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentia
 )
 from kdcube_ai_app.auth.bundle import get_bundle_session_authority
 from kdcube_ai_app.auth.bundle.session_issuance import SessionIssuanceReceipt, SessionIssuanceRefused
-from kdcube_ai_app.auth.bundle.session_planned_issuance import AppliedIssuanceContext, PlannedIssuanceContext
+from kdcube_ai_app.auth.bundle.session_planned_issuance import (
+    AppliedIssuanceContext, PlannedIssuanceContext, PreparedSessionSnapshot,
+)
 
 
 def oauth_tenant_project(source: Any | None = None) -> tuple[str, str]:
@@ -163,6 +165,42 @@ async def activate_prepared_delegated_client_access_token(
     return activated
 
 
+async def read_prepared_delegated_client_access_token(
+    *, plan: object, expires_at: int, authority: Any = None,
+    authority_factory: SessionAuthorityFactory | None = None,
+) -> PreparedSessionSnapshot:
+    """Read the original access receipt/time without preparation or secret I/O."""
+    try:
+        from connection_hub.delegated_credentials.oauth_issuance import OAuthIssuancePlan
+    except ImportError:
+        raise SessionIssuanceRefused("issuance_plan_api_unavailable") from None
+    if type(plan) is not OAuthIssuancePlan:
+        raise SessionIssuanceRefused("issuance_context_invalid")
+    bound = _access_context(PlannedIssuanceContext.from_oauth_plan(plan, slot="access", expires_at=expires_at))
+    try:
+        if (not isinstance(plan.resource_grants, Mapping)
+                or any(type(key) is not str or not key for key in plan.resource_grants)
+                or any(not isinstance(items, (tuple, list)) for items in plan.resource_grants.values())
+                or any(type(scope) is not str or not scope or scope != scope.strip()
+                       for items in plan.resource_grants.values() for scope in items)):
+            raise ValueError
+        permissions = sorted({scope for items in plan.resource_grants.values() for scope in items})
+    except (TypeError, ValueError):
+        raise SessionIssuanceRefused("issuance_authority_invalid") from None
+    resolved = _planned_authority(bound, authority=authority, authority_factory=authority_factory)
+    reader = getattr(resolved, "read_prepared_bound_session", None)
+    if not callable(reader):
+        raise SessionIssuanceRefused("issuance_store_unavailable")
+    snapshot = await reader(bound, user_id=bound.credential_subject,
+                            roles=[DELEGATED_CLIENT_ROLE], permissions=permissions)
+    if (type(snapshot) is not PreparedSessionSnapshot or snapshot.context != bound
+            or type(snapshot.receipt) is not SessionIssuanceReceipt
+            or type(snapshot.issued_at) is not int or not 0 < snapshot.issued_at < bound.expires_at):
+        raise SessionIssuanceRefused("session_issuance_result_invalid")
+    snapshot.receipt.validated()
+    return snapshot
+
+
 __all__ = [
     "ACCESS_TOKEN_TTL_SECONDS",
     "DELEGATED_CLIENT_ROLE",
@@ -172,5 +210,6 @@ __all__ = [
     "PreparedDelegatedClientAccess",
     "prepare_delegated_client_access_token",
     "activate_prepared_delegated_client_access_token",
+    "read_prepared_delegated_client_access_token",
     "oauth_tenant_project",
 ]
