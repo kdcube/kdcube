@@ -20,7 +20,7 @@ import json
 import logging
 import uuid
 from collections import defaultdict
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -31,6 +31,10 @@ from kdcube_ai_app.apps.chat.sdk.context.vector.conv_cold import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _unguarded() -> Any:
+    return nullcontext()
 
 DEFAULT_HOT_DAYS = 90
 ARCHIVE_BATCH_SIZE = 500
@@ -108,6 +112,27 @@ def conversation_index_rows(batch_id: str, records: Sequence[Dict[str, Any]]) ->
     return rows
 
 
+class ConversationDeleteUnavailable(RuntimeError):
+    """A deletion that cannot run now and changed nothing; it is safe to retry (HTTP 503)."""
+
+    code = "conversation_delete_unavailable"
+    retry_after_s = 5
+
+    def __init__(self, message: str, *, code: Optional[str] = None) -> None:
+        super().__init__(message)
+        if code:
+            self.code = code
+
+
+class ConversationDeleteBusy(ConversationDeleteUnavailable):
+    """The retention lock stayed held for the deletion's whole wait."""
+
+    code = "conversation_delete_busy"
+
+
+DELETE_LOCK_WAIT_S = 30.0
+
+
 class ConversationRetention:
     """Archive, read and delete across the hot index and the cold tier."""
 
@@ -117,18 +142,48 @@ class ConversationRetention:
         self.archive = archive
         self.store = store
 
-    @asynccontextmanager
-    async def _exclusive(self):
-        """Hold this schema's retention lock: archive runs and deletions never interleave.
-
-        A PostgreSQL session advisory lock, so it holds across processes. A
-        waiter polls and holds no pool connection while it waits, so waiters
-        cannot starve the holder of the connections it needs to finish.
-        """
-
-        key = int.from_bytes(
+    def _lock_key(self) -> int:
+        return int.from_bytes(
             hashlib.sha256(f"kdcube.conv_retention:{self.schema}".encode()).digest()[:8], "big", signed=True
         )
+
+    @asynccontextmanager
+    async def _exclusive(self, *, wait_s: Optional[float] = None):
+        """Hold this schema's retention lock: archive steps and deletions never interleave.
+
+        A PostgreSQL session advisory lock, so it holds across processes.
+        Archive runs take it once per batch and wait for it by polling
+        `pg_try_advisory_lock`, holding no pool connection meanwhile. A
+        deletion (`wait_s` set) queues for it in PostgreSQL with
+        `pg_advisory_lock` under `lock_timeout`; a try fails while a request
+        is queued, so a running archive yields to the deletion at its next
+        batch boundary. A deletion therefore waits at most one batch, and
+        raises `ConversationDeleteBusy` after `wait_s` seconds.
+
+        Pool size: the holder keeps one connection for the lock's session and
+        needs another for its work, so the pool needs at least 2 connections,
+        plus one for each deletion queued meanwhile.
+        """
+
+        key = self._lock_key()
+        if wait_s is not None:
+            async with self._pool.acquire() as con:
+                await con.fetchval("SELECT set_config('lock_timeout', $1, false)", f"{max(1, int(wait_s * 1000))}ms")
+                try:
+                    await con.fetchval("SELECT pg_advisory_lock($1)", key)
+                except Exception as exc:
+                    if getattr(exc, "sqlstate", None) == "55P03":  # lock_not_available
+                        raise ConversationDeleteBusy(
+                            f"an archive step or another deletion held the retention lock for {wait_s:g}s"
+                        ) from exc
+                    raise
+                finally:
+                    await con.execute("RESET lock_timeout")
+                try:
+                    yield
+                finally:
+                    await con.fetchval("SELECT pg_advisory_unlock($1)", key)
+            return
         delay = 0.05
         while True:
             async with self._pool.acquire() as con:
@@ -154,69 +209,76 @@ class ConversationRetention:
         A resumed batch that fails its readback stays 'written' with its
         error recorded and is reported in "stuck_batches"; its hot rows stay
         hot and are left out of new batches, and the run goes on.
-        Holds the retention lock, so no deletion runs meanwhile.
+        Each batch is one step under the retention lock (see `_exclusive`):
+        the lock is taken, one batch is selected, written, verified and
+        pruned, and the lock is released, so a deletion waits at most one
+        batch. A deletion between batches commits before the next selection,
+        and one that finds a batch left written or verified settles it first.
         """
 
-        async with self._exclusive():
-            return await self._archive_before_locked(cutoff, batch_size=batch_size, max_batches=max_batches)
-
-    async def _archive_before_locked(
-        self,
-        cutoff: datetime,
-        *,
-        batch_size: int = ARCHIVE_BATCH_SIZE,
-        max_batches: Optional[int] = None,
-    ) -> Dict[str, Any]:
         summary: Dict[str, Any] = {"resumed": 0, "stuck": 0, "batches": 0, "rows": 0, "indexed": 0, "relaid": 0}
-        summary["resumed"], summary["stuck_batches"] = await self._resume_unfinished()
+        summary["resumed"], summary["stuck_batches"] = await self._resume_unfinished(guard=self._exclusive)
         summary["stuck"] = len(summary["stuck_batches"])
-        summary["indexed"] = await self._index_unindexed_batches()
+        summary["indexed"] = await self._index_unindexed_batches(guard=self._exclusive)
         # Moving legacy parts counts toward the same budget as archiving.
-        summary["relaid"] = await self._relayout_legacy_batches(limit=max_batches)
+        summary["relaid"] = await self._relayout_legacy_batches(limit=max_batches, guard=self._exclusive)
         while max_batches is None or summary["batches"] + summary["relaid"] < max_batches:
-            async with self._pool.acquire() as con:
-                rows = await con.fetch(
-                    f"SELECT {_ROW_COLUMNS} FROM {self.schema}.conv_messages "
-                    f"WHERE ts < $1 AND NOT EXISTS ("
-                    # rows of an unconfirmed (stuck) batch stay hot until it is resolved
-                    f"SELECT 1 FROM {self.schema}.conv_archive_batches b "
-                    f"JOIN {self.schema}.conv_archive_conversations c ON c.batch_id = b.batch_id "
-                    f"WHERE b.state IN ('written', 'verified') "
-                    f"AND conv_messages.id BETWEEN b.min_id AND b.max_id "
-                    f"AND (conv_messages.ts AT TIME ZONE 'UTC')::date = b.day "
-                    f"AND c.user_id = conv_messages.user_id AND c.conversation_id = conv_messages.conversation_id) "
-                    f"ORDER BY ts, id LIMIT $2",
-                    cutoff,
-                    max(1, int(batch_size)),
-                )
-                if not rows:
-                    break
-                ids = [int(r["id"]) for r in rows]
-                edges = await con.fetch(
-                    f"SELECT from_id, to_id, policy, created_at FROM {self.schema}.conv_artifact_edges "
-                    f"WHERE from_id = ANY($1::bigint[]) OR to_id = ANY($1::bigint[])",
-                    ids,
-                )
-            edges_by_id: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
-            for edge in edges:
-                as_dict = _edge_dict(edge)
-                edges_by_id[int(edge["from_id"])].append(as_dict)
-                if int(edge["to_id"]) != int(edge["from_id"]):
-                    edges_by_id[int(edge["to_id"])].append(as_dict)
-            # One part per user, conversation and UTC day: users and
-            # conversations have no bound, so a part never mixes them.
-            groups: Dict[Tuple[str, str, date], List[Dict[str, Any]]] = defaultdict(list)
-            for row in rows:
-                record = row_to_record(dict(row), edges=edges_by_id.get(int(row["id"]), ()))
-                groups[(str(record.get("user_id") or ""), str(record.get("conversation_id") or ""), _utc_day(row["ts"]))].append(record)
-            for key in sorted(groups, key=lambda k: (k[2], k[0], k[1])):
-                if max_batches is not None and summary["batches"] + summary["relaid"] >= max_batches:
-                    return summary  # the rest stays hot for the next run
-                day, records = key[2], groups[key]
-                await self._archive_batch(day, records)
-                summary["batches"] += 1
-                summary["rows"] += len(records)
+            async with self._exclusive():
+                rows = await self._archive_next_batch(cutoff, batch_size)
+            if not rows:
+                break
+            summary["batches"] += 1
+            summary["rows"] += rows
         return summary
+
+    def _not_stuck(self, alias: str) -> str:
+        # rows of an unconfirmed (stuck) batch stay hot until it is resolved
+        return (
+            f"NOT EXISTS (SELECT 1 FROM {self.schema}.conv_archive_batches b "
+            f"JOIN {self.schema}.conv_archive_conversations c ON c.batch_id = b.batch_id "
+            f"WHERE b.state IN ('written', 'verified') "
+            f"AND {alias}.id BETWEEN b.min_id AND b.max_id "
+            f"AND ({alias}.ts AT TIME ZONE 'UTC')::date = b.day "
+            f"AND c.user_id = {alias}.user_id AND c.conversation_id = {alias}.conversation_id)"
+        )
+
+    async def _archive_next_batch(self, cutoff: datetime, batch_size: int) -> int:
+        """Archive one batch: up to batch_size rows of the oldest archivable row's user, conversation and UTC day.
+
+        One part per user, conversation and UTC day: users and conversations
+        have no bound, so a part never mixes them. Returns its row count (0
+        when nothing is left to archive).
+        """
+
+        async with self._pool.acquire() as con:
+            rows = await con.fetch(
+                f"SELECT {_ROW_COLUMNS} FROM {self.schema}.conv_messages "
+                f"WHERE ts < $1 AND {self._not_stuck('conv_messages')} "
+                f"AND (user_id, conversation_id, (ts AT TIME ZONE 'UTC')::date) = ("
+                f"SELECT m.user_id, m.conversation_id, (m.ts AT TIME ZONE 'UTC')::date "
+                f"FROM {self.schema}.conv_messages m WHERE m.ts < $1 AND {self._not_stuck('m')} "
+                f"ORDER BY m.ts, m.id LIMIT 1) "
+                f"ORDER BY ts, id LIMIT $2",
+                cutoff,
+                max(1, int(batch_size)),
+            )
+            if not rows:
+                return 0
+            ids = [int(r["id"]) for r in rows]
+            edges = await con.fetch(
+                f"SELECT from_id, to_id, policy, created_at FROM {self.schema}.conv_artifact_edges "
+                f"WHERE from_id = ANY($1::bigint[]) OR to_id = ANY($1::bigint[])",
+                ids,
+            )
+        edges_by_id: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+        for edge in edges:
+            as_dict = _edge_dict(edge)
+            edges_by_id[int(edge["from_id"])].append(as_dict)
+            if int(edge["to_id"]) != int(edge["from_id"]):
+                edges_by_id[int(edge["to_id"])].append(as_dict)
+        records = [row_to_record(dict(row), edges=edges_by_id.get(int(row["id"]), ())) for row in rows]
+        await self._archive_batch(_utc_day(rows[0]["ts"]), records)
+        return len(records)
 
     async def _archive_batch(self, day: date, records: Sequence[Dict[str, Any]]) -> None:
         ids = [int(r["id"]) for r in records]
@@ -262,8 +324,18 @@ class ConversationRetention:
                 rows,
             )
 
-    async def _index_unindexed_batches(self) -> int:
-        """Index live batches archived before the conversation index (or its per-start expiry) existed."""
+    async def _batch_state(self, batch_id: str) -> Tuple[Optional[str], Optional[str]]:
+        async with self._pool.acquire() as con:
+            row = await con.fetchrow(
+                f"SELECT state, part_key FROM {self.schema}.conv_archive_batches WHERE batch_id = $1", batch_id
+            )
+        return (row["state"], row["part_key"]) if row else (None, None)
+
+    async def _index_unindexed_batches(self, *, guard: Any = _unguarded) -> int:
+        """Index live batches archived before the conversation index (or its per-start expiry) existed.
+
+        Each batch is one `guard` step; one a deletion changed meanwhile is left alone.
+        """
 
         async with self._pool.acquire() as con:
             pending = await con.fetch(
@@ -275,13 +347,18 @@ class ConversationRetention:
                  ORDER BY b.day, b.batch_id
                 """
             )
+        indexed = 0
         for row in pending:
-            manifest = await self.archive.read_manifest(row["manifest_key"])
-            records = await self.archive.read_part(manifest)
-            async with self._pool.acquire() as con:
-                async with con.transaction():
-                    await self._index_batch(con, row["batch_id"], records)
-        return len(pending)
+            async with guard():
+                if (await self._batch_state(row["batch_id"]))[0] != "pruned":
+                    continue
+                manifest = await self.archive.read_manifest(row["manifest_key"])
+                records = await self.archive.read_part(manifest)
+                async with self._pool.acquire() as con:
+                    async with con.transaction():
+                        await self._index_batch(con, row["batch_id"], records)
+                indexed += 1
+        return indexed
 
     async def _verify_and_prune(self, manifest_key: str, batch_id: str) -> None:
         manifest = await self.archive.read_manifest(manifest_key)
@@ -311,12 +388,13 @@ class ConversationRetention:
                     batch_id,
                 )
 
-    async def _resume_unfinished(self) -> Tuple[int, List[str]]:
+    async def _resume_unfinished(self, *, guard: Any = _unguarded) -> Tuple[int, List[str]]:
         """Finish batches left 'written'/'verified'; returns (finished, stuck batch ids).
 
         Each batch is isolated: one whose readback fails keeps its state, gets
         the error recorded on its ledger row, and does not stop the others.
-        Nothing is deleted for it, so its rows stay hot.
+        Nothing is deleted for it, so its rows stay hot. Each batch is one
+        `guard` step; one a deletion settled meanwhile is skipped.
         """
 
         async with self._pool.acquire() as con:
@@ -325,18 +403,23 @@ class ConversationRetention:
                 f"WHERE state IN ('written', 'verified') ORDER BY day, batch_id"
             )
         stuck: List[str] = []
+        finished = 0
         for row in pending:
-            try:
-                await self._verify_and_prune(row["manifest_key"], row["batch_id"])
-            except Exception as exc:
-                logger.warning("[conversation-archive] stuck batch %s: %s", row["batch_id"], str(exc)[:200])
-                async with self._pool.acquire() as con:
-                    await con.execute(
-                        f"UPDATE {self.schema}.conv_archive_batches SET error = $2, updated_at = now() WHERE batch_id = $1",
-                        row["batch_id"], str(exc)[:500],
-                    )
-                stuck.append(str(row["batch_id"]))
-        return len(pending) - len(stuck), stuck
+            async with guard():
+                if (await self._batch_state(row["batch_id"]))[0] not in ("written", "verified"):
+                    continue
+                try:
+                    await self._verify_and_prune(row["manifest_key"], row["batch_id"])
+                    finished += 1
+                except Exception as exc:
+                    logger.warning("[conversation-archive] stuck batch %s: %s", row["batch_id"], str(exc)[:200])
+                    async with self._pool.acquire() as con:
+                        await con.execute(
+                            f"UPDATE {self.schema}.conv_archive_batches SET error = $2, updated_at = now() WHERE batch_id = $1",
+                            row["batch_id"], str(exc)[:500],
+                        )
+                    stuck.append(str(row["batch_id"]))
+        return finished, stuck
 
     async def watermark(self) -> Optional[datetime]:
         """The newest archived message time; reads older than it may need the cold tier."""
@@ -532,6 +615,7 @@ class ConversationRetention:
         bundle_ids: Optional[Sequence[str]] = None,
         tags_all: Optional[Sequence[str]] = None,
         reason: str = "",
+        lock_wait_s: float = DELETE_LOCK_WAIT_S,
     ) -> Dict[str, Any]:
         """Delete a scope of messages from the hot index, the cold tier and both tiers' bodies.
 
@@ -541,15 +625,18 @@ class ConversationRetention:
         `bundle_ids` (used when `bundle_id` is not given) limits the scope to
         those bundles; an empty list matches nothing.
 
-        Holds the retention lock, so no archive run interleaves. Batches of
-        the conversation that an earlier run left unfinished are finished
-        first, or retired when their readback fails (all their rows are
-        still hot), so the next run cannot bring the deleted rows back.
+        Holds the retention lock, so no archive step interleaves; a running
+        archive yields it at its next batch boundary. When the lock is not
+        free within `lock_wait_s` seconds, raises `ConversationDeleteBusy`
+        before anything is recorded or deleted. Batches of the conversation
+        that an earlier run left unfinished are finished first, or retired
+        when their readback fails (all their rows are still hot), so the next
+        run cannot bring the deleted rows back.
         """
 
         if not actor or not user_id or not conversation_id:
             raise ValueError("delete_messages needs actor, user_id and conversation_id")
-        async with self._exclusive():
+        async with self._exclusive(wait_s=lock_wait_s):
             return await self._delete_messages_locked(
                 actor=actor, user_id=user_id, conversation_id=conversation_id, bundle_id=bundle_id,
                 bundle_ids=bundle_ids, tags_all=tags_all, reason=reason,
@@ -645,6 +732,8 @@ class ConversationRetention:
         every row it holds is still hot, and the deletion removes the scope's
         rows there; the rest are archived again by the next run. Its ledger
         row names the deletion. Nothing an unfinished batch holds can come back.
+        Files that cannot be removed once the row is retired are logged as an
+        error with the batch id and both keys, for an orphan sweep.
         """
 
         async with self._pool.acquire() as con:
@@ -679,8 +768,16 @@ class ConversationRetention:
                             f"DELETE FROM {self.schema}.conv_archive_conversations WHERE batch_id = $1", row["batch_id"]
                         )
             if retired is not None:
-                await self.archive.delete_batch(row["part_key"], row["manifest_key"])
                 settled["retired"] += 1
+                try:
+                    await self.archive.delete_batch(row["part_key"], row["manifest_key"])
+                except Exception as exc:
+                    # The ledger no longer names these files: only an orphan sweep finds them.
+                    logger.error(
+                        "[conversation-archive] retired batch %s (deletion %s) left its files: "
+                        "part_key=%s manifest_key=%s: %s",
+                        row["batch_id"], deletion_id, row["part_key"], row["manifest_key"], str(exc)[:200],
+                    )
         return settled
 
     async def _delete_bodies(self, uris: Any) -> int:
@@ -765,7 +862,7 @@ class ConversationRetention:
             })
         return plan, uris
 
-    async def _relayout_legacy_batches(self, *, limit: Optional[int] = None) -> int:
+    async def _relayout_legacy_batches(self, *, limit: Optional[int] = None, guard: Any = _unguarded) -> int:
         """Move parts written in the legacy day-only layout to the user/conversation layout.
 
         Each legacy part is read and verified, rewritten as one verified part
@@ -773,8 +870,8 @@ class ConversationRetention:
         records the new parts; then its files are removed. A run that stops
         anywhere leaves the ledger consistent: the old part is live until the
         new ones are recorded. A part that a deletion or another run rewrote
-        meanwhile is left to that run. At most `limit` parts move per call.
-        Returns how many legacy parts moved.
+        meanwhile is left to that run. At most `limit` parts move per call,
+        each as one `guard` step. Returns how many legacy parts moved.
         """
 
         if limit is not None and limit <= 0:
@@ -787,20 +884,23 @@ class ConversationRetention:
             )
         moved = 0
         for batch in legacy:
-            manifest = await self.archive.read_manifest(batch["manifest_key"])
-            records = await self.archive.read_part(manifest)
-            try:
-                await self._apply_cold_deletion([{
-                    "day": batch["day"],
-                    "batch_id": batch["batch_id"],
-                    "part_key": batch["part_key"],
-                    "manifest_key": batch["manifest_key"],
-                    "records": records,
-                    "matching_ids": set(),
-                }])
-            except _BatchChanged:
-                continue
-            moved += 1
+            async with guard():
+                if await self._batch_state(batch["batch_id"]) != ("pruned", batch["part_key"]):
+                    continue  # a deletion rewrote or retired it meanwhile
+                manifest = await self.archive.read_manifest(batch["manifest_key"])
+                records = await self.archive.read_part(manifest)
+                try:
+                    await self._apply_cold_deletion([{
+                        "day": batch["day"],
+                        "batch_id": batch["batch_id"],
+                        "part_key": batch["part_key"],
+                        "manifest_key": batch["manifest_key"],
+                        "records": records,
+                        "matching_ids": set(),
+                    }])
+                except _BatchChanged:
+                    continue
+                moved += 1
         return moved
 
     async def _apply_cold_deletion(self, plan: Sequence[Dict[str, Any]]) -> int:
