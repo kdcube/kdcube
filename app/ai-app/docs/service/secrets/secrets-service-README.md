@@ -306,8 +306,11 @@ Provisioning and diagnostics must address the database's actual effective
 privileges rather than weakening this guard.
 
 After an access refusal, a best-effort catalog query may emit one warning
-`runtime_secret_metadata_outside_relation` naming only the first offending
-schema and table. Identifiers are length-bounded and JSON-escaped to one line;
+`runtime_secret_metadata_outside_relation` naming only an outside schema and
+table the role can access, which is one of the possible refusal reasons. The
+warning does not identify the exclusive cause: role attributes, memberships or
+ownership can also fail the access predicate. Identifiers are length-bounded
+and JSON-escaped to one line;
 no record values, DSN, key, secret reference, driver exception or traceback is
 logged. The diagnostic query has a 250 ms timeout and returns at most one
 relation. Diagnostic failure cannot replace the fixed public refusal or grant
