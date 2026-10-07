@@ -152,17 +152,39 @@ Read authorization and a live active metadata record must precede a pinned
 value fetch, followed by a state/deadline/pin recheck before returning it.
 Retirement and its cleanup jobs commit in one transaction. Late create
 acknowledgements cannot resurrect a terminal reference; their exact full ARNs
-become cleanup work, including a different incarnation of the cloud name.
+become cleanup work. Once positively pinned, a different full ARN cannot
+replace that pin or become deletion authority for this single-dispatch lane.
 Cleanup settlement compares the incarnation, full pins and unexpired claim
 token; a stale worker cannot settle a newer claim.
 
+The value commitment is HMAC-SHA256 using a persistent service-held key of
+at least 32 bytes. No key is stored in these PostgreSQL tables or derived
+from public coordinates. This prevents metadata-only readers from checking
+low-entropy value guesses against a plain hash; the opaque-value contract
+does not require callers to supply high-entropy strings. Missing/invalid
+keys refuse. Service restart must retain the same protected key; changing
+it makes original commitment verification fail closed, not mint or replace
+the original. Secure key provisioning, preservation and any reviewed key
+migration are trusted startup/deployment dependencies still to be wired.
+
 The migrator installs a terminal-state guard trigger. Even the service's DML
-role cannot change a terminal record back to reserved or active; publication
-also requires a reserved-state UPDATE precondition.
+role cannot change a terminal record back to reserved or active, reset an
+unknown/observed dispatch to unstarted, or promote pre-ledger attempts into
+single-dispatch evidence. Publication also requires a reserved-state UPDATE
+precondition.
 
 `RuntimeAwsStore` adds asynchronous cloud operations over these coordinates.
-An identical create collision returns False; recovery can complete the same
-reserved creation token but cannot choose another incarnation or deadline.
+Every existing-reference create collision returns False without another
+CreateSecret call. Recovery reads the same reserved creation version and can
+publish its verified original, but cannot choose another incarnation or
+deadline. The reservation owner commits an unstarted-to-unknown dispatch
+fence before the only cloud CreateSecret call. Its actual SDK client must
+have `total_max_attempts=1`; the trusted `RuntimeAwsClientFactory` supplies
+that configuration. An unknown attempt is never rearmed, even after timeout,
+process loss or a negative resource lookup. This inference relies on the
+single-dispatch fence and the SDK's no-retry contract, not on the creation
+token alone. See [CreateSecret](https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_CreateSecret.html)
+and [botocore retry configuration](https://docs.aws.amazon.com/botocore/latest/reference/config.html).
 Active reads send the pinned full ARN and explicit original VersionId, verify
 the value commitment, then recheck metadata before returning the value.
 Omitting VersionId would select the current cloud version rather than prove
@@ -180,14 +202,40 @@ job endpoint. It deletes only a full ARN from a durable claim. An accepted
 delete advances to a separate full-ARN confirmation phase. Name lookup is
 restricted to unresolved-creation discovery with the original VersionId;
 it never authorizes deletion by name. Cloud exception text is not exposed.
+If a delete response is lost and the pinned ARN is later absent, a separate
+confirmation is still required. `confirm_pending` is neither a delete ACK
+nor physical completion; `reconciled` closes discovery only, not deletion.
+
+An unstarted reservation retired before dispatch needs no cloud discovery
+job and cannot later acquire dispatch rights. A positively acknowledged or
+recovered sole dispatch is observed; its known ARN can be deleted and
+confirmed without permanent discovery work. A truly unknown attempt remains
+durable: absence cannot close it because that one request may still commit.
+This includes a process lost between committing the dispatch fence and
+sending its request. Such an attempt can remain unresolved indefinitely;
+the service does not mint a replacement or claim successful recovery.
+
+Cleanup retries use database-clock exponential backoff capped at five
+minutes and bounded claim batches. New unresolved reservations are admitted
+under a cross-process namespace lock, with a trusted `max_unresolved` limit
+(default 1000, maximum 10000). At capacity, new references refuse with a
+finite unavailable reason while existing-reference recovery remains usable.
+An unknown terminal attempt still consumes a slot. An observed attempt or
+undispatched retirement frees it; a negative cloud lookup never does. These
+limits bound unknown-attempt load, not total historical tombstone storage.
+
+The explicit migration classifies pre-ledger records as `legacy_unknown`.
+They cannot be relabeled observed merely by reading one original version:
+earlier code may already have issued multiple requests. They remain durable
+and consume capacity. Migration occurs before opening the service pool;
+existing pre-ledger deployments require separately reviewed reconciliation
+and rollout evidence, not automatic activation of this new lane.
 
 These supporting components are not yet selected by the service entrypoint
-or SDK runtime consumer, and do not make AWS qualification true. Cloud-attempt
-reconciliation remains open: one absent-resource lookup cannot disprove a
-lost or in-flight create. Unknown-create jobs therefore remain durable rather
-than being marked complete. Their queue/load growth is an activation blocker:
-an attempt ledger or sound reconciliation closure protocol is required, not
-a post-activation follow-up. Service wiring, a deployed least-privilege pool
+or SDK runtime consumer, and do not make AWS qualification true. The new
+attempt/closure protocol requires independent review and configured-provider
+qualification, including its conservative pre-dispatch-loss and legacy-row
+behavior. Service wiring, a deployed least-privilege pool
 and role, cloud operations, IAM isolation and the complete guarantee matrix
 must be established separately before production custody can use this lane.
 

@@ -39,6 +39,8 @@ async def create_runtime_metadata_schema(pool, *, schema: str) -> None:
                         state text NOT NULL CHECK (state IN ('reserved', 'active', 'terminal')),
                         arn text,
                         version_id text,
+                        attempt_state text NOT NULL DEFAULT 'legacy_unknown'
+                            CHECK (attempt_state IN ('unstarted', 'unknown', 'observed', 'legacy_unknown')),
                         created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
                         updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
                         PRIMARY KEY (namespace, secret_ref),
@@ -48,12 +50,27 @@ async def create_runtime_metadata_schema(pool, *, schema: str) -> None:
                         CHECK (version_id IS NULL OR version_id = creation_token)
                     )
                 """)
+                # Pre-ledger rows conservatively stay unknown. Migration must
+                # never infer that a prior cloud attempt could not commit.
+                await connection.execute(
+                    f"ALTER TABLE {records} ADD COLUMN IF NOT EXISTS attempt_state text "
+                    "NOT NULL DEFAULT 'legacy_unknown' "
+                    "CHECK (attempt_state IN ('unstarted', 'unknown', 'observed', 'legacy_unknown'))",
+                )
                 await connection.execute(f"""
                     CREATE OR REPLACE FUNCTION "{schema}".runtime_terminal_guard()
                     RETURNS trigger LANGUAGE plpgsql AS $$
                     BEGIN
                         IF OLD.state = 'terminal' AND NEW.state != 'terminal' THEN
                             RAISE EXCEPTION 'runtime_secret_terminal_immutable'
+                                USING ERRCODE = '23514';
+                        END IF;
+                        IF (OLD.attempt_state = 'observed' AND NEW.attempt_state != 'observed')
+                            OR (OLD.attempt_state IN ('unknown', 'legacy_unknown') AND NEW.attempt_state = 'unstarted')
+                            OR (OLD.attempt_state = 'legacy_unknown' AND NEW.attempt_state != 'legacy_unknown')
+                            OR (OLD.state = 'terminal' AND OLD.attempt_state = 'unstarted'
+                                AND NEW.attempt_state != 'unstarted') THEN
+                            RAISE EXCEPTION 'runtime_secret_attempt_immutable'
                                 USING ERRCODE = '23514';
                         END IF;
                         RETURN NEW;
@@ -74,10 +91,12 @@ async def create_runtime_metadata_schema(pool, *, schema: str) -> None:
                         arn text,
                         version_id text,
                         state text NOT NULL DEFAULT 'pending'
-                            CHECK (state IN ('pending', 'claimed', 'delete_accepted', 'deleted')),
+                            CHECK (state IN ('pending', 'claimed', 'confirm_pending', 'deleted', 'reconciled')),
                         phase text NOT NULL CHECK (phase IN ('reconcile', 'delete', 'confirm')),
                         claim_token text,
                         claim_until timestamptz,
+                        retry_count smallint NOT NULL DEFAULT 0 CHECK (retry_count BETWEEN 0 AND 20),
+                        next_attempt_at timestamptz NOT NULL DEFAULT clock_timestamp(),
                         updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
                         PRIMARY KEY (namespace, job_id),
                         FOREIGN KEY (namespace, secret_ref, incarnation)
@@ -90,12 +109,33 @@ async def create_runtime_metadata_schema(pool, *, schema: str) -> None:
                     )
                 """)
                 await connection.execute(
+                    f"ALTER TABLE {cleanup} ADD COLUMN IF NOT EXISTS retry_count smallint "
+                    "NOT NULL DEFAULT 0 CHECK (retry_count BETWEEN 0 AND 20), "
+                    "ADD COLUMN IF NOT EXISTS next_attempt_at timestamptz NOT NULL DEFAULT clock_timestamp()",
+                )
+                await connection.execute(
+                    f"ALTER TABLE {cleanup} DROP CONSTRAINT IF EXISTS runtime_secret_cleanup_state_check",
+                )
+                await connection.execute(
+                    f"UPDATE {cleanup} SET state = 'confirm_pending' WHERE state = 'delete_accepted'",
+                )
+                await connection.execute(
+                    f"ALTER TABLE {cleanup} ADD CONSTRAINT runtime_secret_cleanup_state_check "
+                    "CHECK (state IN ('pending', 'claimed', 'confirm_pending', 'deleted', 'reconciled'))",
+                )
+                await connection.execute(
                     f"CREATE INDEX IF NOT EXISTS runtime_secret_expiry ON {records} "
                     "(namespace, expires_at, secret_ref) WHERE state != 'terminal'",
                 )
                 await connection.execute(
-                    f"CREATE INDEX IF NOT EXISTS runtime_secret_cleanup_pending ON {cleanup} "
-                    "(namespace, updated_at, job_id) WHERE state != 'deleted'",
+                    f"CREATE INDEX IF NOT EXISTS runtime_secret_unresolved ON {records} "
+                    "(namespace, secret_ref) WHERE attempt_state IN ('unknown', 'legacy_unknown') "
+                    "OR (attempt_state = 'unstarted' AND state != 'terminal')",
+                )
+                await connection.execute(
+                    f"CREATE INDEX IF NOT EXISTS runtime_secret_cleanup_ready ON {cleanup} "
+                    "(namespace, next_attempt_at, updated_at, job_id) "
+                    "WHERE state NOT IN ('deleted', 'reconciled')",
                 )
     except RuntimeMetadataError:
         raise

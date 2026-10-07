@@ -10,13 +10,29 @@ account and region. Request data never selects those capabilities.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import re
 
 from kdcube_ai_app.infra.secrets.runtime_pg_metadata import PostgresRuntimeCustodyMetadata
+from kdcube_ai_app.infra.secrets.runtime_pg_schema import RuntimeMetadataError
 
 _REF = re.compile(r"[0-9a-f]{32}")
 _MAX_VALUE_BYTES = 65536
+
+
+class RuntimeAwsClientFactory:
+    """Trusted service SDK composition, not a caller-provided retry label."""
+
+    def __init__(self, session, *, region: str):
+        from botocore.config import Config
+
+        self._session = session
+        self._region = region
+        self._config = Config(retries={"total_max_attempts": 1, "mode": "standard"})
+
+    def __call__(self):
+        return self._session.client("secretsmanager", region_name=self._region, config=self._config)
 
 
 class RuntimeCloudError(RuntimeError):
@@ -27,26 +43,30 @@ class RuntimeCloudError(RuntimeError):
         self.cloud_code = cloud_code
 
 
-def _commitment(namespace: str, secret_ref: str, value: str, expires_at: int) -> str:
+def _commitment(key: bytes, namespace: str, secret_ref: str, value: str, expires_at: int) -> str:
     coordinates = [namespace, secret_ref, expires_at,
                    hashlib.sha256(value.encode("utf-8")).hexdigest()]
-    return hashlib.sha256(json.dumps(coordinates, separators=(",", ":")).encode()).hexdigest()
+    return hmac.new(key, json.dumps(coordinates, separators=(",", ":")).encode(), hashlib.sha256).hexdigest()
 
 
 class RuntimeAwsStore:
     """One host-enrolled namespace; no overwrite or arbitrary-current read."""
 
     def __init__(self, *, metadata: PostgresRuntimeCustodyMetadata, client_factory,
-                 account_id: str, region: str, partition: str = "aws"):
+                 account_id: str, region: str, partition: str = "aws", commitment_key: bytes | None = None):
         if (type(metadata) is not PostgresRuntimeCustodyMetadata
                 or not callable(client_factory) or type(account_id) is not str
                 or re.fullmatch(r"[0-9]{12}", account_id) is None
                 or type(region) is not str or re.fullmatch(r"[a-z0-9-]{1,64}", region) is None
-                or type(partition) is not str or re.fullmatch(r"[a-z][a-z0-9-]{1,31}", partition) is None):
+                or type(partition) is not str or re.fullmatch(r"[a-z][a-z0-9-]{1,31}", partition) is None
+                or type(commitment_key) is not bytes or not 32 <= len(commitment_key) <= 4096):
             raise RuntimeCloudError("runtime_secret_storage_unavailable")
         self._metadata = metadata
         self._client_factory = client_factory
         self._arn_prefix = f"arn:{partition}:secretsmanager:{region}:{account_id}:secret:"
+        # Trusted persistent service secret, never request JSON or PostgreSQL
+        # metadata. No default/derived/namespace-only key is acceptable.
+        self._commitment_key = commitment_key
 
     async def qualify(self) -> None:
         # Do not lift this before actual service/pool/role composition and the
@@ -69,13 +89,26 @@ class RuntimeAwsStore:
         except (ValueError, UnicodeError):
             raise RuntimeCloudError("runtime_secret_value_invalid") from None
 
-    async def _cloud(self, operation: str, **arguments) -> dict:
+    async def _cloud(self, operation: str, *, dispatch_record=None, **arguments) -> dict | None:
         try:
             async with self._client_factory() as client:
+                if operation == "create_secret":
+                    # A later automatic retry could recreate the name after
+                    # cleanup. Inspect the actual SDK client's effective config,
+                    # not a request flag or an availability/qualification label.
+                    retries = getattr(getattr(getattr(client, "meta", None), "config", None), "retries", None)
+                    if (type(retries) is not dict
+                            or type(retries.get("total_max_attempts")) is not int
+                            or retries["total_max_attempts"] != 1):
+                        raise RuntimeCloudError("runtime_secret_storage_unavailable")
+                    if not await self._metadata.begin_create(dispatch_record):
+                        return None
                 response = await getattr(client, operation)(**arguments)
             if type(response) is not dict:
                 raise ValueError
             return response
+        except (RuntimeMetadataError, RuntimeCloudError):
+            raise
         except Exception as exc:
             response = getattr(exc, "response", None)
             error = response.get("Error") if type(response) is dict else None
@@ -97,15 +130,17 @@ class RuntimeAwsStore:
         self._pin_arn(original, full_arn)
         if (response.get("Name") != original.secret_name
                 or type(version) is not str or version != original.creation_token
-                or (original.state == "active" and full_arn != original.arn)):
+                or (original.arn is not None and full_arn != original.arn)):
             raise RuntimeCloudError("runtime_secret_metadata_binding_invalid")
         return full_arn, version
 
     async def _fetch_original(self, original):
+        if original.attempt_state == "unstarted":
+            raise RuntimeCloudError("runtime_secret_outcome_unknown")
         # Name lookup is only for an unresolved reservation. The creation
         # VersionId is always explicit. Active reads use the pinned full ARN.
-        secret_id = original.arn if original.state == "active" else original.secret_name
-        if original.state == "active":
+        secret_id = original.arn if original.arn is not None else original.secret_name
+        if original.arn is not None:
             self._pin_arn(original, original.arn)
             if original.version_id != original.creation_token:
                 raise RuntimeCloudError("runtime_secret_metadata_binding_invalid")
@@ -124,18 +159,19 @@ class RuntimeAwsStore:
         else:
             raise RuntimeCloudError("runtime_secret_metadata_binding_invalid")
         self._value_input(value, original.expires_at)
-        if (_commitment(original.namespace, original.secret_ref, value,
-                               original.expires_at) != original.request_digest):
+        if not hmac.compare_digest(
+                _commitment(self._commitment_key, original.namespace, original.secret_ref, value,
+                            original.expires_at), original.request_digest):
             raise RuntimeCloudError("runtime_secret_metadata_binding_invalid")
         return value, full_arn, version
 
     async def create(self, *, secret_ref: str, value: str, expires_at: int) -> bool:
         self._reference(secret_ref)
         self._value_input(value, expires_at)
-        digest = _commitment(self._metadata.namespace, secret_ref, value, expires_at)
+        digest = _commitment(self._commitment_key, self._metadata.namespace, secret_ref, value, expires_at)
         original = await self._metadata.reserve(secret_ref=secret_ref,
                                                 request_digest=digest, expires_at=expires_at)
-        if (original.state == "terminal" or original.request_digest != digest
+        if (not original.created or original.state == "terminal" or original.request_digest != digest
                 or original.expires_at != expires_at or original.state == "active"):
             return False
         current = await self._metadata.read_original(secret_ref=secret_ref, live_only=True)
@@ -147,11 +183,13 @@ class RuntimeAwsStore:
             return original.created
         try:
             response = await self._cloud(
-                "create_secret", Name=original.secret_name,
+                "create_secret", dispatch_record=current, Name=original.secret_name,
                 ClientRequestToken=original.creation_token,
                 **({"SecretString": value} if value else {"SecretBinary": b"\0"}),
                 Tags=[{"Key": "kdcube-runtime-expires-at", "Value": str(original.expires_at)}],
             )
+            if response is None:
+                return False
             full_arn, version = self._ack(original, response)
         except RuntimeCloudError as exc:
             if exc.cloud_code != "ResourceExistsException":
@@ -193,8 +231,8 @@ class RuntimeAwsStore:
     async def drain_cleanup(self, *, limit: int) -> int:
         """Process at most limit durable claims; return claimed, not erased.
 
-        A delete ACK advances to confirmation. Unknown creates never complete
-        on one absent-resource read; their reconciliation claim only retries.
+        A delete ACK advances to confirmation. A sole dispatch can close on
+        positive original-version evidence, never one absent-resource read.
         This is a trusted maintenance operation, not a request-supplied job.
         """
         claims = await self._metadata.claim_cleanup(limit=limit)
@@ -206,21 +244,34 @@ class RuntimeAwsStore:
                         or original.incarnation != claim.incarnation):
                     raise RuntimeCloudError("runtime_secret_cleanup_binding_invalid")
                 if claim.phase == "reconcile":
-                    _, full_arn, version = await self._fetch_original(original)
-                    await self._metadata.publish_original(
-                        secret_ref=original.secret_ref, incarnation=original.incarnation,
-                        request_digest=original.request_digest, arn=full_arn, version_id=version,
-                    )
+                    if original.attempt_state != "observed":
+                        _, full_arn, version = await self._fetch_original(original)
+                        await self._metadata.publish_original(
+                            secret_ref=original.secret_ref, incarnation=original.incarnation,
+                            request_digest=original.request_digest, arn=full_arn, version_id=version,
+                        )
+                    observed = await self._metadata.read_original(secret_ref=claim.secret_ref)
+                    if observed.attempt_state == "observed":
+                        outcome = "reconciled"
                 else:
                     self._pin_arn(original, claim.arn)
-                    if claim.version_id != original.creation_token:
+                    if (claim.version_id != original.creation_token
+                            or (claim.arn, claim.version_id) != (original.arn, original.version_id)):
                         raise RuntimeCloudError("runtime_secret_cleanup_binding_invalid")
                     if claim.phase == "delete":
-                        response = await self._cloud("delete_secret", SecretId=claim.arn,
-                                                     ForceDeleteWithoutRecovery=True)
-                        if response.get("ARN") != claim.arn or response.get("Name") != original.secret_name:
-                            raise RuntimeCloudError("runtime_secret_cleanup_binding_invalid")
-                        outcome = "delete_accepted"
+                        try:
+                            response = await self._cloud("delete_secret", SecretId=claim.arn,
+                                                         ForceDeleteWithoutRecovery=True)
+                            if response.get("ARN") != claim.arn or response.get("Name") != original.secret_name:
+                                raise RuntimeCloudError("runtime_secret_cleanup_binding_invalid")
+                            outcome = "delete_accepted"
+                        except RuntimeCloudError as exc:
+                            if exc.cloud_code != "ResourceNotFoundException":
+                                raise
+                            # A lost delete response can leave an already absent
+                            # pinned ARN. Advance to a separate confirmation,
+                            # without calling absence a delete ACK or erasure.
+                            outcome = "delete_absent"
                     elif claim.phase == "confirm":
                         try:
                             response = await self._cloud("describe_secret", SecretId=claim.arn)

@@ -61,11 +61,15 @@ async def metadata():
         await pool.close()
 
 
-async def reserve(metadata, *, secret_ref=None, digest=DIGEST, expires_at=None):
-    return await metadata.reserve(
+async def reserve(metadata, *, secret_ref=None, digest=DIGEST, expires_at=None, dispatch=True):
+    result = await metadata.reserve(
         secret_ref=secret_ref or uuid.uuid4().hex, request_digest=digest,
         expires_at=expires_at if expires_at is not None else int(time.time()) + 600,
     )
+    if dispatch and result.created and result.attempt_state == "unstarted":
+        assert await metadata.begin_create(result)
+        result = replace(await metadata.read_original(secret_ref=result.secret_ref), created=result.created)
+    return result
 
 
 def arn(original, suffix="Ab1234"):
@@ -94,6 +98,14 @@ async def cleanup_rows(metadata):
         return await connection.fetch(f"SELECT * FROM {metadata._cleanup} ORDER BY job_id")
 
 
+async def cleanup_due(metadata):
+    # Test-only database clock advance, never a production retry bypass.
+    async with metadata._pool.acquire() as connection:
+        await connection.execute(
+            f"UPDATE {metadata._cleanup} SET next_attempt_at = clock_timestamp() - interval '1 second'",
+        )
+
+
 @pytest.mark.asyncio
 async def test_reservation_is_value_free_and_collision_preserves_every_original_coordinate(metadata):
     original = await reserve(metadata)
@@ -115,7 +127,7 @@ async def test_reservation_is_value_free_and_collision_preserves_every_original_
 async def test_concurrent_reservers_have_one_original_and_one_insert_owner(metadata):
     ref, deadline = uuid.uuid4().hex, int(time.time()) + 600
     contenders = await asyncio.gather(*[
-        reserve(metadata, secret_ref=ref, expires_at=deadline) for _ in range(8)
+        reserve(metadata, secret_ref=ref, expires_at=deadline, dispatch=False) for _ in range(8)
     ])
     assert sum(row.created for row in contenders) == 1
     assert all(row == contenders[0] for row in contenders)
@@ -158,6 +170,7 @@ async def run():
     original = await metadata.reserve(secret_ref=os.environ['W585_METADATA_REF'],
         request_digest=hashlib.sha256(b'synthetic-original-value').hexdigest(),
         expires_at=int(os.environ['W585_METADATA_DEADLINE']))
+    assert await metadata.begin_create(original)
     if os.environ['W585_METADATA_PHASE'] == 'active':
         await metadata.publish_original(secret_ref=original.secret_ref, incarnation=original.incarnation,
             request_digest=original.request_digest, version_id=original.creation_token,
@@ -180,6 +193,8 @@ asyncio.run(run())
     assert recovered.request_digest == original["request_digest"]
     assert recovered.expires_at == deadline
     if phase == "reserved":
+        assert recovered.attempt_state == "unknown"
+        assert not await metadata.begin_create(recovered)
         with pytest.raises(RuntimeMetadataError, match="^runtime_secret_metadata_unavailable$"):
             await metadata.read_active(secret_ref=ref)
         assert await publish(metadata, recovered)
@@ -217,22 +232,23 @@ async def test_invalid_original_pin_cannot_activate_or_queue_foreign_resource(me
 
 
 @pytest.mark.asyncio
-async def test_terminal_fence_before_late_create_never_resurrects_and_keeps_unknown_cleanup(metadata):
+async def test_terminal_fence_before_late_create_never_resurrects_or_changes_full_pin(metadata):
     original = await reserve(metadata)
     await metadata.retire(secret_ref=original.secret_ref, incarnation=original.incarnation)
     assert not await publish(metadata, original)
-    assert not await publish(metadata, original, arn=arn(original, "Xy9876"))
+    with pytest.raises(RuntimeMetadataError, match="^runtime_secret_metadata_binding_invalid$"):
+        await publish(metadata, original, arn=arn(original, "Xy9876"))
     assert await metadata.read_active(secret_ref=original.secret_ref) is None
     collision = await reserve(metadata, secret_ref=original.secret_ref,
                               digest="b" * 64, expires_at=original.expires_at + 1000)
     assert collision.state == "terminal" and collision.incarnation == original.incarnation
     assert collision.expires_at == original.expires_at and not collision.created
     rows = await cleanup_rows(metadata)
-    assert len(rows) == 3  # Unresolved create plus both distinct full ARNs.
-    assert {row["arn"] for row in rows} == {None, arn(original), arn(original, "Xy9876")}
+    assert len(rows) == 2  # Reconciliation plus the sole positively observed full ARN.
+    assert {row["arn"] for row in rows} == {None, arn(original)}
     assert all(row["incarnation"] == original.incarnation for row in rows)
     await metadata.retire(secret_ref=original.secret_ref, incarnation=original.incarnation)
-    assert len(await cleanup_rows(metadata)) == 3
+    assert len(await cleanup_rows(metadata)) == 2
 
 
 @pytest.mark.asyncio
@@ -241,7 +257,7 @@ async def test_expired_create_ack_is_only_cleanup_and_read_recheck_fails_after_r
     await expire(metadata, original)
     assert not await publish(metadata, original)
     assert await metadata.read_active(secret_ref=original.secret_ref) is None
-    assert len(await cleanup_rows(metadata)) == 2
+    assert len(await cleanup_rows(metadata)) == 1
     live = await reserve(metadata)
     await publish(metadata, live)
     active = await metadata.read_active(secret_ref=live.secret_ref)
@@ -283,10 +299,10 @@ async def test_bounded_purge_atomically_retires_expired_rows_with_durable_cleanu
     await publish(metadata, live)
     now = int(time.time())
     assert await metadata.retire_expired(now=now, limit=1) == 1
-    assert len(await cleanup_rows(metadata)) == 2
+    assert len(await cleanup_rows(metadata)) == 1
     assert (await metadata.read_active(secret_ref=live.secret_ref)).state == "active"
     assert await metadata.retire_expired(now=now, limit=1) == 1
-    assert len(await cleanup_rows(metadata)) == 4
+    assert len(await cleanup_rows(metadata)) == 2
     assert await metadata.retire_expired(now=now, limit=1) == 0
 
 
@@ -337,7 +353,8 @@ async def test_racing_publish_and_retire_finish_terminal_with_exact_cleanup(meta
         metadata.retire(secret_ref=original.secret_ref, incarnation=original.incarnation),
     )
     assert await metadata.read_active(secret_ref=original.secret_ref) is None
-    assert {row["arn"] for row in await cleanup_rows(metadata)} == {None, arn(original)}
+    pins = {row["arn"] for row in await cleanup_rows(metadata)}
+    assert arn(original) in pins and pins <= {None, arn(original)}
 
 
 @pytest.mark.asyncio
@@ -353,8 +370,8 @@ async def test_purge_future_time_is_refused_before_mutation(metadata):
 @pytest.mark.asyncio
 async def test_cleanup_claims_are_bounded_exclusive_and_expired_tokens_cannot_settle(metadata):
     original = await reserve(metadata)
-    await publish(metadata, original)
     await metadata.retire(secret_ref=original.secret_ref, incarnation=original.incarnation)
+    assert not await publish(metadata, original)
     first, second = await asyncio.gather(metadata.claim_cleanup(limit=1), metadata.claim_cleanup(limit=1))
     assert len(first) == len(second) == 1 and first[0].job_id != second[0].job_id
     assert await metadata.claim_cleanup(limit=1000) == ()
@@ -377,22 +394,29 @@ async def test_delete_accepted_is_not_physical_completion_and_unknown_create_can
     original = await reserve(metadata)
     await publish(metadata, original)
     await metadata.retire(secret_ref=original.secret_ref, incarnation=original.incarnation)
+    unresolved = await reserve(metadata)
+    await metadata.retire(secret_ref=unresolved.secret_ref, incarnation=unresolved.incarnation)
     claims = await metadata.claim_cleanup(limit=2)
     unknown = next(claim for claim in claims if claim.phase == "reconcile")
     deletion = next(claim for claim in claims if claim.phase == "delete")
     for outcome in ("delete_accepted", "deleted"):
         with pytest.raises(RuntimeMetadataError, match="^runtime_secret_cleanup_binding_invalid$"):
             await metadata.settle_cleanup(unknown, outcome=outcome)
+    assert not await metadata.settle_cleanup(unknown, outcome="reconciled")
     with pytest.raises(RuntimeMetadataError, match="^runtime_secret_cleanup_binding_invalid$"):
         await metadata.settle_cleanup(deletion, outcome="deleted")
     assert await metadata.settle_cleanup(deletion, outcome="delete_accepted")
     confirmation, = await metadata.claim_cleanup(limit=1)
     assert confirmation.phase == "confirm" and confirmation.arn == arn(original)
     assert await metadata.settle_cleanup(confirmation, outcome="retry")
+    assert await metadata.claim_cleanup(limit=1) == ()
+    await cleanup_due(metadata)
     confirmation, = await metadata.claim_cleanup(limit=1)
     assert confirmation.phase == "confirm"
     assert await metadata.settle_cleanup(confirmation, outcome="deleted")
     assert await metadata.settle_cleanup(unknown, outcome="retry")
+    assert await metadata.claim_cleanup(limit=1000) == ()
+    await cleanup_due(metadata)
     remaining, = await metadata.claim_cleanup(limit=1000)
     assert remaining.phase == "reconcile" and remaining.arn is None
     rows = await cleanup_rows(metadata)
@@ -535,13 +559,18 @@ async def test_service_role_needs_dml_only_not_ddl_or_delete(metadata, terminal_
         assert (await service.read_active(secret_ref=original.secret_ref)).arn == arn(original)
         await service.retire(secret_ref=original.secret_ref, incarnation=original.incarnation)
         claims = await service.claim_cleanup(limit=2)
-        assert len(claims) == 2
+        assert len(claims) == 1
         assert all([await service.settle_cleanup(claim, outcome="retry") for claim in claims])
         async with service_pool.acquire() as connection:
             with pytest.raises(asyncpg.CheckViolationError, match="runtime_secret_terminal_immutable"):
                 await connection.execute(
                     f"UPDATE {service._records} SET state = $1 WHERE secret_ref = $2",
                     terminal_state, original.secret_ref,
+                )
+            with pytest.raises(asyncpg.CheckViolationError, match="runtime_secret_attempt_immutable"):
+                await connection.execute(
+                    f"UPDATE {service._records} SET attempt_state = 'unstarted' WHERE secret_ref = $1",
+                    original.secret_ref,
                 )
             for sql in (f"DELETE FROM {service._records}",
                         f'CREATE TABLE "{schema}".forbidden_ddl (id integer)'):
@@ -558,3 +587,118 @@ async def test_service_role_needs_dml_only_not_ddl_or_delete(metadata, terminal_
 def test_schema_names_are_quoted_and_do_not_use_card_or_session_tables():
     assert metadata_tables("runtime_test") == ('"runtime_test".runtime_secret_records',
                                                '"runtime_test".runtime_secret_cleanup')
+
+
+@pytest.mark.asyncio
+async def test_dispatch_fence_has_one_owner_and_unknown_is_never_rearmed(metadata):
+    original = await reserve(metadata, dispatch=False)
+    results = await asyncio.gather(*[metadata.begin_create(original) for _ in range(8)])
+    assert sum(results) == 1
+    unknown = await metadata.read_original(secret_ref=original.secret_ref)
+    assert unknown.attempt_state == "unknown"
+    assert not await metadata.begin_create(unknown)
+    assert not await metadata.begin_create(original)
+    await metadata.retire(secret_ref=original.secret_ref, incarnation=original.incarnation)
+    claim, = await metadata.claim_cleanup(limit=1)
+    assert not await metadata.settle_cleanup(claim, outcome="reconciled")
+    assert await metadata.settle_cleanup(claim, outcome="retry")
+    assert await metadata.claim_cleanup(limit=1) == ()
+    row, = await cleanup_rows(metadata)
+    assert row["retry_count"] == 1
+    assert row["next_attempt_at"] > row["updated_at"]
+
+
+@pytest.mark.asyncio
+async def test_undispatched_retirement_has_no_cloud_job_or_later_dispatch_right(metadata):
+    original = await reserve(metadata, dispatch=False)
+    with pytest.raises(RuntimeMetadataError, match="^runtime_secret_metadata_binding_invalid$"):
+        await publish(metadata, original)
+    await metadata.retire(secret_ref=original.secret_ref, incarnation=original.incarnation)
+    assert not await metadata.begin_create(original)
+    assert await cleanup_rows(metadata) == []
+    assert (await metadata.read_original(secret_ref=original.secret_ref)).attempt_state == "unstarted"
+
+
+@pytest.mark.asyncio
+async def test_positive_sole_dispatch_closes_reconciliation_not_physical_deletion(metadata):
+    original = await reserve(metadata)
+    await metadata.retire(secret_ref=original.secret_ref, incarnation=original.incarnation)
+    unknown, = await metadata.claim_cleanup(limit=1)
+    assert not await publish(metadata, original)
+    assert await metadata.settle_cleanup(unknown, outcome="reconciled")
+    assert not await metadata.settle_cleanup(unknown, outcome="reconciled")
+    deletion, = await metadata.claim_cleanup(limit=1000)
+    assert deletion.phase == "delete" and deletion.arn == arn(original)
+    with pytest.raises(RuntimeMetadataError, match="^runtime_secret_cleanup_binding_invalid$"):
+        await metadata.settle_cleanup(deletion, outcome="reconciled")
+    assert not await metadata.begin_create(await metadata.read_original(secret_ref=original.secret_ref))
+
+
+@pytest.mark.asyncio
+async def test_unresolved_admission_is_bounded_across_process_capabilities_and_keeps_recovery(metadata):
+    bounded = PostgresRuntimeCustodyMetadata(
+        metadata._pool, schema=metadata._records.split('"')[1], namespace=NS,
+        authorized_namespaces=(NS,), cloud_prefix="test/runtime", max_unresolved=2,
+    )
+    results = await asyncio.gather(*[
+        reserve(bounded, dispatch=False) for _ in range(8)
+    ], return_exceptions=True)
+    originals = [result for result in results if not isinstance(result, Exception)]
+    refused = [result for result in results if isinstance(result, Exception)]
+    assert len(originals) == 2 and len(refused) == 6
+    assert all(type(result) is RuntimeMetadataError and str(result) == "runtime_secret_capacity_unavailable"
+               for result in refused)
+    original = originals[0]
+    assert await reserve(bounded, secret_ref=original.secret_ref,
+                         expires_at=original.expires_at, dispatch=False) == original
+    await bounded.retire(secret_ref=original.secret_ref, incarnation=original.incarnation)
+    replacement_slot = await reserve(bounded)
+    await bounded.retire(secret_ref=replacement_slot.secret_ref, incarnation=replacement_slot.incarnation)
+    with pytest.raises(RuntimeMetadataError, match="^runtime_secret_capacity_unavailable$"):
+        await reserve(bounded, dispatch=False)
+    assert not await publish(bounded, replacement_slot)
+    assert (await reserve(bounded, dispatch=False)).created
+
+
+@pytest.mark.asyncio
+async def test_backoff_stays_bounded_and_unknown_jobs_never_close_on_retry(metadata):
+    original = await reserve(metadata)
+    await metadata.retire(secret_ref=original.secret_ref, incarnation=original.incarnation)
+    for _ in range(24):
+        await cleanup_due(metadata)
+        claim, = await metadata.claim_cleanup(limit=1)
+        assert await metadata.settle_cleanup(claim, outcome="retry")
+    row, = await cleanup_rows(metadata)
+    assert row["state"] == "pending" and row["phase"] == "reconcile"
+    assert row["retry_count"] == 20
+    assert (row["next_attempt_at"] - row["updated_at"]).total_seconds() == pytest.approx(300, abs=0.05)
+    assert await metadata.claim_cleanup(limit=1) == ()
+
+
+@pytest.mark.asyncio
+async def test_migration_does_not_turn_preledger_attempts_into_single_dispatch_proof(metadata):
+    import asyncpg
+
+    original = await reserve(metadata)
+    await publish(metadata, original)
+    schema = metadata._records.split('"')[1]
+    async with metadata._pool.acquire() as connection:
+        # Simulate pre-ledger schema input; this is migrator authority, not the
+        # production service's DML role. Dropping the column removes its index.
+        await connection.execute(f"ALTER TABLE {metadata._records} DROP COLUMN attempt_state CASCADE")
+    await create_runtime_metadata_schema(metadata._pool, schema=schema)
+    # Migration precedes opening the service pool; don't reuse asyncpg's
+    # prepared SELECT * cache across the schema shape change in this fixture.
+    pool = await asyncpg.create_pool(os.environ["KDCUBE_TEST_POSTGRES_DSN"], min_size=1, max_size=2)
+    try:
+        fresh = adapter(pool, schema)
+        legacy = await fresh.read_original(secret_ref=original.secret_ref)
+        assert legacy.attempt_state == "legacy_unknown"
+        assert await publish(fresh, legacy)
+        await fresh.retire(secret_ref=original.secret_ref, incarnation=original.incarnation)
+        claims = await fresh.claim_cleanup(limit=1000)
+        unknown = next(claim for claim in claims if claim.phase == "reconcile")
+        assert not await fresh.settle_cleanup(unknown, outcome="reconciled")
+        assert (await fresh.read_original(secret_ref=original.secret_ref)).attempt_state == "legacy_unknown"
+    finally:
+        await pool.close()

@@ -4,18 +4,22 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 import time
 import uuid
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 import pytest
 
-from kdcube_ai_app.infra.secrets.runtime_aws import RuntimeAwsStore, RuntimeCloudError
+from kdcube_ai_app.infra.secrets.runtime_aws import RuntimeAwsStore, RuntimeCloudError, RuntimeAwsClientFactory
 from kdcube_ai_app.infra.secrets.runtime_pg_schema import RuntimeMetadataError
-from kdcube_ai_app.infra.secrets.tests.test_runtime_pg_metadata import metadata
+from kdcube_ai_app.infra.secrets.tests.test_runtime_pg_metadata import metadata, cleanup_due
 
 VALUE = "synthetic-aws-original-no-live-credential"
+COMMITMENT_KEY = hashlib.sha256(b"synthetic-service-only-test-key").digest()
 
 
 class CloudFailure(Exception):
@@ -35,6 +39,9 @@ class SyntheticAws:
         self.after_get = None
         self.response_change = None
         self.create_failure = None
+        self.lose_delete_response = False
+        # Explicit test transport input, not an AWS qualification seam.
+        self.meta = SimpleNamespace(config=SimpleNamespace(retries={"total_max_attempts": 1}))
 
     @asynccontextmanager
     async def client(self):
@@ -91,6 +98,9 @@ class SyntheticAws:
         assert args["SecretId"].startswith("arn:") and args["ForceDeleteWithoutRecovery"] is True
         resource = self.find(args["SecretId"])
         resource["deleting"] = True  # Accepted, not physically removed yet.
+        if self.lose_delete_response:
+            self.lose_delete_response = False
+            raise TimeoutError("synthetic-delete-response-lost")
         return {"Name": resource["Name"], "ARN": resource["ARN"]}
 
     async def describe_secret(self, **args):
@@ -101,7 +111,7 @@ class SyntheticAws:
 
 def store(metadata, cloud):
     return RuntimeAwsStore(metadata=metadata, client_factory=cloud.client,
-                           account_id="123456789012", region="eu-central-1")
+                           account_id="123456789012", region="eu-central-1", commitment_key=COMMITMENT_KEY)
 
 
 async def created(metadata, cloud, *, value=VALUE):
@@ -172,6 +182,8 @@ async def test_lost_create_response_recovers_original_version_without_new_identi
     assert active.creation_token == original.creation_token and active.expires_at == deadline
     assert len(cloud.resources) == 1
     assert len(cloud.resources[active.secret_name]["versions"]) == 1
+    assert len([call for call in cloud.calls if call[0] == "create"]) == 1
+    assert active.attempt_state == "observed"
 
 
 @pytest.mark.asyncio
@@ -188,6 +200,8 @@ async def test_unresolved_absence_is_unavailable_not_missing_and_cleanup_remains
     await custody.delete(secret_ref=ref)
     assert await custody.get(secret_ref=ref) is None
     assert await custody.drain_cleanup(limit=1) == 1
+    assert await metadata.claim_cleanup(limit=1) == ()
+    await cleanup_due(metadata)
     claim, = await metadata.claim_cleanup(limit=1)
     assert claim.phase == "reconcile" and claim.incarnation == original.incarnation
     assert claim.arn is None
@@ -211,7 +225,7 @@ async def test_late_create_cannot_publish_after_terminal_or_expiry_fence(metadat
     assert await custody.get(secret_ref=ref) is None
     assert (await metadata.read_original(secret_ref=ref)).state == "terminal"
     claims = await metadata.claim_cleanup(limit=1000)
-    assert {claim.phase for claim in claims} == {"reconcile", "delete"}
+    assert {claim.phase for claim in claims} == ({"reconcile", "delete"} if move == "delete" else {"delete"})
     pinned = next(claim for claim in claims if claim.arn is not None)
     assert pinned.arn == next(iter(cloud.resources.values()))["ARN"]
 
@@ -319,26 +333,26 @@ async def test_cleanup_deletes_full_pins_and_distinguishes_acceptance_from_confi
     custody, ref, _ = await created(metadata, cloud)
     original = await metadata.read_active(secret_ref=ref)
     await custody.delete(secret_ref=ref)
-    assert await custody.drain_cleanup(limit=2) == 2
+    assert await custody.drain_cleanup(limit=2) == 1
     async with metadata._pool.acquire() as connection:
         rows = await connection.fetch(f"SELECT state, phase FROM {metadata._cleanup}")
     assert {(row["state"], row["phase"]) for row in rows} == {
-        ("pending", "reconcile"), ("delete_accepted", "confirm"),
+        ("confirm_pending", "confirm"),
     }
     assert cloud.resources[original.secret_name]["deleting"]
     assert ("delete", {"SecretId": original.arn, "ForceDeleteWithoutRecovery": True}) in cloud.calls
     del cloud.resources[original.secret_name]  # Synthetic physical deletion event.
-    assert await custody.drain_cleanup(limit=2) == 2
+    assert await custody.drain_cleanup(limit=2) == 1
     async with metadata._pool.acquire() as connection:
         rows = await connection.fetch(f"SELECT state, phase FROM {metadata._cleanup}")
     assert {(row["state"], row["phase"]) for row in rows} == {
-        ("pending", "reconcile"), ("deleted", "confirm"),
+        ("deleted", "confirm"),
     }
-    assert await custody.drain_cleanup(limit=1000) == 1
+    assert await custody.drain_cleanup(limit=1000) == 0
 
 
 @pytest.mark.asyncio
-async def test_reconciliation_after_late_create_discovers_new_full_arn_but_never_deletes_by_name(metadata):
+async def test_reconciliation_positive_original_read_closes_without_a_second_create_or_name_delete(metadata):
     cloud, ref = SyntheticAws(), uuid.uuid4().hex
     custody, deadline = store(metadata, cloud), int(time.time()) + 600
     cloud.lose_create_response = True
@@ -347,16 +361,22 @@ async def test_reconciliation_after_late_create_discovers_new_full_arn_but_never
     original = await metadata.read_original(secret_ref=ref)
     await custody.delete(secret_ref=ref)
     assert await custody.drain_cleanup(limit=1) == 1
-    assert await custody.drain_cleanup(limit=2) == 2
+    assert await custody.drain_cleanup(limit=2) == 1
     resource = cloud.resources[original.secret_name]
     old_arn = resource["ARN"]
-    resource["ARN"] = old_arn[:-6] + "Xy9876"  # Late recreated name, different full ARN.
-    assert await custody.drain_cleanup(limit=2) == 2
-    assert await custody.drain_cleanup(limit=1000) >= 1
+    del cloud.resources[original.secret_name]
+    assert await custody.drain_cleanup(limit=2) == 1
+    assert await custody.drain_cleanup(limit=1000) == 0
+    assert not await custody.create(secret_ref=ref, value=VALUE, expires_at=deadline)
     deleted_ids = [args["SecretId"] for op, args in cloud.calls if op == "delete"]
-    assert old_arn in deleted_ids and resource["ARN"] in deleted_ids
+    assert deleted_ids == [old_arn]
     assert original.secret_name not in deleted_ids
     assert await custody.get(secret_ref=ref) is None
+    assert len([call for call in cloud.calls if call[0] == "create"]) == 1
+    async with metadata._pool.acquire() as connection:
+        assert set(await connection.fetchval(
+            f"SELECT array_agg(state) FROM {metadata._cleanup}",
+        )) == {"reconciled", "deleted"}
 
 
 @pytest.mark.parametrize("code", ["AccessDeniedException", "synthetic-sensitive-code", "InternalServiceError"])
@@ -426,3 +446,162 @@ def test_installed_sdk_parser_returns_decoded_binary_bytes_without_cloud_io():
         "body": json.dumps({"SecretBinary": "AA=="}).encode(),
     }, shape)
     assert response["SecretBinary"] == b"\0"
+
+
+@pytest.mark.parametrize("retries", [{}, {"max_attempts": 0}, {"total_max_attempts": 2},
+                                    {"total_max_attempts": True}],
+                         ids=["missing", "ambiguous-retry-key", "automatic-retry", "boolean"])
+@pytest.mark.asyncio
+async def test_effective_client_retries_refuse_before_dispatch_not_just_qualification(metadata, retries):
+    cloud, ref = SyntheticAws(), uuid.uuid4().hex
+    cloud.meta.config.retries = retries
+    custody = store(metadata, cloud)
+    with pytest.raises(RuntimeCloudError, match="^runtime_secret_storage_unavailable$"):
+        await custody.create(secret_ref=ref, value=VALUE, expires_at=int(time.time()) + 600)
+    assert cloud.calls == []
+    assert (await metadata.read_original(secret_ref=ref)).attempt_state == "unstarted"
+    await custody.delete(secret_ref=ref)
+    assert await metadata.claim_cleanup(limit=1000) == ()
+
+
+@pytest.mark.asyncio
+async def test_absence_during_inflight_create_does_not_close_or_authorize_resend(metadata):
+    cloud, ref = SyntheticAws(), uuid.uuid4().hex
+    custody, deadline = store(metadata, cloud), int(time.time()) + 600
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def delayed_wire_attempt():
+        entered.set()
+        await release.wait()
+
+    cloud.before_create = delayed_wire_attempt
+    creator = asyncio.create_task(custody.create(secret_ref=ref, value=VALUE, expires_at=deadline))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        await custody.delete(secret_ref=ref)
+        assert await custody.drain_cleanup(limit=1) == 1  # Absence, not closure.
+        assert not await store(metadata, cloud).create(secret_ref=ref, value=VALUE, expires_at=deadline)
+        assert len([call for call in cloud.calls if call[0] == "create"]) == 1
+        async with metadata._pool.acquire() as connection:
+            assert await connection.fetchval(f"SELECT state FROM {metadata._cleanup}") == "pending"
+        release.set()
+        assert not await asyncio.wait_for(creator, timeout=2)
+    finally:
+        release.set()
+        await creator
+    original = await metadata.read_original(secret_ref=ref)
+    assert original.attempt_state == "observed" and original.state == "terminal"
+    await cleanup_due(metadata)
+    assert await custody.drain_cleanup(limit=1000) == 2
+    del cloud.resources[original.secret_name]
+    assert await custody.drain_cleanup(limit=1000) == 1
+    assert await custody.drain_cleanup(limit=1000) == 0
+    assert len([call for call in cloud.calls if call[0] == "create"]) == 1
+
+
+def test_trusted_client_factory_supplies_actual_no_retry_sdk_config_without_cloud_io():
+    calls = []
+
+    class Session:
+        def client(self, service, **kwargs):
+            calls.append((service, kwargs))
+            return "synthetic-context"
+
+    factory = RuntimeAwsClientFactory(Session(), region="eu-central-1")
+    assert factory() == "synthetic-context"
+    service, options = calls[0]
+    assert service == "secretsmanager" and options["region_name"] == "eu-central-1"
+    assert options["config"].retries == {"total_max_attempts": 1, "mode": "standard"}
+
+
+@pytest.mark.asyncio
+async def test_installed_async_sdk_effective_config_disables_resends_without_network():
+    import aioboto3
+
+    session = aioboto3.Session(aws_access_key_id="synthetic-no-live-key",
+                             aws_secret_access_key="synthetic-no-live-secret")
+    async with RuntimeAwsClientFactory(session, region="eu-central-1")() as client:
+        assert client.meta.config.retries["total_max_attempts"] == 1
+        assert client.meta.config.retries["mode"] == "standard"
+
+
+@pytest.mark.asyncio
+async def test_lost_delete_ack_followed_by_full_arn_absence_still_requires_confirmation(metadata):
+    cloud = SyntheticAws()
+    custody, ref, _ = await created(metadata, cloud)
+    original = await metadata.read_active(secret_ref=ref)
+    await custody.delete(secret_ref=ref)
+    cloud.lose_delete_response = True
+    assert await custody.drain_cleanup(limit=1000) == 1
+    assert await custody.drain_cleanup(limit=1000) == 0  # Backoff, not completion.
+    del cloud.resources[original.secret_name]  # Physical synthetic deletion after lost ACK.
+    await cleanup_due(metadata)
+    assert await custody.drain_cleanup(limit=1000) == 1
+    async with metadata._pool.acquire() as connection:
+        row = await connection.fetchrow(f"SELECT state, phase FROM {metadata._cleanup}")
+        assert (row["state"], row["phase"]) == ("confirm_pending", "confirm")
+    assert await custody.drain_cleanup(limit=1000) == 1
+    assert cloud.calls[-1] == ("describe", {"SecretId": original.arn})
+    assert await custody.drain_cleanup(limit=1000) == 0
+
+
+@pytest.mark.parametrize("key", [None, b"short", "not-bytes", b"x" * 4097],
+                         ids=["missing", "short", "wrong-type", "over-limit"])
+@pytest.mark.asyncio
+async def test_missing_or_invalid_service_commitment_key_refuses_before_io(metadata, key):
+    cloud = SyntheticAws()
+    with pytest.raises(RuntimeCloudError, match="^runtime_secret_storage_unavailable$"):
+        RuntimeAwsStore(metadata=metadata, client_factory=cloud.client,
+                        account_id="123456789012", region="eu-central-1", commitment_key=key)
+    assert cloud.calls == []
+
+
+@pytest.mark.asyncio
+async def test_low_entropy_value_commitment_is_keyed_and_wrong_key_never_returns_or_replaces(metadata):
+    cloud = SyntheticAws()
+    custody, ref, deadline = await created(metadata, cloud, value="0")
+    original = await metadata.read_active(secret_ref=ref)
+    coordinates = [original.namespace, ref, deadline, hashlib.sha256(b"0").hexdigest()]
+    canonical = json.dumps(coordinates, separators=(",", ":")).encode()
+    assert original.request_digest == hmac.new(COMMITMENT_KEY, canonical, hashlib.sha256).hexdigest()
+    assert original.request_digest != hashlib.sha256(canonical).hexdigest()
+    wrong_key = RuntimeAwsStore(metadata=metadata, client_factory=cloud.client,
+                                account_id="123456789012", region="eu-central-1",
+                                commitment_key=hashlib.sha256(b"synthetic-other-service-key").digest())
+    assert not await wrong_key.create(secret_ref=ref, value="0", expires_at=deadline)
+    with pytest.raises(RuntimeCloudError, match="^runtime_secret_metadata_binding_invalid$"):
+        await wrong_key.get(secret_ref=ref)
+    assert await store(metadata, cloud).get(secret_ref=ref) == "0"
+    assert len([call for call in cloud.calls if call[0] == "create"]) == 1
+    async with metadata._pool.acquire() as connection:
+        raw = await connection.fetchval(f"SELECT row_to_json(r)::text FROM {metadata._records} r")
+    assert COMMITMENT_KEY.hex() not in raw
+
+
+@pytest.mark.asyncio
+async def test_known_resource_cleanup_cannot_touch_replacement_full_arn(metadata):
+    cloud = SyntheticAws()
+    custody, ref, _ = await created(metadata, cloud)
+    original = await metadata.read_active(secret_ref=ref)
+    await custody.delete(secret_ref=ref)
+    replacement = cloud.resources[original.secret_name]
+    replacement["ARN"] = original.arn[:-6] + "Xy9876"
+    assert await custody.drain_cleanup(limit=1000) == 1  # Original full ARN absent.
+    assert await custody.drain_cleanup(limit=1000) == 1  # Separate full-ARN confirmation.
+    assert await custody.drain_cleanup(limit=1000) == 0
+    assert not replacement["deleting"]
+    assert [args["SecretId"] for op, args in cloud.calls if op == "delete"] == [original.arn]
+    assert await custody.get(secret_ref=ref) is None
+
+
+@pytest.mark.asyncio
+async def test_corrupt_cleanup_pin_refuses_before_replacement_cloud_io(metadata):
+    cloud = SyntheticAws()
+    custody, ref, _ = await created(metadata, cloud)
+    original = await metadata.read_active(secret_ref=ref)
+    await custody.delete(secret_ref=ref)
+    async with metadata._pool.acquire() as connection:
+        await connection.execute(f"UPDATE {metadata._cleanup} SET arn = $1", original.arn[:-6] + "Xy9876")
+    before = list(cloud.calls)
+    assert await custody.drain_cleanup(limit=1000) == 1
+    assert cloud.calls == before

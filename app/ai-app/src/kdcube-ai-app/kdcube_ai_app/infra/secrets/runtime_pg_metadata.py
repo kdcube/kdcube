@@ -37,6 +37,7 @@ class RuntimeCustodyRecord:
     state: str
     arn: str | None
     version_id: str | None
+    attempt_state: str
     created: bool = field(default=False, compare=False)
 
 
@@ -72,7 +73,7 @@ class PostgresRuntimeCustodyMetadata:
     """
 
     def __init__(self, pool, *, schema: str, namespace: str,
-                 authorized_namespaces, cloud_prefix: str) -> None:
+                 authorized_namespaces, cloud_prefix: str, max_unresolved: int = 1000) -> None:
         self._records, self._cleanup = metadata_tables(schema)
         if (not valid_namespace(namespace)
                 or type(authorized_namespaces) not in (tuple, list, set, frozenset)
@@ -87,6 +88,8 @@ class PostgresRuntimeCustodyMetadata:
         self._pool = pool
         self._namespace = namespace
         self._prefix = cloud_prefix
+        _bound_integer(max_unresolved, minimum=1, maximum=10000)
+        self._max_unresolved = max_unresolved
 
     @property
     def namespace(self) -> str:
@@ -109,7 +112,7 @@ class PostgresRuntimeCustodyMetadata:
     def _record(self, row, *, created=False) -> RuntimeCustodyRecord:
         result = RuntimeCustodyRecord(**{name: row[name] for name in (
             "namespace", "secret_ref", "incarnation", "request_digest", "expires_at",
-            "creation_token", "secret_name", "state", "arn", "version_id",
+            "creation_token", "secret_name", "state", "arn", "version_id", "attempt_state",
         )}, created=created)
         if result.secret_name != self._name(result.secret_ref, result.incarnation):
             raise RuntimeMetadataError("runtime_secret_metadata_binding_invalid")
@@ -134,19 +137,34 @@ class PostgresRuntimeCustodyMetadata:
         """Insert before cloud I/O; every collision returns the fixed original.
 
         A different commitment is never allowed to perform recovery I/O. The
-        service maps an existing reference to False, and only replays a still
-        reserved original when all its immutable inputs match. Terminal rows
-        remain permanent value-free fences.
+        service maps an existing reference to False. Recovery may publish only
+        the positively observed original version, never redispatch an unknown
+        create. Terminal rows remain permanent value-free fences.
         """
         _hex(secret_ref, _HEX32)
         _hex(request_digest, _HEX64)
         _bound_integer(expires_at, minimum=1, maximum=253402300799)
         incarnation, token = uuid.uuid4().hex, uuid.uuid4().hex
         async with self._transaction() as connection:
+            # Serialize new admissions across processes for this schema and
+            # namespace. Recovery/collisions remain available at capacity.
+            await connection.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                                     f"{self._records}:{self._namespace}")
+            existing = await self._locked(connection, secret_ref)
+            if existing is not None:
+                return self._record(existing)
+            unresolved = await connection.fetchval(
+                f"SELECT count(*) FROM (SELECT 1 FROM {self._records} WHERE namespace = $1 "
+                "AND (attempt_state IN ('unknown', 'legacy_unknown') "
+                "OR (attempt_state = 'unstarted' AND state != 'terminal')) LIMIT $2) pending",
+                self._namespace, self._max_unresolved,
+            )
+            if unresolved >= self._max_unresolved:
+                raise RuntimeMetadataError("runtime_secret_capacity_unavailable")
             inserted = await connection.fetchval(
                 f"INSERT INTO {self._records} (namespace, secret_ref, incarnation, "
-                "request_digest, expires_at, creation_token, secret_name, state) "
-                f"SELECT $1, $2, $3, $4, $5, $6, $7, 'reserved' WHERE $5 > {_CLOCK} "
+                "request_digest, expires_at, creation_token, secret_name, state, attempt_state) "
+                f"SELECT $1, $2, $3, $4, $5, $6, $7, 'reserved', 'unstarted' WHERE $5 > {_CLOCK} "
                 "ON CONFLICT (namespace, secret_ref) DO NOTHING RETURNING secret_ref",
                 self._namespace, secret_ref, incarnation, request_digest, expires_at,
                 token, self._name(secret_ref, incarnation),
@@ -156,6 +174,30 @@ class PostgresRuntimeCustodyMetadata:
                 raise RuntimeMetadataError("runtime_secret_expired")
             return self._record(row, created=inserted is not None)
 
+    async def begin_create(self, original: RuntimeCustodyRecord) -> bool:
+        """Commit the single dispatch fence before one no-retry cloud call.
+
+        An unknown dispatch is never rearmed after timeout, process loss or
+        a negative cloud read. A caller may recover only by positively reading
+        the committed original version. Retirement locks this same row, so an
+        undispatched retired reservation cannot later acquire dispatch rights.
+        """
+        if type(original) is not RuntimeCustodyRecord or original.namespace != self._namespace:
+            raise RuntimeMetadataError("runtime_secret_metadata_binding_invalid")
+        _hex(original.secret_ref, _HEX32)
+        async with self._transaction() as connection:
+            row = await self._locked(connection, original.secret_ref)
+            if (row is None or self._record(row) != original
+                    or row["state"] != "reserved" or not row["live"]
+                    or row["attempt_state"] != "unstarted"):
+                return False
+            return await connection.fetchval(
+                f"UPDATE {self._records} SET attempt_state = 'unknown', updated_at = clock_timestamp() "
+                "WHERE namespace = $1 AND secret_ref = $2 AND incarnation = $3 "
+                "AND attempt_state = 'unstarted' AND state = 'reserved' RETURNING TRUE",
+                self._namespace, original.secret_ref, original.incarnation,
+            ) is True
+
     def _validate_pin(self, record, *, request_digest, arn, version_id):
         if (type(request_digest) is not str or type(version_id) is not str
                 or request_digest != record.request_digest or version_id != record.creation_token):
@@ -163,6 +205,8 @@ class PostgresRuntimeCustodyMetadata:
         pattern = (r"arn:[a-z][a-z0-9-]{1,31}:secretsmanager:[a-z0-9-]{1,64}:"
                    r"[0-9]{12}:secret:" + re.escape(record.secret_name) + r"-[A-Za-z0-9]{6}")
         if type(arn) is not str or re.fullmatch(pattern, arn) is None:
+            raise RuntimeMetadataError("runtime_secret_metadata_binding_invalid")
+        if record.arn is not None and (record.arn, record.version_id) != (arn, version_id):
             raise RuntimeMetadataError("runtime_secret_metadata_binding_invalid")
 
     async def _enqueue(self, connection, record, *, arn=None, version_id=None):
@@ -182,10 +226,11 @@ class PostgresRuntimeCustodyMetadata:
             "WHERE namespace = $1 AND secret_ref = $2 AND incarnation = $3",
             record.namespace, record.secret_ref, record.incarnation,
         )
-        # Without a completed cloud-attempt ledger an in-flight/unknown create
-        # cannot be disproved by one absence read. Reconciliation stays durable
-        # even after a known resource's physical deletion is confirmed.
-        await self._enqueue(connection, record)
+        # Unstarted has no cloud dispatch right after retirement. Observed has
+        # one positively identified resource and cannot dispatch again. Only a
+        # genuinely unknown attempt needs durable discovery work.
+        if record.attempt_state in {"unknown", "legacy_unknown"}:
+            await self._enqueue(connection, record)
         if record.arn is not None:
             await self._enqueue(connection, record, arn=record.arn, version_id=record.version_id)
 
@@ -194,8 +239,8 @@ class PostgresRuntimeCustodyMetadata:
         """Pin a trusted original create acknowledgement, never AWSCURRENT.
 
         A late result after retirement/expiry cannot publish. Its returned full
-        ARN/version becomes cleanup work even if it differs from a previously
-        deleted ARN with the same creation name. The cloud service must verify
+        ARN/version becomes cleanup work; an existing pin cannot be replaced
+        by a different resource with the same creation name. The cloud service must verify
         the response's account/region against its configured client context.
         """
         _hex(secret_ref, _HEX32)
@@ -207,6 +252,17 @@ class PostgresRuntimeCustodyMetadata:
                 raise RuntimeMetadataError("runtime_secret_metadata_binding_invalid")
             record = self._record(row)
             self._validate_pin(record, request_digest=request_digest, arn=arn, version_id=version_id)
+            if record.attempt_state == "unstarted":
+                raise RuntimeMetadataError("runtime_secret_metadata_binding_invalid")
+            # Trusted positive evidence for the sole no-retry dispatch. Persist
+            # its immutable full pin even if retirement won the publication race.
+            attempt_state = "legacy_unknown" if record.attempt_state == "legacy_unknown" else "observed"
+            await connection.execute(
+                f"UPDATE {self._records} SET attempt_state = $6, arn = $4, version_id = $5 "
+                "WHERE namespace = $1 AND secret_ref = $2 AND incarnation = $3",
+                self._namespace, secret_ref, incarnation, arn, version_id, attempt_state,
+            )
+            record = self._record(dict(row, attempt_state=attempt_state, arn=arn, version_id=version_id))
             if record.state == "terminal" or not row["live"]:
                 await self._retire(connection, record)
                 await self._enqueue(connection, record, arn=arn, version_id=version_id)
@@ -303,7 +359,7 @@ class PostgresRuntimeCustodyMetadata:
         async with self._transaction() as connection:
             rows = await connection.fetch(
                 f"SELECT * FROM {self._cleanup} WHERE namespace = $1 AND "
-                "(state IN ('pending', 'delete_accepted') OR "
+                "next_attempt_at <= clock_timestamp() AND (state IN ('pending', 'confirm_pending') OR "
                 "(state = 'claimed' AND claim_until <= clock_timestamp())) "
                 "ORDER BY updated_at, job_id LIMIT $2 FOR UPDATE SKIP LOCKED",
                 self._namespace, limit,
@@ -325,12 +381,13 @@ class PostgresRuntimeCustodyMetadata:
     async def settle_cleanup(self, claim: RuntimeCleanupClaim, *, outcome: str) -> bool:
         """CAS a trusted worker result; a delete ACK is not physical erasure.
 
-        'deleted' requires a confirm-phase claim after accepted deletion of
-        the exact pinned full ARN. Unknown-create reconciliation only retries;
-        one absent-resource read cannot settle it as deleted.
+        'deleted' requires a confirm-phase claim after deletion acceptance or
+        a separate full-ARN absence response. 'reconciled' closes only a positively
+        observed sole dispatch, never a negative cloud lookup. Retry uses
+        database-clock exponential backoff capped at five minutes.
         """
         if (type(claim) is not RuntimeCleanupClaim or claim.namespace != self._namespace
-                or type(outcome) is not str or outcome not in {"retry", "delete_accepted", "deleted"}
+                or type(outcome) is not str or outcome not in {"retry", "delete_accepted", "delete_absent", "deleted", "reconciled"}
                 or type(claim.phase) is not str or claim.phase not in {"reconcile", "delete", "confirm"}
                 or any(type(value) is not str or pattern.fullmatch(value) is None for value, pattern in (
                     (claim.job_id, _HEX64), (claim.secret_ref, _HEX32),
@@ -340,21 +397,34 @@ class PostgresRuntimeCustodyMetadata:
                 or ((claim.phase == "reconcile") != (claim.arn is None))
                 or (claim.arn is not None and (type(claim.arn) is not str
                     or type(claim.version_id) is not str or _HEX32.fullmatch(claim.version_id) is None))
-                or (outcome == "delete_accepted" and claim.phase != "delete")
-                or (outcome == "deleted" and claim.phase != "confirm")):
+                or (outcome in {"delete_accepted", "delete_absent"} and claim.phase != "delete")
+                or (outcome == "deleted" and claim.phase != "confirm")
+                or (outcome == "reconciled" and claim.phase != "reconcile")):
             raise RuntimeMetadataError("runtime_secret_cleanup_binding_invalid")
-        state = {"retry": "delete_accepted" if claim.phase == "confirm" else "pending",
-                 "delete_accepted": "delete_accepted", "deleted": "deleted"}[outcome]
-        phase = "confirm" if outcome == "delete_accepted" else claim.phase
+        state = {"retry": "confirm_pending" if claim.phase == "confirm" else "pending",
+                 "delete_accepted": "confirm_pending", "delete_absent": "confirm_pending",
+                 "deleted": "deleted", "reconciled": "reconciled"}[outcome]
+        phase = "confirm" if outcome in {"delete_accepted", "delete_absent"} else claim.phase
         async with self._transaction() as connection:
+            if outcome == "reconciled":
+                row = await self._locked(connection, claim.secret_ref)
+                if (row is None or row["incarnation"] != claim.incarnation
+                        or row["state"] != "terminal" or row["attempt_state"] != "observed"
+                        or row["arn"] is None):
+                    return False
             changed = await connection.fetchval(
                 f"UPDATE {self._cleanup} SET state = $8, phase = $9, claim_token = NULL, "
-                "claim_until = NULL, updated_at = clock_timestamp() WHERE namespace = $1 "
+                "claim_until = NULL, updated_at = clock_timestamp(), "
+                "retry_count = CASE WHEN $11 THEN LEAST(retry_count + 1, 20) ELSE retry_count END, "
+                "next_attempt_at = clock_timestamp() + (CASE WHEN $11 "
+                "THEN LEAST(300, power(2, LEAST(retry_count, 9))::int) ELSE 0 END * interval '1 second') "
+                "WHERE namespace = $1 "
                 "AND job_id = $2 AND incarnation = $3 AND claim_token = $4 "
                 "AND arn IS NOT DISTINCT FROM $5 AND version_id IS NOT DISTINCT FROM $6 "
                 "AND phase = $7 AND secret_ref = $10 AND state = 'claimed' "
                 "AND claim_until > clock_timestamp() "
                 "RETURNING job_id", self._namespace, claim.job_id, claim.incarnation,
                 claim.claim_token, claim.arn, claim.version_id, claim.phase, state, phase, claim.secret_ref,
+                outcome == "retry",
             )
             return changed is not None
