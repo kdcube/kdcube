@@ -3,7 +3,8 @@
 
 Every identity here is FAKE test material minted in memory by the same X.509
 code the host CA uses; no real secret value, key, or deployment identity is
-read or written. The root-key provider is the labeled in-memory fake."""
+read or written. Most cases use the labeled in-memory root-key fake; custody
+cases use generated temporary file keys with synthetic volume classification."""
 
 from __future__ import annotations
 
@@ -561,9 +562,11 @@ def served(rig: Rig):
     server.shutdown()
 
 
-def _client(rig: Rig, server, *, cert="host-vault-client.crt", key="host-vault-client.key") -> transport.HostVaultClient:
+def _client(rig: Rig, server, *, cert="host-vault-client.crt", key="host-vault-client.key",
+            directory="identity") -> transport.HostVaultClient:
     host, port = server.address
-    tls = transport.ClientTLS(rig.root / "identity" / cert, rig.root / "identity" / key, rig.root / "identity" / "host-vault-ca.crt")
+    tls = transport.ClientTLS(rig.root / directory / cert, rig.root / directory / key,
+                              rig.root / directory / "host-vault-ca.crt")
     return transport.HostVaultClient(host=host, port=port, tls=tls, server_hostname="localhost")
 
 
@@ -574,6 +577,82 @@ def test_mtls_round_trip_and_identity_file_modes(rig: Rig, served):
     assert b.health()["deployment_id"] == "dep-1"
     assert b.set(application="connection-hub@1-0", key=KEY, value=CANARY).ok
     assert b.get(application="connection-hub@1-0", key=KEY) == CANARY
+
+
+def _disk_custody(rig: Rig, monkeypatch):
+    # Real file provider/store and TLS, synthetic filesystem classification.
+    # This gate does not attest any deployment mount or host isolation.
+    monkeypatch.setattr(storage, "persistent_filesystem", lambda root: True)
+    monkeypatch.setattr(keys, "persistent_filesystem", lambda root: True)
+    provider = keys.FileRootKeyProvider(rig.root / "rootkeys")
+    provider.rotate()
+    rig.keys = provider
+    rig.store = storage.FileDurableSecretStore(rig.root / "store", provider)
+    rig.service._store = rig.store
+
+
+def test_mtls_custody_qualification_and_original_runtime_record_survive_reconstruction(
+        rig: Rig, served, monkeypatch):
+    from kdcube_ai_app.infra.secrets.runtime_vault import RuntimeVaultStore
+
+    _disk_custody(rig, monkeypatch)
+    b = broker.SecretsBroker(transport=_client(rig, served), tenant=NS.tenant, project=NS.project)
+    adapter = RuntimeVaultStore(broker=b, application=NS.application, namespace="custody",
+                               authorized_namespaces=("custody",))
+    adapter.qualify()
+    request = rig.request(Operation.QUALIFY, key="platform.runtime.custody.__keys")
+    response = _client(rig, served).call(request)
+    assert response.extra == {"custody": protocol.custody_qualification(request.reference)}
+    assert response.request_id == request.request_id
+    assert response.value is response.generation is None
+    secret_ref = "a" * 32
+    assert adapter.create(secret_ref=secret_ref, value=CANARY, expires_at=int(time.time()) + 60)
+
+    rig.keys = keys.FileRootKeyProvider(rig.keys._dir)
+    rig.store = storage.FileDurableSecretStore(rig.store._root, rig.keys)
+    rig.service = service.HostVaultService(store=rig.store, registry=rig.registry, audit=rig.audit)
+    fresh = RuntimeVaultStore(broker=b, application=NS.application, namespace="custody",
+                             authorized_namespaces=("custody",))
+    fresh.qualify()
+    assert fresh.get(secret_ref=secret_ref) == CANARY
+    assert not fresh.create(secret_ref=secret_ref, value="synthetic-rival", expires_at=int(time.time()) + 60)
+
+
+@pytest.mark.parametrize("failure", ["memory_keys", "transient_store", "key_mode", "lock_mode",
+                                     "foreign_application", "revoked", "wildcard_only"])
+def test_mtls_healthy_vault_does_not_qualify_unsafe_or_ungranted_custody(
+        rig: Rig, served, monkeypatch, failure):
+    from kdcube_ai_app.infra.secrets.runtime_vault import RuntimeVaultError, RuntimeVaultStore
+
+    _disk_custody(rig, monkeypatch)
+    application = NS.application
+    directory = "identity"
+    if failure == "memory_keys":
+        rig.service._store = storage.FileDurableSecretStore(rig.store._root, keys.FakeInMemoryRootKeyProvider())
+    elif failure == "transient_store":
+        monkeypatch.setattr(storage, "persistent_filesystem", lambda root: False)
+    elif failure == "key_mode":
+        (rig.keys._dir / (rig.keys.current_key_id() + ".key")).chmod(0o644)
+    elif failure == "lock_mode":
+        (rig.store._root / rig.store.LOCK_NAME).chmod(0o644)
+    elif failure == "foreign_application":
+        application = OTHER_APP.application
+    elif failure == "wildcard_only":
+        ticket = rig.registry.mint_ticket(deployment_id="synthetic-wildcard", namespaces=["demo-tenant/demo-project/*"])
+        key = identity.DeploymentKey.generate()
+        cert, _ = rig.registry.enroll(ticket_id=ticket.ticket_id, csr_pem=key.csr())
+        directory = "wildcard-identity"
+        key.write_identity_files(rig.root / directory, cert_pem=cert, ca_pem=rig.ca.cert_pem)
+
+    b = broker.SecretsBroker(transport=_client(rig, served, directory=directory), tenant=NS.tenant, project=NS.project)
+    assert b.health()["ok"] is True
+    adapter = RuntimeVaultStore(broker=b, application=application, namespace="custody",
+                               authorized_namespaces=("custody",))
+    if failure == "revoked":
+        adapter.qualify()
+        rig.registry.revoke(rig.record.fingerprint)
+    with pytest.raises(RuntimeVaultError, match="^runtime_secret_custody_unqualified$"):
+        adapter.qualify()
 
 
 def test_transport_rejects_non_json_request_content_type(rig: Rig, served):

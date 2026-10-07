@@ -30,44 +30,42 @@ def _settings(
     )
 
 
-def test_host_vault_shadow_uses_broker_for_runtime_secret_custody() -> None:
+def test_custody_does_not_switch_the_configured_file_provider() -> None:
     store = ephemeral_secret_store(
         namespace="resident-card-credentials",
         settings=_settings(backend="host-vault"),
     )
 
-    assert store._manager.provider_type == "secrets-service"
-    assert store._manager._url == "http://kdcube-secrets:7777"
+    assert store._manager.provider_type == "secrets-file"
     assert store._manager.can_write() is True
 
 
-def test_ephemeral_sidecar_does_not_become_durable_runtime_custody() -> None:
-    with pytest.raises(SecretsManagerError, match="require the host vault"):
-        ephemeral_secret_store(
-            namespace="resident-card-credentials",
-            settings=_settings(backend="ephemeral"),
-        )
+@pytest.mark.asyncio
+async def test_unconfigured_file_runtime_root_does_not_qualify() -> None:
+    store = ephemeral_secret_store(
+        namespace="resident-card-credentials", settings=_settings(backend="ephemeral"),
+    )
+    assert await store.qualify_durable_backend() is False
 
 
 def test_runtime_custody_ignores_backend_environment_fallbacks(monkeypatch) -> None:
     monkeypatch.setenv("SECRETS_SERVICE_BACKEND", "host-vault")
     monkeypatch.setenv("KDCUBE_SECRETS_SERVICE_BACKEND", "host-vault")
 
-    with pytest.raises(SecretsManagerError, match="require the host vault"):
-        ephemeral_secret_store(
-            namespace="resident-card-credentials",
-            settings=_settings(backend="ephemeral"),
-        )
+    store = ephemeral_secret_store(
+        namespace="resident-card-credentials", settings=_settings(backend="ephemeral"),
+    )
+    assert store.provider_type == "secrets-file"
 
 
-def test_host_vault_runtime_custody_requires_admin_token() -> None:
+def test_runtime_custody_requires_the_selected_manager_write_lane() -> None:
     with pytest.raises(
         SecretsManagerError,
         match="not configured for runtime writes",
     ):
         ephemeral_secret_store(
             namespace="resident-card-credentials",
-            settings=_settings(backend="host-vault", admin_token=None),
+            manager=SimpleNamespace(provider_type="fixture", can_write=lambda: False),
         )
 
 

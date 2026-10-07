@@ -4,7 +4,7 @@ title: "Server-Side Login And The Platform Session"
 summary: "How an app-defined login turns an authenticator proof into one KDCube-owned platform session with PostgreSQL authority, a fenced Redis projection, protected browser entry, and sliding lifetime."
 tags: ["service", "auth", "application", "bundle", "session", "sso"]
 keywords: ["server-side login", "app-defined authenticator", "platform session", "platform principal", "connection edge", "bundle", "kst1", "login lane", "login", "logout", "register", "invalidate", "sliding session", "OIDC", "Cognito hosted UI"]
-updated_at: 2026-09-23
+updated_at: 2026-10-07
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/app-simple-idp-bridge-README.md
@@ -95,6 +95,239 @@ Platform UserSession
 | PostgreSQL | Platform | Authoritative bundle users, user versions, bundle sessions, platform sessions, revocation state, and expiry. |
 | Redis | Platform | Stores generation-scoped session projections with native TTL plus digest-only login-attempt pointers bound to the current Redis run. Cache misses rebuild from PostgreSQL. |
 | Deployment secret provider | Deployment | Stores `platform.services.session_token.secret` and short-lived login-attempt payloads. Local runtimes use the host vault; hosted runtimes use dedicated Secrets Manager records. |
+
+## Recoverable Committed Session Issuance
+
+`BundleSessionAuthority.issue_bound_session(context, *, user_id, roles,
+permissions, custody)` is an internal host integration point for a credential
+effect whose authenticated actor, immutable intent and committed decision have
+already been validated. The host also enforces the current target's eligibility.
+`IssuanceContext` carries the tenant, project, transaction, effect slot, actor,
+effect and receipt digests, access identity, target incarnation and absolute
+expiry. The SDK compares every immutable context and grant field on replay.
+
+The issuance identity is SHA-256 of canonical JSON
+`[tenant, project, transaction_id, slot]`. The trusted host supplies a stable
+slot for the exact grant effect, distinct across participants in a grouped
+transaction and unchanged on retry. Slots are exact nonempty ASCII strings of
+at most 256 bytes; test fixture names are not production slot definitions.
+
+SDK session activation and a host's Card/grant binding are separate checks.
+Possessing the correctly signed reserved bearer does not authenticate before
+the active PostgreSQL session row exists, even after custody was committed.
+After SDK activation, the host still enforces the exact live Card/grant binding
+at its delegated authorization boundary. Normal platform sign-in uses its own
+login lane and does not acquire a Card binding from this API.
+
+The durable sequence is reservation, create-only original bearer custody, then
+session activation. PostgreSQL reserves the fixed session id, opaque secret
+reference, signed inputs and bearer digest before an active session exists.
+Register-if-absent happens in that same transaction; granted roles and
+permissions are installed at first activation. An identical retry uses the
+stored reservation and original custody entry. A conflicting request refuses
+before changing the user or custody. Revocation, a moved user epoch and expiry
+remain refusals, and replay of an activated reservation never restores earlier
+user grants.
+
+The reservation captures the user's authority revision under the user lock.
+First activation takes the same lock and refuses if that revision changed:
+an older pending issuance cannot replace a newer grant for the same subject.
+The issuer also passes the revision observed before signing (or an absence
+fence for a new subject), so an intervening update or creation refuses before
+reservation. Existing pending rows without a captured revision fail closed;
+already-active rows can still recover their original receipt without changing
+the current user's grants.
+
+The result `SessionIssuanceReceipt(session_id, secret_ref, bearer_sha256, outcome)` exposes
+coordinates and a digest; the original bearer remains in the host-injected
+durable secret store. Its `create(secret_ref=..., value=..., expires_at=...)`
+is atomic/create-only and its `get(secret_ref=...)` returns `None` only for
+absence; unavailable or uncertain outcomes raise. Expiry and
+signing-key changes cannot cause a retry to mint a new session identity.
+Reservations remain identity tombstones after completion or expiry, so any
+retention policy must preserve their no-remint identity.
+
+The signing primitive runs before reservation and can run again on the same
+reserved claims during recovery. Original hash equality fences that recovery;
+the guarantee is one accepted original session identity and bearer, rather
+than one invocation of the signing primitive.
+
+For KDCube host composition, `issuance_secret_custody(namespace=..., settings=...)`
+in `infra.secrets.issuance` wraps the selected secret backend in a create-only
+JSON envelope. The envelope contains the bearer and original absolute expiry;
+it stays in secret storage, never the public receipt. Reads refuse expired or
+malformed envelopes by name, rather than returning absence and recreating one.
+This also supplies the format needed by expiry purge. The factory uses the
+configured secrets-service runtime custody protocol and rejects in-memory
+providers. File, native-vault and AWS adapters share its scoped operations;
+each backend must qualify its required guarantees before custody access.
+`await custody.qualify()` lets the host check this before composing issuance.
+Unavailable, transient or unqualified custody refuses. Qualification is
+rechecked for operations rather than cached.
+Generic ephemeral-store defaults remain unchanged. The host must separately qualify backend restart durability
+and reader isolation: a namespace string is not an access-control proof.
+See [runtime-secret custody](../secrets/secrets-service-README.md#11-expiring-runtime-secret-custody).
+
+The source tests cover PostgreSQL reservation/replay, concurrent issuers, and
+SIGKILL followed by a fresh issuer after reservation, custody, and activation.
+After reservation and custody interruptions, the original correctly signed
+synthetic bearer is rejected by a fresh SDK authenticator until recovery
+activates the same reserved session. This is SDK authentication evidence; it
+does not test the separate host Card/grant binding boundary.
+They also exercise committed-but-lost responses at all three steps, named
+custody outages, missing/mismatched readback, signing-key changes, and authority
+or deadline movement before activation. Process tests use a durable
+PostgreSQL **test-only** custody table holding synthetic bearers in an isolated
+schema; they qualify the issuer's interruption protocol, not a production
+secret provider. A separate signature test exercises the existing runtime
+secret adapter with an in-memory manager and makes no durability claim.
+
+### Prepare an original plan, then activate its applied result
+
+`BundleSessionAuthority.prepare_bound_session(context, *, user_id, roles,
+permissions, custody)` reserves and custodies one session while it remains
+inactive. A trusted host supplies `PlannedIssuanceContext` from its original
+authenticated decision. It binds the transaction, decision-request identity,
+intent and original-input digests, effect slot/digest, access id, target
+incarnation, Card revision, grantor actor, client, and credential issuer/subject.
+Credential identity is distinct from the actor who granted it. The host maps
+its candidate revision to `card_revision` and its canonical Card content hash
+to `target_incarnation`, retaining `base_revision` as well. The structural
+`PlannedIssuanceContext.from_oauth_plan(plan, slot=..., expires_at=...)` adapter
+performs this mapping. The host validates the original plan before this call.
+
+The fixed `expires_at` is the original session's absolute lifetime, capped by
+the Card's original `cap_expires_at`.
+`delivery_deadline` is the host's original bounded delivery window, and
+`reserved_until` also caps preparation by the original decision's expiry.
+The host captures these once from its durable original plan and issuer
+lifetime; retries reuse them. A future commit receipt is absent from this
+preparation fingerprint. The SDK stores the plan and bearer digest in
+PostgreSQL; bearer bytes stay in create-only custody.
+
+`activate_prepared_bound_session(context, *, custody)` accepts an internal
+`AppliedIssuanceContext` containing that same original plan, a validated
+`committed` decision and `applied` slot outcome, original receipt digest and
+bearer commitment. `AppliedIssuanceContext.from_oauth_result(plan, result)`
+compares the original transaction, intent, access identity, revision, Card
+expiry, delivery deadline and slot effect before constructing this binding.
+The host obtains these from its authenticated result reader,
+not caller JSON. The SDK compares the stored plan and original bearer digest,
+reads custody without signing or creating a credential, and activates the
+fixed reservation. It records the applied-result digest for exact replay.
+Pending, aborted, released or superseded outcomes refuse. The legacy
+`activate_reserved(identity)` path refuses planned rows without this binding.
+
+PostgreSQL evaluates the delivery deadline after acquiring the user and
+issuance locks. Expiry during a lock wait refuses activation even if the
+session's own lifetime remains valid. Preparation also checks the fixed
+reservation deadline inside its transaction. Existing committed issuances keep
+their original behavior; additive nullable columns preserve legacy rows and
+planned rows with missing historical deadlines fail closed.
+
+These are SDK internal composition primitives. Host validation of original
+Plan/Result, live Card incarnation fencing, consumed authorization-code replay
+and physical custody erasure remain host integration responsibilities. A
+prepared receipt describes stable custody coordinates and does not assert
+that the session is active or usable.
+
+### Terminal retirement of a never-active original
+
+`retire_prepared_bound_session(context, *, custody)` first commits a durable
+identity tombstone, then invokes `custody.delete` on only the original reserved
+reference. Its internal `TerminalIssuanceContext.from_oauth_result(plan, result)`
+accepts an authenticated original ABORT/released result or a committed
+superseded slot. An absent never-reserved slot is reported by Hub as pending
+even after ABORT; only that empty-commitment ABORT case is adapted to release.
+Pending decisions and applied slots never authorize retirement. The host,
+not this structural adapter, authenticates the original result.
+
+`TerminalIssuanceContext.expired(plan)` requests retirement after the original
+delivery window. PostgreSQL rechecks that deadline after taking the identity
+and reservation locks; a caller clock or current Card expiry cannot shorten
+it. A session which is already active, has an activation commitment or has
+ever acquired a session row refuses all of these cleanup paths. This is not a
+logout/revocation API and does not touch user grants, epochs or sibling tokens.
+Ordinary Card permission edits do not retire delivered stable token pointers.
+
+The additive `kdcube_bundle_session_issuance_terminals` table also fences an
+ABORT that arrives before the first SDK reservation. It stores only identity,
+plan/result digests, reason and retirement time; no bearer or copied serving
+permissions. Read, reserve and activation refuse a retired identity forever.
+The reserve and activation writes each recheck the tombstone under their own
+database locks: an earlier successful read cannot authorize either write after
+retirement commits. Deterministic PostgreSQL regressions retire between each
+pre-lock read and its write, and assert that no session is activated and no
+first reservation or user is inserted.
+Do not remove tombstones after provider deletion, or reuse a retired reference.
+
+No database connection or lock spans the provider call. Retirement uses one
+short transaction with a five-second bound. A lost commit response does not
+trigger custody I/O; retrying the same terminal context recovers the same
+reference. Unknown/failed deletion stays a finite custody refusal, not mint
+permission. Preparation rechecks the durable terminal fence after custody I/O
+and deletes an original write which finished late.
+
+The returned retirement coordinates are not a physical-erasure proof: a
+provider may distinguish logical retirement from backing-store erasure. An
+in-flight first create can also outlive an absent-reference delete; if its
+process dies before the post-write check, host recovery must retry retirement
+of that same reference. The terminal fence still prevents activation or
+delivery. Provider-qualified restart/denial and combined crash tests remain
+required before enabling the full HTTP workflow.
+
+### Original authorization-code delivery mapping
+
+`oauth.original_exchange_store.PostgresOriginalExchangeStore` lets a trusted
+host recover the original plan after a validated authorization code has been
+consumed. It uses the host's bound PostgreSQL pool and the tenant/project
+session schema. `CodeExchangeProof.from_request` hashes the code, redirect URI
+and PKCE S256 challenge; raw codes and verifiers stay in request memory.
+`ValidatedCodeExchange.from_consumed` compares the live consumed server payload
+with that proof and captures a digest of the complete payload and the exact
+candidate inputs the host will pass to Hub begin. A retry proof alone is not
+first-exchange validation or authorization.
+For confidential clients, the host also repeats the required client
+authentication on replay; the PKCE proof does not replace that authentication.
+
+The host calls `begin(binding)` before Hub begin or any mint, uses the returned
+identity as Hub's `original_request_id`, then `pin_plan(binding, original_plan)`
+before credential preparation. The Hub decision-request identity must match
+the original namespace, grantor, client and host-selected decision scope.
+The ledger pins the complete original plan, including its transaction, Card
+incarnation, effect digests and deadlines. Identical retries reuse it; changed
+proofs, inputs or plans refuse. `read(proof)` performs no mint or activation.
+If validation was recorded but no plan was pinned, the host returns pending
+or a named refusal, rather than starting a replacement from client input.
+
+An unfinished mapping has a fixed 600-second recovery bound captured by
+PostgreSQL at first validation. Once pinned, the Hub's original delivery
+deadline is retained exactly, separately from that unfinished-mapping bound.
+Both are checked with PostgreSQL `clock_timestamp()` after relevant lock waits.
+Expired rows remain no-rebegin tombstones. Each operation uses one bounded
+connection acquisition and a short transaction; it holds no connection across
+Hub completion, minting or custody calls. Database unavailability returns
+`original_exchange_unavailable`, and never licenses a replacement mint.
+
+The ledger stores digests and original plan data, not bearer bytes, raw codes,
+verifiers or consumed payloads. The plan is recovery data, not permission
+authority: serving resolves the current live Card behind a stable token
+pointer. Card permission edits do not rewrite that token. The HTTP token route
+does not yet invoke this primitive; the authenticated original decision reader,
+custody recovery, live-Card serving checks and terminal callbacks must be
+composed and verified together before enabling this workflow.
+
+Deployment integration still requires a qualified durable custody backend,
+host target fencing, and the OAuth refresh/refusal-cleanup adapters. Ordinary
+`login` and `login_or_register` keep their existing behavior.
+
+On a late Card conflict or caller-write refusal during an OAuth refresh,
+the host preserves the supplied replacement refresh token until the refresh
+handler rolls its rotation back. The remotely held original remains usable
+and the client receives a retryable 503, then retries against the current live
+Card without a new consent. Cleanup removes only the new withheld access
+binding in this case. An initial code/device issuance owns a never-delivered
+new family; its late refusal still cleans both newly issued credentials.
 
 ## Descriptor Contract
 

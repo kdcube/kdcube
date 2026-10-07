@@ -1,11 +1,16 @@
 # SPDX-License-Identifier: MIT
 from __future__ import annotations
 
+import json
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
+
+_RUNTIME_NAMESPACE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
+_CREDENTIAL_DIGEST = re.compile(r"[0-9a-f]{64}")
 
 EPHEMERAL_BACKEND = "ephemeral"
 HOST_VAULT_BACKEND = "host-vault"
@@ -32,6 +37,9 @@ class HostVaultRuntimeConfig:
     server_name: str = ""
     identity_dir: Path | None = None
     exec_network_mode: str = ""
+    runtime_root: str = ""
+    runtime_namespaces: tuple[str, ...] = ()
+    runtime_scope_policy: str = ""
 
     @property
     def enabled(self) -> bool:
@@ -100,6 +108,61 @@ def _validate_address(address: str) -> None:
         )
 
 
+def _runtime_configuration(secrets: Mapping[str, object]) -> dict[str, object]:
+    # kdcube-cli is a standalone distribution. Validate the producer's closed
+    # projection shape here, without importing the runtime SDK or authorizing
+    # credentials. Consumer-contract tests keep the two boundaries aligned.
+    runtime = secrets.get("runtime")
+    if runtime is None:
+        return {}
+    if not isinstance(runtime, Mapping) or set(runtime) - {"root", "namespaces", "scope_policy"}:
+        raise HostVaultConfigurationError("secrets.runtime must contain only root, namespaces and scope_policy")
+    root = runtime.get("root", "")
+    try:
+        invalid_root = type(root) is not str or len(root.encode("utf-8")) > 4096
+    except UnicodeError:
+        invalid_root = True
+    if (invalid_root or (root and (
+            not Path(root).is_absolute() or Path(root) == Path("/")
+            or root != root.strip() or any(value in root for value in ("\n", "\r", "\0", "$"))
+            or ".." in Path(root).parts))):
+        raise HostVaultConfigurationError("secrets.runtime.root must be a dedicated absolute path")
+    namespaces = runtime.get("namespaces", [])
+    if (type(namespaces) is not list or len(namespaces) > 64
+            or any(type(value) is not str or _RUNTIME_NAMESPACE.fullmatch(value) is None
+                   for value in namespaces)
+            or len(set(namespaces)) != len(namespaces)):
+        raise HostVaultConfigurationError("secrets.runtime.namespaces must be unique exact namespace names")
+    raw_policy = ""
+    if "scope_policy" in runtime:
+        try:
+            raw_policy = json.dumps(runtime["scope_policy"], sort_keys=True, separators=(",", ":"), allow_nan=False)
+        except (TypeError, ValueError, RecursionError):
+            raise HostVaultConfigurationError("secrets.runtime.scope_policy is invalid") from None
+        policy = runtime["scope_policy"]
+        if not _valid_runtime_policy(policy, namespaces=namespaces, encoded=raw_policy):
+            raise HostVaultConfigurationError("secrets.runtime.scope_policy must grant only declared namespaces")
+    return {"runtime_root": root, "runtime_namespaces": tuple(namespaces),
+            "runtime_scope_policy": raw_policy}
+
+
+def _valid_runtime_policy(policy: object, *, namespaces: list[str], encoded: str) -> bool:
+    if (type(policy) is not dict or set(policy) != {"schema", "read", "write"}
+            or policy["schema"] != "kdcube.runtime_secret_scopes.v1"
+            or len(encoded.encode("utf-8")) > 65536):
+        return False
+    for kind in ("read", "write"):
+        grants = policy[kind]
+        if type(grants) is not dict or len(grants) > 64:
+            return False
+        for digest, values in grants.items():
+            if (type(digest) is not str or _CREDENTIAL_DIGEST.fullmatch(digest) is None
+                    or type(values) is not list or len(values) > 64
+                    or any(type(value) is not str or value not in namespaces for value in values)):
+                return False
+    return True
+
+
 def config_from_assembly(assembly: Mapping[str, object]) -> HostVaultRuntimeConfig:
     secrets = _mapping(assembly.get("secrets"))
     service = _mapping(secrets.get("service"))
@@ -125,6 +188,7 @@ def config_from_assembly(assembly: Mapping[str, object]) -> HostVaultRuntimeConf
         server_name=_text(vault.get("server_name")),
         identity_dir=identity_dir,
         exec_network_mode=_text(exec_config.get("py_code_exec_network_mode")),
+        **_runtime_configuration(secrets),
     )
     validate_configuration(config, check_identity=False)
     return config
@@ -202,6 +266,10 @@ def compose_environment(config: HostVaultRuntimeConfig) -> dict[str, str]:
         "HOST_KDCUBE_HOST_VAULT_CLIENT_CERT_PATH": "",
         "HOST_KDCUBE_HOST_VAULT_CLIENT_KEY_PATH": "",
         "HOST_KDCUBE_HOST_VAULT_CA_PATH": "",
+        "KDCUBE_SECRETS_RUNTIME_ROOT": config.runtime_root,
+        "HOST_KDCUBE_RUNTIME_SECRETS_ROOT": config.runtime_root,
+        "KDCUBE_SECRETS_RUNTIME_NAMESPACES": json.dumps(list(config.runtime_namespaces), separators=(",", ":")),
+        "KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY": config.runtime_scope_policy,
     }
     if not config.enabled:
         return values

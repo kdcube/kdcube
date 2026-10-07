@@ -326,7 +326,7 @@ async def test_secrets_service_without_admin_token_fails_closed(monkeypatch):
 async def test_secrets_service_create_is_atomic_and_reports_collision(monkeypatch):
     client = _QueuedSecretsHttpClient(
         [
-            _FakeHttpResponse(200, {"status": "ok", "generation": 1}),
+            _FakeHttpResponse(200, {"status": "ok", "created": True}),
             _FakeHttpResponse(409, {"detail": "generation conflict"}),
         ]
     )
@@ -352,16 +352,17 @@ async def test_secrets_service_create_is_atomic_and_reports_collision(monkeypatc
     )
     assert [request[2]["json"] for request in client.requests] == [
         {
-            "key": f"platform.runtime.resident-secrets.{secret_ref}",
+            "secret_ref": secret_ref,
             "value": "original",
-            "expected_generation": 0,
+            "expires_at": 20,
         },
         {
-            "key": f"platform.runtime.resident-secrets.{secret_ref}",
+            "secret_ref": secret_ref,
             "value": "replacement",
-            "expected_generation": 0,
+            "expires_at": 30,
         },
     ]
+    assert all(request[1].endswith("/runtime-secrets/resident-secrets/create") for request in client.requests)
 
 
 @pytest.mark.asyncio
@@ -384,7 +385,7 @@ async def test_secrets_service_create_transport_failure_is_outcome_unknown_and_s
             expires_at=20,
         )
 
-    assert str(captured.value) == "secrets-service create request outcome is unknown"
+    assert str(captured.value) == "runtime_secret_outcome_unknown"
     assert canary not in str(captured.value)
     assert "platform.runtime" not in str(captured.value)
 
@@ -397,7 +398,7 @@ async def test_secrets_service_create_transport_failure_is_outcome_unknown_and_s
         {"status": "ok", "generation": 2},
     ],
 )
-async def test_secrets_service_create_requires_generation_one(
+async def test_runtime_create_refuses_legacy_or_foreign_acknowledgement(
     monkeypatch,
     payload,
 ):
@@ -410,7 +411,7 @@ async def test_secrets_service_create_requires_generation_one(
 
     with pytest.raises(
         SecretsManagerWriteError,
-        match="does not prove ownership; outcome is unknown",
+        match="^runtime_secret_response_invalid$",
     ):
         await _secrets_service_manager().create_ephemeral_secret(
             namespace="resident-secrets",
@@ -1298,17 +1299,10 @@ async def test_in_memory_ephemeral_create_preserves_existing_record():
 
 
 @pytest.mark.asyncio
-async def test_ephemeral_purge_uses_the_host_vault_broker_inventory(monkeypatch):
-    expired_ref = "a" * 32
-    live_ref = "b" * 32
-    expired_key = f"platform.runtime.login-attempts.{expired_ref}"
-    live_key = f"platform.runtime.login-attempts.{live_ref}"
+async def test_ephemeral_purge_uses_one_scoped_server_operation(monkeypatch):
     client = _QueuedSecretsHttpClient(
         [
-            _FakeHttpResponse(200, {"value": json.dumps([live_key, expired_key])}),
-            _FakeHttpResponse(200, {"value": json.dumps({"expires_at": 10})}),
-            _FakeHttpResponse(204, {}),
-            _FakeHttpResponse(200, {"value": json.dumps({"expires_at": 30})}),
+            _FakeHttpResponse(200, {"status": "ok", "removed": 1}),
         ]
     )
     monkeypatch.setattr(
@@ -1321,18 +1315,11 @@ async def test_ephemeral_purge_uses_the_host_vault_broker_inventory(monkeypatch)
     )
 
     assert await store.purge_expired(now=20, limit=100) == 1
-    assert [method for method, _url, _kwargs in client.requests] == [
-        "GET",
-        "GET",
-        "DELETE",
-        "GET",
-    ]
+    assert [method for method, _url, _kwargs in client.requests] == ["POST"]
     assert client.requests[0][1].endswith(
-        "/secret/platform.runtime.login-attempts.__keys"
+        "/runtime-secrets/login-attempts/purge"
     )
-    assert client.requests[1][1].endswith(f"/secret/{expired_key}")
-    assert client.requests[2][1].endswith(f"/secret/{expired_key}")
-    assert client.requests[3][1].endswith(f"/secret/{live_key}")
+    assert client.requests[0][2]["json"] == {"now": 20, "limit": 100}
     assert client.responses == []
 
 
@@ -1363,6 +1350,7 @@ async def test_aws_ephemeral_store_uses_dedicated_prefix_and_force_deletes():
             provider="aws-sm",
             component="ingress",
             aws_sm_prefix="kdcube/demo/demo-march",
+            runtime_secret_namespaces=("login-attempts",),
         )
     )
     client = _FakeAwsSecretsClient()
@@ -1408,6 +1396,7 @@ async def test_aws_ephemeral_create_preserves_existing_record():
             provider="aws-sm",
             component="ingress",
             aws_sm_prefix="kdcube/demo/demo-march",
+            runtime_secret_namespaces=("resident-secrets",),
         )
     )
     client = _FakeAwsSecretsClient()
@@ -1439,6 +1428,7 @@ async def test_aws_ephemeral_create_replays_after_a_lost_success_response():
             provider="aws-sm",
             component="ingress",
             aws_sm_prefix="kdcube/demo/demo-march",
+            runtime_secret_namespaces=("resident-secrets",),
         )
     )
     client = _LostAwsCreateResponseClient()
@@ -1476,6 +1466,7 @@ async def test_aws_ephemeral_create_uses_canonical_ref_as_idempotency_token():
             provider="aws-sm",
             component="ingress",
             aws_sm_prefix="kdcube/demo/demo-march",
+            runtime_secret_namespaces=("resident-secrets",),
         )
     )
     client = _FakeAwsSecretsClient()
@@ -1498,6 +1489,7 @@ async def test_aws_ephemeral_purge_scans_at_most_three_pages():
             provider="aws-sm",
             component="ingress",
             aws_sm_prefix="kdcube/demo/demo-march",
+            runtime_secret_namespaces=("login-attempts",),
         )
     )
     prefix = "kdcube/demo/demo-march/runtime/login-attempts/"

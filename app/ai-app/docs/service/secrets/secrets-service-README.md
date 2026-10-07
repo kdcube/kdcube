@@ -4,7 +4,7 @@ title: "Secrets Manager Implementations"
 summary: "System map for KDCube secret resolution: descriptor selectors, trusted-runtime read and write flows, persistence choices, and provider-specific behavior."
 tags: ["service", "secrets", "configuration", "aws", "runtime"]
 keywords: ["SECRETS_PROVIDER", "secrets.service.backend", "secrets-service", "host-vault", "aws-sm", "secrets-file", "in-memory", "user secrets", "bundle secrets", "secret flow"]
-updated_at: 2026-09-22
+updated_at: 2026-10-07
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/service-runtime-configuration-mapping-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/secrets-descriptor-README.md
@@ -67,20 +67,306 @@ keeping provider choice inside KDCube.
 
 `create(secret_ref, value, expires_at)` is an atomic create-only operation:
 
-- `True` proves this create operation owns the requested record; an exact
-  replay after a lost success response has the same result.
-- `False` proves the reference already existed and its value remains intact.
+- `True` means this call created the requested record.
+- `False` means the reference already existed, including an identical replay;
+  its original value, identity and deadline remain intact.
 - an exception means the outcome is unknown. The record remains eligible for
   its provider expiry purge, and callers never infer that it is absent.
 
-The local secrets-service path sends `expected_generation: 0`. Both the
-host-vault broker and the temporary sidecar enforce that precondition at the
-storage mutation. AWS uses `CreateSecret` with the opaque reference as its
-idempotency token, so a retry of the same operation returns its original
-success; `ResourceExistsException` identifies a different operation that
-already owns the name. The in-memory provider performs the test and insert
-under its process lock. Existing `set` operations remain available for
-protocols that do not consume the create outcome.
+The dedicated runtime service path uses create-only records, separate from
+configuration descriptor storage and the legacy generic write endpoint.
+The file runtime store uses an OS lock; the host-vault runtime path uses a
+fixed reference binding and generation-zero creation. In-memory and legacy
+raw AWS operations do not establish the common custody guarantees merely
+because they support writes. In particular, a cloud idempotency token alone
+does not enforce read expiry or provide a terminal deletion fence.
+
+Recoverable session issuance uses `issuance_secret_custody` from
+`infra.secrets.issuance`. It wraps the original bearer in a versioned,
+reference-bound JSON envelope and refuses malformed or expired reads with
+finite `issuance_custody_invalid` / `issuance_custody_expired` reasons. Missing
+records return `None`; provider failures remain unavailable, not absence.
+Its purge accepts a non-future timestamp and a limit from 1 to 1000. The issuer
+still trusts only readback matching the digest captured in its reservation,
+not the create Boolean. Recovery reads the original after a collision; it never
+overwrites that reference or moves to a fresh reference after an unknown result.
+
+The issuance wrapper's `delete(secret_ref=...)` retires one validated opaque
+reference in its fixed namespace, including an expired record, without reading
+the bearer. The trusted host calls it after the original terminal ABORT or
+delivery-deadline decision. Same-reference retries are idempotent under the
+provider contract; an unavailable or lost response raises the finite
+`issuance_custody_unavailable` reason and does not prove successful deletion.
+This adapter supplies the deletion operation, not the decision callback or a
+new issuance protocol. Cloud retirement and physical erasure remain separate
+states as described below; the host still qualifies its backend's cleanup.
+
+The factories use the same mode-neutral qualification operation,
+`qualify_runtime_custody(namespace=...)`, rather than a provider-name allowlist
+or `/health` response. The compatibility `durability_required` constructor
+argument is not an authorization decision. The wrapper's `namespace` is its
+bound address; `declared_backend` and the compatibility `effective_backend`
+are configured provider telemetry, not authority. Direct construction requires
+the exact host store type. Composition must require the exact wrapper and
+namespace, never default a missing namespace or trust a provider label.
+
+Call `await custody.qualify()` before composing production issuance. Every
+create, get, delete and purge repeats the check before value I/O; it is not cached.
+The running service must attest all five guarantees for the exact namespace:
+create-only writes, restart persistence, expiry-enforced reads, bounded atomic
+purge and scope authorization. Its authenticated qualification endpoint is
+`/runtime-secrets/{namespace}/qualification`. Host-owned policy grants exact
+namespaces to read and write credential hashes; neither a namespace supplied
+in a request nor a shared application token is itself a grant. Malformed or
+missing policy denies access. The AWS lane currently returns unqualified.
+The host must still verify real replacement persistence and second-identity
+denial: unit fixtures and configured labels are not deployment evidence.
+
+For a cloud backend, bounded atomic purge means atomic logical retirement
+plus durable, bounded cleanup claims. It does not mean synchronous physical
+cloud erasure. A terminal record blocks reads and late publication before
+cleanup starts. Deletion acceptance and physical deletion confirmation are
+separate states, and unresolved create outcomes remain reconciliation work.
+
+#### Dedicated file-runtime records
+
+The file manager has a separate runtime-record primitive. A trusted host may
+construct `SecretsManagerConfig` with `runtime_secrets_root` (an absolute,
+dedicated persistent directory) and `runtime_secret_namespaces` (the exact
+authorized namespace set). These records never enter configuration descriptor
+YAML. Creation, reads, deletion and bounded expiry purge share a cross-process
+OS file lock; commits use private files, atomic rename and file/directory fsync.
+Reads enforce expiry, and create-only collisions preserve the original value.
+No runtime root or namespace authorization is inferred from a descriptor path.
+
+The file runtime store participates in the common qualification contract;
+there is no separate issuance-only provider allowlist. Private local files prove
+neither a container mount's persistence through replacement nor isolation from
+co-located code running as the same OS identity. The host owns those deployment
+guarantees.
+
+#### Service-owned PostgreSQL cloud metadata (supporting layer)
+
+The common runtime HTTP boundary accepts synchronous or asynchronous trusted
+store factories and operations. Sync file/native work remains in a threadpool;
+async pool/cloud work is awaited on the service event loop. Authorization and
+bounded input validation precede factory invocation. Each request requires an
+exact successful storage qualification before any record operation, not just
+at the qualification endpoint. Bootstrap constructs stores without a duplicate
+qualification check. Finite errors, exact result types and no-store responses
+are shared across providers. In particular, directly supplying the still
+unqualified AWS component cannot bypass this gate; this bridge does not
+select an AWS backend, open a pool, provision a key or lift qualification.
+
+`runtime_pg_schema` provides an explicit migrator, and
+`PostgresRuntimeCustodyMetadata` supplies non-secret reservations, original
+full-ARN/version pins, terminal tombstones and leased cleanup claims. Values
+do not enter these tables. A trusted service supplies a dedicated pool,
+schema, namespace enrollment and cloud prefix; these are not request JSON or
+Card/session-table authority. Normal operations need schema USAGE and table
+SELECT/INSERT/UPDATE, not migration privileges or DELETE.
+
+Reserve before cloud I/O. The immutable incarnation, request commitment,
+creation token and original deadline survive recovery. Only the original
+creation version may be published, never an arbitrary `AWSCURRENT` version.
+Read authorization and a live active metadata record must precede a pinned
+value fetch, followed by a state/deadline/pin recheck before returning it.
+Retirement and its cleanup jobs commit in one transaction. Late create
+acknowledgements cannot resurrect a terminal reference; their exact full ARNs
+become cleanup work. Once positively pinned, a different full ARN cannot
+replace that pin or become deletion authority for this single-dispatch lane.
+Cleanup settlement compares the incarnation, full pins and unexpired claim
+token; a stale worker cannot settle a newer claim.
+
+The value commitment is HMAC-SHA256 using a persistent service-held key of
+at least 32 bytes. No key is stored in these PostgreSQL tables or derived
+from public coordinates. This prevents metadata-only readers from checking
+low-entropy value guesses against a plain hash; the opaque-value contract
+does not require callers to supply high-entropy strings. Missing/invalid
+keys refuse. Service restart must retain the same protected key; changing
+it makes original commitment verification fail closed, not mint or replace
+the original. Secure key provisioning, preservation and any reviewed key
+migration are trusted startup/deployment dependencies still to be wired.
+
+The migrator installs a terminal-state guard trigger. Even the service's DML
+role cannot change a terminal record back to reserved or active, reset an
+unknown/observed dispatch to unstarted, or promote pre-ledger attempts into
+single-dispatch evidence. Publication also requires a reserved-state UPDATE
+precondition.
+
+`RuntimeAwsStore` adds asynchronous cloud operations over these coordinates.
+Every existing-reference create collision returns False without another
+CreateSecret call. Recovery reads the same reserved creation version and can
+publish its verified original, but cannot choose another incarnation or
+deadline. The reservation owner commits an unstarted-to-unknown dispatch
+fence before the only cloud CreateSecret call. Its actual SDK client must
+have `total_max_attempts=1`; the trusted `RuntimeAwsClientFactory` supplies
+that configuration. An unknown attempt is never rearmed, even after timeout,
+process loss or a negative resource lookup. This inference relies on the
+single-dispatch fence and the SDK's no-retry contract, not on the creation
+token alone. See [CreateSecret](https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_CreateSecret.html)
+and [botocore retry configuration](https://docs.aws.amazon.com/botocore/latest/reference/config.html).
+Active reads send the pinned full ARN and explicit original VersionId, verify
+the value commitment, then recheck metadata before returning the value.
+Omitting VersionId would select the current cloud version rather than prove
+the original. See the [AWS GetSecretValue contract](https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_GetSecretValue.html).
+
+Nonempty strings use SecretString without envelope overhead, up to its 65536
+byte limit. An empty public string uses a one-byte SecretBinary marker; the
+original commitment must still match the empty string before decoding it.
+Other binary values and responses containing both fields are refused. These
+are internal service encodings, not a format imposed on caller values.
+
+Deletion and purge retire metadata first, without claiming physical erasure.
+`drain_cleanup(limit=...)` is a trusted maintenance operation, not a public
+job endpoint. It deletes only a full ARN from a durable claim. An accepted
+delete advances to a separate full-ARN confirmation phase. Name lookup is
+restricted to unresolved-creation discovery with the original VersionId;
+it never authorizes deletion by name. Cloud exception text is not exposed.
+If a delete response is lost and the pinned ARN is later absent, a separate
+confirmation is still required. `confirm_pending` is neither a delete ACK
+nor physical completion; `reconciled` closes discovery only, not deletion.
+
+An unstarted reservation retired before dispatch needs no cloud discovery
+job and cannot later acquire dispatch rights. A positively acknowledged or
+recovered sole dispatch is observed; its known ARN can be deleted and
+confirmed without permanent discovery work. A truly unknown attempt remains
+durable: absence cannot close it because that one request may still commit.
+This includes a process lost between committing the dispatch fence and
+sending its request. Such an attempt can remain unresolved indefinitely;
+the service does not mint a replacement or claim successful recovery.
+
+Cleanup retries use database-clock exponential backoff capped at five
+minutes and bounded claim batches. New unresolved reservations are admitted
+under a cross-process namespace lock, with a trusted `max_unresolved` limit
+(default 1000, maximum 10000). At capacity, new references refuse with a
+finite unavailable reason while existing-reference recovery remains usable.
+An unknown terminal attempt still consumes a slot. An observed attempt or
+undispatched retirement frees it; a negative cloud lookup never does. These
+limits bound unknown-attempt load, not total historical tombstone storage.
+
+The explicit migration classifies pre-ledger records as `legacy_unknown`.
+They cannot be relabeled observed merely by reading one original version:
+earlier code may already have issued multiple requests. They remain durable
+and consume capacity. Migration occurs before opening the service pool;
+existing pre-ledger deployments require separately reviewed reconciliation
+and rollout evidence, not automatic activation of this new lane.
+
+A received, definite CreateSecret refusal has its own terminal attempt state,
+`refused`. The adapter requires an actual botocore `ClientError` for
+`CreateSecret`, a received 4xx HTTP status, zero SDK retries, and a narrow
+authorization/throttling/validation/quota error allowlist. The distinction is
+based on the [AWS common errors](https://docs.aws.amazon.com/secretsmanager/latest/apireference/CommonErrors.html)
+and [CreateSecret error contract](https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_CreateSecret.html).
+It is evaluated only around the actual SDK operation, not client-enter/exit.
+ResourceExists, crypto/internal errors, 5xx, transport loss, cancellation,
+missing/malformed status or a code-only arbitrary exception stay unknown.
+
+Recording the refusal atomically retires the exact immutable original and
+closes pending/claimed discovery work. This releases admission capacity while
+keeping the reference permanently unavailable for replay; stale cleanup claims
+lose their CAS rights. Refused rows cannot rearm, revive or acquire a late pin.
+Migration explicitly adds this state and its terminal/no-pin constraint. A
+crash or database failure before the refusal receipt commits conservatively
+leaves unknown: a later negative read still cannot supply the lost evidence.
+
+`RuntimeAwsService.admission_status(namespace)` exposes a trusted, value-free
+collector input: unstarted, unknown, legacy-unknown and total unresolved counts,
+capacity and saturation. It uses the dedicated pool's acquisition checks and
+command timeout and emits no secret, reference, incarnation, ARN or error text.
+It installs no public HTTP route; operator/metrics collector deployment remains
+a separate wiring step. Status and startup success never qualify custody.
+
+`RuntimeAwsService` now composes this store with a dedicated, bounded asyncpg
+pool and the common HTTP boundary through an explicit ASGI lifespan. Its
+trusted composition input is `RuntimeAwsServiceConfig`: exact namespaces,
+metadata schema/login role, AWS account/region/partition/prefix, capacity
+bounds, and two `RuntimeBootstrapSecretRef` values. Each bootstrap reference
+pins a complete AWS ARN plus an explicit VersionId. The database DSN is a
+SecretString; the commitment key is a 32–4096 byte SecretBinary. Their ARNs
+are distinct and outside the runtime-record prefix. The service reads them
+using its own AWS principal, checks response pins/types, and never uses
+arbitrary CURRENT. References may be descriptor data; values may not.
+
+Import, construction and route installation perform no resource I/O. Lifespan
+startup loads the pinned inputs and opens its own pool with verified TLS,
+explicit connection/command timeouts and bounded size. The resolved DSN must
+name the configured login role and explicit host, port and database; ambient
+connection defaults, query options and role overrides are refused. Normal
+startup performs no migration or role grants. Pool shutdown is bounded and
+terminates the owned pool on failure. Service-owned references to the key are
+released on close; this is not a claim of Python memory zeroization.
+
+Every pool acquisition runs read-only checks against the actual logged-in
+principal and migrated relations. Startup refuses superuser/admin attributes,
+role membership, schema/table ownership, DDL/DELETE capabilities, missing
+required DML access, transient relations, disabled terminal guards, stale
+columns, or access to unrelated user tables. Subsequent permission drift also
+refuses acquisition. These checks are bounded structural/access evidence;
+they do not attest every constraint/trigger body, SECURITY DEFINER function,
+database persistence or the complete deployed database/IAM boundary.
+
+This service uses a password login role with zero role memberships and direct
+grants on its own metadata schema. RDS IAM database authentication is outside
+this composition: its `rds_iam` membership is rejected by the acquisition
+check, and [AWS documents that this role selects IAM rather than password authentication](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.IAMDBAuth.html).
+Effective privileges inherited from PUBLIC are checked too; access to an
+unrelated user-schema table therefore refuses even without a direct grant.
+Provisioning and diagnostics must address the database's actual effective
+privileges rather than weakening this guard.
+
+After an access refusal, a best-effort catalog query may emit one warning
+`runtime_secret_metadata_outside_relation` naming only an outside schema and
+table the role can access, which is one of the possible refusal reasons. The
+warning does not identify the exclusive cause: role attributes, memberships or
+ownership can also fail the access predicate. Identifiers are length-bounded
+and JSON-escaped to one line;
+no record values, DSN, key, secret reference, driver exception or traceback is
+logged. The diagnostic query has a 250 ms timeout and returns at most one
+relation. Diagnostic failure cannot replace the fixed public refusal or grant
+access. It does not diagnose other role/schema failures or expose an HTTP
+diagnostic endpoint.
+
+The disposable PostgreSQL lifecycle tests explicitly replace the production
+verified-TLS setting with loopback trust/SSL-disabled input. They exercise a
+real separate login role, permission drift, failure cleanup, and restart with
+the same pinned key/original credential/deadline. AWS transport is synthetic.
+Common ASGI routes remain 503 with zero runtime-record I/O because
+`RuntimeAwsStore.qualify()` remains closed; startup success is not custody
+qualification. Persistent key provisioning, entropy and denied-reader IAM
+evidence remain operator/deployment-owned. Key rotation or legacy-row rollout
+requires a separately reviewed migration preserving existing commitments.
+The catalog-cost regression adds 1,000 empty synthetic tables with no service
+grants, measures startup and ten actual pool acquisitions under the service's
+five-second command timeout, and records timings in JUnit properties. This is
+a disposable local catalog measurement, not a production latency or scale
+guarantee; deployment catalog size and concurrent load need their own evidence.
+
+The SecretsService image source packages the AWS adapter, service lifecycle,
+PostgreSQL access checks, metadata store and explicit schema migrator. Its
+requirements reuse the platform's pinned async AWS stack and pin asyncpg to
+the tested `0.31.0` version, including its verified-TLS connection semantics.
+The image-manifest regression stages only the Dockerfile's actual COPY inputs
+in an isolated directory, imports the service from those bytes in a separate
+process, and checks construction/route installation without resource I/O.
+That test uses the prepared interpreter's installed dependencies; it is not a
+fresh image build, package-install or deployed-runtime verdict.
+
+These supporting components are not yet selected by the deployment entrypoint
+or SDK runtime consumer, and do not make AWS qualification true. The new
+attempt/closure protocol requires independent review and configured-provider
+qualification, including its conservative pre-dispatch-loss and legacy-row
+behavior. Service wiring, a deployed least-privilege pool
+and role, cloud operations, IAM isolation and the complete guarantee matrix
+must be established separately before production custody can use this lane.
+
+The real-PG tests read `KDCUBE_TEST_POSTGRES_DSN`. For the whole `infra/secrets`
+pytest importlib gate, use a disposable trust-authenticated loopback or local
+socket fixture. SCRAM calls stdlib `secrets.token_bytes`, which can be shadowed
+by this package's name during whole-directory collection; a focused-file SCRAM
+run is a different input. This test-only requirement is not a recommendation
+to change production database authentication. Synthetic AWS actors and the
+installed SDK response parser tests do not attest live AWS behavior or IAM.
 
 ### 1.2 Two selectors with different jobs
 
@@ -101,6 +387,11 @@ secrets:
 The accepted service backend values are `ephemeral` and `host-vault`. The
 active durable local combination is exactly `provider: secrets-service` plus
 `backend: host-vault`. The name `secret-vault` is not a configured backend.
+
+When the dedicated runtime root is unset, Compose binds `/dev/null` with
+`create_host_path: false`; it cannot qualify as a persistent directory.
+Runtime API 503 then means custody is not configured. The ordinary secrets
+service can still start and serve its separately configured storage.
 
 Changing only `service.backend` prepares the service side. It does not reroute
 runtime reads away from the provider named by `secrets.provider`. This

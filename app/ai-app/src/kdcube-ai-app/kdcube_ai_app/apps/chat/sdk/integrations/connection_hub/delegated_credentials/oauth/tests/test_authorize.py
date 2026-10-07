@@ -1364,10 +1364,17 @@ def test_oauth_consent_grants_an_authenticated_owners_exact_connector_tool(clien
     assert set(seen_subjects) == {"google:admin@example.test"}
 
 
-def test_consent_recovers_missing_authorize_fields_from_same_origin_referrer(client):
+@pytest.mark.parametrize("issuer", [ISSUER, "http://testserver"])
+@pytest.mark.parametrize("forwarded", [
+    {},
+    {"X-Forwarded-Host": "connector.example.test", "X-Forwarded-Proto": "https"},
+    {"X-Forwarded-Host": "attacker.example", "X-Forwarded-Proto": "http"},
+])
+def test_consent_recovers_missing_authorize_fields_from_same_origin_referrer(client, forwarded, issuer):
+    client.app.state.oauth_delegated_config["issuer"] = issuer
     form = _params()
     csrf = _csrf_token(client, params=form)
-    referer = "http://testserver/oauth/authorize?" + up.urlencode(form)
+    referer = issuer + "/oauth/authorize?" + up.urlencode(form)
     form.pop("client_id")
     form["decision"] = "approve"
     form["consent_contract_version"] = CONSENT_CONTRACT_VERSION
@@ -1378,21 +1385,28 @@ def test_consent_recovers_missing_authorize_fields_from_same_origin_referrer(cli
     r = client.post(
         "/oauth/authorize/consent",
         data=form,
-        headers={"Authorization": "Bearer admin-tok", "Referer": referer},
+        headers={"Authorization": "Bearer admin-tok", "Referer": referer, **forwarded},
         follow_redirects=False,
     )
 
     assert r.status_code == 302
     q = dict(up.parse_qsl(up.urlsplit(r.headers["location"]).query))
     assert q["state"] == "st-123"
-    assert q["iss"] == ISSUER
+    assert q["iss"] == issuer
     assert q["code"]
 
 
-def test_consent_recovers_blank_authorize_fields_from_same_origin_referrer(client):
+@pytest.mark.parametrize("issuer", [ISSUER, "http://testserver"])
+@pytest.mark.parametrize("forwarded", [
+    {},
+    {"X-Forwarded-Host": "connector.example.test", "X-Forwarded-Proto": "https"},
+    {"X-Forwarded-Host": "attacker.example", "X-Forwarded-Proto": "http"},
+])
+def test_consent_recovers_blank_authorize_fields_from_same_origin_referrer(client, forwarded, issuer):
+    client.app.state.oauth_delegated_config["issuer"] = issuer
     form = _params()
     csrf = _csrf_token(client, params=form)
-    referer = "http://testserver/oauth/authorize?" + up.urlencode(form)
+    referer = issuer + "/oauth/authorize?" + up.urlencode(form)
     form["client_id"] = ""
     form["decision"] = "approve"
     form["consent_contract_version"] = CONSENT_CONTRACT_VERSION
@@ -1403,14 +1417,14 @@ def test_consent_recovers_blank_authorize_fields_from_same_origin_referrer(clien
     r = client.post(
         "/oauth/authorize/consent",
         data=form,
-        headers={"Authorization": "Bearer admin-tok", "Referer": referer},
+        headers={"Authorization": "Bearer admin-tok", "Referer": referer, **forwarded},
         follow_redirects=False,
     )
 
     assert r.status_code == 302
     q = dict(up.parse_qsl(up.urlsplit(r.headers["location"]).query))
     assert q["state"] == "st-123"
-    assert q["iss"] == ISSUER
+    assert q["iss"] == issuer
     assert q["code"]
 
 

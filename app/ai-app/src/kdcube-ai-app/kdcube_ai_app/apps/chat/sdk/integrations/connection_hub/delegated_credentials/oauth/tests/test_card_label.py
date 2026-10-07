@@ -13,6 +13,14 @@ from __future__ import annotations
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.http import (
     routes,
 )
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.card_labels import (
+    consent_label, oauth_card_label,
+)
+
+
+def test_public_host_label_helpers_are_the_route_derivation():
+    assert routes._oauth_card_label is oauth_card_label
+    assert routes._consent_label is consent_label
 
 RESOURCE = "https://runtime.example/api/integrations/bundles/t/p/problem-board@1-0/public/mcp/problem_board"
 SESSION = "dfd0d696-82d2-4bec-8a9c-d94493ec63a5"

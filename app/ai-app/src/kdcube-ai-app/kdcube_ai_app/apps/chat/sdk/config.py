@@ -605,6 +605,8 @@ class Settings(PLATFORM_CONFIG):
     CLAUDE_CODE_KEY: str | None = None
     SECRETS_PROVIDER: str | None = None
     SECRETS_SERVICE_BACKEND: str | None = None
+    SECRETS_RUNTIME_ROOT: str | None = None
+    SECRETS_RUNTIME_NAMESPACES: tuple[str, ...] = ()
     SECRETS_URL: str | None = None
     SECRETS_TOKEN: str | None = None
     SECRETS_ADMIN_TOKEN: str | None = None
@@ -1045,6 +1047,11 @@ class Settings(PLATFORM_CONFIG):
             )
         if not self._env_present("SECRETS_URL") and not self.SECRETS_URL:
             self.SECRETS_URL = self._assembly_str("secrets.url")
+        # Runtime custody roots and grants are operator descriptor policy;
+        # ambient environment must not create or override that authority.
+        self.SECRETS_RUNTIME_ROOT = self._assembly_str("secrets.runtime.root")
+        namespaces = _load_assembly_plain("secrets.runtime.namespaces")
+        self.SECRETS_RUNTIME_NAMESPACES = tuple(namespaces) if isinstance(namespaces, (list, tuple)) else ()
         if not self._env_present("SECRETS_TOKEN") and not self.SECRETS_TOKEN:
             self.SECRETS_TOKEN = self._assembly_str("secrets.token")
         if not self._env_present("SECRETS_ADMIN_TOKEN") and not self.SECRETS_ADMIN_TOKEN:

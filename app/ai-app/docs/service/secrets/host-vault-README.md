@@ -449,13 +449,124 @@ Writes are atomic: candidate file, fsync, `os.replace`, directory fsync. A
 crash between candidate and commit leaves the previous value in place, and
 the server removes stale candidates on start.
 
+All store operations and startup recovery take the same POSIX exclusive lock
+at `<home>/store/.store.lock`. It covers the committed-generation check,
+candidate write, rename, and directory fsync across service processes and
+independent store objects. Recovery waits for active writes before removing
+abandoned candidates. Process death releases the lock automatically.
+Every process that accesses this root must use the locking implementation;
+coordinate replacement of older service processes before accepting concurrent
+access.
+
+The lock file must be a regular, single-link, service-owned `0600` file;
+unsafe ownership, permissions, links, or unavailable OS locking fail closed
+with `backend_unavailable`. Keep this inode in place while any process uses
+the store. This is cooperative process serialization on a host-local
+filesystem; filesystem persistence, host isolation, and remote filesystem
+locking require their own deployment acceptance.
+
 Root keys come from a `RootKeyProvider`. The shipped `FileRootKeyProvider`
 keeps raw 32-byte keys as `0400` files in a `0700` directory with a `CURRENT`
-marker, and refuses to serve a key file that is group- or other-readable.
+marker. Every key/marker read pins its service-owned `0700` directory and
+opens a bounded regular, single-link inode without following symlinks. Keys
+must be `0400` or `0600`; the non-secret marker may also be `0644` inside
+that private directory. Foreign ownership, special files, shared links,
+executable keys and unsafe permissions refuse instead of serving material.
+Directory/file ownership, permissions and inode bindings are rechecked after
+each key or marker read, before returning material.
 Rotation makes a new key current and rewraps every record's data key (the
 ciphertext itself is untouched). Old versions remain readable until rewrap
 completes. A hardware- or OS-keychain-backed provider can replace this
-class behind the same three calls (`current_key_id`, `key`, `rotate`).
+class behind the same ordinary calls (`current_key_id`, `key`, `rotate`).
+
+Recoverable-custody composition additionally requires
+`qualify_custody()`: the file provider checks the current and every historical
+key version, bounded to 1024 directory entries, and refuses unknown or transient
+filesystem classifications. The in-memory provider always refuses. This local
+source-level check is not a deployed mount-survival, namespace-credential or
+complete runtime-service qualification. Those legs remain separate and the
+common runtime HTTP/bootstrap composition still requires its own qualification.
+No health response is treated as that proof.
+
+The non-mutating `custody.qualify` operation takes a bounded inventory selector
+and uses the same mTLS transport and live trust registry as secret operations.
+Its positive response requires the requested native namespace explicitly in
+the certificate's enrollment ACL (wildcard-only grants do not qualify), private
+service-owned data storage, the OS process lock, persistent filesystem
+classifications and qualified current/historical root keys.
+Storage ownership/permissions and the acquired lock's inode are rechecked
+after the root-provider probe while the OS lock is still held. The closed
+`kdcube.host_vault_custody.v1` assertion contains only namespace/reference-digest
+binding and fixed guarantee flags, not values or filesystem paths. The broker
+requires the exact request id and selector binding on every qualification;
+old healthy servers and malformed, stale or foreign answers refuse.
+
+`RuntimeVaultStore.qualify()` consumes that native assertion, not `health()`.
+The runtime namespace is additionally a trusted service grant supplied when
+constructing the adapter; the common HTTP policy must still enforce its exact
+read/write caller grants. Neither this source-level assertion nor its synthetic
+filesystem-classification tests prove deployed mount survival or physical host
+isolation. The deployment broker now installs this adapter through the common
+startup composition described below. AWS provider coverage and
+independent/mounted acceptance remain separate unfinished legs.
+
+The common runtime HTTP adapter treats store acknowledgements as a strict
+contract: `qualify()` and `delete()` complete with `None`, or raise a fixed
+failure. A false, true, numeric, string or mapping return is an invalid
+acknowledgement and produces `503 runtime_secret_storage_unavailable` with
+`Cache-Control: no-store`. It cannot become a positive qualification assertion
+or an acknowledged deletion. The SDK surfaces this unavailable outcome rather
+than treating it as qualified custody or successful cleanup. The ASGI regression
+suite exercises both operations and the actual SDK HTTP adapter with malformed
+backend returns; it does not prove installed bootstrap or mount behavior.
+
+The legacy `/secret`, `/set` and broker `/verify` handlers refuse runtime
+keys before authentication or storage access, with
+`403 runtime_secret_scoped_api_required` and `Cache-Control: no-store`.
+Parent-level inventories omit runtime keys; the broker does not read those
+keys while checking legacy inventory hints. Runtime custody must use the
+scoped, expiry-aware protocol, never the ordinary deployment door token.
+These refusal tests do not complete AWS qualification or mounted acceptance.
+
+### Common runtime-service startup (source checkpoint, not activation)
+
+Both deployment HTTP entry points install `/runtime-secrets/{namespace}` using
+`runtime_bootstrap.install_configured_runtime_routes`. The selected file server
+uses a dedicated runtime file root; the selected host-vault broker uses its
+existing enrolled native broker. There is no request-selected provider, health
+fallback or automatic native-to-file fallback. Every operation requalifies
+storage before reading or mutating a record. An unconfigured policy denies
+access before storage is opened; a transient/unqualified store returns a fixed
+503 rather than accepting a value.
+
+The operator's `assembly.yaml` supplies `secrets.runtime.root`, exact
+`secrets.runtime.namespaces` and an optional `secrets.runtime.scope_policy`.
+The policy uses schema `kdcube.runtime_secret_scopes.v1` with `read` and `write`
+maps from SHA-256 credential identifiers to lists of declared namespaces.
+It contains identifiers, not raw credentials. Ordinary door tokens are **not**
+automatically granted custody access; missing policy remains closed.
+The CLI validates and projects these descriptor values into the internal
+`KDCUBE_SECRETS_RUNTIME_ROOT`, `KDCUBE_SECRETS_RUNTIME_NAMESPACES` and
+`KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY` service inputs. Ambient inputs do not
+override the descriptor during projection. A server snapshots those inputs at
+startup, not from requests or subsequent environment changes.
+
+Compose binds `HOST_KDCUBE_RUNTIME_SECRETS_ROOT` to the exact configured root,
+separately from the legacy `/run/kdcube-secrets` tmpfs. It does not create a
+missing host directory automatically. File qualification requires a
+service-owned private directory on a recognized persistent filesystem. The
+native path additionally requires its exact enrollment/root-key/storage proof.
+The CLI projection itself creates no root, credentials or enrollment and
+does not start or activate any runtime.
+
+Source tests import the actual deployment servers and exercise file restart,
+conflict, expiry/tombstones, transient-store refusal before record I/O and
+separate legacy/runtime credentials. Native startup tests use the real enrolled
+protocol and encrypted disk store with in-process transport and synthetic
+filesystem classification. These are not installed volume-survival, live mTLS,
+negative-reader isolation or cloud IAM witnesses. The AWS backend/bootstrap,
+full three-mode gate, independent whole review and mounted acceptance remain
+unfinished; clients must still use the same mode-neutral custody protocol.
 
 Assumptions this phase makes and states: the vault home is owned by a
 dedicated service user on the host, the root-key directory is not on a
@@ -913,6 +1024,12 @@ fake certificates and the labeled in-memory root-key provider and covers:
 - a stateless broker that acknowledges only committed writes
 - root-key rotation with rewrap, and identity file modes
 - a real mTLS round trip, a bearer without a client certificate refused at the handshake and at the service, and sanitized TLS failures
+
+`test_storage_process_lock.py` adds spawned-process proofs with synthetic
+file-backed root keys: racing create/delete generations, read/list/rewrap and
+recovery serialization, startup during an active candidate write, process
+death before commit, and unsafe lock-file refusal. These tests exercise the
+encrypted disk store without changing a configured vault or provider.
 
 Run from the repository root with the platform venv interpreter:
 

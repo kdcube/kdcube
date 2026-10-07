@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import time
+from functools import wraps
 
 import pytest
 from fastapi import FastAPI
@@ -648,6 +649,7 @@ async def test_refresh_rotation_race_reports_family_reuse(ctx, caplog):
     refresh_token = first["refresh_token"]
     _seed_live_card(store, await store.validate_refresh_token(refresh_token))
 
+    @wraps(store.rotate_refresh_token)
     async def reuse_detected(*_args, **_kwargs):
         raise RefreshTokenReuseDetected("credential family revoked")
 
@@ -998,6 +1000,7 @@ async def test_refresh_passes_a_retry_fingerprint_only_when_the_client_sends_an_
         seen.append(("state", dict(kwargs)))
         return await original_state(token)
 
+    @wraps(original_rotate)
     async def recording_rotate(token, **kwargs):
         seen.append(("rotate", {k: v for k, v in kwargs.items() if k == "refresh_request_fingerprint"}))
         kwargs.pop("refresh_request_fingerprint", None)

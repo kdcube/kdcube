@@ -46,6 +46,9 @@ from kdcube_ai_app.infra.secrets.host_vault.protocol import (
 )
 from kdcube_ai_app.infra.secrets.host_vault.transport import ClientTLS, HostVaultClient
 from pydantic import BaseModel
+from kdcube_ai_app.infra.secrets.runtime_contract import runtime_key_namespace
+from kdcube_ai_app.infra.secrets.runtime_http import reject_legacy_runtime_key
+from kdcube_ai_app.infra.secrets.runtime_bootstrap import install_configured_runtime_routes
 
 logging.basicConfig(
     level=os.getenv("SECRETS_LOG_LEVEL", "INFO").upper(),
@@ -123,6 +126,8 @@ def build_broker() -> SecretsBroker:
 
 app = FastAPI()
 BROKER = build_broker()
+install_configured_runtime_routes(app, environ=os.environ,
+                                 broker_factory=lambda: BROKER, application=APPLICATION)
 
 
 class SecretItem(BaseModel):
@@ -161,7 +166,7 @@ def _inventory_value(key: str) -> str:
     listed = BROKER.list_names(application=APPLICATION, metadata_key=key)
     if not listed.ok:
         raise _fail(listed.code)
-    names = set(listed.names)
+    names = {name for name in listed.names if runtime_key_namespace(name) is None}
 
     # Records written before encrypted-name inventory may carry one explicit
     # metadata value. Treat it only as a hint and verify every referenced key,
@@ -184,6 +189,8 @@ def _inventory_value(key: str) -> str:
                 or candidate.endswith(".__keys")
             ):
                 raise _fail(ErrorCode.CORRUPT_RECORD)
+            if runtime_key_namespace(candidate) is not None:
+                continue
             verified = BROKER.read(application=APPLICATION, key=candidate)
             if verified.ok:
                 names.add(candidate)
@@ -210,6 +217,7 @@ def health() -> dict[str, Any]:
 def get_secret(
     key: str, x_kdcube_secret_token: str | None = Header(default=None)
 ) -> dict[str, Any]:
+    reject_legacy_runtime_key(key)
     _require_read(x_kdcube_secret_token)
     if _inventory_prefix(key) is not None:
         return {"value": _inventory_value(key)}
@@ -225,6 +233,7 @@ def get_secret(
 def set_secret(
     item: SecretItem, x_kdcube_admin_token: str | None = Header(default=None)
 ) -> dict[str, Any]:
+    reject_legacy_runtime_key(item.key)
     _require_admin(x_kdcube_admin_token)
     if _inventory_prefix(item.key) is not None:
         return {"status": "ok", "inventory": "derived"}
@@ -244,6 +253,7 @@ def verify_secret(
     item: SecretVerification,
     x_kdcube_admin_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
+    reject_legacy_runtime_key(item.key)
     _require_admin(x_kdcube_admin_token)
     expected = item.sha256.strip().lower()
     if len(expected) != 64 or any(ch not in "0123456789abcdef" for ch in expected):
@@ -262,6 +272,7 @@ def verify_secret(
 def delete_secret(
     key: str, x_kdcube_admin_token: str | None = Header(default=None)
 ) -> dict[str, Any]:
+    reject_legacy_runtime_key(key)
     _require_admin(x_kdcube_admin_token)
     if _inventory_prefix(key) is not None:
         return {"status": "ok", "deleted": False, "inventory": "derived"}

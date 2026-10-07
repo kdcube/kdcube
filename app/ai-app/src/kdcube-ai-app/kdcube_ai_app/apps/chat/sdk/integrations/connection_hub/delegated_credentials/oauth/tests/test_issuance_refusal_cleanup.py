@@ -1,0 +1,346 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Elena Viter
+"""Late host issuance refusal cleanup; synthetic minter, real or fixture store."""
+from __future__ import annotations
+
+import json
+import os
+import time
+import uuid
+from functools import wraps
+from types import SimpleNamespace
+
+import pytest
+import pytest_asyncio
+
+from connection_hub.delegated_credentials.caller_writer_gate import CallerWriteRefused
+from connection_hub.delegated_credentials.cards.model import CardAuthority
+from connection_hub.delegated_credentials.oauth.authority_store import PostgresOAuthAuthorityStore
+from connection_hub.delegated_credentials.oauth.authority_schema import TABLE_FAMILIES, TABLE_REFRESH_GENERATIONS
+from connection_hub.delegated_credentials.oauth.store import GrantStore
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.cards.service import CardConflict
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.http import routes
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.tests.test_clients_and_store import FakeRedis
+
+ACCESS = "synthetic-withheld-access-no-live-credential"
+
+
+@pytest_asyncio.fixture(params=["redis-fixture", "postgres"])
+async def grant_store(request):
+    if request.param == "redis-fixture":
+        yield GrantStore(FakeRedis(), tenant="home", project="cleanup")
+        return
+    dsn = os.environ.get("KDCUBE_TEST_POSTGRES_DSN")
+    if not dsn:
+        pytest.skip("KDCUBE_TEST_POSTGRES_DSN is not set")
+    import asyncpg
+
+    pool = await asyncpg.create_pool(dsn, min_size=1, max_size=2)
+    authority = PostgresOAuthAuthorityStore(
+        pg_pool=pool, tenant="w585-disposable-cleanup", project=uuid.uuid4().hex,
+    )
+    try:
+        await authority.ensure_schema()
+        yield GrantStore(FakeRedis(), tenant=authority.tenant, project=authority.project,
+                         authority_store=authority)
+    finally:
+        async with pool.acquire() as connection:
+            await connection.execute(f'DROP SCHEMA "{authority.schema}" CASCADE')
+        await pool.close()
+
+
+async def _refused_issuance(store, monkeypatch, *, reason, replace_authority=False, refusal=None):
+    observed = {}
+
+    async def mint(sub, scopes):
+        observed["mint_count"] = observed.get("mint_count", 0) + 1
+        return {"access_token": ACCESS, "expires_in": 300}
+
+    async def record(**kwargs):
+        observed.update(kwargs)
+        # Both credentials exist when the actual Hub callback refuses.
+        assert await store.get_access_grant_record(ACCESS) is not None
+        assert await store.validate_refresh_token(kwargs["refresh_token"]) is not None
+        if refusal is not None:
+            raise refusal
+        raise CardConflict(reason, current_revision=9)
+
+    monkeypatch.setattr(routes, "oauth_tenant_project", lambda request: ("home", "cleanup"))
+    monkeypatch.setattr(routes, "get_access_token_minter", lambda request: mint)
+    monkeypatch.setattr(routes, "get_automation_access", lambda request: SimpleNamespace(record_oauth_grant=record))
+    response = await routes._issue_tokens(
+        SimpleNamespace(), store, sub="human", scopes=["records:read"], client_id="client",
+        operations=["records_export"], resource="*", registry_access_id="synthetic-card",
+        card_kind="automation", replace_authority=replace_authority,
+        expected_card_revision=7 if replace_authority else None,
+    )
+    return response, observed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason", ["delegated_access_requires_grantor", "synthetic_late_card_conflict"])
+@pytest.mark.parametrize("replace_authority", [False, True], ids=["generic-refusal", "revision-conflict"])
+async def test_late_card_conflict_revokes_both_withheld_credentials(grant_store, monkeypatch, reason, replace_authority):
+    response, observed = await _refused_issuance(
+        grant_store, monkeypatch, reason=reason, replace_authority=replace_authority,
+    )
+    assert response.status_code == (400 if replace_authority else 503)
+    body = json.loads(response.body)
+    assert body["error"] == ("invalid_grant" if replace_authority else "temporarily_unavailable")
+    assert "access_token" not in body and "refresh_token" not in body
+    assert observed["mint_count"] == 1
+    assert await grant_store.get_access_grant_record(ACCESS) is None
+    assert await grant_store.validate_refresh_token(observed["refresh_token"]) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed_operation", ["revoke_access_grant", "revoke_refresh_token"])
+@pytest.mark.parametrize("replace_authority", [False, True], ids=["generic-refusal", "revision-conflict"])
+async def test_one_cleanup_failure_does_not_prevent_the_other_or_expose_credentials(grant_store, monkeypatch, caplog, failed_operation, replace_authority):
+    calls = []
+    for name in ("revoke_access_grant", "revoke_refresh_token"):
+        original = getattr(grant_store, name)
+
+        async def revoke(token, *, operation=name, delegate=original):
+            calls.append(operation)
+            if operation == failed_operation:
+                raise RuntimeError(ACCESS)
+            return await delegate(token)
+
+        monkeypatch.setattr(grant_store, name, revoke)
+    response, observed = await _refused_issuance(
+        grant_store, monkeypatch, reason="synthetic_late_card_conflict", replace_authority=replace_authority,
+    )
+    assert response.status_code == (400 if replace_authority else 503)
+    assert calls == ["revoke_access_grant", "revoke_refresh_token"]
+    assert ACCESS not in caplog.text and ACCESS.encode() not in response.body
+    if failed_operation != "revoke_access_grant":
+        assert await grant_store.get_access_grant_record(ACCESS) is None
+    if failed_operation != "revoke_refresh_token":
+        assert await grant_store.validate_refresh_token(observed["refresh_token"]) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome_confirmed", [None, False, True])
+async def test_caller_write_refusal_revokes_withheld_credentials(grant_store, monkeypatch, outcome_confirmed):
+    response, observed = await _refused_issuance(
+        grant_store, monkeypatch, reason="caller_writer_refused",
+        refusal=CallerWriteRefused("caller_writer_refused", outcome_confirmed=outcome_confirmed),
+    )
+    assert response.status_code == 503
+    assert json.loads(response.body)["error"] == "temporarily_unavailable"
+    assert observed["mint_count"] == 1
+    assert await grant_store.get_access_grant_record(ACCESS) is None
+    assert await grant_store.validate_refresh_token(observed["refresh_token"]) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed_operation", ["revoke_access_grant", "revoke_refresh_token"])
+async def test_caller_write_cleanup_failure_keeps_other_attempt_and_fixed_log(grant_store, monkeypatch, caplog, failed_operation):
+    calls = []
+    for name in ("revoke_access_grant", "revoke_refresh_token"):
+        original = getattr(grant_store, name)
+
+        async def revoke(token, *, operation=name, delegate=original):
+            calls.append(operation)
+            if operation == failed_operation:
+                raise RuntimeError(ACCESS)
+            return await delegate(token)
+
+        monkeypatch.setattr(grant_store, name, revoke)
+    response, observed = await _refused_issuance(
+        grant_store, monkeypatch, reason="caller_writer_refused",
+        refusal=CallerWriteRefused("caller_writer_refused"),
+    )
+    assert response.status_code == 503
+    assert calls == ["revoke_access_grant", "revoke_refresh_token"]
+    assert ACCESS not in caplog.text and ACCESS.encode() not in response.body
+    if failed_operation != "revoke_access_grant":
+        assert await grant_store.get_access_grant_record(ACCESS) is None
+    if failed_operation != "revoke_refresh_token":
+        assert await grant_store.validate_refresh_token(observed["refresh_token"]) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("refusal_kind", ["card-conflict", "caller-write"])
+async def test_refresh_route_late_refusal_restores_delivered_token_and_retries_live_card(grant_store, monkeypatch, refusal_kind):
+    observed = {"refuse": True, "card_edited": False}
+    original_token = await grant_store.create_refresh_token(
+        client_id="client", sub="human", scopes=["records:read", "records:write"],
+        operations=["records_export"], resource="*", registry_access_id="synthetic-card",
+        card_kind="automation",
+    )
+
+    async def form():
+        return {"grant_type": "refresh_token", "refresh_token": original_token, "client_id": "client"}
+
+    async def resolve(*args, **kwargs):
+        return CardAuthority(
+            access_id="synthetic-card", client_id="client", grantor_subject="human",
+            delegate_subject="", source="oauth", card_kind="automation",
+            card_revision=9 if observed["card_edited"] else 8, expires_at=int(time.time()) + 300,
+            operations=("records_export",),
+            resource_grants={"*": ("records:read",) if observed["card_edited"] else ("records:read", "records:write")},
+        )
+
+    async def mint(sub, scopes):
+        observed["mint_count"] = observed.get("mint_count", 0) + 1
+        observed["minted_scopes"] = scopes
+        observed["minted_access"] = f"{ACCESS}-mint-{observed['mint_count']}"
+        return {"access_token": observed["minted_access"], "expires_in": 300}
+
+    async def record(**kwargs):
+        observed.update(kwargs)
+        assert kwargs["refresh_token"] != original_token
+        assert await grant_store.validate_refresh_token(kwargs["refresh_token"]) is not None
+        if not observed["refuse"]:
+            return SimpleNamespace(access_id=kwargs["access_id"])
+        observed["card_edited"] = True
+        if refusal_kind == "caller-write":
+            raise CallerWriteRefused("caller_writer_refused")
+        raise CardConflict("synthetic_late_card_conflict", current_revision=9)
+
+    rollback = grant_store.rollback_refresh_token_rotation
+
+    @wraps(rollback)
+    async def observe_rollback(*args, **kwargs):
+        observed["rollback_attempts"] = observed.get("rollback_attempts", 0) + 1
+        return await rollback(*args, **kwargs)
+
+    monkeypatch.setattr(routes, "oauth_tenant_project", lambda request: ("home", "cleanup"))
+    monkeypatch.setattr(routes, "get_grant_store", lambda request: grant_store)
+    monkeypatch.setattr(routes, "get_access_token_minter", lambda request: mint)
+    monkeypatch.setattr(routes, "get_automation_access", lambda request: SimpleNamespace(record_oauth_grant=record))
+    monkeypatch.setattr(routes, "delegated_serving_resolvers", lambda request: SimpleNamespace(cards=None))
+    monkeypatch.setattr(routes, "delegated_card_store", lambda **kwargs: None)
+    monkeypatch.setattr(routes, "resolve_live_grant_card", resolve)
+    monkeypatch.setattr(grant_store, "rollback_refresh_token_rotation", observe_rollback)
+    response = await routes.token(SimpleNamespace(form=form))
+
+    assert response.status_code == 503
+    body = json.loads(response.body)
+    assert "access_token" not in body and "refresh_token" not in body
+    assert body["error"] == "temporarily_unavailable"
+    assert "authorize again" not in body["error_description"]
+    assert body["refresh_token_restored"] is True
+    assert observed["mint_count"] == 1
+    assert observed["rollback_attempts"] == 1
+    assert await grant_store.get_access_grant_record(observed["minted_access"]) is None
+    assert await grant_store.validate_refresh_token(original_token) is not None
+    assert await grant_store.validate_refresh_token(observed["refresh_token"]) is None
+
+    # The same remotely held token can retry after the ordinary Card edit.
+    # Authorization comes from the new live Card, without a new consent.
+    observed["refuse"] = False
+    retried = await routes.token(SimpleNamespace(form=form))
+    assert retried.status_code == 200
+    delivered = json.loads(retried.body)
+    assert observed["minted_scopes"] == ["records:read"]
+    assert observed["mint_count"] == 2 and observed["rollback_attempts"] == 1
+    assert await grant_store.validate_refresh_token(delivered["refresh_token"]) is not None
+    assert await grant_store.get_access_grant_record(delivered["access_token"]) is not None
+
+
+@pytest.mark.asyncio
+async def test_successful_card_commit_keeps_issued_credentials(grant_store, monkeypatch):
+    async def mint(sub, scopes):
+        return {"access_token": ACCESS, "expires_in": 300}
+
+    async def record(**kwargs):
+        return SimpleNamespace(access_id=kwargs["access_id"])
+
+    async def unexpected_revoke(token):
+        pytest.fail("A successful Card commit must retain its issued credentials")
+
+    monkeypatch.setattr(routes, "oauth_tenant_project", lambda request: ("home", "cleanup"))
+    monkeypatch.setattr(routes, "get_access_token_minter", lambda request: mint)
+    monkeypatch.setattr(routes, "get_automation_access", lambda request: SimpleNamespace(record_oauth_grant=record))
+    monkeypatch.setattr(grant_store, "revoke_access_grant", unexpected_revoke)
+    monkeypatch.setattr(grant_store, "revoke_refresh_token", unexpected_revoke)
+    response = await routes._issue_tokens(
+        SimpleNamespace(), grant_store, sub="human", scopes=["records:read"], client_id="client",
+        operations=["records_export"], resource="*", registry_access_id="synthetic-card", card_kind="automation",
+    )
+    assert response.status_code == 200
+    body = json.loads(response.body)
+    assert await grant_store.get_access_grant_record(body["access_token"]) is not None
+    assert await grant_store.validate_refresh_token(body["refresh_token"]) is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("grant_store", ["postgres"], indirect=True)
+async def test_card_edit_between_route_read_and_sql_rotation_preserves_original_for_retry(grant_store, monkeypatch):
+    from fastapi.responses import JSONResponse
+
+    authority = grant_store._authority_store
+    deadline = int(time.time()) + 300
+    original_token = await grant_store.create_refresh_token(
+        client_id="client", sub="human", scopes=["records:read", "records:write"],
+        operations=["records_export"], resource="*", registry_access_id="synthetic-card",
+        card_kind="automation", cap_expires_at=deadline, card_revision=8,
+    )
+    observed = {"edited": False, "reads": 0, "issued": []}
+
+    async def form():
+        return {"grant_type": "refresh_token", "refresh_token": original_token, "client_id": "client"}
+
+    async def resolve(*args, **kwargs):
+        observed["reads"] += 1
+        return CardAuthority(
+            access_id="synthetic-card", client_id="client", grantor_subject="human",
+            delegate_subject="", source="oauth", card_kind="automation",
+            card_revision=9 if observed["edited"] else 8, expires_at=deadline,
+            operations=("records_export",),
+            resource_grants={"*": ("records:read",) if observed["edited"] else ("records:read", "records:write")},
+        )
+
+    rotate = grant_store.rotate_refresh_token
+
+    @wraps(rotate)
+    async def edit_then_rotate(token, **kwargs):
+        if not observed["edited"]:
+            # Synthetic family update models the Card edit after the host's
+            # trusted read. The actual facade and locked SQL refusal stay real.
+            async with authority._pool.acquire() as connection:
+                assert await connection.execute(
+                    f'UPDATE "{authority.schema}".{TABLE_FAMILIES} SET card_revision = 9'
+                ) == "UPDATE 1"
+            observed["edited"] = True
+        return await rotate(token, **kwargs)
+
+    async def issue(_request, _store, **kwargs):
+        observed["issued"].append(kwargs)
+        return JSONResponse({"refresh_token": kwargs["refresh_token"]})
+
+    monkeypatch.setattr(routes, "oauth_tenant_project", lambda request: ("home", "cleanup"))
+    monkeypatch.setattr(routes, "get_grant_store", lambda request: grant_store)
+    monkeypatch.setattr(routes, "delegated_serving_resolvers", lambda request: SimpleNamespace(cards=None))
+    monkeypatch.setattr(routes, "delegated_card_store", lambda **kwargs: None)
+    monkeypatch.setattr(routes, "resolve_live_grant_card", resolve)
+    monkeypatch.setattr(routes, "_issue_tokens", issue)
+    monkeypatch.setattr(grant_store, "rotate_refresh_token", edit_then_rotate)
+
+    refused = await routes.token(SimpleNamespace(form=form))
+    assert refused.status_code == 503
+    assert json.loads(refused.body)["error"] == "temporarily_unavailable"
+    assert refused.headers["retry-after"] == "30"
+    assert original_token.encode() not in refused.body
+    assert observed["issued"] == [] and observed["reads"] == 1
+    assert await grant_store.validate_refresh_token(original_token) is not None
+    async with authority._pool.acquire() as connection:
+        assert await connection.fetchval(f'SELECT count(*) FROM "{authority.schema}".{TABLE_REFRESH_GENERATIONS}') == 1
+        family = await connection.fetchrow(f'SELECT card_revision, cap_expires_at FROM "{authority.schema}".{TABLE_FAMILIES}')
+        assert family["card_revision"] == 9
+        assert int(family["cap_expires_at"].timestamp()) == deadline
+
+    retried = await routes.token(SimpleNamespace(form=form))
+    assert retried.status_code == 200
+    successor = json.loads(retried.body)["refresh_token"]
+    assert successor != original_token
+    assert observed["reads"] == 2 and len(observed["issued"]) == 1
+    assert observed["issued"][0]["scopes"] == ["records:read"]
+    assert await grant_store.validate_refresh_token(successor) is not None
+    async with authority._pool.acquire() as connection:
+        family = await connection.fetchrow(f'SELECT card_revision, cap_expires_at FROM "{authority.schema}".{TABLE_FAMILIES}')
+        assert family["card_revision"] == 9
+        assert int(family["cap_expires_at"].timestamp()) == deadline

@@ -18,7 +18,7 @@ import logging
 import secrets
 from functools import wraps
 from typing import Any, Iterable, Mapping, Optional, Tuple
-from urllib.parse import parse_qs, quote, urlencode, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -48,6 +48,9 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentia
     oauth_delegated_config,
     oauth_delegated_config_from_connections,
 )
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.issuance_cleanup import (
+    revoke_withheld_oauth_credentials,
+)
 from connection_hub.delegated_credentials.oauth.consent import (
     CONSENT_CONTRACT_VERSION,
     named_service_selection_rows,
@@ -69,6 +72,7 @@ from connection_hub.delegated_credentials.resource_operations import (
 from connection_hub.delegated_credentials.cards.resolver import (
     CardUnavailable,
 )
+from connection_hub.delegated_credentials.caller_writer_gate import CallerWriteRefused
 from connection_hub.delegated_credentials.cards.identity import (
     CARD_KIND_AGENT,
     CARD_KIND_AUTOMATION,
@@ -89,9 +93,15 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentia
     get_authenticate,
     get_grant_store,
     is_admin,
+    is_integration_consent_identity,
     oauth_tenant_project,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.http.discovery import resolve_issuer
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.http.consent_request import authorize_referrer_params
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.card_labels import (
+    consent_label as _consent_label,
+    oauth_card_label as _oauth_card_label,
+)
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.http.device import (
     DEVICE_CONSENT_SCHEMA,
     device_completion_name,
@@ -116,6 +126,7 @@ from connection_hub.delegated_credentials.oauth.flow import (
     parse_authorize_request,
 )
 from connection_hub.delegated_credentials.oauth.pkce import verify_s256
+from connection_hub.delegated_credentials.oauth import authority_store as oauth_authority_store
 from connection_hub.delegated_credentials.oauth.authority_store import (
     RefreshTokenReuseDetected,
     refresh_request_fingerprint,
@@ -141,6 +152,13 @@ from connection_hub.mcp_metadata import (
 
 router = APIRouter()
 LOGGER = logging.getLogger("kdcube.connection_hub.oauth")
+
+# Package capability, not a locally invented refusal type. Older packages can
+# still load the route; Card-bound refresh fails closed before consumption.
+_REFRESH_CARD_INCARNATION_MOVED_ERRORS = (
+    (oauth_authority_store.RefreshCardIncarnationMoved,)
+    if hasattr(oauth_authority_store, "RefreshCardIncarnationMoved") else ()
+)
 
 _AUTHORIZE_FORM_KEYS = (
     "client_id", "redirect_uri", "response_type", "scope",
@@ -243,31 +261,7 @@ def _normalize_grant_store_unavailable(fn):
 
 
 def _same_origin_authorize_referrer_params(request: Request) -> dict[str, str]:
-    referrer = str(request.headers.get("referer") or request.headers.get("referrer") or "").strip()
-    if not referrer:
-        return {}
-    try:
-        current = urlsplit(str(request.url))
-        got = urlsplit(referrer)
-    except Exception:
-        return {}
-    if not got.scheme or not got.netloc:
-        return {}
-    forwarded_proto = str(request.headers.get("x-forwarded-proto") or "").split(",", 1)[0].strip()
-    forwarded_host = str(request.headers.get("x-forwarded-host") or "").split(",", 1)[0].strip()
-    current_scheme = forwarded_proto or current.scheme
-    current_host = forwarded_host or str(request.headers.get("host") or "").strip() or current.netloc
-    if (got.scheme, got.netloc) != (current_scheme, current_host):
-        return {}
-    if not got.path.rstrip("/").endswith("/oauth/authorize"):
-        return {}
-    parsed = parse_qs(got.query, keep_blank_values=True)
-    out: dict[str, str] = {}
-    for key in _AUTHORIZE_FORM_KEYS:
-        values = parsed.get(key)
-        if values:
-            out[key] = str(values[-1] or "")
-    return out
+    return authorize_referrer_params(request, form_keys=_AUTHORIZE_FORM_KEYS)
 
 
 def _consent_authorize_params(request: Request, form: Any) -> dict[str, Any]:
@@ -771,172 +765,6 @@ def _user_label(user: Mapping[str, object]) -> str:
     return ""
 
 
-_LABEL_SEPARATOR = " · "
-
-
-def _asserted_client_metadata(metadata: Mapping[str, Any]) -> Mapping[str, Any]:
-    asserted = metadata.get("client_metadata")
-    return asserted if isinstance(asserted, Mapping) else {}
-
-
-def _asserted_agent_id(asserted: Mapping[str, Any]) -> str:
-    return str(
-        asserted.get("kdcube_agent_id") or asserted.get("kdcube_worker_id") or ""
-    ).strip()
-
-
-def _asserted_worker_identity(asserted: Mapping[str, Any]) -> str:
-    """``<provider>:<alias>:<session>`` for a client asserting the full worker shape, else "".
-
-    The shape is what a KDCube host worker registers (``kdcube_worker_id``,
-    ``kdcube_worker_alias``, ``kdcube_agent_provider`` and
-    ``kdcube_agent_session_id``), for example every Problem Board worker. A
-    client asserting only some of these keeps the general naming rule.
-    """
-
-    provider = str(asserted.get("kdcube_agent_provider") or "").strip()
-    alias = str(asserted.get("kdcube_worker_alias") or "").strip()
-    session = str(asserted.get("kdcube_agent_session_id") or "").strip()
-    worker_id = str(asserted.get("kdcube_worker_id") or "").strip()
-    if provider and alias and session and worker_id:
-        return f"{provider}:{alias}:{session}"
-    return ""
-
-
-def _identity_forms(asserted: Mapping[str, Any]) -> frozenset[str]:
-    """Every spelling of the asserted agent identity, lowercased for segment comparison."""
-
-    forms = {_asserted_agent_id(asserted)}
-    provider = str(asserted.get("kdcube_agent_provider") or "").strip()
-    session = str(asserted.get("kdcube_agent_session_id") or "").strip()
-    alias = str(asserted.get("kdcube_worker_alias") or "").strip()
-    if provider and session:
-        forms.add(f"{provider}:{session}")
-        if alias:
-            forms.add(f"{provider}:{alias}:{session}")
-    return frozenset(form.lower() for form in forms if form)
-
-
-def _label_segments(label: str) -> list[str]:
-    """The label's segments with byte-identical repeats removed, order kept."""
-
-    seen: set[str] = set()
-    segments: list[str] = []
-    for segment in (part.strip() for part in str(label or "").split(_LABEL_SEPARATOR.strip())):
-        if segment and segment.lower() not in seen:
-            seen.add(segment.lower())
-            segments.append(segment)
-    return segments
-
-
-def _registered_name(metadata: Mapping[str, Any]) -> str:
-    return str(
-        metadata.get("client_name")
-        or metadata.get("name")
-        or metadata.get("client_uri")
-        or ""
-    ).strip()
-
-
-def _door_alias(resource: str) -> str:
-    door_path = str(resource or "").split("?", 1)[0].rstrip("*").rstrip("/")
-    return door_path.rsplit("/mcp/", 1)[-1].strip("/") if "/mcp/" in door_path else ""
-
-
-def _oauth_card_label(
-    client_metadata: Mapping[str, Any] | None,
-    *,
-    resource: str,
-    explicit: str = "",
-) -> str:
-    """The owner-visible card name: product, entry door and agent identity, each once.
-
-    A client asserting the full KDCube worker shape is named
-    ``<client product> · <entry door> · <provider>:<alias>:<session>``, so a
-    first connect and a reconnect give the same name whatever its registered
-    name spelled. Any other client keeps its registered name and gains the
-    entry door and its asserted agent id only when no segment already equals
-    them. On 2026-09-21 the alias and plain forms of one worker identity were
-    compared as substrings, missed each other, and every worker Card carried
-    its identity twice.
-    """
-
-    if str(explicit or "").strip():
-        return str(explicit).strip()
-    metadata = dict(client_metadata or {})
-    asserted = _asserted_client_metadata(metadata)
-    door = _door_alias(resource)
-    segments = _label_segments(_registered_name(metadata))
-    forms = _identity_forms(asserted)
-
-    worker_identity = _asserted_worker_identity(asserted)
-    if worker_identity:
-        product = segments[0] if segments else ""
-        if product.lower() in forms or (door and product.lower() == door.lower()):
-            product = ""
-        return _LABEL_SEPARATOR.join(part for part in (product, door, worker_identity) if part)
-
-    present = {segment.lower() for segment in segments}
-    if door and door.lower() not in present:
-        segments.append(door)
-        present.add(door.lower())
-    agent_id = _asserted_agent_id(asserted)
-    if agent_id and not (present & forms):
-        segments.append(agent_id)
-    label = _LABEL_SEPARATOR.join(segments)
-    return label or str(metadata.get("client_id") or "Connected client")
-
-
-def _legacy_card_label(metadata: Mapping[str, Any], door: str) -> str:
-    """The name the rule before 2026-09-21 generated for this client at ``door``."""
-
-    label = _registered_name(metadata)
-    if door and door.lower() not in label.lower():
-        label = f"{label}{_LABEL_SEPARATOR}{door}" if label else door
-    agent_id = _asserted_agent_id(_asserted_client_metadata(metadata))
-    if agent_id and agent_id.lower() not in label.lower():
-        label = f"{label}{_LABEL_SEPARATOR}{agent_id}" if label else agent_id
-    return label or str(metadata.get("client_id") or "Connected client")
-
-
-def _generated_card_labels(metadata: Mapping[str, Any], *, resource: str) -> frozenset[str]:
-    """Every name this service could have generated for this client, current or earlier rule.
-
-    A Card may have been named at another entry door, so the earlier rule is
-    replayed at the current door, at every door the registered name spells, and
-    with no door.
-    """
-
-    doors = {_door_alias(resource), ""}
-    doors.update(_label_segments(_registered_name(metadata)))
-    labels = {_legacy_card_label(metadata, door) for door in doors}
-    labels.add(_registered_name(metadata))
-    labels.add(_oauth_card_label(metadata, resource=resource))
-    return frozenset(label for label in labels if label)
-
-
-def _consent_label(
-    existing_label: str,
-    derived_label: str,
-    client_metadata: Mapping[str, Any] | None,
-    *,
-    resource: str,
-) -> str:
-    """The name the consent page proposes: the existing Card's, unless this service generated it.
-
-    A reconnect edits an existing Card, and a name a person chose is theirs to
-    keep. Only an exact match with a name this service generates, under the
-    current rule or the earlier one, is replaced by the current derivation.
-    """
-
-    existing = str(existing_label or "").strip()
-    if not existing:
-        return derived_label
-    if existing in _generated_card_labels(dict(client_metadata or {}), resource=resource):
-        return derived_label
-    return existing
-
-
 def _error_response(err: AuthorizeError, issuer: str) -> Response:
     if err.redirectable and err.redirect_uri:
         url = build_redirect(
@@ -958,6 +786,10 @@ async def _require_user(request: Request) -> Tuple[Optional[dict], Optional[Resp
     user = await get_authenticate(request)(token)
     if not user:
         return None, JSONResponse(status_code=401, content={"error": "login_required"})
+    if is_integration_consent_identity(user):
+        return None, JSONResponse(
+            status_code=403, content={"error": "oauth_human_consent_required"}
+        )
     return user, None
 
 
@@ -3246,6 +3078,34 @@ def _refresh_issuance_unavailable(
     return JSONResponse(status_code=503, content=content, headers=headers)
 
 
+def _refresh_store_supports_card_limits(store) -> bool:
+    """Require limit and typed-refusal APIs before a Card token is consumed.
+
+    A generic **kwargs sink is not evidence that limits reach the rotation
+    transaction. Transparent wrappers may expose their real signature via
+    functools.wraps; unavailable or unqualified signatures fail closed.
+    """
+    if not _REFRESH_CARD_INCARNATION_MOVED_ERRORS:
+        return False
+    stores = [store]
+    authority = getattr(store, "_authority_store", None)
+    if authority is not None:
+        stores.append(authority)
+    for candidate in stores:
+        try:
+            parameters = inspect.signature(candidate.rotate_refresh_token).parameters
+        except Exception:
+            return False
+        for name in ("expires_at_cap", "card_incarnation"):
+            parameter = parameters.get(name)
+            if parameter is None or parameter.kind not in {
+                inspect.Parameter.KEYWORD_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            }:
+                return False
+    return True
+
+
 def _minter_accepts_authority_kwargs(minter) -> bool:
     try:
         signature = inspect.signature(minter)
@@ -3310,6 +3170,10 @@ async def _issue_tokens(
     expected_card_revision=None,
     card_conflict_error="invalid_grant",
 ) -> JSONResponse:
+    # A supplied refresh token belongs to a rotation of an already delivered
+    # family. Preserve it until the refresh handler can roll that rotation
+    # back. An initial code/device issuance owns a new, undelivered family.
+    initial_issuance = refresh_token is None
     # A stored selection that is not {resource: [grant or operation]} is a
     # grant this service cannot honour, not a server fault: answer
     # invalid_grant naming it and log it, never a 500 at the token step.
@@ -3461,7 +3325,7 @@ async def _issue_tokens(
         )
     # Register the grant in the user's Connection Hub registry (Delegated by
     # KDCube tab) so the connection is visible and revocable. Registry write
-    # failures must never fail token issuance.
+    # completion gates publication of the issued credentials.
     try:
         service = get_automation_access(request)
         metadata_snapshot = dict(client_metadata or {})
@@ -3525,17 +3389,12 @@ async def _issue_tokens(
                 invocation_policies=invocation_policies,
             )
     except CardConflict as exc:
-        if replace_authority and expected_card_revision is not None:
-            try:
-                await store.revoke_access_grant(access_token)
-                if refresh_token:
-                    await store.revoke_refresh_token(str(refresh_token))
-            except Exception:
-                LOGGER.exception(
-                    "[connection-hub.oauth] failed to remove tokens after card conflict "
-                    "client=%s",
-                    client_id,
-                )
+        await revoke_withheld_oauth_credentials(
+            store, access_token=access_token,
+            refresh_token=refresh_token if initial_issuance else None,
+            client_id=str(client_id or ""),
+        )
+        if initial_issuance and replace_authority and expected_card_revision is not None:
             LOGGER.warning(
                 "[connection-hub.oauth] token withheld: card changed after consent "
                 "client=%s current_revision=%s",
@@ -3551,6 +3410,25 @@ async def _issue_tokens(
             "client=%s reason=%s",
             client_id,
             getattr(exc, "reason", type(exc).__name__),
+        )
+        return _token_error(
+            "temporarily_unavailable",
+            "The delegated access card could not be recorded; retry the request.",
+            status=503,
+        )
+    except CallerWriteRefused:
+        # The caller-writer gate refuses before any Card effect. Its optional
+        # outcome flag describes policy finalization, not permission to mint
+        # again or an uncertain committed Card. Keep that separate from the
+        # unavailable/unknown-COMMIT branches below.
+        await revoke_withheld_oauth_credentials(
+            store, access_token=access_token,
+            refresh_token=refresh_token if initial_issuance else None,
+            client_id=str(client_id or ""),
+        )
+        LOGGER.error(
+            "[connection-hub.oauth] token withheld: caller write refused client=%s",
+            client_id,
         )
         return _token_error(
             "temporarily_unavailable",
@@ -3601,6 +3479,13 @@ async def _issue_tokens(
 async def token(request: Request) -> Response:
     form = await request.form()
     grant_type = (form.get("grant_type") or "").strip()
+    if grant_type == "authorization_code":
+        from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.http.original_code import (
+            original_authorization_code_response,
+        )
+        original = await original_authorization_code_response(request, form)
+        if original is not None:
+            return original
     store = get_grant_store(request)
 
     if grant_type == DEVICE_GRANT_TYPE:
@@ -3806,6 +3691,7 @@ async def token(request: Request) -> Response:
         account_scope: Mapping[str, Mapping[str, list[str] | tuple[str, ...]]] | None = None
         card_pointer = str(rec.get("registry_access_id") or "").strip()
         refresh_card_kind = str(rec.get("card_kind") or "").strip()
+        rotation_limits = {}
         if card_pointer:
             tenant, project = oauth_tenant_project(request)
             credential = rec.get("credential")
@@ -3877,6 +3763,25 @@ async def token(request: Request) -> Response:
             resource_grants = dict(card.resource_grants)
             resource_operations = dict(card.resource_operations)
             account_scope = card.account_scope
+            # Only the stored pointer and resolved live Card supply limits.
+            # The portable store combines them with its stored family cap and
+            # revision under the rotation lock, never a fresh now + TTL cap.
+            rotation_limits["card_incarnation"] = card.card_revision
+            if card.expires_at:
+                rotation_limits["expires_at_cap"] = card.expires_at
+        if rotation_limits and not _refresh_store_supports_card_limits(store):
+            LOGGER.warning(
+                "[connection-hub.oauth] refresh denied "
+                "reason=refresh_card_limits_unsupported client_id=%s",
+                str(rec.get("client_id") or ""),
+            )
+            return _token_error(
+                "temporarily_unavailable",
+                "Card-bound refresh requires a compatible grant store; "
+                "the presented refresh token remains valid, retry after the package update",
+                status=503,
+                retry_after_seconds=30,
+            )
         try:
             new_rt = await store.rotate_refresh_token(
                 rt,
@@ -3891,11 +3796,24 @@ async def token(request: Request) -> Response:
                 ),
                 card_kind=refresh_card_kind or None,
                 state=refresh_state,
+                **rotation_limits,
                 **(
                     {"refresh_request_fingerprint": retry_fingerprint}
                     if retry_fingerprint
                     else {}
                 ),
+            )
+        except _REFRESH_CARD_INCARNATION_MOVED_ERRORS:
+            LOGGER.warning(
+                "[connection-hub.oauth] refresh denied "
+                "reason=refresh_card_incarnation_moved client_id=%s",
+                str(rec.get("client_id") or ""),
+            )
+            return _token_error(
+                "temporarily_unavailable",
+                "Delegated consent changed during refresh; retry with the same refresh token",
+                status=503,
+                retry_after_seconds=30,
             )
         except RefreshTokenReuseDetected:
             return _refresh_refused(

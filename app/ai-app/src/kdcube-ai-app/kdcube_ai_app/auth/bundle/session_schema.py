@@ -7,6 +7,8 @@ from kdcube_ai_app.ops.deployment.sql.db_deployment import project_schema
 
 TABLE_USERS = "kdcube_bundle_session_users"
 TABLE_SESSIONS = "kdcube_bundle_sessions"
+TABLE_ISSUANCES = "kdcube_bundle_session_issuances"
+TABLE_ISSUANCE_TERMINALS = "kdcube_bundle_session_issuance_terminals"
 
 def bundle_session_schema(*, tenant: str, project: str) -> str:
     return project_schema(tenant or "default", project or "default-project")
@@ -62,4 +64,53 @@ CREATE INDEX IF NOT EXISTS kdcube_bundle_sessions_subject_idx
 CREATE INDEX IF NOT EXISTS kdcube_bundle_sessions_live_idx
     ON {schema}.{TABLE_SESSIONS} (idle_expires_at)
     WHERE state = 'active';
+
+CREATE TABLE IF NOT EXISTS {schema}.{TABLE_ISSUANCES} (
+    identity            CHAR(64) PRIMARY KEY,
+    inputs_digest       CHAR(64) NOT NULL,
+    session_id          TEXT NOT NULL UNIQUE,
+    secret_ref          CHAR(32) NOT NULL UNIQUE,
+    subject             TEXT NOT NULL
+                        REFERENCES {schema}.{TABLE_USERS}(subject),
+    expected_version    BIGINT NOT NULL CHECK (expected_version >= 1),
+    expected_user_revision BIGINT CHECK (expected_user_revision >= 1),
+    session_record      JSONB NOT NULL,
+    user_record         JSONB,
+    expires_at          TIMESTAMPTZ NOT NULL,
+    delivery_deadline   TIMESTAMPTZ,
+    reserved_until      TIMESTAMPTZ,
+    activation_digest   CHAR(64),
+    state               TEXT NOT NULL DEFAULT 'reserved'
+                        CHECK (state IN ('reserved', 'active')),
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    activated_at        TIMESTAMPTZ
+);
+
+ALTER TABLE {schema}.{TABLE_ISSUANCES}
+    ADD COLUMN IF NOT EXISTS user_record JSONB;
+
+-- An older pending reservation has no trustworthy historical revision.
+-- Leave it NULL; first activation refuses rather than inventing a fence.
+ALTER TABLE {schema}.{TABLE_ISSUANCES}
+    ADD COLUMN IF NOT EXISTS expected_user_revision BIGINT;
+
+-- Legacy committed issuances keep their existing lifetime. Planned rows
+-- require their original deadlines; missing migration data fails closed.
+ALTER TABLE {schema}.{TABLE_ISSUANCES}
+    ADD COLUMN IF NOT EXISTS delivery_deadline TIMESTAMPTZ;
+ALTER TABLE {schema}.{TABLE_ISSUANCES}
+    ADD COLUMN IF NOT EXISTS reserved_until TIMESTAMPTZ;
+ALTER TABLE {schema}.{TABLE_ISSUANCES}
+    ADD COLUMN IF NOT EXISTS activation_digest CHAR(64);
+
+-- Keep identity tombstones even if ABORT precedes the first SDK reservation.
+-- No bearer or user authority is stored here. Never remove a terminal row
+-- merely because the physical custody value was erased.
+CREATE TABLE IF NOT EXISTS {schema}.{TABLE_ISSUANCE_TERMINALS} (
+    identity            CHAR(64) PRIMARY KEY,
+    plan_digest         CHAR(64) NOT NULL,
+    terminal_digest     CHAR(64) NOT NULL,
+    reason              TEXT NOT NULL CHECK (reason IN ('aborted', 'superseded', 'expired')),
+    retired_at          TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
 """

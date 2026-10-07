@@ -36,6 +36,7 @@ from kdcube_ai_app.infra.secrets.host_vault.protocol import (
     VaultError,
     VaultRequest,
     VaultResponse,
+    custody_qualification,
 )
 
 LOGGER = logging.getLogger("kdcube.host_vault.broker")
@@ -87,6 +88,23 @@ class SecretsBroker:
         return response
 
     # ── the internal secrets-service operations ───────────────────────────
+
+    def qualify_custody(self, *, application: str, metadata_key: str) -> BrokerResult:
+        """Fresh authenticated assertion; health or an old server never suffice."""
+        try:
+            selector = self._reference(application, metadata_key)
+            if not selector.name.endswith(".__keys"):
+                raise VaultError(ErrorCode.INVALID_REQUEST)
+            request = VaultRequest.new(Operation.QUALIFY, selector)
+            response = self._call(request)
+            # Also validate direct/in-process ports through the wire grammar.
+            response = VaultResponse.from_wire(response.to_wire())
+            if (response.ok is not True or response.request_id != request.request_id
+                    or response.extra != {"custody": custody_qualification(selector)}):
+                return BrokerResult(ok=False, code=ErrorCode.BACKEND_UNAVAILABLE)
+            return BrokerResult(ok=True, code=ErrorCode.OK)
+        except Exception:
+            return BrokerResult(ok=False, code=ErrorCode.BACKEND_UNAVAILABLE)
 
     def read(self, *, application: str, key: str) -> BrokerReadResult:
         """Read one value while retaining the fixed protocol result code."""

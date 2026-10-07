@@ -11,6 +11,9 @@ from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
+from kdcube_ai_app.infra.secrets.runtime_contract import runtime_key_namespace
+from kdcube_ai_app.infra.secrets.runtime_http import reject_legacy_runtime_key
+from kdcube_ai_app.infra.secrets.runtime_bootstrap import install_configured_runtime_routes
 
 STORE_PATH = os.getenv("SECRETS_STORE_PATH", "/run/kdcube-secrets/store.json")
 ADMIN_TOKEN = os.getenv("SECRETS_ADMIN_TOKEN")
@@ -21,6 +24,7 @@ _token_state: dict[str, dict[str, float]] = {}
 _STORE_LOCK = threading.RLock()
 
 app = FastAPI()
+install_configured_runtime_routes(app, environ=os.environ)
 logging.basicConfig(
     level=os.getenv("SECRETS_LOG_LEVEL", "INFO").upper(),
     format="%(asctime)s %(levelname)s:%(name)s:%(message)s",
@@ -152,6 +156,7 @@ def health() -> dict[str, str]:
 
 @app.get("/secret/{key}")
 def get_secret(key: str, x_kdcube_secret_token: str | None = Header(default=None)) -> dict[str, str]:
+    reject_legacy_runtime_key(key)
     _require_read_token(x_kdcube_secret_token)
     try:
         with _STORE_LOCK:
@@ -161,7 +166,9 @@ def get_secret(key: str, x_kdcube_secret_token: str | None = Header(default=None
                 keys = sorted(
                     item
                     for item in store
-                    if item.startswith(prefix) and _inventory_prefix(item) is None
+                    if item.startswith(prefix)
+                    and _inventory_prefix(item) is None
+                    and runtime_key_namespace(item) is None
                 )
                 value = json.dumps(keys) if keys else None
             else:
@@ -177,6 +184,7 @@ def get_secret(key: str, x_kdcube_secret_token: str | None = Header(default=None
 
 @app.post("/set")
 def set_secret(item: SecretItem, x_kdcube_admin_token: str | None = Header(default=None)) -> dict[str, Any]:
+    reject_legacy_runtime_key(item.key)
     _require_admin(x_kdcube_admin_token)
     if _inventory_prefix(item.key) is not None:
         return {"status": "ok", "inventory": "derived"}
@@ -200,6 +208,7 @@ def set_secret(item: SecretItem, x_kdcube_admin_token: str | None = Header(defau
 
 @app.delete("/secret/{key}")
 def delete_secret(key: str, x_kdcube_admin_token: str | None = Header(default=None)) -> dict[str, Any]:
+    reject_legacy_runtime_key(key)
     _require_admin(x_kdcube_admin_token)
     if _inventory_prefix(key) is not None:
         return {"status": "ok", "deleted": False, "inventory": "derived"}

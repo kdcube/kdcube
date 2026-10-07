@@ -274,12 +274,31 @@ class SecretsManagerConfig:
     redis_url: Optional[str] = None
     global_secrets_yaml: Optional[str] = None
     bundle_secrets_yaml: Optional[str] = None
+    runtime_secrets_root: Optional[str] = None
+    runtime_secret_namespaces: tuple[str, ...] = ()
     read_timeout_seconds: float = 2.0
     write_timeout_seconds: float = 5.0
 
 
 class ISecretsManager(ABC):
     provider_type: str
+
+    async def qualify_runtime_custody(self, *, namespace: str) -> bool:
+        """Qualify the namespace-bound common contract, never a provider label.
+
+        Unknown/transient adapters cannot advertise production guarantees.
+        Backend implementations own storage and authenticated scope checks;
+        deployment replacement/negative-reader evidence remains host-owned.
+        """
+        return False
+
+    async def qualify_host_vault(self) -> bool:
+        """Confirm the running secrets-service backend, not a configuration label.
+
+        Other provider implementations do not attest a host-vault broker.
+        This is a reachability/backend check, not ACL or restart proof.
+        """
+        return False
 
     @abstractmethod
     async def get_secret(self, key: str) -> Optional[str]:
@@ -921,6 +940,11 @@ class SecretsFileSecretsManager(ISecretsManager):
         self._lock = threading.RLock()
         self._redis = None
 
+        # Runtime records are not descriptor values. The trusted host must
+        # supply a dedicated persistent root and authorize exact namespaces.
+        self._runtime_secrets_root = config.runtime_secrets_root
+        self._runtime_secret_namespaces = config.runtime_secret_namespaces
+
     def _load_current_data(self) -> dict[str, str]:
         merged: dict[str, str] = {}
         if self._global_uri:
@@ -1014,6 +1038,40 @@ class SecretsFileSecretsManager(ISecretsManager):
             "secrets-file cannot store short-lived runtime secrets in tracked descriptors"
         )
 
+    def _runtime_store(self, namespace: str):
+        from kdcube_ai_app.infra.secrets.runtime_file import RuntimeFileStore
+
+        if not self._runtime_secrets_root:
+            raise self._ephemeral_secrets_are_unsupported()
+        runtime_root = Path(self._runtime_secrets_root).resolve()
+        for uri in (self._global_uri, self._bundle_uri):
+            parsed = urlparse(uri or "")
+            if parsed.scheme == "file" and runtime_root == Path(parsed.path).resolve().parent:
+                raise SecretsManagerWriteError("runtime_secret_storage_must_be_separate")
+        return RuntimeFileStore(
+            root=self._runtime_secrets_root,
+            namespace=namespace,
+            authorized_namespaces=self._runtime_secret_namespaces,
+        )
+
+    async def _runtime_file_call(self, namespace: str, operation: str, **kwargs):
+        from kdcube_ai_app.infra.secrets.runtime_file import RuntimeFileError
+
+        try:
+            store = self._runtime_store(namespace)
+            return await _run_blocking_critical_section(
+                lambda: getattr(store, operation)(**kwargs)
+            )
+        except RuntimeFileError as exc:
+            raise SecretsManagerWriteError(str(exc)) from None
+
+    async def qualify_runtime_custody(self, *, namespace: str) -> bool:
+        try:
+            await self._runtime_file_call(namespace, "qualify")
+            return True
+        except SecretsManagerError:
+            return False
+
     async def set_ephemeral_secret(
         self,
         *,
@@ -1022,8 +1080,13 @@ class SecretsFileSecretsManager(ISecretsManager):
         value: str,
         expires_at: int,
     ) -> None:
-        del namespace, secret_ref, value, expires_at
-        raise self._ephemeral_secrets_are_unsupported()
+        # File runtime records are immutable, including the compatibility set
+        # operation. A collision must never overwrite another original.
+        created = await self.create_ephemeral_secret(
+            namespace=namespace, secret_ref=secret_ref, value=value, expires_at=expires_at,
+        )
+        if not created:
+            raise SecretsManagerWriteError("runtime_secret_create_conflict")
 
     async def create_ephemeral_secret(
         self,
@@ -1033,8 +1096,9 @@ class SecretsFileSecretsManager(ISecretsManager):
         value: str,
         expires_at: int,
     ) -> bool:
-        del namespace, secret_ref, value, expires_at
-        raise self._ephemeral_secrets_are_unsupported()
+        return await self._runtime_file_call(
+            namespace, "create", secret_ref=secret_ref, value=value, expires_at=expires_at,
+        )
 
     async def get_ephemeral_secret(
         self,
@@ -1042,8 +1106,7 @@ class SecretsFileSecretsManager(ISecretsManager):
         namespace: str,
         secret_ref: str,
     ) -> Optional[str]:
-        del namespace, secret_ref
-        raise self._ephemeral_secrets_are_unsupported()
+        return await self._runtime_file_call(namespace, "get", secret_ref=secret_ref)
 
     async def delete_ephemeral_secret(
         self,
@@ -1051,8 +1114,7 @@ class SecretsFileSecretsManager(ISecretsManager):
         namespace: str,
         secret_ref: str,
     ) -> None:
-        del namespace, secret_ref
-        raise self._ephemeral_secrets_are_unsupported()
+        await self._runtime_file_call(namespace, "delete", secret_ref=secret_ref)
 
     async def purge_expired_ephemeral_secrets(
         self,
@@ -1061,8 +1123,7 @@ class SecretsFileSecretsManager(ISecretsManager):
         now: int,
         limit: int = 100,
     ) -> int:
-        del namespace, now, limit
-        raise self._ephemeral_secrets_are_unsupported()
+        return await self._runtime_file_call(namespace, "purge_expired", now=now, limit=limit)
 
     async def set_many(self, values: Mapping[str, str]) -> None:
         normalized_values = {
@@ -1189,6 +1250,116 @@ class SecretsServiceSecretsManager(ISecretsManager):
     def _key_url(self, key: str) -> str:
         return f"{self._url}/secret/{quote(key, safe='')}"
 
+    def _runtime_url(self, namespace: str, suffix: str) -> str:
+        from kdcube_ai_app.infra.secrets.runtime_contract import valid_namespace
+
+        if not valid_namespace(namespace):
+            raise SecretsManagerWriteError("runtime_secret_scope_invalid")
+        if not self._url:
+            raise SecretsManagerWriteError("runtime_secret_storage_unavailable")
+        return f"{self._url}/runtime-secrets/{quote(namespace, safe='')}/{suffix}"
+
+    async def _runtime_request(self, *, namespace: str, operation: str,
+                               secret_ref: str | None = None, payload: dict | None = None):
+        if operation in {"get", "delete", "create"} and (type(secret_ref) is not str
+                or _EPHEMERAL_SECRET_REF.fullmatch(secret_ref) is None):
+            raise SecretsManagerWriteError("runtime_secret_reference_invalid")
+        read = operation == "get"
+        token = self._token if read else self._admin_token
+        if not token:
+            raise SecretsManagerWriteError("runtime_secret_scope_forbidden")
+        suffix = f"secret/{secret_ref}" if operation in {"get", "delete"} else operation
+        url = self._runtime_url(namespace, suffix)
+        method = {"get": "get", "delete": "delete", "create": "post", "purge": "post"}[operation]
+        arguments = {"headers": {"X-KDCUBE-SECRET-TOKEN" if read else "X-KDCUBE-ADMIN-TOKEN": token}}
+        if payload is not None:
+            arguments["json"] = payload
+        try:
+            async with _get_httpx().AsyncClient(
+                timeout=self._read_timeout if read else self._write_timeout,
+            ) as client:
+                response = await getattr(client, method)(url, **arguments)
+        except Exception:
+            # A create timeout may have committed. Never fall back to a
+            # generic overwrite, another provider, or a fresh reference.
+            raise SecretsManagerWriteError("runtime_secret_outcome_unknown") from None
+        if operation == "create" and response.status_code == 409:
+            return False
+        if operation == "get" and response.status_code == 404:
+            return None
+        if response.status_code != 200:
+            raise SecretsManagerWriteError("runtime_secret_storage_unavailable")
+        try:
+            result = response.json()
+            if operation == "get":
+                if (type(result) is not dict or set(result) != {"value"}
+                        or type(result["value"]) is not str
+                        or len(result["value"].encode("utf-8")) > _AWS_SECRET_STRING_MAX_BYTES):
+                    raise ValueError
+                return result["value"]
+            expected = {"status", "created"} if operation == "create" else (
+                {"status", "removed"} if operation == "purge" else {"status"})
+            if type(result) is not dict or set(result) != expected or result["status"] != "ok":
+                raise ValueError
+            if operation == "create":
+                if result["created"] is not True:
+                    raise ValueError
+                return True
+            if operation == "purge":
+                if (type(result["removed"]) is not int
+                        or not 0 <= result["removed"] <= payload["limit"]):
+                    raise ValueError
+                return result["removed"]
+        except Exception:
+            raise SecretsManagerWriteError("runtime_secret_response_invalid") from None
+        return None
+
+    async def qualify_runtime_custody(self, *, namespace: str) -> bool:
+        from kdcube_ai_app.infra.secrets.runtime_contract import qualified, valid_namespace
+
+        if not self._url or not self._token or not self._admin_token or not valid_namespace(namespace):
+            return False
+        try:
+            async with _get_httpx().AsyncClient(timeout=self._read_timeout) as client:
+                response = await client.get(
+                    f"{self._url}/runtime-secrets/{quote(namespace, safe='')}/qualification",
+                    headers={"X-KDCUBE-SECRET-TOKEN": self._token,
+                             "X-KDCUBE-ADMIN-TOKEN": self._admin_token},
+                )
+            if response.status_code in {403, 404}:
+                return False
+            if response.status_code != 200:
+                raise SecretsManagerError("Runtime secret qualification is unavailable")
+            payload = response.json()
+        except Exception:
+            raise SecretsManagerError("Runtime secret qualification is unavailable") from None
+        return qualified(payload, namespace=namespace)
+
+    async def qualify_host_vault(self) -> bool:
+        """Reject the temporary sidecar and unhealthy host-vault brokers."""
+        if not self._url:
+            raise SecretsManagerError("Secrets service is not configured")
+        try:
+            async with _get_httpx().AsyncClient(timeout=self._read_timeout) as client:
+                # Health needs no secret header. Do not follow redirects to a
+                # different backend or expose response text in errors.
+                response = await client.get(f"{self._url}/health")
+            if response.status_code != 200:
+                raise SecretsManagerError("Secrets service backend is unavailable")
+            payload = response.json()
+        except Exception:
+            raise SecretsManagerError("Secrets service backend is unavailable") from None
+        vault = payload.get("vault") if type(payload) is dict else None
+        return (type(payload) is dict and set(payload) == {"status", "vault"}
+                and payload["status"] == "ok" and type(vault) is dict
+                and {"ok", "code"} <= set(vault) <= {"ok", "code", "deployment_id"}
+                and vault["ok"] is True and vault["code"] == "ok"
+                and ("deployment_id" not in vault or (
+                    type(vault["deployment_id"]) is str
+                    and bool(vault["deployment_id"].strip())
+                    and len(vault["deployment_id"]) <= 1024
+                )))
+
     @staticmethod
     def _validate_write_response(response: Any, *, operation: str) -> int | None:
         if response.status_code == 409:
@@ -1301,33 +1472,32 @@ class SecretsServiceSecretsManager(ISecretsManager):
         value: str,
         expires_at: int,
     ) -> bool:
-        del expires_at
-        key = _ephemeral_provider_key(namespace, secret_ref)
-        if not self.can_write():
-            raise SecretsManagerWriteError(
-                "secrets-service provider is not configured for writes"
-            )
-        httpx = _get_httpx()
         try:
-            async with httpx.AsyncClient(timeout=self._write_timeout) as client:
-                response = await client.post(
-                    f"{self._url}/set",
-                    json={"key": key, "value": value, "expected_generation": 0},
-                    headers={"X-KDCUBE-ADMIN-TOKEN": self._admin_token},
-                )
-        except Exception:
-            raise SecretsManagerWriteError(
-                "secrets-service create request outcome is unknown"
-            ) from None
-        if response.status_code == 409:
-            return False
-        generation = self._validate_write_response(response, operation="create")
-        if generation != 1:
-            raise SecretsManagerWriteError(
-                "secrets-service create response does not prove ownership; "
-                "outcome is unknown"
-            )
-        return True
+            if (type(value) is not str or len(value.encode("utf-8")) > _AWS_SECRET_STRING_MAX_BYTES
+                    or type(expires_at) is not int or expires_at <= 0):
+                raise ValueError
+        except (ValueError, UnicodeError):
+            raise SecretsManagerWriteError("runtime_secret_value_invalid") from None
+        return await self._runtime_request(namespace=namespace, operation="create", secret_ref=secret_ref,
+            payload={"secret_ref": secret_ref, "value": value, "expires_at": expires_at})
+
+    async def set_ephemeral_secret(self, *, namespace: str, secret_ref: str,
+                                   value: str, expires_at: int) -> None:
+        if not await self.create_ephemeral_secret(namespace=namespace, secret_ref=secret_ref,
+                                                  value=value, expires_at=expires_at):
+            raise SecretsManagerWriteError("runtime_secret_conflict")
+
+    async def get_ephemeral_secret(self, *, namespace: str, secret_ref: str) -> str | None:
+        return await self._runtime_request(namespace=namespace, operation="get", secret_ref=secret_ref)
+
+    async def delete_ephemeral_secret(self, *, namespace: str, secret_ref: str) -> None:
+        await self._runtime_request(namespace=namespace, operation="delete", secret_ref=secret_ref)
+
+    async def purge_expired_ephemeral_secrets(self, *, namespace: str, now: int, limit: int = 100) -> int:
+        if (type(now) is not int or now <= 0 or type(limit) is not int or not 1 <= limit <= 1000):
+            raise SecretsManagerWriteError("runtime_secret_purge_invalid")
+        return await self._runtime_request(namespace=namespace, operation="purge",
+                                           payload={"now": now, "limit": limit})
 
     async def delete_secret(self, key: str) -> None:
         key = validate_secret_provider_key(key)
@@ -1371,6 +1541,37 @@ class AwsSecretsManagerSecretsManager(ISecretsManager):
         self._redis = None
         self._lock = threading.RLock()
         self._write_lock = asyncio.Lock()
+        self._runtime_secret_namespaces = config.runtime_secret_namespaces
+
+    async def qualify_runtime_custody(self, *, namespace: str) -> bool:
+        from kdcube_ai_app.infra.secrets.runtime_contract import valid_namespace
+
+        if not valid_namespace(namespace) or namespace not in self._runtime_secret_namespaces:
+            return False
+        # A signed, read-only provider request checks actual availability and
+        # authentication. Per-operation IAM remains authoritative; deployment
+        # qualification must additionally demonstrate its denied-reader case.
+        try:
+            async with self._client_cm() as client:
+                result = await client.list_secrets(
+                    Filters=[{"Key": "name", "Values": [f"{self._prefix}/runtime/{namespace}/"]}],
+                    MaxResults=1,
+                )
+            if not isinstance(result, Mapping) or not isinstance(result.get("SecretList"), list):
+                raise SecretsManagerError("Runtime secret qualification is unavailable")
+            # Availability alone cannot establish expiry-aware reads, a
+            # replacement-safe purge or IAM namespace isolation. This lane is
+            # unqualified until those implementations and scope proofs exist.
+            return False
+        except Exception as exc:
+            if self._error_code(exc) in {"AccessDenied", "AccessDeniedException", "UnauthorizedException"}:
+                return False
+            raise SecretsManagerError("Runtime secret qualification is unavailable") from None
+
+    def _require_runtime_scope(self, namespace: str) -> None:
+        """Require explicit host enrollment before every raw runtime operation."""
+        if namespace not in self._runtime_secret_namespaces:
+            raise SecretsManagerWriteError("runtime_secret_scope_forbidden")
 
     def _get_session(self):
         if self._session is not None:
@@ -1405,6 +1606,7 @@ class AwsSecretsManagerSecretsManager(ISecretsManager):
 
     def _ephemeral_secret_id(self, namespace: str, secret_ref: str) -> str:
         clean_namespace, clean_ref = _ephemeral_secret_parts(namespace, secret_ref)
+        self._require_runtime_scope(clean_namespace)
         return f"{self._prefix}/runtime/{clean_namespace}/{clean_ref}"
 
     def _doc_lock_key(self, secret_id: str) -> str:
@@ -1649,6 +1851,7 @@ class AwsSecretsManagerSecretsManager(ISecretsManager):
         limit: int = 100,
     ) -> int:
         clean_namespace, _ = _ephemeral_secret_parts(namespace, "0" * 32)
+        self._require_runtime_scope(clean_namespace)
         if not self._claim_ephemeral_purge(clean_namespace):
             return 0
         name_prefix = f"{self._prefix}/runtime/{clean_namespace}/"
@@ -1873,6 +2076,13 @@ class AwsSecretsManagerSecretsManager(ISecretsManager):
 
 
 def build_secrets_manager_config(settings: Any | None = None) -> SecretsManagerConfig:
+    runtime_namespaces = getattr(settings, "SECRETS_RUNTIME_NAMESPACES", None)
+    if runtime_namespaces is None:
+        runtime_namespaces = ()
+    from kdcube_ai_app.infra.secrets.runtime_contract import valid_namespace
+    if (not isinstance(runtime_namespaces, (list, tuple)) or len(runtime_namespaces) > 64
+            or any(not valid_namespace(value) for value in runtime_namespaces)):
+        raise SecretsManagerError("Runtime secret namespace policy is invalid")
     component = _normalize_component_name(
         getattr(settings, "GATEWAY_COMPONENT", None) or os.getenv("GATEWAY_COMPONENT")
     )
@@ -1939,6 +2149,8 @@ def build_secrets_manager_config(settings: Any | None = None) -> SecretsManagerC
         ),
         global_secrets_yaml=global_secrets_yaml,
         bundle_secrets_yaml=bundle_secrets_yaml,
+        runtime_secrets_root=_first_non_empty(getattr(settings, "SECRETS_RUNTIME_ROOT", None)),
+        runtime_secret_namespaces=tuple(runtime_namespaces),
     )
 
 
@@ -1974,6 +2186,8 @@ def get_secrets_manager(settings: Any | None = None) -> ISecretsManager:
         config.redis_url,
         config.global_secrets_yaml,
         config.bundle_secrets_yaml,
+        config.runtime_secrets_root,
+        config.runtime_secret_namespaces,
         config.read_timeout_seconds,
         config.write_timeout_seconds,
     )
