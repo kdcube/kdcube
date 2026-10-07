@@ -34,6 +34,13 @@ does not project them into caller identity or policy.
 
 ## Human consent admission
 
+The public host helper
+`oauth.card_labels.oauth_card_label(client_metadata, resource=..., explicit=...)`
+derives the same owner-visible Card label used by consent and issuance. Its
+companion `consent_label` preserves a person-chosen label on reconnect. Hosting
+factories import this owning derivation to keep naming consistent with the
+normal consent path.
+
 The KDCube host admits verified human platform sessions to authorization,
 device verification, consent draft, consent decision, and consent submission.
 An authenticated external-client principal whose verified identity starts with
