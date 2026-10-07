@@ -326,3 +326,30 @@ async def test_a_quiet_night_moves_and_writes_nothing(env, tmp_path):
     assert await _ledger(pool, schema) == ledger
     assert await retention.watermark() == mark
     assert await _hot_ids(pool, schema) == [recent] and await _cold_ids(retention) == [old]
+
+
+@pytest.mark.asyncio
+async def test_a_stuck_batch_holds_back_only_its_own_utc_day(env, tmp_path):
+    pool, schema, backend, archive, retention = env
+    # Ids 1..3 of one conversation: the stuck batch is the 09-10 day (ids 1 and 3);
+    # the 09-17 row (id 2) lies inside that id range but on another UTC day.
+    first = await _add(pool, schema, "u1", "c1", datetime(2026, 9, 10, 9, tzinfo=UTC))
+    other_day = await _add(pool, schema, "u1", "c1", datetime(2026, 9, 17, 9, tzinfo=UTC))
+    last = await _add(pool, schema, "u1", "c1", datetime(2026, 9, 10, 10, tzinfo=UTC))
+
+    original = archive.write_batch
+
+    async def corrupt(**kw):
+        manifest = await original(**kw)
+        await backend.write_bytes_a(manifest["part_key"], b"tampered")
+        return manifest
+
+    archive.write_batch = corrupt
+    with pytest.raises(ColdArchiveIntegrityError):
+        await retention.archive_before(_night(1))  # cutoff 09-17 02:20: only the 09-10 rows
+    archive.write_batch = original
+
+    summary = await retention.archive_before(_night(3))  # cutoff 09-19 02:20
+    assert summary["stuck"] == 1 and (summary["batches"], summary["rows"]) == (1, 1)
+    assert await _hot_ids(pool, schema) == [first, last]
+    assert await _cold_ids(retention) == [other_day]
