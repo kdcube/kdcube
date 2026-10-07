@@ -28,11 +28,15 @@ async def pinned(store, ledger, **changes):
 
 @pytest.mark.asyncio
 async def test_first_access_expiry_survives_restart_and_elapsed_time(store, ledger):
-    before = await pinned(store, ledger)
+    # A longer Card cap must not mask re-computation of the shorter access TTL.
+    before = await pinned(store, ledger, expires_at=int(time.time()) + 7200)
+    async with store._pool.acquire() as connection:
+        started = await connection.fetchval("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
     first = await ledger.capture_access_expiry(proof(store), ttl_seconds=3600)
     assert first.access_ttl_seconds == 3600
-    assert int(time.time()) + 3598 <= first.access_expires_at <= int(time.time()) + 3600
     async with store._pool.acquire() as connection:
+        finished = await connection.fetchval("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
+        assert started + 3600 <= first.access_expires_at <= finished + 3600
         await connection.execute("SELECT pg_sleep(1.1)")
     restarted = PostgresOriginalExchangeStore(pg_pool=store._pool, tenant=store.tenant, project=store.project)
     replay = await restarted.capture_access_expiry(proof(store), ttl_seconds=3600)
@@ -153,7 +157,7 @@ async def test_additive_schema_keeps_existing_plan_without_inventing_old_access_
 
 @pytest.mark.asyncio
 async def test_a_fresh_interpreter_reads_the_original_access_expiry(store, ledger):
-    await pinned(store, ledger)
+    await pinned(store, ledger, expires_at=int(time.time()) + 7200)
     first = await ledger.capture_access_expiry(proof(store), ttl_seconds=3600)
     script = """
 import asyncio, json, os, sys
