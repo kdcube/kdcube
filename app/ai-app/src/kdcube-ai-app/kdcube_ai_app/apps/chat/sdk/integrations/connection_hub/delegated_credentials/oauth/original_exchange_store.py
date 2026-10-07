@@ -20,6 +20,7 @@ from typing import Any
 
 import asyncpg
 
+from connection_hub.delegated_credentials.oauth.grants import ACCESS_TOKEN_TTL_SECONDS
 from kdcube_ai_app.auth.bundle.session_schema import bundle_session_schema
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.original_exchange import (
     CodeExchangeProof, OriginalExchangeRefused, ValidatedCodeExchange, canonical, plan_snapshot, text,
@@ -40,6 +41,8 @@ class OriginalExchange:
     delivery_deadline: int | None
     plan: dict[str, Any] | None
     created: bool = False
+    access_expires_at: int | None = None
+    access_ttl_seconds: int | None = None
 
 
 class PostgresOriginalExchangeStore:
@@ -75,10 +78,15 @@ class PostgresOriginalExchangeStore:
                     decision_request_id CHAR(64) NOT NULL UNIQUE,
                     pending_until TIMESTAMPTZ NOT NULL,
                     delivery_deadline TIMESTAMPTZ,
+                    access_expires_at TIMESTAMPTZ,
+                    access_ttl_seconds INTEGER,
                     plan JSONB,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
                     CHECK ((plan IS NULL) = (delivery_deadline IS NULL))
                 );
+                ALTER TABLE {self.schema}.{TABLE_EXCHANGES}
+                    ADD COLUMN IF NOT EXISTS access_expires_at TIMESTAMPTZ,
+                    ADD COLUMN IF NOT EXISTS access_ttl_seconds INTEGER;
             """, timeout=_WAIT_SECONDS)
 
     def _proof(self, proof: CodeExchangeProof) -> None:
@@ -97,7 +105,8 @@ class PostgresOriginalExchangeStore:
     async def _row(self, connection: Any, identity: str, *, lock: bool = False) -> Any:
         return await connection.fetchrow(f"""
             SELECT *, floor(extract(epoch FROM pending_until))::bigint AS pending_epoch,
-                   floor(extract(epoch FROM delivery_deadline))::bigint AS delivery_epoch
+                   floor(extract(epoch FROM delivery_deadline))::bigint AS delivery_epoch,
+                   floor(extract(epoch FROM access_expires_at))::bigint AS access_epoch
             FROM {self.schema}.{TABLE_EXCHANGES} WHERE identity = $1
             {'FOR UPDATE' if lock else ''}
         """, identity, timeout=_WAIT_SECONDS)
@@ -120,6 +129,16 @@ class PostgresOriginalExchangeStore:
         )
         if not live:
             raise OriginalExchangeRefused("original_exchange_delivery_expired")
+        expiry, ttl = row["access_expires_at"], row["access_ttl_seconds"]
+        if ((expiry is None) != (ttl is None)
+                or (ttl is not None and (type(ttl) is not int or not 1 <= ttl <= ACCESS_TOKEN_TTL_SECONDS))):
+            raise OriginalExchangeRefused("original_exchange_access_expiry_invalid")
+        if expiry is not None:
+            access_live = await connection.fetchval(
+                "SELECT clock_timestamp() < $1::timestamptz", expiry, timeout=_WAIT_SECONDS,
+            )
+            if not access_live:
+                raise OriginalExchangeRefused("original_exchange_access_expired")
 
     @staticmethod
     def _decode(row: Any, *, created: bool = False) -> OriginalExchange:
@@ -129,6 +148,7 @@ class PostgresOriginalExchangeStore:
             payload_digest=row["payload_digest"], original_input_digest=row["original_input_digest"],
             pending_until=row["pending_epoch"], delivery_deadline=row["delivery_epoch"],
             plan=json.loads(raw) if isinstance(raw, str) else raw, created=created,
+            access_expires_at=row["access_epoch"], access_ttl_seconds=row["access_ttl_seconds"],
         )
 
     async def begin(self, binding: ValidatedCodeExchange) -> OriginalExchange:
@@ -162,6 +182,47 @@ class PostgresOriginalExchangeStore:
             self._match(row, proof)
             await self._live(connection, row)
             return self._decode(row)
+
+    async def capture_access_expiry(self, proof: CodeExchangeProof, *, ttl_seconds: int) -> OriginalExchange:
+        """Capture the first access deadline before any preparation or mint.
+
+        The trusted host calls this after pinning its authenticated original
+        plan. A retry obtains the stored instant, never a renewed TTL. The
+        original Card cap bounds it; the existing delivery window is unchanged.
+        This stores no credential and is not an authorization or mint operation.
+        Legacy NULL fields make no claim about a previously minted access token.
+        """
+        self._proof(proof)
+        if type(ttl_seconds) is not int or not 1 <= ttl_seconds <= ACCESS_TOKEN_TTL_SECONDS:
+            raise OriginalExchangeRefused("original_exchange_access_expiry_invalid")
+        async with self._connection() as connection:
+            async with connection.transaction():
+                row = await self._row(connection, proof.identity, lock=True)
+                if row is None:
+                    raise OriginalExchangeRefused("original_exchange_not_validated")
+                self._match(row, proof)
+                await self._live(connection, row)
+                original = self._decode(row)
+                if original.plan is None:
+                    raise OriginalExchangeRefused("original_exchange_not_planned")
+                if original.access_expires_at is not None:
+                    if original.access_ttl_seconds != ttl_seconds:
+                        raise OriginalExchangeRefused("original_exchange_identity_conflict")
+                    return original
+                cap = original.plan.get("expires_at")
+                if type(cap) is not int or cap < 1:
+                    raise OriginalExchangeRefused("original_exchange_plan_invalid")
+                now = await connection.fetchval(
+                    "SELECT floor(extract(epoch FROM clock_timestamp()))::bigint", timeout=_WAIT_SECONDS,
+                )
+                expiry = min(cap, now + ttl_seconds)
+                if expiry <= now:
+                    raise OriginalExchangeRefused("original_exchange_access_expired")
+                await connection.execute(f"""
+                    UPDATE {self.schema}.{TABLE_EXCHANGES}
+                    SET access_expires_at=to_timestamp($2), access_ttl_seconds=$3 WHERE identity=$1
+                """, proof.identity, expiry, ttl_seconds, timeout=_WAIT_SECONDS)
+                return self._decode(await self._row(connection, proof.identity))
 
     async def pin_plan(self, binding: ValidatedCodeExchange, plan: object) -> OriginalExchange:
         """Pin the host-validated original Hub plan once, before preparation/mint.

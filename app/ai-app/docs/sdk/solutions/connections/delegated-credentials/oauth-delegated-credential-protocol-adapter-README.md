@@ -76,6 +76,25 @@ calls `prepare_bound_session`. The original remains inactive; the return value
 contains only its immutable context and opaque receipt, not bearer material.
 Retries must retain the captured expiry rather than recomputing a fresh TTL.
 
+The host can retain that instant in its existing validated exchange ledger with
+`PostgresOriginalExchangeStore.capture_access_expiry(proof, ttl_seconds=3600)`.
+After the original plan is pinned, the first call captures PostgreSQL's current
+clock under the exchange row lock and caps the access expiry by the original
+Card deadline. Subsequent calls return the same stored expiry, including after
+a new process starts; changing the original TTL refuses. The explicit integer
+TTL is bounded by the portable access-token policy, currently one hour. Missing
+validation, an unplanned exchange or a different retry proof cannot capture it.
+
+Call this before any access preparation and pass its `access_expires_at` to the
+adapter. The original delivery deadline remains separate. Once the access
+deadline passes, ledger read, begin, plan pinning and expiry capture refuse
+without replacing the mapping, even if the delivery window is still open.
+The schema change is additive; existing rows retain their plan and have unknown
+access-expiry fields until a new workflow captures them before minting. A NULL
+field does not prove that an older credential was never minted and must not be
+used to renew a previously minted credential. The ledger grants no authority,
+creates no credential and completes no Hub decision.
+
 `activate_prepared_delegated_client_access_token` accepts the host-authenticated
 original result only when its access slot is committed and applied, matches the
 prepared context, and names the original bearer digest. The public session
