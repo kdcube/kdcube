@@ -69,6 +69,92 @@ async def test_abort_before_prepare_is_a_durable_no_mint_tombstone(store):
 
 
 @pytest.mark.asyncio
+async def test_retirement_after_initial_read_fences_reserve_before_any_row_or_custody_write(store):
+    bound, custody = plan(store), RetirementCustody()
+    read, resume = asyncio.Event(), asyncio.Event()
+
+    class PausedRead:
+        def __getattr__(self, name):
+            return getattr(store, name)
+
+        async def read_issuance(self, identity):
+            original = await store.read_issuance(identity)
+            assert original is None
+            read.set()
+            await resume.wait()
+            return original
+
+    task = asyncio.create_task(prepare(PausedRead(), custody, bound))
+    try:
+        await asyncio.wait_for(read.wait(), 5)
+        retired = await retire(store, custody, terminal(bound))
+        assert retired.secret_ref is None
+        resume.set()
+        with pytest.raises(SessionIssuanceRefused, match="^issuance_terminal$"):
+            await asyncio.wait_for(task, 5)
+        assert await counts(store) == (0, 0, 0)
+        assert custody.created == 0 and not custody.values and not custody.deleted
+        async with store._pool.acquire() as connection:
+            assert await connection.fetchval(
+                f"SELECT count(*) FROM {store.schema}.{TABLE_ISSUANCE_TERMINALS}",
+            ) == 1
+    finally:
+        resume.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_retirement_after_custody_read_fences_activation_before_session_insert(store):
+    from kdcube_ai_app.auth.bundle.session_issuance_store import PostgresSessionIssuanceStore
+    bound, custody = plan(store), RetirementCustody()
+    first = await prepare(store, custody, bound)
+    activating, resume = asyncio.Event(), asyncio.Event()
+
+    class PausedPreLockRead(PostgresSessionIssuanceStore):
+        async def read_issuance(self, identity):
+            original = await super().read_issuance(identity)
+            # Pause the store's own read before its user/issuance row locks,
+            # after the SDK has already read custody. A second read fence
+            # alone cannot protect the ensuing activation write either.
+            activating.set()
+            await resume.wait()
+            return original
+
+    class PausedActivation:
+        def __getattr__(self, name):
+            return getattr(store, name)
+
+        async def activate_reserved(self, *args, **kwargs):
+            return await PausedPreLockRead(
+                pg_pool=store._pool, schema=store.schema,
+                tenant=store.tenant, project=store.project,
+            ).activate_reserved(*args, **kwargs)
+
+    task = asyncio.create_task(activate(PausedActivation(), custody, applied(bound, first)))
+    try:
+        await asyncio.wait_for(activating.wait(), 5)
+        retired = await retire(store, custody, terminal(bound))
+        assert retired.secret_ref == first.secret_ref
+        resume.set()
+        with pytest.raises(SessionIssuanceRefused, match="^issuance_terminal$"):
+            await asyncio.wait_for(task, 5)
+        assert await counts(store) == (1, 1, 0)
+        assert custody.created == 1 and not custody.values
+        assert custody.deleted == [first.secret_ref]
+        async with store._pool.acquire() as connection:
+            assert await connection.fetchval(
+                f"SELECT state FROM {store.schema}.{TABLE_ISSUANCES}",
+            ) == "reserved"
+    finally:
+        resume.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("state,outcome", [("aborted", "released"), ("committed", "superseded")])
 async def test_terminal_retirement_erases_only_inactive_original_and_never_user_authority(store, state, outcome):
     bound, custody = plan(store), RetirementCustody()

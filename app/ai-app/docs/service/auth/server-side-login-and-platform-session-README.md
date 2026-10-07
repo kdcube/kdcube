@@ -254,6 +254,11 @@ The additive `kdcube_bundle_session_issuance_terminals` table also fences an
 ABORT that arrives before the first SDK reservation. It stores only identity,
 plan/result digests, reason and retirement time; no bearer or copied serving
 permissions. Read, reserve and activation refuse a retired identity forever.
+The reserve and activation writes each recheck the tombstone under their own
+database locks: an earlier successful read cannot authorize either write after
+retirement commits. Deterministic PostgreSQL regressions retire between each
+pre-lock read and its write, and assert that no session is activated and no
+first reservation or user is inserted.
 Do not remove tombstones after provider deletion, or reuse a retired reference.
 
 No database connection or lock spans the provider call. Retirement uses one
