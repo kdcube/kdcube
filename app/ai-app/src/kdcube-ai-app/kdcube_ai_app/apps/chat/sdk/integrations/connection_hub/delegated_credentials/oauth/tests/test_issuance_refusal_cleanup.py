@@ -131,7 +131,7 @@ async def test_successful_card_commit_keeps_issued_credentials(grant_store, monk
     monkeypatch.setattr(grant_store, "revoke_refresh_token", unexpected_revoke)
     response = await routes._issue_tokens(
         SimpleNamespace(), grant_store, sub="human", scopes=["records:read"], client_id="client",
-        resource="*", registry_access_id="synthetic-card", card_kind="automation",
+        operations=["records_export"], resource="*", registry_access_id="synthetic-card", card_kind="automation",
     )
     assert response.status_code == 200
     body = json.loads(response.body)
