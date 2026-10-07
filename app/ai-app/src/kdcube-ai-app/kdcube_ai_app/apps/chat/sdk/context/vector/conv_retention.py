@@ -300,6 +300,10 @@ class ConversationRetention:
                 break
             summary["batches"] += 1
             summary["rows"] += rows
+        if summary.get("body_stuck"):
+            # A pruned part whose bodies could not all be copied: reported like any stuck batch.
+            summary["stuck_batches"].extend(summary["body_stuck"])
+            summary["stuck"] = len(summary["stuck_batches"])
         summary.update(self._body_counts)
         summary["body_errors"] = list(self._body_errors)
         summary["bodies_mover"] = self._body_mover() is not None
