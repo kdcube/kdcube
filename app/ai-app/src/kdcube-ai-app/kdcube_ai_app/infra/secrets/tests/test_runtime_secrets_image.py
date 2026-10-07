@@ -46,7 +46,7 @@ def test_secrets_image_uses_shared_pinned_aws_stack_and_service_pg_dependency():
     dockerfile = IMAGE.read_text()
     assert "-r /app/aws-requirements.txt" in dockerfile
     requirements = (APP / "deployment/docker/all_in_one_kdcube/secrets/requirements.txt").read_text()
-    assert "asyncpg" in requirements.splitlines()
+    assert "asyncpg==0.31.0" in requirements.splitlines()
     aws = (APP / "src/kdcube-ai-app/requirements-aws.txt").read_text()
     assert "aioboto3==13.2.0" in aws.splitlines()
     assert "aiobotocore[boto3]==2.15.2" in aws.splitlines()

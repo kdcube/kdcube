@@ -331,7 +331,8 @@ guarantee; deployment catalog size and concurrent load need their own evidence.
 
 The SecretsService image source packages the AWS adapter, service lifecycle,
 PostgreSQL access checks, metadata store and explicit schema migrator. Its
-requirements reuse the platform's pinned async AWS stack and include asyncpg.
+requirements reuse the platform's pinned async AWS stack and pin asyncpg to
+the tested `0.31.0` version, including its verified-TLS connection semantics.
 The image-manifest regression stages only the Dockerfile's actual COPY inputs
 in an isolated directory, imports the service from those bytes in a separate
 process, and checks construction/route installation without resource I/O.
