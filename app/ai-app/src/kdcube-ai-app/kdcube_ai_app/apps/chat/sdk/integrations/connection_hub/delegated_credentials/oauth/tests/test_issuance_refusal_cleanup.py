@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 import pytest_asyncio
 
+from connection_hub.delegated_credentials.caller_writer_gate import CallerWriteRefused
 from connection_hub.delegated_credentials.oauth.authority_store import PostgresOAuthAuthorityStore
 from connection_hub.delegated_credentials.oauth.store import GrantStore
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.cards.service import CardConflict
@@ -44,7 +45,7 @@ async def grant_store(request):
         await pool.close()
 
 
-async def _refused_issuance(store, monkeypatch, *, reason, replace_authority=False):
+async def _refused_issuance(store, monkeypatch, *, reason, replace_authority=False, refusal=None):
     observed = {}
 
     async def mint(sub, scopes):
@@ -56,6 +57,8 @@ async def _refused_issuance(store, monkeypatch, *, reason, replace_authority=Fal
         # Both credentials exist when the actual Hub callback refuses.
         assert await store.get_access_grant_record(ACCESS) is not None
         assert await store.validate_refresh_token(kwargs["refresh_token"]) is not None
+        if refusal is not None:
+            raise refusal
         raise CardConflict(reason, current_revision=9)
 
     monkeypatch.setattr(routes, "oauth_tenant_project", lambda request: ("home", "cleanup"))
@@ -105,6 +108,47 @@ async def test_one_cleanup_failure_does_not_prevent_the_other_or_expose_credenti
         grant_store, monkeypatch, reason="synthetic_late_card_conflict", replace_authority=replace_authority,
     )
     assert response.status_code == (400 if replace_authority else 503)
+    assert calls == ["revoke_access_grant", "revoke_refresh_token"]
+    assert ACCESS not in caplog.text and ACCESS.encode() not in response.body
+    if failed_operation != "revoke_access_grant":
+        assert await grant_store.get_access_grant_record(ACCESS) is None
+    if failed_operation != "revoke_refresh_token":
+        assert await grant_store.validate_refresh_token(observed["refresh_token"]) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome_confirmed", [None, False, True])
+async def test_caller_write_refusal_revokes_withheld_credentials(grant_store, monkeypatch, outcome_confirmed):
+    response, observed = await _refused_issuance(
+        grant_store, monkeypatch, reason="caller_writer_refused",
+        refusal=CallerWriteRefused("caller_writer_refused", outcome_confirmed=outcome_confirmed),
+    )
+    assert response.status_code == 503
+    assert json.loads(response.body)["error"] == "temporarily_unavailable"
+    assert observed["mint_count"] == 1
+    assert await grant_store.get_access_grant_record(ACCESS) is None
+    assert await grant_store.validate_refresh_token(observed["refresh_token"]) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed_operation", ["revoke_access_grant", "revoke_refresh_token"])
+async def test_caller_write_cleanup_failure_keeps_other_attempt_and_fixed_log(grant_store, monkeypatch, caplog, failed_operation):
+    calls = []
+    for name in ("revoke_access_grant", "revoke_refresh_token"):
+        original = getattr(grant_store, name)
+
+        async def revoke(token, *, operation=name, delegate=original):
+            calls.append(operation)
+            if operation == failed_operation:
+                raise RuntimeError(ACCESS)
+            return await delegate(token)
+
+        monkeypatch.setattr(grant_store, name, revoke)
+    response, observed = await _refused_issuance(
+        grant_store, monkeypatch, reason="caller_writer_refused",
+        refusal=CallerWriteRefused("caller_writer_refused"),
+    )
+    assert response.status_code == 503
     assert calls == ["revoke_access_grant", "revoke_refresh_token"]
     assert ACCESS not in caplog.text and ACCESS.encode() not in response.body
     if failed_operation != "revoke_access_grant":
