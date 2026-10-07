@@ -3664,6 +3664,13 @@ async def _issue_tokens(
 async def token(request: Request) -> Response:
     form = await request.form()
     grant_type = (form.get("grant_type") or "").strip()
+    if grant_type == "authorization_code":
+        from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.http.original_code import (
+            original_authorization_code_response,
+        )
+        original = await original_authorization_code_response(request, form)
+        if original is not None:
+            return original
     store = get_grant_store(request)
 
     if grant_type == DEVICE_GRANT_TYPE:

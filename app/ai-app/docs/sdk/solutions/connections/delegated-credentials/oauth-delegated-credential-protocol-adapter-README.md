@@ -106,9 +106,24 @@ unbound, or older-authority cases never fall back to ordinary login/minting.
 These typed values are data, not authentication. The hosting app still owns
 authenticated plan/result readers, immutable exchange binding, and live-target
 fencing. This adapter neither completes the Hub decision nor publishes tokens.
-The current authorization-code HTTP handler is not yet wired to this adapter;
-original refresh preparation, complete original-pair recovery, configured
-encrypted-provider qualification, and installed/live acceptance remain open.
+The authorization-code HTTP handler now accepts a hosting app's server-owned
+`oauth_original_exchange_factory`, on request state or application state. It
+returns an `OriginalCodeExchangeHandler` bound to the same tenant/project and
+an async `exchange(proof=..., code=...)` composition. The selected path receives
+only the client's code/redirect/PKCE proof; plans, results and provider choices
+remain host-owned. Its `OriginalTokenPair` retains the original absolute access
+expiry and delivery deadline, publishes both bearers only in a no-store HTTP
+response, and omits bearers from its representation. Its type is delivery data,
+not authorization evidence.
+
+A configured missing, malformed or unavailable capability fails closed. It
+does not fall back to ordinary consume/mint. An absent binding retains the
+existing workflow during source adoption. The host composition must connect
+the durable original mapping, full authenticated plan/result readers, both
+original reservations, live target fence and qualified custody. Those concrete
+provider callbacks, original refresh preparation, complete original-pair
+recovery, configured encrypted-provider qualification, and installed/live
+acceptance remain open; transport selection alone proves none of them.
 Ordinary human login and the existing delegated minter are unchanged.
 
 ## Refresh lifetime forwarding
