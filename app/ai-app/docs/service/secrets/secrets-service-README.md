@@ -242,7 +242,46 @@ and consume capacity. Migration occurs before opening the service pool;
 existing pre-ledger deployments require separately reviewed reconciliation
 and rollout evidence, not automatic activation of this new lane.
 
-These supporting components are not yet selected by the service entrypoint
+`RuntimeAwsService` now composes this store with a dedicated, bounded asyncpg
+pool and the common HTTP boundary through an explicit ASGI lifespan. Its
+trusted composition input is `RuntimeAwsServiceConfig`: exact namespaces,
+metadata schema/login role, AWS account/region/partition/prefix, capacity
+bounds, and two `RuntimeBootstrapSecretRef` values. Each bootstrap reference
+pins a complete AWS ARN plus an explicit VersionId. The database DSN is a
+SecretString; the commitment key is a 32–4096 byte SecretBinary. Their ARNs
+are distinct and outside the runtime-record prefix. The service reads them
+using its own AWS principal, checks response pins/types, and never uses
+arbitrary CURRENT. References may be descriptor data; values may not.
+
+Import, construction and route installation perform no resource I/O. Lifespan
+startup loads the pinned inputs and opens its own pool with verified TLS,
+explicit connection/command timeouts and bounded size. The resolved DSN must
+name the configured login role and explicit host, port and database; ambient
+connection defaults, query options and role overrides are refused. Normal
+startup performs no migration or role grants. Pool shutdown is bounded and
+terminates the owned pool on failure. Service-owned references to the key are
+released on close; this is not a claim of Python memory zeroization.
+
+Every pool acquisition runs read-only checks against the actual logged-in
+principal and migrated relations. Startup refuses superuser/admin attributes,
+role membership, schema/table ownership, DDL/DELETE capabilities, missing
+required DML access, transient relations, disabled terminal guards, stale
+columns, or access to unrelated user tables. Subsequent permission drift also
+refuses acquisition. These checks are bounded structural/access evidence;
+they do not attest every constraint/trigger body, SECURITY DEFINER function,
+database persistence or the complete deployed database/IAM boundary.
+
+The disposable PostgreSQL lifecycle tests explicitly replace the production
+verified-TLS setting with loopback trust/SSL-disabled input. They exercise a
+real separate login role, permission drift, failure cleanup, and restart with
+the same pinned key/original credential/deadline. AWS transport is synthetic.
+Common ASGI routes remain 503 with zero runtime-record I/O because
+`RuntimeAwsStore.qualify()` remains closed; startup success is not custody
+qualification. Persistent key provisioning, entropy and denied-reader IAM
+evidence remain operator/deployment-owned. Key rotation or legacy-row rollout
+requires a separately reviewed migration preserving existing commitments.
+
+These supporting components are not yet selected by the deployment entrypoint
 or SDK runtime consumer, and do not make AWS qualification true. The new
 attempt/closure protocol requires independent review and configured-provider
 qualification, including its conservative pre-dispatch-loss and legacy-row
