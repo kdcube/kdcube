@@ -57,7 +57,8 @@ async def env(tmp_path):
         await pool.close()
 
 
-async def _put(pool, schema, store, user, conv, ts, *, turn="t1", index_only=False) -> tuple[int, str]:
+async def _put(pool, schema, store, user, conv, ts, *, turn="t1", index_only=False, bundle="b1",
+               agent=None) -> tuple[int, str]:
     """A stored body and its index row, created at `ts` (the body's id carries its creation time)."""
 
     if index_only:
@@ -70,9 +71,9 @@ async def _put(pool, schema, store, user, conv, ts, *, turn="t1", index_only=Fal
         )
     async with pool.acquire() as con:
         row_id = await con.fetchval(
-            f"INSERT INTO {schema}.conv_messages (user_id, bundle_id, conversation_id, role, text, hosted_uri, ts,"
-            f" turn_id) VALUES ($1, 'b1', $2, 'user', 'x', $3, $4, $5) RETURNING id",
-            user, conv, uri, ts, turn,
+            f"INSERT INTO {schema}.conv_messages (user_id, bundle_id, agent_id, conversation_id, role, text, hosted_uri,"
+            f" ts, turn_id) VALUES ($1, $2, $3, $4, 'user', 'x', $5, $6, $7) RETURNING id",
+            user, bundle, agent, conv, uri, ts, turn,
         )
     return row_id, uri
 
@@ -399,3 +400,78 @@ async def test_reads_name_hot_cold_or_unavailable_and_never_return_an_empty_body
         await store.get_message(lost_uri)
     assert await store.delete_message(old_uri) is True
     assert not _cold_path(store, old_uri).exists() and _raw(store, old_uri) is None
+
+
+@pytest.mark.asyncio
+async def test_archived_conversations_are_retrievable_by_date_range_and_filters(env):
+    """Operator: old data leaves hot storage "but still be retrievable on demand (even if not with convenient
+    search semantic of lexical search - but at least with dates ranges an other fitlers we have directly in the
+    cold sotrgae (user, project, agent, etc)."
+    """
+
+    pool, schema, store, archive, retention = env
+    day1 = datetime(2026, 9, 8, tzinfo=UTC)
+    day2, day3 = day1 + timedelta(days=1), day1 + timedelta(days=2)
+    seeded = {}  # row id -> (user, conv, agent, bundle, ts, uri)
+
+    async def seed(user, conv, agent, bundle, ts):
+        row_id, uri = await _put(pool, schema, store, user, conv, ts, turn=f"t{len(seeded)}", bundle=bundle,
+                                 agent=agent)
+        seeded[row_id] = (user, conv, agent, bundle, ts, uri)
+        return row_id
+
+    for day in (day1, day2, day3):
+        for user, conv, agent, bundle, hour in (("u1", "c1", "a1", "b1", 9), ("u2", "c2", "a1", "b1", 10),
+                                                ("u1", "c1", "a2", "b2", 11), ("u2", "c2", "a2", "b2", 12)):
+            await seed(user, conv, agent, bundle, day + timedelta(hours=hour))
+    edge_before = await seed("u1", "c1", "a1", "b1", day2 - timedelta(seconds=1))  # day 1, 23:59:59
+    edge_after = await seed("u1", "c1", "a2", "b2", day3)                           # day 3, 00:00:00
+    recent = {await seed("u1", "c1", "a1", "b1", datetime(2026, 10, 5, 9, tzinfo=UTC)),
+              await seed("u2", "c2", "a2", "b2", datetime(2026, 10, 6, 9, tzinfo=UTC))}
+    old = set(seeded) - recent
+
+    summary = await retention.archive_before(_night(10, 7))  # the nightly path, cutoff 09-23 02:20
+    assert summary["rows"] == len(old) == 14 and summary["bodies_moved"] == 14 and summary["stuck"] == 0
+    assert set(await _hot_ids(pool, schema)) == recent
+    for row_id, (*_, uri) in seeded.items():
+        assert _is_pointer(store, uri) is (row_id in old)  # hot keeps only a pointer for archived bodies
+
+    def text(row_id):
+        user, conv, _, _, ts, _ = seeded[row_id]
+        return f"body of {user}/{conv} at {ts.isoformat()}"
+
+    async def assert_bodies(records):
+        for record in records:
+            body = await store.get_message(record["hosted_uri"])
+            assert body["storage"] == "cold" and body["text"] == text(record["id"])
+
+    def expect(start, end, **match):
+        keys = ("user", "conv", "agent", "bundle")
+        rows = [i for i in old if start <= seeded[i][4] < end
+                and all(seeded[i][keys.index(k)] == v for k, v in match.items())]
+        return sorted(rows, key=lambda i: (seeded[i][4], i))
+
+    # Day 2 only, user u1: exactly u1's day-2 records, in time order; the day boundaries are excluded.
+    u1_day2 = await retention.fetch_cold(from_ts=day2, to_ts=day3, user_id="u1")
+    assert [r["id"] for r in u1_day2] == expect(day2, day3, user="u1")
+    assert len(u1_day2) == 2 and {edge_before, edge_after}.isdisjoint(r["id"] for r in u1_day2)
+    assert [r["ts"] for r in u1_day2] == sorted(r["ts"] for r in u1_day2)
+    assert all(r["storage"] == "cold" and r["user_id"] == "u1" for r in u1_day2)
+    await assert_bodies(u1_day2)
+
+    # Agent, bundle, conversation: exactly the matching subset.
+    a2_all = await retention.fetch_cold(from_ts=day1, to_ts=day3 + timedelta(days=1), agent_id="a2")
+    assert [r["id"] for r in a2_all] == expect(day1, day3 + timedelta(days=1), agent="a2")
+    assert len(a2_all) == 7 and edge_after in {r["id"] for r in a2_all}
+    await assert_bodies(a2_all)
+    u2_a1_days12 = await retention.fetch_cold(from_ts=day1, to_ts=day3, user_id="u2", agent_id="a1")
+    assert [r["id"] for r in u2_a1_days12] == expect(day1, day3, user="u2", agent="a1") and len(u2_a1_days12) == 2
+    await assert_bodies(u2_a1_days12)
+    b1_c1_day1 = await retention.fetch_cold(from_ts=day1, to_ts=day2, bundle_id="b1", conversation_id="c1")
+    assert [r["id"] for r in b1_c1_day1] == expect(day1, day2, bundle="b1", conv="c1") and len(b1_c1_day1) == 2
+    await assert_bodies(b1_c1_day1)
+
+    # A range with no archived data, and a scope with none: nothing.
+    assert await retention.fetch_cold(from_ts=datetime(2026, 9, 15, tzinfo=UTC),
+                                      to_ts=datetime(2026, 9, 20, tzinfo=UTC)) == []
+    assert await retention.fetch_cold(from_ts=day1, to_ts=day3, user_id="u1", agent_id="a3") == []
