@@ -18,7 +18,7 @@ import logging
 import secrets
 from functools import wraps
 from typing import Any, Iterable, Mapping, Optional, Tuple
-from urllib.parse import parse_qs, quote, urlencode, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -97,6 +97,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentia
     oauth_tenant_project,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.http.discovery import resolve_issuer
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.http.consent_request import authorize_referrer_params
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.http.device import (
     DEVICE_CONSENT_SCHEMA,
     device_completion_name,
@@ -256,31 +257,7 @@ def _normalize_grant_store_unavailable(fn):
 
 
 def _same_origin_authorize_referrer_params(request: Request) -> dict[str, str]:
-    referrer = str(request.headers.get("referer") or request.headers.get("referrer") or "").strip()
-    if not referrer:
-        return {}
-    try:
-        current = urlsplit(str(request.url))
-        got = urlsplit(referrer)
-    except Exception:
-        return {}
-    if not got.scheme or not got.netloc:
-        return {}
-    forwarded_proto = str(request.headers.get("x-forwarded-proto") or "").split(",", 1)[0].strip()
-    forwarded_host = str(request.headers.get("x-forwarded-host") or "").split(",", 1)[0].strip()
-    current_scheme = forwarded_proto or current.scheme
-    current_host = forwarded_host or str(request.headers.get("host") or "").strip() or current.netloc
-    if (got.scheme, got.netloc) != (current_scheme, current_host):
-        return {}
-    if not got.path.rstrip("/").endswith("/oauth/authorize"):
-        return {}
-    parsed = parse_qs(got.query, keep_blank_values=True)
-    out: dict[str, str] = {}
-    for key in _AUTHORIZE_FORM_KEYS:
-        values = parsed.get(key)
-        if values:
-            out[key] = str(values[-1] or "")
-    return out
+    return authorize_referrer_params(request, form_keys=_AUTHORIZE_FORM_KEYS)
 
 
 def _consent_authorize_params(request: Request, form: Any) -> dict[str, Any]:

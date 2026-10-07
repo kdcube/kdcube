@@ -49,6 +49,22 @@ contracts; a client asks its human operator to complete authorization in their
 own session. The host's broader platform-login policy remains a separate
 boundary.
 
+### Consent form Referer recovery
+
+The host can recover missing hidden authorization fields from an authorize-page
+Referer at the authorization server's public origin. It uses the existing issuer
+resolution order: the request-local bundle mount's issuer, the configured app
+issuer, then the ASGI request origin for an unconfigured local/dev run. A
+configured public issuer supports consent through a proxy whose internal request
+origin differs. Origin comparison includes scheme, hostname and effective port.
+
+The recovery helper treats request `X-Forwarded-Host` and `X-Forwarded-Proto` as
+untrusted input; they cannot supply its expected origin. A foreign Referer
+supplies no fields, and the ordinary authorization validation refuses a form
+missing its required PKCE challenge. Complete forms retain the existing subject-
+bound, single-use CSRF and client-metadata checks. The deployment's issuer and
+trusted-proxy configuration remain host-owned.
+
 ## Late Card refusal cleanup
 
 A known `CardConflict` or `CallerWriteRefused` from the Hub after minting
