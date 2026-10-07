@@ -240,30 +240,34 @@ def test_existing_ephemeral_factory_defaults_remain_compatible():
 
 
 @pytest.mark.asyncio
-async def test_aws_adapter_identical_replay_preserves_original_version(monkeypatch):
-    """AWS protocol fake: not a live endpoint, IAM or durability qualification."""
+@pytest.mark.parametrize("enrolled", [False, True], ids=["default-closed", "enrolled-available"])
+async def test_aws_adapter_repeated_create_refuses_without_storage_mutation(monkeypatch, enrolled):
+    """Direct unqualified AWS protocol fake; availability is not custody qualification."""
     monkeypatch.setattr(issuance_module, "time", SimpleNamespace(time=lambda: 10))
     manager = AwsSecretsManagerSecretsManager(SecretsManagerConfig(
         provider="aws-sm", component="ingress", aws_sm_prefix="synthetic/issuance",
+        runtime_secret_namespaces=(NAMESPACE,) if enrolled else (),
     ))
     client = _FakeAwsSecretsClient()
     manager._session = _FakeAwsSession(client)
     store = issuance_secret_custody(namespace=NAMESPACE, manager=manager)
     assert store.namespace == NAMESPACE and store.effective_backend == "aws-sm"
-    assert await store.create(secret_ref=REF, value=CANARY, expires_at=30)
-    original_versions = dict(client.version_tokens)
-    assert await store.create(secret_ref=REF, value=CANARY, expires_at=30)
-    assert client.version_tokens == original_versions
-    assert len(client.data) == 1
-    assert digest(await store.get(secret_ref=REF)) == digest(CANARY)
+    for _ in range(2):
+        with pytest.raises(SessionIssuanceRefused, match="^issuance_custody_not_durable$"):
+            await store.create(secret_ref=REF, value=CANARY, expires_at=30)
+    assert len(client.list_calls) == (2 if enrolled else 0)
+    assert client.create_calls == [] and client.delete_calls == []
+    assert client.data == {} and client.tags == {} and client.version_tokens == {}
 
 
 @pytest.mark.asyncio
-async def test_aws_adapter_different_value_contender_cannot_replace_original(monkeypatch):
-    """Concurrent caller surface over a protocol fake, not AWS atomicity proof."""
+@pytest.mark.parametrize("enrolled", [False, True], ids=["default-closed", "enrolled-available"])
+async def test_aws_adapter_concurrent_creates_refuse_without_storage_mutation(monkeypatch, enrolled):
+    """Direct unqualified AWS protocol fake; concurrent refusal is not AWS/IAM proof."""
     monkeypatch.setattr(issuance_module, "time", SimpleNamespace(time=lambda: 10))
     manager = AwsSecretsManagerSecretsManager(SecretsManagerConfig(
         provider="aws-sm", component="ingress", aws_sm_prefix="synthetic/issuance",
+        runtime_secret_namespaces=(NAMESPACE,) if enrolled else (),
     ))
     client = _FakeAwsSecretsClient()
     manager._session = _FakeAwsSession(client)
@@ -272,13 +276,11 @@ async def test_aws_adapter_different_value_contender_cannot_replace_original(mon
     results = await asyncio.gather(*[
         store.create(secret_ref=REF, value=value, expires_at=30) for value in values
     ], return_exceptions=True)
-    assert sum(result is True for result in results) == 1
-    loser = next(result for result in results if result is not True)
-    assert isinstance(loser, SessionIssuanceRefused)
-    assert loser.reason == "issuance_custody_unavailable"
-    assert len(client.data) == 1
-    winner = next(value for value, result in zip(values, results) if result is True)
-    assert digest(await store.get(secret_ref=REF)) == digest(winner)
+    assert all(isinstance(result, SessionIssuanceRefused) for result in results)
+    assert [result.reason for result in results] == ["issuance_custody_not_durable"] * 2
+    assert len(client.list_calls) == (2 if enrolled else 0)
+    assert client.create_calls == [] and client.delete_calls == []
+    assert client.data == {} and client.tags == {} and client.version_tokens == {}
 
 
 def _http_custody():
