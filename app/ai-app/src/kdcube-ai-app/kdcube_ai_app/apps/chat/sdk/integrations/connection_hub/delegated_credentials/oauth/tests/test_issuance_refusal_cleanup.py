@@ -88,7 +88,8 @@ async def test_late_card_conflict_revokes_both_withheld_credentials(grant_store,
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failed_operation", ["revoke_access_grant", "revoke_refresh_token"])
-async def test_one_cleanup_failure_does_not_prevent_the_other_or_expose_credentials(grant_store, monkeypatch, caplog, failed_operation):
+@pytest.mark.parametrize("replace_authority", [False, True], ids=["generic-refusal", "revision-conflict"])
+async def test_one_cleanup_failure_does_not_prevent_the_other_or_expose_credentials(grant_store, monkeypatch, caplog, failed_operation, replace_authority):
     calls = []
     for name in ("revoke_access_grant", "revoke_refresh_token"):
         original = getattr(grant_store, name)
@@ -101,9 +102,9 @@ async def test_one_cleanup_failure_does_not_prevent_the_other_or_expose_credenti
 
         monkeypatch.setattr(grant_store, name, revoke)
     response, observed = await _refused_issuance(
-        grant_store, monkeypatch, reason="synthetic_late_card_conflict",
+        grant_store, monkeypatch, reason="synthetic_late_card_conflict", replace_authority=replace_authority,
     )
-    assert response.status_code == 503
+    assert response.status_code == (400 if replace_authority else 503)
     assert calls == ["revoke_access_grant", "revoke_refresh_token"]
     assert ACCESS not in caplog.text and ACCESS.encode() not in response.body
     if failed_operation != "revoke_access_grant":
@@ -111,3 +112,28 @@ async def test_one_cleanup_failure_does_not_prevent_the_other_or_expose_credenti
     if failed_operation != "revoke_refresh_token":
         assert await grant_store.validate_refresh_token(observed["refresh_token"]) is None
 
+
+@pytest.mark.asyncio
+async def test_successful_card_commit_keeps_issued_credentials(grant_store, monkeypatch):
+    async def mint(sub, scopes):
+        return {"access_token": ACCESS, "expires_in": 300}
+
+    async def record(**kwargs):
+        return SimpleNamespace(access_id=kwargs["access_id"])
+
+    async def unexpected_revoke(token):
+        pytest.fail("A successful Card commit must retain its issued credentials")
+
+    monkeypatch.setattr(routes, "oauth_tenant_project", lambda request: ("home", "cleanup"))
+    monkeypatch.setattr(routes, "get_access_token_minter", lambda request: mint)
+    monkeypatch.setattr(routes, "get_automation_access", lambda request: SimpleNamespace(record_oauth_grant=record))
+    monkeypatch.setattr(grant_store, "revoke_access_grant", unexpected_revoke)
+    monkeypatch.setattr(grant_store, "revoke_refresh_token", unexpected_revoke)
+    response = await routes._issue_tokens(
+        SimpleNamespace(), grant_store, sub="human", scopes=["records:read"], client_id="client",
+        resource="*", registry_access_id="synthetic-card", card_kind="automation",
+    )
+    assert response.status_code == 200
+    body = json.loads(response.body)
+    assert await grant_store.get_access_grant_record(body["access_token"]) is not None
+    assert await grant_store.validate_refresh_token(body["refresh_token"]) is not None
