@@ -126,6 +126,31 @@ recovery, configured encrypted-provider qualification, and installed/live
 acceptance remain open; transport selection alone proves none of them.
 Ordinary human login and the existing delegated minter are unchanged.
 
+`OriginalCodeExchangeFlow` provides the host composition's code-to-pair
+orchestration. It consumes a validated code once, captures the canonical
+candidate-input digest, and asks Hub to begin the original request. Its
+`pin_plan(..., access_ttl_seconds=3600)` call stores the complete plan and first
+absolute access expiry in one PostgreSQL transaction. Replays preserve both;
+an older pinned plan with unknown expiry refuses this workflow.
+
+Before a local pin exists, recovery selects Hub's read-only
+`read_oauth_issuance_plan_by_request(decision_request_id=...)`. Once pinned,
+recovery selects the transaction-id plan reader and compares the complete
+authenticated plan with its durable snapshot. A missing request-reader
+capability returns a finite unavailable response; unknown or unbound plans
+never authorize a replacement begin or mint.
+
+The flow reads Hub's original result before selecting the credential provider.
+A committed replay selects `read_pair`, which must recover existing receipts
+without preparation. A pending result selects idempotent `prepare_pair`,
+reserves both original receipt digests, and completes Hub's existing decision.
+It checks both applied slot digests, re-reads the local pin and invokes the
+host's live-target fence before access activation and again after custody
+reads, before publishing either bearer. The provider must keep refresh
+artifacts distinct from Bundle access sessions. The host still supplies the
+concrete candidate builder, durable provider, authenticated Hub, qualified
+custody and live fence; their real deployment qualification remains open.
+
 ## Refresh lifetime forwarding
 
 When a refresh record has a server-stored Card pointer, the host resolves that

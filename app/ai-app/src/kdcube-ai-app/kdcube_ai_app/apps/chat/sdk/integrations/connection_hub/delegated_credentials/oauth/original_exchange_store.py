@@ -224,7 +224,8 @@ class PostgresOriginalExchangeStore:
                 """, proof.identity, expiry, ttl_seconds, timeout=_WAIT_SECONDS)
                 return self._decode(await self._row(connection, proof.identity))
 
-    async def pin_plan(self, binding: ValidatedCodeExchange, plan: object) -> OriginalExchange:
+    async def pin_plan(self, binding: ValidatedCodeExchange, plan: object, *,
+                       access_ttl_seconds: int | None = None) -> OriginalExchange:
         """Pin the host-validated original Hub plan once, before preparation/mint.
 
         The plan's own delivery deadline is kept exactly. pending_until bounds
@@ -232,6 +233,10 @@ class PostgresOriginalExchangeStore:
         delivery window. A retry cannot substitute any part of a pinned plan.
         """
         self._binding(binding)
+        if (access_ttl_seconds is not None
+                and (type(access_ttl_seconds) is not int
+                     or not 1 <= access_ttl_seconds <= ACCESS_TOKEN_TTL_SECONDS)):
+            raise OriginalExchangeRefused("original_exchange_access_expiry_invalid")
         snapshot = plan_snapshot(binding, plan)
         async with self._connection() as connection:
             async with connection.transaction():
@@ -243,15 +248,36 @@ class PostgresOriginalExchangeStore:
                 if row["plan"] is not None:
                     if self._decode(row).plan != snapshot:
                         raise OriginalExchangeRefused("original_exchange_identity_conflict")
+                    if access_ttl_seconds is not None:
+                        # Unknown legacy expiry does not authorize a first or
+                        # replacement mint. New HTTP composition pins plan and
+                        # expiry in one transaction, including after restart.
+                        if row["access_expires_at"] is None:
+                            raise OriginalExchangeRefused("original_exchange_access_expiry_unknown")
+                        if row["access_ttl_seconds"] != access_ttl_seconds:
+                            raise OriginalExchangeRefused("original_exchange_identity_conflict")
                     return self._decode(row)
+                if row["access_expires_at"] is not None or row["access_ttl_seconds"] is not None:
+                    raise OriginalExchangeRefused("original_exchange_access_expiry_unknown")
                 valid = await connection.fetchval(
                     "SELECT clock_timestamp() < to_timestamp($1) AND clock_timestamp() < to_timestamp($2)",
                     snapshot["delivery_deadline"], snapshot["reserved_until"], timeout=_WAIT_SECONDS,
                 )
                 if not valid:
                     raise OriginalExchangeRefused("original_exchange_delivery_expired")
+                access_expiry = None
+                if access_ttl_seconds is not None:
+                    now = await connection.fetchval(
+                        "SELECT floor(extract(epoch FROM clock_timestamp()))::bigint", timeout=_WAIT_SECONDS,
+                    )
+                    access_expiry = min(snapshot["expires_at"], now + access_ttl_seconds)
+                    if access_expiry <= now:
+                        raise OriginalExchangeRefused("original_exchange_access_expired")
                 await connection.execute(f"""
                     UPDATE {self.schema}.{TABLE_EXCHANGES}
-                    SET plan=$2::jsonb, delivery_deadline=to_timestamp($3) WHERE identity=$1
-                """, binding.proof.identity, canonical(snapshot), snapshot["delivery_deadline"], timeout=_WAIT_SECONDS)
+                    SET plan=$2::jsonb, delivery_deadline=to_timestamp($3),
+                        access_expires_at=to_timestamp($4::bigint), access_ttl_seconds=$5::integer
+                    WHERE identity=$1
+                """, binding.proof.identity, canonical(snapshot), snapshot["delivery_deadline"],
+                    access_expiry, access_ttl_seconds, timeout=_WAIT_SECONDS)
                 return self._decode(await self._row(connection, binding.proof.identity))
