@@ -707,7 +707,7 @@ class Settings(PLATFORM_CONFIG):
 
     # Conversation store retention: rows of conv_messages older than
     # this many days move to the cold tier; assembly routines.conversation_store.hot_days.
-    CONVERSATION_HOT_DAYS: int = Field(default=90)
+    CONVERSATION_HOT_DAYS: int = Field(default=14)
     # On by default: the daily archive moves rows past the hot window to the
     # cold tier; assembly routines.conversation_store.archive_enabled: false turns it off.
     CONVERSATION_ARCHIVE_ENABLED: bool = Field(default=True)

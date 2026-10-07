@@ -1253,3 +1253,19 @@ async def test_the_app_hard_delete_refuses_retryably_when_the_cold_tier_is_unava
             user_type="registered", bundle_ids=["b1"],
         )
     assert refused.value.code == "conversation_delete_cold_unavailable"
+
+
+# The retention default is 14 days (operator, 2026-10-07): an absent setting
+# never falls back to a longer window.
+
+
+def test_the_hot_window_defaults_to_14_days(monkeypatch, tmp_path):
+    from kdcube_ai_app.apps.chat.sdk.config import Settings
+    from kdcube_ai_app.apps.chat.sdk.context.vector.conv_retention import DEFAULT_HOT_DAYS
+
+    path = tmp_path / "assembly.yaml"
+    path.write_text("routines:\n  conversation_store: {}\n")
+    monkeypatch.setenv("ASSEMBLY_YAML_DESCRIPTOR_PATH", str(path))
+    monkeypatch.delenv("CONVERSATION_HOT_DAYS", raising=False)
+    assert Settings().CONVERSATION_HOT_DAYS == 14
+    assert DEFAULT_HOT_DAYS == 14
