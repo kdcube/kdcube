@@ -173,4 +173,3 @@ def consent_label(
 
 
 __all__ = ["oauth_card_label", "consent_label"]
-

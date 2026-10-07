@@ -33,6 +33,7 @@ from connection_hub.delegated_credentials.oauth.authority_store import PostgresO
 from connection_hub.delegated_credentials.oauth.config import oauth_delegated_config_from_connections
 from connection_hub.delegated_credentials.oauth.pkce import make_s256_challenge
 from connection_hub.delegated_credentials.oauth.store import GrantStore
+from connection_hub.invocation_policy import BundleStorageInvocationPolicyStore, InvocationPolicyService
 from kdcube_ai_app.auth.bundle.session_store import PostgresBundleSessionStore
 from kdcube_ai_app.auth.tests.test_bound_session_issuer import authority
 from kdcube_ai_app.infra.secrets.issuance import issuance_secret_custody
@@ -86,8 +87,14 @@ async def hub_world(tmp_path, monkeypatch, secrets_rig):
         persistence = DurableCardPersistence(redis=redis, tenant=r.tenant, project=r.project,
             card_store=r.cards, mutation_lock=mutation_lock, credential_handles=handles)
         persistence._cards = cards
+        @asynccontextmanager
+        async def policy_lock(**kwargs):
+            yield {}
+        r.policies = InvocationPolicyService(
+            store=BundleStorageInvocationPolicyStore(tmp_path / "hub-policies"),
+            mutation_lock=policy_lock)
         compose_card_effects(card_service=cards, card_store=r.cards, grant_store=r.grants,
-                             policies=None, issuance_store=r.oauth, credential_handles=handles)
+                             policies=r.policies, issuance_store=r.oauth, credential_handles=handles)
         intents = LocalCardIntentSource(r.cards)
         participant = HubCardParticipant(service=cards, store=r.cards, intents=intents, decisions=decisions)
         connections = {"delegated_credentials": {"oauth": {"enabled": True,
@@ -100,7 +107,7 @@ async def hub_world(tmp_path, monkeypatch, secrets_rig):
                                   resolve_version=AsyncMock(return_value=document))
         r.hub = AutomationAccessService(redis=redis, tenant=r.tenant, project=r.project,
             config=oauth_delegated_config_from_connections(connections), catalog_resolver=catalog,
-            grant_store=r.grants, card_persistence=persistence)
+            grant_store=r.grants, card_persistence=persistence, invocation_policy_service=r.policies)
         r.hub.notify_change = AsyncMock()
         r.hub.bind_card_coordinator(Coordinator(decisions, {PARTICIPANT: participant}, HubLocalReceiptVerifier(r.cards)),
             intents=intents, decisions=decisions, intent_ttl_seconds=60)
@@ -126,9 +133,10 @@ async def hub_world(tmp_path, monkeypatch, secrets_rig):
             custody_namespace="custody", refresh_signer=HmacOriginalRefreshSigner(r.tenant, r.project, key),
             card_kind="connector", refresh_ttl_seconds=180 * 86400,
             authority_factory=lambda **kwargs: authority(r.sessions))
+        r.candidate_overrides = {}
         async def candidates(*, payload):
             return {"grantor_subject": payload["sub"], "client_id": payload["client_id"],
-                    "scopes": payload["scopes"], "resource": payload["resource"]}
+                    "scopes": payload["scopes"], "resource": payload["resource"], **r.candidate_overrides}
         async def fence(*, plan, result):
             current = await r.cards.read_current_authority(subject_hash=subject_hash_for(r.subject), access_id=plan.access_id)
             if result.state == "pending":

@@ -28,9 +28,16 @@ _DEFAULTS = {
 
 def oauth_issuance_arguments(inputs: Mapping[str, Any]) -> dict[str, Any]:
     """Freeze every public Hub argument before capturing its original digest."""
-    if not isinstance(inputs, Mapping) or not set(inputs) <= set(_DEFAULTS) | {"grantor_subject", "client_id"}:
+    allowed = set(_DEFAULTS) | {"grantor_subject", "client_id", "invocation_policies"}
+    if not isinstance(inputs, Mapping) or not set(inputs) <= allowed:
         raise OriginalExchangeRefused("original_exchange_binding_invalid")
     values = {**_DEFAULTS, **inputs}
+    # Hub deliberately omits this optional key from the original digest when
+    # None. An explicit empty selection is different and stays in the binding.
+    if values.get("invocation_policies") is None:
+        values.pop("invocation_policies", None)
+    elif not isinstance(values["invocation_policies"], Mapping):
+        raise OriginalExchangeRefused("original_exchange_binding_invalid")
     for name in ("grantor_subject", "client_id"):
         text(values.get(name))
     if type(values["replace_authority"]) is not bool:

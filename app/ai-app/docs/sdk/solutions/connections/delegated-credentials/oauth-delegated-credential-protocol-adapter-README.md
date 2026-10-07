@@ -175,6 +175,25 @@ containers refuse. Grant selection and live authority remain host/Hub checks;
 this pure argument normalization performs neither. Source tests compare the
 digest with the real Hub method using synthetic persistence ports.
 
+The optional server-owned `invocation_policies` argument carries the consent's
+`{resource: {operation: "always" | "once"}}` selection into that same original
+binding. An omitted value or `None` omits the key from the digest, preserving
+existing originals; an explicit empty mapping is distinct. A supplied mapping
+is frozen with all other inputs and passed unchanged to Hub. Hub owns selection
+validation, effect limits, policy revisions and application as effects of this
+one issuance decision. The original exchange path must not additionally call
+the ordinary post-grant `apply_oauth_invocation_policies` write.
+The pinned plan retains every effect commitment, including noncredential
+policy, handle and lifetime effects; each access/refresh slot must still have
+its own valid digest. Recovery compares the full immutable snapshot.
+
+This optional field requires a Hub package containing commit
+`af2cb8decdc24bc497910847489b347cc16e36db` or a qualified descendant in the
+same runtime build. Source tests compose both policy modes with the real Hub
+decision, PostgreSQL/Redis and the SDK pair flow, including an unchanged retry
+and a changed-policy refusal. Their private-file custody fixture is not an
+encrypted or installed-runtime qualification.
+
 Before a local pin exists, recovery selects Hub's read-only
 `read_oauth_issuance_plan_by_request(decision_request_id=...)`. Once pinned,
 recovery selects the transaction-id plan reader and compares the complete
@@ -250,11 +269,16 @@ protection receipt; an applied access slot is preserved without activation or
 retirement on this path. The complete original result is checked before either
 cleanup, and a missing cleanup capability gives a finite unavailable response.
 
-Source tests exercise PostgreSQL metadata and synthetic signing/custody
-capabilities. Qualification of the configured secrets-file, host-vault or AWS
-backend, recovery across process termination, host composition and live
-recipient delivery remain separate deployment gates. Backend selection stays
-behind the configured SecretsService abstraction.
+Source tests exercise PostgreSQL metadata and synthetic signing capabilities.
+Separate encrypted-custody tests compose the real SecretsService client/routes,
+native enrollment ACLs and encrypted disk store. Reconstructed readers recover
+the same original values without more signing or writes; ungranted namespaces
+and revoked enrollment refuse. Transports are in-process, keys are synthetic,
+and persistent-volume classification is a fixture. These tests do not qualify
+installed volumes, network mTLS or encrypted recovery after process termination.
+Qualification of the configured secrets-file, host-vault or AWS deployment,
+host composition and live recipient delivery remain separate gates. Backend
+selection stays behind the configured SecretsService abstraction.
 
 ## Refresh lifetime forwarding
 

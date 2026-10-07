@@ -193,11 +193,15 @@ def plan_snapshot(binding: ValidatedCodeExchange, plan: object) -> dict[str, Any
             raise OriginalExchangeRefused("original_exchange_deadline_invalid")
         for name in ("operations", "slots"):
             _string_list(value[name])
-        if not value["slots"] or set(value["slots"]) != set(value["effect_digests"]):
+        if (type(value["effect_digests"]) is not dict or not value["slots"]
+                or not set(value["slots"]) <= set(value["effect_digests"])):
             raise OriginalExchangeRefused("original_exchange_plan_invalid")
         if not set(value["slots"]) <= {"access", "refresh"}:
             raise OriginalExchangeRefused("original_exchange_plan_invalid")
-        for effect in value["effect_digests"].values():
+        # The authenticated Hub plan also holds policy/handle/lifetime effects.
+        # Retain every commitment; credential slots are only a subset of them.
+        for key, effect in value["effect_digests"].items():
+            text(key)
             hex_digest(effect)
         for name in ("resource_grants", "resource_operations"):
             if type(value[name]) is not dict:

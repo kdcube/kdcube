@@ -91,6 +91,21 @@ async def test_same_consumed_code_maps_to_same_plan_after_adapter_restart(store,
 
 
 @pytest.mark.asyncio
+async def test_noncredential_effects_are_pinned_in_full_and_cannot_change_on_retry(store, ledger):
+    binding = validated(store)
+    await ledger.begin(binding)
+    effects = {"access": "d" * 64, "refresh": "e" * 64, "unit-policy": "0" * 64}
+    bound_plan = plan(binding, effect_digests=effects)
+    await ledger.pin_plan(binding, bound_plan)
+    restarted = PostgresOriginalExchangeStore(pg_pool=store._pool, tenant=store.tenant, project=store.project)
+    assert (await restarted.read(proof(store))).plan == bound_plan.to_dict()
+    assert (await restarted.pin_plan(binding, bound_plan)).plan == bound_plan.to_dict()
+    with pytest.raises(OriginalExchangeRefused, match="^original_exchange_identity_conflict$"):
+        await restarted.pin_plan(binding, plan(binding, effect_digests={**effects, "unit-policy": "1" * 64}))
+    assert (await restarted.read(proof(store))).plan == bound_plan.to_dict()
+
+
+@pytest.mark.asyncio
 async def test_a_separate_interpreter_recovers_the_same_durable_plan(store, ledger):
     binding = validated(store)
     await ledger.begin(binding)
@@ -273,6 +288,9 @@ async def test_foreign_namespace_is_refused_before_database_access(store, ledger
     ("resource_grants", {"": ["records:read"]}),
     ("resource_operations", {"/records": ["records.read", "records.read"]}),
     ("slots", ["access", "unknown"]), ("effect_digests", {"access": "d" * 64}),
+    ("effect_digests", {"access": "d" * 64, "refresh": "e" * 64, "": "0" * 64}),
+    ("effect_digests", {"access": "d" * 64, "refresh": "e" * 64, "unit-policy": "not-a-digest"}),
+    ("effect_digests", ["access", "refresh"]),
     ("base_revision", True), ("candidate_revision", 1),
 ])
 async def test_missing_or_malformed_plan_authority_cannot_be_pinned(store, ledger, field, value):

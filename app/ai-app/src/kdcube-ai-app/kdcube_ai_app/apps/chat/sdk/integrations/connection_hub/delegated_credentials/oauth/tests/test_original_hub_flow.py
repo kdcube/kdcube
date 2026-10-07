@@ -5,10 +5,13 @@ deployment, encryption or process-crash proof is inferred from these tests.
 """
 import pytest
 
+from connection_hub.delegated_credentials.oauth_issuance import IssuanceRefused, original_input_digest
+from connection_hub.invocation_policy import SURFACE_OUTER, InvocationAuthority
 from kdcube_ai_app.auth.tests.test_bound_session_issuance_store import counts
 from kdcube_ai_app.infra.secrets.tests.test_runtime_http import rig as secrets_rig
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.http import routes
-from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.tests.original_hub_fixture import hub_world, token_digests
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.original_candidate_inputs import oauth_issuance_arguments
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.tests.original_hub_fixture import RESOURCE, hub_world, token_digests
 
 
 @pytest.mark.asyncio
@@ -75,3 +78,51 @@ async def test_actual_hub_partial_finish_retry_reads_originals_without_reserving
     assert response.status_code == 200 and token_digests(response) == {
         slot: value.token_sha256 for slot, value in result.per_slot.items()}
     assert r.creates == 2 and r.signs == 1 and await counts(r.sessions) == (1, 1, 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["once", "always"])
+async def test_actual_hub_policy_and_original_pair_share_one_decision_and_replay(hub_world, mode):
+    r = hub_world
+    r.candidate_overrides = {
+        "client_label": "Unit client / records", "client_metadata": {"label": "Unit client"},
+        "properties": {"consent": {"source": "synthetic-host"}},
+        "resource_operations": {RESOURCE: ["search"]},
+        "invocation_policies": {RESOURCE: {"search": mode}},
+    }
+    async def no_post_grant_policy_write(**kwargs):
+        pytest.fail("original issuance attempted a second post-grant policy write")
+    r.hub.apply_oauth_invocation_policies = no_post_grant_policy_write
+    first = await routes.token(r.request)
+    assert first.status_code == 200, r.errors
+    mapping = await r.ledger.read(r.proof)
+    plan = await r.hub.read_oauth_issuance_plan(transaction_id=mapping.plan["transaction_id"])
+    arguments = oauth_issuance_arguments({
+        "grantor_subject": r.subject, "client_id": r.client, "scopes": ["records:read"],
+        "resource": RESOURCE, **r.candidate_overrides})
+    assert plan.original_input_digest == original_input_digest(arguments)
+    policy_authority = InvocationAuthority(
+        access_id=plan.access_id, resource=RESOURCE, surface=SURFACE_OUTER, operation="search")
+    assert policy_authority.key in dict(plan.effect_digests)
+    policy = await r.policies.get(owner_subject=r.subject, authority=policy_authority)
+    assert (policy.mode, policy.revision) == (mode, 1)
+    assert await counts(r.sessions) == (1, 1, 1)
+    again = await routes.token(r.request)
+    assert again.status_code == 200 and token_digests(again) == token_digests(first)
+    assert r.creates == 2 and r.signs == 1
+    assert (await r.policies.get(owner_subject=r.subject, authority=policy_authority)).revision == 1
+    changed = {**arguments, "invocation_policies": {RESOURCE: {"search": "always" if mode == "once" else "once"}}}
+    with pytest.raises(IssuanceRefused, match="^issuance_replay_changed$"):
+        await r.hub.begin_oauth_issuance(original_request_id=r.proof.identity, **changed)
+    assert r.creates == 2 and r.signs == 1
+    assert (await r.policies.get(owner_subject=r.subject, authority=policy_authority)).mode == mode
+
+
+@pytest.mark.asyncio
+async def test_actual_hub_empty_policy_selection_refuses_without_preparing_pair(hub_world):
+    r = hub_world
+    r.candidate_overrides = {"resource_operations": {RESOURCE: ["search"]}, "invocation_policies": {}}
+    response = await routes.token(r.request)
+    assert response.status_code == 503
+    assert r.creates == r.signs == 0 and await counts(r.sessions) == (0, 0, 0)
+    assert (await r.ledger.read(r.proof)).plan is None
