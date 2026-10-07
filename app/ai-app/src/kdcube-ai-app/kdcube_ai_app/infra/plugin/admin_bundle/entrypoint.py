@@ -63,13 +63,22 @@ class AdminBundleEntrypoint(BaseEntrypoint):
         resumes on the next one.
         """
         from kdcube_ai_app.apps.chat.sdk.context.vector.conv_index import ConvIndex
-        from kdcube_ai_app.apps.chat.sdk.context.vector.conv_retention import hot_cutoff
+        from kdcube_ai_app.apps.chat.sdk.context.vector.conv_retention import hot_cutoff, valid_hot_days
 
         settings = get_settings()
         if not settings.CONVERSATION_ARCHIVE_ENABLED:
             # Turned off by the assembly property
             # routines.conversation_store.archive_enabled: false.
             logger.info("[conversation-archive] off (routines.conversation_store.archive_enabled is false)")
+            return
+        hot_days = valid_hot_days(settings.CONVERSATION_HOT_DAYS)
+        if hot_days is None:
+            # Never fall back to another window: a typo must not archive the wrong rows.
+            logger.error(
+                "[conversation-archive] invalid hot_days %r (routines.conversation_store.hot_days or "
+                "CONVERSATION_HOT_DAYS must be a whole number >= 1); nothing archived",
+                settings.CONVERSATION_HOT_DAYS,
+            )
             return
         index = ConvIndex(pool=self.pg_pool)
         if index._pool is None:
@@ -79,12 +88,15 @@ class AdminBundleEntrypoint(BaseEntrypoint):
             if retention is None:
                 logger.warning("[conversation-archive] cold tier unavailable; nothing archived")
                 return
-            cutoff = hot_cutoff(settings.CONVERSATION_HOT_DAYS)
+            cutoff = hot_cutoff(hot_days)
             summary = await retention.archive_before(cutoff)
-            logger.info(
-                "[conversation-archive] cutoff=%s hot_days=%s resumed=%s batches=%s rows=%s",
-                cutoff.isoformat(), settings.CONVERSATION_HOT_DAYS,
-                summary["resumed"], summary["batches"], summary["rows"],
+            stuck = summary.get("stuck", 0)
+            logger.log(
+                logging.WARNING if stuck else logging.INFO,
+                "[conversation-archive] cutoff=%s hot_days=%s resumed=%s batches=%s rows=%s stuck=%s%s",
+                cutoff.isoformat(), hot_days,
+                summary["resumed"], summary["batches"], summary["rows"], stuck,
+                f" stuck_batches={','.join(summary.get('stuck_batches') or [])}" if stuck else "",
             )
         finally:
             await index.close()
