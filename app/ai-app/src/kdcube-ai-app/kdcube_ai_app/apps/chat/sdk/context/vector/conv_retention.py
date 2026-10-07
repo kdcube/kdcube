@@ -217,12 +217,17 @@ class ConversationRetention:
         """
 
         summary: Dict[str, Any] = {"resumed": 0, "stuck": 0, "batches": 0, "rows": 0, "indexed": 0, "relaid": 0}
+        if callable(getattr(self.store, "archive_message_body", None)):
+            summary["body_resumed"], summary["body_stuck"] = await self._resume_pruned_bodies(
+                guard=self._exclusive, limit=max_batches,
+            )
         summary["resumed"], summary["stuck_batches"] = await self._resume_unfinished(guard=self._exclusive)
         summary["stuck"] = len(summary["stuck_batches"])
         summary["indexed"] = await self._index_unindexed_batches(guard=self._exclusive)
         # Moving legacy parts counts toward the same budget as archiving.
-        summary["relaid"] = await self._relayout_legacy_batches(limit=max_batches, guard=self._exclusive)
-        while max_batches is None or summary["batches"] + summary["relaid"] < max_batches:
+        remaining = None if max_batches is None else max(0, max_batches - summary.get("body_resumed", 0))
+        summary["relaid"] = await self._relayout_legacy_batches(limit=remaining, guard=self._exclusive)
+        while max_batches is None or summary["batches"] + summary["relaid"] + summary.get("body_resumed", 0) < max_batches:
             async with self._exclusive():
                 rows = await self._archive_next_batch(cutoff, batch_size)
             if not rows:
@@ -364,6 +369,11 @@ class ConversationRetention:
         manifest = await self.archive.read_manifest(manifest_key)
         try:
             await self.archive.verify_batch(manifest)
+            mover = getattr(self.store, "archive_message_body", None)
+            if callable(mover):
+                for record in await self.archive.read_part(manifest):
+                    if record.get("hosted_uri"):
+                        await mover(record["hosted_uri"])
         except Exception as exc:
             async with self._pool.acquire() as con:
                 await con.execute(
@@ -383,10 +393,57 @@ class ConversationRetention:
                     [int(i) for i in manifest["ids"]],
                 )
                 await con.execute(
-                    f"UPDATE {self.schema}.conv_archive_batches SET state = 'pruned', updated_at = now() "
-                    f"WHERE batch_id = $1",
-                    batch_id,
+                    f"UPDATE {self.schema}.conv_archive_batches "
+                    f"SET state = 'pruned', body_state = $2, updated_at = now() WHERE batch_id = $1",
+                    batch_id, "complete" if callable(mover) else "pending",
                 )
+
+    async def _resume_pruned_bodies(self, *, guard: Any = _unguarded, limit: Optional[int] = None) -> Tuple[int, List[str]]:
+        """Copy bodies in index-only parts from older releases, one verified part at a time."""
+
+        mover = getattr(self.store, "archive_message_body", None)
+        if not callable(mover):
+            return 0, []
+        async with self._pool.acquire() as con:
+            pending = await con.fetch(
+                f"SELECT batch_id, manifest_key FROM {self.schema}.conv_archive_batches "
+                f"WHERE state='pruned' AND body_state='pending' ORDER BY day, batch_id",
+            )
+        moved = 0
+        stuck: List[str] = []
+        for row in pending[:limit if limit is not None else None]:
+            async with guard():
+                async with self._pool.acquire() as con:
+                    still_pending = await con.fetchval(
+                        f"SELECT 1 FROM {self.schema}.conv_archive_batches "
+                        f"WHERE batch_id=$1 AND state='pruned' AND body_state='pending'",
+                        row["batch_id"],
+                    )
+                if not still_pending:
+                    continue
+                try:
+                    manifest = await self.archive.read_manifest(row["manifest_key"])
+                    for record in await self.archive.read_part(manifest):
+                        if record.get("hosted_uri"):
+                            await mover(record["hosted_uri"])
+                    async with self._pool.acquire() as con:
+                        await con.execute(
+                            f"UPDATE {self.schema}.conv_archive_batches "
+                            f"SET body_state='complete', error=NULL, updated_at=now() "
+                            f"WHERE batch_id=$1 AND state='pruned' AND body_state='pending'",
+                            row["batch_id"],
+                        )
+                    moved += 1
+                except Exception as exc:
+                    logger.warning("[conversation-archive] body copy stuck batch %s: %s", row["batch_id"], exc)
+                    async with self._pool.acquire() as con:
+                        await con.execute(
+                            f"UPDATE {self.schema}.conv_archive_batches SET error=$2, updated_at=now() "
+                            f"WHERE batch_id=$1 AND body_state='pending'",
+                            row["batch_id"], str(exc)[:500],
+                        )
+                    stuck.append(str(row["batch_id"]))
+        return moved, stuck
 
     async def _resume_unfinished(self, *, guard: Any = _unguarded) -> Tuple[int, List[str]]:
         """Finish batches left 'written'/'verified'; returns (finished, stuck batch ids).

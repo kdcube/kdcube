@@ -175,10 +175,14 @@ CREATE TABLE IF NOT EXISTS <SCHEMA>.conv_archive_batches (
     manifest_key TEXT NOT NULL,
     sha256       TEXT,
     state        TEXT NOT NULL CHECK (state IN ('written', 'verified', 'pruned', 'retired')),
+    body_state   TEXT NOT NULL DEFAULT 'pending' CHECK (body_state IN ('pending', 'complete')),
     error        TEXT,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+-- Existing index-only parts need a bounded body-copy catch-up. A fresh part
+-- becomes complete only after every referenced body has a verified cold copy.
+ALTER TABLE <SCHEMA>.conv_archive_batches ADD COLUMN IF NOT EXISTS body_state TEXT NOT NULL DEFAULT 'pending';
 CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_archive_state ON <SCHEMA>.conv_archive_batches (state, day);
 
 -- Which conversations each archived batch holds, so listing archived

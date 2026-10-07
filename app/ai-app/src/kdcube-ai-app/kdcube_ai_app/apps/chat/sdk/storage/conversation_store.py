@@ -13,6 +13,7 @@ from kdcube_ai_app.infra.service_hub.inventory import _mid
 from kdcube_ai_app.apps.chat.sdk.storage.rn import (
     rn_message, rn_attachment, rn_execution_file, rn_file
 )
+from kdcube_ai_app.apps.chat.sdk.storage import conversation_body_cold
 
 MAX_CONCURRENT_ARTIFACT_FETCHES = 16
 
@@ -202,7 +203,7 @@ class ConversationStore:
                 if child.endswith(".json"):
                     try:
                         raw = self.backend.read_text(child)
-                        obj = json.loads(raw)
+                        obj = conversation_body_cold.read_sync(self.backend, child, raw)
                         obj.setdefault("meta", {})["hosted_uri"] = self._uri_for_path(child)
                         if "turn_id" not in obj:
                             # .../conversation/<user>/<conv>/<turn>/<message>.json
@@ -241,7 +242,7 @@ class ConversationStore:
                 if child.endswith(".json"):
                     try:
                         raw = self.backend.read_text(child)
-                        obj = json.loads(raw)
+                        obj = conversation_body_cold.read_sync(self.backend, child, raw)
                         obj.setdefault("meta", {})["hosted_uri"] = self._uri_for_path(child)
                         out_all.append(obj)
                     except Exception:
@@ -478,12 +479,21 @@ class ConversationStore:
         return await self.backend.read_bytes_a(rel)
 
     async def delete_message(self, uri_or_path: str) -> bool:
-        """Delete one stored message body; False when it was already gone."""
+        """Delete one stored message body and its cold copy, if present."""
         rel = self._rel_from_uri_or_path(uri_or_path)
-        if not await self.backend.exists_a(rel):
-            return False
-        await self.backend.delete_a(rel)
-        return True
+        return await conversation_body_cold.delete_async(self.backend, rel)
+
+    async def archive_message_body(self, uri_or_path: str) -> bool:
+        """Move an old message object to the configured cold prefix after readback."""
+
+        rel = self._rel_from_uri_or_path(uri_or_path)
+        return await conversation_body_cold.move_async(self.backend, rel)
+
+    async def restore_message_body(self, uri_or_path: str) -> bool:
+        """Restore a verified cold message body at its original key."""
+
+        rel = self._rel_from_uri_or_path(uri_or_path)
+        return await conversation_body_cold.restore_async(self.backend, rel)
 
     # ---------- execution snapshot (role-aware RNs in manifest) ----------
 
@@ -660,4 +670,4 @@ class ConversationStore:
         except Exception as e:
             raise FileNotFoundError(f"Cannot read message at {uri_or_path}: {e}")
 
-        return json.loads(raw)
+        return await conversation_body_cold.read_async(self.backend, rel, raw.encode("utf-8"))

@@ -555,6 +555,42 @@ async def test_a_deletion_waits_for_a_running_archive_and_nothing_comes_back(env
 
 
 @pytest.mark.asyncio
+async def test_grouped_batches_keep_oldest_first_and_conserve_rows_across_nights(env):
+    pool, schema, _, archive, retention = env
+    start = datetime(2026, 9, 10, 9, tzinfo=UTC)
+    specs = [
+        ("u1", "c1", 0, 0), ("u1", "c1", 0, 1),
+        ("u2", "c1", 0, 2),
+        ("u1", "c1", 1, 0), ("u1", "c1", 1, 1),
+        ("u3", "c3", 2, 0),
+    ]
+    ids = [await _add(pool, schema, user, conv, start + timedelta(days=day, minutes=minute))
+           for user, conv, day, minute in specs]
+    recent = await _add(pool, schema, "u4", "c4", datetime(2026, 10, 5, 9, tzinfo=UTC))
+    written = []
+    original = archive.write_batch
+
+    async def track(**kwargs):
+        records = kwargs["records"]
+        written.append((min(r["ts"] for r in records), [r["id"] for r in records]))
+        return await original(**kwargs)
+
+    archive.write_batch = track
+    first = await retention.archive_before(_night(7), batch_size=3, max_batches=2)
+    assert (first["batches"], first["rows"]) == (2, 3)
+    assert await _hot_ids(pool, schema) == sorted(ids[3:] + [recent])
+    assert await _cold_ids(retention) == sorted(ids[:3])
+    second = await retention.archive_before(_night(8), batch_size=3)
+    assert (second["batches"], second["rows"]) == (2, 3)
+    assert await _hot_ids(pool, schema) == [recent]
+    assert await _cold_ids(retention) == sorted(ids)
+    assert [stamp for stamp, _ in written] == sorted(stamp for stamp, _ in written)
+    assert [group for _, group in written] == [ids[:2], ids[2:3], ids[3:5], ids[5:]]
+    assert set(await _hot_ids(pool, schema)).isdisjoint(await _cold_ids(retention))
+    assert len(await _hot_ids(pool, schema)) + len(await _cold_ids(retention)) == len(ids) + 1
+
+
+@pytest.mark.asyncio
 async def test_a_deletion_scoped_to_some_bundles_keeps_the_other_bundles_hot_rows(env):
     pool, schema, backend, archive, retention = env
     recent = datetime(2026, 10, 5, 9, tzinfo=UTC)
