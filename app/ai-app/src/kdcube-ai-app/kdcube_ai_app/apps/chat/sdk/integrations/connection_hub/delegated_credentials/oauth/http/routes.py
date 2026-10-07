@@ -3345,6 +3345,10 @@ async def _issue_tokens(
     expected_card_revision=None,
     card_conflict_error="invalid_grant",
 ) -> JSONResponse:
+    # A supplied refresh token belongs to a rotation of an already delivered
+    # family. Preserve it until the refresh handler can roll that rotation
+    # back. An initial code/device issuance owns a new, undelivered family.
+    initial_issuance = refresh_token is None
     # A stored selection that is not {resource: [grant or operation]} is a
     # grant this service cannot honour, not a server fault: answer
     # invalid_grant naming it and log it, never a 500 at the token step.
@@ -3561,10 +3565,11 @@ async def _issue_tokens(
             )
     except CardConflict as exc:
         await revoke_withheld_oauth_credentials(
-            store, access_token=access_token, refresh_token=refresh_token,
+            store, access_token=access_token,
+            refresh_token=refresh_token if initial_issuance else None,
             client_id=str(client_id or ""),
         )
-        if replace_authority and expected_card_revision is not None:
+        if initial_issuance and replace_authority and expected_card_revision is not None:
             LOGGER.warning(
                 "[connection-hub.oauth] token withheld: card changed after consent "
                 "client=%s current_revision=%s",
@@ -3592,7 +3597,8 @@ async def _issue_tokens(
         # again or an uncertain committed Card. Keep that separate from the
         # unavailable/unknown-COMMIT branches below.
         await revoke_withheld_oauth_credentials(
-            store, access_token=access_token, refresh_token=refresh_token,
+            store, access_token=access_token,
+            refresh_token=refresh_token if initial_issuance else None,
             client_id=str(client_id or ""),
         )
         LOGGER.error(

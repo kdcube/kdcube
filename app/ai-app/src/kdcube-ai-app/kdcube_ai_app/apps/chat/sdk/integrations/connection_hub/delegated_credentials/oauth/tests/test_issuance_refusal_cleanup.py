@@ -162,10 +162,10 @@ async def test_caller_write_cleanup_failure_keeps_other_attempt_and_fixed_log(gr
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("refusal_kind", ["card-conflict", "caller-write"])
-async def test_refresh_route_late_refusal_revokes_old_and_new_family(grant_store, monkeypatch, refusal_kind):
-    observed = {}
+async def test_refresh_route_late_refusal_restores_delivered_token_and_retries_live_card(grant_store, monkeypatch, refusal_kind):
+    observed = {"refuse": True, "card_edited": False}
     original_token = await grant_store.create_refresh_token(
-        client_id="client", sub="human", scopes=["records:read"],
+        client_id="client", sub="human", scopes=["records:read", "records:write"],
         operations=["records_export"], resource="*", registry_access_id="synthetic-card",
         card_kind="automation",
     )
@@ -177,18 +177,24 @@ async def test_refresh_route_late_refusal_revokes_old_and_new_family(grant_store
         return CardAuthority(
             access_id="synthetic-card", client_id="client", grantor_subject="human",
             delegate_subject="", source="oauth", card_kind="automation",
-            card_revision=8, expires_at=int(time.time()) + 300,
-            operations=("records_export",), resource_grants={"*": ("records:read",)},
+            card_revision=9 if observed["card_edited"] else 8, expires_at=int(time.time()) + 300,
+            operations=("records_export",),
+            resource_grants={"*": ("records:read",) if observed["card_edited"] else ("records:read", "records:write")},
         )
 
     async def mint(sub, scopes):
         observed["mint_count"] = observed.get("mint_count", 0) + 1
-        return {"access_token": ACCESS, "expires_in": 300}
+        observed["minted_scopes"] = scopes
+        observed["minted_access"] = f"{ACCESS}-mint-{observed['mint_count']}"
+        return {"access_token": observed["minted_access"], "expires_in": 300}
 
     async def record(**kwargs):
         observed.update(kwargs)
         assert kwargs["refresh_token"] != original_token
         assert await grant_store.validate_refresh_token(kwargs["refresh_token"]) is not None
+        if not observed["refuse"]:
+            return SimpleNamespace(access_id=kwargs["access_id"])
+        observed["card_edited"] = True
         if refusal_kind == "caller-write":
             raise CallerWriteRefused("caller_writer_refused")
         raise CardConflict("synthetic_late_card_conflict", current_revision=9)
@@ -213,12 +219,25 @@ async def test_refresh_route_late_refusal_revokes_old_and_new_family(grant_store
     assert response.status_code == 503
     body = json.loads(response.body)
     assert "access_token" not in body and "refresh_token" not in body
-    assert "authorize again" in body["error_description"]
+    assert body["error"] == "temporarily_unavailable"
+    assert "authorize again" not in body["error_description"]
+    assert body["refresh_token_restored"] is True
     assert observed["mint_count"] == 1
     assert observed["rollback_attempts"] == 1
-    assert await grant_store.get_access_grant_record(ACCESS) is None
-    assert await grant_store.validate_refresh_token(original_token) is None
+    assert await grant_store.get_access_grant_record(observed["minted_access"]) is None
+    assert await grant_store.validate_refresh_token(original_token) is not None
     assert await grant_store.validate_refresh_token(observed["refresh_token"]) is None
+
+    # The same remotely held token can retry after the ordinary Card edit.
+    # Authorization comes from the new live Card, without a new consent.
+    observed["refuse"] = False
+    retried = await routes.token(SimpleNamespace(form=form))
+    assert retried.status_code == 200
+    delivered = json.loads(retried.body)
+    assert observed["minted_scopes"] == ["records:read"]
+    assert observed["mint_count"] == 2 and observed["rollback_attempts"] == 1
+    assert await grant_store.validate_refresh_token(delivered["refresh_token"]) is not None
+    assert await grant_store.get_access_grant_record(delivered["access_token"]) is not None
 
 
 @pytest.mark.asyncio

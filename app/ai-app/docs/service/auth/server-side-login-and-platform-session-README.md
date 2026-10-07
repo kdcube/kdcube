@@ -242,6 +242,8 @@ and PKCE S256 challenge; raw codes and verifiers stay in request memory.
 with that proof and captures a digest of the complete payload and the exact
 candidate inputs the host will pass to Hub begin. A retry proof alone is not
 first-exchange validation or authorization.
+For confidential clients, the host also repeats the required client
+authentication on replay; the PKCE proof does not replace that authentication.
 
 The host calls `begin(binding)` before Hub begin or any mint, uses the returned
 identity as Hub's `original_request_id`, then `pin_plan(binding, original_plan)`
@@ -273,6 +275,14 @@ composed and verified together before enabling this workflow.
 Deployment integration still requires a qualified durable custody backend,
 host target fencing, and the OAuth refresh/refusal-cleanup adapters. Ordinary
 `login` and `login_or_register` keep their existing behavior.
+
+On a late Card conflict or caller-write refusal during an OAuth refresh,
+the host preserves the supplied replacement refresh token until the refresh
+handler rolls its rotation back. The remotely held original remains usable
+and the client receives a retryable 503, then retries against the current live
+Card without a new consent. Cleanup removes only the new withheld access
+binding in this case. An initial code/device issuance owns a never-delivered
+new family; its late refusal still cleans both newly issued credentials.
 
 ## Descriptor Contract
 
