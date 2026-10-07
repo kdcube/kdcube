@@ -12,6 +12,8 @@ import time
 import pytest
 
 from kdcube_ai_app.auth.bundle import BundleSessionAuthManager, BundleSessionAuthority
+from kdcube_ai_app.auth.AuthManager import AuthenticationError
+from kdcube_ai_app.auth.bundle.sessions import _make_token
 from kdcube_ai_app.auth.bundle.session_issuance import SessionIssuanceRefused
 from kdcube_ai_app.auth.bundle.session_schema import TABLE_ISSUANCES, TABLE_SESSIONS, TABLE_USERS
 from kdcube_ai_app.auth.tests._bound_session_crash_fixtures import PhasedStore, PostgresTestCustody
@@ -74,6 +76,41 @@ async def test_sigkill_retry_recovers_one_original_signed_session(store, phase):
         for table in (TABLE_USERS, TABLE_ISSUANCES, TABLE_SESSIONS):
             rows = await connection.fetch(f"SELECT to_jsonb(t)::text FROM {store.schema}.{table} AS t")
             assert all(token not in row[0] for row in rows)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["after_reservation", "after_custody"])
+async def test_reserved_original_cannot_authenticate_after_sigkill_before_activation(store, phase):
+    bound = context(store)
+    custody = PostgresTestCustody(store)
+    await custody.ensure_schema()
+    await kill_after_commit(store, bound, phase)
+    original = await store.read_issuance(bound.identity)
+    assert original is not None and original.state == "reserved"
+    assert await counts(store) == (1, 1, 0)
+    assert await store.get_validation_state(original.session_id) is None
+    assert (await store.get_user(original.record["sub"]))["permissions"] == []
+
+    # Reconstruct only the original synthetic bearer using the fixture's
+    # signing key. Its hash proves possession of the actual reserved token,
+    # rather than a malformed token that signature validation would reject.
+    token = _make_token(original.record["claims"], secret="unit-session-signing-secret")
+    assert hashlib.sha256(token.encode()).hexdigest() == original.record["token_sha256"]
+    assert await custody.get(secret_ref=original.secret_ref) == (
+        token if phase == "after_custody" else None
+    )
+    with pytest.raises(AuthenticationError, match="^bundle session is not active$"):
+        await BundleSessionAuthManager(authority=authority(store)).authenticate(token)
+    assert await counts(store) == (1, 1, 0)
+    assert (await store.read_issuance(bound.identity)).state == "reserved"
+
+    recovered = await issue(store, custody, bound)
+    assert (recovered.session_id, recovered.secret_ref, recovered.bearer_sha256) == (
+        original.session_id, original.secret_ref, original.record["token_sha256"],
+    )
+    assert await counts(store) == (1, 1, 1)
+    user = await BundleSessionAuthManager(authority=authority(store)).authenticate(token)
+    assert user.permissions == ["records:read"]
 
 
 @pytest.mark.asyncio

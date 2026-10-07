@@ -91,11 +91,11 @@ async def test_conflicting_request_refuses_before_custody_or_user_changes(store)
 
 
 class _EnvelopeProviderFixture(InMemorySecretsManager):
-    """Protocol fixture only; not a deployed secrets-service durability proof."""
+    """Explicit qualification stub, not deployed custody or durability proof."""
     provider_type = "secrets-service"
 
-    async def qualify_host_vault(self):
-        return True
+    async def qualify_runtime_custody(self, *, namespace):
+        return namespace == "connection-hub-issuance-custody"
 
 
 def envelope_custody(manager):

@@ -4,7 +4,7 @@ title: "Server-Side Login And The Platform Session"
 summary: "How an app-defined login turns an authenticator proof into one KDCube-owned platform session with PostgreSQL authority, a fenced Redis projection, protected browser entry, and sliding lifetime."
 tags: ["service", "auth", "application", "bundle", "session", "sso"]
 keywords: ["server-side login", "app-defined authenticator", "platform session", "platform principal", "connection edge", "bundle", "kst1", "login lane", "login", "logout", "register", "invalidate", "sliding session", "OIDC", "Cognito hosted UI"]
-updated_at: 2026-10-06
+updated_at: 2026-10-07
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/app-simple-idp-bridge-README.md
@@ -106,6 +106,19 @@ already been validated. The host also enforces the current target's eligibility.
 effect and receipt digests, access identity, target incarnation and absolute
 expiry. The SDK compares every immutable context and grant field on replay.
 
+The issuance identity is SHA-256 of canonical JSON
+`[tenant, project, transaction_id, slot]`. The trusted host supplies a stable
+slot for the exact grant effect, distinct across participants in a grouped
+transaction and unchanged on retry. Slots are exact nonempty ASCII strings of
+at most 256 bytes; test fixture names are not production slot definitions.
+
+SDK session activation and a host's Card/grant binding are separate checks.
+Possessing the correctly signed reserved bearer does not authenticate before
+the active PostgreSQL session row exists, even after custody was committed.
+After SDK activation, the host still enforces the exact live Card/grant binding
+at its delegated authorization boundary. Normal platform sign-in uses its own
+login lane and does not acquire a Card binding from this API.
+
 The durable sequence is reservation, create-only original bearer custody, then
 session activation. PostgreSQL reserves the fixed session id, opaque secret
 reference, signed inputs and bearer digest before an active session exists.
@@ -134,23 +147,33 @@ signing-key changes cannot cause a retry to mint a new session identity.
 Reservations remain identity tombstones after completion or expiry, so any
 retention policy must preserve their no-remint identity.
 
+The signing primitive runs before reservation and can run again on the same
+reserved claims during recovery. Original hash equality fences that recovery;
+the guarantee is one accepted original session identity and bearer, rather
+than one invocation of the signing primitive.
+
 For KDCube host composition, `issuance_secret_custody(namespace=..., settings=...)`
 in `infra.secrets.issuance` wraps the selected secret backend in a create-only
 JSON envelope. The envelope contains the bearer and original absolute expiry;
 it stays in secret storage, never the public receipt. Reads refuse expired or
 malformed envelopes by name, rather than returning absence and recreating one.
-This also supplies the format needed by local expiry purge. The factory rejects
-in-memory providers and requires an explicit `host-vault` backend for
-secrets-service, including injected managers. It checks the running broker's
-host-vault health evidence before every custody operation and refuses a
-temporary sidecar or unavailable backend; `await custody.qualify()` also lets
-the host check this before composing issuance. The result is never cached.
+This also supplies the format needed by expiry purge. The factory uses the
+configured secrets-service runtime custody protocol and rejects in-memory
+providers. File, native-vault and AWS adapters share its scoped operations;
+each backend must qualify its required guarantees before custody access.
+`await custody.qualify()` lets the host check this before composing issuance.
+Unavailable, transient or unqualified custody refuses. Qualification is
+rechecked for operations rather than cached.
 Generic ephemeral-store defaults remain unchanged. The host must separately qualify backend restart durability
 and reader isolation: a namespace string is not an access-control proof.
 See [runtime-secret custody](../secrets/secrets-service-README.md#11-expiring-runtime-secret-custody).
 
 The source tests cover PostgreSQL reservation/replay, concurrent issuers, and
 SIGKILL followed by a fresh issuer after reservation, custody, and activation.
+After reservation and custody interruptions, the original correctly signed
+synthetic bearer is rejected by a fresh SDK authenticator until recovery
+activates the same reserved session. This is SDK authentication evidence; it
+does not test the separate host Card/grant binding boundary.
 They also exercise committed-but-lost responses at all three steps, named
 custody outages, missing/mismatched readback, signing-key changes, and authority
 or deadline movement before activation. Process tests use a durable
