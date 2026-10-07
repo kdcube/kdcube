@@ -66,6 +66,32 @@ does not change ordinary platform-login authentication or claim to revoke the
 underlying platform session. Initial refresh-family cap/revision stamping and
 uncertain Card-commit recovery remain separate issuance boundaries.
 
+## Planned original access preparation
+
+The SDK's `prepare_delegated_client_access_token` adapter accepts only a
+host-authenticated original Hub `OAuthIssuancePlan` and the host's first captured
+absolute access expiry. It derives the integration subject and grant permissions
+from that plan, resolves the session authority in the plan's tenant/project, and
+calls `prepare_bound_session`. The original remains inactive; the return value
+contains only its immutable context and opaque receipt, not bearer material.
+Retries must retain the captured expiry rather than recomputing a fresh TTL.
+
+`activate_prepared_delegated_client_access_token` accepts the host-authenticated
+original result only when its access slot is committed and applied, matches the
+prepared context, and names the original bearer digest. The public session
+authority verifies original custody and activates under its PostgreSQL lock.
+The adapter also checks that the returned session, custody reference, and bearer
+digest remain the prepared original. Pending, aborted, superseded, mismatched,
+unbound, or older-authority cases never fall back to ordinary login/minting.
+
+These typed values are data, not authentication. The hosting app still owns
+authenticated plan/result readers, immutable exchange binding, and live-target
+fencing. This adapter neither completes the Hub decision nor publishes tokens.
+The current authorization-code HTTP handler is not yet wired to this adapter;
+original refresh preparation, complete original-pair recovery, configured
+encrypted-provider qualification, and installed/live acceptance remain open.
+Ordinary human login and the existing delegated minter are unchanged.
+
 ## Refresh lifetime forwarding
 
 When a refresh record has a server-stored Card pointer, the host resolves that
