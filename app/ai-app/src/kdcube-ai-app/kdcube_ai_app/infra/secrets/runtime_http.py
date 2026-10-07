@@ -10,8 +10,9 @@ Legacy generic secret routes must reject runtime keys using the guard below.
 from __future__ import annotations
 
 import json
+import inspect
 import re
-from typing import Callable, Protocol
+from typing import Awaitable, Callable, Protocol
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -27,11 +28,11 @@ _NO_STORE = {"Cache-Control": "no-store"}
 
 
 class RuntimeSecretStore(Protocol):
-    def qualify(self) -> None: ...
-    def create(self, *, secret_ref: str, value: str, expires_at: int) -> bool: ...
-    def get(self, *, secret_ref: str) -> str | None: ...
-    def delete(self, *, secret_ref: str) -> None: ...
-    def purge_expired(self, *, now: int, limit: int) -> int: ...
+    def qualify(self) -> None | Awaitable[None]: ...
+    def create(self, *, secret_ref: str, value: str, expires_at: int) -> bool | Awaitable[bool]: ...
+    def get(self, *, secret_ref: str) -> str | None | Awaitable[str | None]: ...
+    def delete(self, *, secret_ref: str) -> None | Awaitable[None]: ...
+    def purge_expired(self, *, now: int, limit: int) -> int | Awaitable[int]: ...
 
 
 def _refuse(code: str, status: int) -> HTTPException:
@@ -80,13 +81,28 @@ def _reference(secret_ref: object) -> None:
         raise _refuse("runtime_secret_reference_invalid", 400)
 
 
-def _call(operation: Callable, **kwargs):
+async def _invoke(operation: Callable, **kwargs):
+    """One boundary for synchronous stores and service-loop async stores.
+
+    Sync filesystem/native operations retain threadpool isolation. Async PG/
+    cloud operations and factories run on the service loop, not a worker's
+    unrelated event loop. Awaitable results receive the same finite errors
+    and exact response validation; no backend label chooses this behavior.
+    """
     try:
-        return operation(**kwargs)
+        if (inspect.iscoroutinefunction(operation)
+                or inspect.iscoroutinefunction(getattr(operation, "__call__", None))):
+            result = operation(**kwargs)
+        else:
+            result = await run_in_threadpool(operation, **kwargs)
+        return await result if inspect.isawaitable(result) else result
     except Exception as exc:
         # Only fixed recognized codes cross the boundary. Never forward a
         # backend exception, path, response text, or a secret-bearing value.
-        code = str(exc)
+        try:
+            code = str(exc)
+        except Exception:
+            code = ""
         status = {
             "runtime_secret_scope_invalid": 400,
             "runtime_secret_scope_forbidden": 403,
@@ -102,7 +118,7 @@ def _call(operation: Callable, **kwargs):
 
 
 def install_runtime_routes(app: FastAPI, *, policy: RuntimeScopePolicy,
-                           store_factory: Callable[[str], RuntimeSecretStore]) -> None:
+                           store_factory: Callable[[str], RuntimeSecretStore | Awaitable[RuntimeSecretStore]]) -> None:
     """Install one protocol for the selected provider, default-closed on policy.
 
     Qualification requires both credential grants and the store's actual
@@ -120,14 +136,25 @@ def install_runtime_routes(app: FastAPI, *, policy: RuntimeScopePolicy,
             ):
                 raise _refuse("runtime_secret_scope_forbidden", 403)
 
-    def store(namespace: str) -> RuntimeSecretStore:
-        return _call(store_factory, namespace=namespace)
+    async def store(namespace: str) -> dict[str, Callable]:
+        instance = await _invoke(store_factory, namespace=namespace)
+        try:
+            methods = {name: getattr(instance, name, None) for name in
+                       ("qualify", "create", "get", "delete", "purge_expired")}
+            if any(not callable(method) for method in methods.values()):
+                raise ValueError
+        except Exception:
+            raise _refuse("runtime_secret_storage_unavailable", 503) from None
+        # Every operation checks actual storage guarantees, not just the
+        # qualification endpoint or a previously cached health/namespace label.
+        if await _invoke(methods["qualify"]) is not None:
+            raise _refuse("runtime_secret_storage_unavailable", 503)
+        return methods
 
     @app.get("/runtime-secrets/{namespace}/qualification")
-    def qualify(namespace: str, request: Request):
+    async def qualify(namespace: str, request: Request):
         authorize(request, namespace, "read", "write")
-        if _call(store(namespace).qualify) is not None:
-            raise _refuse("runtime_secret_storage_unavailable", 503)
+        await store(namespace)
         return JSONResponse(qualification(namespace), headers=_NO_STORE)
 
     @app.post("/runtime-secrets/{namespace}/create")
@@ -142,7 +169,8 @@ def install_runtime_routes(app: FastAPI, *, policy: RuntimeScopePolicy,
                 raise ValueError
         except (ValueError, UnicodeError):
             raise _refuse("runtime_secret_value_invalid", 400) from None
-        created = await run_in_threadpool(_call, store(namespace).create, **payload)
+        instance = await store(namespace)
+        created = await _invoke(instance["create"], **payload)
         if type(created) is not bool:
             raise _refuse("runtime_secret_storage_unavailable", 503)
         if not created:
@@ -150,10 +178,11 @@ def install_runtime_routes(app: FastAPI, *, policy: RuntimeScopePolicy,
         return JSONResponse({"status": "ok", "created": True}, headers=_NO_STORE)
 
     @app.get("/runtime-secrets/{namespace}/secret/{secret_ref}")
-    def get(namespace: str, secret_ref: str, request: Request):
+    async def get(namespace: str, secret_ref: str, request: Request):
         authorize(request, namespace, "read")
         _reference(secret_ref)
-        value = _call(store(namespace).get, secret_ref=secret_ref)
+        instance = await store(namespace)
+        value = await _invoke(instance["get"], secret_ref=secret_ref)
         if value is None:
             raise _refuse("runtime_secret_not_found", 404)
         if type(value) is not str:
@@ -161,10 +190,11 @@ def install_runtime_routes(app: FastAPI, *, policy: RuntimeScopePolicy,
         return JSONResponse({"value": value}, headers=_NO_STORE)
 
     @app.delete("/runtime-secrets/{namespace}/secret/{secret_ref}")
-    def delete(namespace: str, secret_ref: str, request: Request):
+    async def delete(namespace: str, secret_ref: str, request: Request):
         authorize(request, namespace, "write")
         _reference(secret_ref)
-        if _call(store(namespace).delete, secret_ref=secret_ref) is not None:
+        instance = await store(namespace)
+        if await _invoke(instance["delete"], secret_ref=secret_ref) is not None:
             raise _refuse("runtime_secret_storage_unavailable", 503)
         return JSONResponse({"status": "ok"}, headers=_NO_STORE)
 
@@ -175,7 +205,8 @@ def install_runtime_routes(app: FastAPI, *, policy: RuntimeScopePolicy,
         if (type(payload["now"]) is not int or payload["now"] <= 0
                 or type(payload["limit"]) is not int or not 1 <= payload["limit"] <= 1000):
             raise _refuse("runtime_secret_purge_invalid", 400)
-        removed = await run_in_threadpool(_call, store(namespace).purge_expired, **payload)
+        instance = await store(namespace)
+        removed = await _invoke(instance["purge_expired"], **payload)
         if type(removed) is not int or not 0 <= removed <= payload["limit"]:
             raise _refuse("runtime_secret_storage_unavailable", 503)
         return JSONResponse({"status": "ok", "removed": removed}, headers=_NO_STORE)

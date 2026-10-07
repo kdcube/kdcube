@@ -137,6 +137,17 @@ guarantees.
 
 #### Service-owned PostgreSQL cloud metadata (supporting layer)
 
+The common runtime HTTP boundary accepts synchronous or asynchronous trusted
+store factories and operations. Sync file/native work remains in a threadpool;
+async pool/cloud work is awaited on the service event loop. Authorization and
+bounded input validation precede factory invocation. Each request requires an
+exact successful storage qualification before any record operation, not just
+at the qualification endpoint. Bootstrap constructs stores without a duplicate
+qualification check. Finite errors, exact result types and no-store responses
+are shared across providers. In particular, directly supplying the still
+unqualified AWS component cannot bypass this gate; this bridge does not
+select an AWS backend, open a pool, provision a key or lift qualification.
+
 `runtime_pg_schema` provides an explicit migrator, and
 `PostgresRuntimeCustodyMetadata` supplies non-secret reservations, original
 full-ARN/version pins, terminal tombstones and leased cleanup claims. Values

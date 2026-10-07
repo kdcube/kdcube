@@ -61,8 +61,8 @@ def install_configured_runtime_routes(
                 raise RuntimeError("runtime_secret_storage_unavailable")
             store = RuntimeFileStore(root=root, namespace=namespace,
                                      authorized_namespaces=namespaces)
-        if store.qualify() is not None:
-            raise RuntimeError("runtime_secret_storage_unavailable")
+        # The common boundary performs fresh qualification after authorized
+        # construction and before every record operation, sync or async.
         return store
 
     install_runtime_routes(app, policy=policy, store_factory=factory)

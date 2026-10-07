@@ -188,7 +188,9 @@ def test_actual_native_bootstrap_uses_enrolled_broker_and_requalifies_each_opera
                        json={"now": clock[0], "limit": 1}).json() == {"status": "ok", "removed": 1}
     assert client.post(f"{BASE}/create", headers=WRITE,
                        json={**payload, "expires_at": clock[0] + 30}).status_code == 409
-    assert sum(request.operation is protocol.Operation.QUALIFY for request in requests) == 8
+    # Exactly one fresh proof for each of the seven HTTP requests. The common
+    # boundary, not a duplicate bootstrap-only proof, owns this check now.
+    assert sum(request.operation is protocol.Operation.QUALIFY for request in requests) == 7
     assert all(request.operation is not protocol.Operation.HEALTH for request in requests)
     assert not file_root.exists(), "native bootstrap must not silently select a file fallback"
     assert CANARY not in "\n".join(path.read_text() for path in disk._root.rglob("*.json"))
