@@ -34,7 +34,7 @@ def rig(monkeypatch):
     now = int(time.time())
     r = SimpleNamespace(code="unit-original", verifier="x" * 48, consumes=0, prepares=0,
                         pair_reads=0, completions=0, activations=0, reserved=[], gets=0,
-                        fenced=True, lose_complete=False, outcome="pending", original=None)
+                        fenced=True, lose_complete=False, outcome="pending", original=None, retired=0)
     r.proof = CodeExchangeProof.from_request(tenant="unit-tenant", project="unit-project", code=r.code,
                                              client_id="unit-client", redirect_uri="https://unit.test/cb", verifier=r.verifier)
     r.payload = {"sub": "human", "client_id": "unit-client", "redirect_uri": "https://unit.test/cb",
@@ -125,6 +125,10 @@ def rig(monkeypatch):
         async def activate_access(self, *, plan, result, credential):
             r.activations += 1
             return credential.receipt
+        async def retire_pair(self, *, plan, result, access_expires_at):
+            assert plan == r.plan and result.state == "aborted"
+            assert access_expires_at == r.original.access_expires_at
+            r.retired += 1
     class Custody:
         async def get(self, *, secret_ref):
             r.gets += 1
@@ -239,3 +243,11 @@ async def test_final_target_change_after_custody_read_withholds_both(rig):
     response = await routes.token(rig.request)
     assert response.status_code == 400
     assert b"unit-original-access" not in response.body and b"unit-original-refresh" not in response.body
+
+
+@pytest.mark.asyncio
+async def test_original_abort_result_retires_without_prepare_or_custody_read(rig):
+    rig.outcome = "aborted"
+    response = await routes.token(rig.request)
+    assert response.status_code == 400 and rig.retired == 1
+    assert rig.prepares == rig.activations == rig.gets == 0

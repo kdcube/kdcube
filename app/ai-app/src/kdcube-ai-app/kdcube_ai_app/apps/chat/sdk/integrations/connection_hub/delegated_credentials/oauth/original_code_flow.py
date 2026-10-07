@@ -60,6 +60,8 @@ class OriginalPairProvider(Protocol):
     async def read_pair(self, *, plan: OAuthIssuancePlan, access_expires_at: int) -> Mapping[str, PreparedOriginalCredential]: ...
     async def activate_access(self, *, plan: OAuthIssuancePlan, result: OAuthIssuanceResult,
                               credential: PreparedOriginalCredential) -> SessionIssuanceReceipt: ...
+    async def retire_pair(self, *, plan: OAuthIssuancePlan, result: OAuthIssuanceResult,
+                          access_expires_at: int) -> None: ...
 
 
 class OriginalCodeExchangeFlow:
@@ -174,6 +176,9 @@ class OriginalCodeExchangeFlow:
             raise OriginalExchangeRefused("original_exchange_access_expiry_unknown")
         result = self._result(plan, await self.hub.read_oauth_issuance(transaction_id=plan.transaction_id))
         if result.state == "aborted":
+            retire = getattr(self.provider, "retire_pair", None)
+            if callable(retire):
+                await retire(plan=plan, result=result, access_expires_at=expiry)
             raise OriginalExchangeRefused("original_exchange_aborted")
         if result.state == "committed":
             pair = self._pair(plan, expiry, await self.provider.read_pair(plan=plan, access_expires_at=expiry))
@@ -198,6 +203,9 @@ class OriginalCodeExchangeFlow:
         if result.state == "pending":
             raise OriginalExchangePending()
         if result.state != "committed":
+            retire = getattr(self.provider, "retire_pair", None)
+            if result.state == "aborted" and callable(retire):
+                await retire(plan=plan, result=result, access_expires_at=expiry)
             raise OriginalExchangeRefused("original_exchange_aborted")
         for slot in plan.slots:
             if not hmac.compare_digest(result.per_slot[slot].token_sha256, pair[slot].receipt.bearer_sha256):

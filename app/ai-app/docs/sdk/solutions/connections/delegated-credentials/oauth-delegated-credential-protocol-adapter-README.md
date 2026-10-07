@@ -121,9 +121,8 @@ does not fall back to ordinary consume/mint. An absent binding retains the
 existing workflow during source adoption. The host composition must connect
 the durable original mapping, full authenticated plan/result readers, both
 original reservations, live target fence and qualified custody. Those concrete
-provider callbacks, original refresh preparation, complete original-pair
-recovery, configured encrypted-provider qualification, and installed/live
-acceptance remain open; transport selection alone proves none of them.
+provider binding, configured encrypted-provider qualification, and installed/live
+acceptance remain host integration gates; transport selection alone proves none of them.
 Ordinary human login and the existing delegated minter are unchanged.
 
 `read_prepared_delegated_client_access_token` recovers the existing original
@@ -158,8 +157,47 @@ It checks both applied slot digests, re-reads the local pin and invokes the
 host's live-target fence before access activation and again after custody
 reads, before publishing either bearer. The provider must keep refresh
 artifacts distinct from Bundle access sessions. The host still supplies the
-concrete candidate builder, durable provider, authenticated Hub, qualified
-custody and live fence; their real deployment qualification remains open.
+concrete candidate builder, authenticated Hub, qualified custody and live fence;
+their real deployment qualification remains open.
+
+## Original credential pair provider
+
+`OriginalCredentialPairProvider` composes the public Bundle access authority
+with `OriginalRefreshIssuer` and `PostgresOriginalRefreshStore`. Its host-only
+constructor binds the tenant/project, exact expected custody namespace,
+original Card kind, refresh TTL and protected signing-key resolver. Preparation
+first qualifies `KDCubeIssuanceSecretCustody`; receipt recovery reads only
+existing access and refresh metadata. The host binds this provider to its
+authenticated Hub readers and live-target fence.
+
+The refresh metadata table retains one original signing input, opaque custody
+reference and bearer digest. It contains no bearer or signing key. PostgreSQL
+row locks preserve the first identifier, signing time and complete plan;
+conflicting retries refuse. `HmacOriginalRefreshSigner` signs that original
+input with the distinct `kdcube.oauth.original_refresh.v1` purpose and `krt1`
+artifact format. The digest is sealed before create-only external custody, so
+a lost create response recovers the same artifact rather than a new generation.
+A changed key cannot replace an already sealed original.
+
+The artifact's signed expiry and custody deadline retain the original Card cap.
+Hub separately computes the active refresh family's expiry from its first
+reservation time plus the original refresh TTL, capped by that Card deadline.
+The signed cap does not extend the family's usable lifetime or authorize it.
+Hub remains the authority that activates the refresh family.
+
+Before Bundle access activation, the provider records the authenticated applied
+refresh receipt. That protects the applied original against retirement; it
+records the Hub outcome, not recipient delivery. An authenticated aborted flow
+retires both original slots, committing their terminal metadata before purging
+the exact custody references. Each cleanup is attempted independently.
+Applied/superseded mixed-slot recovery still requires its own orchestration
+gate; this aborted-flow path does not qualify it.
+
+Source tests exercise PostgreSQL metadata and synthetic signing/custody
+capabilities. Qualification of the configured secrets-file, host-vault or AWS
+backend, recovery across process termination, host composition and live
+recipient delivery remain separate deployment gates. Backend selection stays
+behind the configured SecretsService abstraction.
 
 ## Refresh lifetime forwarding
 
