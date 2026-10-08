@@ -48,6 +48,11 @@ from kdcube_ai_app.apps.chat.sdk.protocol import (
     ExternalEventRequest,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import bind_current_request_context
+from kdcube_ai_app.apps.chat.sdk.infra.auth_context import (
+    AuthContext,
+    PRINCIPAL_ANONYMOUS,
+    bind_auth_context,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.discovery import (
     RedisNamedServiceDiscovery,
     bind_named_service_discovery,
@@ -6521,7 +6526,19 @@ async def _call_bundle_op_inner(
             surface_alias=operation,
         )
 
+        # The host built this context from the admitted session and resolved
+        # realm (including a verified delegated projection, when present).
+        # Bind a fresh identity for this invocation, rather than inheriting a
+        # caller's context or reading identity from operation arguments.
+        operation_auth_context = AuthContext.from_external_event_payload(
+            comm_context,
+            source="bundle_operation",
+            principal_kind=(
+                PRINCIPAL_ANONYMOUS if session.user_type == UserType.ANONYMOUS else None
+            ),
+        )
         with (
+            bind_auth_context(operation_auth_context),
             bind_current_request_context(comm_context, comm=runtime_comm),
             bind_named_service_discovery(
                 RedisNamedServiceDiscovery(peer_redis, tenant=tenant_id, project=project_id)
