@@ -243,6 +243,45 @@ def test_crash_after_replace_before_journal_replays_once(tmp_path):
     assert invoke(receipt, inputs, store).replayed == 2
 
 
+def test_completed_journal_with_original_store_incarnation_refuses_mixed_clone(tmp_path):
+    source = record()
+    inputs = inventory(source)
+    receipt = clone(tmp_path, inputs)
+    store = MemoryStore(inputs.records)
+    assert invoke(receipt, inputs, store).converted == 1
+    assert digest(source.key.encode()) in read_private(receipt.target, JOURNAL)["completed"]
+    # A rollback/re-copy of only storage cannot reuse the prior completed journal.
+    store.records[source.key] = Observation(source.generation, source.state, source.value)
+    with pytest.raises(ConversionError, match="^runtime_conversion_discard_clone_required$"):
+        invoke(receipt, inputs, store)
+    assert store.writes == [source.key]  # Never silently re-convert a mixed copy.
+    assert read_private(receipt.target, MARKER)["state"] == "invalid"
+
+
+@pytest.mark.parametrize("state,generation", [("absent", 0), ("tombstone", 2)])
+def test_absence_or_tombstone_changed_after_first_read_pass_invalidates_clone(tmp_path, state, generation):
+    source = SourceRecord(NAMESPACE, f"{1:032x}", generation, state)
+    inputs = inventory(source)
+    receipt = clone(tmp_path, inputs)
+    store = MemoryStore(inputs.records)
+    original_read = store.read
+    reads = []
+    def changed_after_read(source):
+        current = original_read(source)
+        reads.append(current)
+        if len(reads) == 1:
+            # The first pass sees the exact original; only the second-phase
+            # read can observe this intervening incarnation change.
+            store.records[source.key] = Observation(generation + 1, "present", b"synthetic-rival")
+        return current
+    store.read = changed_after_read
+    with pytest.raises(ConversionError, match="^runtime_conversion_discard_clone_required$"):
+        invoke(receipt, inputs, store)
+    assert len(reads) == 2
+    assert store.writes == []
+    assert read_private(receipt.target, MARKER)["state"] == "invalid"
+
+
 @pytest.mark.parametrize("failure", ["different-source", "different-generation", "bool-generation",
     "cas-conflict", "bad-ack", "bad-readback", "exception", "operator-abort",
     "journal-unknown", "journal-bool", "inventory-pin", "replay-value", "replay-generation"])
