@@ -14,7 +14,7 @@ import pytest
 
 from kdcube_ai_app.infra.secrets.host_vault import audit, broker, identity, keys, protocol, service, storage
 from kdcube_ai_app.infra.secrets.runtime_conversion import (
-    CloneReceipt, ConversionError, Inventory, Observation, SourceRecord, convert,
+    CloneReceipt, ConversionError, IndexRecord, Inventory, Observation, SourceRecord, convert,
 )
 from kdcube_ai_app.infra.secrets.runtime_conversion.file_store import CopiedFileVault
 from kdcube_ai_app.infra.secrets.runtime_conversion.guard import (
@@ -258,6 +258,114 @@ def test_completed_journal_with_original_store_incarnation_refuses_mixed_clone(t
     assert read_private(receipt.target, MARKER)["state"] == "invalid"
 
 
+@pytest.mark.parametrize("failure", ["missing", "partial"])
+def test_completed_marker_with_missing_or_partial_journal_refuses_before_factory(tmp_path, failure):
+    inputs = inventory(record(), record(2))
+    receipt = clone(tmp_path, inputs)
+    store = MemoryStore(inputs.records)
+    invoke(receipt, inputs, store)
+    if failure == "missing":
+        (receipt.target / JOURNAL).unlink()
+    else:
+        progress = read_private(receipt.target, JOURNAL)
+        progress["completed"].pop(digest(inputs.records[0].key.encode()))
+        write_private(receipt.target, JOURNAL, progress)
+    calls = []
+    with pytest.raises(ConversionError, match="^runtime_conversion_discard_clone_required$"):
+        convert(receipt=receipt, inventory=inputs, parsers={NAMESPACE: Parser()},
+                store_factory=lambda root: calls.append(root))
+    assert calls == []
+    assert read_private(receipt.target, MARKER)["state"] == "invalid"
+
+
+class BoundParser(Parser):
+    binding_sha256 = "b" * 64
+
+
+def bound_inventory():
+    return replace(inventory(record()), binding_pins=((NAMESPACE, BoundParser.binding_sha256),),
+                   index_records=(IndexRecord(NAMESPACE, 1, "present", b'[ "synthetic-index" ]'),))
+
+
+@pytest.mark.parametrize("failure", ["missing-pin", "changed-table", "duplicate-pin", "unknown-pin",
+    "missing-index", "duplicate-index", "unknown-index", "index-generation", "index-value", "index-size"])
+def test_bound_parser_table_and_explicit_index_preflight_fail_before_keys(tmp_path, failure):
+    inputs = bound_inventory()
+    if failure == "missing-pin":
+        inputs = replace(inputs, binding_pins=())
+    elif failure == "changed-table":
+        inputs = replace(inputs, binding_pins=((NAMESPACE, "c" * 64),))
+    elif failure == "duplicate-pin":
+        inputs = replace(inputs, binding_pins=inputs.binding_pins * 2)
+    elif failure == "unknown-pin":
+        inputs = replace(inputs, binding_pins=(("unknown", "b" * 64),))
+    elif failure == "missing-index":
+        inputs = replace(inputs, index_records=())
+    elif failure == "duplicate-index":
+        inputs = replace(inputs, index_records=inputs.index_records * 2)
+    else:
+        index = inputs.index_records[0]
+        index = {"unknown-index": replace(index, namespace="unknown"),
+                 "index-generation": replace(index, generation=True),
+                 "index-value": replace(index, value=None),
+                 "index-size": replace(index, value=b"x" * (protocol.MAX_VALUE_BYTES + 1))}[failure]
+        inputs = replace(inputs, index_records=(index,))
+    receipt = clone(tmp_path, inputs)
+    calls = []
+    with pytest.raises(ConversionError, match="^runtime_conversion_discard_clone_required$"):
+        convert(receipt=receipt, inventory=inputs, parsers={NAMESPACE: BoundParser()},
+                store_factory=lambda root: calls.append(root))
+    assert calls == []
+
+
+@pytest.mark.parametrize("state,generation,value", [
+    ("present", 1, b'[ "synthetic-index" ]'), ("absent", 0, None), ("tombstone", 2, None)])
+def test_explicit_index_is_preserved_and_binding_digest_changes_inventory(tmp_path, state, generation, value):
+    inputs = replace(bound_inventory(), index_records=(IndexRecord(NAMESPACE, generation, state, value),))
+    assert inputs.sha256() != replace(inputs, binding_pins=((NAMESPACE, "c" * 64),)).sha256()
+    index = inputs.index_records[0].as_source()
+    store = MemoryStore((*inputs.records, index))
+    receipt = clone(tmp_path, inputs)
+    result = convert(receipt=receipt, inventory=inputs, parsers={NAMESPACE: BoundParser()},
+                     store_factory=lambda root: store)
+    assert (result.converted, result.preserved) == (1, 1)
+    assert store.read(index) == Observation(generation, state, value)
+    assert store.writes == [inputs.records[0].key]
+
+
+def test_index_change_after_validation_refuses_and_invalidates(tmp_path):
+    inputs = bound_inventory()
+    index = inputs.index_records[0].as_source()
+    store = MemoryStore((*inputs.records, index))
+    receipt = clone(tmp_path, inputs)
+    original_read = store.read
+    index_reads = []
+    def racing_read(source):
+        current = original_read(source)
+        if source.key == index.key:
+            index_reads.append(current)
+            if len(index_reads) == 1:
+                store.records[index.key] = Observation(index.generation + 1, "present", b"changed-index")
+        return current
+    store.read = racing_read
+    with pytest.raises(ConversionError, match="^runtime_conversion_discard_clone_required$"):
+        convert(receipt=receipt, inventory=inputs, parsers={NAMESPACE: BoundParser()},
+                store_factory=lambda root: store)
+    assert read_private(receipt.target, MARKER)["state"] == "invalid"
+
+
+def test_index_only_empty_family_is_explicitly_preserved_without_runtime_writes(tmp_path):
+    inputs = replace(bound_inventory(), records=())
+    index = inputs.index_records[0].as_source()
+    store = MemoryStore((index,))
+    receipt = clone(tmp_path, inputs)
+    for _ in range(2):
+        result = convert(receipt=receipt, inventory=inputs, parsers={NAMESPACE: BoundParser()},
+                         store_factory=lambda root: store)
+        assert (result.converted, result.preserved) == (0, 1)
+    assert store.writes == []
+
+
 @pytest.mark.parametrize("state,generation", [("absent", 0), ("tombstone", 2)])
 def test_absence_or_tombstone_changed_after_first_read_pass_invalidates_clone(tmp_path, state, generation):
     source = SourceRecord(NAMESPACE, f"{1:032x}", generation, state)
@@ -366,7 +474,7 @@ def native_clone(tmp_path, inputs):
     (root / "root-keys" / "CURRENT").chmod(0o600)
     store = storage.FileDurableSecretStore(root / "store", provider)
     scope = protocol.SecretNamespace(*SCOPE)
-    for source in inputs.records:
+    for source in (*inputs.records, *(index.as_source() for index in inputs.index_records)):
         reference = protocol.SecretReference.derive(namespace=scope, internal_key=source.key)
         if source.state != "absent":
             store.put(reference, source.value or b"synthetic-deleted", expected_generation=0)
@@ -432,3 +540,17 @@ def test_native_encrypted_restart_recovers_post_commit_pre_journal_crash(tmp_pat
     assert (replay.converted, replay.replayed) == (0, 1)
     reference = protocol.SecretReference.derive(namespace=scope, internal_key=inputs.records[0].key)
     assert store.get(reference)[0].generation == 2
+
+
+def test_native_encrypted_index_is_unchanged_on_conversion_and_replay(tmp_path):
+    inputs = bound_inventory()
+    receipt, provider, store, scope = native_clone(tmp_path, inputs)
+    private_copy_modes(receipt.target)
+    index = inputs.index_records[0].as_source()
+    reference = protocol.SecretReference.derive(namespace=scope, internal_key=index.key)
+    original = digest(store._path(reference).read_bytes())
+    factory = lambda root: CopiedFileVault(root, scope=SCOPE)
+    for _ in range(2):
+        convert(receipt=receipt, inventory=inputs, parsers={NAMESPACE: BoundParser()}, store_factory=factory)
+        assert digest(store._path(reference).read_bytes()) == original
+        assert store.get(reference)[1] == index.value

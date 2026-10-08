@@ -78,6 +78,9 @@ def convert(*, receipt: CloneReceipt, inventory: Inventory,
                     or any(key not in expected or canonical(value) != canonical(expected[key])
                            for key, value in progress["completed"].items())):
                 raise ConversionError("runtime_conversion_progress_invalid")
+            if (admission.check()["state"] == "complete"
+                    and set(progress["completed"]) != set(expected)):
+                raise ConversionError("runtime_conversion_progress_invalid")
             admission.state("running")
             store = store_factory(admission.root)
             observed = []
@@ -99,7 +102,8 @@ def convert(*, receipt: CloneReceipt, inventory: Inventory,
                 admission.check()
                 source = item.source
                 if item.wrapper is None:
-                    # Recheck absence/tombstone; never issue a create/delete.
+                    # Recheck absence/tombstone AND byte-exact original indexes;
+                    # never create/delete/rewrite any preserved record.
                     if not _same(store.read(source), current):
                         raise ConversionError("runtime_conversion_incarnation_conflict")
                     admission.check()

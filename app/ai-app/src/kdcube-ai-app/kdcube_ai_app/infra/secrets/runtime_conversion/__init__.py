@@ -4,8 +4,8 @@
 from kdcube_ai_app.infra.secrets.runtime_conversion.engine import ConversionResult, convert
 from kdcube_ai_app.infra.secrets.runtime_conversion.guard import CloneReceipt
 from kdcube_ai_app.infra.secrets.runtime_conversion.model import (
-    ConversionError, FamilyParser, Inventory, Observation, SourceRecord,
+    ConversionError, FamilyParser, IndexRecord, Inventory, Observation, SourceRecord,
 )
 
 __all__ = ["CloneReceipt", "ConversionError", "ConversionResult", "FamilyParser",
-           "Inventory", "Observation", "SourceRecord", "convert"]
+           "IndexRecord", "Inventory", "Observation", "SourceRecord", "convert"]

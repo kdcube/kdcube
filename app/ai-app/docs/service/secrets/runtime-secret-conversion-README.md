@@ -79,6 +79,23 @@ positive integer deadline. It must not perform I/O, log values or consult
 current service configuration to fill missing fields. A caller-supplied hash
 is not a substitute for independent source review of that binding.
 
+If a parser uses an external frozen ownership table, it exposes
+`binding_sha256`. `Inventory.binding_pins` must pin every such namespace's
+table digest; the inventory digest covers those pins, and preflight checks
+the parser's digest before constructing a store. Two tables with the same
+parser code cannot be substituted. Trusted composition must also establish
+two-way closure: each required binding has its present record, and each
+present record has a binding. Absent/tombstoned rows require an explicit
+domain-state explanation from the same sealed cut, not a new wall-clock guess.
+
+Every table-bound namespace requires an explicit `IndexRecord` in
+`Inventory.index_records` for `platform.runtime.<namespace>.__keys`. Record
+its original present bytes/generation, or explicit absence/tombstone. Those
+indexes are pinned in the inventory and read/rechecked byte-exact; they are
+never rewritten, rebuilt or silently skipped. Composition separately verifies
+index/member closure against the original cut. Ordinary-key preservation
+remains whole-provider acceptance, not automatic filtering by this library.
+
 Whole-inventory preflight rejects unknown coverage, duplicates, malformed
 UTF-8/JSON, duplicate object fields, nonstandard constants, invalid state or
 generation, parser/binding/deadline mismatches and outer wrapper expansion
@@ -133,6 +150,8 @@ There are two distinct recovery cases:
   in the same copy. Reconstruct from the pinned sealed inventory. Accept only
   the exact original incarnation or exact `old + 1` wrapper; fill a missing
   journal entry without double-wrapping or incrementing again.
+  A `complete` marker with a missing or incomplete progress journal is refused
+  before key/store construction; it is not a known crash-interrupted attempt.
 - Any **refusal/abort**, including preflight failure, conflict, mismatched
   replay, changed generation/value, ambiguous acknowledgement or explicit
   operator abort, invalidates the entire copy. The custodian discards that

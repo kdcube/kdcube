@@ -76,18 +76,35 @@ class FamilyParser(Protocol):
 
 
 @dataclass(frozen=True, repr=False)
+class IndexRecord:
+    """Original namespace index: always preserved, never converted/rebuilt."""
+    namespace: str
+    generation: int
+    state: str
+    value: bytes | None = None
+
+    def as_source(self) -> SourceRecord:
+        return SourceRecord(self.namespace, "__keys", self.generation, self.state, self.value)
+
+
+@dataclass(frozen=True, repr=False)
 class Inventory:
     scope: tuple[str, str, str]     # tenant, project, application
     records: tuple[SourceRecord, ...]
     parser_pins: tuple[tuple[str, str], ...]
+    binding_pins: tuple[tuple[str, str], ...] = ()
+    index_records: tuple[IndexRecord, ...] = ()
 
     def sha256(self) -> str:
         return digest(canonical({
-            "scope": self.scope, "parser_pins": self.parser_pins,
+            "scope": self.scope, "parser_pins": self.parser_pins, "binding_pins": self.binding_pins,
             "records": [{"namespace": r.namespace, "secret_ref": r.secret_ref,
                          "generation": r.generation, "state": r.state,
                          "inner_sha256": digest(r.value) if type(r.value) is bytes else None,
                          "expires_at": r.expires_at} for r in self.records],
+            "indexes": [{"namespace": r.namespace, "generation": r.generation,
+                         "state": r.state, "value_sha256": digest(r.value) if type(r.value) is bytes else None}
+                        for r in self.index_records],
         }))
 
 
@@ -102,8 +119,16 @@ def preflight(inventory: Inventory, parsers: dict[str, FamilyParser]) -> tuple[P
     try:
         if (type(inventory.scope) is not tuple or len(inventory.scope) != 3
                 or any(type(v) is not str or not v for v in inventory.scope)
-                or type(inventory.records) is not tuple or not 1 <= len(inventory.records) <= 10000
-                or type(inventory.parser_pins) is not tuple):
+                or type(inventory.records) is not tuple or len(inventory.records) > 10000
+                or type(inventory.parser_pins) is not tuple
+                or type(inventory.binding_pins) is not tuple or type(inventory.index_records) is not tuple
+                or not inventory.records and not inventory.index_records):
+            raise ValueError
+        binding_pins = dict(inventory.binding_pins)
+        bound_names = {ns for ns, parser in parsers.items() if hasattr(parser, "binding_sha256")}
+        if (len(binding_pins) != len(inventory.binding_pins) or set(binding_pins) != bound_names
+                or any(type(pin) is not str or re.fullmatch(r"[0-9a-f]{64}", pin) is None
+                       or parsers[ns].binding_sha256 != pin for ns, pin in binding_pins.items())):
             raise ValueError
         pins = dict(inventory.parser_pins)
         if (len(pins) != len(inventory.parser_pins) or not pins
@@ -147,6 +172,23 @@ def preflight(inventory: Inventory, parsers: dict[str, FamilyParser]) -> tuple[P
             if len(wrapper) > MAX_VALUE_BYTES:
                 raise ValueError
             prepared.append(PreparedRecord(record, wrapper))
+        index_names = set()
+        for index in inventory.index_records:
+            if (type(index) is not IndexRecord or not valid_namespace(index.namespace) or index.namespace not in pins
+                    or index.namespace in index_names or type(index.generation) is not int
+                    or index.state not in {"present", "absent", "tombstone"}):
+                raise ValueError
+            index_names.add(index.namespace)
+            if index.state == "present":
+                if (index.generation <= 0 or type(index.value) is not bytes
+                        or len(index.value) > MAX_VALUE_BYTES):
+                    raise ValueError
+            elif (index.value is not None or index.state == "absent" and index.generation != 0
+                  or index.state == "tombstone" and index.generation <= 0):
+                raise ValueError
+            prepared.append(PreparedRecord(index.as_source(), None))
+        if not bound_names <= index_names:
+            raise ValueError
         return tuple(prepared)
     except Exception:
         raise ConversionError("runtime_conversion_preflight_refused") from None
