@@ -61,6 +61,10 @@ class _FakePubSub:
     async def close(self) -> None:
         if self.closed:
             return
+        if self.owner.block_next_close:
+            self.owner.block_next_close = False
+            self.owner.close_started.set()
+            await self.owner.close_release.wait()
         self.closed = True
         self.owner.active_count -= 1
         await self.messages.put(_LISTENER_STOP)
@@ -80,6 +84,9 @@ class _FakeRedis:
         self.block_next_subscribe = False
         self.subscribe_started = asyncio.Event()
         self.subscribe_release = asyncio.Event()
+        self.block_next_close = False
+        self.close_started = asyncio.Event()
+        self.close_release = asyncio.Event()
 
     def pubsub(self) -> _FakePubSub:
         pubsub = _FakePubSub(self)
@@ -343,6 +350,31 @@ async def test_stop_cancels_blocked_recovery_and_clears_channels_and_patterns(re
     assert comm._subscribed_patterns == []
     assert redis.active_count == 0
     assert all(pubsub.closed for pubsub in redis.pubsubs)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_acquire_waits_for_final_release_stop_then_reopens(relay_transport):
+    relay, comm, redis = relay_transport
+    await relay.acquire_session_channel("old", tenant="t", project="p")
+    old = comm._pubsub
+    redis.block_next_close = True
+    release = asyncio.create_task(relay.release_session_channel("old", tenant="t", project="p"))
+    await asyncio.wait_for(redis.close_started.wait(), timeout=1.0)
+    acquire = asyncio.create_task(relay.acquire_session_channel("new", tenant="t", project="p"))
+    try:
+        await asyncio.sleep(0)
+        assert not acquire.done()
+    finally:
+        redis.close_release.set()
+        await asyncio.wait_for(asyncio.gather(release, acquire), timeout=1.0)
+
+    new_channel = comm._fmt_channel(relay._session_channel("new", tenant="t", project="p"))
+    assert old.closed
+    assert comm._pubsub is not old
+    assert comm.listener_alive()
+    assert comm._subscribed_channels == [new_channel]
+    assert redis.numsub(new_channel) == 1
+    assert redis.max_active_count == 1
 
 
 @pytest.mark.asyncio
