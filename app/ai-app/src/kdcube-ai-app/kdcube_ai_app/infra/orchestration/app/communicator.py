@@ -2,6 +2,7 @@
 # Copyright (c) 2025 Elena Viter
 
 # kdcube_ai_app/infra/orchestration/app/communicator.py
+import asyncio
 import time
 import json
 import logging
@@ -73,6 +74,9 @@ class ServiceCommunicator:
 
         self._subscribed_channels: List[str] = []
         self._subscribed_patterns: List[str] = []
+        # Logical subscriptions survive a transport failure. Serialize their
+        # changes with transport replacement so recovery cannot restore stale refs.
+        self._subscription_lock = asyncio.Lock()
 
         # Support multiple consumer callbacks
         self._listeners: List[Callable[[dict], Any]] = []
@@ -172,97 +176,99 @@ class ServiceCommunicator:
             self._aioredis = get_async_redis_client(self.redis_url)
             logger.info("[ServiceCommunicator] Lazy Redis async client initialized")
 
+    async def _discard_pubsub_locked(self):
+        pubsub, self._pubsub = self._pubsub, None
+        if pubsub is not None:
+            with contextlib.suppress(Exception):
+                await pubsub.close()
+
+    async def _create_pubsub_locked(self):
+        """Publish a replacement only after restoring every logical subscription."""
+        await self._ensure_async()
+        pubsub = self._aioredis.pubsub()
+        try:
+            if self._subscribed_channels:
+                await pubsub.subscribe(*self._subscribed_channels)
+            if self._subscribed_patterns:
+                await pubsub.psubscribe(*self._subscribed_patterns)
+        except BaseException:
+            # Cancellation also releases a candidate's pooled connection.
+            with contextlib.suppress(Exception):
+                await pubsub.close()
+            raise
+        self._pubsub = pubsub
+
+    async def _subscribe_locked(self, channels: List[str], *, pattern: bool):
+        if self._pubsub is None:
+            # Even a duplicate add must restore the old channels on a new transport.
+            await self._create_pubsub_locked()
+        elif channels:
+            try:
+                if pattern:
+                    await self._pubsub.psubscribe(*channels)
+                else:
+                    await self._pubsub.subscribe(*channels)
+            except BaseException:
+                # A failed command leaves physical subscription state uncertain.
+                # Keep logical intent, discard this connection and retry the full set.
+                await self._discard_pubsub_locked()
+                raise
+
     async def subscribe(self, channels: Union[str, Iterable[str]], *, pattern: bool = False):
         """
         Subscribe (or psubscribe) to one or more channels.
         Call once before listen()/start_listener().
         """
-        await self._ensure_async()
-        if self._pubsub is None:
-            self._pubsub = self._aioredis.pubsub()
-
         if isinstance(channels, str):
             channels = [channels]
-
-        formatted = [self._fmt_channel(ch) for ch in channels]
-        if pattern:
-            self._subscribed_patterns = list(dict.fromkeys(formatted))
-        else:
-            self._subscribed_channels = list(dict.fromkeys(formatted))
-
-        if pattern:
-            await self._pubsub.psubscribe(*formatted)
-            logger.info(f"Pattern-subscribed to: {formatted}")
-        else:
-            await self._pubsub.subscribe(*formatted)
-            logger.info(f"Subscribed to: {formatted}")
+        formatted = list(dict.fromkeys(self._fmt_channel(ch) for ch in channels))
+        async with self._subscription_lock:
+            if pattern:
+                self._subscribed_patterns = formatted
+            else:
+                self._subscribed_channels = formatted
+            await self._subscribe_locked(formatted, pattern=pattern)
 
     async def subscribe_add(self, channels: Union[str, Iterable[str]], *, pattern: bool = False):
-        await self._ensure_async()
-        if self._pubsub is None:
-            self._pubsub = self._aioredis.pubsub()
-
         if isinstance(channels, str):
             channels = [channels]
-
-        formatted = [self._fmt_channel(ch) for ch in channels]
-
-        # Only subscribe to new ones
-        target_list = self._subscribed_patterns if pattern else self._subscribed_channels
-        new_channels = [ch for ch in formatted if ch not in target_list]
-        if not new_channels:
+        formatted = list(dict.fromkeys(self._fmt_channel(ch) for ch in channels))
+        async with self._subscription_lock:
+            target_list = self._subscribed_patterns if pattern else self._subscribed_channels
+            new_channels = [ch for ch in formatted if ch not in target_list]
+            target_list.extend(new_channels)
+            await self._subscribe_locked(new_channels, pattern=pattern)
             logger.info(
-                "[ServiceCommunicator] subscribe_add noop self_id=%s pubsub_id=%s",
-                id(self), id(self._pubsub) if self._pubsub else None
+                "[ServiceCommunicator] subscriptions updated self_id=%s pubsub_id=%s channels=%s patterns=%s",
+                id(self), id(self._pubsub), len(self._subscribed_channels), len(self._subscribed_patterns)
             )
-            return
-
-        target_list.extend(new_channels)
-
-        if pattern:
-            await self._pubsub.psubscribe(*new_channels)
-            logger.info(f"Pattern-subscribed to: {new_channels}")
-        else:
-            await self._pubsub.subscribe(*new_channels)
-            logger.info(f"Subscribed to: {new_channels}")
-
-        logger.info(
-            "[ServiceCommunicator] subscribe_add self_id=%s pubsub_id=%s new=%s now=%s",
-            id(self), id(self._pubsub), new_channels, self._subscribed_channels
-        )
 
 
     async def unsubscribe_some(self, channels: Union[str, Iterable[str]]):
-        if not self._pubsub:
-            return
-
         if isinstance(channels, str):
             channels = [channels]
-
         formatted = [self._fmt_channel(ch) for ch in channels]
-        to_remove = [ch for ch in formatted if ch in self._subscribed_channels]
-        if not to_remove:
-            logger.info(
-                "[ServiceCommunicator] unsubscribe_some noop self_id=%s pubsub_id=%s",
-                id(self), id(self._pubsub) if self._pubsub else None
-            )
-            return
-
-        # Remove from our tracking list
-        self._subscribed_channels = [
-            ch for ch in self._subscribed_channels if ch not in to_remove
-        ]
-
-        # Unsubscribe (works for both sub/psub)
-        with contextlib.suppress(Exception):
-            await self._pubsub.unsubscribe(*to_remove)
-        with contextlib.suppress(Exception):
-            await self._pubsub.punsubscribe(*to_remove)
-
-        logger.info(
-            "[ServiceCommunicator] unsubscribe_some self_id=%s pubsub_id=%s removed=%s remaining=%s",
-            id(self), id(self._pubsub), to_remove, self._subscribed_channels
-        )
+        async with self._subscription_lock:
+            to_remove = [ch for ch in formatted if ch in self._subscribed_channels]
+            patterns = [ch for ch in formatted if ch in self._subscribed_patterns]
+            # Release logical intent even while Redis is unavailable.
+            self._subscribed_channels = [ch for ch in self._subscribed_channels if ch not in to_remove]
+            self._subscribed_patterns = [ch for ch in self._subscribed_patterns if ch not in patterns]
+            if self._pubsub is not None:
+                try:
+                    if to_remove:
+                        await self._pubsub.unsubscribe(*to_remove)
+                    if patterns:
+                        await self._pubsub.punsubscribe(*patterns)
+                except asyncio.CancelledError:
+                    await self._discard_pubsub_locked()
+                    raise
+                except Exception as unsubscribe_err:
+                    # Logical release is complete. Discard uncertain physical
+                    # state, but do not prevent the relay's final idle cleanup.
+                    await self._discard_pubsub_locked()
+                    logger.debug("[ServiceCommunicator] release transport error self_id=%s error_type=%s",
+                                 id(self), type(unsubscribe_err).__name__)
 
 
     async def listen(self) -> AsyncIterator[dict]:
@@ -321,6 +327,7 @@ class ServiceCommunicator:
                 try:
                     async for payload in self.listen():
                         # fan-out payload to all listeners
+                        backoff = 0.5
                         self._last_message_ts = time.time()
                         listeners_snapshot = list(self._listeners)
                         for cb in listeners_snapshot:
@@ -352,9 +359,16 @@ class ServiceCommunicator:
                     raise
                 except Exception as e:
                     log = logger.warning if self._has_active_subscriptions() else logger.debug
-                    log("[ServiceCommunicator] listener error self_id=%s err=%s", id(self), e)
-                    # attempt to reconnect with backoff
-                    await self._reconnect_pubsub()
+                    log("[ServiceCommunicator] listener error self_id=%s error_type=%s", id(self), type(e).__name__)
+                    # Recovery failure is still a transport outage, not a reason
+                    # to terminate the sole listener for connected sessions.
+                    try:
+                        await self._reconnect_pubsub()
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as reconnect_err:
+                        log("[ServiceCommunicator] recovery failed self_id=%s error_type=%s",
+                            id(self), type(reconnect_err).__name__)
                     await asyncio.sleep(backoff)
                     backoff = min(backoff * 2, 10.0)
 
@@ -380,41 +394,29 @@ class ServiceCommunicator:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
 
-        if self._pubsub:
-            with contextlib.suppress(Exception):
-                if self._subscribed_channels:
-                    # attempt to unsubscribe (works for both sub and psub)
-                    await self._pubsub.unsubscribe(*self._subscribed_channels)
-                    await self._pubsub.punsubscribe(*self._subscribed_channels)
-            with contextlib.suppress(Exception):
-                await self._pubsub.close()
-            self._pubsub = None
+        # Cancel before taking the lock: recovery may hold it across a Redis call.
+        async with self._subscription_lock:
+            await self._discard_pubsub_locked()
             self._subscribed_channels = []
-
-        if self._aioredis:
-            with contextlib.suppress(Exception):
-                if not getattr(self._aioredis, "_kdcube_shared", False):
-                    await self._aioredis.close()
-            self._aioredis = None
+            self._subscribed_patterns = []
+            if self._aioredis:
+                with contextlib.suppress(Exception):
+                    if not getattr(self._aioredis, "_kdcube_shared", False):
+                        await self._aioredis.close()
+                self._aioredis = None
         logger.info("Stopped listener and closed async Redis.")
 
     async def _reconnect_pubsub(self):
         """Recreate pubsub connection and resubscribe after Redis restart."""
-        with contextlib.suppress(Exception):
-            if self._pubsub:
-                await self._pubsub.close()
-        self._pubsub = None
-        await self._ensure_async()
-        self._pubsub = self._aioredis.pubsub()
-        if self._subscribed_channels:
-            await self._pubsub.subscribe(*self._subscribed_channels)
-        if self._subscribed_patterns:
-            await self._pubsub.psubscribe(*self._subscribed_patterns)
-        log = logger.info if self._has_active_subscriptions() else logger.debug
-        log(
-            "[ServiceCommunicator] Reconnected pubsub self_id=%s pubsub_id=%s channels=%s patterns=%s",
-            id(self), id(self._pubsub), self._subscribed_channels, self._subscribed_patterns
-        )
+        async with self._subscription_lock:
+            await self._discard_pubsub_locked()
+            if self._has_active_subscriptions():
+                await self._create_pubsub_locked()
+            logger.info(
+                "[ServiceCommunicator] Reconnected pubsub self_id=%s pubsub_id=%s channels=%s patterns=%s",
+                id(self), id(self._pubsub) if self._pubsub else None,
+                len(self._subscribed_channels), len(self._subscribed_patterns)
+            )
 
 
     # ==============================================================================

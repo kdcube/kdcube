@@ -1,4 +1,6 @@
 import asyncio
+import contextlib
+import fnmatch
 
 import pytest
 
@@ -19,12 +21,26 @@ class _FakePubSub:
         self.closed = False
 
     async def subscribe(self, *channels: str) -> None:
+        if self.owner.block_next_subscribe:
+            self.owner.block_next_subscribe = False
+            self.owner.subscribe_started.set()
+            await self.owner.subscribe_release.wait()
+        if self.owner.subscribe_failures:
+            self.owner.subscribe_failures -= 1
+            self.owner.subscribe_failed.set()
+            raise ConnectionError("synthetic subscription failure")
         self.subscribed.update(channels)
 
     async def psubscribe(self, *channels: str) -> None:
+        if self.owner.psubscribe_failures:
+            self.owner.psubscribe_failures -= 1
+            raise ConnectionError("synthetic pattern subscription failure")
         self.patterns.update(channels)
 
     async def unsubscribe(self, *channels: str) -> None:
+        if self.owner.unsubscribe_failures:
+            self.owner.unsubscribe_failures -= 1
+            raise ConnectionError("synthetic unsubscribe failure")
         self.subscribed.difference_update(channels)
 
     async def punsubscribe(self, *channels: str) -> None:
@@ -35,6 +51,8 @@ class _FakePubSub:
             message = await self.messages.get()
             if message is _LISTENER_STOP:
                 return
+            if isinstance(message, Exception):
+                raise message
             yield message
 
     async def emit(self, payload: dict) -> None:
@@ -55,6 +73,13 @@ class _FakeRedis:
         self.pubsubs: list[_FakePubSub] = []
         self.active_count = 0
         self.max_active_count = 0
+        self.subscribe_failures = 0
+        self.psubscribe_failures = 0
+        self.unsubscribe_failures = 0
+        self.subscribe_failed = asyncio.Event()
+        self.block_next_subscribe = False
+        self.subscribe_started = asyncio.Event()
+        self.subscribe_release = asyncio.Event()
 
     def pubsub(self) -> _FakePubSub:
         pubsub = _FakePubSub(self)
@@ -62,6 +87,24 @@ class _FakeRedis:
         self.active_count += 1
         self.max_active_count = max(self.max_active_count, self.active_count)
         return pubsub
+
+    def numsub(self, channel: str) -> int:
+        return sum(not pubsub.closed and channel in pubsub.subscribed for pubsub in self.pubsubs)
+
+    async def publish(self, channel: str, payload: dict) -> int:
+        """Model physical subscriptions, not the communicator's logical lists."""
+        delivered = 0
+        for pubsub in self.pubsubs:
+            if pubsub.closed:
+                continue
+            if channel in pubsub.subscribed:
+                await pubsub.emit(payload)
+                delivered += 1
+            for pattern in pubsub.patterns:
+                if fnmatch.fnmatchcase(channel, pattern):
+                    await pubsub.messages.put({"type": "pmessage", "data": payload})
+                    delivered += 1
+        return delivered
 
 
 @pytest.fixture
@@ -104,6 +147,202 @@ async def test_final_session_release_stops_listener_and_closes_pubsub(relay_tran
     assert redis.active_count == 0
     assert len(redis.pubsubs) == 1
     assert relay._listener_started is False
+
+
+async def _cancel_listener_only(comm: ServiceCommunicator) -> None:
+    """Simulate a dead listener without releasing the relay's connected refs."""
+    task, comm._listen_task = comm._listen_task, None
+    if task:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+
+async def _wait_until(predicate) -> None:
+    async with asyncio.timeout(3.0):
+        while not predicate():
+            await asyncio.sleep(0.01)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pattern", [False, True])
+async def test_recreated_transport_restores_retained_subscription_on_duplicate_add(relay_transport, pattern):
+    _relay, comm, redis = relay_transport
+    channel = "retained.*" if pattern else "retained"
+    await comm.subscribe_add(channel, pattern=pattern)
+    old = comm._pubsub
+    await old.close()
+    comm._pubsub = None
+
+    await comm.subscribe_add(channel, pattern=pattern)
+
+    replacement = comm._pubsub
+    assert replacement is not old
+    expected = {comm._fmt_channel(channel)}
+    assert (replacement.patterns if pattern else replacement.subscribed) == expected
+    assert redis.active_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["subscribe", "psubscribe"])
+async def test_failed_reconnect_discards_partial_pubsub_but_keeps_connected_refs(relay_transport, phase):
+    relay, comm, redis = relay_transport
+    await relay.acquire_session_channel("retained", tenant="t", project="p")
+    await relay.acquire_session_channel("peer", tenant="t", project="p")
+    await comm.subscribe_add("notifications.*", pattern=True)
+    await _cancel_listener_only(comm)
+    channels = set(comm._subscribed_channels)
+    patterns = set(comm._subscribed_patterns)
+    setattr(redis, f"{phase}_failures", 1)
+
+    with pytest.raises(ConnectionError, match="synthetic"):
+        await comm._reconnect_pubsub()
+
+    assert redis.pubsubs[-1].closed
+    assert comm._pubsub is None
+    assert redis.active_count == 0
+    assert set(comm._subscribed_channels) == channels
+    assert set(comm._subscribed_patterns) == patterns
+
+    await relay.acquire_session_channel("new", tenant="t", project="p")
+    assert comm.listener_alive()
+    assert comm._pubsub.subscribed == set(comm._subscribed_channels)
+    assert comm._pubsub.patterns == patterns
+    assert all(redis.numsub(channel) == 1 for channel in comm._subscribed_channels)
+    assert redis.max_active_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failures", [1, 2])
+async def test_listener_survives_failed_recovery_and_delivers_exact_retry_receipts(relay_transport, failures):
+    relay, comm, redis = relay_transport
+    received: list[dict] = []
+    async def on_message(message: dict) -> None:
+        received.append(message)
+
+    await relay.acquire_session_channel("retained", tenant="t", project="p", callback=on_message)
+    await relay.acquire_session_channel("peer", tenant="t", project="p")
+    listener = comm._listen_task
+    old = comm._pubsub
+    redis.subscribe_failures = failures
+    await old.messages.put(ConnectionError("synthetic listener failure"))
+    await asyncio.wait_for(redis.subscribe_failed.wait(), timeout=1.0)
+    await asyncio.sleep(0)
+    assert comm.listener_alive()
+    assert comm._listen_task is listener
+    assert redis.pubsubs[-1].closed
+
+    await _wait_until(lambda: comm._pubsub is not None and not comm._pubsub.closed)
+    await relay.acquire_session_channel("new", tenant="t", project="p")
+    expected = []
+    for session, source in [("retained", "1-0"), ("peer", "2-0"), ("new", "3-0"), ("retained", "4-0")]:
+        # The same caller message ID can name different source attempts. Match both.
+        payload = {"event": "terminal", "data": {"message_id": "retry-id", "source_stream_id": source}}
+        channel = comm._fmt_channel(relay._session_channel(session, tenant="t", project="p"))
+        assert redis.numsub(channel) == 1
+        assert await redis.publish(channel, payload) == 1
+        expected.append(payload)
+    await _wait_until(lambda: len(received) == len(expected))
+    assert received == expected
+    assert redis.max_active_count == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_final_unsubscribe_still_releases_transport(relay_transport):
+    relay, comm, redis = relay_transport
+    await relay.acquire_session_channel("released", tenant="t", project="p")
+    redis.unsubscribe_failures = 1
+
+    await relay.release_session_channel("released", tenant="t", project="p")
+
+    assert comm._subscribed_channels == []
+    assert comm._pubsub is None
+    assert not comm.listener_alive()
+    assert redis.active_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pattern", [False, True])
+async def test_offline_release_is_not_resurrected_by_reconnect(relay_transport, pattern):
+    _relay, comm, redis = relay_transport
+    await comm.subscribe_add("released.*" if pattern else "released", pattern=pattern)
+    await comm.subscribe_add("retained")
+    await comm._pubsub.close()
+    comm._pubsub = None
+
+    await comm.unsubscribe_some("released.*" if pattern else "released")
+    await comm._reconnect_pubsub()
+
+    assert comm._subscribed_channels == [comm._fmt_channel("retained")]
+    assert comm._subscribed_patterns == []
+    assert comm._pubsub.subscribed == {comm._fmt_channel("retained")}
+    assert comm._pubsub.patterns == set()
+    assert redis.active_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["session", "project"])
+async def test_reconnect_serializes_with_acquire_release_and_reconcile(relay_transport, scope):
+    relay, comm, redis = relay_transport
+    if scope == "session":
+        await relay.acquire_session_channel("released", tenant="t", project="p")
+        await relay.acquire_session_channel("retained", tenant="t", project="p")
+    else:
+        await relay.acquire_project_channel(tenant="t", project="released")
+        await relay.acquire_project_channel(tenant="t", project="retained")
+    await _cancel_listener_only(comm)
+    relay._listener_started = False
+    redis.block_next_subscribe = True
+    reconnect = asyncio.create_task(comm._reconnect_pubsub())
+    await asyncio.wait_for(redis.subscribe_started.wait(), timeout=1.0)
+
+    if scope == "session":
+        release = asyncio.create_task(relay.release_session_channel("released", tenant="t", project="p"))
+        acquire = asyncio.create_task(relay.acquire_session_channel("new", tenant="t", project="p"))
+        reconcile = asyncio.create_task(relay.reconcile_sessions({
+            ("t", "p", "retained"): ("t", "p", 1),
+            ("t", "p", "new"): ("t", "p", 1),
+        }, reason="test"))
+    else:
+        release = asyncio.create_task(relay.release_project_channel(tenant="t", project="released"))
+        acquire = asyncio.create_task(relay.acquire_project_channel(tenant="t", project="new"))
+        reconcile = asyncio.create_task(relay.reconcile_project_channels({
+            ("t", "retained"): 1, ("t", "new"): 1,
+        }, reason="test"))
+    try:
+        await asyncio.sleep(0)
+        assert not release.done()
+        assert not acquire.done()
+        assert not reconcile.done()
+    finally:
+        redis.subscribe_release.set()
+        await asyncio.wait_for(asyncio.gather(reconnect, release, acquire, reconcile), timeout=1.0)
+
+    assert comm._pubsub.subscribed == set(comm._subscribed_channels)
+    assert len(comm._subscribed_channels) == 2
+    assert all("released" not in channel for channel in comm._pubsub.subscribed)
+    assert all(redis.numsub(channel) == 1 for channel in comm._subscribed_channels)
+    assert comm.listener_alive()
+    assert redis.max_active_count == 1
+
+
+@pytest.mark.asyncio
+async def test_stop_cancels_blocked_recovery_and_clears_channels_and_patterns(relay_transport):
+    relay, comm, redis = relay_transport
+    await relay.acquire_session_channel("retained", tenant="t", project="p")
+    await comm.subscribe_add("notifications.*", pattern=True)
+    redis.block_next_subscribe = True
+    await comm._pubsub.messages.put(ConnectionError("synthetic listener failure"))
+    await asyncio.wait_for(redis.subscribe_started.wait(), timeout=1.0)
+
+    await asyncio.wait_for(comm.stop_listener(), timeout=1.0)
+
+    assert not comm.listener_alive()
+    assert comm._pubsub is None
+    assert comm._subscribed_channels == []
+    assert comm._subscribed_patterns == []
+    assert redis.active_count == 0
+    assert all(pubsub.closed for pubsub in redis.pubsubs)
 
 
 @pytest.mark.asyncio

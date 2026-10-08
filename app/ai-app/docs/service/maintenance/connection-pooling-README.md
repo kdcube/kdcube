@@ -260,6 +260,29 @@ When Redis reconnects, the chat service automatically:
 - Reconnects gateway config pubsub listener.
 - For proc, queue/config listener failures trigger a shared-pool socket disconnect so the next Redis call reconnects through the same client.
 
+The chat relay's `ServiceCommunicator` keeps logical channel and pattern
+subscriptions separate from its physical Redis Pub/Sub connection. Creating a
+replacement connection restores the **entire retained set**, including when
+`subscribe_add` is called for an already-known channel. A replacement is exposed
+only after all subscribe commands succeed; a failed or cancelled candidate is
+closed without forgetting connected-session refs. Subscription changes and
+recreation are serialized, so a release during recovery is not later restored.
+Releases remove logical refs even while Redis is unavailable. Explicit listener
+shutdown clears both channel and pattern refs and releases the Pub/Sub connection,
+without closing the shared Redis pool.
+
+Listener recovery failures remain retryable with bounded exponential backoff
+(0.5 to 10 seconds); they do not terminate the sole listener. Receiving a message
+resets that backoff. Recovery diagnostics log exception types and subscription
+counts, not message payloads or credentials.
+
+A connected Socket.IO/SSE session or a nonempty logical subscription list does
+**not** prove reply delivery. Check physical `PUBSUB NUMSUB` for the expected
+direct reply channel and a bounded caller roundtrip matched by both message ID
+and source stream ID. Redis Pub/Sub is not a durable replay mechanism: messages
+published during an outage may be lost. Transport recovery does not authorize
+re-enqueuing a request with an unknown outcome or changing processing locks.
+
 Look for logs:
 - `[RedisMonitor] Redis connection recovered`
 - `[SSEHub] resync relay reason=redis_reconnect ...`
