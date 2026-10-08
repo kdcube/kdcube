@@ -273,6 +273,10 @@ async def test_schema_states_what_is_not_supported(provider, ctx):
     assert set(schema["refs"]) == {"account", "post"}
     assert "r_member_social" in schema["not_supported"]["post_content_read"]
     assert schema["limits"]["images_per_post"] == 20
+    # The image ceiling is a pixel count, not a byte size.
+    assert schema["limits"]["image_max_pixels_exclusive"] == 36_152_320
+    assert schema["limits"]["gif_max_frames"] == 250
+    assert "image_bytes" not in schema["limits"]
 
 
 @pytest.mark.asyncio
