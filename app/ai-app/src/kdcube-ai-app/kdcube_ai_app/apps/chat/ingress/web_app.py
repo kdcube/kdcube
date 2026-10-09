@@ -5,6 +5,7 @@
 """
 FastAPI chat application with modular Socket.IO integration and gateway protection
 """
+from functools import partial
 import traceback
 import faulthandler
 
@@ -101,6 +102,7 @@ from kdcube_ai_app.apps.chat.ingress.resolvers import (
 from kdcube_ai_app.infra.metrics.rolling_stats import record_metric
 from kdcube_ai_app.infra.namespaces import REDIS
 from kdcube_ai_app.infra.platform_settings.updates import PlatformSettingsUpdateListener
+from kdcube_ai_app.infra.secrets.projections import apply_bundle_secret_update, bundle_secret_update_channel
 from kdcube_ai_app.infra.availability.shutdown_diagnostics import (
     install_uvicorn_shutdown_diagnostics,
     log_shutdown_diagnostics,
@@ -271,6 +273,12 @@ async def lifespan(app: FastAPI):
         project=settings.PROJECT,
         handlers={"auth": PlatformAuthSettingsHandler(get_auth_manager())},
         stop_event=app.state.platform_settings_stop,
+        # Operator 2026-10-09: every process that caches secrets hears bundles.secrets.update; ingress
+        # reads secrets through the same SDK cache, so its existing listener clears the changed entry.
+        channel_handlers={
+            bundle_secret_update_channel(tenant=settings.TENANT, project=settings.PROJECT): partial(
+                apply_bundle_secret_update, tenant=settings.TENANT, project=settings.PROJECT),
+        },
     )
     app.state.platform_settings_task = asyncio.create_task(
         app.state.platform_settings_listener.run(),

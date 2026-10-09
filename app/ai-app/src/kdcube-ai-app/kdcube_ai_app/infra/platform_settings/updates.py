@@ -182,6 +182,7 @@ class PlatformSettingsUpdateListener:
         stop_event: asyncio.Event | None = None,
         poll_seconds: float = 1.0,
         reconnect_max_seconds: float = 10.0,
+        channel_handlers: Mapping[str, Callable[[Any], Awaitable[Any] | Any]] | None = None,
     ) -> None:
         self.redis = redis
         self.tenant = str(tenant or "").strip()
@@ -195,6 +196,12 @@ class PlatformSettingsUpdateListener:
         self.poll_seconds = max(0.05, float(poll_seconds))
         self.reconnect_max_seconds = max(0.1, float(reconnect_max_seconds))
         self.channel = platform_settings_update_channel(tenant=self.tenant, project=self.project)
+        # Further existing config channels this service listens to on the same connection and loop, each
+        # with a raw-message handler (e.g. bundles.secrets.update in ingress); no second subscriber.
+        self.channel_handlers = {
+            str(channel): handler for channel, handler in (channel_handlers or {}).items()
+            if str(channel or "").strip() and handler is not None
+        }
 
     async def _call(self, handler: PlatformSettingsHandler, event: PlatformSettingsUpdate) -> None:
         result = handler(event)
@@ -242,7 +249,7 @@ class PlatformSettingsUpdateListener:
             pubsub = None
             try:
                 pubsub = self.redis.pubsub()
-                await pubsub.subscribe(self.channel)
+                await pubsub.subscribe(self.channel, *self.channel_handlers)
                 logger.info(
                     "Subscribed to platform settings updates: channel=%s sections=%s",
                     self.channel,
@@ -257,6 +264,17 @@ class PlatformSettingsUpdateListener:
                     )
                     if not message or message.get("type") not in {"message", b"message"}:
                         await asyncio.sleep(0)
+                        continue
+                    channel = message.get("channel")
+                    channel = channel.decode() if isinstance(channel, bytes) else str(channel or "")
+                    raw_handler = self.channel_handlers.get(channel)
+                    if raw_handler is not None:
+                        try:
+                            result = raw_handler(message.get("data"))
+                            if inspect.isawaitable(result):
+                                await result
+                        except Exception:
+                            logger.exception("Config channel handler failed: channel=%s", channel)
                         continue
                     try:
                         event = PlatformSettingsUpdate.from_message(message.get("data"))
@@ -288,7 +306,7 @@ class PlatformSettingsUpdateListener:
             finally:
                 if pubsub is not None:
                     try:
-                        await pubsub.unsubscribe(self.channel)
+                        await pubsub.unsubscribe(self.channel, *self.channel_handlers)
                     except Exception:
                         pass
                     try:

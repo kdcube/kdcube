@@ -84,6 +84,32 @@ async def invalidate_bundle_secret_inventory(
         )
 
 
+def apply_bundle_secret_update(data: Any, *, tenant: str, project: str) -> int:
+    """Clear this process's secret cache for one bundles.secrets.update event; the count of entries cleared.
+
+    The same targeted invalidation the processor's config listener performs (bundle, user, keys), for
+    processes that listen through another existing listener (ingress: PlatformSettingsUpdateListener).
+    An event for another tenant/project, or an unreadable one, clears nothing.
+    """
+    from kdcube_ai_app.apps.chat.sdk.config_cache import clear_secret_cache
+
+    try:
+        event = json.loads(data.decode("utf-8") if isinstance(data, bytes) else str(data))
+    except Exception:
+        return 0
+    if (not isinstance(event, dict) or str(event.get("tenant") or "") != str(tenant or "")
+            or str(event.get("project") or "") != str(project or "")):
+        return 0
+    keys = [str(key) for key in (event.get("keys") or []) if str(key)]
+    return clear_secret_cache(
+        tenant=tenant,
+        project=project,
+        bundle_id=str(event.get("bundle_id") or "").strip() or None,
+        user_id=str(event.get("user_id") or "").strip() or None,
+        keys=keys,
+    )
+
+
 async def publish_bundle_secret_update(
     redis: Any,
     *,
