@@ -6,6 +6,7 @@ from __future__ import annotations
 import base64
 import copy
 import json
+import logging
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
 from urllib.parse import unquote, urlparse
@@ -478,7 +479,10 @@ def _secret_records_payload(
         if not records:
             return None
         return base64.b64encode(json.dumps({"records": records}, ensure_ascii=True).encode("ascii")).decode("ascii")
-    except Exception:
+    except Exception as exc:
+        # One fixed, value-free line: the isolated runtime gets no folder-stored secrets this time.
+        reason = str(exc) if str(exc).startswith(("user_secret_", "runtime_secret_")) else type(exc).__name__
+        logging.getLogger("kdcube.platform_env").warning("[secrets] sandbox records unavailable reason=%s", reason)
         return None
 
 

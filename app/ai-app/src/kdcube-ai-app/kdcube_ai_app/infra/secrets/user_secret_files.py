@@ -91,8 +91,9 @@ class UserSecretFileStore:
         segment, never "platform", ".", ".." or hidden."""
         if bundle_id is None:
             raise UserSecretFileError("user_secret_bundle_required")
+        # A "secrets" segment would make bundles.<id>.secrets.<key> ambiguous to split (review N1).
         if (type(bundle_id) is not str or _BUNDLE.fullmatch(bundle_id) is None
-                or bundle_id in {PLATFORM_OWNER, ".", ".."}):
+                or bundle_id in {PLATFORM_OWNER, ".", ".."} or ".secrets." in f".{bundle_id}."):
             raise UserSecretFileError("user_secret_bundle_invalid")
         return bundle_id
 

@@ -514,3 +514,56 @@ async def test_migration_keeps_case_differing_keys_and_users_apart(tmp_path):
     assert await fresh.get_secret(_key(user="Alice", key="Token")) == "synthetic-1"
     assert await fresh.get_secret(_key(user="Alice", key="token")) == "synthetic-2"
     assert await fresh.get_secret(_key(user="alice", key="Token")) == "synthetic-3"
+
+
+# Second review F2 / N1 / N2.
+
+def test_bundle_ids_with_a_secrets_segment_are_refused(tmp_path):
+    for bundle in ("acme.secrets.v1", "acme.secrets", "secrets.acme"):
+        with pytest.raises(Exception, match="user_secret_bundle_invalid"):
+            UserSecretFileStore(root=tmp_path / "secrets").set_app(bundle_id=bundle, key="k", value="v")
+
+
+def test_unavailable_sandbox_records_log_one_value_free_warning(tmp_path, monkeypatch, caplog):
+    import logging as _logging
+
+    from kdcube_ai_app.infra.config import platform_env
+    from kdcube_ai_app.infra.secrets import manager as manager_module
+
+    host = _manager(tmp_path)
+    store = UserSecretFileStore(root=_root(tmp_path))
+    store.set_app(bundle_id=HUB, key="k", value="synthetic-never-logged")
+    (_root(tmp_path) / HUB / "k.json").chmod(0o644)  # an unsafe record makes listing refuse
+    monkeypatch.setattr(manager_module, "get_secrets_manager", lambda settings=None: host)
+    caplog.set_level(_logging.WARNING)
+    exported = {"KDCUBE_RUNTIME_BUNDLES_SECRETS_YAML_B64": "x"}
+    assert platform_env._secret_records_payload(exported, bundle_id=None, descriptor_payload_scope=None) is None
+    assert "[secrets] sandbox records unavailable reason=" in caplog.text
+    assert "synthetic-never-logged" not in caplog.text
+
+
+def test_the_sandbox_writes_records_independently_and_never_leaks_the_env_var(tmp_path, monkeypatch):
+    import base64
+
+    from kdcube_ai_app.apps.chat.sdk.runtime.isolated import py_code_exec_entry
+
+    payload = base64.b64encode(json.dumps({"records": {
+        _app_key(): "synthetic-good", "users.u.secrets.bundle-less": "synthetic-bad",
+        _key(key="k"): "synthetic-user"}}).encode()).decode()
+    runtime_dir = tmp_path / "sandbox"
+    runtime_dir.mkdir(mode=0o700)
+    logged = []
+    log = type("L", (), {"log": lambda self, *a: logged.append(a)})()
+    py_code_exec_entry._materialize_secret_records(runtime_dir, log, payload)
+    store = UserSecretFileStore(root=runtime_dir / "secrets")
+    assert store.get_app(bundle_id=HUB, key="google.client_secret") == "synthetic-good"
+    assert store.get(user_id=USER, bundle_id=HUB, key="k") == "synthetic-user"
+    assert any("skipped 1" in str(entry) for entry in logged)
+    assert not any("synthetic-" in str(entry) for entry in logged)
+    # N2: with no yaml copy at all, the records variable still never reaches user code.
+    monkeypatch.setenv("KDCUBE_RUNTIME_SECRET_RECORDS_B64", payload)
+    for name in ("KDCUBE_RUNTIME_ASSEMBLY_YAML_B64", "KDCUBE_RUNTIME_BUNDLES_YAML_B64", "KDCUBE_RUNTIME_GATEWAY_YAML_B64",
+                 "KDCUBE_RUNTIME_SECRETS_YAML_B64", "KDCUBE_RUNTIME_BUNDLES_SECRETS_YAML_B64"):
+        monkeypatch.delenv(name, raising=False)
+    assert py_code_exec_entry._materialize_runtime_descriptor_payloads(log) is None
+    assert "KDCUBE_RUNTIME_SECRET_RECORDS_B64" not in os.environ
