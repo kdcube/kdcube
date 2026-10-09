@@ -547,7 +547,24 @@ It contains identifiers, not raw credentials. Ordinary door tokens are **not**
 automatically granted custody access; missing policy remains closed.
 The CLI validates and projects these descriptor values into the internal
 `KDCUBE_SECRETS_RUNTIME_ROOT`, `KDCUBE_SECRETS_RUNTIME_NAMESPACES` and
-`KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY` service inputs. Ambient inputs do not
+`KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY` service inputs.
+
+Defaults when `secrets.runtime` is absent (W673, operator 2026-10-09: "it
+simply must work regardless of the backend"). The platform's own runtime-record
+purposes are enrolled: `login-attempts`, `card-credentials` and
+`oauth-refresh-tokens` (`runtime_contract.DEFAULT_RUNTIME_NAMESPACES`; the SDK
+settings and the CLI projection use the same list, and `users` is reserved for
+per-user secret folders). The CLI marks the projection
+`KDCUBE_SECRETS_RUNTIME_DEFAULTED=1`, and every fresh token set written at
+install or refresh (`write_env_overlay`) carries a scope policy granting exactly
+those namespaces to this run's own proc credentials: `read` for the proc read
+token (`SECRETS_TOKEN_PROC`) and `write` for the writer token
+(`SECRETS_ADMIN_TOKEN`), by SHA-256 identifier only. The ingress door token and
+any other credential get nothing, and there is no wildcard. A declared
+`secrets.runtime` (an explicit empty namespace list included) wins whole: its
+namespaces and policy are projected unchanged and no default grant is added.
+The file runtime root default is the secrets-file manager's own rule
+(`resolve_runtime_secrets_root`). Ambient inputs do not
 override the descriptor during projection. A server snapshots those inputs at
 startup, not from requests or subsequent environment changes.
 
