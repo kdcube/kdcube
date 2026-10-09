@@ -57,25 +57,15 @@ echo "[entrypoint] Switching to user $APPUSER (UID $APPUSER_UID)"
 # Ensure appuser owns the exec workspace (volume overrides image ownership)
 chown -R appuser:appuser /exec-workspace || true
 
-# W677: the secrets folder has ONE owner uid (KDCUBE_SECRETS_OWNER_UID, appuser by default). Entries created
-# by root (docker exec sessions, the one-time migration, kdcube-secrets, a host-side copy shown as uid 0) are
-# handed to that owner here, before the app starts. Only root-owned entries are re-owned and modes are not
-# touched; an entry owned by any other uid stays refused by the application.
+# W677: the secrets folder has ONE owner uid (KDCUBE_SECRETS_OWNER_UID, appuser by default). Root-owned
+# private entries (created by docker exec sessions, the one-time migration, kdcube-secrets, or a host copy
+# shown as uid 0) are handed to that owner before the app starts. The repair and all its guards (explicit
+# canonical target, trusted 0700 folder chain, single-link 0600/0400 files, no-follow descriptor walk,
+# same filesystem, modes untouched) are kdcube_ai_app.infra.secrets.ownership_repair; anything else is
+# left for the application to refuse. A failure never blocks the start.
 SECRETS_ROOT="${KDCUBE_SECRETS_RUNTIME_ROOT:-/config/secrets}"
 SECRETS_OWNER_UID="${KDCUBE_SECRETS_OWNER_UID:-$APPUSER_UID}"
-SECRETS_ROOT="${SECRETS_ROOT%/}"
-# The target must be an explicit secrets directory: absolute, canonical (no symlink or ".." on the path),
-# not "/", at least two levels deep; anything else is skipped before any traversal (review P1).
-case "$SECRETS_ROOT" in
-    /*/*) SECRETS_ROOT_OK=1 ;;
-    *) SECRETS_ROOT_OK=0 ;;
-esac
-if [ "$SECRETS_ROOT_OK" = "1" ] && [ -d "$SECRETS_ROOT" ] && [ ! -L "$SECRETS_ROOT" ] \
-        && [ "$(readlink -f "$SECRETS_ROOT")" = "$SECRETS_ROOT" ]; then
-    # Only private, single-link, root-owned entries: 0700 folders, 0600 records and 0400 tombstones.
-    find "$SECRETS_ROOT" -xdev -uid 0 \( \( -type d -perm 0700 \) -o \( -type f -links 1 \( -perm 0600 -o -perm 0400 \) \) \) \
-        -exec chown "$SECRETS_OWNER_UID" {} + 2>/dev/null || true
-fi
+python -m kdcube_ai_app.infra.secrets.ownership_repair "$SECRETS_ROOT" "$SECRETS_OWNER_UID" || true
 
 # Ensure appuser can create managed bundle cache entries without recursively
 # walking the shared cache on every start. Recursive repair is expensive on EFS

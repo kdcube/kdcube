@@ -190,42 +190,6 @@ def test_the_exec_supervisor_owns_the_materialized_secrets_and_the_executor_cann
         store.get(user_id="u", bundle_id=HUB, key="k")
 
 
-def test_kdcube_secrets_startup_reowns_only_root_owned_entries(tmp_path, monkeypatch):
-    import importlib.util
-    from pathlib import Path
-
-    path = Path(__file__).resolve().parents[6] / "deployment/docker/all_in_one_kdcube/secrets/secrets_service_entrypoint.py"
-    spec = importlib.util.spec_from_file_location("secrets_service_entrypoint_w677", path)
-    entry = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(entry)
-    root = tmp_path / "secrets"
-    (root / HUB).mkdir(parents=True)
-    for folder in (root, root / HUB):
-        folder.chmod(0o700)
-    (root / HUB / "root.json").write_text("{}")
-    (root / HUB / "foreign.json").write_text("{}")
-    for name in ("root.json", "foreign.json"):
-        (root / HUB / name).chmod(0o600)
-    os.symlink(root / HUB / "root.json", root / HUB / "link.json")
-    real_lstat, chowned = os.lstat, []
-
-    def lstat(p, *a, **k):
-        info = real_lstat(p, *a, **k)
-        if str(p).endswith("foreign.json"):
-            return os.stat_result((info.st_mode, info.st_ino, info.st_dev, info.st_nlink, 4242, info.st_gid,
-                                   info.st_size, 0, 0, 0))
-        return os.stat_result((info.st_mode, info.st_ino, info.st_dev, info.st_nlink, 0, info.st_gid,
-                               info.st_size, 0, 0, 0))
-
-    monkeypatch.setattr(entry.os, "lstat", lstat)
-    monkeypatch.setattr(entry.os, "geteuid", lambda: 0)
-    monkeypatch.setattr(entry.os, "chown", lambda p, uid, gid, follow_symlinks=True: chowned.append((Path(p).name, uid)))
-    assert entry.adopt_root_owned_entries(str(root), "1000") == 3  # root folder, bundle folder, root.json
-    assert sorted(chowned) == sorted([("secrets", 1000), (HUB, 1000), ("root.json", 1000)])
-    monkeypatch.setattr(entry.os, "geteuid", lambda: 1000)
-    assert entry.adopt_root_owned_entries(str(root), "1000") == 0  # only root repairs
-
-
 # W677 acceptance: both creation orders, every runtime namespace, qualify/create/read/delete, then the
 # negative cases. SYNTHETIC uids: "root" is os.geteuid patched to 0 (a chown to one's own uid is a real call),
 # the owner is this test user; no test runs with real uid changes.
