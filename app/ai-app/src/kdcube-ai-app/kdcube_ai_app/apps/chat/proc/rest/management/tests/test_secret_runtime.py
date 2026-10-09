@@ -325,3 +325,39 @@ async def test_management_read_rejects_oversized_existing_value() -> None:
     assert (await runtime.metadata(target))["exists"] is True
     with pytest.raises(ManagementSecretsProviderUnavailable):
         await runtime.read(target)
+
+
+@pytest.mark.asyncio
+async def test_a_platform_secret_change_is_broadcast_and_cleared_in_proc_and_ingress() -> None:
+    """W675 review (claude-ops): platform.* writes were never broadcast, so non-file backends kept a cached
+    platform value in every process for the TTL. They now publish bundles.secrets.update (scope platform,
+    empty bundle id, the exact key), which the proc and ingress listeners turn into an exact cache clear."""
+    from kdcube_ai_app.apps.chat.sdk import config_cache
+    from kdcube_ai_app.infra.secrets.projections import apply_bundle_secret_update
+
+    redis = _Redis()
+    runtime = KDCubeSecretRuntime(_request(redis), tenant="tenant-a", project="project-a", manager=_Manager())
+    target = SecretTarget(scope=PLATFORM_SCOPE, key="platform.services.stripe.secret_key")
+    for operation in ("write", "delete"):
+        config_cache.clear_secret_cache()
+        mine = ("provider", "tenant-a", "project-a", target.provider_key)
+        other = ("provider", "tenant-a", "project-a", "platform.services.openai.api_key")
+        config_cache.set_secret_cache(mine, "stale")
+        config_cache.set_secret_cache(other, "kept")
+        redis.published.clear()
+        if operation == "write":
+            await runtime.write(target, value="secret-canary", caller_profile="devops-agent")
+        else:
+            await runtime.delete(target, caller_profile="devops-agent")
+        assert len(redis.published) == 1
+        channel, data = redis.published[0]
+        event = json.loads(data)
+        assert channel == "kdcube:config:bundles:secrets:update:tenant-a:project-a"
+        assert (event["scope"], event["bundle_id"], event["keys"]) == ("platform", "", [target.provider_key])
+        assert "secret-canary" not in data
+        assert redis.values == {}  # no per-bundle inventory projection for a platform key
+        # Ingress handler (the processor's listener performs the same clear).
+        assert apply_bundle_secret_update(data, tenant="tenant-a", project="project-a") == 1
+        assert config_cache.get_secret_cache(mine) == (False, None)
+        assert config_cache.get_secret_cache(other) == (True, "kept")
+    config_cache.clear_secret_cache()

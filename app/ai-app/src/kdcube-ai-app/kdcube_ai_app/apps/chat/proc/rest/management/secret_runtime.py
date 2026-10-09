@@ -130,14 +130,12 @@ class KDCubeSecretRuntime:
         previous = await self._value(manager, target)
         try:
             await manager.set_secret(target.provider_key, value)
-            if target.scope == BUNDLE_SCOPE or (
-                target.scope == USER_SCOPE and target.bundle_id
-            ):
-                await self._record_bundle_update(
-                    target=target,
-                    mode="set",
-                    caller_profile=caller_profile,
-                )
+            # Every scope is broadcast (platform.* too), so each process's secret cache drops the entry.
+            await self._record_bundle_update(
+                target=target,
+                mode="set",
+                caller_profile=caller_profile,
+            )
         except Exception as exc:
             raise ManagementSecretsProviderUnavailable(
                 "The configured secrets provider could not write the secret"
@@ -161,14 +159,12 @@ class KDCubeSecretRuntime:
         previous = await self._value(manager, target)
         try:
             await manager.delete_secret(target.provider_key)
-            if target.scope == BUNDLE_SCOPE or (
-                target.scope == USER_SCOPE and target.bundle_id
-            ):
-                await self._record_bundle_update(
-                    target=target,
-                    mode="clear",
-                    caller_profile=caller_profile,
-                )
+            # Every scope is broadcast (platform.* too), so each process's secret cache drops the entry.
+            await self._record_bundle_update(
+                target=target,
+                mode="clear",
+                caller_profile=caller_profile,
+            )
         except Exception as exc:
             raise ManagementSecretsProviderUnavailable(
                 "The configured secrets provider could not delete the secret"
@@ -188,18 +184,20 @@ class KDCubeSecretRuntime:
         caller_profile: str,
     ) -> None:
         redis = getattr(self._request.app.state, "redis_async", None)
-        await invalidate_bundle_secret_inventory(
-            redis,
-            tenant=self._tenant,
-            project=self._project,
-            bundle_id=target.bundle_id,
-            user_id=target.user_id or None,
-        )
+        if target.bundle_id:
+            # The inventory projection is per bundle; a platform or bundle-less user key has none.
+            await invalidate_bundle_secret_inventory(
+                redis,
+                tenant=self._tenant,
+                project=self._project,
+                bundle_id=target.bundle_id,
+                user_id=target.user_id or None,
+            )
         await publish_bundle_secret_update(
             redis,
             tenant=self._tenant,
             project=self._project,
-            bundle_id=target.bundle_id,
+            bundle_id=target.bundle_id or "",
             scope=target.scope,
             mode=mode,
             keys={target.provider_key},
