@@ -272,12 +272,18 @@ async def test_a_broad_runtime_folder_is_refused_not_repaired(folder):
 
 
 @pytest.mark.asyncio
-async def test_without_a_runtime_folder_the_file_backend_refuses_records_and_does_not_qualify(folder):
+async def test_without_an_explicit_runtime_folder_records_go_to_secrets_beside_the_descriptors(folder):
+    # With no secrets.runtime.root the file backend uses <descriptor folder>/secrets: a separate private
+    # folder next to bundles.secrets.yaml, never the YAML itself.
     store = _store(SecretsFileSecretsManager(folder.file_config(runtime_secrets_root=None)))
-    assert await store.qualify_durable_backend() is False
-    with pytest.raises(SecretsManagerError):
-        await store.create(secret_ref=REF, value=CANARY, expires_at=_later())
+    assert await store.create(secret_ref=REF, value=CANARY, expires_at=_later()) is True
+    assert await store.get(secret_ref=REF) == CANARY
+    assert await store.qualify_durable_backend() is True
+    default_root = folder.config_dir / "secrets"
+    assert oct(os.stat(default_root).st_mode & 0o777) == oct(0o700)
+    assert any(CANARY in p.read_text() for p in default_root.rglob("*") if p.is_file())
     assert CANARY not in folder.bundle_yaml.read_text()
+    assert not folder.runtime_root.exists()
 
 
 # 6. Refusal is fixed and value-free.
