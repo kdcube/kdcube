@@ -441,3 +441,25 @@ def test_the_host_command_requires_paths_and_prints_only_fixed_reasons(tmp_path,
     assert main(["migrate", "--global-secrets-yaml", str(config / "secrets.yaml"),
                  "--bundle-secrets-yaml", str(config / "missing.yaml")]) == 1
     assert json.loads(capsys.readouterr().out)["reason"] == "bundle_secrets_yaml_not_found"
+
+
+def test_the_host_command_prints_only_enumerated_reasons(tmp_path, capsys, monkeypatch):
+    from kdcube_ai_app.infra.secrets.manager import SecretsManagerWriteError
+    from kdcube_ai_app.infra.secrets.user_secret_files import main
+
+    _yaml_with_users(tmp_path, SOURCE)
+
+    async def refuse(self, *, dry_run=False):
+        raise SecretsManagerWriteError("synthetic_private_canary")
+
+    monkeypatch.setattr(SecretsFileSecretsManager, "migrate_user_secrets", refuse)
+    assert main(["migrate", "--config-dir", str(tmp_path / "config")]) == 1
+    output = capsys.readouterr().out
+    assert json.loads(output)["reason"] == "migration_unavailable" and "canary" not in output
+
+    async def conflict(self, *, dry_run=False):
+        raise SecretsManagerWriteError("user_secret_migration_destination_conflict")
+
+    monkeypatch.setattr(SecretsFileSecretsManager, "migrate_user_secrets", conflict)
+    assert main(["migrate", "--config-dir", str(tmp_path / "config")]) == 1
+    assert json.loads(capsys.readouterr().out)["reason"] == "user_secret_migration_destination_conflict"

@@ -32,7 +32,13 @@ _MAX_SEGMENT_CHARS = 200
 _MAX_VALUE_BYTES = 65536
 _MAX_FILE_BYTES = 6 * _MAX_VALUE_BYTES + 64
 _SUFFIX = ".json"
-_REASON = re.compile(r"[a-z_]{1,80}")
+# The only refusal reasons the host command prints; anything else is reported as migration_unavailable.
+_MIGRATION_REASONS = frozenset({
+    "user_secret_migration_bundle_less_source", "user_secret_migration_bundle_invalid",
+    "user_secret_migration_destination_conflict", "user_secret_migration_readback_mismatch",
+    "user_secret_storage_unavailable", "user_secret_bundle_invalid", "user_secret_bundle_required",
+    "user_secret_key_invalid", "user_secret_value_invalid", "runtime_secret_storage_must_be_separate",
+})
 _BUNDLE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@-]{0,127}")
 
 
@@ -374,7 +380,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         counts = asyncio.run(manager.migrate_user_secrets(dry_run=arguments.dry_run))
     except Exception as exc:  # a fixed reason only: never a value, a path or parser text
-        reason = str(exc) if isinstance(exc, SecretsManagerError) and _REASON.fullmatch(str(exc)) else (
+        reason = str(exc) if isinstance(exc, SecretsManagerError) and str(exc) in _MIGRATION_REASONS else (
             "migration_unavailable")
         print(json.dumps({"status": "refused", "reason": reason}))
         return 1
