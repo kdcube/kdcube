@@ -16,6 +16,7 @@ New entries live as dated files in this directory.
 
 ## Entries
 
+- [2026-10-09 - Provider fetch serves the signed media type](2026-10-09-provider-fetch-signed-media-type.md)
 - [2026-09-01 - Web search and fetch on the productivity surface](2026-09-01-productivity-web.md)
 - [2026-08-31 - Telegram notify: text and images to the caller's connected account](2026-08-31-telegram-notify.md)
 - [2026-08-01 - Google Docs explicit tab selection](2026-08-01-docs-explicit-tab-selection.md)

@@ -492,6 +492,7 @@ paths:
         "400": { $ref: "#/components/responses/JsonError" }
         "403": { $ref: "#/components/responses/JsonError" }
         "404": { $ref: "#/components/responses/JsonError" }
+        "503": { $ref: "#/components/responses/JsonError" }
 
   /bundles/{tenant}/{project}/{bundle_id}/public/conv_file_download:
     get:

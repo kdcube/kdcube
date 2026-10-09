@@ -100,3 +100,31 @@ def test_a_token_for_a_third_party_carries_no_identity() -> None:
         assert "user scope" in str(exc)
     else:  # pragma: no cover - the guard must hold
         raise AssertionError("a person-facing download accepted an unscoped token")
+
+
+def test_a_measured_media_type_is_signed_into_the_token() -> None:
+    from kdcube_ai_app.apps.chat.sdk.solutions.conversation.download_links import (
+        mint_file_download_token,
+        verify_file_download_token,
+    )
+
+    token, _expires = mint_file_download_token(
+        "secret",
+        fi_ref="staged:abc:image.png",
+        user_id="",
+        include_identity=False,
+        media_type="Image/PNG",
+    )
+    verified = verify_file_download_token(
+        "secret", token, fi_ref="staged:abc:image.png", require_user_scope=False
+    )
+    assert verified["media_type"] == "image/png"
+
+    # Without a measured type the payload names none, so the route serves
+    # opaque bytes rather than guessing from a name.
+    bare, _expires = mint_file_download_token(
+        "secret", fi_ref="staged:abc:image.png", user_id="u-1"
+    )
+    assert "media_type" not in verify_file_download_token(
+        "secret", bare, fi_ref="staged:abc:image.png"
+    )

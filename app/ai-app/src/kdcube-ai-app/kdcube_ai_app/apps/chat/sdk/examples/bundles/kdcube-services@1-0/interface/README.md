@@ -491,7 +491,7 @@ model context:
 | Alias | Method | Required query | Result |
 | --- | --- | --- | --- |
 | `integration_file_upload` | POST | `object_ref`, `upload_token` | Raw request bytes become a short-lived, single-use `staged:` ref. |
-| `provider_fetch_download` | GET | `object_ref`, `download_token` | One staged file, served to a provider that fetches it with no identity of its own. The token binds that one staged ref and expires within a minute by default; the action that staged the file deletes it as soon as the provider call returns, after which this answers `fetch_file_gone`. |
+| `provider_fetch_download` | GET | `object_ref`, `download_token` | One staged file, served to a provider that fetches it with no identity of its own. The token binds that one staged ref and the media type the staging action measured, and expires within a minute by default. The route serves exactly that type with `X-Content-Type-Options: nosniff`, never one derived from the staged name; a type outside PNG, JPEG, GIF, WebP and PDF, or a token without one, is served as an attachment. The action that staged the file deletes it as soon as the provider call returns, after which this answers `fetch_file_gone`. |
 | `integration_file_download` | GET | `object_ref`, `download_token` | Complete Mail message JSON, raw Mail attachment/Slack file bytes, a Sheets/Docs JSON snapshot, or a portable Google Docs export with `Content-Disposition` and `private, no-store`. |
 | `conv_file_download` | GET | `object_ref`, `download_token` | Raw conversation artifact bytes under token-bound user/conversation scope. |
 

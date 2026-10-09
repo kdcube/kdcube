@@ -2119,10 +2119,33 @@ async def test_a_staged_file_is_served_to_google_and_then_removed(tmp_path) -> N
     call = [row for row in fake.calls if row["operation"] == "embed_image"][0]
     assert call["payload"]["image_uri"] == "https://example.invalid/d/x"
     assert "file_ref" not in call["payload"]
-    assert minted[0]["staged_ref"] == staged_ref
-    # Google fetched it inside that call, so the copy is gone.
-    staged_id, filename = parse_staged_ref(staged_ref)
-    assert not (root / staged_id / filename).exists()
+    # Google is served a copy named after the measured format and signed for it.
+    served_ref = minted[0]["staged_ref"]
+    assert parse_staged_ref(served_ref)[1] == "image.png"
+    assert minted[0]["media_type"] == "image/png"
+    # Google fetched it inside that call, so the source and the copy are gone.
+    for ref in (staged_ref, served_ref):
+        staged_id, filename = parse_staged_ref(ref)
+        assert not (root / staged_id / filename).exists()
+
+
+@pytest.mark.anyio
+async def test_a_staged_name_never_decides_the_served_type(tmp_path) -> None:
+    from kdcube_ai_app.apps.chat.sdk.integrations.file_staging import parse_staged_ref
+
+    # Bytes after a PNG's end do not stop it from measuring as a PNG, so a name
+    # ending in .html must not reach the public route as the served name.
+    fake = _FakeDocs()
+    root, staged_ref = _staged(
+        tmp_path, _png_bytes() + b"<html><script>1</script></html>", filename="page.html"
+    )
+    provider, minted = _hosting_provider(fake, root)
+
+    response = await provider.dispatch(_ctx(), _embed_request(file_ref=staged_ref))
+
+    assert response.ok is True
+    assert minted[0]["media_type"] == "image/png"
+    assert parse_staged_ref(minted[0]["staged_ref"])[1] == "image.png"
 
 
 @pytest.mark.anyio

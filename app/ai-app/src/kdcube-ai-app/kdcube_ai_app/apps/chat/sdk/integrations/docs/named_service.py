@@ -1794,6 +1794,7 @@ def _document_object(
 
 # Google fetches an inserted image itself and accepts only these.
 DOCS_IMAGE_MEDIA_TYPES = {"image/png", "image/jpeg", "image/gif"}
+DOCS_IMAGE_EXTENSIONS = {"image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif"}
 MAX_DOCS_IMAGE_BYTES = 25 * 1024 * 1024
 MAX_DOCS_IMAGE_PIXELS = 2000
 
@@ -2523,11 +2524,11 @@ class DocsNamedServiceProvider(NamedServiceProvider):
                 status=409,
             )
 
-        owned = False
+        source_staged_ref = ""
         if file_ref.startswith(STAGED_REF_PREFIX):
-            staged_ref = file_ref
+            source_staged_ref = file_ref
             try:
-                filename, data = load_staged(root, staged_ref)
+                filename, data = load_staged(root, file_ref)
             except (FileNotFoundError, ValueError) as exc:
                 return None, _image_refusal(
                     request,
@@ -2541,8 +2542,6 @@ class DocsNamedServiceProvider(NamedServiceProvider):
             if error is not None:
                 return None, error
             filename, data = resolved
-            staged_ref = new_staged_ref(filename)
-            owned = True
 
         measured = validate_image_bytes(data)
         media_type = _text(measured.get("media_type")) or _mime_for_image(measured)
@@ -2578,26 +2577,33 @@ class DocsNamedServiceProvider(NamedServiceProvider):
                 details={"file_ref": file_ref, "width": width, "height": height},
             )
 
-        if owned:
-            try:
-                save_staged(root, staged_ref, data)
-            except ValueError as exc:
-                return None, _image_refusal(
-                    request,
-                    code="docs_image_too_large",
-                    message=str(exc),
-                    details={"file_ref": file_ref},
-                )
+        # The served copy is named after the format the bytes were measured
+        # as, never after the caller's filename, and the fetch URL is signed
+        # for that media type.
+        staged_ref = new_staged_ref("image" + DOCS_IMAGE_EXTENSIONS[media_type])
+        try:
+            save_staged(root, staged_ref, data)
+        except ValueError as exc:
+            return None, _image_refusal(
+                request,
+                code="docs_image_too_large",
+                message=str(exc),
+                details={"file_ref": file_ref},
+            )
 
         def _cleanup() -> None:
-            try:
-                delete_staged(root, staged_ref)
-            except Exception:
-                LOGGER.warning("docs staged image not removed: %s", staged_ref)
+            for ref in (staged_ref, source_staged_ref):
+                if not ref:
+                    continue
+                try:
+                    delete_staged(root, ref)
+                except Exception:
+                    LOGGER.warning("docs staged image not removed: %s", ref)
 
         try:
             minted = self._provider_fetch_url_factory(
-                ctx, {"staged_ref": staged_ref, "filename": filename}
+                ctx,
+                {"staged_ref": staged_ref, "filename": filename, "media_type": media_type},
             )
             if hasattr(minted, "__await__"):
                 minted = await minted

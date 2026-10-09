@@ -63,8 +63,12 @@ def mint_file_download_token(
     ttl_seconds: int = DEFAULT_TTL_SECONDS,
     now: int | None = None,
     include_identity: bool = True,
+    media_type: str = "",
 ) -> tuple[str, int]:
     """Mint a signed download token bound to a single artifact + requester.
+
+    ``media_type`` signs the type the route must serve the bytes as, for a
+    caller that measured them; the route then never derives it from a name.
 
     ``include_identity=False`` leaves tenant, project, user and conversation
     out of the payload. Use it for a URL handed to a third party that records
@@ -89,6 +93,8 @@ def mint_file_download_token(
         "fi_ref": str(fi_ref or "").strip(),
         "exp": expires_at,
     }
+    if str(media_type or "").strip():
+        payload["media_type"] = str(media_type).strip().lower()
     if include_identity:
         payload.update(
             {
