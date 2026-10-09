@@ -54,13 +54,26 @@ def test_absent_runtime_projects_the_default_namespaces_and_marks_them_defaulted
     assert values["KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY"] == ""
 
 
-def test_a_declared_runtime_wins_whole(tmp_path):
+def test_declared_namespaces_and_policies_win(tmp_path):
     declared = {"secrets": {"provider": "secrets-service", "runtime": {
         "root": str(tmp_path / "custody"), "namespaces": ["custody"],
         "scope_policy": {"schema": POLICY_SCHEMA, "read": {"a" * 64: ["custody"]}, "write": {"b" * 64: ["custody"]}}}}}
     values = compose_environment(config_from_assembly(declared))
     assert json.loads(values["KDCUBE_SECRETS_RUNTIME_NAMESPACES"]) == ["custody"]
     assert values["KDCUBE_SECRETS_RUNTIME_DEFAULTED"] == ""
+    # Declared namespaces without a policy stay closed: no default grant.
+    no_policy = compose_environment(config_from_assembly({"secrets": {"runtime": {"namespaces": ["custody"]}}}))
+    assert no_policy["KDCUBE_SECRETS_RUNTIME_DEFAULTED"] == ""
+    # Defaulted namespaces with a declared policy: the declared policy is projected, no default grant.
+    with_policy = compose_environment(config_from_assembly({"secrets": {"runtime": {"scope_policy": {
+        "schema": POLICY_SCHEMA, "read": {"c" * 64: ["login-attempts"]}, "write": {}}}}}))
+    assert json.loads(with_policy["KDCUBE_SECRETS_RUNTIME_NAMESPACES"]) == list(DEFAULT_RUNTIME_NAMESPACES)
+    assert with_policy["KDCUBE_SECRETS_RUNTIME_DEFAULTED"] == ""
+    assert json.loads(with_policy["KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY"])["read"] == {"c" * 64: ["login-attempts"]}
+    # Root-only: the defaults and the per-run grant, like an absent section.
+    root_only = compose_environment(config_from_assembly({"secrets": {"runtime": {"root": "/config/secrets"}}}))
+    assert json.loads(root_only["KDCUBE_SECRETS_RUNTIME_NAMESPACES"]) == list(DEFAULT_RUNTIME_NAMESPACES)
+    assert root_only["KDCUBE_SECRETS_RUNTIME_DEFAULTED"] == "1"
     explicit_empty = compose_environment(config_from_assembly({"secrets": {"runtime": {"namespaces": []}}}))
     assert explicit_empty["KDCUBE_SECRETS_RUNTIME_NAMESPACES"] == "[]"
     assert explicit_empty["KDCUBE_SECRETS_RUNTIME_DEFAULTED"] == ""
