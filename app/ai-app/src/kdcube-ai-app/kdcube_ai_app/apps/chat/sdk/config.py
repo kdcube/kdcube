@@ -1387,6 +1387,7 @@ class Settings(PLATFORM_CONFIG):
                 BUNDLE_STORAGE_ROOT=self._resolve_str("BUNDLE_STORAGE_ROOT", f"{bundles_p}.bundle_storage_root"),
                 BUNDLES_DESCRIPTOR_PROVIDER=self._resolve_str("BUNDLES_DESCRIPTOR_PROVIDER", f"{bundles_p}.descriptor_provider"),
                 BUNDLES_INCLUDE_EXAMPLES=self._resolve_bool("BUNDLES_INCLUDE_EXAMPLES", f"{bundles_p}.bundles_include_examples", True),
+                ALLOWED_BUNDLE_IDS=self._assembly_bundle_allowlist(f"{bundles_p}.allowed_bundle_ids"),
                 BUNDLE_CLEANUP_ENABLED=self._resolve_bool("BUNDLE_CLEANUP_ENABLED", f"{bundles_p}.bundle_cleanup_enabled", True),
                 BUNDLE_CLEANUP_INTERVAL_SECONDS=self._resolve_int("BUNDLE_CLEANUP_INTERVAL_SECONDS", f"{bundles_p}.bundle_cleanup_interval_seconds", 3600),
                 BUNDLE_CLEANUP_LOCK_TTL_SECONDS=self._resolve_int("BUNDLE_CLEANUP_LOCK_TTL_SECONDS", f"{bundles_p}.bundle_cleanup_lock_ttl_seconds", 900),

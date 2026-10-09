@@ -460,6 +460,24 @@ def _share_example_bundle(bundle_root: Path) -> Path | None:
 def _examples_enabled() -> bool:
     return bool(get_settings().PLATFORM.APPLICATIONS.BUNDLES_INCLUDE_EXAMPLES)
 
+
+def _allowed_bundle_ids() -> Set[str] | None:
+    value = getattr(get_settings().PLATFORM.APPLICATIONS, "ALLOWED_BUNDLE_IDS", None)
+    if value is None:
+        return None
+    return set(value) | {ADMIN_BUNDLE_ID}
+
+
+def _bundle_allowed(bundle_id: str) -> bool:
+    allowed = _allowed_bundle_ids()
+    return allowed is None or bundle_id in allowed
+
+
+def _require_allowed_bundles(bundle_ids) -> None:
+    denied = sorted(bid for bid in bundle_ids if not _bundle_allowed(bid))
+    if denied:
+        raise ValueError(f"Applications excluded by assembly allowed_bundle_ids: {', '.join(denied)}")
+
 # Example entrypoints live in the immutable image; memoize the ast.parse-based
 # BUNDLE_ID discovery per process (it previously ran per registry read).
 _DECLARED_EXAMPLE_ID_CACHE: Dict[str, Optional[str]] = {}
@@ -511,6 +529,10 @@ def _load_example_bundles() -> Dict[str, "BundleEntry"]:
             continue
         if not (item / "entrypoint.py").exists():
             continue
+        # Filter before copying or importing: excluded apps never activate.
+        declared_id = _declared_example_bundle_id(item) or item.name
+        if not _bundle_allowed(declared_id):
+            continue
         bundle_path = _ensure_example_bundle_shared(item)
         try:
             from kdcube_ai_app.infra.plugin.bundle_loader import get_declared_bundle_id
@@ -541,7 +563,10 @@ def _discover_example_bundle_ids(*, respect_enabled: bool = True) -> Set[str]:
             continue
         if not (item / "entrypoint.py").exists():
             continue
-        ids.update(_example_bundle_id_candidates(item))
+        candidates = _example_bundle_id_candidates(item)
+        if respect_enabled:
+            candidates = {bid for bid in candidates if _bundle_allowed(bid)}
+        ids.update(candidates)
     return ids
 
 def _reserved_bundle_ids() -> Set[str]:
@@ -567,27 +592,25 @@ def _drop_disabled_example_bundle_entries(
     props_map: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
     props_map = dict(props_map or {})
-    if _examples_enabled():
+    if _examples_enabled() and _allowed_bundle_ids() is None:
         return bundles_dict, props_map
-    example_ids = _discover_example_bundle_ids(respect_enabled=False)
-    if not example_ids:
-        return bundles_dict, props_map
+    example_ids = set() if _examples_enabled() else _discover_example_bundle_ids(respect_enabled=False)
     filtered = {
         bid: value
         for bid, value in (bundles_dict or {}).items()
-        if str(bid or "").strip() not in example_ids
+        if (str(bid or "").strip() not in example_ids or bool(value.get("repo"))) and _bundle_allowed(bid)
     }
     filtered_props = {
         bid: value
         for bid, value in props_map.items()
-        if str(bid or "").strip() not in example_ids
+        if bid in filtered
     }
     return filtered, filtered_props
 
 def _reserved_bundle_entry(bid: str) -> Optional["BundleEntry"]:
     if bid == ADMIN_BUNDLE_ID:
         return _admin_bundle_entry()
-    if not _examples_enabled() or not _is_example_bundle_id(bid):
+    if not _bundle_allowed(bid) or not _examples_enabled() or not _is_example_bundle_id(bid):
         return None
     root = _examples_root()
     if not root.exists():
@@ -883,10 +906,14 @@ def _entries_equivalent(a: "BundleEntry", b: "BundleEntry") -> bool:
     )
 
 def _merge_example_bundles(reg: "BundlesRegistry") -> tuple["BundlesRegistry", bool]:
+    filtered = {bid: entry for bid, entry in reg.bundles.items() if _bundle_allowed(bid)}
+    removed = len(filtered) != len(reg.bundles)
+    if removed:
+        reg = BundlesRegistry(default_bundle_id=reg.default_bundle_id, bundles=filtered)
     examples = _load_example_bundles()
     if not examples:
-        return reg, False
-    updated = False
+        return reg, removed
+    updated = removed
     merged = BundlesRegistry(
         default_bundle_id=reg.default_bundle_id,
         bundles=dict(reg.bundles),
@@ -914,6 +941,11 @@ def _merge_example_bundles(reg: "BundlesRegistry") -> tuple["BundlesRegistry", b
 
 
 def _ensure_admin_bundle(reg: "BundlesRegistry") -> "BundlesRegistry":
+    if any(not _bundle_allowed(bid) for bid in reg.bundles):
+        reg = BundlesRegistry(
+            default_bundle_id=reg.default_bundle_id,
+            bundles={bid: entry for bid, entry in reg.bundles.items() if _bundle_allowed(bid)},
+        )
     if ADMIN_BUNDLE_ID not in reg.bundles:
         reg = BundlesRegistry(
             default_bundle_id=reg.default_bundle_id,
@@ -1511,7 +1543,11 @@ class _FileBundleDescriptorStore:
             bundle_id = str(item.get("id") or "").strip()
             if not bundle_id:
                 continue
-            if not _examples_enabled() and _is_example_bundle_id(bundle_id):
+            if not _bundle_allowed(bundle_id):
+                continue
+            # Disabling image examples leaves explicit external Git sources
+            # available, including apps that retain a migrated example's ID.
+            if not _examples_enabled() and _is_example_bundle_id(bundle_id) and not item.get("repo"):
                 continue
             try:
                 entry, props = self._bundle_item_entry_and_props(bundle_id, item)
@@ -2155,6 +2191,7 @@ async def save_registry(
     props_map: Optional[Dict[str, Dict[str, Any]]] = None,
     replace: bool = False,
 ) -> None:
+    _require_allowed_bundles(reg.bundles)
     key = redis_key(tenant, project)
     reg = _ensure_admin_bundle(reg)
     t, p = tenant, project
@@ -2640,6 +2677,7 @@ def apply_update(
     """
     if op not in ("replace", "merge"):
         raise ValueError("Invalid op; use 'replace' or 'merge'")
+    _require_allowed_bundles(bundles_patch or {})
 
     if op == "replace":
         new_map = {bid: _to_entry(bid, v) for bid, v in (bundles_patch or {}).items()}

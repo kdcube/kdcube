@@ -88,6 +88,8 @@ def _normalize(d: Dict[str, Any]) -> Dict[str, Any]:
     d["id"] = d.get("id") or d.get("key") or d.get("name")
     if not d.get("id"):
         raise ValueError("BundleSpec missing 'id'")
+    from kdcube_ai_app.infra.plugin.bundle_store import _require_allowed_bundles
+    _require_allowed_bundles([d["id"]])
     unsupported_keys = {"git_url", "git_ref", "git_subdir", "git_repo"}
     if any(k in d for k in unsupported_keys):
         raise ValueError("Use repo/ref/subdir only; git_* keys are not supported.")
@@ -533,6 +535,9 @@ def resolve_bundle(bundle_id: Optional[str], override: Optional[Dict[str, Any]] 
         bid = bundle_id or _DEFAULT_ID
         if not bid or bid not in _REGISTRY:
             return None
+        from kdcube_ai_app.infra.plugin.bundle_store import _bundle_allowed
+        if not _bundle_allowed(bid):
+            return None
         spec_dict = dict(_REGISTRY[bid])
 
     # Git bundle resolution is a controlled operation performed during registry
@@ -695,7 +700,7 @@ async def load_persisted_registry_from_runtime_ctx(
             return None
 
         try:
-            from kdcube_ai_app.infra.plugin.bundle_store import BundlesRegistry, redis_key
+            from kdcube_ai_app.infra.plugin.bundle_store import BundlesRegistry, redis_key, _ensure_admin_bundle
 
             raw = await redis_client.get(redis_key(tenant, project))
             if raw:
@@ -703,7 +708,7 @@ async def load_persisted_registry_from_runtime_ctx(
                     raw = raw.decode("utf-8")
                 reg = BundlesRegistry.model_validate_json(raw)
                 if reg and reg.bundles:
-                    return reg
+                    return _ensure_admin_bundle(reg)
         except Exception as e:
             logger.warning(
                 "Failed to read cached bundle registry snapshot "

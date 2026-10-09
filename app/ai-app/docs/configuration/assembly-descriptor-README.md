@@ -4,7 +4,7 @@ title: "Platform Assembly Descriptor"
 summary: "Platform-level non-secret deployment configuration in assembly.yaml: tenant/project identity, auth, models, services, ports, storage backends, local runtime paths, and frontend/runtime wiring."
 tags: ["service", "configuration", "platform", "deployment", "assembly", "descriptor"]
 keywords: ["platform deployment identity", "tenant and project scope", "auth and cognito settings", "service port layout", "storage and workspace backends", "runtime path wiring", "application preparation concurrency", "application preparation retry", "bundle descriptor provider", "frontend build metadata", "local compose topology", "aws deployment mapping"]
-updated_at: 2026-09-23
+updated_at: 2026-10-09
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/descriptors-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/service-runtime-configuration-mapping-README.md
@@ -28,10 +28,11 @@ It defines:
 - storage and runtime backends
 - local host-path topology for CLI compose and direct local debugging
 - frontend build/image metadata for custom UI compose runs
+- the allowed application IDs for a dedicated deployment
 
 It does not define:
 
-- bundle inventory
+- app sources and properties, declared in `bundles.yaml`
 - bundle secrets
 - global secrets
 - gateway throttling and route guards
@@ -696,6 +697,50 @@ bundle props (`config.execution.runtime` or legacy `config.exec_runtime`). The
 override is applied only to that bundle run.
 
 ### `platform.services.proc.bundles`
+
+#### Dedicated application inventory
+
+An operator can restrict a deployment to its selected applications with
+`platform.services.<component>.bundles.allowed_bundle_ids`. Configure the same
+list for `proc` and `ingress`, so each component applies the same inventory:
+
+```yaml
+platform:
+  services:
+    proc:
+      bundles:
+        allowed_bundle_ids: [my-product@1-0, kdcube-services@1-0]
+        bundles_include_examples: true
+    ingress:
+      bundles:
+        allowed_bundle_ids: [my-product@1-0, kdcube-services@1-0]
+        bundles_include_examples: true
+```
+
+`my-product@1-0` is an illustrative operator-selected app ID. The field is
+descriptor-only. Omission or `null` preserves the existing inventory policy;
+an empty list permits only the internal `kdcube.admin` implementation used by
+platform administration. List entries must be distinct, non-empty app IDs.
+The internal administration implementation is always retained independently
+of the operator-selected app inventory.
+
+The restriction applies before built-in examples are copied or imported, on
+file/provider/Redis registry reads, on startup reseeding and authority reload,
+and on cached/override resolution. Registry merge/replace and direct saves
+refuse excluded IDs. A stale Redis snapshot cannot restore an excluded app.
+This is deployment inventory selection; each allowed app's surface permission
+and service dependency contracts continue to apply.
+
+`bundles_include_examples: true` lets an allowed built-in such as KDCube
+services load from the pinned platform image. Setting it to `false` removes
+image-owned examples. An explicit Git source in `bundles.yaml` continues to
+load even when its app ID matches a former built-in example, provided the
+allowlist permits it. This supports migrating an app to an independently
+maintained repository while disabling automatic examples. See the external
+[KDCube services deployment guide](https://github.com/elenaviter/app-ecosystem/blob/main/products/kdcube/apps/kdcube-services%401-0/README.md#deployment).
+The ordinary `bundles.yaml` descriptor still supplies app sources, properties
+and default selection. If that default is excluded or missing, the existing
+internal administration fallback applies.
 
 `platform.services.proc.bundles` owns proc runtime bundle behavior that is not
 part of the bundle inventory itself. Bundle inventory stays in `bundles.yaml`.

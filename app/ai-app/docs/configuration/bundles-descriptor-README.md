@@ -22,6 +22,9 @@ see_also:
 ---
 # Bundles Descriptor
 
+For a dedicated deployment's permitted app IDs, including selected built-ins,
+see [the assembly application inventory policy](assembly-descriptor-README.md#dedicated-application-inventory).
+
 `bundles.yaml` defines:
 
 - which bundles exist

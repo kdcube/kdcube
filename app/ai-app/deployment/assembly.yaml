@@ -510,6 +510,7 @@ platform:
         managed_bundles_root: "/managed-bundles"      # MANAGED_BUNDLES_ROOT; proc runtime path for platform-managed git/example bundles. Direct host-run should also set paths.host_managed_bundles_path or HOST_MANAGED_BUNDLES_PATH.
         bundle_storage_root: ""                       # BUNDLE_STORAGE_ROOT; proc runtime path for bundle-owned storage/UI/cache. CLI compose normally uses /bundle-storage; direct host-run descriptors should use file:///host/path.
         bundles_include_examples: true                # BUNDLES_INCLUDE_EXAMPLES
+        allowed_bundle_ids: null                      # null = existing inventory; list = permitted apps, including selected built-ins
         bundle_cleanup_enabled: true                  # BUNDLE_CLEANUP_ENABLED
         bundle_cleanup_interval_seconds: 3600         # BUNDLE_CLEANUP_INTERVAL_SECONDS
         bundle_cleanup_lock_ttl_seconds: 900          # BUNDLE_CLEANUP_LOCK_TTL_SECONDS
