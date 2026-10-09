@@ -73,9 +73,11 @@ def adopt_root_owned_entries(root: Optional[str] = None, owner: Optional[str] = 
             info = os.lstat(path)
         except OSError:
             continue
-        if info.st_dev != device or info.st_uid != 0 or not (
-                stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
-            continue
+        mode = stat.S_IMODE(info.st_mode)
+        private = ((stat.S_ISDIR(info.st_mode) and mode == 0o700)
+                   or (stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and mode in (0o600, 0o400)))
+        if info.st_dev != device or info.st_uid != 0 or not private:
+            continue  # only private, single-link, root-owned entries; anything else stays for the app to refuse
         try:
             os.chown(path, int(owner), -1, follow_symlinks=False)
             changed += 1

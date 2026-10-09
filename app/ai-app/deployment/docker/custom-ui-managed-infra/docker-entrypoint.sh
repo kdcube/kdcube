@@ -72,7 +72,9 @@ case "$SECRETS_ROOT" in
 esac
 if [ "$SECRETS_ROOT_OK" = "1" ] && [ -d "$SECRETS_ROOT" ] && [ ! -L "$SECRETS_ROOT" ] \
         && [ "$(readlink -f "$SECRETS_ROOT")" = "$SECRETS_ROOT" ]; then
-    find "$SECRETS_ROOT" -xdev -uid 0 ! -type l \( -type d -o -type f \) -exec chown "$SECRETS_OWNER_UID" {} + 2>/dev/null || true
+    # Only private, single-link, root-owned entries: 0700 folders, 0600 records and 0400 tombstones.
+    find "$SECRETS_ROOT" -xdev -uid 0 \( \( -type d -perm 0700 \) -o \( -type f -links 1 \( -perm 0600 -o -perm 0400 \) \) \) \
+        -exec chown "$SECRETS_OWNER_UID" {} + 2>/dev/null || true
 fi
 
 # Ensure appuser can create managed bundle cache entries without recursively

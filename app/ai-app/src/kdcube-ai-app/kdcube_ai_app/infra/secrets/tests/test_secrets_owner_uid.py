@@ -200,8 +200,12 @@ def test_kdcube_secrets_startup_reowns_only_root_owned_entries(tmp_path, monkeyp
     spec.loader.exec_module(entry)
     root = tmp_path / "secrets"
     (root / HUB).mkdir(parents=True)
+    for folder in (root, root / HUB):
+        folder.chmod(0o700)
     (root / HUB / "root.json").write_text("{}")
     (root / HUB / "foreign.json").write_text("{}")
+    for name in ("root.json", "foreign.json"):
+        (root / HUB / name).chmod(0o600)
     os.symlink(root / HUB / "root.json", root / HUB / "link.json")
     real_lstat, chowned = os.lstat, []
 
