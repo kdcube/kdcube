@@ -367,18 +367,53 @@ def test_the_consent_time_grantor_ceiling_only_denies(monkeypatch):
     assert not _entered(_admin_session(monkeypatch, redis, grantor_roles=("kdcube:role:registered",)))
 
 
-def test_a_card_that_stops_selecting_a_role_falls_back_to_the_consent_time_grantor_roles(monkeypatch):
-    """PINNED, NOT ENDORSED (W653 finding 2, for Main/Root): delegated_roles.delegated_role_projection's contract,
-    "Use Card-selected roles when present; otherwise preserve legacy roles", projects the grantor's consent-time
-    roles for endpoint checks once a live Card selects no platform role, with the actor kept external. This test
-    records today's behaviour on one session; changing it is a contract decision, not part of this fix."""
+def test_a_card_that_stops_selecting_admin_leaves_the_same_session_unprivileged(monkeypatch):
+    """Main's RETURN on 90284db3: once a live Card stops selecting the admin role, the consent-time grantor
+    roles/permissions must not keep the session privileged. Before: privileged by the Card's own selection.
+    After: no privileged role or consent permission, so the platform session (authentication_surface's
+    _roles_user_type) is not PRIVILEGED and the admin entrance refuses the same session."""
+    from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.authentication_surface import _roles_user_type
+    from kdcube_ai_app.auth.sessions import UserType
+
     redis = _Redis()
     _put(redis, _live_card(resource_grants={GUARD_RESOURCE: (ADMIN, "records:read")}))
     record = {**_stored(), "grantor_authority": {"grantor_roles": [ADMIN], "grantor_permissions": ["kdcube:*"]}}
     client = _session(monkeypatch, redis, record)
     before = _projection(client)["projection"]
-    assert (before["roles"], before["user_type"], before["delegated_roles_selected"]) == ([ADMIN], "privileged", True)
+    assert before["roles"] == [ADMIN] and _roles_user_type(before["roles"]) == UserType.PRIVILEGED
+
     _put(redis, _live_card(resource_grants={GUARD_RESOURCE: ("records:read",)}))  # the Card drops the role
     after = _projection(client)["projection"]
-    assert (after["roles"], after["permissions"], after["user_type"], after["delegated_roles_selected"]) == (
-        [ADMIN], ["kdcube:*"], "external", False)
+    assert ADMIN not in after["roles"] and "kdcube:*" not in after["permissions"]
+    assert _roles_user_type(after["roles"]) != UserType.PRIVILEGED
+    assert after["delegated_roles_selected"] is False
+
+
+def test_the_same_session_is_refused_at_the_admin_entrance_once_its_card_drops_admin(monkeypatch):
+    redis = _Redis()
+    _store_live_card(redis, _admin_card(grants=(ADMIN, "records:read")))
+    client = _admin_session(monkeypatch, redis)
+    assert _entered(client)
+    _store_live_card(redis, _admin_card(grants=("records:read",)))
+    assert not _entered(client)
+
+
+def test_a_legacy_record_keeps_the_grantors_consent_roles(monkeypatch):
+    """No registry pointer: the stored record is the authority, as before (legacy compatibility)."""
+    redis = _Redis()
+    legacy = {"operations": ["records_export"], "credential": _authority(),
+              "grantor_authority": {"grantor_roles": [ADMIN], "grantor_permissions": ["kdcube:*"]}}
+    client = _session(monkeypatch, redis, legacy)
+    projection = _projection(client)["projection"]
+    assert projection["roles"] == [ADMIN] and projection["permissions"] == ["kdcube:*"]
+
+
+def test_a_live_card_without_a_role_keeps_the_grantors_non_privileged_tier(monkeypatch):
+    """The legacy tier contract for live Cards (test_delegated_bearer_slice_projects_card_principal_and_grantor_role)
+    is kept: a paid grantor's unselected Card still projects the paid role."""
+    redis = _Redis()
+    _put(redis, _live_card())
+    record = {**_stored(), "grantor_authority": {"grantor_roles": ["kdcube:role:paid"],
+                                                 "grantor_permissions": ["records:read"]}}
+    client = _session(monkeypatch, redis, record)
+    assert _projection(client)["projection"]["roles"] == ["kdcube:role:paid"]

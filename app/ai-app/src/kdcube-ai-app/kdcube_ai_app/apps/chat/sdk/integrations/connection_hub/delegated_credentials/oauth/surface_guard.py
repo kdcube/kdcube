@@ -95,6 +95,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.named_service_admis
     store_managed_named_service_admission_snapshot,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_roles import (
+    PRIVILEGED_ROLES,
     delegated_role_projection,
 )
 from kdcube_ai_app.apps.chat.sdk.application_operations import (
@@ -877,11 +878,29 @@ def _delegated_runtime_projection(
                 "resource_operations": resource_operations,
             }
         )
-    fallback_roles = (
+    # The grantor's consent-time roles/permissions, as the economics projection
+    # carries them (resolver: from grantor_authority) or directly.
+    consent_roles = (
         _as_list(identity_authority.get("roles"))
         or _as_list(grantor_authority.get("grantor_roles"))
-        or _as_list(user.get("roles"))
     )
+    consent_permissions = (
+        _as_list(identity_authority.get("permissions"))
+        or _as_list(grantor_authority.get("grantor_permissions"))
+    )
+    privileged_consent = tuple(
+        role for role in consent_roles
+        if authority_has_platform_privilege((role,)) or role in PRIVILEGED_ROLES
+    )
+    if privileged_consent and str(grant_record.get("registry_access_id") or "").strip():
+        # A live Card is the authority (W653). A Card that selects no role keeps
+        # the grantor's consent-time tier and permissions for endpoint checks
+        # (legacy), but a privileged consent is not carried: privilege must be
+        # selected on the Card as it is now, so neither the privileged roles nor
+        # the permissions of the admin edge they selected at consent project.
+        consent_roles = tuple(role for role in consent_roles if role not in privileged_consent)
+        consent_permissions = ()
+    fallback_roles = consent_roles or _as_list(user.get("roles"))
     role_projection = delegated_role_projection(
         grants,
         fallback_roles=fallback_roles,
@@ -894,8 +913,7 @@ def _delegated_runtime_projection(
         permissions = tuple(grants)
     else:
         permissions = (
-            _as_list(identity_authority.get("permissions"))
-            or _as_list(grantor_authority.get("grantor_permissions"))
+            consent_permissions
             or _as_list(user.get("permissions"))
             or tuple(grants)
         )
