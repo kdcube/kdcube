@@ -282,3 +282,19 @@ async def test_values_never_reach_logs(tmp_path, caplog):
     await manager.migrate_user_secrets()
     await manager.get_secret(_key(key="k"))
     assert "synthetic-never-logged" not in caplog.text
+
+
+def test_the_host_command_migrates_a_config_folder_and_prints_counts_only(tmp_path, capsys):
+    from kdcube_ai_app.infra.secrets.user_secret_files import main
+
+    _yaml_with_users(tmp_path, SOURCE)
+    config = str(tmp_path / "config")
+    assert main(["migrate", "--config-dir", config, "--dry-run"]) == 0
+    dry = json.loads(capsys.readouterr().out)
+    assert dry["would_write"] == 4 and dry["written"] == 0 and dry["root"] == str(_root(tmp_path).resolve())
+    assert main(["migrate", "--config-dir", config]) == 0
+    output = capsys.readouterr().out
+    assert json.loads(output)["written"] == 4 and "synthetic-" not in output
+    assert (_root(tmp_path) / HUB / "users" / "user-1" / "other.json").exists()
+    assert main(["migrate", "--config-dir", str(tmp_path / "missing")]) == 1
+    assert json.loads(capsys.readouterr().out)["reason"] == "global_secrets_yaml_not_found"

@@ -232,17 +232,51 @@ class UserSecretFileStore:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """``python -m kdcube_ai_app.infra.secrets.user_secret_files migrate [--dry-run]``: counts only, no values."""
+    """Move per-user secrets out of the descriptor yaml (counts only, never a value).
+
+    On the host, with kdcube stopped and a backup taken::
+
+        python -m kdcube_ai_app.infra.secrets.user_secret_files migrate --config-dir <workdir>/config --dry-run
+        python -m kdcube_ai_app.infra.secrets.user_secret_files migrate --config-dir <workdir>/config
+
+    ``--config-dir`` selects ``<dir>/secrets.yaml`` (and ``<dir>/bundles.secrets.yaml`` when present) and
+    the default root ``<dir>/secrets``; ``--global-secrets-yaml`` / ``--bundle-secrets-yaml`` /
+    ``--runtime-root`` override them. With no path option, the deployment's configured manager is used.
+    """
     import argparse
     import asyncio
 
-    from kdcube_ai_app.infra.secrets.manager import SecretsFileSecretsManager, get_secrets_manager
+    from kdcube_ai_app.infra.secrets.manager import (
+        SecretsFileSecretsManager, SecretsManagerConfig, get_secrets_manager,
+    )
 
     parser = argparse.ArgumentParser(prog="user_secret_files")
     parser.add_argument("command", choices=["migrate"])
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--config-dir")
+    parser.add_argument("--global-secrets-yaml")
+    parser.add_argument("--bundle-secrets-yaml")
+    parser.add_argument("--runtime-root")
     arguments = parser.parse_args(argv)
-    manager = get_secrets_manager()
+    global_yaml, bundle_yaml = arguments.global_secrets_yaml, arguments.bundle_secrets_yaml
+    if arguments.config_dir:
+        config_dir = Path(arguments.config_dir).expanduser().resolve()
+        global_yaml = global_yaml or str(config_dir / "secrets.yaml")
+        if not bundle_yaml and (config_dir / "bundles.secrets.yaml").is_file():
+            bundle_yaml = str(config_dir / "bundles.secrets.yaml")
+    if global_yaml or bundle_yaml or arguments.runtime_root:
+        if not global_yaml or not Path(global_yaml).expanduser().is_file():
+            print(json.dumps({"status": "refused", "reason": "global_secrets_yaml_not_found"}))
+            return 1
+        manager = SecretsFileSecretsManager(SecretsManagerConfig(
+            provider="secrets-file", component="migration",
+            global_secrets_yaml=Path(global_yaml).expanduser().resolve().as_uri(),
+            bundle_secrets_yaml=Path(bundle_yaml).expanduser().resolve().as_uri() if bundle_yaml else None,
+            runtime_secrets_root=(str(Path(arguments.runtime_root).expanduser().resolve())
+                                  if arguments.runtime_root else None),
+        ))
+    else:
+        manager = get_secrets_manager()
     if not isinstance(manager, SecretsFileSecretsManager):
         print(json.dumps({"status": "not_applicable", "provider": manager.provider_type}))
         return 2
@@ -251,7 +285,8 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:  # a finite reason only; never a value
         print(json.dumps({"status": "refused", "reason": str(exc)}))
         return 1
-    print(json.dumps({"status": "ok", "dry_run": arguments.dry_run, **counts}, sort_keys=True))
+    print(json.dumps({"status": "ok", "dry_run": arguments.dry_run, "root": manager._runtime_secrets_root,
+                      **counts}, sort_keys=True))
     return 0
 
 
