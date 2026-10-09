@@ -83,6 +83,7 @@ from connection_hub.delegated_credentials.oauth.metadata import (
     protected_resource_metadata_url,
 )
 from connection_hub.hub.resolver import (
+    IDENTITY_SCOPE_GRANTOR,
     delegated_primary_user_id,
     normalize_delegated_identity_scope,
     resolve_delegated_authority_projection,
@@ -676,9 +677,19 @@ async def _live_grant_record(request: Any, grant_record: Optional[Dict[str, Any]
         provider: {account_id: list(claims) for account_id, claims in accounts.items()}
         for provider, accounts in card.account_scope.items()
     }
+    # Whose identities' data the session reaches is Card authority too: it
+    # follows the card, and a card that names none gets the narrowest scope,
+    # never the (possibly wider) value stored at issuance (W653).
+    attrs["identity_scope"] = str(card.identity_scope or "").strip() or IDENTITY_SCOPE_GRANTOR
+    # The single issuance-time resource only synthesizes a grant map when none
+    # is carried; the card's map is always carried here, so drop it (W653).
+    attrs.pop("resource", None)
     credential["subject"] = card.delegate_subject
     credential["attrs"] = attrs
     resolved["credential"] = credential
+    # Every reader of the record sees the card's map, not the issuance-time one.
+    resolved["resource_grants"] = dict(attrs["resource_grants"])
+    resolved.pop("resource", None)
     resolved["registry_access_id"] = card.access_id
     resolved["client_id"] = card.client_id
     resolved["grantor_subject"] = card.grantor_subject
