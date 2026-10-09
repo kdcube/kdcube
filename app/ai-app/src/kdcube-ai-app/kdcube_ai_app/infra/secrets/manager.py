@@ -938,6 +938,37 @@ def _find_bundle_item(items: list[dict[str, Any]], bundle_id: str) -> dict[str, 
     return None
 
 
+def resolve_runtime_secrets_root(
+    runtime_secrets_root: str | None,
+    *,
+    global_secrets_yaml: str | None = None,
+    bundle_secrets_yaml: str | None = None,
+) -> str | None:
+    """The secrets-file root for runtime records and per-user secrets (W670).
+
+    An explicit ``secrets.runtime.root`` wins. Otherwise the root is ``<folder of the secrets yaml>/secrets``
+    (the global yaml first, then the bundle yaml), when that yaml is a local file. A remote or absent yaml
+    gives ``None``. The root itself is created and checked (0700, owner, no symlink) on use.
+    """
+    explicit = _first_non_empty(runtime_secrets_root)
+    if explicit:
+        return explicit
+    for uri in (global_secrets_yaml, bundle_secrets_yaml):
+        raw = _first_non_empty(uri)
+        if not raw:
+            continue
+        parsed = urlparse(raw)
+        if parsed.scheme not in {"", "file"}:
+            continue
+        path = local_file_uri_path(raw) if parsed.scheme == "file" else raw
+        return str(Path(path).expanduser().resolve().parent / "secrets")
+    return None
+
+
+def _is_user_secret_key(key: str) -> bool:
+    return key == USER_SECRET_INVENTORY_KEY or key.startswith("users.")
+
+
 class SecretsFileSecretsManager(ISecretsManager):
     provider_type = "secrets-file"
     _LOCK_TTL_SECONDS = 30
@@ -962,9 +993,14 @@ class SecretsFileSecretsManager(ISecretsManager):
         self._lock = threading.RLock()
         self._redis = None
 
-        # Runtime records are not descriptor values. The trusted host must
-        # supply a dedicated persistent root and authorize exact namespaces.
-        self._runtime_secrets_root = config.runtime_secrets_root
+        # Runtime records and per-user secrets are not descriptor values. They live
+        # under a dedicated persistent root: the configured one, else the default
+        # <folder of the secrets yaml>/secrets. Runtime namespaces stay exact grants.
+        self._runtime_secrets_root = resolve_runtime_secrets_root(
+            config.runtime_secrets_root,
+            global_secrets_yaml=self._global_uri,
+            bundle_secrets_yaml=self._bundle_uri,
+        )
         self._runtime_secret_namespaces = config.runtime_secret_namespaces
 
     def _load_current_data(self) -> dict[str, str]:
@@ -1038,6 +1074,8 @@ class SecretsFileSecretsManager(ISecretsManager):
 
     async def get_secret(self, key: str) -> Optional[str]:
         key = validate_secret_provider_key(key)
+        if _is_user_secret_key(key):
+            return await asyncio.to_thread(self._read_user_secret, key)
 
         def read_value() -> Optional[str]:
             with self._lock:
@@ -1047,6 +1085,42 @@ class SecretsFileSecretsManager(ISecretsManager):
 
     def can_write(self) -> bool:
         return True
+
+    def _user_store(self):
+        """Per-user secrets: <root>/<bundle>/users/<user>/<key>.json, never the descriptor yaml (W670)."""
+        from kdcube_ai_app.infra.secrets.user_secret_files import UserSecretFileStore
+
+        if not self._runtime_secrets_root:
+            raise SecretsManagerWriteError("user_secret_storage_unavailable")
+        runtime_root = Path(self._runtime_secrets_root).resolve()
+        for uri in (self._global_uri, self._bundle_uri):
+            parsed = urlparse(uri or "")
+            if parsed.scheme == "file" and runtime_root == Path(parsed.path).resolve().parent:
+                raise SecretsManagerWriteError("runtime_secret_storage_must_be_separate")
+        return UserSecretFileStore(root=self._runtime_secrets_root)
+
+    def _user_secret_call(self, operation: str, key: str, value: str | None = None):
+        from kdcube_ai_app.infra.secrets.user_secret_files import UserSecretFileError
+
+        try:
+            store = self._user_store()
+            if key == USER_SECRET_INVENTORY_KEY:
+                return store.list_keys()
+            user_id, bundle_id, tail = _split_user_secret_key(key)
+            if tail == "__keys":
+                return store.list_keys(user_id=user_id, bundle_id=bundle_id)
+            call = getattr(store, operation)
+            if operation == "set":
+                return call(user_id=user_id, bundle_id=bundle_id, key=tail, value=value)
+            return call(user_id=user_id, bundle_id=bundle_id, key=tail)
+        except UserSecretFileError as exc:
+            raise SecretsManagerWriteError(str(exc)) from None
+
+    def _read_user_secret(self, key: str) -> Optional[str]:
+        result = self._user_secret_call("get", key)
+        if isinstance(result, list):
+            return json.dumps(result, ensure_ascii=False) if result else None
+        return result
 
     async def set_secret(self, key: str, value: str) -> None:
         await self.set_many({key: value})
@@ -1160,6 +1234,18 @@ class SecretsFileSecretsManager(ISecretsManager):
             validate_secret_provider_key(key): value
             for key, value in values.items()
         }
+        user_values = {key: value for key, value in normalized_values.items()
+                       if _is_user_secret_key(key) and _secret_inventory_prefix(key) is None}
+        if user_values:
+            def write_user_values() -> None:
+                for key, value in user_values.items():
+                    self._user_secret_call("set", key, value)
+
+            await _run_blocking_critical_section(write_user_values)
+        normalized_values = {key: value for key, value in normalized_values.items()
+                             if not _is_user_secret_key(key)}
+        if not normalized_values:
+            return
         redis, token = await self._acquire_distributed_lock()
 
         def write_values() -> None:
@@ -1214,6 +1300,17 @@ class SecretsFileSecretsManager(ISecretsManager):
 
     async def delete_many(self, keys: Iterable[str]) -> None:
         key_list = [validate_secret_provider_key(key) for key in keys]
+        user_keys = [key for key in key_list
+                     if _is_user_secret_key(key) and _secret_inventory_prefix(key) is None]
+        if user_keys:
+            def delete_user_values() -> None:
+                for key in user_keys:
+                    self._user_secret_call("delete", key)
+
+            await _run_blocking_critical_section(delete_user_values)
+        key_list = [key for key in key_list if not _is_user_secret_key(key)]
+        if not key_list:
+            return
         redis, token = await self._acquire_distributed_lock()
 
         def delete_values() -> None:
@@ -1263,6 +1360,78 @@ class SecretsFileSecretsManager(ISecretsManager):
 
         try:
             await _run_blocking_critical_section(delete_values)
+        finally:
+            await self._release_distributed_lock(redis, token)
+
+
+    async def migrate_user_secrets(self, *, dry_run: bool = False) -> dict[str, int]:
+        """Move every users.* leaf from the global secrets yaml into the per-user folder (W670), once.
+
+        Idempotent and value-free: it returns counts only. Before any change it refuses a bundle-less user
+        leaf and a destination that already holds a different value. It then publishes each value
+        atomically, reads every one back, and only then removes the whole users subtree from the yaml in
+        one atomic write. A rerun after a crash at any step finds identical destinations and completes. The
+        host runs it with user-secret writers stopped and a backup taken.
+        """
+        if not self._global_uri:
+            return {"found": 0, "written": 0, "already_present": 0, "removed_from_yaml": 0}
+        redis, token = await self._acquire_distributed_lock()
+
+        def migrate() -> dict[str, int]:
+            with self._lock:
+                data = _load_yaml_mapping_from_storage(self._global_uri, missing_ok=True)
+                root = _global_descriptor_root(data)
+                leaves: dict[str, str] = {}
+                _flatten_mapping("users", root.get("users"), leaves)
+                parsed = {}
+                for key in leaves:
+                    user = _split_user_secret_key(key)
+                    if user is None or user[1] is None or user[2] == "__keys":
+                        raise SecretsManagerWriteError("user_secret_migration_bundle_less_source")
+                    parsed[key] = user
+                store = self._user_store()
+                written = present = 0
+                pending = {}
+                for key, (user_id, bundle_id, tail) in parsed.items():
+                    current = store.get(user_id=user_id, bundle_id=bundle_id, key=tail)
+                    if current is None:
+                        pending[key] = (user_id, bundle_id, tail)
+                    elif current == leaves[key]:
+                        present += 1
+                    else:
+                        raise SecretsManagerWriteError("user_secret_migration_destination_conflict")
+                counts = {"found": len(leaves), "written": 0, "already_present": present,
+                          "removed_from_yaml": 0}
+                if dry_run:
+                    counts["would_write"] = len(pending)
+                    return counts
+                for key, (user_id, bundle_id, tail) in pending.items():
+                    store.set(user_id=user_id, bundle_id=bundle_id, key=tail, value=leaves[key])
+                    written += 1
+                for key, (user_id, bundle_id, tail) in parsed.items():
+                    if store.get(user_id=user_id, bundle_id=bundle_id, key=tail) != leaves[key]:
+                        raise SecretsManagerWriteError("user_secret_migration_readback_mismatch")
+                counts["written"] = written
+                if "users" in root:
+                    root.pop("users")
+                    _write_yaml_mapping_to_storage(self._global_uri, data)
+                    if urlparse(self._global_uri).scheme in {"", "file"}:
+                        raw = self._global_uri
+                        path = local_file_uri_path(raw) if urlparse(raw).scheme == "file" else raw
+                        folder = os.open(Path(path).expanduser().resolve().parent, os.O_RDONLY | os.O_DIRECTORY)
+                        try:
+                            os.fsync(folder)
+                        finally:
+                            os.close(folder)
+                    counts["removed_from_yaml"] = len(leaves)
+                return counts
+
+        from kdcube_ai_app.infra.secrets.user_secret_files import UserSecretFileError
+
+        try:
+            return await _run_blocking_critical_section(migrate)
+        except UserSecretFileError as exc:
+            raise SecretsManagerWriteError(str(exc)) from None
         finally:
             await self._release_distributed_lock(redis, token)
 
