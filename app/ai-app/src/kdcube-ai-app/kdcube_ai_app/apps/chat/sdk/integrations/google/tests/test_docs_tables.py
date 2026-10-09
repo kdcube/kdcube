@@ -863,6 +863,53 @@ def test_a_document_keeps_its_last_tab() -> None:
     assert google.writes == []
 
 
+def test_the_only_top_level_tab_is_kept_even_when_it_has_nested_tabs() -> None:
+    # Google deletes the nested tabs with their parent, so deleting the only
+    # top-level tab would leave the document with no tab at all.
+    doc = document(("t.0", "Main", Body().paragraph("a")))
+    doc["tabs"][0]["childTabs"] = [
+        {
+            "tabProperties": {"tabId": "t.0.1", "title": "Sub", "index": 0},
+            "documentTab": {"body": Body().paragraph("c").as_body()},
+        }
+    ]
+    google = _Google(doc)
+    out = _run(
+        docs_proxy, "delete_tab", {"document_ref": "DOC1", "tab_id": "t.0"}, google
+    )
+
+    assert out["error"]["code"] == "docs_last_tab"
+    assert out["error"]["details"]["nested_tab_ids"] == ["t.0.1"]
+    assert google.writes == []
+
+
+def test_deleting_a_tab_reports_nested_tabs_at_every_depth() -> None:
+    doc = document(
+        ("t.0", "Main", Body().paragraph("a")),
+        ("t.1", "Notes", Body().paragraph("b")),
+    )
+    doc["tabs"][1]["childTabs"] = [
+        {
+            "tabProperties": {"tabId": "t.2", "title": "Sub", "index": 0},
+            "documentTab": {"body": Body().paragraph("c").as_body()},
+            "childTabs": [
+                {
+                    "tabProperties": {"tabId": "t.3", "title": "Deeper", "index": 0},
+                    "documentTab": {"body": Body().paragraph("d").as_body()},
+                }
+            ],
+        }
+    ]
+    remaining = document(("t.0", "Main", Body().paragraph("a")))
+    google = _Google(doc, remaining)
+    out = _run(
+        docs_proxy, "delete_tab", {"document_ref": "DOC1", "tab_id": "t.1"}, google
+    )
+
+    assert out["ok"] is True, out
+    assert out["ret"]["deleted_child_tab_ids"] == ["t.2", "t.3"]
+
+
 def test_a_comment_and_a_reply_are_rewritten_where_drive_keeps_them() -> None:
     seen: list[tuple[str, str, dict[str, Any]]] = []
 

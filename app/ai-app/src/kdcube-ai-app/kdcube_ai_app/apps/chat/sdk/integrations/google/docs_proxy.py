@@ -2869,17 +2869,16 @@ async def _delete_tab(
             "Name the tab with tab_id or tab_selector.",
             details=_tab_selection_details(tabs),
         )
-    if len(tabs) <= 1:
+    # Google deletes a tab together with every tab nested under it, so the
+    # tabs a document keeps are those outside that whole subtree.
+    children = _descendant_tab_ids(tabs, tab_id)
+    if len(tabs) - 1 - len(children) < 1:
         raise DocsValidationError(
             "docs_last_tab",
-            "This is the document's only tab; a document keeps at least one.",
-            details={"tab_id": tab_id},
+            "Deleting this tab would leave the document without a tab; a "
+            "document keeps at least one.",
+            details={"tab_id": tab_id, "nested_tab_ids": children},
         )
-    children = [
-        _clean(tab.get("tab_id"))
-        for tab in tabs
-        if _clean(tab.get("parent_tab_id")) == tab_id
-    ]
     await _batch_update(
         client,
         access_token=access_token,
@@ -2900,9 +2899,24 @@ async def _delete_tab(
         "idempotency_key": _clean(payload.get("idempotency_key")),
     }
     if children:
-        # Google deletes a tab's children with it; the caller hears which.
+        # Google deletes a tab's nested tabs with it; the caller hears which.
         result["deleted_child_tab_ids"] = children
     return result
+
+
+def _descendant_tab_ids(tabs: Sequence[Mapping[str, Any]], tab_id: str) -> list[str]:
+    """Every tab nested under ``tab_id`` at any depth, in document order."""
+
+    nested: list[str] = []
+    parents = {tab_id}
+    for tab in tabs:
+        # Document order lists a parent before its children, so one pass
+        # collects grandchildren as well.
+        if _clean(tab.get("parent_tab_id")) in parents:
+            child = _clean(tab.get("tab_id"))
+            nested.append(child)
+            parents.add(child)
+    return nested
 
 
 async def _insert_page_break(
